@@ -10,6 +10,8 @@ export default function ConfigView() {
   const [model, setModel] = useState("");
   const [key, setKey] = useState("");
   const [systemPrompt, setSystemPrompt] = useState("");
+  const [userLabel, setUserLabel] = useState("");
+  const [assistantLabel, setAssistantLabel] = useState("");
   const [saved, setSaved] = useState(false);
 
   const [dataDir, setDataDir] = useState<DataDirInfo | null>(null);
@@ -21,6 +23,8 @@ export default function ConfigView() {
       setConfig(c);
       setModel(c.model);
       setSystemPrompt(c.system_prompt);
+      setUserLabel(c.user_label);
+      setAssistantLabel(c.assistant_label);
     });
     api.getDataDir().then((d) => {
       setDataDir(d);
@@ -41,9 +45,9 @@ export default function ConfigView() {
     }
   }
 
-  if (!config) return <div className="config">Loading…</div>;
+  if (!config) return <div className="page page-narrow config">Loading…</div>;
 
-  async function save(fields: Partial<{ model: string; theme: string; openrouter_key: string; system_prompt: string; quote_color: string }>) {
+  async function save(fields: Partial<{ model: string; theme: string; openrouter_key: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string }>) {
     const next = await api.putConfig(fields);
     setConfig(next);
     setKey("");
@@ -53,25 +57,29 @@ export default function ConfigView() {
   }
 
   return (
-    <div className="config">
-      <h2>Configuration</h2>
+    <div className="page page-narrow view-anim config">
+      <div className="page-head">
+        <h1 className="page-h1">Configuration</h1>
+      </div>
 
-      <label htmlFor="cfg-data-dir">Storage location</label>
+      <div className="section-label">Storage location</div>
       <p className="field-hint" style={{ marginTop: 0 }}>
         The folder where all worlds, campaigns, and settings live. Point it at a
         synced folder (Syncthing, Dropbox/Drive desktop, iCloud…) to share the
         same library across devices. Changes take effect immediately.
       </p>
-      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+      <div className="joined">
         <input
           id="cfg-data-dir"
-          style={{ flex: 1 }}
+          aria-label="Storage location"
+          className="mono-input"
           placeholder={dataDir?.default ?? "~/.grimoire"}
           value={dataDirInput}
           disabled={dataDir?.source === "env"}
           onChange={(e) => setDataDirInput(e.target.value)}
         />
         <button
+          className="btn-accent"
           onClick={() => saveDataDir(dataDirInput)}
           disabled={dataDir?.source === "env" || dataDirInput.trim() === dataDir?.data_dir}
         >
@@ -91,23 +99,27 @@ export default function ConfigView() {
         </p>
       )}
       {dataDirMsg && (
-        <p style={{ color: dataDirMsg.kind === "err" ? "var(--danger, crimson)" : "var(--accent)" }}>
+        <p className={dataDirMsg.kind === "err" ? "config-msg err" : "config-msg save-flash"}>
           {dataDirMsg.text}
         </p>
       )}
 
-      <label>OpenRouter API key</label>
+      <div className="section-label">OpenRouter API key</div>
       <input
         type="password"
+        aria-label="OpenRouter API key"
         placeholder={config.key_set ? "A key is set — type to replace" : "sk-or-…"}
         value={key}
         onChange={(e) => setKey(e.target.value)}
       />
 
-      <label>Model</label>
+      <div className="section-label">Model</div>
       <ModelCombobox value={model} onChange={setModel} />
 
-      <label htmlFor="cfg-system-prompt">System prompt (sent with every scene)</label>
+      <div className="section-label">System prompt</div>
+      <label className="field-hint" htmlFor="cfg-system-prompt" style={{ display: "block", marginTop: 0 }}>
+        System prompt (sent with every scene)
+      </label>
       <textarea
         id="cfg-system-prompt"
         rows={4}
@@ -116,7 +128,8 @@ export default function ConfigView() {
         onChange={(e) => setSystemPrompt(e.target.value)}
       />
 
-      <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <div className="section-label">Transcript</div>
+      <label className="checkbox-row">
         <input
           type="checkbox"
           aria-label="Color quoted dialogue"
@@ -125,28 +138,44 @@ export default function ConfigView() {
         />
         Color quoted dialogue
       </label>
+      <div className="field-row" style={{ marginTop: 12 }}>
+        <div className="field">
+          <label htmlFor="cfg-user-label">Your label</label>
+          <input id="cfg-user-label" type="text" value={userLabel} placeholder="You"
+                 onChange={(e) => setUserLabel(e.target.value)} />
+        </div>
+        <div className="field">
+          <label htmlFor="cfg-assistant-label">Narrator label</label>
+          <input id="cfg-assistant-label" type="text" value={assistantLabel} placeholder="Grimoire"
+                 onChange={(e) => setAssistantLabel(e.target.value)} />
+        </div>
+      </div>
 
-      <label>Theme</label>
+      <div className="section-label">Theme</div>
       <div className="theme-cards">
         {themeList.map((t) => (
-          <div
+          <button
             key={t.name}
             className={"theme-card" + (config.theme === t.name ? " active" : "")}
             onClick={() => save({ theme: t.name })}
           >
             {t.label}
-          </div>
+          </button>
         ))}
       </div>
 
       <p style={{ marginTop: 24 }}>
         <button
-          className="primary"
-          onClick={() => save({ model, system_prompt: systemPrompt, ...(key ? { openrouter_key: key } : {}) })}
+          className="btn-accent"
+          onClick={() => save({
+            model, system_prompt: systemPrompt,
+            user_label: userLabel, assistant_label: assistantLabel,
+            ...(key ? { openrouter_key: key } : {}),
+          })}
         >
           Save
         </button>
-        {saved && <span style={{ marginLeft: 12, color: "var(--accent)" }}>Saved</span>}
+        {saved && <span className="save-flash" style={{ marginLeft: 12 }}>Saved ✓</span>}
       </p>
     </div>
   );

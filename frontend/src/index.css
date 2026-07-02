@@ -166,30 +166,38 @@ button.send, button.primary { background: var(--accent); color: var(--bg); borde
 .banner.error-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .banner .retry { flex: none; background: var(--accent); color: var(--bg); border: none; border-radius: var(--radius); padding: 4px 12px; cursor: pointer; }
 .banner .retry:disabled { opacity: 0.5; cursor: default; }
-.config { padding: 24px; max-width: 560px; }
-.config label { display: block; margin: 16px 0 4px; color: var(--muted); }
-.config input[type="text"], .config input[type="password"] { width: 100%; background: var(--surface); color: var(--ink); border: 1px solid var(--muted); border-radius: var(--radius); padding: 8px; }
-.config textarea { width: 100%; background: var(--surface); color: var(--ink); border: 1px solid var(--muted); border-radius: var(--radius); padding: 8px; font-family: var(--fb); resize: vertical; }
+.config label { display: block; margin: 0 0 4px; color: var(--muted); font-family: var(--fm); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; }
+.config input[type="text"], .config input[type="password"] { width: 100%; background: var(--surface); color: var(--ink); border: var(--rw) solid var(--rule); padding: 10px 12px; font-size: 15px; }
+.config textarea { width: 100%; background: var(--surface); color: var(--ink); border: var(--rw) solid var(--rule); padding: 10px 12px; font-family: var(--fb); font-size: 15px; resize: vertical; }
+.config .mono-input, .config input.mono-input { font-family: var(--fm); font-size: 13px; }
+.config .checkbox-row { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.config input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent); }
+.save-flash { color: var(--accent); font-family: var(--fm); font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; }
+.config-msg.err { color: var(--banner-ink); font-family: var(--fm); font-size: 10.5px; }
 .combobox { position: relative; }
-.combobox input[type="text"] { width: 100%; background: var(--surface); color: var(--ink); border: 1px solid var(--muted); border-radius: var(--radius); padding: 8px; }
-.combobox-note { margin-top: 4px; font-size: 12px; color: var(--muted); }
+.combobox input[type="text"] { width: 100%; background: var(--surface); color: var(--ink); border: var(--rw) solid var(--rule); padding: 10px 12px; font-family: var(--fm); font-size: 13px; }
+.combobox-note { margin-top: 4px; font-family: var(--fm); font-size: 10.5px; color: var(--muted); }
 .combobox-list {
-  position: absolute; z-index: 10; left: 0; right: 0; margin: 4px 0 0; padding: 0;
-  list-style: none; max-height: 320px; overflow-y: auto;
-  background: var(--surface); border: 1px solid var(--muted); border-radius: var(--radius);
+  position: absolute; z-index: 10; left: 0; right: 0; margin: -2px 0 0; padding: 0;
+  list-style: none; max-height: 264px; overflow-y: auto;
+  background: var(--surface); border: var(--rw) solid var(--rule); box-shadow: var(--sh5);
 }
-.combobox-row { padding: 6px 8px; cursor: pointer; border-bottom: 1px solid var(--bg); }
+.combobox-row { padding: 8px 10px; cursor: pointer; border-bottom: 1px solid var(--rule-soft); }
 .combobox-row:last-child { border-bottom: none; }
-.combobox-row:hover { background: var(--bg); }
-.combobox-row-top { display: flex; justify-content: space-between; gap: 12px; }
+.combobox-row:hover { background: var(--panel2); }
+.combobox-row-top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
 .combobox-row-bottom { display: flex; justify-content: space-between; gap: 12px; }
-.combobox-name { color: var(--ink); }
-.combobox-price { color: var(--accent); font-size: 12px; white-space: nowrap; }
-.combobox-id { color: var(--muted); font-size: 12px; }
-.combobox-ctx { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.combobox-name { color: var(--ink); font-family: var(--fd); font-weight: 700; font-size: 17px; }
+.combobox-price { color: var(--accent); font-family: var(--fm); font-size: 10px; white-space: nowrap; }
+.combobox-id { color: var(--muted); font-family: var(--fm); font-size: 10px; }
+.combobox-ctx { color: var(--muted); font-family: var(--fm); font-size: 10px; white-space: nowrap; }
 .theme-cards { display: flex; gap: 12px; margin-top: 8px; }
-.theme-card { flex: 1; border: 1px solid var(--muted); border-radius: var(--radius); padding: 12px; cursor: pointer; }
-.theme-card.active { border-color: var(--accent); }
+.theme-card {
+  flex: 1; border: var(--rw) solid var(--rule); background: var(--surface); color: var(--ink);
+  font-family: var(--fm); font-size: 11px; font-weight: 700; letter-spacing: 0.1em;
+  padding: 14px; cursor: pointer; text-transform: uppercase;
+}
+.theme-card.active { background: var(--accent); color: var(--on-accent); box-shadow: var(--sh3); }
 .cursor { display: inline-block; width: 7px; height: 14px; background: var(--accent); vertical-align: -2px; animation: blink 1s steps(1) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 .row {
