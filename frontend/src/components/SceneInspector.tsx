@@ -91,6 +91,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
     [models, ctx]);
 
   const pct = (t: number) => (ctxLen > 0 ? ` · ${Math.round((t / ctxLen) * 100)}%` : "");
+  const pctNumber = (t: number) => (ctxLen > 0 ? Math.round((t / ctxLen) * 100) : 0);
   const nameOf = (a: Actor) => names[`${a.kind}/${a.id}`] ?? a.id;
 
   return (
@@ -161,11 +162,31 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
       </div>
 
       <div className="side-section">
-        <h4>Context {ctx ? `· ${ctx.total_tokens.toLocaleString()} tok${pct(ctx.total_tokens)}` : ""}</h4>
-        <div className="field-hint">token estimates</div>
+        <div className="ctx-head">
+          <h4>Context</h4>
+          {ctx && ctxLen > 0 && <span className="ctx-pct">{pctNumber(ctx.total_tokens)}%</span>}
+        </div>
+        {ctx && (
+          <>
+            <div className="ctx-bar">
+              <div className="ctx-bar-fill" style={{ width: `${Math.min(100, pctNumber(ctx.total_tokens))}%` }} />
+            </div>
+            <div className="ctx-tokens">
+              {ctx.total_tokens.toLocaleString()}{ctxLen > 0 ? ` / ${ctxLen.toLocaleString()}` : ""} tok
+            </div>
+            <div className="ctx-caption">Breakdown · click a row to inspect</div>
+          </>
+        )}
         {ctx?.sections.map((s) => (
           <details className="ctx-section" key={s.label}>
-            <summary>{s.label} <span className="role">{s.tokens.toLocaleString()} tok{pct(s.tokens)}</span></summary>
+            <summary>
+              <span className={"ctx-dot" + (s.label.toLowerCase().includes("transcript") ? " hot" : "")} />
+              <span className="ctx-label">{s.label}</span>
+              <span className="ctx-meta">{s.tokens.toLocaleString()}{pct(s.tokens)}</span>
+            </summary>
+            <div className="ctx-mini">
+              <div style={{ width: `${Math.min(100, pctNumber(s.tokens))}%` }} />
+            </div>
             <pre className="ctx-text">{s.text}</pre>
           </details>
         ))}
