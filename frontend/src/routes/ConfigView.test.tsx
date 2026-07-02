@@ -9,7 +9,7 @@ vi.mock("../theme/ThemeProvider", () => ({ useTheme: () => ({ setTheme: vi.fn() 
 vi.mock("./ModelCombobox", () => ({ default: () => <div /> }));
 import { api } from "../api/client";
 
-const cfg = { model: "m", theme: "codex", key_set: false, system_prompt: "", quote_color: "off" };
+const cfg = { model: "m", theme: "codex", key_set: false, system_prompt: "", quote_color: "off", user_label: "You", assistant_label: "Grimoire" };
 const dataDir = {
   data_dir: "/home/u/.grimoire", default: "/home/u/.grimoire",
   is_default: true, source: "default" as const, exists: true,
@@ -45,4 +45,20 @@ test("moving the storage location saves the new path", async () => {
   fireEvent.change(input, { target: { value: "/sync/grimoire" } });
   fireEvent.click(screen.getByRole("button", { name: /^move$/i }));
   await waitFor(() => expect(api.putDataDir).toHaveBeenCalledWith("/sync/grimoire"));
+});
+
+test("edits transcript labels and saves them", async () => {
+  render(<ConfigView />);
+  const user = await screen.findByLabelText(/your label/i);
+  fireEvent.change(user, { target: { value: "Kestrel" } });
+  fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+  await waitFor(() =>
+    expect(api.putConfig).toHaveBeenCalledWith(expect.objectContaining({ user_label: "Kestrel" })));
+});
+
+test("shows the three theme cards", async () => {
+  render(<ConfigView />);
+  expect(await screen.findByText("CODEX")).toBeInTheDocument();
+  expect(screen.getByText("MANUSCRIPT")).toBeInTheDocument();
+  expect(screen.getByText("ASTRAL")).toBeInTheDocument();
 });
