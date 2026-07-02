@@ -8,8 +8,9 @@ from __future__ import annotations
 import functools
 import re
 
-from . import (appearances, briefs, calendars, campaigns, characters, chronicle,
-               config, entities, pcs, playstate, plot, relationships, scenes, worlds)
+from . import (appearances, calendars, campaigns, characters, chronicle,
+               config, dossiers, entities, pcs, playstate, plot, relationships, scenes,
+               taglines, worlds)
 
 
 def activate(entries: list[dict], recent_text: str, present: frozenset = frozenset()) -> list[dict]:
@@ -136,20 +137,20 @@ def _cast_directory(croot, wroot, cid: str, sid: str) -> str:
     for a in roster:
         if a["kind"] != "characters" or a["role"] != "npc" or a["id"] in present:
             continue
-        b = briefs.read_brief(croot, a["id"])
-        if b and b["body"]:
-            active.append(f"{_char_name(croot, a['id'])}: {b['body']}")
+        body = dossiers.read(croot, a["id"])
+        if body:
+            active.append(f"{_char_name(croot, a['id'])}: {body}")
 
     known: list[str] = []
     for char_id in characters.character_refs(wroot):
         if char_id in roster_ids or char_id in present:
             continue
-        b = briefs.read_brief(wroot, char_id)
-        if not b or not b["tagline"]:
+        tag = taglines.read(wroot, char_id)
+        if not tag:
             continue
         versions = ", ".join(v["id"] for v in characters.read_character(wroot, char_id)["versions"])
         suffix = f" (available as: {versions})" if versions else ""
-        known.append(f"{_char_name(wroot, char_id)}: {b['tagline']}{suffix}")
+        known.append(f"{_char_name(wroot, char_id)}: {tag}{suffix}")
 
     if not active and not known:
         return ""
