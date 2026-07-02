@@ -10,8 +10,9 @@ import { RecordDrawer, type DrawerTarget } from "./RecordDrawer";
 // grows as providers are added.
 const CALENDARS = [{ id: "gregorian", name: "Gregorian" }];
 
-export function SceneInspector({ cid, sid, refreshKey, onSceneChanged }:
-  { cid: string; sid: string; refreshKey: number; onSceneChanged: () => void }) {
+export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRenamed }:
+  { cid: string; sid: string; refreshKey: number; onSceneChanged: () => void;
+    onSceneRenamed?: (id: string) => void }) {
   const [cast, setCast] = useState<Actor[]>([]);
   const [names, setNames] = useState<Record<string, string>>({});
   const [setting, setSetting] = useState<SceneLocation | null>(null);
@@ -70,8 +71,14 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged }:
     if (!dateInput) return;
     setError(null);
     try {
-      await api.setSceneDatetime(cid, sid, dateInput);
+      const res = await api.setSceneDatetime(cid, sid, dateInput);
       setDateInput("");
+      if (res.id !== sid) {
+        // first date set renames the scene file — adopt the new id; the sid
+        // prop change re-runs every load effect, so skip the stale reload
+        onSceneRenamed?.(res.id);
+        return;
+      }
       await reloadWhen();
       onSceneChanged();  // surface the "Time passes…" transition line in the stream
     } catch (err: any) {

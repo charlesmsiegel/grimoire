@@ -392,7 +392,7 @@ export const api = {
   getSceneDatetime: (cid: string, sid: string) =>
     request<SceneDatetime>("GET", `/api/campaigns/${cid}/scenes/${sid}/datetime`),
   setSceneDatetime: (cid: string, sid: string, datetime: string) =>
-    request<{ ok: boolean; advanced: boolean; friendly: string }>(
+    request<{ ok: boolean; advanced: boolean; friendly: string; id: string }>(
       "PUT", `/api/campaigns/${cid}/scenes/${sid}/datetime`, { datetime }),
   getCalendarConfig: (cid: string) =>
     request<CalendarConfig>("GET", `/api/campaigns/${cid}/calendar`),

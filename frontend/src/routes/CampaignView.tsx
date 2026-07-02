@@ -72,6 +72,12 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
     setScenes(await api.listScenes(cid));
   }
 
+  // the first date set renames the scene file — re-list and adopt the new id
+  async function sceneRenamed(id: string) {
+    setScenes(await api.listScenes(cid));
+    selectScene(id);
+  }
+
   async function deleteScene(s: SceneMeta) {
     if (!window.confirm(`Delete '${s.title}'?`)) return;
     await api.deleteScene(cid, s.id);
@@ -276,6 +282,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
             sceneEmpty={true}
             keySet={keySet}
             onSeeded={() => selectScene(activeId)}
+            onSceneRenamed={sceneRenamed}
           />
         )}
         <div className={"stream" + (colorQuotes ? " color-quotes" : "")} ref={streamRef}>
@@ -329,7 +336,8 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
       </section>
       {activeId && (
         <SceneInspector cid={cid} sid={activeId} refreshKey={ctxKey}
-                        onSceneChanged={() => selectScene(activeId)} />
+                        onSceneChanged={() => selectScene(activeId)}
+                        onSceneRenamed={sceneRenamed} />
       )}
     </div>
   );

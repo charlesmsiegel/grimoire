@@ -26,7 +26,7 @@ beforeEach(() => {
   (api.getSceneLocation as any).mockResolvedValue({ current: null, visited: [] });
   (api.setSceneLocation as any).mockResolvedValue({ ok: true, moved: false, name: "" });
   (api.getSceneDatetime as any).mockResolvedValue({ current: null, history: [] });
-  (api.setSceneDatetime as any).mockResolvedValue({ ok: true, advanced: true, friendly: "1 January 2027" });
+  (api.setSceneDatetime as any).mockResolvedValue({ ok: true, advanced: true, friendly: "1 January 2027", id: "s" });
   (api.availableGreetings as any).mockResolvedValue([
     { id: "open", name: "Open", available: true, reasons: [] },
     { id: "locked", name: "Locked", available: false, reasons: ["missing required tags"] },
@@ -62,10 +62,11 @@ test("Suggest scenes fetches, renders, and a pick auto-seeds + prefills the prom
   expect((screen.getByLabelText("Opener prompt") as HTMLInputElement).value).toBe("A debt-collector arrives.");
 });
 
-function renderPanel(props: Partial<{ sceneEmpty: boolean; keySet: boolean; onSeeded: () => void }> = {}) {
+function renderPanel(props: Partial<{ sceneEmpty: boolean; keySet: boolean; onSeeded: () => void;
+                                      onSceneRenamed: (id: string) => void }> = {}) {
   render(
     <CastPanel cid="c" sid="s" sceneEmpty={props.sceneEmpty ?? true} keySet={props.keySet ?? true}
-               onSeeded={props.onSeeded ?? (() => {})} />,
+               onSeeded={props.onSeeded ?? (() => {})} onSceneRenamed={props.onSceneRenamed} />,
   );
 }
 
@@ -177,4 +178,16 @@ test("When section shows the current date and advances", async () => {
   fireEvent.click(screen.getByRole("button", { name: /advance to|set date/i }));
   await waitFor(() => expect(api.setSceneDatetime).toHaveBeenCalledWith("c", "s", "2027-01-01"));
   await waitFor(() => expect(onSeeded).toHaveBeenCalled());
+});
+
+test("first date set renames the scene: adopts the new id via onSceneRenamed", async () => {
+  (api.setSceneDatetime as any).mockResolvedValue(
+    { ok: true, advanced: false, friendly: "4 July 2026", id: "001--2026-07-04--s" });
+  const onSceneRenamed = vi.fn();
+  const onSeeded = vi.fn();
+  renderPanel({ onSeeded, onSceneRenamed });
+  fireEvent.change(await screen.findByLabelText("Scene date"), { target: { value: "2026-07-04" } });
+  fireEvent.click(screen.getByRole("button", { name: /advance to|set date/i }));
+  await waitFor(() => expect(onSceneRenamed).toHaveBeenCalledWith("001--2026-07-04--s"));
+  expect(onSeeded).not.toHaveBeenCalled();  // the parent re-selects via the new id instead
 });
