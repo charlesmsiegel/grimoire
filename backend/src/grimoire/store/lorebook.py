@@ -71,12 +71,31 @@ def from_character_book(book) -> list[dict]:
     return _normalize(book or {})
 
 
+def _existing_signatures(root: Path, kind: str) -> set[tuple[str, str, str]]:
+    sigs = set()
+    for ref in entities.list_entities(root, kind):
+        e = entities.read_entity(root, kind, ref["id"])
+        sigs.add((e["meta"].get("name", ""), e["meta"].get("keys", ""), e["body"].strip()))
+    return sigs
+
+
 def commit(root: Path, entries: list[dict]) -> list[dict]:
+    """Create entities for the entries, skipping exact duplicates -- an entry
+    whose name, keys, and body all match an existing entity of the same
+    category (or an earlier entry in the batch) is dropped, so re-importing
+    the same book is a no-op instead of piling up slug-suffixed copies."""
     created: list[dict] = []
+    seen: dict[str, set[tuple[str, str, str]]] = {}
     for e in entries:
         category = e.get("category", "lore")
         if category not in entities.ENTITY_KINDS:
             raise LorebookError(f"unknown category: {category}")
+        if category not in seen:
+            seen[category] = _existing_signatures(root, category)
+        sig = (e.get("name", "Imported entry"), ",".join(e.get("keys", [])), e.get("body", "").strip())
+        if sig in seen[category]:
+            continue
+        seen[category].add(sig)
         eid = entities.create_entity(root, category, e.get("name", "Imported entry"),
                                      e.get("body", ""), ",".join(e.get("keys", [])))
         created.append({"kind": category, "id": eid})
