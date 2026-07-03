@@ -635,3 +635,20 @@ test("the edit form no longer shows a link control (moved to the detail page)", 
   expect(screen.queryByRole("button", { name: /^link to url$/i })).toBeNull();
   expect(screen.queryByRole("button", { name: /^unlink$/i })).toBeNull();
 });
+
+
+test("grid cards show gallery/localized badges only when nonzero", async () => {
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "a", name: "Aya", default_version: "default", has_avatar: true,
+      gallery_count: 3, localized_count: 0, versions: [] },
+    { id: "b", name: "Bea", default_version: "default", has_avatar: true,
+      gallery_count: 0, localized_count: 2, versions: [] },
+    { id: "c", name: "Cyn", default_version: "default", has_avatar: true,
+      gallery_count: 0, localized_count: 0, versions: [] },
+  ]);
+  render(<CharacterEditor wid="w" />);
+  await screen.findByText("3 gallery");
+  await screen.findByText("2 localized");
+  expect(screen.queryByText("0 gallery")).toBeNull();
+  expect(screen.queryByText("0 localized")).toBeNull();
+});
