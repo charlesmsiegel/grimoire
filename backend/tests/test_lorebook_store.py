@@ -79,6 +79,21 @@ def test_commit_routes_and_writes_keys(tmp_path):
     assert e["body"].strip() == "binds"
 
 
+def test_commit_skips_exact_duplicates(tmp_path):
+    entries = [{"name": "Salt Pact", "keys": ["pact", "salt"], "body": "binds", "category": "lore"}]
+    assert len(lorebook.commit(tmp_path, entries)) == 1
+
+    again = lorebook.commit(tmp_path, [
+        {"name": "Salt Pact", "keys": ["pact", "salt"], "body": "binds"},      # exists -> skipped
+        {"name": "Salt Pact", "keys": ["pact", "salt"], "body": "binds"},      # in-batch dupe -> skipped
+        {"name": "Salt Pact", "keys": ["pact", "salt"], "body": "different"},  # body differs -> created
+        {"name": "Salt Pact", "keys": ["other"], "body": "binds"},             # keys differ -> created
+    ])
+    assert len(again) == 2
+    # only the original + the two genuinely-new variants exist on disk
+    assert len(entities.list_entities(tmp_path, "lore")) == 3
+
+
 def test_commit_unknown_category_raises(tmp_path):
     with pytest.raises(lorebook.LorebookError):
         lorebook.commit(tmp_path, [{"name": "X", "keys": [], "body": "y", "category": "bogus"}])
