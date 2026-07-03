@@ -686,3 +686,11 @@ button.primary { background: var(--accent); color: var(--on-accent); border: var
 .tagline-modal { background: var(--panel); border: 1px solid var(--muted); padding: 20px; width: min(520px, 92vw); }
 .tagline-modal h3 { font-family: var(--fd); margin: 0 0 6px; }
 .tagline-modal textarea { width: 100%; }
+
+.avatar-crop-btn { padding: 0; border: none; background: transparent; cursor: pointer; flex: none; display: block; }
+.focus-modal { width: min(420px, 92vw); }
+.focus-scroll { max-height: 60vh; overflow-y: auto; margin: 8px 0; }
+.focus-preview { position: relative; cursor: crosshair; touch-action: none; }
+.focus-preview img { width: 100%; display: block; user-select: none; }
+.focus-window { position: absolute; border: 2px solid var(--accent); box-shadow: 0 0 0 999px rgba(0, 0, 0, 0.45); pointer-events: none; }
+.focus-modal input[type="range"] { width: 100%; }

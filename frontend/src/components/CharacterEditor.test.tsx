@@ -6,7 +6,8 @@ vi.mock("../api/client", () => ({
     listCharacters: vi.fn(), readCharacter: vi.fn(), createCharacter: vi.fn(),
     updateVersion: vi.fn(), createVersion: vi.fn(), setDefaultVersion: vi.fn(),
     deleteCharacter: vi.fn(), importCharacter: vi.fn(), localizeImages: vi.fn(),
-    putImage: vi.fn(), deleteImage: vi.fn(), promoteImage: vi.fn(), importCharacterBook: vi.fn(),
+    putImage: vi.fn(), deleteImage: vi.fn(), promoteImage: vi.fn(), setAvatarFocus: vi.fn(),
+    importCharacterBook: vi.fn(),
     importCharacterFromChub: vi.fn(),
     setCharacterBirthdate: vi.fn(),
     setCharacterChubSource: vi.fn(), clearCharacterChubSource: vi.fn(),
@@ -44,6 +45,7 @@ beforeEach(() => {
   (api.putImage as any).mockResolvedValue({ name: "avatar", ext: "png" });
   (api.deleteImage as any).mockResolvedValue({ ok: true });
   (api.promoteImage as any).mockResolvedValue({ ok: true });
+  (api.setAvatarFocus as any).mockResolvedValue({ ok: true });
   (api.deleteCharacter as any).mockResolvedValue({ ok: true });
   (api.importCharacterBook as any).mockResolvedValue({ created: [{ kind: "lore", id: "pact" }] });
   (api.setCharacterBirthdate as any).mockResolvedValue({ ok: true });
@@ -673,4 +675,38 @@ test("first message and alternate greetings render markdown images; other fields
   await screen.findByRole("img", { name: "scene" });
   await screen.findByRole("img", { name: "alt-pic" });
   expect(screen.getByText("plain **stars** stay literal")).toBeInTheDocument();
+});
+
+
+test("clicking the profile avatar opens the crop picker and saves the focus", async () => {
+  (api.readCharacter as any).mockResolvedValue({
+    meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
+    versions: [{ id: "default", name: "default", card: CARD, images: ["avatar"], avatar_focus: null }],
+  });
+  render(<CharacterEditor wid="w" />);
+  fireEvent.click(await screen.findByText("Seraphine"));
+  fireEvent.click(await screen.findByRole("button", { name: /adjust avatar crop/i }));
+  const slider = await screen.findByLabelText("Crop position");
+  fireEvent.change(slider, { target: { value: "80" } });
+  fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+  await waitFor(() => expect(api.setAvatarFocus).toHaveBeenCalledWith("w", "seraphine", "default", 80));
+});
+
+test("stored focus is applied as object-position on detail and grid avatars", async () => {
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "seraphine", name: "Seraphine", default_version: "default", has_avatar: true,
+      avatar_focus: 25, versions: [] },
+  ]);
+  (api.readCharacter as any).mockResolvedValue({
+    meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
+    versions: [{ id: "default", name: "default", card: CARD, images: ["avatar"], avatar_focus: 25 }],
+  });
+  render(<CharacterEditor wid="w" />);
+  await screen.findByText("Seraphine");
+  const cardImg = document.querySelector(".char-card-avatar") as HTMLElement;
+  expect(cardImg.style.objectPosition).toBe("25% 25%");
+  fireEvent.click(screen.getByText("Seraphine"));
+  await screen.findByRole("button", { name: /adjust avatar crop/i });
+  const detailImg = document.querySelector(".detail-avatar") as HTMLElement;
+  expect(detailImg.style.objectPosition).toBe("25% 25%");
 });
