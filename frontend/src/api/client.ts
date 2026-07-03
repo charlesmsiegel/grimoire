@@ -84,10 +84,15 @@ export type CardData = {
 };
 export type Card = { spec: string; spec_version: string; data: CardData };
 export type VersionRef = { id: string; name: string };
-export type CharacterSummary = { id: string; name: string; default_version: string; has_avatar?: boolean; tagline?: string; versions: VersionRef[] };
+export type CharacterSummary = {
+  id: string; name: string; default_version: string; has_avatar?: boolean;
+  avatar_focus?: number | null; gallery_count?: number; localized_count?: number;
+  tagline?: string; versions: VersionRef[];
+};
 export type CharacterDetail = {
   meta: { id: string; name: string; default_version: string; birthdate?: string };
-  versions: { id: string; name: string; card: Card; images?: string[]; chub_source?: string; is_chub?: boolean }[];
+  versions: { id: string; name: string; card: Card; images?: string[];
+              avatar_focus?: number | null; chub_source?: string; is_chub?: boolean }[];
 };
 export type ChubImportResult = {
   character: string;
@@ -326,6 +331,9 @@ export const api = {
     request<{ ok: boolean }>("DELETE", `/api/worlds/${wid}/characters/${cid}/versions/${vid}/images/${name}`),
   promoteImage: (wid: string, cid: string, vid: string, name: string) =>
     request<{ ok: boolean }>("POST", `/api/worlds/${wid}/characters/${cid}/versions/${vid}/images/${name}/promote`),
+  setAvatarFocus: (wid: string, cid: string, vid: string, focus: number) =>
+    request<{ ok: boolean }>("PUT",
+      `/api/worlds/${wid}/characters/${cid}/versions/${vid}/images/avatar/focus`, { focus }),
   entityImageUrl: (scope: EntityScope, kind: EntityKind, eid: string, name: string) =>
     `${entityBase(scope)}/${kind}/${eid}/images/${name}`,
   listEntityImages: (scope: EntityScope, kind: EntityKind, eid: string) =>
