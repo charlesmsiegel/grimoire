@@ -10,9 +10,11 @@ by image edits.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 AVATAR = "avatar"
+FOCUS_FILE = "focus.json"
 _EXTS = {"png", "jpg", "jpeg", "gif", "webp"}
 
 
@@ -52,9 +54,42 @@ def list_images(root: Path, cid: str, vid: str, base: str = "characters") -> lis
         return []
     out: list[dict] = []
     for p in sorted(d.iterdir()):
-        if p.is_file() and p.suffix:
+        if p.is_file() and _norm_ext(p.suffix):
             out.append({"name": p.stem, "ext": p.suffix.lstrip(".").lower()})
     return out
+
+
+def read_focus(root: Path, cid: str, vid: str, base: str = "characters") -> int | None:
+    """Avatar crop focus: 0-100 along the image's long axis; None = center."""
+    if not (_safe(cid) and _safe(vid)):
+        return None
+    p = _dir(root, cid, vid, base) / FOCUS_FILE
+    if not p.exists():
+        return None
+    try:
+        val = json.loads(p.read_text(encoding="utf-8")).get(AVATAR)
+    except (json.JSONDecodeError, AttributeError):
+        return None
+    if isinstance(val, bool) or not isinstance(val, (int, float)):
+        return None
+    return max(0, min(100, int(val)))
+
+
+def write_focus(root: Path, cid: str, vid: str, focus: int, base: str = "characters") -> None:
+    if not (_safe(cid) and _safe(vid)):
+        raise ValueError("unsafe image id")
+    d = _dir(root, cid, vid, base)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / FOCUS_FILE).write_text(json.dumps({AVATAR: max(0, min(100, int(focus)))}),
+                                encoding="utf-8")
+
+
+def clear_focus(root: Path, cid: str, vid: str, base: str = "characters") -> None:
+    if not (_safe(cid) and _safe(vid)):
+        return
+    p = _dir(root, cid, vid, base) / FOCUS_FILE
+    if p.exists():
+        p.unlink()
 
 
 def put_image(root: Path, cid: str, vid: str, name: str, data: bytes, ext: str,
@@ -69,6 +104,8 @@ def put_image(root: Path, cid: str, vid: str, name: str, data: bytes, ext: str,
     for p in d.glob(f"{name}.*"):  # drop any prior-ext file of this name
         p.unlink()
     (d / f"{name}.{ext}").write_bytes(data)
+    if name == AVATAR:
+        clear_focus(root, cid, vid, base)
     return ext
 
 
@@ -79,6 +116,8 @@ def delete_image(root: Path, cid: str, vid: str, name: str, base: str = "charact
     if d.exists():
         for p in d.glob(f"{name}.*"):
             p.unlink()
+    if name == AVATAR:
+        clear_focus(root, cid, vid, base)
 
 
 def promote_image(root: Path, cid: str, vid: str, name: str, base: str = "characters") -> None:
@@ -95,3 +134,4 @@ def promote_image(root: Path, cid: str, vid: str, name: str, base: str = "charac
     if cur is not None:
         cur.rename(d / f"{name}{cur.suffix}")
     tmp.rename(d / f"{AVATAR}{src.suffix}")
+    clear_focus(root, cid, vid, base)
