@@ -56,7 +56,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
   const [tagline, setTagline] = useState("");
   const [taglineBusy, setTaglineBusy] = useState(false);
   const taglineReq = useRef(0);
-  const [taglinePrompt, setTaglinePrompt] = useState<{ cid: string; name: string } | null>(null);
+  const [taglineQueue, setTaglineQueue] = useState<{ cid: string; name: string }[]>([]);
 
   const reload = useCallback(() => api.listCharacters(wid).then(setChars), [wid]);
   useEffect(() => {
@@ -444,7 +444,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
     else if (imported.length === 1) {
       // single import: open the card so its localize progress shows inline
       const d = await openDetail(imported[0].cid);
-      setTaglinePrompt({ cid: imported[0].cid, name: d.meta.name });
+      setTaglineQueue([{ cid: imported[0].cid, name: d.meta.name }]);
       await runLocalize(imported[0].cid, imported[0].version);
     } else if (imported.length > 1) {
       await runBulkLocalize(imported);
@@ -460,7 +460,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
       const result = await api.importCharacterFromChub(wid, url);
       await reload();
       const d = await openDetail(result.character);
-      setTaglinePrompt({ cid: result.character, name: d.meta.name });
+      setTaglineQueue([{ cid: result.character, name: d.meta.name }]);
       setImportMsg(describeChubResult(result));
       await runLocalize(result.character, result.version);
     } catch (err: any) {
@@ -586,10 +586,10 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
   if (mode === "grid" || !detail || !card) {
     return (
       <div className="character-editor">
-        {taglinePrompt && (
-          <TaglinePrompt wid={wid} cid={taglinePrompt.cid} name={taglinePrompt.name}
-                         onSaved={(t) => setTagline(t)}
-                         onClose={() => setTaglinePrompt(null)} />
+        {taglineQueue.length > 0 && (
+          <TaglinePrompt wid={wid} cid={taglineQueue[0].cid} name={taglineQueue[0].name}
+                         onSaved={(t) => { setTagline(t); reload(); }}
+                         onClose={() => setTaglineQueue((q) => q.slice(1))} />
         )}
         <div className="grid-toolbar">
           <button className="primary" onClick={newCharacter}>+ New character</button>
@@ -655,10 +655,10 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
     const tags = card.data.tags ?? [];
     return (
       <div className="character-editor">
-        {taglinePrompt && (
-          <TaglinePrompt wid={wid} cid={taglinePrompt.cid} name={taglinePrompt.name}
-                         onSaved={(t) => setTagline(t)}
-                         onClose={() => setTaglinePrompt(null)} />
+        {taglineQueue.length > 0 && (
+          <TaglinePrompt wid={wid} cid={taglineQueue[0].cid} name={taglineQueue[0].name}
+                         onSaved={(t) => { setTagline(t); reload(); }}
+                         onClose={() => setTaglineQueue((q) => q.slice(1))} />
         )}
         <div className="editor-body">
           <button className="subtle back" onClick={backToGrid}>‹ All characters</button>
@@ -792,10 +792,10 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
   // mode === "edit"
   return (
     <div className="character-editor">
-      {taglinePrompt && (
-        <TaglinePrompt wid={wid} cid={taglinePrompt.cid} name={taglinePrompt.name}
-                       onSaved={(t) => setTagline(t)}
-                       onClose={() => setTaglinePrompt(null)} />
+      {taglineQueue.length > 0 && (
+        <TaglinePrompt wid={wid} cid={taglineQueue[0].cid} name={taglineQueue[0].name}
+                       onSaved={(t) => { setTagline(t); reload(); }}
+                       onClose={() => setTaglineQueue((q) => q.slice(1))} />
       )}
       <div className="editor-body">
         <button className="subtle back" onClick={backToGrid}>‹ All characters</button>
