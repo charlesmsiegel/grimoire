@@ -749,3 +749,30 @@ def test_download_chub_lorebooks_unlinked_version_raises(tmp_path):
     cid, vid = ch.create_character(tmp_path, "Abelha", "main")
     with pytest.raises(chub.ChubFetchError):
         ch.download_chub_lorebooks(tmp_path, cid, vid)
+
+
+def test_list_characters_counts_gallery_and_localized(tmp_path):
+    from grimoire.store import assets
+    cid, vid = ch.create_character(tmp_path, "Sera")
+    row = ch.list_characters(tmp_path)[0]
+    assert (row["gallery_count"], row["localized_count"]) == (0, 0)
+    assets.put_image(tmp_path, cid, vid, assets.AVATAR, b"a", "png")
+    row = ch.list_characters(tmp_path)[0]  # avatar alone counts as nothing
+    assert (row["gallery_count"], row["localized_count"]) == (0, 0)
+    assets.put_image(tmp_path, cid, vid, "gallery_1", b"g", "png")
+    assets.put_image(tmp_path, cid, vid, "gallery_2", b"g", "png")
+    assets.put_image(tmp_path, cid, vid, "embed-abc123def456", b"e", "png")
+    row = ch.list_characters(tmp_path)[0]
+    assert (row["gallery_count"], row["localized_count"]) == (2, 1)
+    assert row["has_avatar"] is True
+
+
+def test_avatar_focus_exposed_on_read_and_list(tmp_path):
+    from grimoire.store import assets
+    cid, vid = ch.create_character(tmp_path, "Sera")
+    assert ch.read_character(tmp_path, cid)["versions"][0]["avatar_focus"] is None
+    assert ch.list_characters(tmp_path)[0]["avatar_focus"] is None
+    assets.put_image(tmp_path, cid, vid, assets.AVATAR, b"a", "png")
+    assets.write_focus(tmp_path, cid, vid, 20)
+    assert ch.read_character(tmp_path, cid)["versions"][0]["avatar_focus"] == 20
+    assert ch.list_characters(tmp_path)[0]["avatar_focus"] == 20
