@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, type Card, type CharacterDetail, type CharacterSummary, type ChubImportResult, type ChubUnlinkedVersion } from "../api/client";
+import { AvatarFocusPicker } from "./AvatarFocusPicker";
 import { Field } from "./Field";
 import { OwnedLorePanel } from "./OwnedLorePanel";
 import { TaglinePrompt } from "./TaglinePrompt";
@@ -33,6 +34,10 @@ function describeChubResult(result: ChubImportResult): string {
 
 type Mode = "grid" | "detail" | "edit";
 
+function focusStyle(f?: number | null): React.CSSProperties | undefined {
+  return f == null ? undefined : { objectPosition: `${f}% ${f}%` };
+}
+
 export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
   { wid: string; resetSignal?: number; focus?: { cid: string; vid: string } | null;
     onOpenLore?: (nav: { focusEntry?: string; newOwner?: string }) => void }) {
@@ -61,6 +66,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
   const taglineReq = useRef(0);
   const [taglineQueue, setTaglineQueue] = useState<{ cid: string; name: string }[]>([]);
   const [urlPromptOpen, setUrlPromptOpen] = useState(false);
+  const [cropOpen, setCropOpen] = useState(false);
   const [bulkUrl, setBulkUrl] = useState<{ current: number; total: number; name: string; step: string } | null>(null);
 
   const reload = useCallback(() => api.listCharacters(wid).then(setChars), [wid]);
@@ -84,6 +90,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
   const hasAvatar = (detail && card)
     ? (detail.versions.find((v) => v.id === vid)?.images ?? []).includes("avatar")
     : false;
+  const avatarFocus = detail?.versions.find((v) => v.id === vid)?.avatar_focus ?? null;
   const chubSource = detail?.versions.find((v) => v.id === vid)?.chub_source ?? "";
   const isChub = detail?.versions.find((v) => v.id === vid)?.is_chub ?? false;
   const galleryImages = (detail?.versions.find((v) => v.id === vid)?.images ?? [])
@@ -95,6 +102,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
     setVid(v.id);
     setCard(v.card);
     setGreetings(v.card.data.alternate_greetings ?? []);
+    setCropOpen(false);
     setBookMsg(null);
     setLocalizeMsg(null);
     setLocalizeProg(null);
@@ -406,6 +414,18 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
     }
   }
 
+  async function saveFocus(f: number) {
+    if (!detail) return;
+    setCropOpen(false);
+    setError(null);
+    try {
+      await api.setAvatarFocus(wid, detail.meta.id, vid, f);
+      await refreshVersion();
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
+  }
+
   async function onShelfAdd(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file || !detail) return;
@@ -682,7 +702,8 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
               <div key={c.id} className="char-card">
                 <button className="char-card-main" onClick={() => openDetail(c.id)}>
                   {c.has_avatar
-                    ? <img className="char-card-avatar" alt="" src={avatarSrc(c.id, c.default_version, true)} />
+                    ? <img className="char-card-avatar" alt="" style={focusStyle(c.avatar_focus)}
+                           src={avatarSrc(c.id, c.default_version, true)} />
                     : <div className="initials-avatar" aria-hidden>
                         {c.name.split(/\s+/).slice(0, 2).map((w) => w[0] ?? "").join("")}
                       </div>}
@@ -716,6 +737,12 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
                          onSaved={(t) => { setTagline(t); reload(); }}
                          onClose={() => setTaglineQueue((q) => q.slice(1))} />
         )}
+        {cropOpen && hasAvatar && (
+          <AvatarFocusPicker src={avatarSrc(detail.meta.id, vid, true)}
+                             initial={avatarFocus ?? 50}
+                             onSave={saveFocus}
+                             onClose={() => setCropOpen(false)} />
+        )}
         <div className="editor-body">
           <button className="subtle back" onClick={backToGrid}>‹ All characters</button>
           {error && <div className="banner">{error}</div>}
@@ -723,7 +750,11 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
           <div className="detail">
             <div className="detail-head">
               {hasAvatar
-                ? <img className="detail-avatar" alt="" src={avatarSrc(detail.meta.id, vid, true)} />
+                ? <button className="avatar-crop-btn" type="button" aria-label="Adjust avatar crop"
+                          title="Adjust avatar crop" onClick={() => setCropOpen(true)}>
+                    <img className="detail-avatar" alt="" style={focusStyle(avatarFocus)}
+                         src={avatarSrc(detail.meta.id, vid, true)} />
+                  </button>
                 : <div className="initials-avatar detail" aria-hidden>
                     {(card.data.name || detail.meta.name).split(/\s+/).slice(0, 2).map((w) => w[0] ?? "").join("")}
                   </div>}
