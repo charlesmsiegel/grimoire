@@ -307,27 +307,93 @@ test("import version posts importCharacter into the current character", async ()
     expect(api.importCharacter).toHaveBeenCalledWith("w", expect.any(File), "json", "seraphine"));
 });
 
-test("downloading from a URL creates a character and shows the result", async () => {
-  vi.spyOn(window, "prompt").mockReturnValue("https://chub.ai/characters/creator/imp");
+test("downloading from a URL runs the full pipeline and shows the summary", async () => {
   (api.importCharacterFromChub as any).mockResolvedValue({
-    character: "imp", version: "default",
+    character: "imp", version: "default", updated: false,
     gallery: { attempted: 2, stored: 2 },
     lore: { lorebooks_found: 1, created: [{ kind: "lore", id: "x" }] },
   });
   render(<CharacterEditor wid="w" />);
   await screen.findByText("Seraphine");
   fireEvent.click(screen.getByRole("button", { name: /^download from url$/i }));
+  fireEvent.change(screen.getByLabelText("Card URLs"),
+    { target: { value: "https://chub.ai/characters/creator/imp" } });
+  fireEvent.click(screen.getByRole("button", { name: /^add$/i }));
   await waitFor(() =>
     expect(api.importCharacterFromChub).toHaveBeenCalledWith("w", "https://chub.ai/characters/creator/imp"));
-  await screen.findByText(/downloaded from url.*2\/2 gallery images.*1 lorebook \(1 entry\) added to world lore/i);
+  // pipeline: localize + embedded lorebook run against the new character
+  await waitFor(() => expect(api.localizeImages).toHaveBeenCalledWith("w", "imp", "default", expect.any(Function)));
+  await waitFor(() => expect(api.importCharacterBook).toHaveBeenCalledWith("w", "imp", "default"));
+  // summary: 1 related entry + 1 embedded entry = 2; localize mock reports 1 localized
+  await screen.findByText(/added 1\/1 character · 2 gallery images · 1 image localized · 2 lore entries imported/i);
+  // single URL: detail opens (readCharacter mock -> Seraphine) and its tagline prompt queues
+  await screen.findByText("Tagline for Seraphine");
 });
 
-test("an empty URL prompt makes no API call", async () => {
-  vi.spyOn(window, "prompt").mockReturnValue(null);
+test("cancelling the URL modal makes no API call", async () => {
   render(<CharacterEditor wid="w" />);
   await screen.findByText("Seraphine");
   fireEvent.click(screen.getByRole("button", { name: /^download from url$/i }));
+  fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
   expect(api.importCharacterFromChub).not.toHaveBeenCalled();
+});
+
+test("bulk URL import pipelines every URL and queues tagline prompts", async () => {
+  (api.importCharacterFromChub as any)
+    .mockResolvedValueOnce({ character: "imp1", version: "default", updated: false,
+      gallery: { attempted: 1, stored: 1 }, lore: { lorebooks_found: 0, created: [] } })
+    .mockResolvedValueOnce({ character: "imp2", version: "default", updated: false,
+      gallery: { attempted: 0, stored: 0 }, lore: { lorebooks_found: 0, created: [] } });
+  (api.readCharacter as any).mockImplementation((_w: string, cid: string) => Promise.resolve({
+    meta: { id: cid, name: cid === "imp1" ? "Imp One" : "Imp Two", default_version: "default" },
+    versions: [{ id: "default", name: "default", card: CARD, images: [] }],
+  }));
+  render(<CharacterEditor wid="w" />);
+  await screen.findByText("Seraphine");
+  fireEvent.click(screen.getByRole("button", { name: /^download from url$/i }));
+  fireEvent.change(screen.getByLabelText("Card URLs"),
+    { target: { value: "creator/one\n\ncreator/two\n" } });
+  fireEvent.click(screen.getByRole("button", { name: /^add$/i }));
+  await waitFor(() => expect(api.importCharacterFromChub).toHaveBeenCalledTimes(2));
+  expect(api.importCharacterFromChub).toHaveBeenCalledWith("w", "creator/one");
+  expect(api.importCharacterFromChub).toHaveBeenCalledWith("w", "creator/two");
+  await waitFor(() => expect(api.importCharacterBook).toHaveBeenCalledWith("w", "imp1", "default"));
+  await waitFor(() => expect(api.importCharacterBook).toHaveBeenCalledWith("w", "imp2", "default"));
+  // tagline prompts drain one at a time; Skip advances to the next character
+  await screen.findByText("Tagline for Imp One");
+  fireEvent.click(screen.getByRole("button", { name: /^skip$/i }));
+  await screen.findByText("Tagline for Imp Two");
+});
+
+test("a failing URL is reported in the summary and the rest still import", async () => {
+  (api.importCharacterFromChub as any)
+    .mockRejectedValueOnce({ detail: "could not fetch a character card from that URL" })
+    .mockResolvedValueOnce({ character: "imp2", version: "default", updated: false,
+      gallery: { attempted: 0, stored: 0 }, lore: { lorebooks_found: 0, created: [] } });
+  render(<CharacterEditor wid="w" />);
+  await screen.findByText("Seraphine");
+  fireEvent.click(screen.getByRole("button", { name: /^download from url$/i }));
+  fireEvent.change(screen.getByLabelText("Card URLs"),
+    { target: { value: "bad/url\ncreator/two" } });
+  fireEvent.click(screen.getByRole("button", { name: /^add$/i }));
+  await screen.findByText(/added 1\/2 characters.*failed — bad\/url: could not fetch/i);
+  // the good URL still went through the pipeline
+  expect(api.localizeImages).toHaveBeenCalledWith("w", "imp2", "default", expect.any(Function));
+});
+
+test("a mid-pipeline failure still finishes the character's remaining steps", async () => {
+  (api.localizeImages as any).mockRejectedValueOnce({ detail: "boom" });
+  (api.importCharacterFromChub as any).mockResolvedValue({
+    character: "imp", version: "default", updated: false,
+    gallery: { attempted: 0, stored: 0 }, lore: { lorebooks_found: 0, created: [] },
+  });
+  render(<CharacterEditor wid="w" />);
+  await screen.findByText("Seraphine");
+  fireEvent.click(screen.getByRole("button", { name: /^download from url$/i }));
+  fireEvent.change(screen.getByLabelText("Card URLs"), { target: { value: "creator/imp" } });
+  fireEvent.click(screen.getByRole("button", { name: /^add$/i }));
+  await waitFor(() => expect(api.importCharacterBook).toHaveBeenCalledWith("w", "imp", "default"));
+  await screen.findByText(/added 1\/1 character.*failed — .*localize failed/i);
 });
 
 test("checking chub.ai links lists unlinked versions and jumps to one on click", async () => {

@@ -3,6 +3,7 @@ import { api, type Card, type CharacterDetail, type CharacterSummary, type ChubI
 import { Field } from "./Field";
 import { OwnedLorePanel } from "./OwnedLorePanel";
 import { TaglinePrompt } from "./TaglinePrompt";
+import { UrlImportPrompt } from "./UrlImportPrompt";
 
 const TEXT_FIELDS: { key: string; label: string; area?: boolean }[] = [
   { key: "description", label: "Description", area: true },
@@ -57,6 +58,8 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
   const [taglineBusy, setTaglineBusy] = useState(false);
   const taglineReq = useRef(0);
   const [taglineQueue, setTaglineQueue] = useState<{ cid: string; name: string }[]>([]);
+  const [urlPromptOpen, setUrlPromptOpen] = useState(false);
+  const [bulkUrl, setBulkUrl] = useState<{ current: number; total: number; name: string; step: string } | null>(null);
 
   const reload = useCallback(() => api.listCharacters(wid).then(setChars), [wid]);
   useEffect(() => {
@@ -451,21 +454,58 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
     }
   }
 
-  async function downloadFromChub() {
-    const url = window.prompt("Card URL (chub.ai link or a direct URL)?")?.trim();
-    if (!url) return;
+  // Bulk pipeline for "Download from URL". Per URL: import (the backend already
+  // downloads the avatar, chub gallery, and related chub lorebooks inside this
+  // one call), localize embedded images, then import the card's embedded
+  // character_book to world lore. Failures record and continue — one bad URL
+  // shouldn't sink the batch. Tagline prompts queue up after the whole run.
+  async function runBulkUrlImport(urls: string[]) {
     setError(null);
     setImportMsg(null);
-    try {
-      const result = await api.importCharacterFromChub(wid, url);
-      await reload();
-      const d = await openDetail(result.character);
-      setTaglineQueue([{ cid: result.character, name: d.meta.name }]);
-      setImportMsg(describeChubResult(result));
-      await runLocalize(result.character, result.version);
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
+    const failures: string[] = [];
+    const added: { cid: string; name: string }[] = [];
+    let localized = 0, gallery = 0, lore = 0;
+    for (let i = 0; i < urls.length; i++) {
+      setBulkUrl({ current: i + 1, total: urls.length, name: urls[i], step: "importing" });
+      let result: ChubImportResult;
+      try {
+        result = await api.importCharacterFromChub(wid, urls[i]);
+      } catch (err: any) {
+        failures.push(`${urls[i]}: ${err.detail ?? String(err)}`);
+        continue;
+      }
+      gallery += result.gallery.stored;
+      lore += result.lore.created.length;
+      let name = result.character;
+      try {
+        name = (await api.readCharacter(wid, result.character)).meta.name;
+      } catch { /* fall back to the id */ }
+      setBulkUrl({ current: i + 1, total: urls.length, name, step: "localizing images" });
+      try {
+        await api.localizeImages(wid, result.character, result.version, (e) => {
+          if (e.summary) localized += e.summary.localized;
+        });
+      } catch (err: any) {
+        failures.push(`${name}: localize failed (${err.detail ?? String(err)})`);
+      }
+      setBulkUrl({ current: i + 1, total: urls.length, name, step: "importing lorebook" });
+      try {
+        const { created } = await api.importCharacterBook(wid, result.character, result.version);
+        lore += created.length;
+      } catch (err: any) {
+        failures.push(`${name}: lorebook import failed (${err.detail ?? String(err)})`);
+      }
+      added.push({ cid: result.character, name });
+      await reload();  // the new card appears in the grid as it lands
     }
+    setBulkUrl(null);
+    const parts = [`Added ${added.length}/${urls.length} character${urls.length === 1 ? "" : "s"}`];
+    if (gallery) parts.push(`${gallery} gallery image${gallery === 1 ? "" : "s"}`);
+    if (localized) parts.push(`${localized} image${localized === 1 ? "" : "s"} localized`);
+    if (lore) parts.push(`${lore} lore entr${lore === 1 ? "y" : "ies"} imported`);
+    setImportMsg(parts.join(" · ") + (failures.length ? ` · failed — ${failures.join("; ")}` : ""));
+    if (urls.length === 1 && added.length === 1) await openDetail(added[0].cid);
+    setTaglineQueue(added);
   }
 
   async function downloadVersionFromChub() {
@@ -591,14 +631,22 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
                          onSaved={(t) => { setTagline(t); reload(); }}
                          onClose={() => setTaglineQueue((q) => q.slice(1))} />
         )}
+        {urlPromptOpen && (
+          <UrlImportPrompt onClose={() => setUrlPromptOpen(false)} onSubmit={runBulkUrlImport} />
+        )}
         <div className="grid-toolbar">
           <button className="primary" onClick={newCharacter}>+ New character</button>
           <button className="subtle" onClick={() => fileRef.current?.click()}>Import card</button>
           <input ref={fileRef} type="file" accept=".json,.png,.charx" multiple hidden aria-label="Import character card" onChange={onImport} />
-          <button className="subtle" onClick={downloadFromChub}>Download from URL</button>
+          <button className="subtle" onClick={() => setUrlPromptOpen(true)}>Download from URL</button>
           <button className="subtle" onClick={checkChubLinks}>Check chub.ai links</button>
           {bulkLocalize && (
             <span className="field-hint">Localizing card {bulkLocalize.current}/{bulkLocalize.cards}…</span>
+          )}
+          {bulkUrl && (
+            <span className="field-hint">
+              Adding {bulkUrl.current}/{bulkUrl.total} — {bulkUrl.name}: {bulkUrl.step}…
+            </span>
           )}
           {!bulkLocalize && importMsg && <span className="field-hint">{importMsg}</span>}
         </div>
