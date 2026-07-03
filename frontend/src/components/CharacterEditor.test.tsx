@@ -361,8 +361,11 @@ test("bulk URL import pipelines every URL and queues tagline prompts", async () 
   await waitFor(() => expect(api.importCharacterBook).toHaveBeenCalledWith("w", "imp2", "default"));
   // tagline prompts drain one at a time; Skip advances to the next character
   await screen.findByText("Tagline for Imp One");
+  fireEvent.change(screen.getByLabelText("Tagline"), { target: { value: "typed for Imp One" } });
   fireEvent.click(screen.getByRole("button", { name: /^skip$/i }));
   await screen.findByText("Tagline for Imp Two");
+  // the box starts empty for each character — no leftover text from the previous one
+  expect(screen.getByLabelText("Tagline")).toHaveValue("");
 });
 
 test("a failing URL is reported in the summary and the rest still import", async () => {

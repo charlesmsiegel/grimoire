@@ -627,7 +627,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
     return (
       <div className="character-editor">
         {taglineQueue.length > 0 && (
-          <TaglinePrompt wid={wid} cid={taglineQueue[0].cid} name={taglineQueue[0].name}
+          <TaglinePrompt key={taglineQueue[0].cid} wid={wid} cid={taglineQueue[0].cid} name={taglineQueue[0].name}
                          onSaved={(t) => { setTagline(t); reload(); }}
                          onClose={() => setTaglineQueue((q) => q.slice(1))} />
         )}
@@ -704,7 +704,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
     return (
       <div className="character-editor">
         {taglineQueue.length > 0 && (
-          <TaglinePrompt wid={wid} cid={taglineQueue[0].cid} name={taglineQueue[0].name}
+          <TaglinePrompt key={taglineQueue[0].cid} wid={wid} cid={taglineQueue[0].cid} name={taglineQueue[0].name}
                          onSaved={(t) => { setTagline(t); reload(); }}
                          onClose={() => setTaglineQueue((q) => q.slice(1))} />
         )}
@@ -841,7 +841,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
   return (
     <div className="character-editor">
       {taglineQueue.length > 0 && (
-        <TaglinePrompt wid={wid} cid={taglineQueue[0].cid} name={taglineQueue[0].name}
+        <TaglinePrompt key={taglineQueue[0].cid} wid={wid} cid={taglineQueue[0].cid} name={taglineQueue[0].name}
                        onSaved={(t) => { setTagline(t); reload(); }}
                        onClose={() => setTaglineQueue((q) => q.slice(1))} />
       )}
