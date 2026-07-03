@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { api, type Card, type CharacterDetail, type CharacterSummary, type ChubImportResult, type ChubUnlinkedVersion } from "../api/client";
 import { Field } from "./Field";
 import { OwnedLorePanel } from "./OwnedLorePanel";
@@ -823,18 +825,25 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
 
             {TEXT_FIELDS.map((f) => {
               const val = (card.data[f.key] as string) ?? "";
-              return val.trim() ? (
+              if (!val.trim()) return null;
+              return (
                 <div className="detail-field" key={f.key}>
                   <div className="section-label">{f.label}</div>
-                  <div className="detail-text">{val}</div>
+                  {f.key === "first_mes"
+                    ? <div className="detail-rendered"><Markdown remarkPlugins={[remarkGfm]}>{val}</Markdown></div>
+                    : <div className="detail-text">{val}</div>}
                 </div>
-              ) : null;
+              );
             })}
 
             {greetings.length > 0 && (
               <div className="detail-field">
                 <div className="section-label">Alternate greetings</div>
-                {greetings.map((g, i) => <blockquote className="greeting-quote" key={i}>{g}</blockquote>)}
+                {greetings.map((g, i) => (
+                  <blockquote className="greeting-quote" key={i}>
+                    <div className="detail-rendered"><Markdown remarkPlugins={[remarkGfm]}>{g}</Markdown></div>
+                  </blockquote>
+                ))}
               </div>
             )}
           </div>
