@@ -7,7 +7,7 @@ export default defineConfig({
   server: {
     host: "127.0.0.1",
     port: 5173,
-    proxy: { "/api": "http://127.0.0.1:8173" },
+    proxy: { "/api": process.env.GRIMOIRE_API ?? "http://127.0.0.1:8173" },
   },
   test: {
     globals: true,
