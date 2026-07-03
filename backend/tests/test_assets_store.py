@@ -67,6 +67,40 @@ def test_promote_avatar_itself_is_a_noop(tmp_path):
     assert assets.image_path(tmp_path, "sera", "default", "avatar").read_bytes() == b"a"
 
 
+def test_focus_round_trip_and_clamp(tmp_path):
+    assert assets.read_focus(tmp_path, "sera", "default") is None
+    assets.write_focus(tmp_path, "sera", "default", 62)
+    assert assets.read_focus(tmp_path, "sera", "default") == 62
+    assets.write_focus(tmp_path, "sera", "default", 250)
+    assert assets.read_focus(tmp_path, "sera", "default") == 100
+    assets.clear_focus(tmp_path, "sera", "default")
+    assert assets.read_focus(tmp_path, "sera", "default") is None
+
+
+def test_focus_sidecar_not_listed_as_image(tmp_path):
+    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"a", "png")
+    assets.write_focus(tmp_path, "sera", "default", 30)
+    assert assets.list_images(tmp_path, "sera", "default") == [{"name": "avatar", "ext": "png"}]
+
+
+def test_focus_cleared_when_avatar_changes(tmp_path):
+    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"a", "png")
+    assets.write_focus(tmp_path, "sera", "default", 30)
+    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"b", "png")  # re-upload clears
+    assert assets.read_focus(tmp_path, "sera", "default") is None
+
+    assets.write_focus(tmp_path, "sera", "default", 30)
+    assets.put_image(tmp_path, "sera", "default", "gallery_1", b"g", "png")  # non-avatar keeps it
+    assert assets.read_focus(tmp_path, "sera", "default") == 30
+
+    assets.promote_image(tmp_path, "sera", "default", "gallery_1")  # promote clears
+    assert assets.read_focus(tmp_path, "sera", "default") is None
+
+    assets.write_focus(tmp_path, "sera", "default", 30)
+    assets.delete_image(tmp_path, "sera", "default", assets.AVATAR)  # delete clears
+    assert assets.read_focus(tmp_path, "sera", "default") is None
+
+
 def test_base_param_roots_other_kinds(tmp_path):
     assets.put_image(tmp_path, "docks", "default", "avatar", b"i", "png", base="locations")
     p = assets.image_path(tmp_path, "docks", "default", "avatar", base="locations")
