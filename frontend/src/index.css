@@ -694,3 +694,5 @@ button.primary { background: var(--accent); color: var(--on-accent); border: var
 .focus-preview img { width: 100%; display: block; user-select: none; }
 .focus-window { position: absolute; border: 2px solid var(--accent); box-shadow: 0 0 0 999px rgba(0, 0, 0, 0.45); pointer-events: none; }
 .focus-modal input[type="range"] { width: 100%; }
+
+.html-note { width: 100%; border: none; display: block; }

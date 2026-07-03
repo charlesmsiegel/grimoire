@@ -710,3 +710,34 @@ test("stored focus is applied as object-position on detail and grid avatars", as
   const detailImg = document.querySelector(".detail-avatar") as HTMLElement;
   expect(detailImg.style.objectPosition).toBe("25% 25%");
 });
+
+
+test("creator notes render inside a sandboxed iframe", async () => {
+  const card = {
+    ...CARD,
+    data: { ...CARD.data, creator_notes: "<style>body{color:red}</style><b>fancy</b> note" },
+  };
+  (api.readCharacter as any).mockResolvedValue({
+    meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
+    versions: [{ id: "default", name: "default", card, images: [] }],
+  });
+  render(<CharacterEditor wid="w" />);
+  fireEvent.click(await screen.findByText("Seraphine"));
+  const frame = await screen.findByTitle("Creator notes");
+  expect(frame.tagName).toBe("IFRAME");
+  expect(frame.getAttribute("sandbox")).not.toContain("allow-scripts");
+  expect(frame.getAttribute("srcdoc")).toContain("<b>fancy</b> note");
+});
+
+test("plain-text creator notes keep line breaks via pre-wrap", async () => {
+  const card = { ...CARD, data: { ...CARD.data, creator_notes: "line one\nline two" } };
+  (api.readCharacter as any).mockResolvedValue({
+    meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
+    versions: [{ id: "default", name: "default", card, images: [] }],
+  });
+  render(<CharacterEditor wid="w" />);
+  fireEvent.click(await screen.findByText("Seraphine"));
+  const frame = await screen.findByTitle("Creator notes");
+  expect(frame.getAttribute("srcdoc")).toContain("white-space:pre-wrap");
+  expect(frame.getAttribute("srcdoc")).toContain("line one\nline two");
+});

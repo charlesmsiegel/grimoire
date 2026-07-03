@@ -4,6 +4,7 @@ import remarkGfm from "remark-gfm";
 import { api, type Card, type CharacterDetail, type CharacterSummary, type ChubImportResult, type ChubUnlinkedVersion } from "../api/client";
 import { AvatarFocusPicker } from "./AvatarFocusPicker";
 import { Field } from "./Field";
+import { HtmlNote } from "./HtmlNote";
 import { OwnedLorePanel } from "./OwnedLorePanel";
 import { TaglinePrompt } from "./TaglinePrompt";
 import { UrlImportPrompt } from "./UrlImportPrompt";
@@ -862,7 +863,9 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
                   <div className="section-label">{f.label}</div>
                   {f.key === "first_mes"
                     ? <div className="detail-rendered"><Markdown remarkPlugins={[remarkGfm]}>{val}</Markdown></div>
-                    : <div className="detail-text">{val}</div>}
+                    : f.key === "creator_notes"
+                      ? <HtmlNote html={val} title="Creator notes" />
+                      : <div className="detail-text">{val}</div>}
                 </div>
               );
             })}
