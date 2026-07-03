@@ -99,6 +99,10 @@ class TaglineSave(BaseModel):
     tagline: str = ""
 
 
+class AvatarFocus(BaseModel):
+    focus: int
+
+
 class PCCreate(BaseModel):
     name: str
     tags: list[str] = []
@@ -750,6 +754,15 @@ def promote_world_image(wid: str, cid: str, vid: str, name: str):
         store.assets.promote_image(_world_root_or_404(wid), cid, vid, name)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="image not found")
+    return {"ok": True}
+
+
+@router.put("/worlds/{wid}/characters/{cid}/versions/{vid}/images/avatar/focus")
+def put_world_avatar_focus(wid: str, cid: str, vid: str, body: AvatarFocus):
+    root = _world_root_or_404(wid)
+    if store.assets.image_path(root, cid, vid, store.assets.AVATAR) is None:
+        raise HTTPException(status_code=404, detail="image not found")
+    store.assets.write_focus(root, cid, vid, body.focus)
     return {"ok": True}
 
 
