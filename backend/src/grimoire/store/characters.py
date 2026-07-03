@@ -179,6 +179,7 @@ def read_character(root: Path, cid: str) -> dict:
             "name": _version_label(card, vid),
             "card": card,
             "images": [i["name"] for i in assets.list_images(root, cid, vid)],
+            "avatar_focus": assets.read_focus(root, cid, vid),
             "chub_source": chub_source,
             "is_chub": bool(chub_source) and chub.parse_full_path(chub_source) is not None,
         })
@@ -198,11 +199,15 @@ def list_characters(root: Path) -> list[dict]:
             cid = cd.name
             meta, _ = parse_frontmatter(_meta_path(root, cid).read_text(encoding="utf-8"))
             default = meta.get("default_version", "")
+            names = [i["name"] for i in assets.list_images(root, cid, default)]
             out.append({
                 "id": cid,
                 "name": meta.get("name", cid),
                 "default_version": default,
-                "has_avatar": assets.image_path(root, cid, default, assets.AVATAR) is not None,
+                "has_avatar": assets.AVATAR in names,
+                "avatar_focus": assets.read_focus(root, cid, default),
+                "gallery_count": sum(1 for n in names if n.startswith("gallery_")),
+                "localized_count": sum(1 for n in names if n.startswith("embed-")),
                 "tagline": taglines.read(root, cid),
                 "versions": [{"id": v, "name": _version_label(read_card(root, cid, v), v)}
                              for v in _version_ids(root, cid)],
