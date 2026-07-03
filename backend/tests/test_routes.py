@@ -171,6 +171,25 @@ def test_character_image_promote_missing_404(client):
     assert r.status_code == 404
 
 
+def test_avatar_focus_endpoint_round_trip(client):
+    wid = _world(client)
+    cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
+    base = f"/api/worlds/{wid}/characters/{cid}/versions/default/images"
+    # no avatar yet -> 404
+    assert client.put(f"{base}/avatar/focus", json={"focus": 30}).status_code == 404
+    client.put(f"{base}/avatar", files={"file": ("a.png", io.BytesIO(b"img"), "image/png")})
+    assert client.put(f"{base}/avatar/focus", json={"focus": 30}).json() == {"ok": True}
+    detail = client.get(f"/api/worlds/{wid}/characters/{cid}").json()
+    assert detail["versions"][0]["avatar_focus"] == 30
+    chars = client.get(f"/api/worlds/{wid}/characters").json()
+    assert chars[0]["avatar_focus"] == 30
+    assert chars[0]["gallery_count"] == 0 and chars[0]["localized_count"] == 0
+    # promoting a new image invalidates the crop
+    client.put(f"{base}/gallery_1", files={"file": ("g.png", io.BytesIO(b"g"), "image/png")})
+    client.post(f"{base}/gallery_1/promote")
+    assert client.get(f"/api/worlds/{wid}/characters/{cid}").json()["versions"][0]["avatar_focus"] is None
+
+
 def test_entity_images_crud_promote_and_has_image(client):
     wid = _world(client)
     eid = client.post(f"/api/worlds/{wid}/locations", json={"name": "Warehouse Nine"}).json()["id"]
