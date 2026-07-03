@@ -652,3 +652,25 @@ test("grid cards show gallery/localized badges only when nonzero", async () => {
   expect(screen.queryByText("0 gallery")).toBeNull();
   expect(screen.queryByText("0 localized")).toBeNull();
 });
+
+
+test("first message and alternate greetings render markdown images; other fields stay plain", async () => {
+  const card = {
+    ...CARD,
+    data: {
+      ...CARD.data,
+      first_mes: "hello ![scene](/img/w/seraphine/default/embed-abc)",
+      alternate_greetings: ["alt ![alt-pic](/img/w/seraphine/default/embed-def)"],
+      description: "plain **stars** stay literal",
+    },
+  };
+  (api.readCharacter as any).mockResolvedValue({
+    meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
+    versions: [{ id: "default", name: "default", card, images: ["avatar"] }],
+  });
+  render(<CharacterEditor wid="w" />);
+  fireEvent.click(await screen.findByText("Seraphine"));
+  await screen.findByRole("img", { name: "scene" });
+  await screen.findByRole("img", { name: "alt-pic" });
+  expect(screen.getByText("plain **stars** stay literal")).toBeInTheDocument();
+});
