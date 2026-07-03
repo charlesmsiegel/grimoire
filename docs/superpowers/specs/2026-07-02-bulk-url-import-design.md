@@ -40,16 +40,18 @@ unchanged.
 
 ## Pipeline (per URL, sequential)
 
-1. `api.importCharacterFromChub(wid, url)` — creates the character.
-2. `api.downloadCharacterChubGallery(wid, cid, vid, onEvent)` — gallery
-   images. Skips gracefully when the URL is not a chub link or there is no
-   gallery.
-3. `api.localizeImages(wid, cid, vid, onEvent)` — downloads remote images
+1. `api.importCharacterFromChub(wid, url)` — creates the character. The
+   backend (`store.characters.import_from_chub`) already downloads the
+   avatar, the chub gallery, and related chub lorebooks as part of this call
+   and reports their counts in `ChubImportResult.gallery` / `.lore`; for
+   non-chub direct URLs those come back empty. No separate gallery or
+   related-lorebook calls are needed (re-calling those endpoints would
+   re-download everything a second time).
+2. `api.localizeImages(wid, cid, vid, onEvent)` — downloads remote images
    referenced in the card text and rewrites the references to local paths.
-4. `api.importCharacterBook(wid, cid, vid)` — embedded `character_book` →
+3. `api.importCharacterBook(wid, cid, vid)` — embedded `character_book` →
    world lore. Backend returns `created: []` when the card has no book.
-5. `api.downloadCharacterChubLorebooks(wid, cid, vid)` — related chub
-   lorebooks → world lore.
+   (This is the one lorebook source the import call does not cover.)
 
 Error handling: a failing step records the error and **continues** — to the
 next step of the same character, and to the next URL. A failure in step 1
@@ -81,7 +83,8 @@ character's detail view, then show its tagline prompt.
 Vitest with the mocked `api` module (existing pattern in
 `CharacterEditor.test.tsx`):
 
-- Multi-URL happy path: all five endpoints called per URL, in order.
+- Multi-URL happy path: import, localize, and embedded-lorebook endpoints
+  called per URL, in order.
 - A URL whose import fails is skipped; later URLs still run; the summary
   reports the failure.
 - A mid-pipeline step failure (e.g. gallery) still runs the remaining steps
