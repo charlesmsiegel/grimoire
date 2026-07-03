@@ -25,12 +25,20 @@ export function HtmlNote({ html, title }: { html: string; title: string }) {
     const frame = ref.current;
     const root = frame?.contentDocument?.documentElement;
     if (!frame || !root) return;
-    frame.style.height = `${root.scrollHeight}px`;
+    // Measure at a zero-height viewport so viewport-relative (vh) content
+    // collapses and can't feed the measurement back into itself. All writes
+    // share one JS turn, so the probe state is never painted.
+    frame.style.height = "0px";
+    const staticH = root.scrollHeight;
+    frame.style.height = `${staticH}px`;
+    // Content that tracks the viewport re-expands past any height we set;
+    // give it one screen and let the frame scroll internally for the rest.
+    if (root.scrollHeight > staticH + 1) {
+      frame.style.height = `${Math.max(staticH, Math.round(window.innerHeight * 0.9))}px`;
+    }
     roRef.current?.disconnect();
     if (typeof ResizeObserver !== "undefined") {
-      roRef.current = new ResizeObserver(() => {
-        frame.style.height = `${root.scrollHeight}px`;
-      });
+      roRef.current = new ResizeObserver(fit);
       roRef.current.observe(root);
     }
   }
