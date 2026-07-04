@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type Card, type CharacterDetail, type CharacterSummary, type ChubImportResult, type ChubUnlinkedVersion } from "../api/client";
+import { api, type Appearance, type Card, type CharacterDetail, type CharacterSummary, type ChubImportResult, type ChubUnlinkedVersion, type Greeting } from "../api/client";
 import { AvatarFocusPicker } from "./AvatarFocusPicker";
 import { Field } from "./Field";
 import { GreetingMarkdown } from "./GreetingMarkdown";
@@ -38,9 +38,10 @@ function focusStyle(f?: number | null): React.CSSProperties | undefined {
   return f == null ? undefined : { objectPosition: `${f}% ${f}%` };
 }
 
-export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
+export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGreeting }:
   { wid: string; resetSignal?: number; focus?: { cid: string; vid: string } | null;
-    onOpenLore?: (nav: { focusEntry?: string; newOwner?: string }) => void }) {
+    onOpenLore?: (nav: { focusEntry?: string; newOwner?: string }) => void;
+    onOpenGreeting?: (gid: string) => void }) {
   const [chars, setChars] = useState<CharacterSummary[]>([]);
   const [detail, setDetail] = useState<CharacterDetail | null>(null);
   const [vid, setVid] = useState("");
@@ -53,6 +54,8 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
   const avatarRef = useRef<HTMLInputElement>(null);
   const shelfFileRef = useRef<HTMLInputElement>(null);
   const [avatarBust, setAvatarBust] = useState(0);
+  const [imageAppearances, setImageAppearances] = useState<Appearance[]>([]);
+  const [worldGreetings, setWorldGreetings] = useState<Greeting[]>([]);
   const [bookMsg, setBookMsg] = useState<string | null>(null);
   const [localizeProg, setLocalizeProg] = useState<{ done: number; total: number } | null>(null);
   const [localizeMsg, setLocalizeMsg] = useState<string | null>(null);
@@ -86,6 +89,14 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
     if (focus) focusCharacter(focus.cid, focus.vid);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // detail-view extras: tagged greeting images + world greetings featuring this character
+  const detailCid = detail?.meta.id;
+  useEffect(() => {
+    if (!detailCid) return;
+    api.listImageAppearances(wid, detailCid).then(setImageAppearances).catch(() => setImageAppearances([]));
+    api.listGreetings(wid).then(setWorldGreetings).catch(() => setWorldGreetings([]));
+  }, [wid, detailCid]);
 
   const hasAvatar = (detail && card)
     ? (detail.versions.find((v) => v.id === vid)?.images ?? []).includes("avatar")
@@ -408,6 +419,17 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
     setError(null);
     try {
       await api.promoteImage(wid, detail.meta.id, vid, name);
+      await refreshVersion();
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
+  }
+
+  async function copyFromGreeting(a: Appearance, slot: "avatar" | "gallery") {
+    if (!detail) return;
+    setError(null);
+    try {
+      await api.copyGreetingImage(wid, detail.meta.id, vid, { gid: a.gid, name: a.name, slot });
       await refreshVersion();
     } catch (err: any) {
       setError(err.detail ?? String(err));
@@ -866,6 +888,26 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
               </div>
             </div>
 
+            {imageAppearances.length > 0 && (
+              <div className="detail-field">
+                <div className="section-label">Appears in</div>
+                <div className="images-shelf">
+                  {imageAppearances.map((a) => (
+                    <div className="shelf-tile" key={`${a.gid}/${a.name}`}>
+                      <a href={a.url} target="_blank" rel="noreferrer">
+                        <img alt={`${a.greeting_name} art`} src={a.url} />
+                      </a>
+                      <button className="shelf-promote" onClick={() => copyFromGreeting(a, "avatar")}>Set as avatar</button>
+                      <button className="shelf-promote" onClick={() => copyFromGreeting(a, "gallery")}>Add to gallery</button>
+                      {onOpenGreeting && (
+                        <button className="shelf-promote" onClick={() => onOpenGreeting(a.gid)}>{a.greeting_name}</button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {localizeControls(false)}
 
             {onOpenLore && (
@@ -902,6 +944,24 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
                 ))}
               </div>
             )}
+
+            {(() => {
+              // world greetings featuring this character — links, not card content
+              const mine = worldGreetings.filter((g) => (g.present ?? []).includes(detail.meta.id));
+              if (mine.length === 0) return null;
+              return (
+                <div className="detail-field">
+                  <div className="section-label">World greetings</div>
+                  <div className="chips">
+                    {mine.map((g) => (
+                      <button key={g.id} className="chip on" onClick={() => onOpenGreeting?.(g.id)}>
+                        {g.character === detail.meta.id ? `★ ${g.name}` : g.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         </div>
       </div>
