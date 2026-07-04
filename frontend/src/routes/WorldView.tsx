@@ -48,6 +48,8 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   }, [campaign, cid, widParam]);
 
   const scope: EntityScope = campaign ? { kind: "campaign", id: cid } : { kind: "world", id: wid };
+  // tag vocabulary is a world concern; campaign PC tags are free strings
+  const tabs = campaign ? TABS.filter((t) => t.key !== "tags") : TABS;
 
   // a present-character link from the greeting view jumps to that character
   function openCharacter(cid: string, vid: string) {
@@ -97,7 +99,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
       <h1 className="page-h1">{name}</h1>
 
       <div className="tabs">
-        {TABS.map((t) => (
+        {tabs.map((t) => (
           <button
             key={t.key}
             className={"tab" + (tab === t.key ? " active" : "")}
@@ -110,14 +112,14 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
 
       {tab === "characters" && <CharacterEditor scope={scope} wid={wid} resetSignal={charReset} focus={focusChar} onOpenLore={openLore} onOpenGreeting={openGreeting} />}
       {tab === "pcs" && <PCEditor scope={scope} wid={wid} onOpenLore={openLore} />}
-      {tab === "tags" && <TagEditor wid={wid} />}
+      {!campaign && tab === "tags" && <TagEditor wid={wid} />}
       {tab === "locations" && <EntityEditor wid={wid} scope={scope} kind="locations" onOpenLore={openLore} />}
       {tab === "lore" && (
         <>
-          <details className="import-section">
+          {!campaign && <details className="import-section">
             <summary>Import lorebook / world-info</summary>
             <LorebookImport wid={wid} onImported={() => setLoreReset((n) => n + 1)} />
-          </details>
+          </details>}
           <EntityEditor key={loreReset} wid={wid} scope={scope} kind="lore" nav={loreNav}
                         onNavConsumed={() => setLoreNav(null)} onOpenOwner={openOwner} />
         </>

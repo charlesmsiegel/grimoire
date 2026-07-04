@@ -18,6 +18,8 @@ vi.mock("../api/client", () => ({
     getGreetingSubjects: vi.fn(),
     listUntaggedImages: vi.fn(),
     imageUrl: (w: string, c: string, v: string, n: string) => `/img/${w}/${c}/${v}/${n}`,
+    actorImageUrl: (sc: { id: string }, c: string, v: string, n: string) => `/img/${sc.id}/${c}/${v}/${n}`,
+    listAppearances: vi.fn(), markGreeting: vi.fn(), pickVersion: vi.fn(), importVersion: vi.fn(),
   },
 }));
 import { api } from "../api/client";
@@ -110,4 +112,18 @@ test("openGreeting switches to the greetings tab and focuses the greeting", asyn
   fireEvent.click(within(wg.parentElement as HTMLElement).getByText("SoL 2"));
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "sol-2"));
   expect(screen.getByRole("button", { name: "Greetings" })).toHaveClass("active");
+});
+
+
+test("campaign mode passes campaign scope and hides the Tags tab", async () => {
+  (api.listAppearances as any).mockResolvedValue([]);
+  render(
+    <MemoryRouter initialEntries={["/campaigns/c1/world"]}>
+      <Routes><Route path="/campaigns/:cid/world" element={<WorldView campaign />} /></Routes>
+    </MemoryRouter>,
+  );
+  await screen.findByText(/World Copy/);
+  await waitFor(() => expect(api.listCharacters).toHaveBeenCalledWith({ kind: "campaign", id: "c1" }));
+  expect(screen.queryByRole("button", { name: "Tags" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Greetings" })).toBeInTheDocument();
 });
