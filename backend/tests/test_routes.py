@@ -1777,3 +1777,57 @@ def test_campaign_root_routes_backfill_legacy_copy(client):
     assert store.campaigns.read_campaign(cid)["meta"]["world_copy"] == "full"
     # missing campaigns still 404 through the same helper
     assert client.get("/api/campaigns/nope/greetings/available").status_code == 404
+
+
+# ---- campaign greeting CRUD + marks ----
+def test_campaign_greeting_crud_and_marks(client):
+    wid = _world(client)
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"})
+    g = client.post(f"/api/worlds/{wid}/greetings",
+                    json={"name": "Gala", "character": "mara", "version": "default",
+                          "body": "Hi."}).json()["id"]
+    cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
+
+    # campaign list carries marks
+    out = client.get(f"/api/campaigns/{cid}/greetings").json()
+    assert [x["id"] for x in out] == [g] and out[0]["mark"] is None
+
+    # detail includes edges + predecessors from the campaign plot map
+    detail = client.get(f"/api/campaigns/{cid}/greetings/{g}").json()
+    assert detail["body"] == "Hi." and detail["edges"] == {"leads_to": [], "excludes": []}
+
+    # campaign edit does not touch the world
+    r = client.put(f"/api/campaigns/{cid}/greetings/{g}", json={"body": "Campaign version."})
+    assert r.status_code == 200
+    assert client.get(f"/api/worlds/{wid}/greetings/{g}").json()["body"] == "Hi."
+
+    # marks
+    r = client.post(f"/api/campaigns/{cid}/greetings/{g}/mark", json={"status": "skipped"})
+    assert r.status_code == 200
+    assert client.get(f"/api/campaigns/{cid}/greetings").json()[0]["mark"] == "skipped"
+    assert client.get(f"/api/campaigns/{cid}/greetings/available").json() == []
+    r = client.post(f"/api/campaigns/{cid}/greetings/nope/mark", json={"status": "skipped"})
+    assert r.status_code == 404
+
+    # create + edges + delete campaign-local greeting
+    g2 = client.post(f"/api/campaigns/{cid}/greetings",
+                     json={"name": "Local", "character": "mara", "version": "default",
+                           "body": "Local."}).json()["id"]
+    r = client.put(f"/api/campaigns/{cid}/greetings/{g2}/edges", json={"leads_to": [g]})
+    assert r.status_code == 200
+    assert client.get(f"/api/campaigns/{cid}/greetings/{g}").json()["predecessors"] == [g2]
+    assert client.delete(f"/api/campaigns/{cid}/greetings/{g2}").status_code == 200
+
+
+def test_campaign_greeting_mark_played_conflicts(client):
+    wid = _world(client)
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"})
+    g = client.post(f"/api/worlds/{wid}/greetings",
+                    json={"name": "Gala", "character": "mara", "version": "default",
+                          "body": "Hi."}).json()["id"]
+    cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/start-from-greeting",
+                       json={"greeting": g}).status_code == 200
+    r = client.post(f"/api/campaigns/{cid}/greetings/{g}/mark", json={"status": "completed"})
+    assert r.status_code == 409
