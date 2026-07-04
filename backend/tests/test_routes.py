@@ -1034,6 +1034,28 @@ def test_start_from_greeting_unknown_404(client):
                        json={"greeting": "nope"}).status_code == 404
 
 
+def test_available_greetings_after_param(client):
+    wid = _world(client)
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Seraphine"})
+    g1 = client.post(f"/api/worlds/{wid}/greetings",
+                     json={"name": "Alpha", "character": "seraphine", "version": "default",
+                           "body": "A."}).json()["id"]
+    g2 = client.post(f"/api/worlds/{wid}/greetings",
+                     json={"name": "Reckoning", "character": "seraphine", "version": "default",
+                           "body": "R."}).json()["id"]
+    client.put(f"/api/worlds/{wid}/greetings/{g1}/edges", json={"leads_to": [g2]})
+    cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Opening"}).json()["id"]
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/start-from-greeting", json={"greeting": g1})
+    avail = client.get(f"/api/campaigns/{cid}/greetings/available", params={"after": sid}).json()
+    assert avail[0]["id"] == g2 and avail[0]["unlocked"] is True
+    # no param: same shape, nothing flagged
+    plain = client.get(f"/api/campaigns/{cid}/greetings/available").json()
+    assert all(x["unlocked"] is False for x in plain)
+    assert client.get(f"/api/campaigns/{cid}/greetings/available",
+                      params={"after": "nope"}).status_code == 404
+
+
 def test_opener_streams_without_persisting(client):
     _wid, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]

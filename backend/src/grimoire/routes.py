@@ -1653,9 +1653,12 @@ def put_scene_message(cid: str, sid: str, index: int, body: EditMessage):
 
 # ---- campaign greetings / play (declared before the generic /{kind} routes) ----
 @router.get("/campaigns/{cid}/greetings/available")
-def get_available_greetings(cid: str):
+def get_available_greetings(cid: str, after: str | None = None):
     _campaign_root_or_404(cid)
-    return store.playing.available_greetings(cid)
+    try:
+        return store.playing.available_greetings(cid, after=after)
+    except store.scenes.SceneNotFound:
+        raise HTTPException(status_code=404, detail="scene not found")
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/start-from-greeting")
