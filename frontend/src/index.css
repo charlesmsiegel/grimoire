@@ -692,6 +692,15 @@ button.primary { background: var(--accent); color: var(--on-accent); border: var
 .tagline-modal h3 { font-family: var(--fd); margin: 0 0 6px; }
 .tagline-modal textarea { width: 100%; }
 
+.chooser-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 30; }
+.chooser { background: var(--panel); border: 1px solid var(--muted); padding: 20px; width: min(560px, 92vw); max-height: 80vh; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+.chooser h3 { font-family: var(--fd); margin: 0 0 6px; }
+.chooser-card { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; text-align: left; padding: 10px 12px; background: transparent; border: 1px solid var(--muted); color: inherit; cursor: pointer; }
+.chooser-card:hover:not(:disabled) { border-color: var(--accent); }
+.chooser-card:disabled { opacity: 0.6; cursor: default; }
+.chooser-card-title { font-weight: 600; }
+.chooser-card-premise { opacity: 0.85; }
+
 .avatar-crop-btn { padding: 0; border: none; background: transparent; cursor: pointer; flex: none; display: block; }
 .focus-modal { width: min(420px, 92vw); }
 .focus-scroll { max-height: 60vh; overflow-y: auto; margin: 8px 0; }
