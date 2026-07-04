@@ -34,10 +34,10 @@ export function NewSceneChooser({ cid, afterSid, keySet, onClose, onCreated }: {
   }, [cid, keySet]);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !busy) onClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, busy]);
 
   // 4 slots: 2 greetings + 2 generated; greetings grow to 4 when nothing will generate
   const wantGenerated = keySet && (suggestions === null || suggestions.length > 0);
@@ -47,12 +47,16 @@ export function NewSceneChooser({ cid, afterSid, keySet, onClose, onCreated }: {
   async function create(seed: (sid: string) => Promise<string | undefined>) {
     setBusy(true);
     setError(null);
+    let created: string | null = null;
     try {
       const { id } = await api.createScene(cid);
+      created = id;
       const prompt = await seed(id);
       if (prompt !== undefined) onCreated(id, prompt);
       else onCreated(id);
     } catch (err: any) {
+      // a half-seeded scene would be a stray — remove it before surfacing the error
+      if (created) await api.deleteScene(cid, created).catch(() => {});
       setError(errMsg(err));
     } finally {
       setBusy(false);
@@ -74,7 +78,8 @@ export function NewSceneChooser({ cid, afterSid, keySet, onClose, onCreated }: {
   });
 
   return (
-    <div className="chooser-backdrop" role="dialog" aria-label="New scene" onClick={onClose}>
+    <div className="chooser-backdrop" role="dialog" aria-label="New scene"
+         onClick={() => { if (!busy) onClose(); }}>
       <div className="chooser" onClick={(e) => e.stopPropagation()}>
         <h3>New scene</h3>
         {error && <div className="banner">{error}</div>}

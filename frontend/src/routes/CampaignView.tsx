@@ -106,11 +106,13 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
   async function renameScene(id: string, title: string) {
     const { id: newId } = await api.renameScene(cid, id, title);
     if (activeId === id) setActiveId(newId);
+    setSeedPrompt((p) => (p && p.sid === id ? { ...p, sid: newId } : p));
     setScenes(await api.listScenes(cid));
   }
 
   // the first date set renames the scene file — re-list and adopt the new id
   async function sceneRenamed(id: string) {
+    setSeedPrompt((p) => (p && p.sid === activeId ? { ...p, sid: id } : p));
     setScenes(await api.listScenes(cid));
     selectScene(id);
   }
