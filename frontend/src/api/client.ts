@@ -133,6 +133,7 @@ export type GreetingDraft = {
   predecessor_join?: "all" | "any";
 };
 export type Availability = { id: string; name: string; available: boolean; reasons: string[] };
+export type Appearance = { gid: string; greeting_name: string; name: string; url: string };
 
 // cast
 export type Actor = { kind: "characters" | "pcs"; id: string; role: "player" | "npc"; name: string };
@@ -403,6 +404,16 @@ export const api = {
     request<{ ok: boolean }>("PUT", `/api/worlds/${wid}/greetings/${gid}/edges`, edges),
   importGreetings: (wid: string, body: { character: string; version: string }) =>
     request<{ greetings: string[] }>("POST", `/api/worlds/${wid}/greetings/import`, body),
+  getGreetingSubjects: (wid: string, gid: string) =>
+    request<Record<string, string[]>>("GET", `/api/worlds/${wid}/greetings/${gid}/subjects`),
+  setImageSubjects: (wid: string, gid: string, name: string, subjects: string[]) =>
+    request<{ ok: boolean }>("PUT", `/api/worlds/${wid}/greetings/${gid}/images/${name}/subjects`, { subjects }),
+  listImageAppearances: (wid: string, cid: string) =>
+    request<Appearance[]>("GET", `/api/worlds/${wid}/characters/${cid}/appearances`),
+  copyGreetingImage: (wid: string, cid: string, vid: string,
+                      body: { gid: string; name: string; slot: "avatar" | "gallery" }) =>
+    request<{ name: string; ext: string }>(
+      "POST", `/api/worlds/${wid}/characters/${cid}/versions/${vid}/images/copy-from-greeting`, body),
 
   // campaign cast & play
   listAppearances: (cid: string) => request<RosterEntry[]>("GET", `/api/campaigns/${cid}/appearances`),

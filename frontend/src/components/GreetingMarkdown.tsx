@@ -21,11 +21,25 @@ const components = {
   h4: SceneLabel, h5: SceneLabel, h6: SceneLabel,
 };
 
-export function GreetingMarkdown({ children }: { children: string }) {
+export function GreetingMarkdown({ children, imageExtras }:
+    { children: string; imageExtras?: (src: string) => ReactNode }) {
   const text = children.replace(/^#(.+?)#\s*$/gm, (_m, label) => `### ${label.trim()}`);
+  // imageExtras hangs per-image UI (subject chips, pickers) under each image;
+  // wrapped in spans because react-markdown renders images inside <p>.
+  const withImages = imageExtras
+    ? {
+        ...components,
+        img: ({ src, alt }: { src?: string; alt?: string }) => (
+          <span className="img-block">
+            <img src={src} alt={alt ?? ""} />
+            <span className="img-extras">{imageExtras(src ?? "")}</span>
+          </span>
+        ),
+      }
+    : components;
   return (
     <div className="detail-rendered">
-      <Markdown remarkPlugins={[remarkGfm, remarkBreaks]} components={components}>
+      <Markdown remarkPlugins={[remarkGfm, remarkBreaks]} components={withImages}>
         {text}
       </Markdown>
     </div>
