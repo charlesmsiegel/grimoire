@@ -110,7 +110,7 @@ test("generating an opener streams into the preview and can be saved as a greeti
   fireEvent.change(screen.getByLabelText("Actor"), { target: { value: "seraphine" } });
   fireEvent.click(screen.getByRole("button", { name: /save as greeting/i }));
   await waitFor(() =>
-    expect(api.createGreeting).toHaveBeenCalledWith("w", expect.objectContaining({
+    expect(api.createGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, expect.objectContaining({
       character: "seraphine", version: "default", body: "Mist rolls in.",
     })),
   );

@@ -299,7 +299,7 @@ test("focus prop opens that character at the given version", async () => {
     ],
   });
   render(<CharacterEditor wid="w" focus={{ cid: "rook", vid: "v2" }} />);
-  await waitFor(() => expect(api.readCharacter).toHaveBeenCalledWith("w", "rook"));
+  await waitFor(() => expect(api.readCharacter).toHaveBeenCalledWith({ kind: "world", id: "w" }, "rook"));
   const active = await screen.findByRole("button", { name: "v2", pressed: true });
   expect(active).toBeInTheDocument();
 });
@@ -418,7 +418,7 @@ test("checking chub.ai links lists unlinked versions and jumps to one on click",
   await screen.findByText(/1 version not linked to chub\.ai/i);
 
   fireEvent.click(screen.getByRole("button", { name: /seraphine \(futa\)/i }));
-  await waitFor(() => expect(api.readCharacter).toHaveBeenCalledWith("w", "seraphine"));
+  await waitFor(() => expect(api.readCharacter).toHaveBeenCalledWith({ kind: "world", id: "w" }, "seraphine"));
   await screen.findByRole("heading", { name: "Seraphine" }); // jumped to detail
 });
 

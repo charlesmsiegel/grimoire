@@ -181,7 +181,7 @@ test("addToCast POSTs kind+id to the scene cast endpoint", async () => {
 test("setEdges PUTs to the greeting edges endpoint", async () => {
   const fetchMock = vi.fn().mockResolvedValue(jsonOk({ ok: true }));
   globalThis.fetch = fetchMock as unknown as typeof fetch;
-  await api.setEdges("w", "g1", { leads_to: ["g2"] });
+  await api.setEdges({ kind: "world", id: "w" }, "g1", { leads_to: ["g2"] });
   expect(fetchMock).toHaveBeenCalledWith(
     "/api/worlds/w/greetings/g1/edges",
     expect.objectContaining({ method: "PUT", body: JSON.stringify({ leads_to: ["g2"] }) }),
@@ -250,4 +250,26 @@ test("entity image helpers hit the scope-aware routes", async () => {
     "/api/worlds/w/locations/crypt/images/gallery_1/promote",
     expect.objectContaining({ method: "POST" }),
   );
+});
+
+test("scope-parameterized calls route to worlds or campaigns", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk([]));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  await api.listCharacters({ kind: "campaign", id: "run" });
+  expect(fetchMock).toHaveBeenLastCalledWith("/api/campaigns/run/characters",
+    expect.objectContaining({ method: "GET" }));
+  await api.readGreeting({ kind: "world", id: "w" }, "g1");
+  expect(fetchMock).toHaveBeenLastCalledWith("/api/worlds/w/greetings/g1",
+    expect.objectContaining({ method: "GET" }));
+});
+
+test("greeting marks and version picks POST to their campaign routes", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ ok: true }));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  await api.markGreeting("run", "g1", "skipped");
+  expect(fetchMock).toHaveBeenLastCalledWith("/api/campaigns/run/greetings/g1/mark",
+    expect.objectContaining({ method: "POST", body: JSON.stringify({ status: "skipped" }) }));
+  await api.pickVersion("run", "characters", "mara", "veteran");
+  expect(fetchMock).toHaveBeenLastCalledWith("/api/campaigns/run/characters/mara/pick-version",
+    expect.objectContaining({ method: "POST", body: JSON.stringify({ version: "veteran" }) }));
 });

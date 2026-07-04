@@ -5,8 +5,8 @@ export type LoreOwner = { ref: string; label: string; kind: "characters" | "pcs"
 /** All records in a world that can own lore, as selectable owner refs. */
 export async function loreOwnerOptions(wid: string): Promise<LoreOwner[]> {
   const [chars, pcs, locs] = await Promise.all([
-    api.listCharacters(wid),
-    api.listPCs(wid),
+    api.listCharacters({ kind: "world", id: wid }),
+    api.listPCs({ kind: "world", id: wid }),
     api.listEntities({ kind: "world", id: wid }, "locations"),
   ]);
   return [

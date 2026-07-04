@@ -24,10 +24,10 @@ export function GreetingEditor({ wid, onOpenCharacter, focus }:
   const [untagged, setUntagged] = useState<Appearance[]>([]);
   const [queueOpen, setQueueOpen] = useState(false);
 
-  const reload = useCallback(() => api.listGreetings(wid).then(setGreetings), [wid]);
+  const reload = useCallback(() => api.listGreetings({ kind: "world", id: wid }).then(setGreetings), [wid]);
   useEffect(() => {
     reload();
-    api.listCharacters(wid).then(setChars);
+    api.listCharacters({ kind: "world", id: wid }).then(setChars);
     api.listTags(wid).then(setTags);
     api.listUntaggedImages(wid).then(setUntagged).catch(() => setUntagged([]));
   }, [wid, reload]);
@@ -57,7 +57,7 @@ export function GreetingEditor({ wid, onOpenCharacter, focus }:
 
   async function select(id: string) {
     setError(null);
-    const g = await api.readGreeting(wid, id);
+    const g = await api.readGreeting({ kind: "world", id: wid }, id);
     setGid(id);
     setForm({
       name: g.meta.name, character: g.meta.character, version: g.meta.version,
@@ -79,14 +79,14 @@ export function GreetingEditor({ wid, onOpenCharacter, focus }:
     try {
       let id = gid;
       if (id) {
-        await api.updateGreeting(wid, id, {
+        await api.updateGreeting({ kind: "world", id: wid }, id, {
           name: form.name, body: form.body, present: form.present,
           requires_tags: form.requires_tags, predecessor_join: form.predecessor_join,
         });
       } else {
-        id = (await api.createGreeting(wid, { ...form })).id;
+        id = (await api.createGreeting({ kind: "world", id: wid }, { ...form })).id;
       }
-      await api.setEdges(wid, id, { leads_to: edges.leads_to, excludes: edges.excludes });
+      await api.setEdges({ kind: "world", id: wid }, id, { leads_to: edges.leads_to, excludes: edges.excludes });
       await reload();
       await select(id);
     } catch (err: any) {
@@ -102,7 +102,7 @@ export function GreetingEditor({ wid, onOpenCharacter, focus }:
 
   async function remove(g: Greeting) {
     if (!window.confirm(`Delete greeting '${g.name}'?`)) return;
-    await api.deleteGreeting(wid, g.id);
+    await api.deleteGreeting({ kind: "world", id: wid }, g.id);
     if (gid === g.id) resetForm();
     await reload();
   }

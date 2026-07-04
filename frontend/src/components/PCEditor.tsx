@@ -17,7 +17,7 @@ export function PCEditor({ wid, onOpenLore }:
   const [mode, setMode] = useState<"view" | "edit">("view");
   const [error, setError] = useState<string | null>(null);
 
-  const reload = useCallback(() => api.listPCs(wid).then(setPCs), [wid]);
+  const reload = useCallback(() => api.listPCs({ kind: "world", id: wid }).then(setPCs), [wid]);
   useEffect(() => {
     reload();
     api.listTags(wid).then(setTags);
@@ -25,7 +25,7 @@ export function PCEditor({ wid, onOpenLore }:
 
   async function select(pid: string, version?: string) {
     setError(null);
-    const d = await api.readPC(wid, pid);
+    const d = await api.readPC({ kind: "world", id: wid }, pid);
     setDetail(d);
     const v = d.versions.find((x) => x.id === (version ?? d.meta.default_version)) ?? d.versions[0];
     setVid(v?.id ?? "");
@@ -52,7 +52,7 @@ export function PCEditor({ wid, onOpenLore }:
     if (!detail) return;
     setError(null);
     try {
-      await api.updatePCVersion(wid, detail.meta.id, vid, persona);
+      await api.updatePCVersion({ kind: "world", id: wid }, detail.meta.id, vid, persona);
       await select(detail.meta.id, vid); // back to the read-only view
     } catch (err: any) {
       setError(err.detail ?? String(err));
@@ -63,14 +63,14 @@ export function PCEditor({ wid, onOpenLore }:
     if (!detail) return;
     const name = window.prompt("New version name?")?.trim();
     if (!name) return;
-    const { version } = await api.createPCVersion(wid, detail.meta.id, { name, persona });
+    const { version } = await api.createPCVersion({ kind: "world", id: wid }, detail.meta.id, { name, persona });
     await select(detail.meta.id, version);
     setMode("edit");
   }
 
   async function setDefault() {
     if (!detail) return;
-    await api.updatePC(wid, detail.meta.id, { default_version: vid });
+    await api.updatePC({ kind: "world", id: wid }, detail.meta.id, { default_version: vid });
     await select(detail.meta.id, vid);
     setMode("edit");
   }
@@ -87,8 +87,8 @@ export function PCEditor({ wid, onOpenLore }:
     if (!detail) return;
     const current = detail.meta.tags;
     const next = current.includes(tid) ? current.filter((t) => t !== tid) : [...current, tid];
-    await api.updatePC(wid, detail.meta.id, { tags: next });
-    const d = await api.readPC(wid, detail.meta.id);
+    await api.updatePC({ kind: "world", id: wid }, detail.meta.id, { tags: next });
+    const d = await api.readPC({ kind: "world", id: wid }, detail.meta.id);
     setDetail(d); // keep the form open; only the tag chips changed
   }
 

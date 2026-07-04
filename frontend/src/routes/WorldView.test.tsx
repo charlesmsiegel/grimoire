@@ -60,7 +60,7 @@ function renderAt() {
 test("shows the world name and the Characters tab by default", async () => {
   renderAt();
   await screen.findByText("Drowned Realm");
-  await waitFor(() => expect(api.listCharacters).toHaveBeenCalledWith("w"));
+  await waitFor(() => expect(api.listCharacters).toHaveBeenCalledWith({ kind: "world", id: "w" }));
   expect(screen.getByRole("button", { name: /new character/i })).toBeInTheDocument();
 });
 
@@ -68,7 +68,7 @@ test("switching to the PCs tab renders the PC editor", async () => {
   renderAt();
   await screen.findByText("Drowned Realm");
   fireEvent.click(screen.getByRole("button", { name: "PCs" }));
-  await waitFor(() => expect(api.listPCs).toHaveBeenCalledWith("w"));
+  await waitFor(() => expect(api.listPCs).toHaveBeenCalledWith({ kind: "world", id: "w" }));
   expect(screen.getByRole("button", { name: /new pc/i })).toBeInTheDocument();
 });
 
@@ -108,6 +108,6 @@ test("openGreeting switches to the greetings tab and focuses the greeting", asyn
   fireEvent.click(await screen.findByText("Mira"));               // grid -> detail
   const wg = await screen.findByText("World greetings");
   fireEvent.click(within(wg.parentElement as HTMLElement).getByText("SoL 2"));
-  await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith("w", "sol-2"));
+  await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "sol-2"));
   expect(screen.getByRole("button", { name: "Greetings" })).toHaveClass("active");
 });

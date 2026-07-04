@@ -112,6 +112,7 @@ export type PCDetail = {
 };
 
 // greetings & plot maps
+export type GreetingMark = "played" | "completed" | "skipped" | null;
 export type Greeting = {
   id: string;
   name: string;
@@ -120,6 +121,7 @@ export type Greeting = {
   present: string[];
   requires_tags: string[];
   predecessor_join: "all" | "any";
+  mark?: GreetingMark;   // campaign lists carry it
 };
 export type Edges = { leads_to: string[]; excludes: string[] };
 export type GreetingDetail = { meta: Greeting; body: string; edges: Edges; predecessors: string[] };
@@ -134,6 +136,7 @@ export type GreetingDraft = {
 };
 export type Availability = {
   id: string; name: string; available: boolean; reasons: string[]; unlocked: boolean;
+  mark?: GreetingMark;
 };
 export type Appearance = { gid: string; greeting_name: string; name: string; url: string };
 
@@ -287,13 +290,13 @@ export const api = {
   deleteTag: (wid: string, tid: string) => request<{ ok: boolean }>("DELETE", `/api/worlds/${wid}/tags/${tid}`),
 
   // characters
-  listCharacters: (wid: string) => request<CharacterSummary[]>("GET", `/api/worlds/${wid}/characters`),
+  listCharacters: (scope: EntityScope) => request<CharacterSummary[]>("GET", `${entityBase(scope)}/characters`),
   createCharacter: (wid: string, body: { name: string; version_name?: string; card?: Card }) =>
     request<{ character: string; version: string }>("POST", `/api/worlds/${wid}/characters`, body),
-  readCharacter: (wid: string, cid: string) =>
-    request<CharacterDetail>("GET", `/api/worlds/${wid}/characters/${cid}`),
-  setDefaultVersion: (wid: string, cid: string, vid: string) =>
-    request<{ ok: boolean }>("PUT", `/api/worlds/${wid}/characters/${cid}`, { default_version: vid }),
+  readCharacter: (scope: EntityScope, cid: string) =>
+    request<CharacterDetail>("GET", `${entityBase(scope)}/characters/${cid}`),
+  setDefaultVersion: (scope: EntityScope, cid: string, vid: string) =>
+    request<{ ok: boolean }>("PUT", `${entityBase(scope)}/characters/${cid}`, { default_version: vid }),
   setCharacterBirthdate: (wid: string, cid: string, birthdate: string) =>
     request<{ ok: boolean }>("PUT", `/api/worlds/${wid}/characters/${cid}/birthdate`, { birthdate }),
   deleteCharacter: (wid: string, cid: string) =>
@@ -304,12 +307,12 @@ export const api = {
     request<{ ok: boolean }>("PUT", `/api/worlds/${wid}/characters/${cid}/tagline`, { tagline }),
   generateCharacterTagline: (wid: string, cid: string) =>
     request<{ tagline: string }>("POST", `/api/worlds/${wid}/characters/${cid}/tagline/generate`),
-  createVersion: (wid: string, cid: string, body: { name: string; card: Card }) =>
-    request<{ version: string }>("POST", `/api/worlds/${wid}/characters/${cid}/versions`, body),
-  updateVersion: (wid: string, cid: string, vid: string, card: Card) =>
-    request<{ ok: boolean }>("PUT", `/api/worlds/${wid}/characters/${cid}/versions/${vid}`, { card }),
-  deleteVersion: (wid: string, cid: string, vid: string) =>
-    request<{ ok: boolean }>("DELETE", `/api/worlds/${wid}/characters/${cid}/versions/${vid}`),
+  createVersion: (scope: EntityScope, cid: string, body: { name: string; card: Card }) =>
+    request<{ version: string }>("POST", `${entityBase(scope)}/characters/${cid}/versions`, body),
+  updateVersion: (scope: EntityScope, cid: string, vid: string, card: Card) =>
+    request<{ ok: boolean }>("PUT", `${entityBase(scope)}/characters/${cid}/versions/${vid}`, { card }),
+  deleteVersion: (scope: EntityScope, cid: string, vid: string) =>
+    request<{ ok: boolean }>("DELETE", `${entityBase(scope)}/characters/${cid}/versions/${vid}`),
   importCharacter: (wid: string, file: File, format: string, into?: string) => {
     const form = new FormData();
     form.append("file", file);
@@ -374,36 +377,36 @@ export const api = {
     request<{ versions: ChubUnlinkedVersion[] }>("GET", `/api/worlds/${wid}/characters/chub-unlinked`),
 
   // pcs
-  listPCs: (wid: string) => request<PCSummary[]>("GET", `/api/worlds/${wid}/pcs`),
+  listPCs: (scope: EntityScope) => request<PCSummary[]>("GET", `${entityBase(scope)}/pcs`),
   createCampaignPC: (cid: string, body: { name: string; tags?: string[]; persona?: Persona }) =>
     request<{ pc: string; version: string }>("POST", `/api/campaigns/${cid}/pcs`, body),
   listCampaignPCs: (cid: string) => request<PCSummary[]>("GET", `/api/campaigns/${cid}/pcs`),
   createPC: (wid: string, body: { name: string; tags?: string[]; persona?: Persona }) =>
     request<{ pc: string; version: string }>("POST", `/api/worlds/${wid}/pcs`, body),
-  readPC: (wid: string, pid: string) => request<PCDetail>("GET", `/api/worlds/${wid}/pcs/${pid}`),
-  updatePC: (wid: string, pid: string, patch: { default_version?: string; tags?: string[] }) =>
-    request<{ ok: boolean }>("PUT", `/api/worlds/${wid}/pcs/${pid}`, patch),
+  readPC: (scope: EntityScope, pid: string) => request<PCDetail>("GET", `${entityBase(scope)}/pcs/${pid}`),
+  updatePC: (scope: EntityScope, pid: string, patch: { default_version?: string; tags?: string[] }) =>
+    request<{ ok: boolean }>("PUT", `${entityBase(scope)}/pcs/${pid}`, patch),
   deletePC: (wid: string, pid: string) => request<{ ok: boolean }>("DELETE", `/api/worlds/${wid}/pcs/${pid}`),
-  createPCVersion: (wid: string, pid: string, body: { name: string; persona: Persona }) =>
-    request<{ version: string }>("POST", `/api/worlds/${wid}/pcs/${pid}/versions`, body),
-  updatePCVersion: (wid: string, pid: string, vid: string, persona: Persona) =>
-    request<{ ok: boolean }>("PUT", `/api/worlds/${wid}/pcs/${pid}/versions/${vid}`, { persona }),
-  deletePCVersion: (wid: string, pid: string, vid: string) =>
-    request<{ ok: boolean }>("DELETE", `/api/worlds/${wid}/pcs/${pid}/versions/${vid}`),
+  createPCVersion: (scope: EntityScope, pid: string, body: { name: string; persona: Persona }) =>
+    request<{ version: string }>("POST", `${entityBase(scope)}/pcs/${pid}/versions`, body),
+  updatePCVersion: (scope: EntityScope, pid: string, vid: string, persona: Persona) =>
+    request<{ ok: boolean }>("PUT", `${entityBase(scope)}/pcs/${pid}/versions/${vid}`, { persona }),
+  deletePCVersion: (scope: EntityScope, pid: string, vid: string) =>
+    request<{ ok: boolean }>("DELETE", `${entityBase(scope)}/pcs/${pid}/versions/${vid}`),
 
   // greetings & plot maps
-  listGreetings: (wid: string) => request<Greeting[]>("GET", `/api/worlds/${wid}/greetings`),
-  createGreeting: (wid: string, draft: GreetingDraft) =>
-    request<{ id: string }>("POST", `/api/worlds/${wid}/greetings`, draft),
-  readGreeting: (wid: string, gid: string) =>
-    request<GreetingDetail>("GET", `/api/worlds/${wid}/greetings/${gid}`),
-  updateGreeting: (wid: string, gid: string,
+  listGreetings: (scope: EntityScope) => request<Greeting[]>("GET", `${entityBase(scope)}/greetings`),
+  createGreeting: (scope: EntityScope, draft: GreetingDraft) =>
+    request<{ id: string }>("POST", `${entityBase(scope)}/greetings`, draft),
+  readGreeting: (scope: EntityScope, gid: string) =>
+    request<GreetingDetail>("GET", `${entityBase(scope)}/greetings/${gid}`),
+  updateGreeting: (scope: EntityScope, gid: string,
                    patch: { name?: string; body?: string; present?: string[]; requires_tags?: string[]; predecessor_join?: string }) =>
-    request<{ ok: boolean }>("PUT", `/api/worlds/${wid}/greetings/${gid}`, patch),
-  deleteGreeting: (wid: string, gid: string) =>
-    request<{ ok: boolean }>("DELETE", `/api/worlds/${wid}/greetings/${gid}`),
-  setEdges: (wid: string, gid: string, edges: { leads_to?: string[]; excludes?: string[] }) =>
-    request<{ ok: boolean }>("PUT", `/api/worlds/${wid}/greetings/${gid}/edges`, edges),
+    request<{ ok: boolean }>("PUT", `${entityBase(scope)}/greetings/${gid}`, patch),
+  deleteGreeting: (scope: EntityScope, gid: string) =>
+    request<{ ok: boolean }>("DELETE", `${entityBase(scope)}/greetings/${gid}`),
+  setEdges: (scope: EntityScope, gid: string, edges: { leads_to?: string[]; excludes?: string[] }) =>
+    request<{ ok: boolean }>("PUT", `${entityBase(scope)}/greetings/${gid}/edges`, edges),
   importGreetings: (wid: string, body: { character: string; version: string }) =>
     request<{ greetings: string[] }>("POST", `/api/worlds/${wid}/greetings/import`, body),
   getGreetingSubjects: (wid: string, gid: string) =>
@@ -418,6 +421,16 @@ export const api = {
                       body: { gid: string; name: string; slot: "avatar" | "gallery" }) =>
     request<{ name: string; ext: string }>(
       "POST", `/api/worlds/${wid}/characters/${cid}/versions/${vid}/images/copy-from-greeting`, body),
+
+  // campaign world-copy actions
+  markGreeting: (cid: string, gid: string, status: "completed" | "skipped" | "none") =>
+    request<{ ok: boolean }>("POST", `/api/campaigns/${cid}/greetings/${gid}/mark`, { status }),
+  pickVersion: (cid: string, kind: "characters" | "pcs", aid: string, version: string) =>
+    request<{ ok: boolean }>("POST", `/api/campaigns/${cid}/${kind}/${aid}/pick-version`, { version }),
+  importVersion: (cid: string, kind: "characters" | "pcs", aid: string, version: string) =>
+    request<{ ok: boolean }>("POST", `/api/campaigns/${cid}/${kind}/${aid}/import-version`, { version }),
+  actorImageUrl: (scope: EntityScope, cid: string, vid: string, name: string) =>
+    `${entityBase(scope)}/characters/${cid}/versions/${vid}/images/${name}`,
 
   // campaign cast & play
   listAppearances: (cid: string) => request<RosterEntry[]>("GET", `/api/campaigns/${cid}/appearances`),
