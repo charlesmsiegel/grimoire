@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import struct
 import zipfile
 import zlib
@@ -52,6 +53,45 @@ def to_v3(obj: dict) -> dict:
     known["extensions"] = extensions
     known.setdefault("name", data.get("name", "Unnamed"))
     return {"spec": "chara_card_v3", "spec_version": "3.0", "data": known}
+
+
+_BAKE_FIELDS = ("description", "personality", "scenario", "first_mes", "mes_example",
+                "system_prompt", "post_history_instructions", "creator_notes")
+_CHAR_MACRO = re.compile(r"\{\{char\}\}", re.IGNORECASE)
+
+
+def bake_char_name(card: dict) -> bool:
+    """Replace the {{char}} macro with the card's own name in every text field,
+    greeting, and lorebook entry. Baked at import: scene-time substitution maps
+    {{char}} to the whole present cast, so a card's own macro would expand
+    wrongly in multi-character scenes — and the raw token must never surface in
+    chats. {{user}} stays literal (unknown until a scene). Mutates `card`;
+    True if anything changed."""
+    data = card.get("data") or {}
+    name = str(data.get("name") or "").strip()
+    if not name:
+        return False
+    changed = False
+
+    def sub(text: str) -> str:
+        nonlocal changed
+        new = _CHAR_MACRO.sub(lambda _m: name, text)
+        changed = changed or new != text
+        return new
+
+    for key in _BAKE_FIELDS:
+        if isinstance(data.get(key), str):
+            data[key] = sub(data[key])
+    greetings = data.get("alternate_greetings")
+    if isinstance(greetings, list):
+        data["alternate_greetings"] = [sub(g) if isinstance(g, str) else g for g in greetings]
+    book = data.get("character_book")
+    entries = book.get("entries") if isinstance(book, dict) else None
+    if isinstance(entries, list):
+        for e in entries:
+            if isinstance(e, dict) and isinstance(e.get("content"), str):
+                e["content"] = sub(e["content"])
+    return changed
 
 
 def _loads_json(data: bytes) -> dict:
