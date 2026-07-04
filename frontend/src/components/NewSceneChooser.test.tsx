@@ -107,6 +107,32 @@ test("a failed seed deletes the orphan scene and keeps the chooser open", async 
   expect(await screen.findByText("boom")).toBeInTheDocument();
 });
 
+test("a 409 while seeding cast is tolerated; the pick still completes", async () => {
+  (api.addToCast as any).mockRejectedValue({ status: 409, detail: "already cast" });
+  const onCreated = vi.fn();
+  renderChooser({ onCreated });
+  fireEvent.click(await screen.findByText("The creditor"));
+  await waitFor(() => expect(onCreated).toHaveBeenCalledWith("s9", "A debt-collector arrives."));
+  expect(api.deleteScene).not.toHaveBeenCalled();
+});
+
+test("a non-409 cast failure aborts the pick and cleans up the scene", async () => {
+  (api.addToCast as any).mockRejectedValue({ status: 500, detail: "boom" });
+  const onCreated = vi.fn();
+  renderChooser({ onCreated });
+  fireEvent.click(await screen.findByText("The creditor"));
+  await waitFor(() => expect(api.deleteScene).toHaveBeenCalledWith("c", "s9"));
+  expect(onCreated).not.toHaveBeenCalled();
+  expect(await screen.findByText("boom")).toBeInTheDocument();
+});
+
+test("a failed greetings fetch surfaces in the banner", async () => {
+  (api.availableGreetings as any).mockRejectedValue({ status: 500, detail: "greetings down" });
+  renderChooser();
+  expect(await screen.findByText("greetings down")).toBeInTheDocument();
+  expect(screen.getByText("No available greetings.")).toBeInTheDocument();
+});
+
 test("no afterSid fetches availability without the param", async () => {
   renderChooser({ afterSid: null });
   await screen.findByText("Reckoning");

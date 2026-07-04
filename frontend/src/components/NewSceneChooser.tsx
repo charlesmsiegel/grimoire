@@ -23,7 +23,7 @@ export function NewSceneChooser({ cid, afterSid, keySet, onClose, onCreated }: {
   useEffect(() => {
     api.availableGreetings(cid, afterSid ?? undefined)
       .then((all) => setGreetings(all.filter((g) => g.available)))
-      .catch(() => setGreetings([]));
+      .catch((err) => { setGreetings([]); setError(errMsg(err)); });
   }, [cid, afterSid]);
 
   useEffect(() => {
@@ -71,7 +71,9 @@ export function NewSceneChooser({ cid, afterSid, keySet, onClose, onCreated }: {
   const pickSuggestion = (s: SceneSuggestion) => create(async (sid) => {
     for (const c of s.cast) {
       try { await api.addToCast(cid, sid, { kind: c.kind, id: c.id }); }
-      catch { /* already cast — keep seeding */ }
+      catch (err: any) {
+        if (err?.status !== 409) throw err;  // 409 = already cast; keep seeding
+      }
     }
     if (s.location) await api.setSceneLocation(cid, sid, s.location.id);
     return s.premise;
