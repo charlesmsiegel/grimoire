@@ -63,7 +63,7 @@ test("editing persona saves the selected version", async () => {
   fireEvent.change(screen.getByLabelText("Description"), { target: { value: "a sage" } });
   fireEvent.click(screen.getByRole("button", { name: /save persona/i }));
   await waitFor(() =>
-    expect(api.updatePCVersion).toHaveBeenCalledWith("w", "elara", "default",
+    expect(api.updatePCVersion).toHaveBeenCalledWith({ kind: "world", id: "w" }, "elara", "default",
       expect.objectContaining({ description: "a sage" })),
   );
 });
@@ -75,7 +75,7 @@ test("editing the birthdate saves it on the persona", async () => {
   fireEvent.change(await screen.findByLabelText("Birthdate"), { target: { value: "1990-06-29" } });
   fireEvent.click(screen.getByRole("button", { name: /save persona/i }));
   await waitFor(() =>
-    expect(api.updatePCVersion).toHaveBeenCalledWith("w", "elara", "default",
+    expect(api.updatePCVersion).toHaveBeenCalledWith({ kind: "world", id: "w" }, "elara", "default",
       expect.objectContaining({ birthdate: "1990-06-29" })),
   );
 });
@@ -85,7 +85,7 @@ test("toggling a tag chip in the form updates the PC tags", async () => {
   fireEvent.click(await screen.findByText("Elara"));
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   fireEvent.click(await screen.findByRole("button", { name: "Student" }));
-  await waitFor(() => expect(api.updatePC).toHaveBeenCalledWith("w", "elara", { tags: [] }));
+  await waitFor(() => expect(api.updatePC).toHaveBeenCalledWith({ kind: "world", id: "w" }, "elara", { tags: [] }));
 });
 
 test("adding a version prompts and posts the current persona", async () => {
@@ -96,7 +96,7 @@ test("adding a version prompts and posts the current persona", async () => {
   await screen.findByLabelText("Description");
   fireEvent.click(screen.getByRole("button", { name: /\+ version/i }));
   await waitFor(() =>
-    expect(api.createPCVersion).toHaveBeenCalledWith("w", "elara",
+    expect(api.createPCVersion).toHaveBeenCalledWith({ kind: "world", id: "w" }, "elara",
       expect.objectContaining({ name: "Young" })),
   );
 });

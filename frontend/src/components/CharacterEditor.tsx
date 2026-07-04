@@ -72,7 +72,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
   const [cropOpen, setCropOpen] = useState(false);
   const [bulkUrl, setBulkUrl] = useState<{ current: number; total: number; name: string; step: string } | null>(null);
 
-  const reload = useCallback(() => api.listCharacters(wid).then(setChars), [wid]);
+  const reload = useCallback(() => api.listCharacters({ kind: "world", id: wid }).then(setChars), [wid]);
   useEffect(() => {
     reload();
   }, [reload]);
@@ -95,7 +95,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
   useEffect(() => {
     if (!detailCid) return;
     api.listImageAppearances(wid, detailCid).then(setImageAppearances).catch(() => setImageAppearances([]));
-    api.listGreetings(wid).then(setWorldGreetings).catch(() => setWorldGreetings([]));
+    api.listGreetings({ kind: "world", id: wid }).then(setWorldGreetings).catch(() => setWorldGreetings([]));
   }, [wid, detailCid]);
 
   const hasAvatar = (detail && card)
@@ -146,7 +146,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
         }
       });
       // show the rewritten text + any new images for the version we localized
-      const d = await api.readCharacter(wid, cid);
+      const d = await api.readCharacter({ kind: "world", id: wid }, cid);
       setDetail(d);
       loadVersion(d, version);  // clears localizeMsg, so set the summary after it
     } catch (err: any) {
@@ -218,7 +218,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
 
   async function select(cid: string) {
     setError(null);
-    const d = await api.readCharacter(wid, cid);
+    const d = await api.readCharacter({ kind: "world", id: wid }, cid);
     setDetail(d);
     setBirthdate(d.meta.birthdate ?? "");
     loadVersion(d, d.meta.default_version);
@@ -279,7 +279,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
   async function focusCharacter(cid: string, vid: string) {
     window.scrollTo(0, 0);
     setError(null);
-    const d = await api.readCharacter(wid, cid);
+    const d = await api.readCharacter({ kind: "world", id: wid }, cid);
     setDetail(d);
     setBirthdate(d.meta.birthdate ?? "");
     loadVersion(d, d.versions.some((v) => v.id === vid) ? vid : d.meta.default_version);
@@ -322,7 +322,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
     if (!detail || !card) return;
     setError(null);
     try {
-      await api.updateVersion(wid, detail.meta.id, vid, buildCard());
+      await api.updateVersion({ kind: "world", id: wid }, detail.meta.id, vid, buildCard());
       await select(detail.meta.id);
       await reload();
     } catch (err: any) {
@@ -334,9 +334,9 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
     if (!detail) return;
     const name = window.prompt("New version name?")?.trim();
     if (!name) return;
-    const { version } = await api.createVersion(wid, detail.meta.id, { name, card: buildCard() });
+    const { version } = await api.createVersion({ kind: "world", id: wid }, detail.meta.id, { name, card: buildCard() });
     await select(detail.meta.id);
-    loadVersion(await api.readCharacter(wid, detail.meta.id), version);
+    loadVersion(await api.readCharacter({ kind: "world", id: wid }, detail.meta.id), version);
   }
 
   async function onImportVersion(e: React.ChangeEvent<HTMLInputElement>) {
@@ -345,7 +345,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
     setError(null);
     try {
       const { version } = await api.importCharacter(wid, file, formatOf(file), detail.meta.id);
-      const d = await api.readCharacter(wid, detail.meta.id);
+      const d = await api.readCharacter({ kind: "world", id: wid }, detail.meta.id);
       setDetail(d);
       loadVersion(d, version);
       await reload();
@@ -359,7 +359,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
 
   async function setDefault() {
     if (!detail) return;
-    await api.setDefaultVersion(wid, detail.meta.id, vid);
+    await api.setDefaultVersion({ kind: "world", id: wid }, detail.meta.id, vid);
     await select(detail.meta.id);
   }
 
@@ -407,7 +407,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
   // Reload the open version in place (select() would snap back to the default version).
   async function refreshVersion() {
     if (!detail) return;
-    const d = await api.readCharacter(wid, detail.meta.id);
+    const d = await api.readCharacter({ kind: "world", id: wid }, detail.meta.id);
     setDetail(d);
     loadVersion(d, vid);
     await reload();
@@ -522,7 +522,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
       lore += result.lore.created.length;
       let name = result.character;
       try {
-        name = (await api.readCharacter(wid, result.character)).meta.name;
+        name = (await api.readCharacter({ kind: "world", id: wid }, result.character)).meta.name;
       } catch { /* fall back to the id */ }
       setBulkUrl({ current: i + 1, total: urls.length, name, step: "localizing images" });
       try {
@@ -560,7 +560,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
     setImportMsg(null);
     try {
       const result = await api.importCharacterFromChub(wid, url, detail.meta.id, vid);
-      const d = await api.readCharacter(wid, detail.meta.id);
+      const d = await api.readCharacter({ kind: "world", id: wid }, detail.meta.id);
       setDetail(d);
       loadVersion(d, result.version);
       await reload();
@@ -579,7 +579,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
     setImportMsg(null);
     try {
       const result = await api.importCharacterFromChub(wid, chubSource, detail.meta.id, vid);
-      const d = await api.readCharacter(wid, detail.meta.id);
+      const d = await api.readCharacter({ kind: "world", id: wid }, detail.meta.id);
       setDetail(d);
       loadVersion(d, result.version);
       await reload();
@@ -600,7 +600,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
     setError(null);
     try {
       await api.setCharacterChubSource(wid, detail.meta.id, vid, url);
-      const d = await api.readCharacter(wid, detail.meta.id);
+      const d = await api.readCharacter({ kind: "world", id: wid }, detail.meta.id);
       setDetail(d);
       loadVersion(d, vid);
     } catch (err: any) {
@@ -613,7 +613,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
     setError(null);
     try {
       await api.clearCharacterChubSource(wid, detail.meta.id, vid);
-      const d = await api.readCharacter(wid, detail.meta.id);
+      const d = await api.readCharacter({ kind: "world", id: wid }, detail.meta.id);
       setDetail(d);
       loadVersion(d, vid);
     } catch (err: any) {
@@ -644,7 +644,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
         }
       });
       // refresh so newly downloaded images show without navigating away and back
-      const d = await api.readCharacter(wid, detail.meta.id);
+      const d = await api.readCharacter({ kind: "world", id: wid }, detail.meta.id);
       setDetail(d);
       loadVersion(d, vid);
       setAvatarBust((n) => n + 1); // bust the cache in case a re-download overwrote images in place

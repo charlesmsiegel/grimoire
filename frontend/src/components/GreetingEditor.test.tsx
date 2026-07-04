@@ -41,7 +41,7 @@ test("clicking a greeting shows a read-only rendered view; Edit reveals the form
   const { container } = render(<GreetingEditor wid="w" />);
   const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
   fireEvent.click(await within(rail).findByText("Open"));
-  await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith("w", "open"));
+  await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open"));
   // read-only: markdown rendered, no editable textarea
   expect(screen.getByText("world")).toBeInTheDocument();
   expect(container.querySelector("textarea")).toBeNull();
@@ -79,12 +79,12 @@ test("creating a greeting posts the draft then sets edges", async () => {
   fireEvent.click(screen.getByRole("button", { name: "VIP" }));
   fireEvent.click(screen.getByRole("button", { name: /create greeting/i }));
   await waitFor(() =>
-    expect(api.createGreeting).toHaveBeenCalledWith("w", expect.objectContaining({
+    expect(api.createGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, expect.objectContaining({
       name: "Open", character: "seraphine", version: "default",
       predecessor_join: "any", requires_tags: ["vip"],
     })),
   );
-  await waitFor(() => expect(api.setEdges).toHaveBeenCalledWith("w", "open", { leads_to: [], excludes: [] }));
+  await waitFor(() => expect(api.setEdges).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open", { leads_to: [], excludes: [] }));
 });
 
 test("version options follow the selected character", async () => {
@@ -123,7 +123,7 @@ test("clicking a present character opens that character at the right version", a
   const { container } = render(<GreetingEditor wid="w" onOpenCharacter={onOpenCharacter} />);
   const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
   fireEvent.click(await within(rail).findByText("Open"));
-  await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith("w", "open"));
+  await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open"));
   const present = within(container.querySelector(".detail-sidebar") as HTMLElement)
     .getByText("Present characters").closest(".side-section") as HTMLElement;
   // source character's chip carries its variant label; co-present stays plain
@@ -148,7 +148,7 @@ test("the view sidebar shows the full dependency picture", async () => {
   const { container } = render(<GreetingEditor wid="w" />);
   const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
   fireEvent.click(await within(rail).findByText("Open"));
-  await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith("w", "open"));
+  await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open"));
   const side = container.querySelector(".detail-sidebar") as HTMLElement;
   const dep = within(side).getByText("Depends on").closest(".side-section") as HTMLElement;
   expect(within(dep).getByText("Prologue")).toBeInTheDocument();
@@ -170,11 +170,11 @@ test("clicking a Depends-on scene navigates to that greeting", async () => {
   const { container } = render(<GreetingEditor wid="w" />);
   const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
   fireEvent.click(await within(rail).findByText("Open"));
-  await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith("w", "open"));
+  await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open"));
   const dep = within(container.querySelector(".detail-sidebar") as HTMLElement)
     .getByText("Depends on").closest(".side-section") as HTMLElement;
   fireEvent.click(within(dep).getByRole("button", { name: "Prologue" }));
-  await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith("w", "prologue"));
+  await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "prologue"));
 });
 
 test("editing a greeting toggles present characters and saves them", async () => {
@@ -193,13 +193,13 @@ test("editing a greeting toggles present characters and saves them", async () =>
   const { container } = render(<GreetingEditor wid="w" />);
   const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
   fireEvent.click(await within(rail).findByText("Open"));
-  await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith("w", "open"));
+  await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open"));
   fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
   const present = screen.getByText("Present characters").closest(".field") as HTMLElement;
   fireEvent.click(within(present).getByRole("button", { name: "Rowan" }));
   fireEvent.click(screen.getByRole("button", { name: /save greeting/i }));
   await waitFor(() =>
-    expect(api.updateGreeting).toHaveBeenCalledWith("w", "open",
+    expect(api.updateGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open",
       expect.objectContaining({ present: ["seraphine", "rowan"] })),
   );
 });
@@ -212,13 +212,13 @@ test("editing a greeting sets leads_to edges", async () => {
   const { container } = render(<GreetingEditor wid="w" />);
   const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
   fireEvent.click(await within(rail).findByText("Open"));
-  await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith("w", "open"));
+  await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open"));
   fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
   const leadsTo = screen.getByText("Leads to").closest(".field") as HTMLElement;
   fireEvent.click(within(leadsTo).getByRole("button", { name: "Reckoning" }));
   fireEvent.click(screen.getByRole("button", { name: /save greeting/i }));
   await waitFor(() =>
-    expect(api.setEdges).toHaveBeenCalledWith("w", "open", { leads_to: ["reckoning"], excludes: [] }),
+    expect(api.setEdges).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open", { leads_to: ["reckoning"], excludes: [] }),
   );
 });
 
@@ -274,7 +274,7 @@ test("saving the picker PUTs subjects and refreshes", async () => {
 test("focus prop opens that greeting in view mode", async () => {
   mockOpenWithImage({});
   render(<GreetingEditor wid="w" focus="open" />);
-  await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith("w", "open"));
+  await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open"));
   expect(await screen.findByRole("button", { name: /^edit$/i })).toBeInTheDocument();
 });
 

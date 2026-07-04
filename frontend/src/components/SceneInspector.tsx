@@ -31,7 +31,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
 
   useEffect(() => {
     api.getCampaign(cid).then((c) => {
-      Promise.all([api.listCharacters(c.meta.world), api.listPCs(c.meta.world), api.listCampaignPCs(cid)])
+      Promise.all([api.listCharacters({ kind: "world", id: c.meta.world }), api.listPCs({ kind: "world", id: c.meta.world }), api.listCampaignPCs(cid)])
         .then(([chars, worldPCs, localPCs]) => {
           const m: Record<string, string> = {};
           for (const x of chars) m[`characters/${x.id}`] = x.name;
