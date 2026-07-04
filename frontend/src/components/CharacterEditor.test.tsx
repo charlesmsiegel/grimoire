@@ -3,6 +3,8 @@ import { CharacterEditor } from "./CharacterEditor";
 
 vi.mock("../api/client", () => ({
   api: {
+    listAppearances: vi.fn(), pickVersion: vi.fn(), importVersion: vi.fn(),
+    actorImageUrl: (sc: { id: string }, c: string, v: string, n: string) => `/img/${sc.id}/${c}/${v}/${n}`,
     listCharacters: vi.fn(), readCharacter: vi.fn(), createCharacter: vi.fn(),
     updateVersion: vi.fn(), createVersion: vi.fn(), setDefaultVersion: vi.fn(),
     deleteCharacter: vi.fn(), importCharacter: vi.fn(), localizeImages: vi.fn(),
@@ -67,7 +69,7 @@ test("grid cards show the tagline under the name", async () => {
     { id: "seraphine", name: "Seraphine", default_version: "default", has_avatar: false,
       tagline: "Keeper of the salt ledgers.", versions: [] },
   ]);
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await screen.findByText("Keeper of the salt ledgers.");
 });
 
@@ -76,7 +78,7 @@ test("detail shows the Images shelf with avatar tile, gallery promote, and add t
     meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
     versions: [{ id: "default", name: "default", card: CARD, images: ["avatar", "gallery_1"] }],
   });
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   fireEvent.click(await screen.findByText("Seraphine"));
   await screen.findByText("Images");
   expect(screen.getByText("avatar")).toBeInTheDocument();               // shelf caption
@@ -90,7 +92,7 @@ test("detail without avatar shows the dashed placeholder tile", async () => {
     meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
     versions: [{ id: "default", name: "default", card: CARD, images: [] }],
   });
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   fireEvent.click(await screen.findByText("Seraphine"));
   await screen.findByText("no avatar");
   expect(screen.getByRole("button", { name: /\+ add/i })).toBeInTheDocument();
@@ -98,7 +100,7 @@ test("detail without avatar shows the dashed placeholder tile", async () => {
 
 test("detail view shows the character tagline", async () => {
   (api.getCharacterTagline as any).mockResolvedValue({ tagline: "A silent snowleopardgirl." });
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   fireEvent.click(await screen.findByText("Seraphine"));
   await screen.findByText("A silent snowleopardgirl.");
 });
@@ -106,7 +108,7 @@ test("detail view shows the character tagline", async () => {
 test("edit view saves an edited tagline via PUT", async () => {
   (api.getCharacterTagline as any).mockResolvedValue({ tagline: "old" });
   (api.setCharacterTagline as any).mockResolvedValue({ ok: true });
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await openEditForm();
   const box = await screen.findByLabelText("Tagline");
   fireEvent.change(box, { target: { value: "A new tagline." } });
@@ -115,7 +117,7 @@ test("edit view saves an edited tagline via PUT", async () => {
 });
 
 test("imports an embedded character_book and shows the result", async () => {
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await openEditForm();
   fireEvent.click(screen.getByRole("button", { name: /import .* lore/i }));
   await waitFor(() => expect(api.importCharacterBook).toHaveBeenCalledWith("w", "seraphine", "default"));
@@ -123,14 +125,14 @@ test("imports an embedded character_book and shows the result", async () => {
 });
 
 test("editing the birthdate persists it on the character", async () => {
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await openEditForm();
   fireEvent.change(screen.getByLabelText("Birthdate"), { target: { value: "1985-03-14" } });
   await waitFor(() => expect(api.setCharacterBirthdate).toHaveBeenCalledWith("w", "seraphine", "1985-03-14"));
 });
 
 test("uploads an avatar for the selected version", async () => {
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await openEditForm();
   const input = screen.getByLabelText("Upload avatar");
   fireEvent.change(input, { target: { files: [new File(["x"], "a.png", { type: "image/png" })] } });
@@ -139,14 +141,14 @@ test("uploads an avatar for the selected version", async () => {
 
 test("creating a character prompts and posts the name", async () => {
   vi.spyOn(window, "prompt").mockReturnValue("Rook");
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await screen.findByText("Seraphine");
   fireEvent.click(screen.getByRole("button", { name: /new character/i }));
   await waitFor(() => expect(api.createCharacter).toHaveBeenCalledWith("w", { name: "Rook" }));
 });
 
 test("editing description + alternate greetings (repeatable) saves a rebuilt card", async () => {
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await openEditForm();
   fireEvent.change(screen.getByLabelText("Description"), { target: { value: "cold keeper" } });
   // the seed card has one greeting "hi"; add a second and edit both
@@ -164,7 +166,7 @@ test("editing description + alternate greetings (repeatable) saves a rebuilt car
 });
 
 test("editing creator and tags saves them", async () => {
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await openEditForm();
   fireEvent.change(screen.getByLabelText("Creator"), { target: { value: "anon" } });
   fireEvent.change(screen.getByLabelText("Tags"), { target: { value: "fantasy, oc " } });
@@ -177,7 +179,7 @@ test("editing creator and tags saves them", async () => {
 });
 
 test("clicking a card shows read-only details, then Edit opens the form", async () => {
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   fireEvent.click(await screen.findByText("Seraphine")); // card main -> detail
   await screen.findByRole("heading", { name: "Seraphine" });
   expect(screen.getByText("keeper")).toBeInTheDocument(); // description shown read-only
@@ -189,7 +191,7 @@ test("clicking a card shows read-only details, then Edit opens the form", async 
 
 test("clicking a character or returning to the list scrolls to the top", async () => {
   const scrollSpy = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
 
   fireEvent.click(await screen.findByText("Seraphine")); // grid -> detail
   await screen.findByRole("heading", { name: "Seraphine" });
@@ -208,22 +210,22 @@ test("clicking a character or returning to the list scrolls to the top", async (
 
 test("a card's Delete button deletes the character", async () => {
   vi.spyOn(window, "confirm").mockReturnValue(true);
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await screen.findByText("Seraphine");
   fireEvent.click(screen.getByRole("button", { name: /^delete$/i }));
   await waitFor(() => expect(api.deleteCharacter).toHaveBeenCalledWith("w", "seraphine"));
 });
 
 test("bumping resetSignal returns from the editor to the grid", async () => {
-  const { rerender } = render(<CharacterEditor wid="w" resetSignal={0} />);
+  const { rerender } = render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" resetSignal={0} />);
   await openEditForm(); // in the edit form
-  rerender(<CharacterEditor wid="w" resetSignal={1} />);
+  rerender(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" resetSignal={1} />);
   await screen.findByRole("button", { name: /new character/i }); // back at the grid
   expect(screen.queryByLabelText("Description")).toBeNull();
 });
 
 test("importing a .json posts multipart with json format", async () => {
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await screen.findByText("Seraphine");
   const input = screen.getByLabelText("Import character card");
   fireEvent.change(input, { target: { files: [new File(["{}"], "c.json")] } });
@@ -231,7 +233,7 @@ test("importing a .json posts multipart with json format", async () => {
 });
 
 test("single import shows the tagline popup with the character's real name", async () => {
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await screen.findByText("Seraphine");
   const input = screen.getByLabelText("Import character card");
   fireEvent.change(input, { target: { files: [new File(["{}"], "c.json")] } });
@@ -242,7 +244,7 @@ test("single import shows the tagline popup with the character's real name", asy
 
 test("saving the import popup refreshes the detail-view tagline", async () => {
   (api.setCharacterTagline as any).mockResolvedValue({ ok: true });
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await screen.findByText("Seraphine");
   fireEvent.change(screen.getByLabelText("Import character card"),
     { target: { files: [new File(["{}"], "c.json")] } });
@@ -254,7 +256,7 @@ test("saving the import popup refreshes the detail-view tagline", async () => {
 });
 
 test("importing a .png posts multipart with png format", async () => {
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await screen.findByText("Seraphine");
   const input = screen.getByLabelText("Import character card");
   fireEvent.change(input, { target: { files: [new File(["x"], "fay.png", { type: "image/png" })] } });
@@ -262,7 +264,7 @@ test("importing a .png posts multipart with png format", async () => {
 });
 
 test("import card accepts multiple files and imports each", async () => {
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await screen.findByText("Seraphine");
   const input = screen.getByLabelText("Import character card");
   fireEvent.change(input, { target: { files: [
@@ -278,7 +280,7 @@ test("bulk import localizes each imported card", async () => {
   (api.importCharacter as any)
     .mockResolvedValueOnce({ character: "a", version: "default" })
     .mockResolvedValueOnce({ character: "b", version: "default" });
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await screen.findByText("Seraphine");
   const input = screen.getByLabelText("Import character card");
   fireEvent.change(input, { target: { files: [
@@ -298,14 +300,14 @@ test("focus prop opens that character at the given version", async () => {
       { id: "v2", name: "v2", card: CARD, images: [] },
     ],
   });
-  render(<CharacterEditor wid="w" focus={{ cid: "rook", vid: "v2" }} />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" focus={{ cid: "rook", vid: "v2" }} />);
   await waitFor(() => expect(api.readCharacter).toHaveBeenCalledWith({ kind: "world", id: "w" }, "rook"));
   const active = await screen.findByRole("button", { name: "v2", pressed: true });
   expect(active).toBeInTheDocument();
 });
 
 test("import version posts importCharacter into the current character", async () => {
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await openEditForm();
   const input = screen.getByLabelText("Import version");
   fireEvent.change(input, { target: { files: [new File(["{}"], "v.json")] } });
@@ -319,7 +321,7 @@ test("downloading from a URL runs the full pipeline and shows the summary", asyn
     gallery: { attempted: 2, stored: 2 },
     lore: { lorebooks_found: 1, created: [{ kind: "lore", id: "x" }] },
   });
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await screen.findByText("Seraphine");
   fireEvent.click(screen.getByRole("button", { name: /^download from url$/i }));
   fireEvent.change(screen.getByLabelText("Card URLs"),
@@ -337,7 +339,7 @@ test("downloading from a URL runs the full pipeline and shows the summary", asyn
 });
 
 test("cancelling the URL modal makes no API call", async () => {
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await screen.findByText("Seraphine");
   fireEvent.click(screen.getByRole("button", { name: /^download from url$/i }));
   fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
@@ -354,7 +356,7 @@ test("bulk URL import pipelines every URL and queues tagline prompts", async () 
     meta: { id: cid, name: cid === "imp1" ? "Imp One" : "Imp Two", default_version: "default" },
     versions: [{ id: "default", name: "default", card: CARD, images: [] }],
   }));
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await screen.findByText("Seraphine");
   fireEvent.click(screen.getByRole("button", { name: /^download from url$/i }));
   fireEvent.change(screen.getByLabelText("Card URLs"),
@@ -379,7 +381,7 @@ test("a failing URL is reported in the summary and the rest still import", async
     .mockRejectedValueOnce({ detail: "could not fetch a character card from that URL" })
     .mockResolvedValueOnce({ character: "imp2", version: "default", updated: false,
       gallery: { attempted: 0, stored: 0 }, lore: { lorebooks_found: 0, created: [] } });
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await screen.findByText("Seraphine");
   fireEvent.click(screen.getByRole("button", { name: /^download from url$/i }));
   fireEvent.change(screen.getByLabelText("Card URLs"),
@@ -396,7 +398,7 @@ test("a mid-pipeline failure still finishes the character's remaining steps", as
     character: "imp", version: "default", updated: false,
     gallery: { attempted: 0, stored: 0 }, lore: { lorebooks_found: 0, created: [] },
   });
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await screen.findByText("Seraphine");
   fireEvent.click(screen.getByRole("button", { name: /^download from url$/i }));
   fireEvent.change(screen.getByLabelText("Card URLs"), { target: { value: "creator/imp" } });
@@ -411,7 +413,7 @@ test("checking chub.ai links lists unlinked versions and jumps to one on click",
       { character: "seraphine", character_name: "Seraphine", version: "futa", version_name: "Seraphine (futa)" },
     ],
   });
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await screen.findByText("Seraphine");
   fireEvent.click(screen.getByRole("button", { name: /check chub\.ai links/i }));
   await waitFor(() => expect(api.findChubUnlinked).toHaveBeenCalledWith("w"));
@@ -424,7 +426,7 @@ test("checking chub.ai links lists unlinked versions and jumps to one on click",
 
 test("checking chub.ai links with none unlinked says so", async () => {
   (api.findChubUnlinked as any).mockResolvedValue({ versions: [] });
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await screen.findByText("Seraphine");
   fireEvent.click(screen.getByRole("button", { name: /check chub\.ai links/i }));
   await screen.findByText(/^all versions are linked to chub\.ai$/i);
@@ -437,7 +439,7 @@ test("downloading a version from a URL targets the open character and version", 
     gallery: { attempted: 0, stored: 0 },
     lore: { lorebooks_found: 0, created: [] },
   });
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await openEditForm();
   fireEvent.click(screen.getByRole("button", { name: /download version from url/i }));
   await waitFor(() =>
@@ -452,7 +454,7 @@ test("re-downloading an already-linked version updates it in place instead of cr
     gallery: { attempted: 0, stored: 0 },
     lore: { lorebooks_found: 0, created: [] },
   });
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await openEditForm();
   fireEvent.click(screen.getByRole("button", { name: /download version from url/i }));
   await waitFor(() =>
@@ -471,7 +473,7 @@ test("linking a character to a URL from the detail page shows a clickable link a
       versions: [{ ...DETAIL.versions[0], chub_source: "creator/imp" }],
     }); // after linking
 
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   fireEvent.click(await screen.findByText("Seraphine")); // card main -> detail (read-only)
   await screen.findByRole("heading", { name: "Seraphine" });
   expect(screen.queryByRole("link", { name: /creator\/imp/i })).toBeNull();
@@ -498,7 +500,7 @@ test("linking to a direct (non-chub) URL uses it as the href directly", async ()
       versions: [{ ...DETAIL.versions[0], chub_source: "https://example.com/card.png", is_chub: false }],
     });
 
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   fireEvent.click(await screen.findByText("Seraphine"));
   fireEvent.click(await screen.findByRole("button", { name: /^link to url$/i }));
   const link = await screen.findByRole("link", { name: /example\.com\/card\.png/i });
@@ -516,7 +518,7 @@ test("a sibling version doesn't show another version's chub.ai link", async () =
       { id: "variant", name: "variant", card: CARD, images: [] },
     ],
   });
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   fireEvent.click(await screen.findByText("Seraphine"));
   await screen.findByRole("link", { name: /creator\/main/i });
 
@@ -526,7 +528,7 @@ test("a sibling version doesn't show another version's chub.ai link", async () =
 });
 
 test("download gallery/lorebooks buttons only appear once a version is linked", async () => {
-  render(<CharacterEditor wid="w" />); // DETAIL's only version has no chub_source
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />); // DETAIL's only version has no chub_source
   fireEvent.click(await screen.findByText("Seraphine"));
   await screen.findByRole("button", { name: /^link to url$/i });
   expect(screen.queryByRole("button", { name: /download gallery/i })).toBeNull();
@@ -546,7 +548,7 @@ test("downloading the gallery for a linked version shows per-image progress then
       return new Promise<void>((resolve) => { resolveDownload = resolve; });
     },
   );
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   fireEvent.click(await screen.findByText("Seraphine"));
   fireEvent.click(await screen.findByRole("button", { name: /download gallery/i }));
   await waitFor(() =>
@@ -572,7 +574,7 @@ test("gallery images render as thumbnails, sorted numerically, opening full-size
       images: ["avatar", "gallery_10", "gallery_2", "gallery_0"], chub_source: "creator/imp",
     }],
   });
-  const { container } = render(<CharacterEditor wid="w" />);
+  const { container } = render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   fireEvent.click(await screen.findByText("Seraphine"));
   await screen.findByText("Images");
 
@@ -591,7 +593,7 @@ test("gallery images render as thumbnails, sorted numerically, opening full-size
 });
 
 test("no gallery section when a version has no gallery images", async () => {
-  render(<CharacterEditor wid="w" />); // DETAIL's only version has images: ["avatar"]
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />); // DETAIL's only version has images: ["avatar"]
   fireEvent.click(await screen.findByText("Seraphine"));
   await screen.findByRole("heading", { name: "Seraphine" });
   expect(screen.queryByText("Gallery")).toBeNull();
@@ -612,7 +614,7 @@ test("gallery images downloaded while viewing a character appear without navigat
       return Promise.resolve();
     },
   );
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   fireEvent.click(await screen.findByText("Seraphine"));
   await screen.findByText("Images");
   expect(screen.queryByRole("button", { name: /set as avatar/i })).toBeNull();
@@ -627,7 +629,7 @@ test("downloading linked lorebooks for a version with none shows a clear empty r
     versions: [{ id: "default", name: "default", card: CARD, images: [], chub_source: "creator/imp", is_chub: true }],
   });
   (api.downloadCharacterChubLorebooks as any).mockResolvedValue({ lorebooks_found: 0, created: [] });
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   fireEvent.click(await screen.findByText("Seraphine"));
   fireEvent.click(await screen.findByRole("button", { name: /download linked lorebooks/i }));
   await waitFor(() =>
@@ -636,7 +638,7 @@ test("downloading linked lorebooks for a version with none shows a clear empty r
 });
 
 test("the edit form no longer shows a link control (moved to the detail page)", async () => {
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await openEditForm();
   expect(screen.queryByRole("button", { name: /^link to url$/i })).toBeNull();
   expect(screen.queryByRole("button", { name: /^unlink$/i })).toBeNull();
@@ -652,7 +654,7 @@ test("grid cards show gallery/localized/greeting badges only when nonzero", asyn
     { id: "c", name: "Cyn", default_version: "default", has_avatar: true,
       gallery_count: 0, localized_count: 0, greeting_count: 0, versions: [] },
   ]);
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await screen.findByText("3 gallery");
   await screen.findByText("2 localized");
   await screen.findByText("1 greeting");
@@ -674,7 +676,7 @@ test("Re-download uses the stored chub link without prompting", async () => {
     gallery: { attempted: 0, stored: 0 }, lore: { lorebooks_found: 0, created: [] },
   });
   const promptSpy = vi.spyOn(window, "prompt");
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   fireEvent.click(await screen.findByText("Seraphine"));
   fireEvent.click(await screen.findByRole("button", { name: /re-download/i }));
   await waitFor(() => expect(api.importCharacterFromChub).toHaveBeenCalledWith(
@@ -696,7 +698,7 @@ test("greeting scene labels are demoted and single newlines keep line breaks", a
     meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
     versions: [{ id: "default", name: "default", card, images: ["avatar"] }],
   });
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   fireEvent.click(await screen.findByText("Seraphine"));
   // `#Scene Label#` lines become a small scene label (trailing # stripped), not an h1
   await screen.findByText("Rooftop Setting");
@@ -722,7 +724,7 @@ test("first message and alternate greetings render markdown images; other fields
     meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
     versions: [{ id: "default", name: "default", card, images: ["avatar"] }],
   });
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   fireEvent.click(await screen.findByText("Seraphine"));
   await screen.findByRole("img", { name: "scene" });
   await screen.findByRole("img", { name: "alt-pic" });
@@ -735,7 +737,7 @@ test("clicking the profile avatar opens the crop picker and saves the focus", as
     meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
     versions: [{ id: "default", name: "default", card: CARD, images: ["avatar"], avatar_focus: null }],
   });
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   fireEvent.click(await screen.findByText("Seraphine"));
   fireEvent.click(await screen.findByRole("button", { name: /adjust avatar crop/i }));
   const slider = await screen.findByLabelText("Crop position");
@@ -753,7 +755,7 @@ test("stored focus is applied as object-position on detail and grid avatars", as
     meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
     versions: [{ id: "default", name: "default", card: CARD, images: ["avatar"], avatar_focus: 25 }],
   });
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await screen.findByText("Seraphine");
   const cardImg = document.querySelector(".char-card-avatar") as HTMLElement;
   expect(cardImg.style.objectPosition).toBe("25% 25%");
@@ -773,7 +775,7 @@ test("creator notes render inside a sandboxed iframe", async () => {
     meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
     versions: [{ id: "default", name: "default", card, images: [] }],
   });
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   fireEvent.click(await screen.findByText("Seraphine"));
   const frame = await screen.findByTitle("Creator notes");
   expect(frame.tagName).toBe("IFRAME");
@@ -787,7 +789,7 @@ test("plain-text creator notes keep line breaks via pre-wrap", async () => {
     meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
     versions: [{ id: "default", name: "default", card, images: [] }],
   });
-  render(<CharacterEditor wid="w" />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   fireEvent.click(await screen.findByText("Seraphine"));
   const frame = await screen.findByTitle("Creator notes");
   expect(frame.getAttribute("srcdoc")).toContain("white-space:pre-wrap");
@@ -804,7 +806,7 @@ test("appears-in gallery copies to avatar and world greetings link with primary 
     { id: "sol-3", name: "SoL 3", character: "other", version: "main", present: ["other"], requires_tags: [], predecessor_join: "all" },
   ]);
   const onOpenGreeting = vi.fn();
-  render(<CharacterEditor wid="w" onOpenGreeting={onOpenGreeting} />);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" onOpenGreeting={onOpenGreeting} />);
   fireEvent.click(await screen.findByText("Seraphine"));
 
   // appears-in strip: copy to avatar
@@ -822,4 +824,38 @@ test("appears-in gallery copies to avatar and world greetings link with primary 
   expect(within(wg).queryByText(/SoL 3/)).toBeNull();
   fireEvent.click(within(wg).getByText("SoL 2"));
   expect(onOpenGreeting).toHaveBeenCalledWith("sol-2");
+});
+
+
+test("campaign scope: hides world-only tooling and uses campaign image URLs", async () => {
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "mara", name: "Mara", default_version: "young", has_avatar: true, versions: [] },
+  ]);
+  const { container } = render(<CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+  await screen.findByText("Mara");
+  expect(screen.queryByRole("button", { name: "Import card" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Download from URL" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "+ New character" })).toBeNull();
+  const img = container.querySelector("img.char-card-avatar")!;
+  expect(img.getAttribute("src")).toContain("/img/run/mara/");
+});
+
+test("campaign scope: picking a version calls pickVersion", async () => {
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "mara", name: "Mara", default_version: "young", versions: [] },
+  ]);
+  (api.readCharacter as any).mockImplementation(async (scope: any) => ({
+    meta: { id: "mara", name: "Mara", default_version: "young" },
+    versions: [
+      { id: "young", name: "Young", card: { spec: "chara_card_v3", spec_version: "3.0", data: { name: "Mara" } } },
+      { id: "veteran", name: "Veteran", card: { spec: "chara_card_v3", spec_version: "3.0", data: { name: "Mara" } } },
+    ],
+  }));
+  (api.listAppearances as any).mockResolvedValue([]);
+  (api.pickVersion as any).mockResolvedValue({ ok: true });
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  render(<CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+  fireEvent.click(await screen.findByText("Mara"));
+  fireEvent.click(await screen.findByRole("button", { name: "Pick this version" }));
+  await waitFor(() => expect(api.pickVersion).toHaveBeenCalledWith("run", "characters", "mara", "young"));
 });
