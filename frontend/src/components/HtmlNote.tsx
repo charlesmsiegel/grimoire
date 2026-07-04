@@ -31,10 +31,14 @@ export function HtmlNote({ html, title }: { html: string; title: string }) {
     frame.style.height = "0px";
     const staticH = root.scrollHeight;
     frame.style.height = `${staticH}px`;
-    // Content that tracks the viewport re-expands past any height we set;
-    // give it one screen and let the frame scroll internally for the rest.
+    // Content that tracks the viewport (100vh sections, fixed overlays)
+    // re-expands past any height we set. Clip it at the static height: the
+    // real content already fits (measured with vh collapsed), and a frame
+    // that scrolls internally would swallow wheel events and pin the page.
     if (root.scrollHeight > staticH + 1) {
-      frame.style.height = `${Math.max(staticH, Math.round(window.innerHeight * 0.9))}px`;
+      root.style.overflow = "hidden";
+      const body = frame.contentDocument?.body;
+      if (body) body.style.overflow = "hidden";
     }
     roRef.current?.disconnect();
     if (typeof ResizeObserver !== "undefined") {
