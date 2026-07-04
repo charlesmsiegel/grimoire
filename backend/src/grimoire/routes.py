@@ -962,6 +962,16 @@ def _entity_kind_or_404(kind: str) -> None:
         raise HTTPException(status_code=404, detail="unknown kind")
 
 
+_IMAGE_KINDS = store.entities.ENTITY_KINDS + ("greetings",)
+
+
+def _image_kind_or_404(kind: str) -> None:
+    # read side only: greeting images are stored by localize_greeting / scripts,
+    # not uploaded over HTTP, so the write routes keep the strict entity check
+    if kind not in _IMAGE_KINDS:
+        raise HTTPException(status_code=404, detail="unknown kind")
+
+
 def _entity_images_list(root, kind: str, eid: str):
     _entity_kind_or_404(kind)
     return store.assets.list_images(root, eid, "default", base=kind)
@@ -990,12 +1000,13 @@ def _entity_image_promote(root, kind: str, eid: str, name: str):
 
 @router.get("/worlds/{wid}/{kind}/{eid}/images")
 def list_world_entity_images(wid: str, kind: str, eid: str):
-    return _entity_images_list(_world_root_or_404(wid), kind, eid)
+    _image_kind_or_404(kind)
+    return store.assets.list_images(_world_root_or_404(wid), eid, "default", base=kind)
 
 
 @router.get("/worlds/{wid}/{kind}/{eid}/images/{name}")
 def get_world_entity_image(wid: str, kind: str, eid: str, name: str):
-    _entity_kind_or_404(kind)
+    _image_kind_or_404(kind)
     return _serve_image(_world_root_or_404(wid), eid, "default", name, base=kind)
 
 

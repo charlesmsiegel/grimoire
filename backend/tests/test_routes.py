@@ -230,6 +230,30 @@ def test_campaign_entity_images_served(client):
     assert client.get(f"/api/campaigns/{cid}/locations").json()[0]["has_image"] is True
 
 
+def test_greeting_images_served_readonly(client):
+    wid = _world(client)
+    gid = client.post(f"/api/worlds/{wid}/greetings",
+                      json={"name": "Opener", "character": "mira", "version": "v1"}).json()["id"]
+    # no PUT route for greeting images: store the asset directly
+    root = store.worlds.world_root(wid)
+    store.assets.put_image(root, gid, "default", "embed-abc123def456", b"art", "png",
+                           base="greetings")
+
+    base = f"/api/worlds/{wid}/greetings/{gid}/images"
+    assert [i["name"] for i in client.get(base).json()] == ["embed-abc123def456"]
+    r = client.get(f"{base}/embed-abc123def456")
+    assert r.status_code == 200 and r.content == b"art"
+    assert r.headers["content-type"] == "image/png"
+
+    # write surface stays entity-only: greetings is not an accepted kind
+    assert client.put(f"{base}/other",
+                      files={"file": ("a.png", io.BytesIO(b"x"), "image/png")}).status_code == 404
+    assert client.delete(f"{base}/embed-abc123def456").status_code == 404
+    assert client.post(f"{base}/embed-abc123def456/promote").status_code == 404
+    # and unknown kinds still 404 on GET
+    assert client.get(f"/api/worlds/{wid}/potions/x/images").status_code == 404
+
+
 def test_character_import_garbage_400(client):
     wid = _world(client)
     files = {"file": ("c.json", io.BytesIO(b"nonsense"), "application/json")}
