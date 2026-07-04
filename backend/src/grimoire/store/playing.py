@@ -6,15 +6,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import appearances, campaigns, characters, context, greetings, pcs, scenes, worlds
+from . import appearances, campaigns, characters, context, greetings, pcs, scenes
 
 
 class PlayError(Exception):
     pass
-
-
-def _world_root(cid: str) -> Path:
-    return worlds.world_root(campaigns.read_campaign(cid)["meta"].get("world", ""))
 
 
 _MARK_KEYS = ("played", "completed", "skipped")
@@ -79,9 +75,15 @@ def player_tags(cid: str) -> set[str]:
 
 
 def available_greetings(cid: str, after: str | None = None) -> list[dict]:
-    wroot = _world_root(cid)
-    plotmap = greetings.read_plotmap(wroot)
-    out = greetings.availability(wroot, plotmap, read_played(cid), player_tags(cid))
+    croot = campaigns.campaign_root(cid)
+    plotmap = greetings.read_plotmap(croot)
+    marks = read_marks(cid)
+    out = greetings.availability(croot, plotmap, marks["played"] | marks["completed"],
+                                 player_tags(cid), skipped=marks["skipped"])
+    mark_of = {gid: "played" for gid in marks["played"]}
+    mark_of.update({gid: "completed" for gid in marks["completed"]})
+    for g in out:
+        g["mark"] = mark_of.get(g["id"])
     unlocked: set[str] = set()
     if after:
         gid = scenes.read_scene(cid, after)["meta"].get("greeting", "")
@@ -94,21 +96,23 @@ def available_greetings(cid: str, after: str | None = None) -> list[dict]:
 
 
 def start_from_greeting(cid: str, sid: str, gid: str) -> None:
-    wroot = _world_root(cid)
-    g = greetings.read_greeting(wroot, gid)["meta"]   # raises GreetingNotFound
+    croot = campaigns.campaign_root(cid)
+    g = greetings.read_greeting(croot, gid)["meta"]   # raises GreetingNotFound
     scene = scenes.read_scene(cid, sid)               # raises SceneNotFound
     if scene["messages"]:
         raise PlayError("scene already has messages")
     if not {a["id"]: a["available"] for a in available_greetings(cid)}.get(gid, False):
         raise PlayError(f"greeting {gid} is not available")
-    # Cast everyone present at the opener: the primary at the greeting's version,
-    # any co-present character at its own default version. Deduped, primary first.
-    for cid_ in dict.fromkeys([g["character"], *g["present"]]):
-        version = g["version"] if cid_ == g["character"] else \
-            characters.read_character(wroot, cid_)["meta"]["default_version"]
-        appearances.appear(cid, sid, "characters", cid_, version, "npc")
+    # Cast everyone present at the opener. A locked version always wins; otherwise
+    # the primary uses the greeting's version and co-present characters their default.
+    for actor in dict.fromkeys([g["character"], *g["present"]]):
+        version = appearances.locked_version(cid, "characters", actor)
+        if version is None:
+            version = g["version"] if actor == g["character"] else \
+                characters.read_character(croot, actor)["meta"]["default_version"]
+        appearances.appear(cid, sid, "characters", actor, version, "npc")
     _mark_played(cid, gid)
     scenes.stamp_greeting(cid, sid, gid)
-    text = context._substitute(greetings.read_greeting(wroot, gid)["body"],
+    text = context._substitute(greetings.read_greeting(croot, gid)["body"],
                                context.scene_substitutions(cid, sid))
     scenes.append_message(cid, sid, "assistant", text)

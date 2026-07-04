@@ -4,11 +4,22 @@ from grimoire.store import appearances as ap
 from grimoire.store import campaigns, characters, greetings, pcs, playing, scenes, tags, worlds
 
 
-def _campaign(monkeypatch, tmp_path):
+def _world(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    wid = worlds.create_world("W")
+    return worlds.create_world("W")
+
+
+def _campaign_after_seed(wid):
+    """Create the campaign (and one scene) AFTER the world is seeded — the
+    campaign copies the world at creation and play reads only the copy."""
     cid = campaigns.create_campaign("Run", wid)
     sid = scenes.create_scene(cid, "S")
+    return cid, sid
+
+
+def _campaign(monkeypatch, tmp_path):
+    wid = _world(monkeypatch, tmp_path)
+    cid, sid = _campaign_after_seed(wid)
     return wid, cid, sid
 
 
@@ -22,38 +33,41 @@ def test_played_roundtrip(monkeypatch, tmp_path):
 
 
 def test_player_tags_unions_player_pcs_only(monkeypatch, tmp_path):
-    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    wid = _world(monkeypatch, tmp_path)
     wroot = worlds.world_root(wid)
     for t in ("student", "sailor"):
         tags.add_tag(wroot, t)
     pcs.create_pc(wroot, "Elara", ["student"])
     pcs.create_pc(wroot, "Bryn", ["sailor"])
+    cid, sid = _campaign_after_seed(wid)
     ap.appear(cid, sid, "pcs", "elara", "default", "player")
     ap.appear(cid, sid, "pcs", "bryn", "default", "player")
     assert playing.player_tags(cid) == {"student", "sailor"}
 
 
 def test_available_greetings_end_to_end(monkeypatch, tmp_path):
-    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    wid = _world(monkeypatch, tmp_path)
     wroot = worlds.world_root(wid)
     tags.add_tag(wroot, "vip")
     g = greetings.create_greeting(wroot, "Gala", "c", "v", requires_tags=["vip"])
-    assert {x["id"]: x["available"] for x in playing.available_greetings(cid)}[g] is False
     pcs.create_pc(wroot, "Elara", ["vip"])
+    cid, sid = _campaign_after_seed(wid)
+    assert {x["id"]: x["available"] for x in playing.available_greetings(cid)}[g] is False
     ap.appear(cid, sid, "pcs", "elara", "default", "player")
     assert {x["id"]: x["available"] for x in playing.available_greetings(cid)}[g] is True
 
 
 def test_start_from_greeting_seeds_appears_marks(monkeypatch, tmp_path):
-    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    wid = _world(monkeypatch, tmp_path)
     wroot = worlds.world_root(wid)
     card = characters.blank_card("Seraphine")
     card["data"].update(description="keeper")
     characters.create_character(wroot, "Seraphine", "default", card)
     pcs.create_pc(wroot, "Elara", [])
-    ap.appear(cid, sid, "pcs", "elara", "default", "player")
     g = greetings.create_greeting(wroot, "Open", "seraphine", "default",
                                   body="{{char}} greets {{user}}.")
+    cid, sid = _campaign_after_seed(wid)
+    ap.appear(cid, sid, "pcs", "elara", "default", "player")
     playing.start_from_greeting(cid, sid, g)
     scene = scenes.read_scene(cid, sid)
     assert scene["messages"][0]["role"] == "assistant"
@@ -66,14 +80,15 @@ def test_start_from_greeting_seeds_appears_marks(monkeypatch, tmp_path):
 
 
 def test_start_from_greeting_casts_all_present(monkeypatch, tmp_path):
-    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    wid = _world(monkeypatch, tmp_path)
     wroot = worlds.world_root(wid)
     characters.create_character(wroot, "Mara", "main", characters.blank_card("Mara"))
     characters.create_character(wroot, "Rowan", "main", characters.blank_card("Rowan"))
     pcs.create_pc(wroot, "Elara", [])
-    ap.appear(cid, sid, "pcs", "elara", "default", "player")
     g = greetings.create_greeting(wroot, "Arrival: Mara & Rowan", "mara", "main",
                                   body="Mara and Rowan arrive.", present=["mara", "rowan"])
+    cid, sid = _campaign_after_seed(wid)
+    ap.appear(cid, sid, "pcs", "elara", "default", "player")
     playing.start_from_greeting(cid, sid, g)
     # both present characters cast as NPCs, each at their default version
     assert ap.is_appeared(cid, "characters", "mara")
@@ -81,20 +96,22 @@ def test_start_from_greeting_casts_all_present(monkeypatch, tmp_path):
 
 
 def test_start_unavailable_raises(monkeypatch, tmp_path):
-    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    wid = _world(monkeypatch, tmp_path)
     wroot = worlds.world_root(wid)
     characters.create_character(wroot, "S", "default", characters.blank_card("S"))
     tags.add_tag(wroot, "vip")
     g = greetings.create_greeting(wroot, "Gala", "s", "default", requires_tags=["vip"])
+    cid, sid = _campaign_after_seed(wid)
     with pytest.raises(playing.PlayError):
         playing.start_from_greeting(cid, sid, g)
 
 
 def test_start_from_greeting_stamps_greeting(monkeypatch, tmp_path):
-    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    wid = _world(monkeypatch, tmp_path)
     wroot = worlds.world_root(wid)
     characters.create_character(wroot, "Seraphine", "default", characters.blank_card("Seraphine"))
     g = greetings.create_greeting(wroot, "Open", "seraphine", "default", body="Hi.")
+    cid, sid = _campaign_after_seed(wid)
     playing.start_from_greeting(cid, sid, g)
     assert scenes.read_scene(cid, sid)["meta"]["greeting"] == g
 
@@ -106,13 +123,14 @@ def test_stamp_greeting_missing_scene_raises(monkeypatch, tmp_path):
 
 
 def test_available_greetings_after_flags_and_sorts_unlocked(monkeypatch, tmp_path):
-    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    wid = _world(monkeypatch, tmp_path)
     wroot = worlds.world_root(wid)
     characters.create_character(wroot, "S", "default", characters.blank_card("S"))
     g1 = greetings.create_greeting(wroot, "Alpha", "s", "default", body="A.")
     g2 = greetings.create_greeting(wroot, "Omega", "s", "default", body="O.")
     g3 = greetings.create_greeting(wroot, "Middle", "s", "default", body="M.")
     greetings.set_edges(wroot, g1, leads_to=[g3])
+    cid, sid = _campaign_after_seed(wid)
     playing.start_from_greeting(cid, sid, g1)
     got = playing.available_greetings(cid, after=sid)
     assert got[0]["id"] == g3                      # the unlocked greeting sorts first
@@ -120,19 +138,21 @@ def test_available_greetings_after_flags_and_sorts_unlocked(monkeypatch, tmp_pat
 
 
 def test_available_greetings_after_without_stamp_all_false(monkeypatch, tmp_path):
-    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    wid = _world(monkeypatch, tmp_path)
     wroot = worlds.world_root(wid)
     characters.create_character(wroot, "S", "default", characters.blank_card("S"))
     greetings.create_greeting(wroot, "Alpha", "s", "default", body="A.")
+    cid, sid = _campaign_after_seed(wid)
     got = playing.available_greetings(cid, after=sid)   # scene never started from a greeting
     assert [x["unlocked"] for x in got] == [False]
 
 
 def test_available_greetings_no_after_has_unlocked_false(monkeypatch, tmp_path):
-    wid, cid, _sid = _campaign(monkeypatch, tmp_path)
+    wid = _world(monkeypatch, tmp_path)
     wroot = worlds.world_root(wid)
     characters.create_character(wroot, "S", "default", characters.blank_card("S"))
     greetings.create_greeting(wroot, "Alpha", "s", "default", body="A.")
+    cid, _sid = _campaign_after_seed(wid)
     assert [x["unlocked"] for x in playing.available_greetings(cid)] == [False]
 
 
@@ -183,3 +203,46 @@ def test_mark_played_clears_offscreen_marks(monkeypatch, tmp_path):
     playing._mark_played(cid, g)
     marks = playing.read_marks(cid)
     assert g in marks["played"] and g not in marks["completed"]
+
+
+def test_campaign_play_isolated_from_world_edits(monkeypatch, tmp_path):
+    wid = _world(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    characters.create_character(wroot, "S", "default", characters.blank_card("S"))
+    g = greetings.create_greeting(wroot, "Open", "s", "default", body="Original.")
+    cid, sid = _campaign_after_seed(wid)
+    greetings.update_greeting(wroot, g, body="Edited in world.")   # after the fork
+    greetings.delete_greeting(wroot, g)                            # even deleted
+    assert {x["id"] for x in playing.available_greetings(cid)} == {g}
+    playing.start_from_greeting(cid, sid, g)
+    assert scenes.read_scene(cid, sid)["messages"][0]["content"] == "Original."
+
+
+def test_available_greetings_reports_marks_and_hides_skipped(monkeypatch, tmp_path):
+    wid = _world(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    characters.create_character(wroot, "S", "default", characters.blank_card("S"))
+    g1 = greetings.create_greeting(wroot, "A", "s", "default", body="A.")
+    g2 = greetings.create_greeting(wroot, "B", "s", "default", body="B.")
+    g3 = greetings.create_greeting(wroot, "C", "s", "default", body="C.")
+    greetings.set_edges(wroot, g1, leads_to=[g3])
+    cid, _sid = _campaign_after_seed(wid)
+    playing.mark_greeting(cid, g1, "completed")   # unlocks g3 like a play would
+    playing.mark_greeting(cid, g2, "skipped")
+    got = {x["id"]: x for x in playing.available_greetings(cid)}
+    assert g2 not in got
+    assert got[g1]["mark"] == "completed"
+    assert got[g3]["mark"] is None and got[g3]["available"] is True
+
+
+def test_start_from_greeting_locked_version_wins(monkeypatch, tmp_path):
+    wid = _world(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    char_id, _ = characters.create_character(wroot, "Mara", "young", characters.blank_card("Mara"))
+    characters.create_version(wroot, char_id, "veteran", characters.blank_card("Mara"))
+    g = greetings.create_greeting(wroot, "Open", char_id, "young", body="Hi.")
+    cid, sid = _campaign_after_seed(wid)
+    other = scenes.create_scene(cid, "S0")
+    ap.appear(cid, other, "characters", char_id, "veteran", "npc")  # lock veteran first
+    playing.start_from_greeting(cid, sid, g)                        # greeting says young
+    assert ap.locked_version(cid, "characters", char_id) == "veteran"
