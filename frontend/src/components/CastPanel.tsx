@@ -54,15 +54,11 @@ export function CastPanel({
     setPrompt(initialPrompt ?? "");
   }, [sid, initialPrompt]);
 
-  // characters/pcs available to add: world assets plus the campaign's own PC overlays
+  // characters/pcs available to add: the campaign copy holds every actor
   useEffect(() => {
     api.getCampaign(cid).then((c) => {
-      api.listCharacters({ kind: "world", id: c.meta.world }).then(setChars);
-      Promise.all([api.listPCs({ kind: "world", id: c.meta.world }), api.listCampaignPCs(cid)]).then(([worldPCs, localPCs]) => {
-        const byId = new Map(worldPCs.map((p) => [p.id, p]));
-        for (const p of localPCs) byId.set(p.id, p);
-        setPCs([...byId.values()]);
-      });
+      api.listCharacters({ kind: "campaign", id: cid }).then(setChars);
+      api.listCampaignPCs(cid).then(setPCs);
     });
     api.listEntities({ kind: "campaign", id: cid }, "locations").then(setLocations).catch(() => setLocations([]));
   }, [cid]);
@@ -153,8 +149,8 @@ export function CastPanel({
     if (!character) return;
     const name = window.prompt("Name this greeting?", "Opener")?.trim();
     if (!name) return;
-    const c = await api.getCampaign(cid);
-    await api.createGreeting({ kind: "world", id: c.meta.world }, {
+    // an opener saved as a greeting belongs to the campaign, not the world baseline
+    await api.createGreeting({ kind: "campaign", id: cid }, {
       name, character: actorId, version: character.default_version, body: opener,
     });
     setOpener("");

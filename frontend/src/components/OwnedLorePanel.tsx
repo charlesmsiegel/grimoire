@@ -1,19 +1,19 @@
 import { useEffect, useState } from "react";
-import { api, type EntitySummary } from "../api/client";
+import { api, type EntityScope, type EntitySummary } from "../api/client";
 
 /** Lists the world lore entries owned by `ownerRef`, with a shortcut to create a new one.
  *  Editing happens in the Lore tab — the callbacks route there. */
-export function OwnedLorePanel({ wid, ownerRef, onOpenEntry, onNewEntry }: {
-  wid: string; ownerRef: string;
+export function OwnedLorePanel({ scope, ownerRef, onOpenEntry, onNewEntry }: {
+  scope: EntityScope; ownerRef: string;
   onOpenEntry: (id: string) => void; onNewEntry: () => void;
 }) {
   const [owned, setOwned] = useState<EntitySummary[]>([]);
   useEffect(() => {
-    api.listEntities({ kind: "world", id: wid }, "lore").then((items) =>
+    api.listEntities(scope, "lore").then((items) =>
       setOwned(items.filter((e) =>
         (e.owners ?? "").split(",").map((o) => o.trim()).includes(ownerRef))),
     );
-  }, [wid, ownerRef]);
+  }, [scope.kind, scope.id, ownerRef]);
 
   return (
     <div className="side-section owned-lore">

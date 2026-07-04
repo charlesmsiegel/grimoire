@@ -161,7 +161,7 @@ export function PCEditor({ wid, onOpenLore }:
               </div>
               {onOpenLore && (
                 <OwnedLorePanel
-                  wid={wid}
+                  scope={{ kind: "world", id: wid }}
                   ownerRef={`pcs:${detail.meta.id}`}
                   onOpenEntry={(id) => onOpenLore({ focusEntry: id })}
                   onNewEntry={() => onOpenLore({ newOwner: `pcs:${detail.meta.id}` })}

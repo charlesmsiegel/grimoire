@@ -19,8 +19,7 @@ beforeEach(() => {
   (api.getCast as any).mockResolvedValue([{ kind: "pcs", id: "elara", role: "player" }]);
   (api.getCampaign as any).mockResolvedValue({ meta: { id: "c", world: "w" }, body: "" });
   (api.listCharacters as any).mockResolvedValue([{ id: "seraphine", name: "Seraphine", default_version: "default", versions: [] }]);
-  (api.listPCs as any).mockResolvedValue([{ id: "elara", name: "Elara", tags: [], default_version: "default", versions: [] }]);
-  (api.listCampaignPCs as any).mockResolvedValue([]);
+  (api.listCampaignPCs as any).mockResolvedValue([{ id: "elara", name: "Elara", tags: [], default_version: "default", versions: [] }]);
   (api.listEntities as any).mockResolvedValue([]);
   (api.getSceneLocation as any).mockResolvedValue({ current: null, visited: [] });
   (api.setSceneLocation as any).mockResolvedValue({ ok: true, moved: false, name: "" });
@@ -75,9 +74,11 @@ test("renders the current cast", async () => {
   expect(screen.getByText(/PC · player/)).toBeInTheDocument();
 });
 
-test("PC dropdown includes campaign-local PCs", async () => {
-  (api.listPCs as any).mockResolvedValue([{ id: "elara", name: "Elara", tags: [], default_version: "default", versions: [] }]);
-  (api.listCampaignPCs as any).mockResolvedValue([{ id: "mara", name: "Mara", tags: [], default_version: "default", versions: [] }]);
+test("PC dropdown lists the campaign's PCs (copied world PCs + local overlays)", async () => {
+  (api.listCampaignPCs as any).mockResolvedValue([
+    { id: "elara", name: "Elara", tags: [], default_version: "default", versions: [] },
+    { id: "mara", name: "Mara", tags: [], default_version: "default", versions: [] },
+  ]);
   renderPanel();
   fireEvent.change(await screen.findByLabelText(/actor kind/i), { target: { value: "pcs" } });
   await screen.findByRole("option", { name: "Elara" });
@@ -110,7 +111,7 @@ test("generating an opener streams into the preview and can be saved as a greeti
   fireEvent.change(screen.getByLabelText("Actor"), { target: { value: "seraphine" } });
   fireEvent.click(screen.getByRole("button", { name: /save as greeting/i }));
   await waitFor(() =>
-    expect(api.createGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, expect.objectContaining({
+    expect(api.createGreeting).toHaveBeenCalledWith({ kind: "campaign", id: "c" }, expect.objectContaining({
       character: "seraphine", version: "default", body: "Mist rolls in.",
     })),
   );

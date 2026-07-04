@@ -41,7 +41,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
   }, [wid, kind, scope.kind, scope.id]);
 
   useEffect(() => {
-    if (kind === "lore") loreOwnerOptions(wid).then(setOwnerOpts);
+    if (kind === "lore") loreOwnerOptions(scope).then(setOwnerOpts);
   }, [wid, kind]);
 
   const ownerLabel = useCallback(
@@ -293,7 +293,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
               )}
               {kind === "locations" && editing && onOpenLore && (
                 <OwnedLorePanel
-                  wid={wid}
+                  scope={scope}
                   ownerRef={`locations:${editing}`}
                   onOpenEntry={(id) => onOpenLore({ focusEntry: id })}
                   onNewEntry={() => onOpenLore({ newOwner: `locations:${editing}` })}
