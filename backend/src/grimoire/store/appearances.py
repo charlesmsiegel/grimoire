@@ -90,6 +90,63 @@ def _copy_actor(wroot: Path, croot: Path, kind: str, actor_id: str, vid: str) ->
             shutil.copytree(src_dir / "assets", dst_dir / "assets", dirs_exist_ok=True)
 
 
+def _purge_other_versions(croot: Path, kind: str, actor_id: str, keep: str) -> None:
+    d = croot / kind / actor_id
+    ext = _version_ext(kind)
+    for p in d.glob(f"*.{ext}"):
+        if p.name not in (f"{keep}.{ext}", _meta_name(kind)):
+            p.unlink()
+
+
+def _set_default(croot: Path, kind: str, actor_id: str, vid: str) -> None:
+    if kind == "characters":
+        characters.set_default_version(croot, actor_id, vid)
+    else:
+        pcs.set_default_version(croot, actor_id, vid)
+
+
+def _drop_manifest_ref(cid: str, kind: str, actor_id: str) -> None:
+    manifest = campaigns.read_manifest(cid)
+    if manifest.pop(_ref(kind, actor_id), None) is not None:
+        campaigns.write_manifest(cid, manifest)
+
+
+def _lock(cid: str, kind: str, actor_id: str, version_id: str) -> str:
+    """Materialize a version lock in the campaign tree: ensure the version file is
+    present, purge every sibling version, point default_version at the pick, and
+    drop the whole-actor sync ref (the locked per-version flow takes over).
+    Returns the sync base hash for the appearance record."""
+    wroot = worlds.world_root(_world_id(cid))
+    croot = campaigns.campaign_root(cid)
+    base = actor_hash(wroot, kind, actor_id, version_id)
+    if actor_hash(croot, kind, actor_id, version_id) is None:
+        # Not in the campaign yet: a world actor created after the fork (copy it),
+        # or nothing anywhere -> error.
+        if base is None:
+            raise AppearError(f"no {_ref(kind, actor_id)}/{version_id} in world or campaign")
+        _copy_actor(wroot, croot, kind, actor_id, version_id)
+    _purge_other_versions(croot, kind, actor_id, version_id)
+    _set_default(croot, kind, actor_id, version_id)
+    _drop_manifest_ref(cid, kind, actor_id)
+    return base or ""  # campaign-local actor: empty world-base, sync skips it
+
+
+def pick_version(cid: str, kind: str, actor_id: str, version_id: str) -> None:
+    """Explicit pick from the campaign's world pages: lock without a scene."""
+    ref = _ref(kind, actor_id)
+    data = record(cid)
+    if ref in data:
+        raise AppearError(f"{ref} is already locked to version {data[ref]['version']}")
+    croot = campaigns.campaign_root(cid)
+    if actor_hash(croot, kind, actor_id, version_id) is None:
+        raise AppearError(f"no {ref}/{version_id} in campaign")
+    base = _lock(cid, kind, actor_id, version_id)
+    data[ref] = {"version": version_id, "base": base, "scenes": [],
+                 "role": "player" if kind == "pcs" else "npc"}
+    _write(cid, data)
+    campaigns.touch(cid)
+
+
 def appear(cid: str, scene_id: str, kind: str, actor_id: str, version_id: str, role: str) -> None:
     data = record(cid)
     ref = _ref(kind, actor_id)
@@ -104,18 +161,7 @@ def appear(cid: str, scene_id: str, kind: str, actor_id: str, version_id: str, r
             _write(cid, data)
         return
 
-    wroot = worlds.world_root(_world_id(cid))
-    croot = campaigns.campaign_root(cid)
-    base = actor_hash(wroot, kind, actor_id, version_id)
-    if base is None:
-        # Campaign-local overlay actor: no world source, so it must already exist
-        # in the campaign. Record an empty world-base; sync skips refs the world
-        # lacks, so a local actor never surfaces as an incoming change.
-        if actor_hash(croot, kind, actor_id, version_id) is None:
-            raise AppearError(f"no {ref}/{version_id} in world or campaign")
-        base = ""
-    else:
-        _copy_actor(wroot, croot, kind, actor_id, version_id)
+    base = _lock(cid, kind, actor_id, version_id)  # lazy pick: first appearance locks
     data[ref] = {"version": version_id, "base": base, "scenes": [scene_id], "role": role}
     _write(cid, data)
     campaigns.touch(cid)

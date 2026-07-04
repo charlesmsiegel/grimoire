@@ -186,3 +186,53 @@ def test_suggestions_candidates_come_from_campaign_copy(monkeypatch, tmp_path):
     characters.delete_character(wroot, "rowan")  # world diverges after the fork
     got = ap.suggestions(cid, sid)
     assert [s["character"] for s in got] == ["rowan"]  # campaign copy still has Rowan
+
+
+def _fork(monkeypatch, tmp_path, versions=("young", "veteran")):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    char_id, _ = characters.create_character(wroot, "Mara", versions[0])
+    for v in versions[1:]:
+        characters.create_version(wroot, char_id, v, characters.blank_card("Mara"))
+    cid = campaigns.create_campaign("Run", wid)
+    return wid, cid, char_id
+
+
+def test_pick_version_purges_and_locks(monkeypatch, tmp_path):
+    wid, cid, char_id = _fork(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    ap.pick_version(cid, "characters", char_id, "veteran")
+    assert ap.locked_version(cid, "characters", char_id) == "veteran"
+    assert not (croot / "characters" / char_id / "young.json").exists()
+    assert (croot / "characters" / char_id / "veteran.json").exists()
+    assert characters.read_character(croot, char_id)["meta"]["default_version"] == "veteran"
+    assert f"characters/{char_id}" not in campaigns.read_manifest(cid)
+    rec = ap.record(cid)[f"characters/{char_id}"]
+    assert rec["scenes"] == [] and rec["role"] == "npc"
+    with pytest.raises(ap.AppearError):
+        ap.pick_version(cid, "characters", char_id, "young")  # already locked
+
+
+def test_pick_version_unknown_version_raises(monkeypatch, tmp_path):
+    wid, cid, char_id = _fork(monkeypatch, tmp_path)
+    with pytest.raises(ap.AppearError):
+        ap.pick_version(cid, "characters", char_id, "bogus")
+
+
+def test_lazy_appear_picks_and_purges(monkeypatch, tmp_path):
+    wid, cid, char_id = _fork(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    ap.appear(cid, sid, "characters", char_id, "young", "npc")
+    croot = campaigns.campaign_root(cid)
+    assert not (croot / "characters" / char_id / "veteran.json").exists()
+    assert f"characters/{char_id}" not in campaigns.read_manifest(cid)
+    assert ap.record(cid)[f"characters/{char_id}"]["scenes"] == [sid]
+
+
+def test_appear_after_pick_adds_scene(monkeypatch, tmp_path):
+    wid, cid, char_id = _fork(monkeypatch, tmp_path)
+    ap.pick_version(cid, "characters", char_id, "veteran")
+    sid = scenes.create_scene(cid, "S")
+    ap.appear(cid, sid, "characters", char_id, "veteran", "npc")
+    assert ap.record(cid)[f"characters/{char_id}"]["scenes"] == [sid]
