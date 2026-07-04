@@ -10,7 +10,7 @@ import re
 
 from . import (appearances, calendars, campaigns, characters, chronicle,
                config, dossiers, entities, pcs, playstate, plot, relationships, scenes,
-               taglines, worlds)
+               taglines)
 
 
 def activate(entries: list[dict], recent_text: str, present: frozenset = frozenset()) -> list[dict]:
@@ -149,7 +149,7 @@ def _char_name(root, cid: str) -> str:
         return cid
 
 
-def _cast_directory(croot, wroot, cid: str, sid: str) -> str:
+def _cast_directory(croot, cid: str, sid: str) -> str:
     """Off-scene cast as two tiers: campaign-active characters (dossier paragraph) and
     every other world character (tagline + available versions). Empty string if neither
     tier has any described members."""
@@ -166,15 +166,15 @@ def _cast_directory(croot, wroot, cid: str, sid: str) -> str:
             active.append(f"{_char_name(croot, a['id'])}: {body}")
 
     known: list[str] = []
-    for char_id in characters.character_refs(wroot):
+    for char_id in characters.character_refs(croot):
         if char_id in roster_ids or char_id in present:
             continue
-        tag = taglines.read(wroot, char_id)
+        tag = taglines.read(croot, char_id)
         if not tag:
             continue
-        versions = ", ".join(v["id"] for v in characters.read_character(wroot, char_id)["versions"])
+        versions = ", ".join(v["id"] for v in characters.read_character(croot, char_id)["versions"])
         suffix = f" (available as: {versions})" if versions else ""
-        known.append(f"{_char_name(wroot, char_id)}: {tag}{suffix}")
+        known.append(f"{_char_name(croot, char_id)}: {tag}{suffix}")
 
     if not active and not known:
         return ""
@@ -397,8 +397,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0) -> dic
     if current_loc:
         present |= {f"locations:{current_loc}"}
     add("World info", _world_info(croot, recent_text, exclude, frozenset(present)))
-    wroot = worlds.world_root(campaigns.read_campaign(cid)["meta"].get("world", ""))
-    add("Off-scene cast", _cast_directory(croot, wroot, cid, sid))
+    add("Off-scene cast", _cast_directory(croot, cid, sid))
 
     fmt = ("Write your reply as a script. Each character who acts or speaks gets "
            "their own block starting with **<Name>:** on its own line, e.g. "

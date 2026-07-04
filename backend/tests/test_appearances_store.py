@@ -170,3 +170,19 @@ def test_player_names_empty_when_no_players(monkeypatch, tmp_path):
     cid = campaigns.create_campaign("Run", wid)
     sid = scenes.create_scene(cid, "S")
     assert ap.player_names(cid, sid) == []
+
+
+def test_suggestions_candidates_come_from_campaign_copy(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    card = characters.blank_card("Mara")
+    card["data"]["description"] = "Mara knows Rowan."
+    characters.create_character(wroot, "Mara", "default", card)
+    characters.create_character(wroot, "Rowan", "default", characters.blank_card("Rowan"))
+    cid = campaigns.create_campaign("Run", wid)
+    sid = scenes.create_scene(cid, "S")
+    ap.appear(cid, sid, "characters", "mara", "default", "npc")
+    characters.delete_character(wroot, "rowan")  # world diverges after the fork
+    got = ap.suggestions(cid, sid)
+    assert [s["character"] for s in got] == ["rowan"]  # campaign copy still has Rowan

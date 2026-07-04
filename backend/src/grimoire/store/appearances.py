@@ -218,11 +218,10 @@ def locked_version(cid: str, kind: str, actor_id: str) -> str | None:
 def suggestions(cid: str, scene_id: str) -> list[dict]:
     from . import scenes
     croot = campaigns.campaign_root(cid)
-    wroot = worlds.world_root(_world_id(cid))
     appeared_chars = {actor_id for ref in record(cid) for k, actor_id in [_split(ref)] if k == "characters"}
     dismissed = set(scenes.get_dismissed(cid, scene_id))
     in_scene_chars = [a["id"] for a in scene_cast(cid, scene_id) if a["kind"] == "characters"]
-    candidates = [c for c in characters.list_characters(wroot)
+    candidates = [c for c in characters.list_characters(croot)
                   if c["id"] not in appeared_chars and c["id"] not in dismissed and c["id"] not in in_scene_chars]
 
     mentioned_by: dict[str, list[str]] = {}
