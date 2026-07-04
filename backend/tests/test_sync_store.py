@@ -179,3 +179,57 @@ def test_incoming_plotmap_update_accept(monkeypatch, tmp_path):
     croot = campaigns.campaign_root(cid)
     assert greetings.edges_of(greetings.read_plotmap(croot), g)["leads_to"] == [g2]
     assert (croot / "greetings" / f"{g2}.md").exists()
+
+
+def _actor_world(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    char_id, _ = characters.create_character(wroot, "Mara", "young")
+    characters.create_version(wroot, char_id, "veteran", characters.blank_card("Mara"))
+    cid = campaigns.create_campaign("Run", wid)
+    return wid, wroot, cid, char_id
+
+
+def test_unpicked_actor_world_edit_is_update_and_accept_recopies(monkeypatch, tmp_path):
+    wid, wroot, cid, char_id = _actor_world(monkeypatch, tmp_path)
+    card = characters.blank_card("Mara")
+    card["data"]["description"] = "changed"
+    characters.update_version(wroot, char_id, "young", card)
+    characters.delete_version(wroot, char_id, "veteran")
+    items = {(i["ref"]["kind"], i["ref"]["id"]): i for i in sync.incoming(cid)}
+    assert items[("characters", char_id)]["status"] == "update"
+    sync.accept(cid, [{"kind": "characters", "id": char_id}])
+    croot = campaigns.campaign_root(cid)
+    assert characters.read_card(croot, char_id, "young")["data"]["description"] == "changed"
+    assert not (croot / "characters" / char_id / "veteran.json").exists()  # deletion propagates
+    assert sync.incoming(cid) == []
+
+
+def test_unpicked_actor_conflict_and_reject(monkeypatch, tmp_path):
+    wid, wroot, cid, char_id = _actor_world(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    characters.update_version(wroot, char_id, "young", characters.blank_card("W-Mara"))
+    characters.update_version(croot, char_id, "young", characters.blank_card("C-Mara"))
+    items = {(i["ref"]["kind"], i["ref"]["id"]): i for i in sync.incoming(cid)}
+    assert items[("characters", char_id)]["status"] == "conflict"
+    sync.reject(cid, [{"kind": "characters", "id": char_id}])
+    assert characters.read_card(croot, char_id, "young")["data"]["name"] == "C-Mara"
+    assert sync.incoming(cid) == []
+
+
+def test_new_world_actor_is_new(monkeypatch, tmp_path):
+    wid, wroot, cid, char_id = _actor_world(monkeypatch, tmp_path)
+    new_id, _ = characters.create_character(wroot, "Rowan")
+    items = {(i["ref"]["kind"], i["ref"]["id"]): i for i in sync.incoming(cid)}
+    assert items[("characters", new_id)]["status"] == "new"
+    sync.accept(cid, [{"kind": "characters", "id": new_id}])
+    croot = campaigns.campaign_root(cid)
+    assert (croot / "characters" / new_id / "character.md").exists()
+
+
+def test_locked_actor_new_world_version_invisible(monkeypatch, tmp_path):
+    wid, wroot, cid, char_id = _actor_world(monkeypatch, tmp_path)
+    ap.pick_version(cid, "characters", char_id, "young")
+    characters.create_version(wroot, char_id, "elder", characters.blank_card("Mara"))
+    assert sync.incoming(cid) == []  # only the locked version's own edits would show
