@@ -159,3 +159,25 @@ def test_plotmap_hash_roundtrip(tmp_path):
     assert h1
     greetings.set_edges(tmp_path, g, leads_to=["b", "c"])
     assert greetings.plotmap_hash(tmp_path) != h1
+
+
+def test_availability_skipped_dropped_and_pruned(tmp_path):
+    a = greetings.create_greeting(tmp_path, "A", "c", "v")
+    b = greetings.create_greeting(tmp_path, "B", "c", "v")
+    c = greetings.create_greeting(tmp_path, "C", "c", "v")
+    greetings.set_edges(tmp_path, a, leads_to=[c])
+    greetings.set_edges(tmp_path, b, leads_to=[c])
+    pm = greetings.read_plotmap(tmp_path)
+    # skip A: it vanishes from the output, and C's "all" join is satisfied by B alone
+    out = {g["id"]: g for g in greetings.availability(tmp_path, pm, {b}, set(), skipped={a})}
+    assert a not in out
+    assert out[c]["available"] is True
+
+
+def test_availability_sole_predecessor_skipped_frees_successor(tmp_path):
+    a = greetings.create_greeting(tmp_path, "A", "c", "v")
+    c = greetings.create_greeting(tmp_path, "C", "c", "v")
+    greetings.set_edges(tmp_path, a, leads_to=[c])
+    pm = greetings.read_plotmap(tmp_path)
+    out = {g["id"]: g for g in greetings.availability(tmp_path, pm, set(), set(), skipped={a})}
+    assert out[c]["available"] is True

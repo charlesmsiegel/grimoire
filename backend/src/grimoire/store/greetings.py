@@ -192,13 +192,19 @@ def import_from_character(root: Path, char_id: str, vid: str) -> list[str]:
             for name, body in items]
 
 
-def availability(world_root: Path, plotmap: dict, played, player_tags) -> list[dict]:
-    """Pure: which greetings are startable given the played set + player tags."""
+def availability(world_root: Path, plotmap: dict, played, player_tags,
+                 skipped=frozenset()) -> list[dict]:
+    """Pure: which greetings are startable given the played set + player tags.
+    Skipped greetings are dropped from the output and pruned from predecessor
+    lists — the plot routes around a greeting marked won't-do."""
     played = set(played)
+    skipped = set(skipped)
     player_tags = set(player_tags)
-    items = list_greetings(world_root)
+    items = [g for g in list_greetings(world_root) if g["id"] not in skipped]
     preds: dict[str, set] = {g["id"]: set() for g in items}
     for src, e in plotmap.items():
+        if src in skipped:
+            continue
         for tgt in e.get("leads_to", []):
             if tgt in preds:
                 preds[tgt].add(src)
