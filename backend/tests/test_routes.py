@@ -1907,3 +1907,20 @@ def test_campaign_pc_read_and_versions(client):
                     json={"name": "older", "persona": {"name": "Elara", "pronouns": "",
                                                        "summary": "", "description": "x"}})
     assert r.status_code == 200
+
+
+def test_sync_routes_backfill_legacy_campaigns(client):
+    wid = _world(client)
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"})
+    g = client.post(f"/api/worlds/{wid}/greetings",
+                    json={"name": "Gala", "character": "mara", "version": "default",
+                          "body": "Hi."}).json()["id"]
+    cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
+    _strip_campaign_to_legacy(cid)
+    # incoming triggers the backfill first: a never-opened legacy campaign reports
+    # no pending items instead of every greeting/actor as "new"
+    r = client.get(f"/api/campaigns/{cid}/incoming")
+    assert r.status_code == 200 and r.json() == []
+    croot = store.campaigns.campaign_root(cid)
+    assert (croot / "greetings" / f"{g}.md").exists()
+    assert store.campaigns.read_campaign(cid)["meta"]["world_copy"] == "full"

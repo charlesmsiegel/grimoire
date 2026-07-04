@@ -81,10 +81,13 @@ def _copy_actor(wroot: Path, croot: Path, kind: str, actor_id: str, vid: str) ->
     dst_dir.mkdir(parents=True, exist_ok=True)
     ext = _version_ext(kind)
     (dst_dir / f"{vid}.{ext}").write_text((src_dir / f"{vid}.{ext}").read_text(encoding="utf-8"), encoding="utf-8")
-    # container meta so campaign-side reads work; default_version points at the copied version
-    meta, _ = parse_frontmatter((src_dir / _meta_name(kind)).read_text(encoding="utf-8"))
-    meta["default_version"] = vid
-    (dst_dir / _meta_name(kind)).write_text(dump_frontmatter(meta, ""), encoding="utf-8")
+    # container meta so campaign-side reads work; default_version points at the copied
+    # version. An existing campaign meta is kept (its tag/name edits win) — callers
+    # that lock re-point default_version themselves.
+    if not (dst_dir / _meta_name(kind)).exists():
+        meta, _ = parse_frontmatter((src_dir / _meta_name(kind)).read_text(encoding="utf-8"))
+        meta["default_version"] = vid
+        (dst_dir / _meta_name(kind)).write_text(dump_frontmatter(meta, ""), encoding="utf-8")
     if kind == "characters":
         if (src_dir / "assets").exists():
             shutil.copytree(src_dir / "assets", dst_dir / "assets", dirs_exist_ok=True)

@@ -263,3 +263,22 @@ def test_import_version_unknown_world_version(monkeypatch, tmp_path):
     ap.pick_version(cid, "characters", char_id, "young")
     with pytest.raises(ap.AppearError):
         ap.import_version(cid, "characters", char_id, "bogus")
+
+
+def test_pick_version_pcs_purges_and_keeps_meta(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    pid, _ = pcs.create_pc(wroot, "Elara", [], "young")
+    pcs.create_version(wroot, pid, "older", pcs.blank_persona("Elara"))
+    cid = campaigns.create_campaign("Run", wid)
+    croot = campaigns.campaign_root(cid)
+    pcs.set_tags(croot, pid, ["campaign-tag"])  # campaign-side meta edit survives the pick
+    ap.pick_version(cid, "pcs", pid, "older")
+    assert ap.locked_version(cid, "pcs", pid) == "older"
+    assert not (croot / "pcs" / pid / "young.md").exists()
+    assert (croot / "pcs" / pid / "pc.md").exists()          # meta never purged (*.md glob guard)
+    meta = pcs.read_pc(croot, pid)["meta"]
+    assert meta["default_version"] == "older"
+    assert meta["tags"] == ["campaign-tag"]
+    assert f"pcs/{pid}" not in campaigns.read_manifest(cid)
