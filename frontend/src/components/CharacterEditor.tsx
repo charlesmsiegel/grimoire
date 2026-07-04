@@ -549,6 +549,25 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
     }
   }
 
+  // One-click re-import from the version's stored link — the backend matches
+  // the source and overwrites this version in place instead of forking a new one.
+  async function redownloadFromChub() {
+    if (!detail || !chubSource) return;
+    setError(null);
+    setImportMsg(null);
+    try {
+      const result = await api.importCharacterFromChub(wid, chubSource, detail.meta.id, vid);
+      const d = await api.readCharacter(wid, detail.meta.id);
+      setDetail(d);
+      loadVersion(d, result.version);
+      await reload();
+      setImportMsg(describeChubResult(result));
+      await runLocalize(detail.meta.id, result.version);
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
+  }
+
   // Linking is per-version, and the detail view may be showing a
   // non-default version -- reload via loadVersion(d, vid) rather than
   // select() (which always snaps back to the default version).
@@ -794,6 +813,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
                      target="_blank" rel="noreferrer">
                     {chubSource}
                   </a>
+                  <button className="subtle" type="button" onClick={redownloadFromChub}>Re-download</button>
                   <button className="subtle" type="button" onClick={unlinkChub}>Unlink</button>
                   {isChub && (
                     <>

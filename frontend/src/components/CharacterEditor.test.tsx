@@ -656,6 +656,26 @@ test("grid cards show gallery/localized badges only when nonzero", async () => {
 });
 
 
+test("Re-download uses the stored chub link without prompting", async () => {
+  (api.readCharacter as any).mockResolvedValue({
+    meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
+    versions: [{ id: "default", name: "default", card: CARD, images: ["avatar"],
+                 chub_source: "https://chub.ai/characters/creator/seraphine", is_chub: true }],
+  });
+  (api.importCharacterFromChub as any).mockResolvedValue({
+    character: "seraphine", version: "default", updated: true,
+    gallery: { attempted: 0, stored: 0 }, lore: { lorebooks_found: 0, created: [] },
+  });
+  const promptSpy = vi.spyOn(window, "prompt");
+  render(<CharacterEditor wid="w" />);
+  fireEvent.click(await screen.findByText("Seraphine"));
+  fireEvent.click(await screen.findByRole("button", { name: /re-download/i }));
+  await waitFor(() => expect(api.importCharacterFromChub).toHaveBeenCalledWith(
+    "w", "https://chub.ai/characters/creator/seraphine", "seraphine", "default"));
+  expect(promptSpy).not.toHaveBeenCalled();
+});
+
+
 test("greeting scene labels are demoted and single newlines keep line breaks", async () => {
   const card = {
     ...CARD,
