@@ -140,7 +140,9 @@ def test_ensure_campaign_copy_backfills_legacy(monkeypatch, tmp_path):
     assert campaigns.read_campaign(cid)["meta"]["world_copy"] == "full"
     manifest = campaigns.read_manifest(cid)
     assert manifest["plotmap"] == greetings.plotmap_hash(wroot)
-    campaigns.ensure_campaign_copy(cid)  # idempotent
+    before = campaigns.read_manifest(cid)
+    campaigns.ensure_campaign_copy(cid)  # idempotent: second run changes nothing
+    assert campaigns.read_manifest(cid) == before
 
 
 def test_ensure_campaign_copy_skips_locked_actors(monkeypatch, tmp_path):
