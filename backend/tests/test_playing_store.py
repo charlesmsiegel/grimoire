@@ -103,3 +103,40 @@ def test_stamp_greeting_missing_scene_raises(monkeypatch, tmp_path):
     _wid, cid, _sid = _campaign(monkeypatch, tmp_path)
     with pytest.raises(scenes.SceneNotFound):
         scenes.stamp_greeting(cid, "nope", "g1")
+
+
+def test_available_greetings_after_flags_and_sorts_unlocked(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    characters.create_character(wroot, "S", "default", characters.blank_card("S"))
+    g1 = greetings.create_greeting(wroot, "Alpha", "s", "default", body="A.")
+    g2 = greetings.create_greeting(wroot, "Omega", "s", "default", body="O.")
+    g3 = greetings.create_greeting(wroot, "Middle", "s", "default", body="M.")
+    greetings.set_edges(wroot, g1, leads_to=[g3])
+    playing.start_from_greeting(cid, sid, g1)
+    got = playing.available_greetings(cid, after=sid)
+    assert got[0]["id"] == g3                      # the unlocked greeting sorts first
+    assert {x["id"]: x["unlocked"] for x in got} == {g1: False, g2: False, g3: True}
+
+
+def test_available_greetings_after_without_stamp_all_false(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    characters.create_character(wroot, "S", "default", characters.blank_card("S"))
+    greetings.create_greeting(wroot, "Alpha", "s", "default", body="A.")
+    got = playing.available_greetings(cid, after=sid)   # scene never started from a greeting
+    assert [x["unlocked"] for x in got] == [False]
+
+
+def test_available_greetings_no_after_has_unlocked_false(monkeypatch, tmp_path):
+    wid, cid, _sid = _campaign(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    characters.create_character(wroot, "S", "default", characters.blank_card("S"))
+    greetings.create_greeting(wroot, "Alpha", "s", "default", body="A.")
+    assert [x["unlocked"] for x in playing.available_greetings(cid)] == [False]
+
+
+def test_available_greetings_unknown_after_raises(monkeypatch, tmp_path):
+    wid, cid, _sid = _campaign(monkeypatch, tmp_path)
+    with pytest.raises(scenes.SceneNotFound):
+        playing.available_greetings(cid, after="nope")
