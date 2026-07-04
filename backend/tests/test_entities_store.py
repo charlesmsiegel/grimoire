@@ -24,6 +24,17 @@ def test_collision_suffix(tmp_path: Path):
     assert b == "echo-2"
 
 
+def test_synced_refs_includes_greetings(tmp_path: Path):
+    (tmp_path / "locations").mkdir()
+    (tmp_path / "locations" / "inn.md").write_text("---\nname: Inn\n---\n", encoding="utf-8")
+    (tmp_path / "greetings").mkdir()
+    (tmp_path / "greetings" / "gala.md").write_text("---\nname: Gala\n---\n", encoding="utf-8")
+    assert entities.synced_refs(tmp_path) == [("locations", "inn"), ("greetings", "gala")]
+    # greetings are synced but not generic-CRUD entities
+    assert "greetings" in entities.SYNCED_KINDS
+    assert "greetings" not in entities.ENTITY_KINDS
+
+
 def test_characters_is_not_a_generic_kind(tmp_path: Path):
     assert "characters" not in entities.ENTITY_KINDS
     with pytest.raises(entities.UnknownKind):

@@ -15,6 +15,10 @@ from .paths import slugify, uniquify
 
 ENTITY_KINDS: tuple[str, ...] = ("locations", "lore")
 
+# Everything copy-on-create / sync tracks as a flat `<kind>/<id>.md` file:
+# generic entities plus greetings (which keep their own CRUD module).
+SYNCED_KINDS: tuple[str, ...] = ENTITY_KINDS + ("greetings",)
+
 
 class EntityNotFound(Exception):
     pass
@@ -119,6 +123,15 @@ def all_refs(root: Path) -> list[tuple[str, str]]:
         if d.exists():
             for p in sorted(d.glob("*.md")):
                 refs.append((kind, p.stem))
+    return refs
+
+
+def synced_refs(root: Path) -> list[tuple[str, str]]:
+    refs: list[tuple[str, str]] = []
+    for kind in SYNCED_KINDS:
+        d = _kind_dir(root, kind)
+        if d.exists():
+            refs.extend((kind, p.stem) for p in sorted(d.glob("*.md")))
     return refs
 
 
