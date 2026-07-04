@@ -701,3 +701,8 @@ button.primary { background: var(--accent); color: var(--on-accent); border: var
 .focus-modal input[type="range"] { width: 100%; }
 
 .html-note { width: 100%; border: none; display: block; }
+
+/* greeting image subjects */
+.img-block { display: inline-block; }
+.img-extras { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 8px; }
+.subjects-popover { border: 1px solid var(--border, #444); border-radius: 8px; padding: 10px; margin: 6px 0; display: grid; gap: 8px; max-width: 420px; background: var(--panel, #1b1b1f); }

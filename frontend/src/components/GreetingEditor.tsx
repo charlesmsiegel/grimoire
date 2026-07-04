@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, type CharacterSummary, type Edges, type Greeting } from "../api/client";
 import { Field } from "./Field";
 import { GreetingMarkdown } from "./GreetingMarkdown";
+import { SubjectsPopover } from "./SubjectsPopover";
 
 const BLANK = { name: "", character: "", version: "", body: "", present: [] as string[], requires_tags: [] as string[], predecessor_join: "all" as "all" | "any" };
 const NO_EDGES: Edges = { leads_to: [], excludes: [] };
@@ -16,6 +17,8 @@ export function GreetingEditor({ wid, onOpenCharacter }: { wid: string; onOpenCh
   const [predecessors, setPredecessors] = useState<string[]>([]);
   const [mode, setMode] = useState<"view" | "edit">("edit"); // existing greetings open in view
   const [error, setError] = useState<string | null>(null);
+  const [subjects, setSubjects] = useState<Record<string, string[]>>({});
+  const [picking, setPicking] = useState<string | null>(null); // image name being edited
 
   const reload = useCallback(() => api.listGreetings(wid).then(setGreetings), [wid]);
   useEffect(() => {
@@ -44,6 +47,8 @@ export function GreetingEditor({ wid, onOpenCharacter }: { wid: string; onOpenCh
     setEdges(g.edges);
     setPredecessors(g.predecessors ?? []);
     setMode("view"); // existing greetings are read-only until Edit
+    setPicking(null);
+    api.getGreetingSubjects(wid, id).then(setSubjects).catch(() => setSubjects({}));
   }
 
   const versions = chars.find((c) => c.id === form.character)?.versions ?? [];
@@ -104,6 +109,13 @@ export function GreetingEditor({ wid, onOpenCharacter }: { wid: string; onOpenCh
   const presentVid = (id: string) => (id === form.character ? form.version : (chars.find((c) => c.id === id)?.default_version ?? ""));
   const presentLabel = (id: string) =>
     chars.find((c) => c.id === id)?.versions.find((v) => v.id === presentVid(id))?.name ?? charName(id);
+  const imageName = (src: string) => src.split("/").pop() ?? "";
+
+  async function saveSubjects(name: string, cids: string[]) {
+    await api.setImageSubjects(wid, gid!, name, cids);
+    setSubjects(await api.getGreetingSubjects(wid, gid!));
+    setPicking(null);
+  }
 
   function sideList(label: string, items: string[], render: (id: string) => string,
                     onItem?: (id: string) => void) {
@@ -139,7 +151,23 @@ export function GreetingEditor({ wid, onOpenCharacter }: { wid: string; onOpenCh
           <div className="detail-view">
             <div className="detail-main">
               <h3>{form.name}</h3>
-              <GreetingMarkdown>{form.body}</GreetingMarkdown>
+              <GreetingMarkdown imageExtras={(src) => {
+                const name = imageName(src);
+                return (
+                  <>
+                    {(subjects[name] ?? []).map((cid) => (
+                      <button key={cid} className="chip on"
+                              onClick={() => onOpenCharacter?.(cid, presentVid(cid))}>{charName(cid)}</button>
+                    ))}
+                    <button className="chip" onClick={() => setPicking(name)}>＋ subjects</button>
+                    {picking === name && (
+                      <SubjectsPopover chars={chars} present={form.present} value={subjects[name] ?? []}
+                                       onSave={(cids) => saveSubjects(name, cids)}
+                                       onClose={() => setPicking(null)} />
+                    )}
+                  </>
+                );
+              }}>{form.body}</GreetingMarkdown>
             </div>
             <aside className="detail-sidebar">
               <div className="form-actions">
