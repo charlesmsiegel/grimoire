@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, type Appearance, type CharacterSummary, type Edges, type Greeting } from "../api/client";
+import { api, type Appearance, type CharacterSummary, type Edges, type EntityScope, type Greeting, type GreetingMark } from "../api/client";
 import { Field } from "./Field";
 import { GreetingMarkdown } from "./GreetingMarkdown";
 import { SubjectsPopover } from "./SubjectsPopover";
@@ -8,8 +8,10 @@ import { TaggingQueue } from "./TaggingQueue";
 const BLANK = { name: "", character: "", version: "", body: "", present: [] as string[], requires_tags: [] as string[], predecessor_join: "all" as "all" | "any" };
 const NO_EDGES: Edges = { leads_to: [], excludes: [] };
 
-export function GreetingEditor({ wid, onOpenCharacter, focus }:
-  { wid: string; onOpenCharacter?: (cid: string, vid: string) => void; focus?: string | null }) {
+export function GreetingEditor({ scope, wid, onOpenCharacter, focus }:
+  { scope: EntityScope; wid: string;
+    onOpenCharacter?: (cid: string, vid: string) => void; focus?: string | null }) {
+  const worldScope = scope.kind === "world";
   const [greetings, setGreetings] = useState<Greeting[]>([]);
   const [chars, setChars] = useState<CharacterSummary[]>([]);
   const [tags, setTags] = useState<Record<string, string>>({});
@@ -24,13 +26,13 @@ export function GreetingEditor({ wid, onOpenCharacter, focus }:
   const [untagged, setUntagged] = useState<Appearance[]>([]);
   const [queueOpen, setQueueOpen] = useState(false);
 
-  const reload = useCallback(() => api.listGreetings({ kind: "world", id: wid }).then(setGreetings), [wid]);
+  const reload = useCallback(() => api.listGreetings(scope).then(setGreetings), [scope.kind, scope.id]);
   useEffect(() => {
     reload();
-    api.listCharacters({ kind: "world", id: wid }).then(setChars);
-    api.listTags(wid).then(setTags);
-    api.listUntaggedImages(wid).then(setUntagged).catch(() => setUntagged([]));
-  }, [wid, reload]);
+    api.listCharacters(scope).then(setChars);
+    api.listTags(wid).then(setTags);  // tag vocabulary stays a world concern
+    if (worldScope) api.listUntaggedImages(wid).then(setUntagged).catch(() => setUntagged([]));
+  }, [wid, worldScope, reload]);  // eslint-disable-line react-hooks/exhaustive-deps -- scope is captured by reload
 
   function closeQueue() {
     setQueueOpen(false);
@@ -57,7 +59,7 @@ export function GreetingEditor({ wid, onOpenCharacter, focus }:
 
   async function select(id: string) {
     setError(null);
-    const g = await api.readGreeting({ kind: "world", id: wid }, id);
+    const g = await api.readGreeting(scope, id);
     setGid(id);
     setForm({
       name: g.meta.name, character: g.meta.character, version: g.meta.version,
@@ -68,7 +70,7 @@ export function GreetingEditor({ wid, onOpenCharacter, focus }:
     setPredecessors(g.predecessors ?? []);
     setMode("view"); // existing greetings are read-only until Edit
     setPicking(null);
-    api.getGreetingSubjects(wid, id).then(setSubjects).catch(() => setSubjects({}));
+    if (worldScope) api.getGreetingSubjects(wid, id).then(setSubjects).catch(() => setSubjects({}));
   }
 
   const versions = chars.find((c) => c.id === form.character)?.versions ?? [];
@@ -79,14 +81,14 @@ export function GreetingEditor({ wid, onOpenCharacter, focus }:
     try {
       let id = gid;
       if (id) {
-        await api.updateGreeting({ kind: "world", id: wid }, id, {
+        await api.updateGreeting(scope, id, {
           name: form.name, body: form.body, present: form.present,
           requires_tags: form.requires_tags, predecessor_join: form.predecessor_join,
         });
       } else {
-        id = (await api.createGreeting({ kind: "world", id: wid }, { ...form })).id;
+        id = (await api.createGreeting(scope, { ...form })).id;
       }
-      await api.setEdges({ kind: "world", id: wid }, id, { leads_to: edges.leads_to, excludes: edges.excludes });
+      await api.setEdges(scope, id, { leads_to: edges.leads_to, excludes: edges.excludes });
       await reload();
       await select(id);
     } catch (err: any) {
@@ -102,7 +104,7 @@ export function GreetingEditor({ wid, onOpenCharacter, focus }:
 
   async function remove(g: Greeting) {
     if (!window.confirm(`Delete greeting '${g.name}'?`)) return;
-    await api.deleteGreeting({ kind: "world", id: wid }, g.id);
+    await api.deleteGreeting(scope, g.id);
     if (gid === g.id) resetForm();
     await reload();
   }
@@ -120,6 +122,18 @@ export function GreetingEditor({ wid, onOpenCharacter, focus }:
   function togglePresent(cid: string) {
     const cur = form.present;
     setForm({ ...form, present: cur.includes(cid) ? cur.filter((c) => c !== cid) : [...cur, cid] });
+  }
+
+  const mark: GreetingMark = greetings.find((g) => g.id === gid)?.mark ?? null;
+
+  async function setMark(status: "completed" | "skipped" | "none") {
+    if (!gid) return;
+    try {
+      await api.markGreeting(scope.id, gid, status);
+      await reload();
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
   }
 
   const others = greetings.filter((g) => g.id !== gid);
@@ -154,7 +168,7 @@ export function GreetingEditor({ wid, onOpenCharacter, focus }:
     <div className="editor">
       <div className="editor-list">
         <button className="primary new" onClick={resetForm}>+ New greeting</button>
-        {untagged.length > 0 && (
+        {worldScope && untagged.length > 0 && (
           <button className="subtle new" onClick={() => setQueueOpen(true)}>
             ▶ Tag images ({untagged.length})
           </button>
@@ -166,20 +180,25 @@ export function GreetingEditor({ wid, onOpenCharacter, focus }:
             onClick={() => select(g.id)}
           >
             {g.name}
+            {!worldScope && g.mark && (
+              <span className={`mark-badge ${g.mark}`}>
+                {g.mark === "completed" ? "done" : g.mark === "skipped" ? "skip" : "played"}
+              </span>
+            )}
           </button>
         ))}
       </div>
 
       <div className="editor-body">
         {error && <div className="banner">{error}</div>}
-        {queueOpen ? (
+        {worldScope && queueOpen ? (
           <TaggingQueue wid={wid} chars={chars} greetings={greetings} queue={untagged}
                         onClose={closeQueue} onSaved={queueSaved} />
         ) : mode === "view" && gid ? (
           <div className="detail-view">
             <div className="detail-main">
               <h3>{form.name}</h3>
-              <GreetingMarkdown imageExtras={(src) => {
+              <GreetingMarkdown imageExtras={!worldScope ? undefined : (src) => {
                 const name = imageName(src);
                 return (
                   <>
@@ -201,6 +220,25 @@ export function GreetingEditor({ wid, onOpenCharacter, focus }:
               <div className="form-actions">
                 <button className="subtle" onClick={() => setMode("edit")}>Edit</button>
               </div>
+              {!worldScope && (
+                <div className="side-section">
+                  <h4>Status</h4>
+                  <div className="field-hint">
+                    {mark === "played" ? "Started this greeting in a scene — the mark is fixed."
+                      : mark === "completed" ? "Marked complete: successors are unlocked."
+                      : mark === "skipped" ? "Won't do: hidden from new scenes; the plot routes around it."
+                      : "Unmarked."}
+                  </div>
+                  <div className="chips">
+                    <button className={"chip" + (mark === "completed" ? " on" : "")} disabled={mark === "played"}
+                            onClick={() => setMark("completed")}>Mark complete</button>
+                    <button className={"chip" + (mark === "skipped" ? " on" : "")} disabled={mark === "played"}
+                            onClick={() => setMark("skipped")}>Won't do</button>
+                    <button className="chip" disabled={mark === "played" || !mark}
+                            onClick={() => setMark("none")}>Clear</button>
+                  </div>
+                </div>
+              )}
               {form.present.length > 0 && (
                 <div className="side-section">
                   <h4>Present characters</h4>
@@ -250,11 +288,13 @@ export function GreetingEditor({ wid, onOpenCharacter, focus }:
               {versions.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
             </select>
           </Field>
-          <div className="form-actions">
-            <button className="subtle" onClick={importFromCharacter} disabled={!form.character || !form.version}>
-              Import greetings from this character/version
-            </button>
-          </div>
+          {worldScope && (
+            <div className="form-actions">
+              <button className="subtle" onClick={importFromCharacter} disabled={!form.character || !form.version}>
+                Import greetings from this character/version
+              </button>
+            </div>
+          )}
           <Field label="Greeting text">
             <textarea value={form.body} rows={6} onChange={(e) => setForm({ ...form, body: e.target.value })} />
           </Field>
