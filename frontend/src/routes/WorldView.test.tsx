@@ -16,6 +16,7 @@ vi.mock("../api/client", () => ({
     listImageAppearances: vi.fn(),
     readGreeting: vi.fn(),
     getGreetingSubjects: vi.fn(),
+    listUntaggedImages: vi.fn(),
     imageUrl: (w: string, c: string, v: string, n: string) => `/img/${w}/${c}/${v}/${n}`,
   },
 }));
@@ -43,6 +44,7 @@ beforeEach(() => {
     body: "hi", edges: { leads_to: [], excludes: [] }, predecessors: [],
   });
   (api.getGreetingSubjects as any).mockResolvedValue({});
+  (api.listUntaggedImages as any).mockResolvedValue([]);
 });
 
 function renderAt() {

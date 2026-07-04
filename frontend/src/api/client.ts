@@ -410,6 +410,8 @@ export const api = {
     request<{ ok: boolean }>("PUT", `/api/worlds/${wid}/greetings/${gid}/images/${name}/subjects`, { subjects }),
   listImageAppearances: (wid: string, cid: string) =>
     request<Appearance[]>("GET", `/api/worlds/${wid}/characters/${cid}/appearances`),
+  listUntaggedImages: (wid: string) =>
+    request<Appearance[]>("GET", `/api/worlds/${wid}/subjects/untagged`),
   copyGreetingImage: (wid: string, cid: string, vid: string,
                       body: { gid: string; name: string; slot: "avatar" | "gallery" }) =>
     request<{ name: string; ext: string }>(

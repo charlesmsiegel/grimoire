@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, type CharacterSummary, type Edges, type Greeting } from "../api/client";
+import { api, type Appearance, type CharacterSummary, type Edges, type Greeting } from "../api/client";
 import { Field } from "./Field";
 import { GreetingMarkdown } from "./GreetingMarkdown";
 import { SubjectsPopover } from "./SubjectsPopover";
+import { TaggingQueue } from "./TaggingQueue";
 
 const BLANK = { name: "", character: "", version: "", body: "", present: [] as string[], requires_tags: [] as string[], predecessor_join: "all" as "all" | "any" };
 const NO_EDGES: Edges = { leads_to: [], excludes: [] };
@@ -20,13 +21,25 @@ export function GreetingEditor({ wid, onOpenCharacter, focus }:
   const [error, setError] = useState<string | null>(null);
   const [subjects, setSubjects] = useState<Record<string, string[]>>({});
   const [picking, setPicking] = useState<string | null>(null); // image name being edited
+  const [untagged, setUntagged] = useState<Appearance[]>([]);
+  const [queueOpen, setQueueOpen] = useState(false);
 
   const reload = useCallback(() => api.listGreetings(wid).then(setGreetings), [wid]);
   useEffect(() => {
     reload();
     api.listCharacters(wid).then(setChars);
     api.listTags(wid).then(setTags);
+    api.listUntaggedImages(wid).then(setUntagged).catch(() => setUntagged([]));
   }, [wid, reload]);
+
+  function closeQueue() {
+    setQueueOpen(false);
+    api.listUntaggedImages(wid).then(setUntagged).catch(() => setUntagged([]));
+  }
+
+  function queueSaved(savedGid: string) {
+    if (savedGid === gid) api.getGreetingSubjects(wid, savedGid).then(setSubjects).catch(() => {});
+  }
 
   // arrived via a character page's world-greeting link: open that greeting
   useEffect(() => {
@@ -141,6 +154,11 @@ export function GreetingEditor({ wid, onOpenCharacter, focus }:
     <div className="editor">
       <div className="editor-list">
         <button className="primary new" onClick={resetForm}>+ New greeting</button>
+        {untagged.length > 0 && (
+          <button className="subtle new" onClick={() => setQueueOpen(true)}>
+            ▶ Tag images ({untagged.length})
+          </button>
+        )}
         {greetings.map((g) => (
           <button
             key={g.id}
@@ -154,7 +172,10 @@ export function GreetingEditor({ wid, onOpenCharacter, focus }:
 
       <div className="editor-body">
         {error && <div className="banner">{error}</div>}
-        {mode === "view" && gid ? (
+        {queueOpen ? (
+          <TaggingQueue wid={wid} chars={chars} greetings={greetings} queue={untagged}
+                        onClose={closeQueue} onSaved={queueSaved} />
+        ) : mode === "view" && gid ? (
           <div className="detail-view">
             <div className="detail-main">
               <h3>{form.name}</h3>
