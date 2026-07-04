@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import Markdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { api, type CharacterSummary, type Edges, type Greeting } from "../api/client";
 import { Field } from "./Field";
+import { GreetingMarkdown } from "./GreetingMarkdown";
 
 const BLANK = { name: "", character: "", version: "", body: "", present: [] as string[], requires_tags: [] as string[], predecessor_join: "all" as "all" | "any" };
 const NO_EDGES: Edges = { leads_to: [], excludes: [] };
@@ -140,9 +139,7 @@ export function GreetingEditor({ wid, onOpenCharacter }: { wid: string; onOpenCh
           <div className="detail-view">
             <div className="detail-main">
               <h3>{form.name}</h3>
-              <div className="detail-rendered">
-                <Markdown remarkPlugins={[remarkGfm]}>{form.body}</Markdown>
-              </div>
+              <GreetingMarkdown>{form.body}</GreetingMarkdown>
             </div>
             <aside className="detail-sidebar">
               <div className="form-actions">

@@ -345,6 +345,11 @@ button.primary { background: var(--accent); color: var(--on-accent); border: var
 .detail-rendered { line-height: 1.55; }
 .detail-rendered img { max-width: 100%; height: auto; margin: 8px 0; }
 .detail-rendered p { margin: 0 0 10px; }
+/* demoted heading in greeting text — chub cards' `#Scene Label#` convention */
+.detail-rendered .scene-label {
+  margin: 4px 0 10px; font-family: var(--fm); font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.14em; color: var(--muted);
+}
 .detail-sidebar { width: 240px; flex: none; display: flex; flex-direction: column; gap: 16px; }
 .detail-sidebar .form-actions { margin-top: 0; }
 .detail-sidebar .form-actions button { width: 100%; }
