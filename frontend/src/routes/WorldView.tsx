@@ -122,7 +122,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
                         onNavConsumed={() => setLoreNav(null)} onOpenOwner={openOwner} />
         </>
       )}
-      {tab === "greetings" && <GreetingEditor wid={wid} onOpenCharacter={openCharacter} focus={focusGreeting} />}
+      {tab === "greetings" && <GreetingEditor scope={scope} wid={wid} onOpenCharacter={openCharacter} focus={focusGreeting} />}
     </div>
   );
 }

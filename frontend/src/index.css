@@ -719,3 +719,14 @@ button.primary { background: var(--accent); color: var(--on-accent); border: var
 /* untagged-image tagging queue */
 .tagging-queue { display: grid; gap: 10px; max-width: 640px; }
 .tagging-queue .queue-image { max-width: 100%; border-radius: 8px; }
+
+/* campaign greeting mark badges in the editor rail */
+.mark-badge {
+  margin-left: 0.5em;
+  font-size: 0.72em;
+  opacity: 0.75;
+  border: 1px solid currentColor;
+  border-radius: 8px;
+  padding: 0 0.45em;
+}
+.mark-badge.skipped { text-decoration: line-through; }

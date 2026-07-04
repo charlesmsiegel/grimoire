@@ -6,7 +6,7 @@ vi.mock("../api/client", () => ({
     listGreetings: vi.fn(), listCharacters: vi.fn(), listTags: vi.fn(), readGreeting: vi.fn(),
     createGreeting: vi.fn(), updateGreeting: vi.fn(), deleteGreeting: vi.fn(),
     setEdges: vi.fn(), importGreetings: vi.fn(),
-    getGreetingSubjects: vi.fn(), setImageSubjects: vi.fn(), listUntaggedImages: vi.fn(),
+    getGreetingSubjects: vi.fn(), setImageSubjects: vi.fn(), listUntaggedImages: vi.fn(), markGreeting: vi.fn(),
   },
 }));
 import { api } from "../api/client";
@@ -38,7 +38,7 @@ test("clicking a greeting shows a read-only rendered view; Edit reveals the form
     meta: { id: "open", name: "Open", character: "seraphine", version: "default", present: ["seraphine"], requires_tags: [], predecessor_join: "all" },
     body: "Hello **world**", edges: { leads_to: [], excludes: [] }, predecessors: [],
   });
-  const { container } = render(<GreetingEditor wid="w" />);
+  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
   fireEvent.click(await within(rail).findByText("Open"));
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open"));
@@ -60,7 +60,7 @@ test("greeting body demotes scene-label headings and keeps single newlines", asy
     body: "#Rooftop Setting#\n\nFirst line\nSecond line",
     edges: { leads_to: [], excludes: [] }, predecessors: [],
   });
-  const { container } = render(<GreetingEditor wid="w" />);
+  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
   fireEvent.click(await within(rail).findByText("Open"));
   await screen.findByText("Rooftop Setting");
@@ -70,7 +70,7 @@ test("greeting body demotes scene-label headings and keeps single newlines", asy
 
 
 test("creating a greeting posts the draft then sets edges", async () => {
-  render(<GreetingEditor wid="w" />);
+  render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await waitFor(() => expect(api.listCharacters).toHaveBeenCalled());
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Open" } });
   fireEvent.change(screen.getByLabelText("Character"), { target: { value: "seraphine" } });
@@ -88,7 +88,7 @@ test("creating a greeting posts the draft then sets edges", async () => {
 });
 
 test("version options follow the selected character", async () => {
-  render(<GreetingEditor wid="w" />);
+  render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await waitFor(() => expect(api.listCharacters).toHaveBeenCalled());
   fireEvent.change(screen.getByLabelText("Character"), { target: { value: "seraphine" } });
   // the version select now offers 'default'
@@ -97,7 +97,7 @@ test("version options follow the selected character", async () => {
 });
 
 test("import-from-character posts the selected character + version", async () => {
-  render(<GreetingEditor wid="w" />);
+  render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await waitFor(() => expect(api.listCharacters).toHaveBeenCalled());
   fireEvent.change(screen.getByLabelText("Character"), { target: { value: "seraphine" } });
   fireEvent.change(screen.getByLabelText("Version"), { target: { value: "default" } });
@@ -120,7 +120,7 @@ test("clicking a present character opens that character at the right version", a
     meta: { id: "open", name: "Open", character: "seraphine", version: "v2", present: ["seraphine", "rowan"], requires_tags: [], predecessor_join: "all" },
     body: "hi", edges: { leads_to: [], excludes: [] }, predecessors: [],
   });
-  const { container } = render(<GreetingEditor wid="w" onOpenCharacter={onOpenCharacter} />);
+  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" onOpenCharacter={onOpenCharacter} />);
   const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
   fireEvent.click(await within(rail).findByText("Open"));
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open"));
@@ -145,7 +145,7 @@ test("the view sidebar shows the full dependency picture", async () => {
     meta: { id: "open", name: "Open", character: "seraphine", version: "default", present: ["seraphine"], requires_tags: ["vip"], predecessor_join: "any" },
     body: "hi", edges: { leads_to: ["finale"], excludes: ["secret"] }, predecessors: ["prologue"],
   });
-  const { container } = render(<GreetingEditor wid="w" />);
+  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
   fireEvent.click(await within(rail).findByText("Open"));
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open"));
@@ -167,7 +167,7 @@ test("clicking a Depends-on scene navigates to that greeting", async () => {
     meta: { id, name: id === "prologue" ? "Prologue" : "Open", character: "seraphine", version: "default", present: [], requires_tags: [], predecessor_join: "any" },
     body: "x", edges: { leads_to: [], excludes: [] }, predecessors: id === "open" ? ["prologue"] : [],
   }));
-  const { container } = render(<GreetingEditor wid="w" />);
+  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
   fireEvent.click(await within(rail).findByText("Open"));
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open"));
@@ -190,7 +190,7 @@ test("editing a greeting toggles present characters and saves them", async () =>
     body: "hi", edges: { leads_to: [], excludes: [] },
   });
   (api.updateGreeting as any).mockResolvedValue({ ok: true });
-  const { container } = render(<GreetingEditor wid="w" />);
+  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
   fireEvent.click(await within(rail).findByText("Open"));
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open"));
@@ -209,7 +209,7 @@ test("editing a greeting sets leads_to edges", async () => {
     { id: "open", name: "Open", character: "seraphine", version: "default", present: ["seraphine"], requires_tags: [], predecessor_join: "all" },
     { id: "reckoning", name: "Reckoning", character: "seraphine", version: "default", present: ["seraphine"], requires_tags: [], predecessor_join: "all" },
   ]);
-  const { container } = render(<GreetingEditor wid="w" />);
+  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
   fireEvent.click(await within(rail).findByText("Open"));
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open"));
@@ -237,7 +237,7 @@ function mockOpenWithImage(subjects: Record<string, string[]> = {}) {
 
 test("greeting image shows subject chips and opens the picker", async () => {
   mockOpenWithImage({ "embed-aaa111bbb222": ["seraphine"] });
-  const { container } = render(<GreetingEditor wid="w" />);
+  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
   fireEvent.click(await within(rail).findByText("Open"));
   await waitFor(() => expect(api.getGreetingSubjects).toHaveBeenCalledWith("w", "open"));
@@ -253,7 +253,7 @@ test("greeting image shows subject chips and opens the picker", async () => {
 
 test("saving the picker PUTs subjects and refreshes", async () => {
   mockOpenWithImage({});
-  const { container } = render(<GreetingEditor wid="w" />);
+  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
   fireEvent.click(await within(rail).findByText("Open"));
   await waitFor(() => expect(api.getGreetingSubjects).toHaveBeenCalledWith("w", "open"));
@@ -273,7 +273,7 @@ test("saving the picker PUTs subjects and refreshes", async () => {
 
 test("focus prop opens that greeting in view mode", async () => {
   mockOpenWithImage({});
-  render(<GreetingEditor wid="w" focus="open" />);
+  render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" focus="open" />);
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open"));
   expect(await screen.findByRole("button", { name: /^edit$/i })).toBeInTheDocument();
 });
@@ -288,7 +288,7 @@ test("rail button opens the tagging queue; save/no-subjects advance it", async (
   (api.listGreetings as any).mockResolvedValue([
     { id: "open", name: "Open", character: "seraphine", version: "default", present: ["seraphine"], requires_tags: [], predecessor_join: "all" },
   ]);
-  render(<GreetingEditor wid="w" />);
+  render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   fireEvent.click(await screen.findByRole("button", { name: /tag images \(2\)/i }));
   await screen.findByText(/tagging 1 \/ 2/i);
   fireEvent.click(screen.getByRole("button", { name: "Seraphine" }));
@@ -302,7 +302,7 @@ test("rail button opens the tagging queue; save/no-subjects advance it", async (
 
 test("skip advances without a PUT and close leaves the queue", async () => {
   (api.listUntaggedImages as any).mockResolvedValue(UNTAGGED);
-  render(<GreetingEditor wid="w" />);
+  render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   fireEvent.click(await screen.findByRole("button", { name: /tag images \(2\)/i }));
   await screen.findByText(/tagging 1 \/ 2/i);
   fireEvent.click(screen.getByRole("button", { name: /^skip$/i }));
@@ -310,4 +310,47 @@ test("skip advances without a PUT and close leaves the queue", async () => {
   expect(api.setImageSubjects).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: /^close$/i }));
   expect(await screen.findByRole("button", { name: /new greeting/i })).toBeInTheDocument();
+});
+
+
+test("campaign scope: marks a greeting as won't-do from the sidebar", async () => {
+  (api.listGreetings as any).mockResolvedValue([
+    { id: "g1", name: "Gala", character: "seraphine", version: "default", present: [],
+      requires_tags: [], predecessor_join: "all", mark: null },
+  ]);
+  (api.readGreeting as any).mockResolvedValue({
+    meta: { id: "g1", name: "Gala", character: "seraphine", version: "default", present: [],
+            requires_tags: [], predecessor_join: "all" },
+    body: "Hi.", edges: { leads_to: [], excludes: [] }, predecessors: [],
+  });
+  (api.markGreeting as any).mockResolvedValue({ ok: true });
+  const { container } = render(<GreetingEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
+  fireEvent.click(await within(rail).findByText("Gala"));
+  fireEvent.click(await screen.findByRole("button", { name: "Won't do" }));
+  await waitFor(() => expect(api.markGreeting).toHaveBeenCalledWith("run", "g1", "skipped"));
+});
+
+test("campaign scope: played greetings show a disabled status control", async () => {
+  (api.listGreetings as any).mockResolvedValue([
+    { id: "g1", name: "Gala", character: "seraphine", version: "default", present: [],
+      requires_tags: [], predecessor_join: "all", mark: "played" },
+  ]);
+  (api.readGreeting as any).mockResolvedValue({
+    meta: { id: "g1", name: "Gala", character: "seraphine", version: "default", present: [],
+            requires_tags: [], predecessor_join: "all" },
+    body: "Hi.", edges: { leads_to: [], excludes: [] }, predecessors: [],
+  });
+  const { container } = render(<GreetingEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
+  fireEvent.click(await within(rail).findByText("Gala"));
+  expect(await screen.findByRole("button", { name: "Mark complete" })).toBeDisabled();
+  expect(screen.getByText(/started this greeting in a scene/i)).toBeInTheDocument();
+});
+
+test("campaign scope: hides the tagging queue and never fetches untagged images", async () => {
+  (api.listGreetings as any).mockResolvedValue([]);
+  render(<GreetingEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+  await screen.findByRole("button", { name: "+ New greeting" });
+  expect(api.listUntaggedImages).not.toHaveBeenCalled();
 });
