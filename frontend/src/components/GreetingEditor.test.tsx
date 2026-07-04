@@ -6,12 +6,15 @@ vi.mock("../api/client", () => ({
     listGreetings: vi.fn(), listCharacters: vi.fn(), listTags: vi.fn(), readGreeting: vi.fn(),
     createGreeting: vi.fn(), updateGreeting: vi.fn(), deleteGreeting: vi.fn(),
     setEdges: vi.fn(), importGreetings: vi.fn(),
+    getGreetingSubjects: vi.fn(), setImageSubjects: vi.fn(),
   },
 }));
 import { api } from "../api/client";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  (api.getGreetingSubjects as any).mockResolvedValue({});
+  (api.setImageSubjects as any).mockResolvedValue({ ok: true });
   (api.listGreetings as any).mockResolvedValue([]);
   (api.listCharacters as any).mockResolvedValue([
     { id: "seraphine", name: "Seraphine", default_version: "default", versions: [{ id: "default", name: "default" }] },
@@ -216,4 +219,53 @@ test("editing a greeting sets leads_to edges", async () => {
   await waitFor(() =>
     expect(api.setEdges).toHaveBeenCalledWith("w", "open", { leads_to: ["reckoning"], excludes: [] }),
   );
+});
+
+const IMG_BODY = "scene ![M](/api/worlds/w/greetings/open/images/embed-aaa111bbb222)";
+
+function mockOpenWithImage(subjects: Record<string, string[]> = {}) {
+  (api.listGreetings as any).mockResolvedValue([
+    { id: "open", name: "Open", character: "seraphine", version: "default", present: ["seraphine"], requires_tags: [], predecessor_join: "all" },
+  ]);
+  (api.readGreeting as any).mockResolvedValue({
+    meta: { id: "open", name: "Open", character: "seraphine", version: "default", present: ["seraphine"], requires_tags: [], predecessor_join: "all" },
+    body: IMG_BODY, edges: { leads_to: [], excludes: [] }, predecessors: [],
+  });
+  (api.getGreetingSubjects as any).mockResolvedValue(subjects);
+}
+
+test("greeting image shows subject chips and opens the picker", async () => {
+  mockOpenWithImage({ "embed-aaa111bbb222": ["seraphine"] });
+  const { container } = render(<GreetingEditor wid="w" />);
+  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
+  fireEvent.click(await within(rail).findByText("Open"));
+  await waitFor(() => expect(api.getGreetingSubjects).toHaveBeenCalledWith("w", "open"));
+  const extras = await waitFor(() => {
+    const el = container.querySelector(".img-extras");
+    expect(el).not.toBeNull();
+    return el as HTMLElement;
+  });
+  expect(within(extras).getByText("Seraphine")).toBeInTheDocument();
+  fireEvent.click(within(extras).getByRole("button", { name: /subjects/i }));
+  expect(screen.getByText(/present in this greeting/i)).toBeInTheDocument();
+});
+
+test("saving the picker PUTs subjects and refreshes", async () => {
+  mockOpenWithImage({});
+  const { container } = render(<GreetingEditor wid="w" />);
+  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
+  fireEvent.click(await within(rail).findByText("Open"));
+  await waitFor(() => expect(api.getGreetingSubjects).toHaveBeenCalledWith("w", "open"));
+  // click-and-verify atomically: a subjects re-render can rebuild the markdown
+  // DOM, detaching a button grabbed earlier
+  await waitFor(() => {
+    const extras = container.querySelector(".img-extras") as HTMLElement;
+    expect(extras).not.toBeNull();
+    fireEvent.click(within(extras).getByRole("button", { name: /subjects/i }));
+    expect(screen.getByRole("dialog", { name: /image subjects/i })).toBeInTheDocument();
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Seraphine" }));
+  fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+  await waitFor(() => expect(api.setImageSubjects).toHaveBeenCalledWith(
+    "w", "open", "embed-aaa111bbb222", ["seraphine"]));
 });
