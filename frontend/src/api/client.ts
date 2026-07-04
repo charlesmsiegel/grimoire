@@ -87,7 +87,7 @@ export type VersionRef = { id: string; name: string };
 export type CharacterSummary = {
   id: string; name: string; default_version: string; has_avatar?: boolean;
   avatar_focus?: number | null; gallery_count?: number; localized_count?: number;
-  tagline?: string; versions: VersionRef[];
+  greeting_count?: number; tagline?: string; versions: VersionRef[];
 };
 export type CharacterDetail = {
   meta: { id: string; name: string; default_version: string; birthdate?: string };

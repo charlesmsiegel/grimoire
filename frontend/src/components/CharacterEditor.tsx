@@ -728,8 +728,11 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore }:
                       </div>}
                   <span className="char-card-name">{c.name}</span>
                   {c.tagline ? <span className="char-card-tagline">{c.tagline}</span> : null}
-                  {((c.gallery_count ?? 0) > 0 || (c.localized_count ?? 0) > 0) && (
+                  {((c.gallery_count ?? 0) > 0 || (c.localized_count ?? 0) > 0 || (c.greeting_count ?? 0) > 0) && (
                     <span className="char-card-badges">
+                      {(c.greeting_count ?? 0) > 0 && (
+                        <span className="chip">{c.greeting_count} greeting{c.greeting_count === 1 ? "" : "s"}</span>
+                      )}
                       {(c.gallery_count ?? 0) > 0 && <span className="chip">{c.gallery_count} gallery</span>}
                       {(c.localized_count ?? 0) > 0 && <span className="chip">{c.localized_count} localized</span>}
                     </span>

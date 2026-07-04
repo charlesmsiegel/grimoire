@@ -906,6 +906,17 @@ def test_list_characters_counts_gallery_and_localized(tmp_path):
     assert row["has_avatar"] is True
 
 
+def test_list_characters_counts_greetings_of_default_version(tmp_path):
+    cid, vid = ch.create_character(tmp_path, "Sera")
+    assert ch.list_characters(tmp_path)[0]["greeting_count"] == 0  # blank card
+
+    card = ch.read_card(tmp_path, cid, vid)
+    card["data"]["first_mes"] = "hello"
+    card["data"]["alternate_greetings"] = ["alt one", "alt two"]
+    ch.update_version(tmp_path, cid, vid, card)
+    assert ch.list_characters(tmp_path)[0]["greeting_count"] == 3  # first_mes + 2 alts
+
+
 def test_avatar_focus_exposed_on_read_and_list(tmp_path):
     from grimoire.store import assets
     cid, vid = ch.create_character(tmp_path, "Sera")

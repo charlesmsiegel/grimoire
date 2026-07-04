@@ -191,6 +191,13 @@ def read_character(root: Path, cid: str) -> dict:
     }
 
 
+def _greeting_count(data: dict) -> int:
+    """Selectable greetings on a card: a non-empty first_mes plus the alternates."""
+    greetings = data.get("alternate_greetings")
+    return ((1 if str(data.get("first_mes") or "").strip() else 0)
+            + (len(greetings) if isinstance(greetings, list) else 0))
+
+
 def list_characters(root: Path) -> list[dict]:
     out: list[dict] = []
     d = _chars_dir(root)
@@ -200,6 +207,10 @@ def list_characters(root: Path) -> list[dict]:
             meta, _ = parse_frontmatter(_meta_path(root, cid).read_text(encoding="utf-8"))
             default = meta.get("default_version", "")
             names = [i["name"] for i in assets.list_images(root, cid, default)]
+            try:
+                default_data = read_card(root, cid, default).get("data", {})
+            except VersionNotFound:
+                default_data = {}
             out.append({
                 "id": cid,
                 "name": meta.get("name", cid),
@@ -208,6 +219,7 @@ def list_characters(root: Path) -> list[dict]:
                 "avatar_focus": assets.read_focus(root, cid, default),
                 "gallery_count": sum(1 for n in names if n.startswith("gallery_")),
                 "localized_count": sum(1 for n in names if n.startswith("embed-")),
+                "greeting_count": _greeting_count(default_data),
                 "tagline": taglines.read(root, cid),
                 "versions": [{"id": v, "name": _version_label(read_card(root, cid, v), v)}
                              for v in _version_ids(root, cid)],

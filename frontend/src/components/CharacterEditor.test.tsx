@@ -639,20 +639,23 @@ test("the edit form no longer shows a link control (moved to the detail page)", 
 });
 
 
-test("grid cards show gallery/localized badges only when nonzero", async () => {
+test("grid cards show gallery/localized/greeting badges only when nonzero", async () => {
   (api.listCharacters as any).mockResolvedValue([
     { id: "a", name: "Aya", default_version: "default", has_avatar: true,
-      gallery_count: 3, localized_count: 0, versions: [] },
+      gallery_count: 3, localized_count: 0, greeting_count: 1, versions: [] },
     { id: "b", name: "Bea", default_version: "default", has_avatar: true,
-      gallery_count: 0, localized_count: 2, versions: [] },
+      gallery_count: 0, localized_count: 2, greeting_count: 18, versions: [] },
     { id: "c", name: "Cyn", default_version: "default", has_avatar: true,
-      gallery_count: 0, localized_count: 0, versions: [] },
+      gallery_count: 0, localized_count: 0, greeting_count: 0, versions: [] },
   ]);
   render(<CharacterEditor wid="w" />);
   await screen.findByText("3 gallery");
   await screen.findByText("2 localized");
+  await screen.findByText("1 greeting");
+  await screen.findByText("18 greetings");
   expect(screen.queryByText("0 gallery")).toBeNull();
   expect(screen.queryByText("0 localized")).toBeNull();
+  expect(screen.queryByText(/0 greeting/)).toBeNull();
 });
 
 
