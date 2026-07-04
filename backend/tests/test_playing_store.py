@@ -88,3 +88,18 @@ def test_start_unavailable_raises(monkeypatch, tmp_path):
     g = greetings.create_greeting(wroot, "Gala", "s", "default", requires_tags=["vip"])
     with pytest.raises(playing.PlayError):
         playing.start_from_greeting(cid, sid, g)
+
+
+def test_start_from_greeting_stamps_greeting(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    characters.create_character(wroot, "Seraphine", "default", characters.blank_card("Seraphine"))
+    g = greetings.create_greeting(wroot, "Open", "seraphine", "default", body="Hi.")
+    playing.start_from_greeting(cid, sid, g)
+    assert scenes.read_scene(cid, sid)["meta"]["greeting"] == g
+
+
+def test_stamp_greeting_missing_scene_raises(monkeypatch, tmp_path):
+    _wid, cid, _sid = _campaign(monkeypatch, tmp_path)
+    with pytest.raises(scenes.SceneNotFound):
+        scenes.stamp_greeting(cid, "nope", "g1")

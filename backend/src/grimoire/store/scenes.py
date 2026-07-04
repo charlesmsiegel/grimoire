@@ -200,6 +200,16 @@ def add_dismissed(cid: str, sid: str, char_id: str) -> None:
     p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
 
 
+def stamp_greeting(cid: str, sid: str, gid: str) -> None:
+    """Record the greeting this scene was started from (plot-map unlock linkage)."""
+    p = _scene_path(cid, sid)
+    if not _safe_id(sid) or not p.exists():
+        raise SceneNotFound(sid)
+    meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
+    meta["greeting"] = gid
+    p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+
+
 def append_message(cid: str, sid: str, role: str, content: str, speaker: str | None = None) -> None:
     p = _scene_path(cid, sid)
     if not _safe_id(sid) or not p.exists():

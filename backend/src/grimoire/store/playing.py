@@ -67,6 +67,7 @@ def start_from_greeting(cid: str, sid: str, gid: str) -> None:
             characters.read_character(wroot, cid_)["meta"]["default_version"]
         appearances.appear(cid, sid, "characters", cid_, version, "npc")
     _mark_played(cid, gid)
+    scenes.stamp_greeting(cid, sid, gid)
     text = context._substitute(greetings.read_greeting(wroot, gid)["body"],
                                context.scene_substitutions(cid, sid))
     scenes.append_message(cid, sid, "assistant", text)
