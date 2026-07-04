@@ -1,6 +1,7 @@
 import pytest
 
-from grimoire.store import campaigns, entities, sync, worlds
+from grimoire.store import appearances as ap
+from grimoire.store import campaigns, characters, entities, greetings, pcs, sync, worlds
 
 
 def home(monkeypatch, tmp_path):
@@ -130,3 +131,51 @@ def test_incoming_missing_campaign_raises(monkeypatch, tmp_path):
     home(monkeypatch, tmp_path)
     with pytest.raises(campaigns.CampaignNotFound):
         sync.incoming("nope")
+
+
+def _greeting_world(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    g = greetings.create_greeting(wroot, "Gala", "c", "v", body="Original.")
+    greetings.set_edges(wroot, g, leads_to=[])
+    cid = campaigns.create_campaign("Run", wid)
+    return wid, wroot, cid, g
+
+
+def test_incoming_world_greeting_edit_is_update(monkeypatch, tmp_path):
+    wid, wroot, cid, g = _greeting_world(monkeypatch, tmp_path)
+    greetings.update_greeting(wroot, g, body="Changed.")
+    items = {(i["ref"]["kind"], i["ref"]["id"]): i for i in sync.incoming(cid)}
+    item = items[("greetings", g)]
+    assert item["status"] == "update"
+    assert item["world"]["body"] == "Changed."
+    sync.accept(cid, [{"kind": "greetings", "id": g}])
+    croot = campaigns.campaign_root(cid)
+    assert greetings.read_greeting(croot, g)["body"] == "Changed."
+    assert sync.incoming(cid) == []
+
+
+def test_incoming_greeting_conflict_and_reject(monkeypatch, tmp_path):
+    wid, wroot, cid, g = _greeting_world(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    greetings.update_greeting(wroot, g, body="World edit.")
+    greetings.update_greeting(croot, g, body="Campaign edit.")
+    items = {(i["ref"]["kind"], i["ref"]["id"]): i for i in sync.incoming(cid)}
+    assert items[("greetings", g)]["status"] == "conflict"
+    sync.reject(cid, [{"kind": "greetings", "id": g}])
+    assert greetings.read_greeting(croot, g)["body"] == "Campaign edit."
+    assert sync.incoming(cid) == []
+
+
+def test_incoming_plotmap_update_accept(monkeypatch, tmp_path):
+    wid, wroot, cid, g = _greeting_world(monkeypatch, tmp_path)
+    g2 = greetings.create_greeting(wroot, "Next", "c", "v")
+    greetings.set_edges(wroot, g, leads_to=[g2])
+    items = {(i["ref"]["kind"], i["ref"]["id"]): i for i in sync.incoming(cid)}
+    assert items[("plotmap", "plotmap")]["status"] == "update"
+    sync.accept(cid, [{"kind": "plotmap", "id": "plotmap"},
+                      {"kind": "greetings", "id": g2}])
+    croot = campaigns.campaign_root(cid)
+    assert greetings.edges_of(greetings.read_plotmap(croot), g)["leads_to"] == [g2]
+    assert (croot / "greetings" / f"{g2}.md").exists()
