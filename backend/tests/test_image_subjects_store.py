@@ -18,12 +18,13 @@ def test_subjects_roundtrip_and_missing_file(tmp_path):
     assert image_subjects.read_subjects(tmp_path, gid) == {"art_1": [cid]}
 
 
-def test_write_rejects_unknown_image_and_drops_empty(tmp_path):
+def test_write_rejects_unknown_image_and_persists_empty(tmp_path):
     cid, gid = _world(tmp_path)
     with pytest.raises(ValueError):
         image_subjects.write_subjects(tmp_path, gid, {"nope": [cid]})
     image_subjects.write_subjects(tmp_path, gid, {"art_1": [cid], "art_2": []})
-    assert image_subjects.read_subjects(tmp_path, gid) == {"art_1": [cid]}
+    # explicit [] persists: "reviewed, nobody in it"
+    assert image_subjects.read_subjects(tmp_path, gid) == {"art_1": [cid], "art_2": []}
 
 
 def test_read_drops_vanished_images_and_characters(tmp_path):
@@ -44,7 +45,21 @@ def test_set_image_subjects_updates_one_entry(tmp_path):
     image_subjects.set_image_subjects(tmp_path, gid, "art_1", [cid])
     image_subjects.set_image_subjects(tmp_path, gid, "art_2", [cid])
     image_subjects.set_image_subjects(tmp_path, gid, "art_1", [])
-    assert image_subjects.read_subjects(tmp_path, gid) == {"art_2": [cid]}
+    assert image_subjects.read_subjects(tmp_path, gid) == {"art_1": [], "art_2": [cid]}
+
+
+def test_untagged_lists_only_unreviewed_images(tmp_path):
+    cid, _vid = characters.create_character(tmp_path, "Mira", "main")
+    g1 = greetings.create_greeting(tmp_path, "One", cid, "main", "x")
+    g2 = greetings.create_greeting(tmp_path, "Two", cid, "main", "x")
+    for gid, names in ((g1, ("a_tagged", "b_reviewed", "c_new")), (g2, ("d_new",))):
+        for n in names:
+            assets.put_image(tmp_path, gid, "default", n, b"p", "png", base="greetings")
+    image_subjects.set_image_subjects(tmp_path, g1, "a_tagged", [cid])
+    image_subjects.set_image_subjects(tmp_path, g1, "b_reviewed", [])  # reviewed, none
+    got = image_subjects.untagged(tmp_path)
+    assert got == sorted(got, key=lambda a: (a["gid"], a["name"]))
+    assert {(a["gid"], a["name"]) for a in got} == {(g1, "c_new"), (g2, "d_new")}
 
 
 def test_appearances_scans_across_greetings_in_order(tmp_path):
