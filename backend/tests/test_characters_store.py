@@ -593,6 +593,121 @@ def test_import_from_chub_direct_url_updates_in_place_when_already_linked(tmp_pa
     assert ch.read_card(tmp_path, cid, vid)["data"]["name"] == "Direct Updated"
 
 
+def _stale_png_and_node(definition):
+    """A PNG whose embedded card is a stale revision, plus a chub node carrying
+    `definition` (chub regenerates the PNG lazily, so the two can disagree)."""
+    from grimoire.store import cards
+
+    stale = ch.blank_card("Imp")
+    stale["data"].update({
+        "description": "old description",
+        "personality": "old personality",
+        "first_mes": "old hello",
+        "creator_notes": "old notes",
+        "alternate_greetings": ["old alt"],
+    })
+    png = cards.dumps(stale, "png")
+    node = {
+        "id": 1, "hasGallery": False, "related_lorebooks": [],
+        "max_res_url": "https://avatars.charhub.io/avatars/creator/imp/chara_card_v2.png",
+    }
+    if definition is not None:
+        node["definition"] = definition
+    return png, node
+
+
+def test_import_from_chub_definition_overrides_stale_png_card(tmp_path, monkeypatch):
+    from grimoire.store import chub
+
+    # chub's definition field names predate the tavern spec: `personality` holds
+    # the card description, `tavern_personality` the personality, `description`
+    # the creator notes.
+    png, node = _stale_png_and_node({
+        "name": "Imp",
+        "personality": "new description",
+        "tavern_personality": "new personality",
+        "description": "new notes",
+        "scenario": "new scenario",
+        "first_message": "new hello",
+        "example_dialogs": "new examples",
+        "system_prompt": "new sys",
+        "post_history_instructions": "new phi",
+        "alternate_greetings": ["new alt 1", "new alt 2"],
+        "embedded_lorebook": {"entries": [{"keys": ["k"], "content": "book"}]},
+    })
+    monkeypatch.setattr(chub, "fetch_character_node", lambda fp: node)
+    monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: (png, "image/png"))
+
+    result = ch.import_from_chub(tmp_path, "creator/imp")
+
+    data = ch.read_card(tmp_path, result["character"], result["version"])["data"]
+    assert data["description"] == "new description"
+    assert data["personality"] == "new personality"
+    assert data["creator_notes"] == "new notes"
+    assert data["scenario"] == "new scenario"
+    assert data["first_mes"] == "new hello"
+    assert data["mes_example"] == "new examples"
+    assert data["system_prompt"] == "new sys"
+    assert data["post_history_instructions"] == "new phi"
+    assert data["alternate_greetings"] == ["new alt 1", "new alt 2"]
+    assert data["character_book"] == {"entries": [{"keys": ["k"], "content": "book"}]}
+
+
+def test_import_from_chub_empty_definition_fields_keep_png_values(tmp_path, monkeypatch):
+    from grimoire.store import chub
+
+    # An empty/missing definition field must not wipe the PNG card's value —
+    # fail-safe if chub stops populating a field.
+    png, node = _stale_png_and_node({
+        "personality": "",
+        "first_message": "",
+        "alternate_greetings": [],
+    })
+    monkeypatch.setattr(chub, "fetch_character_node", lambda fp: node)
+    monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: (png, "image/png"))
+
+    result = ch.import_from_chub(tmp_path, "creator/imp")
+
+    data = ch.read_card(tmp_path, result["character"], result["version"])["data"]
+    assert data["description"] == "old description"
+    assert data["first_mes"] == "old hello"
+    assert data["creator_notes"] == "old notes"
+    assert data["alternate_greetings"] == ["old alt"]
+
+
+def test_import_from_chub_no_definition_keeps_png_card(tmp_path, monkeypatch):
+    from grimoire.store import chub
+
+    png, node = _stale_png_and_node(None)
+    monkeypatch.setattr(chub, "fetch_character_node", lambda fp: node)
+    monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: (png, "image/png"))
+
+    result = ch.import_from_chub(tmp_path, "creator/imp")
+
+    data = ch.read_card(tmp_path, result["character"], result["version"])["data"]
+    assert data["description"] == "old description"
+    assert data["first_mes"] == "old hello"
+    assert data["alternate_greetings"] == ["old alt"]
+
+
+def test_import_from_chub_definition_applies_on_in_place_update(tmp_path, monkeypatch):
+    from grimoire.store import chub
+
+    cid, vid = ch.create_character(tmp_path, "Imp", "main")
+    ch.set_chub_source(tmp_path, cid, vid, "creator/imp")
+    png, node = _stale_png_and_node({"first_message": "new hello",
+                                     "alternate_greetings": ["new alt"]})
+    monkeypatch.setattr(chub, "fetch_character_node", lambda fp: node)
+    monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: (png, "image/png"))
+
+    result = ch.import_from_chub(tmp_path, "creator/imp", into_cid=cid, into_vid=vid)
+
+    assert result["updated"] is True
+    data = ch.read_card(tmp_path, cid, vid)["data"]
+    assert data["first_mes"] == "new hello"
+    assert data["alternate_greetings"] == ["new alt"]
+
+
 def test_download_chub_gallery_for_linked_version(tmp_path, monkeypatch):
     from grimoire.store import assets, chub
 

@@ -340,6 +340,48 @@ def _sniff_card_format(data: bytes) -> str | None:
     return "json" if isinstance(parsed, dict) else None
 
 
+# chub definition key -> card data key. chub's field names predate the tavern
+# spec: `personality` holds the card description, `tavern_personality` the
+# personality, and `description` the page notes (card creator_notes).
+_CHUB_DEF_FIELDS = (
+    ("name", "name"),
+    ("personality", "description"),
+    ("tavern_personality", "personality"),
+    ("description", "creator_notes"),
+    ("scenario", "scenario"),
+    ("first_message", "first_mes"),
+    ("example_dialogs", "mes_example"),
+    ("system_prompt", "system_prompt"),
+    ("post_history_instructions", "post_history_instructions"),
+)
+
+
+def merge_chub_definition(card: dict, definition: dict) -> bool:
+    """Overlay chub's current API definition onto a card parsed from the
+    max-res PNG. The PNG's embedded card can be a stale revision (chub doesn't
+    always regenerate it after a creator edits), so the definition wins — but
+    only field-by-field where it is non-empty, so a field chub omits or blanks
+    never wipes what the PNG carried. Mutates `card`; True if anything changed."""
+    data = card.setdefault("data", {})
+    changed = False
+    for def_key, card_key in _CHUB_DEF_FIELDS:
+        v = definition.get(def_key)
+        if isinstance(v, str) and v.strip() and v != data.get(card_key):
+            data[card_key] = v
+            changed = True
+    greetings = definition.get("alternate_greetings")
+    if isinstance(greetings, list):
+        greetings = [g for g in greetings if isinstance(g, str) and g.strip()]
+        if greetings and greetings != data.get("alternate_greetings"):
+            data["alternate_greetings"] = greetings
+            changed = True
+    book = definition.get("embedded_lorebook")
+    if isinstance(book, dict) and book.get("entries") and book != data.get("character_book"):
+        data["character_book"] = book
+        changed = True
+    return changed
+
+
 def import_from_chub(root: Path, url_or_path: str, into_cid: str | None = None,
                       into_vid: str | None = None) -> dict:
     """Download a character card from a URL and import/update it. A chub.ai
@@ -399,6 +441,12 @@ def import_from_chub(root: Path, url_or_path: str, into_cid: str | None = None,
         raise chub.ChubFetchError(str(exc)) from exc
     if not updated:
         set_chub_source(root, cid, vid, stored_url)
+
+    definition = (node or {}).get("definition")
+    if isinstance(definition, dict):
+        card = read_card(root, cid, vid)
+        if merge_chub_definition(card, definition):
+            update_version(root, cid, vid, card)
 
     gallery = _download_gallery(root, cid, vid, node) if node else {"attempted": 0, "stored": 0}
     lore = _download_lorebooks(root, node) if node else {"lorebooks_found": 0, "created": []}
