@@ -253,6 +253,18 @@ def card_hash(root: Path, cid: str, vid: str) -> str | None:
     return hashlib.sha256(p.read_text(encoding="utf-8").encode("utf-8")).hexdigest()
 
 
+def dir_hash(root: Path, cid: str) -> str | None:
+    """Whole-actor content hash: character.md plus every version card, name-tagged.
+    Assets are excluded so an image-only change never surfaces in sync."""
+    if not _safe(cid) or not _meta_path(root, cid).exists():
+        return None
+    h = hashlib.sha256()
+    for p in [_meta_path(root, cid)] + [_card_path(root, cid, v) for v in _version_ids(root, cid)]:
+        h.update(p.name.encode("utf-8"))
+        h.update(p.read_text(encoding="utf-8").encode("utf-8"))
+    return h.hexdigest()
+
+
 def character_count(root: Path) -> int:
     d = _chars_dir(root)
     return sum(1 for p in d.iterdir() if p.is_dir() and (p / "character.md").exists()) if d.exists() else 0

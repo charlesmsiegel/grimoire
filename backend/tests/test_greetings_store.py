@@ -149,3 +149,13 @@ def test_availability_gate_join_exclusion_tags(tmp_path):
 
     avail = {x["id"]: x["available"] for x in greetings.availability(root, pm, {a, a2}, set())}
     assert avail[b] is True            # all preds played
+
+
+def test_plotmap_hash_roundtrip(tmp_path):
+    assert greetings.plotmap_hash(tmp_path) is None
+    g = greetings.create_greeting(tmp_path, "A", "c", "v")
+    greetings.set_edges(tmp_path, g, leads_to=["b"])
+    h1 = greetings.plotmap_hash(tmp_path)
+    assert h1
+    greetings.set_edges(tmp_path, g, leads_to=["b", "c"])
+    assert greetings.plotmap_hash(tmp_path) != h1

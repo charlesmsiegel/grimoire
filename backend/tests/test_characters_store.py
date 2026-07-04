@@ -926,3 +926,17 @@ def test_avatar_focus_exposed_on_read_and_list(tmp_path):
     assets.write_focus(tmp_path, cid, vid, 20)
     assert ch.read_character(tmp_path, cid)["versions"][0]["avatar_focus"] == 20
     assert ch.list_characters(tmp_path)[0]["avatar_focus"] == 20
+
+
+def test_dir_hash_tracks_meta_and_versions_not_assets(tmp_path):
+    assert ch.dir_hash(tmp_path, "nope") is None
+    cid, vid = ch.create_character(tmp_path, "Mara")
+    h1 = ch.dir_hash(tmp_path, cid)
+    assert h1
+    ch.create_version(tmp_path, cid, "grim", ch.blank_card("Mara"))
+    h2 = ch.dir_hash(tmp_path, cid)
+    assert h2 != h1
+    # an assets-only change does not move the hash
+    (tmp_path / "characters" / cid / "assets").mkdir()
+    (tmp_path / "characters" / cid / "assets" / "x.png").write_bytes(b"png")
+    assert ch.dir_hash(tmp_path, cid) == h2
