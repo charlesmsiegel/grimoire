@@ -192,6 +192,16 @@ class GreetingCreate(BaseModel):
     present: list[str] | None = None
 
 
+class SubjectsBody(BaseModel):
+    subjects: list[str] = []
+
+
+class CopyFromGreeting(BaseModel):
+    gid: str
+    name: str
+    slot: str
+
+
 class GreetingUpdate(BaseModel):
     name: str | None = None
     body: str | None = None
@@ -847,6 +857,66 @@ def delete_world_greeting(wid: str, gid: str):
     except store.greetings.GreetingNotFound:
         raise HTTPException(status_code=404, detail="greeting not found")
     return {"ok": True}
+
+
+# ---- greeting image subjects (who appears in each localized image) ----
+def _greeting_or_404(root, gid: str) -> None:
+    try:
+        store.greetings.read_greeting(root, gid)
+    except store.greetings.GreetingNotFound:
+        raise HTTPException(status_code=404, detail="greeting not found")
+
+
+@router.get("/worlds/{wid}/greetings/{gid}/subjects")
+def get_world_greeting_subjects(wid: str, gid: str):
+    root = _world_root_or_404(wid)
+    _greeting_or_404(root, gid)
+    return store.image_subjects.read_subjects(root, gid)
+
+
+@router.get("/worlds/{wid}/greetings/{gid}/images/{name}/subjects")
+def get_world_greeting_image_subjects(wid: str, gid: str, name: str):
+    root = _world_root_or_404(wid)
+    _greeting_or_404(root, gid)
+    if store.assets.image_path(root, gid, "default", name, base="greetings") is None:
+        raise HTTPException(status_code=404, detail="image not found")
+    return {"subjects": store.image_subjects.read_subjects(root, gid).get(name, [])}
+
+
+@router.put("/worlds/{wid}/greetings/{gid}/images/{name}/subjects")
+def put_world_greeting_image_subjects(wid: str, gid: str, name: str, body: SubjectsBody):
+    root = _world_root_or_404(wid)
+    _greeting_or_404(root, gid)
+    if store.assets.image_path(root, gid, "default", name, base="greetings") is None:
+        raise HTTPException(status_code=404, detail="image not found")
+    known = {c["id"] for c in store.characters.list_characters(root)}
+    bad = [c for c in body.subjects if c not in known]
+    if bad:
+        raise HTTPException(status_code=400, detail=f"unknown characters: {bad}")
+    store.image_subjects.set_image_subjects(root, gid, name, body.subjects)
+    return {"ok": True}
+
+
+@router.get("/worlds/{wid}/characters/{cid}/appearances")
+def get_world_character_appearances(wid: str, cid: str):
+    root = _world_root_or_404(wid)
+    names = {g["id"]: g["name"] for g in store.greetings.list_greetings(root)}
+    return [{**a, "greeting_name": names.get(a["gid"], a["gid"]),
+             "url": f"/api/worlds/{wid}/greetings/{a['gid']}/images/{a['name']}"}
+            for a in store.image_subjects.appearances(root, cid)]
+
+
+@router.post("/worlds/{wid}/characters/{cid}/versions/{vid}/images/copy-from-greeting")
+def post_copy_image_from_greeting(wid: str, cid: str, vid: str, body: CopyFromGreeting):
+    root = _world_root_or_404(wid)
+    try:
+        stored = store.image_subjects.copy_to_character(root, body.gid, body.name, cid, vid, body.slot)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="source image not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    p = store.assets.image_path(root, cid, vid, stored)
+    return {"name": stored, "ext": p.suffix.lstrip(".").lower() if p else ""}
 
 
 # ---- world lorebook import (declared before the generic /{kind} routes) ----
