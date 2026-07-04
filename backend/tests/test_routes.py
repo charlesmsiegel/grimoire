@@ -254,6 +254,54 @@ def test_greeting_images_served_readonly(client):
     assert client.get(f"/api/worlds/{wid}/potions/x/images").status_code == 404
 
 
+def test_image_subjects_routes_roundtrip_and_validation(client):
+    wid = _world(client)
+    cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mira"}).json()["character"]
+    gid = client.post(f"/api/worlds/{wid}/greetings",
+                      json={"name": "Opener", "character": cid, "version": "default"}).json()["id"]
+    root = store.worlds.world_root(wid)
+    store.assets.put_image(root, gid, "default", "embed-abc123def456", b"art", "png",
+                           base="greetings")
+    base = f"/api/worlds/{wid}/greetings/{gid}/images/embed-abc123def456/subjects"
+
+    assert client.get(base).json() == {"subjects": []}
+    assert client.put(base, json={"subjects": [cid]}).status_code == 200
+    assert client.get(base).json() == {"subjects": [cid]}
+    assert client.get(f"/api/worlds/{wid}/greetings/{gid}/subjects").json() == {
+        "embed-abc123def456": [cid]}
+
+    # validation: unknown cid -> 400; unknown image/greeting -> 404
+    assert client.put(base, json={"subjects": ["ghost"]}).status_code == 400
+    assert client.put(f"/api/worlds/{wid}/greetings/{gid}/images/nope/subjects",
+                      json={"subjects": [cid]}).status_code == 404
+    assert client.get(f"/api/worlds/{wid}/greetings/missing/images/x/subjects").status_code == 404
+
+
+def test_appearances_and_copy_from_greeting(client):
+    wid = _world(client)
+    cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mira"}).json()["character"]
+    gid = client.post(f"/api/worlds/{wid}/greetings",
+                      json={"name": "Opener", "character": cid, "version": "default"}).json()["id"]
+    root = store.worlds.world_root(wid)
+    store.assets.put_image(root, gid, "default", "embed-abc123def456", b"art", "png",
+                           base="greetings")
+    client.put(f"/api/worlds/{wid}/greetings/{gid}/images/embed-abc123def456/subjects",
+               json={"subjects": [cid]})
+
+    apps = client.get(f"/api/worlds/{wid}/characters/{cid}/appearances").json()
+    assert apps == [{"gid": gid, "greeting_name": "Opener", "name": "embed-abc123def456",
+                     "url": f"/api/worlds/{wid}/greetings/{gid}/images/embed-abc123def456"}]
+
+    copy_url = f"/api/worlds/{wid}/characters/{cid}/versions/default/images/copy-from-greeting"
+    r = client.post(copy_url, json={"gid": gid, "name": "embed-abc123def456", "slot": "avatar"})
+    assert r.status_code == 200 and r.json() == {"name": "avatar", "ext": "png"}
+    assert client.get(f"/api/worlds/{wid}/characters/{cid}/versions/default/images/avatar").content == b"art"
+    r = client.post(copy_url, json={"gid": gid, "name": "embed-abc123def456", "slot": "gallery"})
+    assert r.json()["name"] == "gallery_1"
+    assert client.post(copy_url, json={"gid": gid, "name": "missing", "slot": "gallery"}).status_code == 404
+    assert client.post(copy_url, json={"gid": gid, "name": "embed-abc123def456", "slot": "banner"}).status_code == 400
+
+
 def test_character_import_garbage_400(client):
     wid = _world(client)
     files = {"file": ("c.json", io.BytesIO(b"nonsense"), "application/json")}
