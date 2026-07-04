@@ -200,6 +200,26 @@ def test_fetch_exception_counts_as_failed_and_never_raises(tmp_path):
     assert card["data"]["description"] == "![a](https://h/a.png)"  # untouched
 
 
+def test_interrupted_run_keeps_rewrites_of_completed_fields(tmp_path):
+    # A closed generator (client disconnect mid-stream) must not lose the
+    # rewrites of fields whose refs already finished — they are applied as each
+    # field completes, not all at the end.
+    card = {"data": {
+        "description": "![a](https://h/a.png)",
+        "first_mes": "![b](https://h/b.png)",
+        "alternate_greetings": [],
+    }}
+    fetch = _fake_fetch({"https://h/a.png": (_PNG, "png"),
+                         "https://h/b.png": (_PNG[:8] + b"\x01" + _PNG[9:], "png")})
+    gen = localize.localize_card(card, tmp_path, "c", "v", "w", fetch=fetch)
+    assert next(gen) == {"total": 2}
+    first_done = next(gen)  # description's only ref finished -> field applied
+    assert first_done["applied"] == 1  # progress events expose applied count
+    gen.close()  # stream interrupted here
+    assert "/api/worlds/w/" in card["data"]["description"]
+    assert card["data"]["first_mes"] == "![b](https://h/b.png)"  # untouched
+
+
 def test_localizes_greetings_and_lorebook_entries(tmp_path):
     card = {"data": {
         "description": "",

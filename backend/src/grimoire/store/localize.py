@@ -144,10 +144,28 @@ def _store(root, cid, vid, got) -> str | None:
     return name
 
 
+def _apply_field(getter, setter, items, wid, cid, vid) -> None:
+    """Splice each (ref, name) into the field's text, last span first so
+    earlier offsets stay valid."""
+    text = getter()
+    for ref, name in sorted(items, key=lambda it: it[0].span[0], reverse=True):
+        local = _serving_url(wid, cid, vid, name)
+        start, end = ref.span
+        repl = f"![]({local})" if ref.as_markdown else local
+        text = text[:start] + repl + text[end:]
+    setter(text)
+
+
 def localize_card(card, root, cid, vid, wid, *, fetch=None, cap=None):
     """Generator: download every referenced image, store it, and rewrite the
-    text in `card` in place — yielding {"total": N}, then {"done": k, "total": N}
-    per ref, then {"summary": {...}}. The caller persists `card` afterward."""
+    text in `card` in place — yielding {"total": N}, then {"done": k, "total": N,
+    "applied": j} per ref, then {"summary": {...}}. The caller persists `card`.
+
+    Each field's rewrites are applied as soon as its last ref finishes (before
+    that ref's progress event), so a generator closed mid-stream — a client
+    disconnect — keeps every completed field's rewrites; `applied` counts the
+    refs whose rewrite has landed in `card`, letting the caller decide whether
+    a partial run is worth persisting."""
     if fetch is None:
         fetch = _fetch.download_url
     data = card.get("data") or {}
@@ -157,65 +175,59 @@ def localize_card(card, root, cid, vid, wid, *, fetch=None, cap=None):
         cap = 10 * n_greetings
 
     fields = list(_iter_fields(card))
-    # plan: (field index, ref) for every ref in every field
-    plan = [(idx, ref) for idx, (getter, _setter) in enumerate(fields)
-            for ref in find_refs(getter())]
-    total = len(plan)
+    # refs found up front, before any rewrite — fields are independent strings,
+    # so applying one field never shifts another field's spans
+    plan = [(getter, setter, find_refs(getter())) for getter, setter in fields]
+    total = sum(len(refs) for _g, _s, refs in plan)
     yield {"total": total}
 
     localized = skipped = failed = 0
+    applied = done = downloads = 0
     capped = False
-    seen: dict[str, str] = {}                      # raw url/data-uri -> stored asset name
-    edits: dict[int, list[tuple[Ref, str]]] = {}   # field index -> [(ref, name)]
-    downloads = 0
+    seen: dict[str, str] = {}  # raw url/data-uri -> stored asset name
 
-    for done, (idx, ref) in enumerate(plan, start=1):
-        name = None
-        if ref.url in seen:
-            name = seen[ref.url]
-        elif ref.url.startswith("data:"):
-            got = _fetch.decode_data_uri(ref.url)
-            if got is None:
+    for getter, setter, refs in plan:
+        items: list[tuple[Ref, str]] = []  # this field's pending rewrites
+        for i, ref in enumerate(refs):
+            name = None
+            if ref.url in seen:
+                name = seen[ref.url]
+            elif ref.url.startswith("data:"):
+                got = _fetch.decode_data_uri(ref.url)
+                if got is None:
+                    skipped += 1
+                else:
+                    name = _store(root, cid, vid, got)
+                    if name is None:
+                        failed += 1  # bytes decoded but the store rejected them
+            elif downloads >= cap:
+                capped = True
                 skipped += 1
             else:
-                name = _store(root, cid, vid, got)
-                if name is None:
-                    failed += 1  # bytes decoded but the store rejected them
-        elif downloads >= cap:
-            capped = True
-            skipped += 1
-        else:
-            downloads += 1
-            try:
-                got = fetch(ref.url)
-            except Exception:  # noqa: BLE001 — best-effort; a miss never breaks the card
-                got = None
-                failed += 1
-                got_failed = True
-            else:
-                got_failed = False
-            if got is not None:
-                name = _store(root, cid, vid, got)
-                if name is None:
-                    failed += 1  # downloaded but the store rejected the bytes
-            elif not got_failed:
-                skipped += 1  # download returned None (non-image / blocked host)
-        if name is not None:
-            seen[ref.url] = name
-            edits.setdefault(idx, []).append((ref, name))
-            localized += 1
-        yield {"done": done, "total": total}
-
-    # apply rewrites per field, last span first so offsets stay valid
-    for idx, items in edits.items():
-        getter, setter = fields[idx]
-        text = getter()
-        for ref, name in sorted(items, key=lambda it: it[0].span[0], reverse=True):
-            local = _serving_url(wid, cid, vid, name)
-            start, end = ref.span
-            repl = f"![]({local})" if ref.as_markdown else local
-            text = text[:start] + repl + text[end:]
-        setter(text)
+                downloads += 1
+                try:
+                    got = fetch(ref.url)
+                except Exception:  # noqa: BLE001 — best-effort; a miss never breaks the card
+                    got = None
+                    failed += 1
+                    got_failed = True
+                else:
+                    got_failed = False
+                if got is not None:
+                    name = _store(root, cid, vid, got)
+                    if name is None:
+                        failed += 1  # downloaded but the store rejected the bytes
+                elif not got_failed:
+                    skipped += 1  # download returned None (non-image / blocked host)
+            if name is not None:
+                seen[ref.url] = name
+                items.append((ref, name))
+                localized += 1
+            done += 1
+            if i == len(refs) - 1 and items:  # field complete: land its rewrites
+                _apply_field(getter, setter, items, wid, cid, vid)
+                applied += len(items)
+            yield {"done": done, "total": total, "applied": applied}
 
     yield {"summary": {"total": total, "localized": localized,
                        "skipped": skipped, "failed": failed, "capped": capped}}
