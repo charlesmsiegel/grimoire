@@ -72,11 +72,12 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   const [urlPromptOpen, setUrlPromptOpen] = useState(false);
   const [cropOpen, setCropOpen] = useState(false);
   const [bulkUrl, setBulkUrl] = useState<{ current: number; total: number; name: string; step: string } | null>(null);
+  const lockReq = useRef(0);
   const [locked, setLocked] = useState<string | null>(null);       // campaign: locked version id
   const [worldVersions, setWorldVersions] = useState<VersionRef[]>([]);
   const [importVid, setImportVid] = useState("");
 
-  const reload = useCallback(() => api.listCharacters(scope).then(setChars), [wid]);
+  const reload = useCallback(() => api.listCharacters(scope).then(setChars), [scope.kind, scope.id]);  // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     reload();
   }, [reload]);
@@ -100,7 +101,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     if (!detailCid) return;
     if (worldScope) api.listImageAppearances(wid, detailCid).then(setImageAppearances).catch(() => setImageAppearances([]));
     api.listGreetings(scope).then(setWorldGreetings).catch(() => setWorldGreetings([]));
-  }, [wid, detailCid]);
+  }, [wid, worldScope, scope.kind, scope.id, detailCid]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const hasAvatar = (detail && card)
     ? (detail.versions.find((v) => v.id === vid)?.images ?? []).includes("avatar")
@@ -232,13 +233,16 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   }
 
   async function loadLockState(cid: string) {
+    // token drops a slow earlier response so selecting A then B can't show A's lock on B
+    const req = ++lockReq.current;
     const roster = await api.listAppearances(scope.id).catch(() => []);
+    if (lockReq.current !== req) return;
     setLocked(roster.find((r) => r.kind === "characters" && r.id === cid)?.version ?? null);
     setImportVid("");
     // the source world's versions feed the import picker; a deleted world char offers none
     api.readCharacter({ kind: "world", id: wid }, cid)
-      .then((w) => setWorldVersions(w.versions.map((v) => ({ id: v.id, name: v.name }))))
-      .catch(() => setWorldVersions([]));
+      .then((w) => { if (lockReq.current === req) setWorldVersions(w.versions.map((v) => ({ id: v.id, name: v.name }))); })
+      .catch(() => { if (lockReq.current === req) setWorldVersions([]); });
   }
 
   async function runPick() {
@@ -821,7 +825,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
                          onSaved={(t) => { setTagline(t); reload(); }}
                          onClose={() => setTaglineQueue((q) => q.slice(1))} />
         )}
-        {cropOpen && hasAvatar && (
+        {worldScope && cropOpen && hasAvatar && (
           <AvatarFocusPicker src={avatarSrc(detail.meta.id, vid, true)}
                              initial={avatarFocus ?? 50}
                              onSave={saveFocus}
@@ -833,12 +837,15 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
           {importMsg && <span className="field-hint">{importMsg}</span>}
           <div className="detail">
             <div className="detail-head">
-              {hasAvatar
+              {hasAvatar && worldScope
                 ? <button className="avatar-crop-btn" type="button" aria-label="Adjust avatar crop"
                           title="Adjust avatar crop" onClick={() => setCropOpen(true)}>
                     <img className="detail-avatar" alt="" style={focusStyle(avatarFocus)}
                          src={avatarSrc(detail.meta.id, vid, true)} />
                   </button>
+                : hasAvatar
+                ? <img className="detail-avatar" alt="" style={focusStyle(avatarFocus)}
+                       src={avatarSrc(detail.meta.id, vid, true)} />
                 : <div className="initials-avatar detail" aria-hidden>
                     {(card.data.name || detail.meta.name).split(/\s+/).slice(0, 2).map((w) => w[0] ?? "").join("")}
                   </div>}
