@@ -3,6 +3,7 @@ import { PCEditor } from "./PCEditor";
 
 vi.mock("../api/client", () => ({
   api: {
+    listAppearances: vi.fn(), pickVersion: vi.fn(), importVersion: vi.fn(), createCampaignPC: vi.fn(),
     listPCs: vi.fn(), listTags: vi.fn(), readPC: vi.fn(), createPC: vi.fn(),
     updatePC: vi.fn(), deletePC: vi.fn(), createPCVersion: vi.fn(), updatePCVersion: vi.fn(),
   },
@@ -26,7 +27,7 @@ beforeEach(() => {
 });
 
 test("clicking a PC shows a read-only view; Edit reveals the form", async () => {
-  const { container } = render(<PCEditor wid="w" />);
+  const { container } = render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   fireEvent.click(await screen.findByText("Elara"));
   await screen.findByText("a wanderer");                         // rendered description
   expect(container.querySelector("textarea")).toBeNull();        // read-only
@@ -39,7 +40,7 @@ test("clicking a PC shows a read-only view; Edit reveals the form", async () => 
 });
 
 test("saving the persona returns to the read-only view", async () => {
-  const { container } = render(<PCEditor wid="w" />);
+  const { container } = render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   fireEvent.click(await screen.findByText("Elara"));
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   fireEvent.click(screen.getByRole("button", { name: /save persona/i }));
@@ -48,7 +49,7 @@ test("saving the persona returns to the read-only view", async () => {
 
 test("creating a PC prompts for a name and opens the form directly", async () => {
   vi.spyOn(window, "prompt").mockReturnValue("Rook");
-  const { container } = render(<PCEditor wid="w" />);
+  const { container } = render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await screen.findByText("Elara");
   fireEvent.click(screen.getByRole("button", { name: /new pc/i }));
   await waitFor(() => expect(api.createPC).toHaveBeenCalledWith("w", { name: "Rook" }));
@@ -56,7 +57,7 @@ test("creating a PC prompts for a name and opens the form directly", async () =>
 });
 
 test("editing persona saves the selected version", async () => {
-  render(<PCEditor wid="w" />);
+  render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   fireEvent.click(await screen.findByText("Elara"));
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   await screen.findByLabelText("Description");
@@ -69,7 +70,7 @@ test("editing persona saves the selected version", async () => {
 });
 
 test("editing the birthdate saves it on the persona", async () => {
-  render(<PCEditor wid="w" />);
+  render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   fireEvent.click(await screen.findByText("Elara"));
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   fireEvent.change(await screen.findByLabelText("Birthdate"), { target: { value: "1990-06-29" } });
@@ -81,7 +82,7 @@ test("editing the birthdate saves it on the persona", async () => {
 });
 
 test("toggling a tag chip in the form updates the PC tags", async () => {
-  render(<PCEditor wid="w" />);
+  render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   fireEvent.click(await screen.findByText("Elara"));
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   fireEvent.click(await screen.findByRole("button", { name: "Student" }));
@@ -90,7 +91,7 @@ test("toggling a tag chip in the form updates the PC tags", async () => {
 
 test("adding a version prompts and posts the current persona", async () => {
   vi.spyOn(window, "prompt").mockReturnValue("Young");
-  render(<PCEditor wid="w" />);
+  render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   fireEvent.click(await screen.findByText("Elara"));
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   await screen.findByLabelText("Description");
@@ -99,4 +100,44 @@ test("adding a version prompts and posts the current persona", async () => {
     expect(api.createPCVersion).toHaveBeenCalledWith({ kind: "world", id: "w" }, "elara",
       expect.objectContaining({ name: "Young" })),
   );
+});
+
+
+const PC_DETAIL = {
+  meta: { id: "elara", name: "Elara", tags: [], default_version: "young" },
+  versions: [
+    { id: "young", name: "Young", persona: { name: "Elara", pronouns: "", summary: "", birthdate: "", description: "d" } },
+    { id: "older", name: "Older", persona: { name: "Elara", pronouns: "", summary: "", birthdate: "", description: "d2" } },
+  ],
+};
+
+test("campaign scope: picking a version confirms and calls pickVersion", async () => {
+  (api.listPCs as any).mockResolvedValue([{ id: "elara", name: "Elara", tags: [],
+    default_version: "young", versions: [] }]);
+  (api.readPC as any).mockResolvedValue(PC_DETAIL);
+  (api.listAppearances as any).mockResolvedValue([]);          // unlocked
+  (api.pickVersion as any).mockResolvedValue({ ok: true });
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  render(<PCEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+  fireEvent.click(await screen.findByRole("button", { name: "Elara" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Pick this version" }));
+  await waitFor(() => expect(api.pickVersion).toHaveBeenCalledWith("run", "pcs", "elara", "young"));
+});
+
+test("campaign scope: a locked PC offers import from world", async () => {
+  (api.listPCs as any).mockResolvedValue([{ id: "elara", name: "Elara", tags: [],
+    default_version: "young", versions: [] }]);
+  (api.readPC as any).mockImplementation(async (scope: any) =>
+    scope.kind === "campaign" ? { ...PC_DETAIL, versions: [PC_DETAIL.versions[0]] } : PC_DETAIL);
+  (api.listAppearances as any).mockResolvedValue([
+    { kind: "pcs", id: "elara", version: "young", role: "player", scenes: [] },
+  ]);
+  (api.importVersion as any).mockResolvedValue({ ok: true });
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  render(<PCEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+  fireEvent.click(await screen.findByRole("button", { name: "Elara" }));
+  expect(await screen.findByText(/locked to/i)).toBeInTheDocument();
+  fireEvent.change(await screen.findByLabelText("Import version"), { target: { value: "older" } });
+  fireEvent.click(screen.getByRole("button", { name: "Import from world" }));
+  await waitFor(() => expect(api.importVersion).toHaveBeenCalledWith("run", "pcs", "elara", "older"));
 });
