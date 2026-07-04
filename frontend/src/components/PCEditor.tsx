@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
+import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { api, type PCDetail, type PCSummary, type Persona } from "../api/client";
 import { Field } from "./Field";
 import { OwnedLorePanel } from "./OwnedLorePanel";
@@ -12,6 +14,7 @@ export function PCEditor({ wid, onOpenLore }:
   const [detail, setDetail] = useState<PCDetail | null>(null);
   const [vid, setVid] = useState("");
   const [persona, setPersona] = useState<Persona>(BLANK);
+  const [mode, setMode] = useState<"view" | "edit">("view");
   const [error, setError] = useState<string | null>(null);
 
   const reload = useCallback(() => api.listPCs(wid).then(setPCs), [wid]);
@@ -20,13 +23,14 @@ export function PCEditor({ wid, onOpenLore }:
     api.listTags(wid).then(setTags);
   }, [wid, reload]);
 
-  async function select(pid: string) {
+  async function select(pid: string, version?: string) {
     setError(null);
     const d = await api.readPC(wid, pid);
     setDetail(d);
-    const v = d.versions.find((x) => x.id === d.meta.default_version) ?? d.versions[0];
+    const v = d.versions.find((x) => x.id === (version ?? d.meta.default_version)) ?? d.versions[0];
     setVid(v?.id ?? "");
     setPersona(v?.persona ?? BLANK);
+    setMode("view");
   }
 
   function switchVersion(id: string) {
@@ -41,6 +45,7 @@ export function PCEditor({ wid, onOpenLore }:
     const { pc } = await api.createPC(wid, { name });
     await reload();
     await select(pc);
+    setMode("edit"); // a brand-new PC goes straight to the form
   }
 
   async function savePersona() {
@@ -48,7 +53,7 @@ export function PCEditor({ wid, onOpenLore }:
     setError(null);
     try {
       await api.updatePCVersion(wid, detail.meta.id, vid, persona);
-      await select(detail.meta.id);
+      await select(detail.meta.id, vid); // back to the read-only view
     } catch (err: any) {
       setError(err.detail ?? String(err));
     }
@@ -59,14 +64,15 @@ export function PCEditor({ wid, onOpenLore }:
     const name = window.prompt("New version name?")?.trim();
     if (!name) return;
     const { version } = await api.createPCVersion(wid, detail.meta.id, { name, persona });
-    await select(detail.meta.id);
-    switchVersion(version);
+    await select(detail.meta.id, version);
+    setMode("edit");
   }
 
   async function setDefault() {
     if (!detail) return;
     await api.updatePC(wid, detail.meta.id, { default_version: vid });
-    await select(detail.meta.id);
+    await select(detail.meta.id, vid);
+    setMode("edit");
   }
 
   async function deletePC() {
@@ -82,7 +88,8 @@ export function PCEditor({ wid, onOpenLore }:
     const current = detail.meta.tags;
     const next = current.includes(tid) ? current.filter((t) => t !== tid) : [...current, tid];
     await api.updatePC(wid, detail.meta.id, { tags: next });
-    await select(detail.meta.id);
+    const d = await api.readPC(wid, detail.meta.id);
+    setDetail(d); // keep the form open; only the tag chips changed
   }
 
   return (
@@ -101,11 +108,69 @@ export function PCEditor({ wid, onOpenLore }:
       </div>
 
       <div className="editor-body">
+        {error && <div className="banner">{error}</div>}
         {!detail ? (
           <div className="editor-empty">Select or create a PC.</div>
+        ) : mode === "view" ? (
+          <div className="detail-view">
+            <div className="detail-main">
+              <h3>{persona.name || detail.meta.name}</h3>
+              <div className="detail-rendered">
+                <Markdown remarkPlugins={[remarkGfm]}>{persona.description}</Markdown>
+              </div>
+            </div>
+            <aside className="detail-sidebar">
+              <div className="form-actions">
+                <button className="subtle" onClick={() => setMode("edit")}>Edit</button>
+              </div>
+              {detail.versions.length > 1 && (
+                <div className="side-section">
+                  <h4>Version</h4>
+                  <select value={vid} onChange={(e) => switchVersion(e.target.value)} aria-label="Version">
+                    {detail.versions.map((v) => (
+                      <option key={v.id} value={v.id}>
+                        {v.name}{v.id === detail.meta.default_version ? " (default)" : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              {persona.pronouns && (
+                <div className="side-section">
+                  <h4>Pronouns</h4>
+                  <div className="field-hint">{persona.pronouns}</div>
+                </div>
+              )}
+              {persona.summary && (
+                <div className="side-section">
+                  <h4>Summary</h4>
+                  <div className="field-hint">{persona.summary}</div>
+                </div>
+              )}
+              {persona.birthdate && (
+                <div className="side-section">
+                  <h4>Birthdate</h4>
+                  <div className="field-hint">{persona.birthdate}</div>
+                </div>
+              )}
+              <div className="side-section">
+                <h4>Tags</h4>
+                {detail.meta.tags.length > 0
+                  ? <div className="chips">{detail.meta.tags.map((t) => <span key={t} className="chip on">{tags[t] ?? t}</span>)}</div>
+                  : <div className="field-hint">no tags</div>}
+              </div>
+              {onOpenLore && (
+                <OwnedLorePanel
+                  wid={wid}
+                  ownerRef={`pcs:${detail.meta.id}`}
+                  onOpenEntry={(id) => onOpenLore({ focusEntry: id })}
+                  onNewEntry={() => onOpenLore({ newOwner: `pcs:${detail.meta.id}` })}
+                />
+              )}
+            </aside>
+          </div>
         ) : (
           <div className="form">
-            {error && <div className="banner">{error}</div>}
             <div className="picker">
               <select value={vid} onChange={(e) => switchVersion(e.target.value)} aria-label="Version">
                 {detail.versions.map((v) => (
@@ -152,17 +217,9 @@ export function PCEditor({ wid, onOpenLore }:
             </Field>
 
             <div className="form-actions">
+              <button className="subtle" onClick={() => select(detail.meta.id, vid)}>Cancel</button>
               <button className="primary" onClick={savePersona}>Save persona</button>
             </div>
-
-            {onOpenLore && (
-              <OwnedLorePanel
-                wid={wid}
-                ownerRef={`pcs:${detail.meta.id}`}
-                onOpenEntry={(id) => onOpenLore({ focusEntry: id })}
-                onNewEntry={() => onOpenLore({ newOwner: `pcs:${detail.meta.id}` })}
-              />
-            )}
           </div>
         )}
       </div>

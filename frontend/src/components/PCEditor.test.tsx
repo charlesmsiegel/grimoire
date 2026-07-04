@@ -10,8 +10,8 @@ vi.mock("../api/client", () => ({
 import { api } from "../api/client";
 
 const DETAIL = {
-  meta: { id: "elara", name: "Elara", tags: [], default_version: "default" },
-  versions: [{ id: "default", name: "default", persona: { name: "Elara", pronouns: "she/her", summary: "scholar", description: "a wanderer" } }],
+  meta: { id: "elara", name: "Elara", tags: ["student"], default_version: "default" },
+  versions: [{ id: "default", name: "default", persona: { name: "Elara", pronouns: "she/her", summary: "scholar", birthdate: "", description: "a wanderer" } }],
 };
 
 beforeEach(() => {
@@ -25,17 +25,40 @@ beforeEach(() => {
   (api.createPCVersion as any).mockResolvedValue({ version: "young" });
 });
 
-test("creating a PC prompts for a name and posts it", async () => {
+test("clicking a PC shows a read-only view; Edit reveals the form", async () => {
+  const { container } = render(<PCEditor wid="w" />);
+  fireEvent.click(await screen.findByText("Elara"));
+  await screen.findByText("a wanderer");                         // rendered description
+  expect(container.querySelector("textarea")).toBeNull();        // read-only
+  expect(screen.getByText("she/her")).toBeInTheDocument();       // sidebar metadata
+  expect(screen.getByText("scholar")).toBeInTheDocument();
+  expect(screen.getByText("Student")).toBeInTheDocument();       // tag chip
+
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  expect(container.querySelector("textarea")).not.toBeNull();    // form revealed
+});
+
+test("saving the persona returns to the read-only view", async () => {
+  const { container } = render(<PCEditor wid="w" />);
+  fireEvent.click(await screen.findByText("Elara"));
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  fireEvent.click(screen.getByRole("button", { name: /save persona/i }));
+  await waitFor(() => expect(container.querySelector("textarea")).toBeNull());
+});
+
+test("creating a PC prompts for a name and opens the form directly", async () => {
   vi.spyOn(window, "prompt").mockReturnValue("Rook");
-  render(<PCEditor wid="w" />);
+  const { container } = render(<PCEditor wid="w" />);
   await screen.findByText("Elara");
   fireEvent.click(screen.getByRole("button", { name: /new pc/i }));
   await waitFor(() => expect(api.createPC).toHaveBeenCalledWith("w", { name: "Rook" }));
+  await waitFor(() => expect(container.querySelector("textarea")).not.toBeNull()); // straight to the form
 });
 
 test("editing persona saves the selected version", async () => {
   render(<PCEditor wid="w" />);
   fireEvent.click(await screen.findByText("Elara"));
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   await screen.findByLabelText("Description");
   fireEvent.change(screen.getByLabelText("Description"), { target: { value: "a sage" } });
   fireEvent.click(screen.getByRole("button", { name: /save persona/i }));
@@ -48,6 +71,7 @@ test("editing persona saves the selected version", async () => {
 test("editing the birthdate saves it on the persona", async () => {
   render(<PCEditor wid="w" />);
   fireEvent.click(await screen.findByText("Elara"));
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   fireEvent.change(await screen.findByLabelText("Birthdate"), { target: { value: "1990-06-29" } });
   fireEvent.click(screen.getByRole("button", { name: /save persona/i }));
   await waitFor(() =>
@@ -56,17 +80,19 @@ test("editing the birthdate saves it on the persona", async () => {
   );
 });
 
-test("toggling a tag chip updates the PC tags", async () => {
+test("toggling a tag chip in the form updates the PC tags", async () => {
   render(<PCEditor wid="w" />);
   fireEvent.click(await screen.findByText("Elara"));
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   fireEvent.click(await screen.findByRole("button", { name: "Student" }));
-  await waitFor(() => expect(api.updatePC).toHaveBeenCalledWith("w", "elara", { tags: ["student"] }));
+  await waitFor(() => expect(api.updatePC).toHaveBeenCalledWith("w", "elara", { tags: [] }));
 });
 
 test("adding a version prompts and posts the current persona", async () => {
   vi.spyOn(window, "prompt").mockReturnValue("Young");
   render(<PCEditor wid="w" />);
   fireEvent.click(await screen.findByText("Elara"));
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   await screen.findByLabelText("Description");
   fireEvent.click(screen.getByRole("button", { name: /\+ version/i }));
   await waitFor(() =>
