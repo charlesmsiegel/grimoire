@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type Appearance, type Card, type CharacterDetail, type CharacterSummary, type ChubImportResult, type ChubUnlinkedVersion, type Greeting } from "../api/client";
+import { api, type Appearance, type Card, type CharacterDetail, type CharacterSummary, type ChubImportResult, type ChubUnlinkedVersion, type EntityScope, type Greeting, type VersionRef } from "../api/client";
 import { AvatarFocusPicker } from "./AvatarFocusPicker";
 import { Field } from "./Field";
 import { GreetingMarkdown } from "./GreetingMarkdown";
@@ -38,10 +38,11 @@ function focusStyle(f?: number | null): React.CSSProperties | undefined {
   return f == null ? undefined : { objectPosition: `${f}% ${f}%` };
 }
 
-export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGreeting }:
-  { wid: string; resetSignal?: number; focus?: { cid: string; vid: string } | null;
+export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, onOpenGreeting }:
+  { scope: EntityScope; wid: string; resetSignal?: number; focus?: { cid: string; vid: string } | null;
     onOpenLore?: (nav: { focusEntry?: string; newOwner?: string }) => void;
     onOpenGreeting?: (gid: string) => void }) {
+  const worldScope = scope.kind === "world";
   const [chars, setChars] = useState<CharacterSummary[]>([]);
   const [detail, setDetail] = useState<CharacterDetail | null>(null);
   const [vid, setVid] = useState("");
@@ -71,8 +72,11 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
   const [urlPromptOpen, setUrlPromptOpen] = useState(false);
   const [cropOpen, setCropOpen] = useState(false);
   const [bulkUrl, setBulkUrl] = useState<{ current: number; total: number; name: string; step: string } | null>(null);
+  const [locked, setLocked] = useState<string | null>(null);       // campaign: locked version id
+  const [worldVersions, setWorldVersions] = useState<VersionRef[]>([]);
+  const [importVid, setImportVid] = useState("");
 
-  const reload = useCallback(() => api.listCharacters({ kind: "world", id: wid }).then(setChars), [wid]);
+  const reload = useCallback(() => api.listCharacters(scope).then(setChars), [wid]);
   useEffect(() => {
     reload();
   }, [reload]);
@@ -94,8 +98,8 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
   const detailCid = detail?.meta.id;
   useEffect(() => {
     if (!detailCid) return;
-    api.listImageAppearances(wid, detailCid).then(setImageAppearances).catch(() => setImageAppearances([]));
-    api.listGreetings({ kind: "world", id: wid }).then(setWorldGreetings).catch(() => setWorldGreetings([]));
+    if (worldScope) api.listImageAppearances(wid, detailCid).then(setImageAppearances).catch(() => setImageAppearances([]));
+    api.listGreetings(scope).then(setWorldGreetings).catch(() => setWorldGreetings([]));
   }, [wid, detailCid]);
 
   const hasAvatar = (detail && card)
@@ -146,7 +150,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
         }
       });
       // show the rewritten text + any new images for the version we localized
-      const d = await api.readCharacter({ kind: "world", id: wid }, cid);
+      const d = await api.readCharacter(scope, cid);
       setDetail(d);
       loadVersion(d, version);  // clears localizeMsg, so set the summary after it
     } catch (err: any) {
@@ -218,12 +222,45 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
 
   async function select(cid: string) {
     setError(null);
-    const d = await api.readCharacter({ kind: "world", id: wid }, cid);
+    const d = await api.readCharacter(scope, cid);
     setDetail(d);
     setBirthdate(d.meta.birthdate ?? "");
     loadVersion(d, d.meta.default_version);
-    loadTagline(cid);
+    if (worldScope) loadTagline(cid);
+    else await loadLockState(cid);
     return d;
+  }
+
+  async function loadLockState(cid: string) {
+    const roster = await api.listAppearances(scope.id).catch(() => []);
+    setLocked(roster.find((r) => r.kind === "characters" && r.id === cid)?.version ?? null);
+    setImportVid("");
+    // the source world's versions feed the import picker; a deleted world char offers none
+    api.readCharacter({ kind: "world", id: wid }, cid)
+      .then((w) => setWorldVersions(w.versions.map((v) => ({ id: v.id, name: v.name }))))
+      .catch(() => setWorldVersions([]));
+  }
+
+  async function runPick() {
+    if (!detail) return;
+    if (!window.confirm(`Lock '${detail.meta.name}' to this version? Other versions are removed from the campaign.`)) return;
+    try {
+      await api.pickVersion(scope.id, "characters", detail.meta.id, vid);
+      await select(detail.meta.id);
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
+  }
+
+  async function runImport() {
+    if (!detail || !importVid) return;
+    if (!window.confirm("Replace the locked version with the world's copy?")) return;
+    try {
+      await api.importVersion(scope.id, "characters", detail.meta.id, importVid);
+      await select(detail.meta.id);
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
   }
 
   // Fetch the tagline independently of the (synchronous) card load so a slow GET
@@ -279,11 +316,12 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
   async function focusCharacter(cid: string, vid: string) {
     window.scrollTo(0, 0);
     setError(null);
-    const d = await api.readCharacter({ kind: "world", id: wid }, cid);
+    const d = await api.readCharacter(scope, cid);
     setDetail(d);
     setBirthdate(d.meta.birthdate ?? "");
     loadVersion(d, d.versions.some((v) => v.id === vid) ? vid : d.meta.default_version);
-    loadTagline(cid);
+    if (worldScope) loadTagline(cid);
+    else await loadLockState(cid);
     setMode("detail");
   }
 
@@ -322,7 +360,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
     if (!detail || !card) return;
     setError(null);
     try {
-      await api.updateVersion({ kind: "world", id: wid }, detail.meta.id, vid, buildCard());
+      await api.updateVersion(scope, detail.meta.id, vid, buildCard());
       await select(detail.meta.id);
       await reload();
     } catch (err: any) {
@@ -334,9 +372,9 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
     if (!detail) return;
     const name = window.prompt("New version name?")?.trim();
     if (!name) return;
-    const { version } = await api.createVersion({ kind: "world", id: wid }, detail.meta.id, { name, card: buildCard() });
+    const { version } = await api.createVersion(scope, detail.meta.id, { name, card: buildCard() });
     await select(detail.meta.id);
-    loadVersion(await api.readCharacter({ kind: "world", id: wid }, detail.meta.id), version);
+    loadVersion(await api.readCharacter(scope, detail.meta.id), version);
   }
 
   async function onImportVersion(e: React.ChangeEvent<HTMLInputElement>) {
@@ -345,7 +383,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
     setError(null);
     try {
       const { version } = await api.importCharacter(wid, file, formatOf(file), detail.meta.id);
-      const d = await api.readCharacter({ kind: "world", id: wid }, detail.meta.id);
+      const d = await api.readCharacter(scope, detail.meta.id);
       setDetail(d);
       loadVersion(d, version);
       await reload();
@@ -359,7 +397,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
 
   async function setDefault() {
     if (!detail) return;
-    await api.setDefaultVersion({ kind: "world", id: wid }, detail.meta.id, vid);
+    await api.setDefaultVersion(scope, detail.meta.id, vid);
     await select(detail.meta.id);
   }
 
@@ -407,7 +445,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
   // Reload the open version in place (select() would snap back to the default version).
   async function refreshVersion() {
     if (!detail) return;
-    const d = await api.readCharacter({ kind: "world", id: wid }, detail.meta.id);
+    const d = await api.readCharacter(scope, detail.meta.id);
     setDetail(d);
     loadVersion(d, vid);
     await reload();
@@ -522,7 +560,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
       lore += result.lore.created.length;
       let name = result.character;
       try {
-        name = (await api.readCharacter({ kind: "world", id: wid }, result.character)).meta.name;
+        name = (await api.readCharacter(scope, result.character)).meta.name;
       } catch { /* fall back to the id */ }
       setBulkUrl({ current: i + 1, total: urls.length, name, step: "localizing images" });
       try {
@@ -560,7 +598,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
     setImportMsg(null);
     try {
       const result = await api.importCharacterFromChub(wid, url, detail.meta.id, vid);
-      const d = await api.readCharacter({ kind: "world", id: wid }, detail.meta.id);
+      const d = await api.readCharacter(scope, detail.meta.id);
       setDetail(d);
       loadVersion(d, result.version);
       await reload();
@@ -579,7 +617,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
     setImportMsg(null);
     try {
       const result = await api.importCharacterFromChub(wid, chubSource, detail.meta.id, vid);
-      const d = await api.readCharacter({ kind: "world", id: wid }, detail.meta.id);
+      const d = await api.readCharacter(scope, detail.meta.id);
       setDetail(d);
       loadVersion(d, result.version);
       await reload();
@@ -600,7 +638,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
     setError(null);
     try {
       await api.setCharacterChubSource(wid, detail.meta.id, vid, url);
-      const d = await api.readCharacter({ kind: "world", id: wid }, detail.meta.id);
+      const d = await api.readCharacter(scope, detail.meta.id);
       setDetail(d);
       loadVersion(d, vid);
     } catch (err: any) {
@@ -613,7 +651,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
     setError(null);
     try {
       await api.clearCharacterChubSource(wid, detail.meta.id, vid);
-      const d = await api.readCharacter({ kind: "world", id: wid }, detail.meta.id);
+      const d = await api.readCharacter(scope, detail.meta.id);
       setDetail(d);
       loadVersion(d, vid);
     } catch (err: any) {
@@ -644,7 +682,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
         }
       });
       // refresh so newly downloaded images show without navigating away and back
-      const d = await api.readCharacter({ kind: "world", id: wid }, detail.meta.id);
+      const d = await api.readCharacter(scope, detail.meta.id);
       setDetail(d);
       loadVersion(d, vid);
       setAvatarBust((n) => n + 1); // bust the cache in case a re-download overwrote images in place
@@ -684,7 +722,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
   }
 
   const avatarSrc = (cid: string, version: string, bust = false) =>
-    api.imageUrl(wid, cid, version, "avatar") + (bust ? `?v=${avatarBust}` : "");
+    api.actorImageUrl(scope, cid, version, "avatar") + (bust ? `?v=${avatarBust}` : "");
 
   if (mode === "grid" || !detail || !card) {
     return (
@@ -698,11 +736,13 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
           <UrlImportPrompt onClose={() => setUrlPromptOpen(false)} onSubmit={runBulkUrlImport} />
         )}
         <div className="grid-toolbar">
-          <button className="primary" onClick={newCharacter}>+ New character</button>
-          <button className="subtle" onClick={() => fileRef.current?.click()}>Import card</button>
-          <input ref={fileRef} type="file" accept=".json,.png,.charx" multiple hidden aria-label="Import character card" onChange={onImport} />
-          <button className="subtle" onClick={() => setUrlPromptOpen(true)}>Download from URL</button>
-          <button className="subtle" onClick={checkChubLinks}>Check chub.ai links</button>
+          {worldScope && <>
+            <button className="primary" onClick={newCharacter}>+ New character</button>
+            <button className="subtle" onClick={() => fileRef.current?.click()}>Import card</button>
+            <input ref={fileRef} type="file" accept=".json,.png,.charx" multiple hidden aria-label="Import character card" onChange={onImport} />
+            <button className="subtle" onClick={() => setUrlPromptOpen(true)}>Download from URL</button>
+            <button className="subtle" onClick={checkChubLinks}>Check chub.ai links</button>
+          </>}
           {bulkLocalize && (
             <span className="field-hint">Localizing card {bulkLocalize.current}/{bulkLocalize.cards}…</span>
           )}
@@ -762,7 +802,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
                 </button>
                 <div className="char-card-actions">
                   <button className="subtle" onClick={() => openEdit(c.id)}>Edit</button>
-                  <button className="subtle" onClick={() => deleteCharacter(c.id, c.name)}>Delete</button>
+                  {worldScope && <button className="subtle" onClick={() => deleteCharacter(c.id, c.name)}>Delete</button>}
                 </div>
               </div>
             ))}
@@ -826,11 +866,35 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
                   </div>
                 )}
                 <button className="primary" onClick={() => setMode("edit")}>Edit</button>
-                <button className="subtle" onClick={() => deleteCharacter(detail.meta.id, detail.meta.name)}>Delete</button>
+                {worldScope && <button className="subtle" onClick={() => deleteCharacter(detail.meta.id, detail.meta.name)}>Delete</button>}
               </div>
             </div>
 
-            <div className="chub-source-block">
+            {!worldScope && (
+              <div className="side-section">
+                <h4>Version</h4>
+                {locked ? (
+                  <>
+                    <span className="field-hint">Locked to <b>{detail.versions.find((v) => v.id === locked)?.name ?? locked}</b> for this campaign. </span>
+                    <select aria-label="Import version" value={importVid}
+                            onChange={(e) => setImportVid(e.target.value)}>
+                      <option value="">— world version —</option>
+                      {worldVersions.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
+                    </select>
+                    <button className="subtle" disabled={!importVid} onClick={runImport}>Import from world</button>
+                  </>
+                ) : detail.versions.length > 1 ? (
+                  <>
+                    <span className="field-hint">Picking locks the viewed version and removes the others from this campaign. </span>
+                    <button className="subtle" onClick={runPick}>Pick this version</button>
+                  </>
+                ) : (
+                  <span className="field-hint">Single version; it locks when first used in a scene.</span>
+                )}
+              </div>
+            )}
+
+            {worldScope && <div className="chub-source-block">
               {chubSource ? (
                 <>
                   <a className="field-hint"
@@ -858,7 +922,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
               ) : (
                 <button className="subtle" type="button" onClick={linkChub}>Link to URL</button>
               )}
-            </div>
+            </div>}
 
             <div className="detail-field">
               <div className="section-label">Images</div>
@@ -874,17 +938,19 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
                   <div className="shelf-tile shelf-empty">no avatar</div>
                 )}
                 {galleryImages.map((name) => {
-                  const src = `${api.imageUrl(wid, detail.meta.id, vid, name)}?v=${avatarBust}`;
+                  const src = `${api.actorImageUrl(scope, detail.meta.id, vid, name)}?v=${avatarBust}`;
                   return (
                     <div className="shelf-tile" key={name}>
                       <a href={src} target="_blank" rel="noreferrer"><img alt={name} src={src} /></a>
-                      <button className="shelf-promote" onClick={() => promote(name)}>Set as avatar</button>
+                      {worldScope && <button className="shelf-promote" onClick={() => promote(name)}>Set as avatar</button>}
                     </div>
                   );
                 })}
-                <button className="shelf-add" onClick={() => shelfFileRef.current?.click()}>+ add</button>
-                <input ref={shelfFileRef} type="file" accept="image/*" hidden
-                       aria-label="Add image" onChange={onShelfAdd} />
+                {worldScope && <>
+                  <button className="shelf-add" onClick={() => shelfFileRef.current?.click()}>+ add</button>
+                  <input ref={shelfFileRef} type="file" accept="image/*" hidden
+                         aria-label="Add image" onChange={onShelfAdd} />
+                </>}
               </div>
             </div>
 
@@ -908,11 +974,11 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
               </div>
             )}
 
-            {localizeControls(false)}
+            {worldScope && localizeControls(false)}
 
             {onOpenLore && (
               <OwnedLorePanel
-                scope={{ kind: "world", id: wid }}
+                scope={scope}
                 ownerRef={`characters:${detail.meta.id}`}
                 onOpenEntry={(id) => onOpenLore({ focusEntry: id })}
                 onNewEntry={() => onOpenLore({ newOwner: `characters:${detail.meta.id}` })}
@@ -988,13 +1054,17 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
                 </option>
               ))}
             </select>
-            <button className="subtle" onClick={addVersion}>+ Version</button>
-            <button className="subtle" onClick={() => versionFileRef.current?.click()}>Import version</button>
-            <input ref={versionFileRef} type="file" accept=".json,.png,.charx" hidden
-                   aria-label="Import version" onChange={onImportVersion} />
+            {(worldScope || !locked) && <button className="subtle" onClick={addVersion}>+ Version</button>}
+            {worldScope && <>
+              <button className="subtle" onClick={() => versionFileRef.current?.click()}>Import version</button>
+              <input ref={versionFileRef} type="file" accept=".json,.png,.charx" hidden
+                     aria-label="Import version" onChange={onImportVersion} />
+            </>}
             <button className="subtle" onClick={setDefault}>Set default</button>
-            <button className="subtle" onClick={() => deleteCharacter(detail.meta.id, detail.meta.name)}>Delete</button>
-            <button className="subtle" onClick={downloadVersionFromChub}>Download version from URL</button>
+            {worldScope && <>
+              <button className="subtle" onClick={() => deleteCharacter(detail.meta.id, detail.meta.name)}>Delete</button>
+              <button className="subtle" onClick={downloadVersionFromChub}>Download version from URL</button>
+            </>}
             {importMsg && <span className="field-hint">{importMsg}</span>}
           </div>
 
@@ -1004,17 +1074,17 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
             ) : (
               <div className="avatar avatar-empty" aria-label="no avatar">no avatar</div>
             )}
-            <div className="avatar-actions">
+            {worldScope && <div className="avatar-actions">
               <button className="subtle" type="button" onClick={() => avatarRef.current?.click()}>
                 {hasAvatar ? "Replace" : "Upload"}
               </button>
               {hasAvatar && <button className="subtle" type="button" onClick={removeAvatar}>Remove</button>}
               <input ref={avatarRef} type="file" accept="image/*" hidden
                      aria-label="Upload avatar" onChange={onAvatar} />
-            </div>
+            </div>}
           </div>
 
-          {localizeControls(dirty, "Save your changes before localizing images")}
+          {worldScope && localizeControls(dirty, "Save your changes before localizing images")}
 
           <Field label="Name">
             <input type="text" value={card.data.name ?? ""} onChange={(e) => setField("name", e.target.value)} />
@@ -1022,20 +1092,22 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
           <Field label="Creator">
             <input type="text" value={card.data.creator ?? ""} onChange={(e) => setField("creator", e.target.value)} />
           </Field>
-          <Field label="Birthdate">
-            <input type="date" aria-label="Birthdate" value={birthdate}
-                   onChange={(e) => saveBirthdate(e.target.value)} />
-          </Field>
-          <Field label="Tagline" hint="one-line identity for the off-scene cast">
-            <textarea aria-label="Tagline" value={tagline} rows={2}
-                      onChange={(e) => setTagline(e.target.value)} />
-          </Field>
-          <div className="form-actions">
-            <button className="subtle" type="button" disabled={taglineBusy} onClick={regenerateTagline}>
-              {taglineBusy ? "Generating…" : "Generate"}
-            </button>
-            <button className="subtle" type="button" onClick={saveTagline}>Save tagline</button>
-          </div>
+          {worldScope && <>
+            <Field label="Birthdate">
+              <input type="date" aria-label="Birthdate" value={birthdate}
+                     onChange={(e) => saveBirthdate(e.target.value)} />
+            </Field>
+            <Field label="Tagline" hint="one-line identity for the off-scene cast">
+              <textarea aria-label="Tagline" value={tagline} rows={2}
+                        onChange={(e) => setTagline(e.target.value)} />
+            </Field>
+            <div className="form-actions">
+              <button className="subtle" type="button" disabled={taglineBusy} onClick={regenerateTagline}>
+                {taglineBusy ? "Generating…" : "Generate"}
+              </button>
+              <button className="subtle" type="button" onClick={saveTagline}>Save tagline</button>
+            </div>
+          </>}
           <Field label="Tags" hint="comma-separated">
             <input
               type="text"
@@ -1074,7 +1146,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
             </div>
           </Field>
 
-          {bookCount > 0 && (
+          {worldScope && bookCount > 0 && (
             <div className="book-import">
               <button className="subtle" type="button" onClick={importBook}>
                 Import {bookCount} embedded lore {bookCount === 1 ? "entry" : "entries"} to world
