@@ -302,6 +302,24 @@ def test_appearances_and_copy_from_greeting(client):
     assert client.post(copy_url, json={"gid": gid, "name": "embed-abc123def456", "slot": "banner"}).status_code == 400
 
 
+def test_untagged_images_route_and_empty_marker(client):
+    wid = _world(client)
+    cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mira"}).json()["character"]
+    gid = client.post(f"/api/worlds/{wid}/greetings",
+                      json={"name": "Opener", "character": cid, "version": "default"}).json()["id"]
+    root = store.worlds.world_root(wid)
+    store.assets.put_image(root, gid, "default", "embed-abc123def456", b"art", "png",
+                           base="greetings")
+
+    r = client.get(f"/api/worlds/{wid}/subjects/untagged")
+    assert r.json() == [{"gid": gid, "greeting_name": "Opener", "name": "embed-abc123def456",
+                         "url": f"/api/worlds/{wid}/greetings/{gid}/images/embed-abc123def456"}]
+    # an explicit [] PUT marks it reviewed and removes it from the queue
+    client.put(f"/api/worlds/{wid}/greetings/{gid}/images/embed-abc123def456/subjects",
+               json={"subjects": []})
+    assert client.get(f"/api/worlds/{wid}/subjects/untagged").json() == []
+
+
 def test_character_import_garbage_400(client):
     wid = _world(client)
     files = {"file": ("c.json", io.BytesIO(b"nonsense"), "application/json")}

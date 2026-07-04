@@ -897,6 +897,15 @@ def put_world_greeting_image_subjects(wid: str, gid: str, name: str, body: Subje
     return {"ok": True}
 
 
+@router.get("/worlds/{wid}/subjects/untagged")
+def get_world_untagged_images(wid: str):
+    root = _world_root_or_404(wid)
+    names = {g["id"]: g["name"] for g in store.greetings.list_greetings(root)}
+    return [{**a, "greeting_name": names.get(a["gid"], a["gid"]),
+             "url": f"/api/worlds/{wid}/greetings/{a['gid']}/images/{a['name']}"}
+            for a in store.image_subjects.untagged(root)]
+
+
 @router.get("/worlds/{wid}/characters/{cid}/appearances")
 def get_world_character_appearances(wid: str, cid: str):
     root = _world_root_or_404(wid)
