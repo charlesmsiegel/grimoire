@@ -48,9 +48,11 @@ export function CastPanel({
     reloadWhen();
   }, [cid, sid, reloadCast, reloadSetting, reloadWhen]);
 
+  // seed from the chooser's premise; reset on scene switch so a prior
+  // scene's premise never lingers in another scene's opener box
   useEffect(() => {
-    if (initialPrompt) setPrompt(initialPrompt);
-  }, [initialPrompt]);
+    setPrompt(initialPrompt ?? "");
+  }, [sid, initialPrompt]);
 
   // characters/pcs available to add: world assets plus the campaign's own PC overlays
   useEffect(() => {

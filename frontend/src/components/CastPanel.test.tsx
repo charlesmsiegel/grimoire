@@ -47,6 +47,19 @@ test("initialPrompt seeds the opener prompt", async () => {
   ).toBe("A debt-collector arrives."));
 });
 
+test("switching scenes clears a previously seeded prompt", async () => {
+  const { rerender } = render(
+    <CastPanel cid="c" sid="s" keySet onSeeded={() => {}} initialPrompt="A premise" />,
+  );
+  await waitFor(() => expect(
+    (screen.getByLabelText("Opener prompt") as HTMLInputElement).value,
+  ).toBe("A premise"));
+  rerender(<CastPanel cid="c" sid="s2" keySet onSeeded={() => {}} />);
+  await waitFor(() => expect(
+    (screen.getByLabelText("Opener prompt") as HTMLInputElement).value,
+  ).toBe(""));
+});
+
 function renderPanel(props: Partial<{ keySet: boolean; onSeeded: () => void;
                                       onSceneRenamed: (id: string) => void; initialPrompt: string }> = {}) {
   render(
