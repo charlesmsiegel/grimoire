@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 from . import assets
 from . import fetch as _fetch
+from . import greetings as _greetings
 
 # Order matters: earlier patterns win overlapping spans. Each has one capture
 # group holding the URL/data-uri.
@@ -132,13 +133,13 @@ def _serving_url(wid: str, cid: str, vid: str, name: str) -> str:
     return f"/api/worlds/{wid}/characters/{cid}/versions/{vid}/images/{name}"
 
 
-def _store(root, cid, vid, got) -> str | None:
+def _store(root, cid, vid, got, base: str = "characters") -> str | None:
     """Store downloaded bytes under a content-hash name; None if the store
-    rejects them (keeps localize_card best-effort even for an odd fetcher)."""
+    rejects them (keeps localization best-effort even for an odd fetcher)."""
     raw, ext = got
     name = "embed-" + hashlib.sha256(raw).hexdigest()[:12]
     try:
-        assets.put_image(root, cid, vid, name, raw, ext)
+        assets.put_image(root, cid, vid, name, raw, ext, base=base)
     except Exception:  # noqa: BLE001 — e.g. unsupported ext from a caller's fetch
         return None
     return name
@@ -231,3 +232,62 @@ def localize_card(card, root, cid, vid, wid, *, fetch=None, cap=None):
 
     yield {"summary": {"total": total, "localized": localized,
                        "skipped": skipped, "failed": failed, "capped": capped}}
+
+
+def localize_greeting(root, gid, wid, *, fetch=None, cap=10) -> dict:
+    """Download every image referenced in a world greeting's body into the
+    per-greeting asset store (<root>/greetings/<gid>/assets/default/) and
+    rewrite the body to the local serving URLs. Best-effort per ref, like
+    localize_card; persists via greetings.update_greeting only when at least
+    one ref localized. Returns {"total","localized","skipped","failed","capped"}.
+    """
+    if fetch is None:
+        fetch = _fetch.download_url
+    text = _greetings.read_greeting(root, gid)["body"]
+    refs = find_refs(text)
+    localized = skipped = failed = downloads = 0
+    capped = False
+    seen: dict[str, str] = {}  # raw url/data-uri -> stored asset name
+    items: list[tuple[Ref, str]] = []
+    for ref in refs:
+        name = None
+        if ref.url in seen:
+            name = seen[ref.url]
+        elif ref.url.startswith("data:"):
+            got = _fetch.decode_data_uri(ref.url)
+            if got is None:
+                skipped += 1
+            else:
+                name = _store(root, gid, "default", got, base="greetings")
+                if name is None:
+                    failed += 1  # bytes decoded but the store rejected them
+        elif downloads >= cap:
+            capped = True
+            skipped += 1
+        else:
+            downloads += 1
+            try:
+                got = fetch(ref.url)
+            except Exception:  # noqa: BLE001 — best-effort; a miss never breaks the greeting
+                got = None
+                failed += 1
+            else:
+                if got is None:
+                    skipped += 1  # download returned None (non-image / blocked host)
+            if got is not None:
+                name = _store(root, gid, "default", got, base="greetings")
+                if name is None:
+                    failed += 1  # downloaded but the store rejected the bytes
+        if name is not None:
+            seen[ref.url] = name
+            items.append((ref, name))
+            localized += 1
+    for ref, name in sorted(items, key=lambda it: it[0].span[0], reverse=True):
+        local = f"/api/worlds/{wid}/greetings/{gid}/images/{name}"
+        start, end = ref.span
+        repl = f"![]({local})" if ref.as_markdown else local
+        text = text[:start] + repl + text[end:]
+    if items:
+        _greetings.update_greeting(root, gid, body=text)
+    return {"total": len(refs), "localized": localized, "skipped": skipped,
+            "failed": failed, "capped": capped}
