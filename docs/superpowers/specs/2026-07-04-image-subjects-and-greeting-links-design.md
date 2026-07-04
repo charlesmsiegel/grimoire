@@ -69,6 +69,8 @@ def copy_to_character(root, gid, name, cid, vid, slot) -> str
 
 ## Part 3 — routes (world scope only)
 
+- `GET /api/worlds/{wid}/greetings/{gid}/subjects` → the whole sidecar map
+  `{"<image-name>": ["cid", ...]}` — one call renders a whole greeting's chips.
 - `GET /api/worlds/{wid}/greetings/{gid}/images/{name}/subjects`
   → `{"subjects": ["cid", ...]}`
 - `PUT` same path, body `{"subjects": ["cid", ...]}` → writes sidecar only
