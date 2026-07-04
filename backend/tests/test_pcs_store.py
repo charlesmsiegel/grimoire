@@ -55,3 +55,12 @@ def test_delete_last_version_refused_and_missing(tmp_path):
         pcs.delete_version(tmp_path, pid, vid)
     with pytest.raises(pcs.PCNotFound):
         pcs.read_pc(tmp_path, "nobody")
+
+
+def test_dir_hash_tracks_meta_and_versions(tmp_path):
+    assert pcs.dir_hash(tmp_path, "nope") is None
+    pid, vid = pcs.create_pc(tmp_path, "Elara", [])
+    h1 = pcs.dir_hash(tmp_path, pid)
+    assert h1
+    pcs.set_tags(tmp_path, pid, ["vip"])
+    assert pcs.dir_hash(tmp_path, pid) != h1

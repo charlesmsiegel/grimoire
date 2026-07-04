@@ -181,6 +181,17 @@ def version_hash(root: Path, pid: str, vid: str) -> str | None:
     return hashlib.sha256(p.read_text(encoding="utf-8").encode("utf-8")).hexdigest()
 
 
+def dir_hash(root: Path, pid: str) -> str | None:
+    """Whole-actor content hash: pc.md plus every version persona, name-tagged."""
+    if not _safe(pid) or not _meta_path(root, pid).exists():
+        return None
+    h = hashlib.sha256()
+    for p in [_meta_path(root, pid)] + [_version_path(root, pid, v) for v in _version_ids(root, pid)]:
+        h.update(p.name.encode("utf-8"))
+        h.update(p.read_text(encoding="utf-8").encode("utf-8"))
+    return h.hexdigest()
+
+
 def pc_count(root: Path) -> int:
     d = _pcs_dir(root)
     return sum(1 for p in d.iterdir() if p.is_dir() and (p / "pc.md").exists()) if d.exists() else 0

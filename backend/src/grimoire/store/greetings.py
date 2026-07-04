@@ -8,6 +8,7 @@ keyed by greeting id.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -125,6 +126,13 @@ def read_plotmap(root: Path) -> dict:
     if not p.exists():
         return {}
     return json.loads(p.read_text(encoding="utf-8"))
+
+
+def plotmap_hash(root: Path) -> str | None:
+    p = _plotmap_path(root)
+    if not p.exists():
+        return None
+    return hashlib.sha256(p.read_text(encoding="utf-8").encode("utf-8")).hexdigest()
 
 
 def _write_plotmap(root: Path, data: dict) -> None:
