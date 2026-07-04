@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import appearances, campaigns, characters, entities, pcs, worlds
+from . import appearances, campaigns, characters, entities, greetings, pcs, worlds
 
 
 def _world_id(cid: str) -> str:
@@ -23,6 +23,9 @@ def _ref_str(kind: str, eid: str) -> str:
 
 
 def _entity_blob(root: Path, kind: str, eid: str) -> dict:
+    if kind == "greetings":
+        g = greetings.read_greeting(root, eid)
+        return {"name": g["meta"].get("name", eid), "body": g["body"]}
     e = entities.read_entity(root, kind, eid)
     return {"name": e["meta"].get("name", eid), "body": e["body"]}
 
@@ -35,14 +38,14 @@ def incoming(cid: str) -> list[dict]:
 
     refs: set[str] = set(manifest)
     if wroot.exists():
-        refs |= {_ref_str(k, e) for k, e in entities.all_refs(wroot)}
-    refs |= {_ref_str(k, e) for k, e in entities.all_refs(croot)}
+        refs |= {_ref_str(k, e) for k, e in entities.synced_refs(wroot)}
+    refs |= {_ref_str(k, e) for k, e in entities.synced_refs(croot)}
 
     out: list[dict] = []
     for ref in sorted(refs):
         kind, _, eid = ref.partition("/")
-        if kind not in entities.ENTITY_KINDS:
-            continue
+        if kind not in entities.SYNCED_KINDS:
+            continue  # actor refs + plotmap are handled by their own passes
         world_h = entities.entity_hash(wroot, kind, eid) if wroot.exists() else None
         base_h = manifest.get(ref)
         if world_h is None or world_h == base_h:
@@ -59,7 +62,28 @@ def incoming(cid: str) -> list[dict]:
         if mine_h is not None:
             item["mine"] = _entity_blob(croot, kind, eid)
         out.append(item)
-    return out + _actor_incoming(cid)
+    return out + _plotmap_incoming(cid) + _actor_incoming(cid)
+
+
+def _plotmap_blob(root: Path) -> dict:
+    p = root / "plotmap.json"
+    return {"name": "Plot map", "body": p.read_text(encoding="utf-8") if p.exists() else ""}
+
+
+def _plotmap_incoming(cid: str) -> list[dict]:
+    wroot = worlds.world_root(_world_id(cid))
+    croot = campaigns.campaign_root(cid)
+    world_h = greetings.plotmap_hash(wroot) if wroot.exists() else None
+    base = campaigns.read_manifest(cid).get("plotmap")
+    if world_h is None or world_h == base:
+        return []
+    mine_h = greetings.plotmap_hash(croot)
+    status = "new" if mine_h is None else ("update" if mine_h == base else "conflict")
+    item: dict = {"ref": {"kind": "plotmap", "id": "plotmap"}, "status": status,
+                  "world": _plotmap_blob(wroot)}
+    if mine_h is not None:
+        item["mine"] = _plotmap_blob(croot)
+    return [item]
 
 
 def _actor_blob(root: Path, kind: str, actor_id: str, vid: str) -> dict:
@@ -119,6 +143,17 @@ def _advance(cid: str, refs: list[dict], *, copy: bool) -> None:
     touched = False           # any ref advanced → bump campaign.updated
     for ref in refs:
         kind, eid = ref["kind"], ref["id"]
+        if kind == "plotmap":
+            world_h = greetings.plotmap_hash(wroot) if wroot.exists() else None
+            if world_h is None or manifest.get("plotmap") == world_h:
+                continue
+            if copy:
+                (croot / "plotmap.json").write_text(
+                    (wroot / "plotmap.json").read_text(encoding="utf-8"), encoding="utf-8")
+            manifest["plotmap"] = world_h
+            manifest_changed = True
+            touched = True
+            continue
         if kind in appearances.ACTOR_KINDS:
             if _advance_actor(cid, kind, eid, copy=copy):
                 touched = True
