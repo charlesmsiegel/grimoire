@@ -2,9 +2,14 @@ from grimoire.store import (appearances, campaigns, characters, chronicle, entit
                             plot, scenes, suggest, taglines, worlds)
 
 
-def _campaign(monkeypatch, tmp_path):
+def _world(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    return campaigns.create_campaign("Run", worlds.create_world("W"))
+    return worlds.create_world("W")
+
+
+def _campaign(monkeypatch, tmp_path):
+    # campaign over an empty world (seed the world BEFORE create_campaign elsewhere)
+    return campaigns.create_campaign("Run", _world(monkeypatch, tmp_path))
 
 
 def _char(root, name, birthdate=""):
@@ -15,14 +20,15 @@ def _char(root, name, birthdate=""):
 
 
 def test_build_snapshot_gathers_signals(monkeypatch, tmp_path):
-    cid = _campaign(monkeypatch, tmp_path)
-    wroot = worlds.world_root(campaigns.read_campaign(cid)["meta"]["world"])
-    absent = _char(wroot, "Doran")            # world char, appears then absent from recent chronicle
+    wid = _world(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    absent = _char(wroot, "Doran")            # appears then absent from recent chronicle
     present = _char(wroot, "Seraphine")
+    taglines.write(wroot, absent, "a quiet sellsword")   # seeded before the fork
+    cid = campaigns.create_campaign("Run", wid)
     s1 = scenes.create_scene(cid, "One")
     appearances.appear(cid, s1, "characters", absent, "main", "npc")
     appearances.appear(cid, s1, "characters", present, "main", "npc")
-    taglines.write(wroot, absent, "a quiet sellsword")   # absent cast carries its world tagline
     chronicle.absorb(cid, {"id": s1, "one_line": "x", "summary": "y", "keywords": [],
                            "cast": [f"characters/{present}"], "location": "", "date": ""})
     plot.set_movement(cid, "the-map", "The map", "advanced", "It is a forgery.", s1)
@@ -30,7 +36,7 @@ def test_build_snapshot_gathers_signals(monkeypatch, tmp_path):
     snap = suggest.build_snapshot(cid)
     assert [t["title"] for t in snap["open_threads"]] == ["The map"]
     absent_by_name = {a["name"]: a["tagline"] for a in snap["absent_cast"]}
-    assert absent_by_name.get("Doran") == "a quiet sellsword"   # absent cast carries its world tagline
+    assert absent_by_name.get("Doran") == "a quiet sellsword"   # tagline travels with the copy
     assert "Seraphine" not in absent_by_name                    # present is not absent
     tokens = [c["token"] for c in snap["available_cast"]]
     assert f"characters:{absent}" in tokens and f"characters:{present}" in tokens
@@ -58,10 +64,11 @@ def test_build_prompt_includes_signals():
 
 
 def test_parse_output_validates_ids(monkeypatch, tmp_path):
-    cid = _campaign(monkeypatch, tmp_path)
-    croot = campaigns.campaign_root(cid)
-    wroot = worlds.world_root(campaigns.read_campaign(cid)["meta"]["world"])
+    wid = _world(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
     ann = characters.create_character(wroot, "Ann", "main", characters.blank_card("Ann"))[0]
+    cid = campaigns.create_campaign("Run", wid)
+    croot = campaigns.campaign_root(cid)
     entities.create_entity(croot, "locations", "The Keep")
     text = ('{"suggestions": ['
             f'{{"title": "T", "premise": "P", "cast": ["characters:{ann}", "characters:ghost"], "location": "the-keep"}},'
@@ -93,10 +100,11 @@ def test_build_snapshot_tolerates_garbled_chronicle(monkeypatch, tmp_path):
 
 
 def test_build_snapshot_dedupes_available_cast(monkeypatch, tmp_path):
-    cid = _campaign(monkeypatch, tmp_path)
-    wroot = worlds.world_root(campaigns.read_campaign(cid)["meta"]["world"])
+    wid = _world(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
     hero = _char(wroot, "Hero")
+    cid = campaigns.create_campaign("Run", wid)
     s1 = scenes.create_scene(cid, "One")
-    appearances.appear(cid, s1, "characters", hero, "main", "player")  # world char AND roster player
+    appearances.appear(cid, s1, "characters", hero, "main", "player")  # campaign char AND roster player
     tokens = [c["token"] for c in suggest.build_snapshot(cid)["available_cast"]]
     assert tokens.count(f"characters:{hero}") == 1  # listed once, not duplicated

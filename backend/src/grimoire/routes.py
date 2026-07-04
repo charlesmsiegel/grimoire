@@ -1282,9 +1282,9 @@ def _resolve_cast(cid: str, tokens: list[str]) -> list[dict]:
                 name = store.pcs.read_pc(croot, aid)["meta"].get("name", aid)
             else:
                 try:
-                    name = store.characters.read_character(wroot, aid)["meta"].get("name", aid)
-                except store.characters.CharacterNotFound:
                     name = store.characters.read_character(croot, aid)["meta"].get("name", aid)
+                except store.characters.CharacterNotFound:
+                    name = store.characters.read_character(wroot, aid)["meta"].get("name", aid)
         except (store.characters.CharacterNotFound, store.pcs.PCNotFound):
             name = aid
         out.append({"kind": kind, "id": aid, "name": name})
@@ -1539,12 +1539,15 @@ def post_scene_cast(cid: str, sid: str, body: Appear):
     try:
         if version is None:
             if body.kind == "characters":
-                version = store.characters.read_character(wroot, body.id)["meta"]["default_version"]
+                try:
+                    version = store.characters.read_character(croot, body.id)["meta"]["default_version"]
+                except store.characters.CharacterNotFound:
+                    version = store.characters.read_character(wroot, body.id)["meta"]["default_version"]
             else:
                 try:
-                    version = store.pcs.read_pc(wroot, body.id)["meta"]["default_version"]
-                except store.pcs.PCNotFound:
                     version = store.pcs.read_pc(croot, body.id)["meta"]["default_version"]
+                except store.pcs.PCNotFound:
+                    version = store.pcs.read_pc(wroot, body.id)["meta"]["default_version"]
     except (store.characters.CharacterNotFound, store.pcs.PCNotFound):
         raise HTTPException(status_code=404, detail="actor not found")
     try:

@@ -1539,10 +1539,11 @@ def test_absorb_returns_edits_without_persisting(client):
 
 
 def test_scene_suggestions_returns_resolved(client):
-    wid, cid = _campaign(client)
+    wid = _world(client)
     client.put("/api/config", json={"openrouter_key": "sk-or-x"})
     ann = client.post(f"/api/worlds/{wid}/characters",
                       json={"name": "Ann", "version_name": "main"}).json()["character"]
+    cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
     client.app.dependency_overrides[routes.get_openrouter] = lambda: FakeOpenRouterComplete(
         '{"suggestions": [{"title": "T", "premise": "P",'
         f' "cast": ["characters:{ann}"], "location": ""}}]}}')

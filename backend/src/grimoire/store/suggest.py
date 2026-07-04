@@ -9,13 +9,9 @@ from __future__ import annotations
 import json
 
 from . import (appearances, calendars, campaigns, characters, chronicle,
-               entities, pcs, plot, taglines, worlds)
+               entities, pcs, plot, taglines)
 
 RECENT_WINDOW = 5
-
-
-def _world_root(cid: str):
-    return worlds.world_root(campaigns.read_campaign(cid)["meta"].get("world", ""))
 
 
 def _char_name(croot, aid: str) -> str:
@@ -77,7 +73,6 @@ def _birthdays(croot, now: str, roster: list[dict]) -> list[dict]:
 
 def build_snapshot(cid: str) -> dict:
     croot = campaigns.campaign_root(cid)
-    wroot = _world_root(cid)
     roster = appearances.roster(cid)
 
     try:
@@ -105,10 +100,10 @@ def build_snapshot(cid: str) -> dict:
         if a["kind"] != "characters" or a["role"] != "npc" or a["id"] in recent_ids:
             continue
         absent_cast.append({"name": _char_name(croot, a["id"]),
-                            "tagline": taglines.read(wroot, a["id"])})
+                            "tagline": taglines.read(croot, a["id"])})
 
     available_cast, seen = [], set()
-    for c in characters.list_characters(wroot):
+    for c in characters.list_characters(croot):
         tok = f"characters:{c['id']}"
         seen.add(tok)
         available_cast.append({"token": tok, "name": c.get("name", c["id"])})
@@ -181,8 +176,7 @@ def build_prompt(snapshot: dict) -> list[dict]:
 
 def _valid_ids(cid: str):
     croot = campaigns.campaign_root(cid)
-    wroot = _world_root(cid)
-    char_ids = {c["id"] for c in characters.list_characters(wroot)}
+    char_ids = {c["id"] for c in characters.list_characters(croot)}
     player_tokens = {f"{a['kind']}:{a['id']}" for a in appearances.roster(cid) if a["role"] == "player"}
     loc_ids = {e["id"] for e in entities.list_entities(croot, "locations")}
     return char_ids, player_tokens, loc_ids

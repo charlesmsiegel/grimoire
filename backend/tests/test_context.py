@@ -300,20 +300,25 @@ def test_depth_zero_and_unparseable_fallback(monkeypatch, tmp_path):
 
 def test_cast_directory_tiers(monkeypatch, tmp_path):
     from grimoire.store import taglines, dossiers
-    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("W")
     wroot = worlds.world_root(wid)
-    croot = campaigns.campaign_root(cid)
 
     # present in this scene (full card)
     characters.create_character(wroot, "Aese", "main", _npc_card("Aese", description="present-desc"))
     # appeared elsewhere in the campaign -> tier 2 paragraph from the campaign dossier
     characters.create_character(wroot, "Myval", "main", _npc_card("Myval", description="m"))
-    # world-only with a tagline and two versions -> tier 3 sentence + version list
+    # off-roster with a tagline and two versions -> tier 3 sentence + version list
     characters.create_character(wroot, "Akane", "main", _npc_card("Akane", description="a"))
     characters.create_version(wroot, "akane", "futa", _npc_card("Akane", description="a"))
     taglines.write(wroot, "akane", "An eager doggirl.")
-    # world-only WITHOUT a tagline (must be skipped)
+    # off-roster WITHOUT a tagline (must be skipped)
     characters.create_character(wroot, "Ghost", "main", _npc_card("Ghost", description="g"))
+
+    # seed BEFORE the fork: the campaign copy carries cards + taglines
+    cid = campaigns.create_campaign("Run", wid)
+    sid = scenes.create_scene(cid, "S")
+    croot = campaigns.campaign_root(cid)
 
     # Myval appears in a different scene -> roster, not in this scene's cast
     other = scenes.create_scene(cid, "Other")
