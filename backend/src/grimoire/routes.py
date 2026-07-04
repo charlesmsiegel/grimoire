@@ -48,6 +48,10 @@ class NewCampaign(BaseModel):
     region: str | None = None
 
 
+class MarkBody(BaseModel):
+    status: str  # "completed" | "skipped" | "none" — validated in the store
+
+
 class EntityCreate(BaseModel):
     name: str
     body: str = ""
@@ -1667,6 +1671,84 @@ def get_available_greetings(cid: str, after: str | None = None):
         raise HTTPException(status_code=404, detail="scene not found")
 
 
+@router.get("/campaigns/{cid}/greetings")
+def get_campaign_greetings(cid: str):
+    root = _campaign_root_or_404(cid)
+    marks = store.playing.read_marks(cid)
+    mark_of = {g: "played" for g in marks["played"]}
+    mark_of.update({g: "completed" for g in marks["completed"]})
+    mark_of.update({g: "skipped" for g in marks["skipped"]})
+    return [{**g, "mark": mark_of.get(g["id"])} for g in store.greetings.list_greetings(root)]
+
+
+@router.post("/campaigns/{cid}/greetings")
+def post_campaign_greeting(cid: str, body: GreetingCreate):
+    root = _campaign_root_or_404(cid)
+    gid = store.greetings.create_greeting(root, body.name, body.character, body.version,
+                                          body.body, body.requires_tags,
+                                          body.predecessor_join, present=body.present)
+    return {"id": gid}
+
+
+@router.get("/campaigns/{cid}/greetings/{gid}")
+def get_campaign_greeting(cid: str, gid: str):
+    root = _campaign_root_or_404(cid)
+    try:
+        g = store.greetings.read_greeting(root, gid)
+    except store.greetings.GreetingNotFound:
+        raise HTTPException(status_code=404, detail="greeting not found")
+    plotmap = store.greetings.read_plotmap(root)
+    g["edges"] = store.greetings.edges_of(plotmap, gid)
+    g["predecessors"] = store.greetings.predecessors_of(plotmap, gid)
+    return g
+
+
+@router.put("/campaigns/{cid}/greetings/{gid}")
+def put_campaign_greeting(cid: str, gid: str, body: GreetingUpdate):
+    root = _campaign_root_or_404(cid)
+    try:
+        store.greetings.update_greeting(root, gid, name=body.name, body=body.body,
+                                        requires_tags=body.requires_tags,
+                                        predecessor_join=body.predecessor_join,
+                                        present=body.present)
+    except store.greetings.GreetingNotFound:
+        raise HTTPException(status_code=404, detail="greeting not found")
+    return {"ok": True}
+
+
+@router.put("/campaigns/{cid}/greetings/{gid}/edges")
+def put_campaign_greeting_edges(cid: str, gid: str, body: Edges):
+    root = _campaign_root_or_404(cid)
+    try:
+        store.greetings.read_greeting(root, gid)
+    except store.greetings.GreetingNotFound:
+        raise HTTPException(status_code=404, detail="greeting not found")
+    store.greetings.set_edges(root, gid, body.leads_to, body.excludes)
+    return {"ok": True}
+
+
+@router.delete("/campaigns/{cid}/greetings/{gid}")
+def delete_campaign_greeting(cid: str, gid: str):
+    root = _campaign_root_or_404(cid)
+    try:
+        store.greetings.delete_greeting(root, gid)
+    except store.greetings.GreetingNotFound:
+        raise HTTPException(status_code=404, detail="greeting not found")
+    return {"ok": True}
+
+
+@router.post("/campaigns/{cid}/greetings/{gid}/mark")
+def post_campaign_greeting_mark(cid: str, gid: str, body: MarkBody):
+    _campaign_root_or_404(cid)
+    try:
+        store.playing.mark_greeting(cid, gid, body.status)
+    except store.greetings.GreetingNotFound:
+        raise HTTPException(status_code=404, detail="greeting not found")
+    except store.playing.PlayError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {"ok": True}
+
+
 @router.post("/campaigns/{cid}/scenes/{sid}/start-from-greeting")
 def post_start_from_greeting(cid: str, sid: str, body: StartFromGreeting):
     _require_scene(cid, sid)
@@ -1734,7 +1816,7 @@ def list_campaign_entity_images(cid: str, kind: str, eid: str):
 
 @router.get("/campaigns/{cid}/{kind}/{eid}/images/{name}")
 def get_campaign_entity_image(cid: str, kind: str, eid: str, name: str):
-    _entity_kind_or_404(kind)
+    _image_kind_or_404(kind)
     return _serve_image(_campaign_root_or_404(cid), eid, "default", name, base=kind)
 
 
