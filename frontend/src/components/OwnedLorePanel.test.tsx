@@ -15,7 +15,7 @@ beforeEach(() => {
 
 test("lists only entries owned by the ref and opens one", async () => {
   const onOpenEntry = vi.fn();
-  render(<OwnedLorePanel wid="w" ownerRef="characters:tanaka" onOpenEntry={onOpenEntry} onNewEntry={vi.fn()} />);
+  render(<OwnedLorePanel scope={{ kind: "world", id: "w" }} ownerRef="characters:tanaka" onOpenEntry={onOpenEntry} onNewEntry={vi.fn()} />);
   expect(await screen.findByText("Exile")).toBeInTheDocument();
   expect(await screen.findByText("Duel")).toBeInTheDocument();
   expect(screen.queryByText("World fact")).toBeNull();
@@ -25,7 +25,7 @@ test("lists only entries owned by the ref and opens one", async () => {
 
 test("the + New lore button fires onNewEntry", async () => {
   const onNewEntry = vi.fn();
-  render(<OwnedLorePanel wid="w" ownerRef="characters:tanaka" onOpenEntry={vi.fn()} onNewEntry={onNewEntry} />);
+  render(<OwnedLorePanel scope={{ kind: "world", id: "w" }} ownerRef="characters:tanaka" onOpenEntry={vi.fn()} onNewEntry={onNewEntry} />);
   fireEvent.click(await screen.findByRole("button", { name: /\+ new lore/i }));
   expect(onNewEntry).toHaveBeenCalled();
 });

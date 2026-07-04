@@ -4,6 +4,8 @@ import { loreOwnerOptions } from "./loreOwners";
 vi.mock("./client", () => ({
   api: {
     listCharacters: vi.fn(), listPCs: vi.fn(), listEntities: vi.fn(),
+    actorImageUrl: (sc: { kind: string; id: string }, c: string, v: string, n: string) =>
+      `/api/worlds/${sc.id}/characters/${c}/versions/${v}/images/${n}`,
     imageUrl: (w: string, c: string, v: string, n: string) =>
       `/api/worlds/${w}/characters/${c}/versions/${v}/images/${n}`,
   },
@@ -18,7 +20,7 @@ beforeEach(() => {
 });
 
 test("collects characters, pcs, locations as owner refs", async () => {
-  const opts = await loreOwnerOptions("w");
+  const opts = await loreOwnerOptions({ kind: "world", id: "w" });
   expect(opts).toEqual([
     { ref: "characters:tanaka", label: "Tanaka", kind: "characters" },
     { ref: "pcs:hero", label: "Hero", kind: "pcs" },
@@ -34,7 +36,7 @@ test("characters with avatars get an avatar url; others get none", async () => {
   ]);
   (api.listPCs as any).mockResolvedValue([]);
   (api.listEntities as any).mockResolvedValue([]);
-  const opts = await loreOwnerOptions("w");
+  const opts = await loreOwnerOptions({ kind: "world", id: "w" });
   expect(opts.find((o) => o.ref === "characters:maren")?.avatar)
     .toBe("/api/worlds/w/characters/maren/versions/v1/images/avatar");
   expect(opts.find((o) => o.ref === "characters:hedde")?.avatar).toBeUndefined();

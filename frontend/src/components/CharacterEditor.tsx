@@ -912,7 +912,7 @@ export function CharacterEditor({ wid, resetSignal, focus, onOpenLore, onOpenGre
 
             {onOpenLore && (
               <OwnedLorePanel
-                wid={wid}
+                scope={{ kind: "world", id: wid }}
                 ownerRef={`characters:${detail.meta.id}`}
                 onOpenEntry={(id) => onOpenLore({ focusEntry: id })}
                 onNewEntry={() => onOpenLore({ newOwner: `characters:${detail.meta.id}` })}
