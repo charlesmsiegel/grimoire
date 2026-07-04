@@ -676,16 +676,29 @@ def post_character_localize(wid: str, cid: str, vid: str):
         raise HTTPException(status_code=404, detail="version not found")
 
     def event_stream():
-        changed = False
+        # localize_card rewrites `card` in place field-by-field; save whenever any
+        # rewrite landed, including on a mid-stream error or client disconnect
+        # (GeneratorExit skips the except but runs the finally).
+        state = {"changed": False, "saved": False}
+
+        def save():
+            if state["changed"] and not state["saved"]:
+                store.characters.update_version(root, cid, vid, card)
+                state["saved"] = True
+
         try:
             for ev in store.localize.localize_card(card, root, cid, vid, wid):
-                if "summary" in ev and ev["summary"].get("localized"):
-                    changed = True
+                if ev.get("applied") or ("summary" in ev and ev["summary"].get("localized")):
+                    state["changed"] = True
                 yield f"data: {json.dumps(ev)}\n\n"
-            if changed:
-                store.characters.update_version(root, cid, vid, card)
+            save()  # normal completion: a failed save surfaces as an error frame
         except Exception as exc:  # noqa: BLE001 — surface a stream error like the chat routes
             yield f"data: {json.dumps({'error': {'detail': str(exc), 'kind': 'localize'}})}\n\n"
+        finally:
+            try:
+                save()
+            except Exception:  # noqa: BLE001 — a disconnected client can't be told
+                pass
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 

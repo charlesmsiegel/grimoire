@@ -1121,6 +1121,29 @@ def test_localize_endpoint_emits_error_frame_on_generator_failure(client, monkey
     assert events[-1]["error"]["kind"] == "localize"
 
 
+def test_localize_endpoint_persists_partial_rewrites_on_mid_stream_failure(client, monkeypatch):
+    # If the stream dies after some fields were already rewritten, those
+    # rewrites must still land on disk — not be silently discarded.
+    wid = client.post("/api/worlds", json={"name": "WP"}).json()["id"]
+    cid, vid = _import_card(client, wid, "![a](https://h/a.png)")
+
+    def partial(card, *a, **k):
+        yield {"total": 2}
+        card["data"]["description"] = "![a](/api/worlds/w/local)"
+        yield {"done": 1, "total": 2, "applied": 1}
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(store.localize, "localize_card", partial)
+    resp = client.post(f"/api/worlds/{wid}/characters/{cid}/versions/{vid}/localize")
+    events = [json.loads(l[len("data:"):].strip())
+              for l in resp.text.splitlines() if l.startswith("data:")]
+    assert events[-1]["error"]["kind"] == "localize"
+
+    exported = client.get(
+        f"/api/worlds/{wid}/characters/{cid}/versions/{vid}/export?format=json").json()
+    assert exported["data"]["description"] == "![a](/api/worlds/w/local)"
+
+
 def test_localize_endpoint_does_not_persist_when_nothing_localized(client, monkeypatch):
     wid = client.post("/api/worlds", json={"name": "WN"}).json()["id"]
     cid, vid = _import_card(client, wid, "see https://h/page now")  # a non-image link
