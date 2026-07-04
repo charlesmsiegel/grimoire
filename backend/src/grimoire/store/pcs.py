@@ -182,7 +182,8 @@ def version_hash(root: Path, pid: str, vid: str) -> str | None:
 
 
 def dir_hash(root: Path, pid: str) -> str | None:
-    """Whole-actor content hash: pc.md plus every version persona, name-tagged."""
+    """Whole-actor content hash: pc.md plus every version persona, name-tagged.
+    Only these files feed the hash, so nothing else in the dir can surface in sync."""
     if not _safe(pid) or not _meta_path(root, pid).exists():
         return None
     h = hashlib.sha256()

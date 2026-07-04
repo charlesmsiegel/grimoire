@@ -1,6 +1,10 @@
+import json
+import shutil
+
 import pytest
 
 from grimoire.store import campaigns, characters, entities, greetings, pcs, worlds
+from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 
 
 def home(monkeypatch, tmp_path):
@@ -101,3 +105,63 @@ def test_create_campaign_full_copy(monkeypatch, tmp_path):
     assert manifest[f"characters/{char_id}"] == characters.dir_hash(wroot, char_id)
     assert manifest[f"pcs/{pid}"] == pcs.dir_hash(wroot, pid)
     assert campaigns.read_campaign(cid)["meta"]["world_copy"] == "full"
+
+
+def _strip_to_legacy(cid):
+    """Rewind a freshly created campaign to the pre-full-copy on-disk layout."""
+    croot = campaigns.campaign_root(cid)
+    for sub in ("greetings", "characters", "pcs"):
+        if (croot / sub).exists():
+            shutil.rmtree(croot / sub)
+    (croot / "plotmap.json").unlink(missing_ok=True)
+    manifest = {r: h for r, h in campaigns.read_manifest(cid).items()
+                if r.split("/")[0] in ("locations", "lore")}
+    campaigns.write_manifest(cid, manifest)
+    mp = campaigns.campaign_meta_path(cid)
+    meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
+    del meta["world_copy"]
+    mp.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+
+
+def test_ensure_campaign_copy_backfills_legacy(monkeypatch, tmp_path):
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    char_id, _ = characters.create_character(wroot, "Mara")
+    g = greetings.create_greeting(wroot, "Gala", char_id, "default", body="Hi.")
+    greetings.set_edges(wroot, g, leads_to=[])
+    cid = campaigns.create_campaign("Run", wid)
+    _strip_to_legacy(cid)
+    campaigns.ensure_campaign_copy(cid)
+    croot = campaigns.campaign_root(cid)
+    assert (croot / "greetings" / f"{g}.md").exists()
+    assert (croot / "plotmap.json").exists()
+    assert (croot / "characters" / char_id / "default.json").exists()
+    assert campaigns.read_campaign(cid)["meta"]["world_copy"] == "full"
+    manifest = campaigns.read_manifest(cid)
+    assert manifest["plotmap"] == greetings.plotmap_hash(wroot)
+    campaigns.ensure_campaign_copy(cid)  # idempotent
+
+
+def test_ensure_campaign_copy_skips_locked_actors(monkeypatch, tmp_path):
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    char_id, _ = characters.create_character(wroot, "Mara")
+    characters.create_version(wroot, char_id, "grim", characters.blank_card("Mara"))
+    cid = campaigns.create_campaign("Run", wid)
+    _strip_to_legacy(cid)
+    # legacy lock: the old appear() copied exactly one version
+    croot = campaigns.campaign_root(cid)
+    (croot / "characters" / char_id).mkdir(parents=True)
+    src = wroot / "characters" / char_id
+    for fn in ("character.md", "default.json"):
+        (croot / "characters" / char_id / fn).write_text(
+            (src / fn).read_text(encoding="utf-8"), encoding="utf-8")
+    (croot / "appearances.json").write_text(
+        json.dumps({f"characters/{char_id}": {"version": "default", "base": "h",
+                                              "scenes": ["s1"], "role": "npc"}}),
+        encoding="utf-8")
+    campaigns.ensure_campaign_copy(cid)
+    assert not (croot / "characters" / char_id / "grim.json").exists()  # no version resurrection
+    assert f"characters/{char_id}" not in campaigns.read_manifest(cid)
