@@ -7,7 +7,8 @@ import { SubjectsPopover } from "./SubjectsPopover";
 const BLANK = { name: "", character: "", version: "", body: "", present: [] as string[], requires_tags: [] as string[], predecessor_join: "all" as "all" | "any" };
 const NO_EDGES: Edges = { leads_to: [], excludes: [] };
 
-export function GreetingEditor({ wid, onOpenCharacter }: { wid: string; onOpenCharacter?: (cid: string, vid: string) => void }) {
+export function GreetingEditor({ wid, onOpenCharacter, focus }:
+  { wid: string; onOpenCharacter?: (cid: string, vid: string) => void; focus?: string | null }) {
   const [greetings, setGreetings] = useState<Greeting[]>([]);
   const [chars, setChars] = useState<CharacterSummary[]>([]);
   const [tags, setTags] = useState<Record<string, string>>({});
@@ -26,6 +27,12 @@ export function GreetingEditor({ wid, onOpenCharacter }: { wid: string; onOpenCh
     api.listCharacters(wid).then(setChars);
     api.listTags(wid).then(setTags);
   }, [wid, reload]);
+
+  // arrived via a character page's world-greeting link: open that greeting
+  useEffect(() => {
+    if (focus) select(focus);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focus, wid]);
 
   function resetForm() {
     setGid(null);

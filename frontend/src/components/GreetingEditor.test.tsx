@@ -269,3 +269,10 @@ test("saving the picker PUTs subjects and refreshes", async () => {
   await waitFor(() => expect(api.setImageSubjects).toHaveBeenCalledWith(
     "w", "open", "embed-aaa111bbb222", ["seraphine"]));
 });
+
+test("focus prop opens that greeting in view mode", async () => {
+  mockOpenWithImage({});
+  render(<GreetingEditor wid="w" focus="open" />);
+  await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith("w", "open"));
+  expect(await screen.findByRole("button", { name: /^edit$/i })).toBeInTheDocument();
+});

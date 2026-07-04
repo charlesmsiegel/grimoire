@@ -29,6 +29,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   const [charReset, setCharReset] = useState(0);
   const [loreReset, setLoreReset] = useState(0);
   const [focusChar, setFocusChar] = useState<{ cid: string; vid: string } | null>(null);
+  const [focusGreeting, setFocusGreeting] = useState<string | null>(null);
   const [loreNav, setLoreNav] = useState<{ focusEntry?: string; newOwner?: string } | null>(null);
 
   useEffect(() => {
@@ -52,6 +53,12 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   function openCharacter(cid: string, vid: string) {
     setFocusChar({ cid, vid });
     setTab("characters");
+  }
+
+  // a world-greeting link from a character page jumps to that greeting
+  function openGreeting(gid: string) {
+    setFocusGreeting(gid);
+    setTab("greetings");
   }
 
   // an owner editor's lore panel routes to the Lore tab (open an entry, or start a pre-owned one)
@@ -94,14 +101,14 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
           <button
             key={t.key}
             className={"tab" + (tab === t.key ? " active" : "")}
-            onClick={() => { setTab(t.key); if (t.key === "characters") { setCharReset((n) => n + 1); setFocusChar(null); } }}
+            onClick={() => { setTab(t.key); if (t.key === "characters") { setCharReset((n) => n + 1); setFocusChar(null); } if (t.key === "greetings") setFocusGreeting(null); }}
           >
             {t.label}
           </button>
         ))}
       </div>
 
-      {tab === "characters" && <CharacterEditor wid={wid} resetSignal={charReset} focus={focusChar} onOpenLore={openLore} />}
+      {tab === "characters" && <CharacterEditor wid={wid} resetSignal={charReset} focus={focusChar} onOpenLore={openLore} onOpenGreeting={openGreeting} />}
       {tab === "pcs" && <PCEditor wid={wid} onOpenLore={openLore} />}
       {tab === "tags" && <TagEditor wid={wid} />}
       {tab === "locations" && <EntityEditor wid={wid} scope={scope} kind="locations" onOpenLore={openLore} />}
@@ -115,7 +122,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
                         onNavConsumed={() => setLoreNav(null)} onOpenOwner={openOwner} />
         </>
       )}
-      {tab === "greetings" && <GreetingEditor wid={wid} onOpenCharacter={openCharacter} />}
+      {tab === "greetings" && <GreetingEditor wid={wid} onOpenCharacter={openCharacter} focus={focusGreeting} />}
     </div>
   );
 }

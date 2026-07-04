@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import WorldView from "./WorldView";
 
@@ -11,6 +11,12 @@ vi.mock("../api/client", () => ({
     listTags: vi.fn(),
     listEntities: vi.fn(),
     listGreetings: vi.fn(),
+    readCharacter: vi.fn(),
+    getCharacterTagline: vi.fn(),
+    listImageAppearances: vi.fn(),
+    readGreeting: vi.fn(),
+    getGreetingSubjects: vi.fn(),
+    imageUrl: (w: string, c: string, v: string, n: string) => `/img/${w}/${c}/${v}/${n}`,
   },
 }));
 import { api } from "../api/client";
@@ -24,6 +30,19 @@ beforeEach(() => {
   (api.listTags as any).mockResolvedValue({});
   (api.listEntities as any).mockResolvedValue([]);
   (api.listGreetings as any).mockResolvedValue([]);
+  (api.readCharacter as any).mockResolvedValue({
+    meta: { id: "mira", name: "Mira", default_version: "main" },
+    versions: [{ id: "main", name: "main", images: [],
+                 card: { spec: "chara_card_v3", spec_version: "3.0",
+                         data: { name: "Mira", description: "", alternate_greetings: [], extensions: {} } } }],
+  });
+  (api.getCharacterTagline as any).mockResolvedValue({ tagline: "" });
+  (api.listImageAppearances as any).mockResolvedValue([]);
+  (api.readGreeting as any).mockResolvedValue({
+    meta: { id: "sol-2", name: "SoL 2", character: "other", version: "main", present: ["mira"], requires_tags: [], predecessor_join: "all" },
+    body: "hi", edges: { leads_to: [], excludes: [] }, predecessors: [],
+  });
+  (api.getGreetingSubjects as any).mockResolvedValue({});
 });
 
 function renderAt() {
@@ -73,4 +92,20 @@ test("the Lore tab hosts the lorebook importer", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Lore" }));
   fireEvent.click(screen.getByText(/import lorebook/i)); // expand the details
   expect(screen.getByRole("button", { name: /parse/i })).toBeInTheDocument();
+});
+
+test("openGreeting switches to the greetings tab and focuses the greeting", async () => {
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "mira", name: "Mira", default_version: "main", versions: [{ id: "main", name: "main" }] },
+  ]);
+  (api.listGreetings as any).mockResolvedValue([
+    { id: "sol-2", name: "SoL 2", character: "other", version: "main", present: ["mira"], requires_tags: [], predecessor_join: "all" },
+  ]);
+  renderAt();
+  await screen.findByText("Drowned Realm");
+  fireEvent.click(await screen.findByText("Mira"));               // grid -> detail
+  const wg = await screen.findByText("World greetings");
+  fireEvent.click(within(wg.parentElement as HTMLElement).getByText("SoL 2"));
+  await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith("w", "sol-2"));
+  expect(screen.getByRole("button", { name: "Greetings" })).toHaveClass("active");
 });
