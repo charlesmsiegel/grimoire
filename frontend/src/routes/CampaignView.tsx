@@ -377,7 +377,6 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
           <CastPanel
             cid={cid}
             sid={activeId}
-            sceneEmpty={true}
             keySet={keySet}
             onSeeded={() => selectScene(activeId)}
             onSceneRenamed={sceneRenamed}

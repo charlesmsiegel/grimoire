@@ -1,31 +1,22 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  api, type Actor, type Availability, type CharacterSummary, type EntitySummary,
+  api, type Actor, type CharacterSummary, type EntitySummary,
   type PCSummary, type RosterEntry, type SceneLocation, type SceneDatetime,
-  type SceneSuggestion,
 } from "../api/client";
 
-// Most endpoints return a string `detail`; the LLM-backed ones return a 502 with an
-// object `{detail, kind}`. Coerce to a string so it never renders as a React child.
-function errMsg(err: any): string {
-  const d = err?.detail;
-  return typeof d === "string" ? d : (d?.detail ?? String(err));
-}
-
 export function CastPanel({
-  cid, sid, sceneEmpty, keySet, onSeeded, onSceneRenamed,
+  cid, sid, keySet, onSeeded, onSceneRenamed, initialPrompt,
 }: {
   cid: string;
   sid: string;
-  sceneEmpty: boolean;
   keySet: boolean;
   onSeeded: () => void;
   onSceneRenamed?: (id: string) => void;
+  initialPrompt?: string;
 }) {
   const [cast, setCast] = useState<Actor[]>([]);
   const [chars, setChars] = useState<CharacterSummary[]>([]);
   const [pcs, setPCs] = useState<PCSummary[]>([]);
-  const [avail, setAvail] = useState<Availability[]>([]);
   const [roster, setRoster] = useState<RosterEntry[]>([]);
   const [locations, setLocations] = useState<EntitySummary[]>([]);
   const [setting, setSetting] = useState<SceneLocation | null>(null);
@@ -40,7 +31,6 @@ export function CastPanel({
 
   const [prompt, setPrompt] = useState("");
   const [opener, setOpener] = useState("");
-  const [suggestions, setSuggestions] = useState<SceneSuggestion[]>([]);
   const [busy, setBusy] = useState(false);
 
   const reloadCast = useCallback(() => api.getCast(cid, sid).then(setCast), [cid, sid]);
@@ -53,12 +43,14 @@ export function CastPanel({
 
   useEffect(() => {
     reloadCast();
-    api.availableGreetings(cid).then(setAvail).catch(() => setAvail([]));
     api.listAppearances(cid).then(setRoster).catch(() => setRoster([]));
     reloadSetting();
     reloadWhen();
-    setSuggestions([]);  // don't carry a prior scene's suggestions across a switch
   }, [cid, sid, reloadCast, reloadSetting, reloadWhen]);
+
+  useEffect(() => {
+    if (initialPrompt) setPrompt(initialPrompt);
+  }, [initialPrompt]);
 
   // characters/pcs available to add: world assets plus the campaign's own PC overlays
   useEffect(() => {
@@ -116,50 +108,6 @@ export function CastPanel({
       onSeeded(); // surface the transition line in the stream
     } catch (err: any) {
       setError(err.detail ?? String(err));
-    }
-  }
-
-  async function start(gid: string) {
-    setError(null);
-    try {
-      await api.startFromGreeting(cid, sid, gid);
-      onSeeded();
-      await reloadCast();
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
-    }
-  }
-
-  async function suggestScenes() {
-    setError(null);
-    setBusy(true);
-    try {
-      const r = await api.sceneSuggestions(cid);
-      setSuggestions(r.suggestions);
-    } catch (err: any) {
-      setError(errMsg(err));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function useSuggestion(s: SceneSuggestion) {
-    setError(null);
-    setBusy(true);
-    try {
-      for (const c of s.cast) {
-        await api.addToCast(cid, sid, { kind: c.kind, id: c.id });
-      }
-      if (s.location) await api.setSceneLocation(cid, sid, s.location.id);
-      setPrompt(s.premise);
-      setSuggestions([]);
-      await reloadCast();
-      await reloadSetting();
-      onSeeded();
-    } catch (err: any) {
-      setError(errMsg(err));
-    } finally {
-      setBusy(false);
     }
   }
 
@@ -291,40 +239,6 @@ export function CastPanel({
             )}
             <button className="primary" onClick={add} disabled={!actorId}>Add</button>
           </div>
-        </div>
-
-        <div>
-          <div className="role">Start from a greeting</div>
-          {!sceneEmpty && <div className="field-hint">Available only for an empty scene.</div>}
-          {avail.length === 0 && <div className="field-hint">No greetings in this world.</div>}
-          <div className="chips">
-            {avail.map((g) => (
-              <button
-                key={g.id}
-                className="chip"
-                disabled={!sceneEmpty || !g.available}
-                title={g.available ? "" : g.reasons.join("; ")}
-                onClick={() => start(g.id)}
-              >
-                {g.name}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="suggest-scenes">
-          <button className="subtle" onClick={suggestScenes} disabled={!keySet || busy}>Suggest scenes</button>
-          {suggestions.map((s, i) => (
-            <div className="suggestion" key={i}>
-              <div className="suggestion-title">{s.title}</div>
-              <div className="suggestion-premise">{s.premise}</div>
-              <div className="field-hint">
-                {s.cast.map((c) => c.name).join(", ")}
-                {s.location ? ` · ${s.location.name}` : ""}
-              </div>
-              <button className="primary" onClick={() => useSuggestion(s)} disabled={busy}>Use this scene</button>
-            </div>
-          ))}
         </div>
 
         <div>

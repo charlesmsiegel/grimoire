@@ -7,9 +7,8 @@ vi.mock("../api/client", () => ({
     listCampaignPCs: vi.fn(),
     listEntities: vi.fn(), getSceneLocation: vi.fn(), setSceneLocation: vi.fn(),
     getSceneDatetime: vi.fn(), setSceneDatetime: vi.fn(),
-    availableGreetings: vi.fn(), addToCast: vi.fn(), startFromGreeting: vi.fn(),
+    addToCast: vi.fn(),
     opener: vi.fn(), firstPost: vi.fn(), createGreeting: vi.fn(), listAppearances: vi.fn(),
-    sceneSuggestions: vi.fn(),
     campaignImageUrl: (c: string, ch: string, v: string, n: string) => `/cimg/${c}/${ch}/${v}/${n}`,
   },
 }));
@@ -27,12 +26,7 @@ beforeEach(() => {
   (api.setSceneLocation as any).mockResolvedValue({ ok: true, moved: false, name: "" });
   (api.getSceneDatetime as any).mockResolvedValue({ current: null, history: [] });
   (api.setSceneDatetime as any).mockResolvedValue({ ok: true, advanced: true, friendly: "1 January 2027", id: "s" });
-  (api.availableGreetings as any).mockResolvedValue([
-    { id: "open", name: "Open", available: true, reasons: [] },
-    { id: "locked", name: "Locked", available: false, reasons: ["missing required tags"] },
-  ]);
   (api.addToCast as any).mockResolvedValue({ ok: true });
-  (api.startFromGreeting as any).mockResolvedValue({ ok: true });
   (api.createGreeting as any).mockResolvedValue({ id: "g" });
   (api.listAppearances as any).mockResolvedValue([
     { kind: "characters", id: "sera", version: "default", role: "npc", scenes: ["s"] },
@@ -46,27 +40,19 @@ test("character cast row shows the locked-version avatar", async () => {
   expect(img.getAttribute("src")).toContain("/cimg/c/sera/default/avatar");
 });
 
-test("Suggest scenes fetches, renders, and a pick auto-seeds + prefills the prompt", async () => {
-  (api.sceneSuggestions as any).mockResolvedValue({ suggestions: [
-    { title: "The creditor", premise: "A debt-collector arrives.",
-      cast: [{ kind: "characters", id: "doran", name: "Doran" }],
-      location: { id: "keep", name: "The Keep" } }] });
-  renderPanel();
-  fireEvent.click(await screen.findByRole("button", { name: /Suggest scenes/ }));
-  await screen.findByText("The creditor");
-  fireEvent.click(screen.getByRole("button", { name: /Use this scene/ }));
-  await waitFor(() => {
-    expect(api.addToCast).toHaveBeenCalledWith("c", "s", { kind: "characters", id: "doran" });
-    expect(api.setSceneLocation).toHaveBeenCalledWith("c", "s", "keep");
-  });
-  expect((screen.getByLabelText("Opener prompt") as HTMLInputElement).value).toBe("A debt-collector arrives.");
+test("initialPrompt seeds the opener prompt", async () => {
+  renderPanel({ initialPrompt: "A debt-collector arrives." });
+  await waitFor(() => expect(
+    (screen.getByLabelText("Opener prompt") as HTMLInputElement).value,
+  ).toBe("A debt-collector arrives."));
 });
 
-function renderPanel(props: Partial<{ sceneEmpty: boolean; keySet: boolean; onSeeded: () => void;
-                                      onSceneRenamed: (id: string) => void }> = {}) {
+function renderPanel(props: Partial<{ keySet: boolean; onSeeded: () => void;
+                                      onSceneRenamed: (id: string) => void; initialPrompt: string }> = {}) {
   render(
-    <CastPanel cid="c" sid="s" sceneEmpty={props.sceneEmpty ?? true} keySet={props.keySet ?? true}
-               onSeeded={props.onSeeded ?? (() => {})} onSceneRenamed={props.onSceneRenamed} />,
+    <CastPanel cid="c" sid="s" keySet={props.keySet ?? true}
+               onSeeded={props.onSeeded ?? (() => {})} onSceneRenamed={props.onSceneRenamed}
+               initialPrompt={props.initialPrompt} />,
   );
 }
 
@@ -94,21 +80,6 @@ test("adding an actor posts kind + id (+ role for characters)", async () => {
   await waitFor(() =>
     expect(api.addToCast).toHaveBeenCalledWith("c", "s", { kind: "characters", id: "seraphine", role: "player" }),
   );
-});
-
-test("starting from an available greeting seeds the scene; unavailable is disabled", async () => {
-  const onSeeded = vi.fn();
-  renderPanel({ onSeeded });
-  const open = await screen.findByRole("button", { name: "Open" });
-  expect(screen.getByRole("button", { name: "Locked" })).toBeDisabled();
-  fireEvent.click(open);
-  await waitFor(() => expect(api.startFromGreeting).toHaveBeenCalledWith("c", "s", "open"));
-  expect(onSeeded).toHaveBeenCalled();
-});
-
-test("start-from-greeting is disabled when the scene is not empty", async () => {
-  renderPanel({ sceneEmpty: false });
-  expect(await screen.findByRole("button", { name: "Open" })).toBeDisabled();
 });
 
 test("generating an opener streams into the preview and can be saved as a greeting", async () => {
