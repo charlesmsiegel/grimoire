@@ -138,3 +138,12 @@ test("no afterSid fetches availability without the param", async () => {
   await screen.findByText("Reckoning");
   expect(api.availableGreetings).toHaveBeenCalledWith("c", undefined);
 });
+
+test("renders exactly the server-filtered greeting list (skipped absent, marks tolerated)", async () => {
+  (api.availableGreetings as any).mockResolvedValue([
+    { id: "g1", name: "Gala", available: true, reasons: [], unlocked: false, mark: "completed" },
+  ]);
+  renderChooser();
+  await screen.findByText("Gala");                     // a marked-complete greeting still renders
+  expect(screen.queryByText("Reckoning")).toBeNull();  // nothing beyond the server's list
+});
