@@ -9,6 +9,7 @@ An incoming change exists iff world is not None and world != base.
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from . import appearances, campaigns, characters, entities, greetings, pcs, worlds
@@ -62,7 +63,7 @@ def incoming(cid: str) -> list[dict]:
         if mine_h is not None:
             item["mine"] = _entity_blob(croot, kind, eid)
         out.append(item)
-    return out + _plotmap_incoming(cid) + _actor_incoming(cid)
+    return out + _plotmap_incoming(cid) + _actor_incoming(cid) + _unpicked_incoming(cid)
 
 
 def _plotmap_blob(root: Path) -> dict:
@@ -114,6 +115,47 @@ def _actor_incoming(cid: str) -> list[dict]:
     return out
 
 
+def _dir_hash(root: Path, kind: str, actor_id: str) -> str | None:
+    return characters.dir_hash(root, actor_id) if kind == "characters" else pcs.dir_hash(root, actor_id)
+
+
+def _actor_summary_blob(root: Path, kind: str, actor_id: str) -> dict:
+    detail = (characters.read_character(root, actor_id) if kind == "characters"
+              else pcs.read_pc(root, actor_id))
+    versions = ", ".join(v["id"] for v in detail["versions"])
+    return {"name": detail["meta"].get("name", actor_id), "body": f"versions: {versions}"}
+
+
+def _unpicked_incoming(cid: str) -> list[dict]:
+    """Whole-actor diffs for actors with no version lock: one item per changed actor;
+    accept re-copies the entire dir (deleted versions go too), reject advances the base."""
+    wroot = worlds.world_root(_world_id(cid))
+    croot = campaigns.campaign_root(cid)
+    manifest = campaigns.read_manifest(cid)
+    locked = set(appearances.record(cid))
+    refs = {r for r in manifest if r.partition("/")[0] in appearances.ACTOR_KINDS}
+    if wroot.exists():
+        refs |= {f"characters/{a}" for a in characters.character_refs(wroot)}
+        refs |= {f"pcs/{a}" for a in pcs.pc_refs(wroot)}
+    out: list[dict] = []
+    for ref in sorted(refs):
+        if ref in locked:
+            continue  # the per-locked-version pass owns this actor
+        kind, _, aid = ref.partition("/")
+        world_h = _dir_hash(wroot, kind, aid) if wroot.exists() else None
+        if world_h is None or world_h == manifest.get(ref):
+            continue  # no incoming change (incl. world-side deletions, skipped)
+        mine_h = _dir_hash(croot, kind, aid)
+        status = ("new" if mine_h is None
+                  else "update" if mine_h == manifest.get(ref) else "conflict")
+        item: dict = {"ref": {"kind": kind, "id": aid}, "status": status,
+                      "world": _actor_summary_blob(wroot, kind, aid)}
+        if mine_h is not None:
+            item["mine"] = _actor_summary_blob(croot, kind, aid)
+        out.append(item)
+    return out
+
+
 def _advance_actor(cid: str, kind: str, actor_id: str, *, copy: bool) -> bool:
     wroot = worlds.world_root(_world_id(cid))
     croot = campaigns.campaign_root(cid)
@@ -155,8 +197,21 @@ def _advance(cid: str, refs: list[dict], *, copy: bool) -> None:
             touched = True
             continue
         if kind in appearances.ACTOR_KINDS:
-            if _advance_actor(cid, kind, eid, copy=copy):
-                touched = True
+            if appearances.record(cid).get(_ref_str(kind, eid)) is not None:
+                if _advance_actor(cid, kind, eid, copy=copy):
+                    touched = True
+                continue
+            world_h = _dir_hash(wroot, kind, eid) if wroot.exists() else None
+            if world_h is None or manifest.get(_ref_str(kind, eid)) == world_h:
+                continue  # not pending
+            if copy:
+                dst = croot / kind / eid
+                if dst.exists():
+                    shutil.rmtree(dst)  # replace wholesale so deleted versions go too
+                shutil.copytree(wroot / kind / eid, dst)
+            manifest[_ref_str(kind, eid)] = world_h
+            manifest_changed = True
+            touched = True
             continue
         world_h = entities.entity_hash(wroot, kind, eid) if wroot.exists() else None
         if world_h is None or manifest.get(_ref_str(kind, eid)) == world_h:
