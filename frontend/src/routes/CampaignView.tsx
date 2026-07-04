@@ -9,6 +9,7 @@ import {
 import type { ChatEvent } from "../api/stream";
 import { EditableRow } from "../components/EditableRow";
 import { CastPanel } from "../components/CastPanel";
+import { NewSceneChooser } from "../components/NewSceneChooser";
 import { ChangesPanel } from "../components/ChangesPanel";
 import { CalendarConfig } from "../components/CalendarConfig";
 import { Portrait } from "../components/Portrait";
@@ -50,6 +51,8 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
   const [absorb, setAbsorb] = useState<SceneAbsorb | null>(null);
   const [absorbing, setAbsorbing] = useState(false);
   const [editRows, setEditRows] = useState<(StagedEdit & { approved: boolean })[]>([]);
+  const [chooserOpen, setChooserOpen] = useState(false);
+  const [seedPrompt, setSeedPrompt] = useState<{ sid: string; prompt: string } | null>(null);
   const streamRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -89,8 +92,13 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
     setCtxKey((n) => n + 1);
   }
 
-  async function newScene() {
-    const { id } = await api.createScene(cid);
+  function newScene() {
+    setChooserOpen(true);
+  }
+
+  async function sceneCreated(id: string, initialPrompt?: string) {
+    setChooserOpen(false);
+    if (initialPrompt) setSeedPrompt({ sid: id, prompt: initialPrompt });
     setScenes(await api.listScenes(cid));
     selectScene(id);
   }
@@ -380,6 +388,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
             keySet={keySet}
             onSeeded={() => selectScene(activeId)}
             onSceneRenamed={sceneRenamed}
+            initialPrompt={seedPrompt?.sid === activeId ? seedPrompt.prompt : undefined}
           />
         )}
         {activeId && (
@@ -497,6 +506,10 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
       )}
       {drawer && activeId && (
         <RecordDrawer cid={cid} sid={activeId} target={drawer} onClose={() => setDrawer(null)} />
+      )}
+      {chooserOpen && (
+        <NewSceneChooser cid={cid} afterSid={activeId} keySet={keySet}
+                         onClose={() => setChooserOpen(false)} onCreated={sceneCreated} />
       )}
       </div>
     </div>

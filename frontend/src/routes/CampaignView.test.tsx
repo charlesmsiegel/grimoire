@@ -2,8 +2,19 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import CampaignView from "./CampaignView";
 
-// CastPanel and CalendarConfig have their own tests + make their own API calls; stub them here.
-vi.mock("../components/CastPanel", () => ({ CastPanel: () => <div data-testid="cast-panel" /> }));
+// CastPanel, NewSceneChooser, and CalendarConfig have their own tests + make their own
+// API calls; stub them here.
+vi.mock("../components/CastPanel", () => ({
+  CastPanel: ({ initialPrompt }: any) => <div data-testid="cast-panel">{initialPrompt ?? ""}</div>,
+}));
+vi.mock("../components/NewSceneChooser", () => ({
+  NewSceneChooser: ({ onCreated, onClose }: any) => (
+    <div data-testid="scene-chooser">
+      <button onClick={() => onCreated("s9", "A premise")}>stub-pick</button>
+      <button onClick={() => onClose()}>stub-close</button>
+    </div>
+  ),
+}));
 vi.mock("../components/CalendarConfig", () => ({ CalendarConfig: () => <div data-testid="calendar-config" /> }));
 
 vi.mock("../api/client", () => ({
@@ -240,6 +251,38 @@ test("sending with no scene creates one first", async () => {
   fireEvent.keyDown(ta, { key: "Enter" });
   await waitFor(() => expect(api.createScene).toHaveBeenCalledWith("run"));
   await waitFor(() => expect(api.chat).toHaveBeenCalledWith("run", "s1", "hi", expect.any(Function)));
+});
+
+test("+ New Scene opens the chooser without creating a scene", async () => {
+  renderCampaign();
+  await screen.findByText(/Run One/);
+  fireEvent.click(screen.getByRole("button", { name: /\+ new scene/i }));
+  expect(await screen.findByTestId("scene-chooser")).toBeInTheDocument();
+  expect(api.createScene).not.toHaveBeenCalled();
+});
+
+test("a chooser pick refreshes the rail, selects the scene, and seeds the prompt", async () => {
+  (api.listScenes as any)
+    .mockResolvedValueOnce([])                       // initial load
+    .mockResolvedValue([{ id: "s9", title: "New", model: "", created: "", updated: "" }]);
+  renderCampaign();
+  await screen.findByText(/Run One/);
+  fireEvent.click(screen.getByRole("button", { name: /\+ new scene/i }));
+  fireEvent.click(await screen.findByText("stub-pick"));
+  await waitFor(() => expect(api.getScene).toHaveBeenCalledWith("run", "s9"));
+  expect(screen.queryByTestId("scene-chooser")).toBeNull();
+  // the premise reaches the empty scene's CastPanel
+  expect(await screen.findByText("A premise")).toBeInTheDocument();
+});
+
+test("closing the chooser creates nothing", async () => {
+  renderCampaign();
+  await screen.findByText(/Run One/);
+  fireEvent.click(screen.getByRole("button", { name: /\+ new scene/i }));
+  fireEvent.click(await screen.findByText("stub-close"));
+  expect(screen.queryByTestId("scene-chooser")).toBeNull();
+  expect(api.createScene).not.toHaveBeenCalled();
+  expect(api.getScene).not.toHaveBeenCalled();
 });
 
 test("the edit button renames a scene", async () => {
