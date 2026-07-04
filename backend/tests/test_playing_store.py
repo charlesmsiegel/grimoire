@@ -140,3 +140,46 @@ def test_available_greetings_unknown_after_raises(monkeypatch, tmp_path):
     wid, cid, _sid = _campaign(monkeypatch, tmp_path)
     with pytest.raises(scenes.SceneNotFound):
         playing.available_greetings(cid, after="nope")
+
+
+def test_read_marks_migrates_legacy_list(monkeypatch, tmp_path):
+    _wid, cid, _sid = _campaign(monkeypatch, tmp_path)
+    (campaigns.campaign_root(cid) / "played.json").write_text('["g1"]', encoding="utf-8")
+    marks = playing.read_marks(cid)
+    assert marks == {"played": {"g1"}, "completed": set(), "skipped": set()}
+
+
+def test_mark_greeting_roundtrip(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    g = greetings.create_greeting(croot, "Gala", "c", "v")
+    playing.mark_greeting(cid, g, "completed")
+    assert playing.read_marks(cid)["completed"] == {g}
+    playing.mark_greeting(cid, g, "skipped")
+    marks = playing.read_marks(cid)
+    assert marks["skipped"] == {g} and marks["completed"] == set()
+    playing.mark_greeting(cid, g, "none")
+    assert playing.read_marks(cid)["skipped"] == set()
+    with pytest.raises(playing.PlayError):
+        playing.mark_greeting(cid, g, "bogus")
+    with pytest.raises(greetings.GreetingNotFound):
+        playing.mark_greeting(cid, "nope", "completed")
+
+
+def test_mark_greeting_refuses_played(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    g = greetings.create_greeting(croot, "Gala", "c", "v")
+    playing._mark_played(cid, g)
+    with pytest.raises(playing.PlayError):
+        playing.mark_greeting(cid, g, "completed")
+
+
+def test_mark_played_clears_offscreen_marks(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    g = greetings.create_greeting(croot, "Gala", "c", "v")
+    playing.mark_greeting(cid, g, "completed")
+    playing._mark_played(cid, g)
+    marks = playing.read_marks(cid)
+    assert g in marks["played"] and g not in marks["completed"]

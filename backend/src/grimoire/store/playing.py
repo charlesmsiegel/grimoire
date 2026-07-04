@@ -17,21 +17,53 @@ def _world_root(cid: str) -> Path:
     return worlds.world_root(campaigns.read_campaign(cid)["meta"].get("world", ""))
 
 
-def _played_path(cid: str) -> Path:
+_MARK_KEYS = ("played", "completed", "skipped")
+
+
+def _marks_path(cid: str) -> Path:
     return campaigns.campaign_root(cid) / "played.json"
 
 
-def read_played(cid: str) -> set[str]:
-    p = _played_path(cid)
+def read_marks(cid: str) -> dict[str, set[str]]:
+    p = _marks_path(cid)
     if not p.exists():
-        return set()
-    return set(json.loads(p.read_text(encoding="utf-8")))
+        return {k: set() for k in _MARK_KEYS}
+    data = json.loads(p.read_text(encoding="utf-8"))
+    if isinstance(data, list):  # legacy format: a bare list of played ids
+        data = {"played": data}
+    return {k: set(data.get(k, [])) for k in _MARK_KEYS}
+
+
+def _write_marks(cid: str, marks: dict[str, set[str]]) -> None:
+    payload = {k: sorted(marks[k]) for k in _MARK_KEYS}
+    _marks_path(cid).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def read_played(cid: str) -> set[str]:
+    return read_marks(cid)["played"]
 
 
 def _mark_played(cid: str, gid: str) -> None:
-    played = read_played(cid)
-    played.add(gid)
-    _played_path(cid).write_text(json.dumps(sorted(played), indent=2) + "\n", encoding="utf-8")
+    marks = read_marks(cid)
+    marks["played"].add(gid)
+    marks["completed"].discard(gid)  # actually playing supersedes an off-screen mark
+    marks["skipped"].discard(gid)
+    _write_marks(cid, marks)
+
+
+def mark_greeting(cid: str, gid: str, status: str) -> None:
+    """Set a greeting's off-screen mark: completed / skipped / none (clear)."""
+    greetings.read_greeting(campaigns.campaign_root(cid), gid)  # raises GreetingNotFound
+    if status not in ("completed", "skipped", "none"):
+        raise PlayError(f"unknown mark status: {status}")
+    marks = read_marks(cid)
+    if gid in marks["played"]:
+        raise PlayError("greeting was played in a scene; its mark cannot be changed")
+    marks["completed"].discard(gid)
+    marks["skipped"].discard(gid)
+    if status != "none":
+        marks[status].add(gid)
+    _write_marks(cid, marks)
 
 
 def player_tags(cid: str) -> set[str]:
