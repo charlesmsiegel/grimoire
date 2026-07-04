@@ -1,6 +1,6 @@
 import pytest
 
-from grimoire.store import campaigns, entities, worlds
+from grimoire.store import campaigns, characters, entities, greetings, pcs, worlds
 
 
 def home(monkeypatch, tmp_path):
@@ -42,7 +42,8 @@ def test_empty_world_makes_empty_campaign(monkeypatch, tmp_path):
     home(monkeypatch, tmp_path)
     wid = worlds.create_world("Empty")
     cid = campaigns.create_campaign("Run", wid)
-    assert campaigns.read_manifest(cid) == {}
+    # the plotmap ref is always recorded (empty world -> empty hash)
+    assert campaigns.read_manifest(cid) == {"plotmap": ""}
     assert (campaigns.campaign_root(cid) / "scenes").exists()
 
 
@@ -76,3 +77,27 @@ def test_manifest_roundtrip_with_slash_keys(monkeypatch, tmp_path):
     cid = campaigns.create_campaign("Run", wid)
     campaigns.write_manifest(cid, {"characters/a": "deadbeef", "lore/salt-pact": "cafe"})
     assert campaigns.read_manifest(cid) == {"characters/a": "deadbeef", "lore/salt-pact": "cafe"}
+
+
+def test_create_campaign_full_copy(monkeypatch, tmp_path):
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    char_id, _ = characters.create_character(wroot, "Mara")
+    characters.create_version(wroot, char_id, "grim", characters.blank_card("Mara"))
+    pid, _ = pcs.create_pc(wroot, "Elara", [])
+    g = greetings.create_greeting(wroot, "Gala", char_id, "default", body="Hi.")
+    greetings.set_edges(wroot, g, leads_to=[])
+    cid = campaigns.create_campaign("Run", wid)
+    croot = campaigns.campaign_root(cid)
+    assert (croot / "greetings" / f"{g}.md").exists()
+    assert (croot / "plotmap.json").exists()
+    assert (croot / "characters" / char_id / "default.json").exists()
+    assert (croot / "characters" / char_id / "grim.json").exists()
+    assert (croot / "pcs" / pid / "default.md").exists()
+    manifest = campaigns.read_manifest(cid)
+    assert manifest[f"greetings/{g}"] == entities.entity_hash(wroot, "greetings", g)
+    assert manifest["plotmap"] == greetings.plotmap_hash(wroot)
+    assert manifest[f"characters/{char_id}"] == characters.dir_hash(wroot, char_id)
+    assert manifest[f"pcs/{pid}"] == pcs.dir_hash(wroot, pid)
+    assert campaigns.read_campaign(cid)["meta"]["world_copy"] == "full"

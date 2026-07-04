@@ -5,7 +5,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from . import calendars, entities, worlds
+from . import calendars, characters, entities, greetings, pcs, worlds
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import ensure_home, home, now_iso, slugify, uniquify
 
@@ -73,13 +73,15 @@ def create_campaign(name: str, world_id: str, region: str | None = None) -> str:
     (root / "scenes").mkdir()
     now = now_iso()
     campaign_meta_path(cid).write_text(
-        dump_frontmatter({"name": name, "world": world_id, "created": now, "updated": now}, ""),
+        dump_frontmatter({"name": name, "world": world_id, "created": now, "updated": now,
+                          "world_copy": "full"}, ""),
         encoding="utf-8",
     )
-    # copy-on-create: deep-copy world entities + record base hashes
+    # copy-on-create: deep-copy world entities, greetings, plot map, and every
+    # actor version + record base hashes so sync can diff against this snapshot
     wroot = worlds.world_root(world_id)
     manifest: dict[str, str] = {}
-    for kind, eid in entities.all_refs(wroot):
+    for kind, eid in entities.synced_refs(wroot):
         src = wroot / kind / f"{eid}.md"
         dst_dir = root / kind
         dst_dir.mkdir(parents=True, exist_ok=True)
@@ -88,6 +90,15 @@ def create_campaign(name: str, world_id: str, region: str | None = None) -> str:
         if assets_dir.exists():  # entity images (primary/gallery) travel with the copy
             shutil.copytree(assets_dir, root / kind / eid / "assets", dirs_exist_ok=True)
         manifest[f"{kind}/{eid}"] = entities.entity_hash(wroot, kind, eid) or ""
+    if (wroot / "plotmap.json").exists():
+        (root / "plotmap.json").write_text((wroot / "plotmap.json").read_text(encoding="utf-8"),
+                                           encoding="utf-8")
+    manifest["plotmap"] = greetings.plotmap_hash(wroot) or ""
+    for kind, refs_of, dir_hash in (("characters", characters.character_refs, characters.dir_hash),
+                                    ("pcs", pcs.pc_refs, pcs.dir_hash)):
+        for aid in refs_of(wroot):
+            shutil.copytree(wroot / kind / aid, root / kind / aid)
+            manifest[f"{kind}/{aid}"] = dir_hash(wroot, aid) or ""
     write_manifest(cid, manifest)
     calendars.copy_calendar(wroot, root)
     if region is not None:
