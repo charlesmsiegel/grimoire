@@ -1,6 +1,6 @@
 import re as _re
 
-from grimoire.store import assets, localize
+from grimoire.store import assets, greetings, localize
 
 
 def test_find_markdown_image():
@@ -232,3 +232,65 @@ def test_localizes_greetings_and_lorebook_entries(tmp_path):
     assert events[0] == {"total": 2}
     assert "/api/worlds/w/" in card["data"]["alternate_greetings"][0]
     assert "/api/worlds/w/" in card["data"]["character_book"]["entries"][0]["content"]
+
+
+# ---- localize_greeting (world greeting bodies -> per-greeting assets) ----
+def _greeting_with(tmp_path, body):
+    return greetings.create_greeting(tmp_path, "Opener", "mira", "v1", body)
+
+
+def test_localize_greeting_rewrites_body_and_stores_assets(tmp_path):
+    gid = _greeting_with(tmp_path, "look ![art](https://h/a.png) done")
+    fetch = _fake_fetch({"https://h/a.png": (b"png-bytes", "png")})
+    summary = localize.localize_greeting(tmp_path, gid, "w1", fetch=fetch)
+    assert summary == {"total": 1, "localized": 1, "skipped": 0,
+                       "failed": 0, "capped": False}
+    body = greetings.read_greeting(tmp_path, gid)["body"]
+    m = _re.search(r"!\[art\]\(/api/worlds/w1/greetings/%s/images/(embed-\w{12})\)" % gid, body)
+    assert m, body
+    name = m.group(1)
+    p = assets.image_path(tmp_path, gid, "default", name, base="greetings")
+    assert p is not None and p.read_bytes() == b"png-bytes"
+    assert p.parent == tmp_path / "greetings" / gid / "assets" / "default"
+
+
+def test_localize_greeting_data_uri_and_failed_fetch(tmp_path):
+    # data-uri decodes and stores; the http ref fails; nothing raises
+    body = ("pic ![d](data:image/png;base64,aGk=) and "
+            "![b](https://h/broken.png) end")
+    gid = _greeting_with(tmp_path, body)
+
+    def boom(url):
+        raise OSError("down")
+
+    summary = localize.localize_greeting(tmp_path, gid, "w1", fetch=boom)
+    assert summary["total"] == 2 and summary["localized"] == 1
+    assert summary["failed"] == 1 and summary["skipped"] == 0
+    new_body = greetings.read_greeting(tmp_path, gid)["body"]
+    assert f"/api/worlds/w1/greetings/{gid}/images/embed-" in new_body
+    assert "https://h/broken.png" in new_body  # failed ref left untouched
+
+
+def test_localize_greeting_skips_local_refs_and_is_idempotent(tmp_path):
+    gid = _greeting_with(tmp_path, "x ![a](https://h/a.png) y")
+    fetch = _fake_fetch({"https://h/a.png": (b"raw", "png")})
+    localize.localize_greeting(tmp_path, gid, "w1", fetch=fetch)
+    second = localize.localize_greeting(tmp_path, gid, "w1", fetch=fetch)
+    assert second == {"total": 0, "localized": 0, "skipped": 0,
+                      "failed": 0, "capped": False}
+
+
+def test_localize_greeting_respects_cap_and_dedups(tmp_path):
+    # same URL twice = one download; cap=1 still localizes both spans
+    gid = _greeting_with(
+        tmp_path, "![a](https://h/a.png) ![b](https://h/a.png) ![c](https://h/c.png)")
+    calls = []
+
+    def fetch(url):
+        calls.append(url)
+        return (b"raw-" + url.encode(), "png")
+
+    summary = localize.localize_greeting(tmp_path, gid, "w1", fetch=fetch, cap=1)
+    assert calls == ["https://h/a.png"]
+    assert summary == {"total": 3, "localized": 2, "skipped": 1,
+                       "failed": 0, "capped": True}
