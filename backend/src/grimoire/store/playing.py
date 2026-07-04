@@ -46,10 +46,19 @@ def player_tags(cid: str) -> set[str]:
     return out
 
 
-def available_greetings(cid: str) -> list[dict]:
+def available_greetings(cid: str, after: str | None = None) -> list[dict]:
     wroot = _world_root(cid)
-    return greetings.availability(wroot, greetings.read_plotmap(wroot),
-                                  read_played(cid), player_tags(cid))
+    plotmap = greetings.read_plotmap(wroot)
+    out = greetings.availability(wroot, plotmap, read_played(cid), player_tags(cid))
+    unlocked: set[str] = set()
+    if after:
+        gid = scenes.read_scene(cid, after)["meta"].get("greeting", "")
+        if gid:
+            unlocked = set(greetings.edges_of(plotmap, gid)["leads_to"])
+    for g in out:
+        g["unlocked"] = g["id"] in unlocked
+    out.sort(key=lambda g: not g["unlocked"])  # stable: unlocked first, rest keep order
+    return out
 
 
 def start_from_greeting(cid: str, sid: str, gid: str) -> None:
