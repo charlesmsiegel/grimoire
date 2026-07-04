@@ -167,3 +167,19 @@ def test_ensure_campaign_copy_skips_locked_actors(monkeypatch, tmp_path):
     campaigns.ensure_campaign_copy(cid)
     assert not (croot / "characters" / char_id / "grim.json").exists()  # no version resurrection
     assert f"characters/{char_id}" not in campaigns.read_manifest(cid)
+
+
+def test_ensure_campaign_copy_never_clobbers_existing_actor_dirs(monkeypatch, tmp_path):
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    pid, _ = pcs.create_pc(wroot, "Elara", [])
+    cid = campaigns.create_campaign("Run", wid)
+    _strip_to_legacy(cid)
+    croot = campaigns.campaign_root(cid)
+    # legacy campaign-local overlay shadowing the world PC (old CastPanel merge semantics)
+    pcs.create_pc(croot, "Elara", [], persona={**pcs.blank_persona("Elara"), "description": "local"})
+    campaigns.ensure_campaign_copy(cid)
+    assert pcs.read_persona(croot, pid, "default")["description"] == "local"  # not overwritten
+    # base recorded anyway: divergence surfaces through sync instead of a silent clobber
+    assert campaigns.read_manifest(cid)[f"pcs/{pid}"] == pcs.dir_hash(wroot, pid)

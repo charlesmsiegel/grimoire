@@ -1191,6 +1191,7 @@ def delete_campaign(cid: str):
 @router.get("/campaigns/{cid}/incoming")
 def get_incoming(cid: str):
     try:
+        store.campaigns.ensure_campaign_copy(cid)
         return store.sync.incoming(cid)
     except store.campaigns.CampaignNotFound:
         raise HTTPException(status_code=404, detail="campaign not found")
@@ -1199,6 +1200,7 @@ def get_incoming(cid: str):
 @router.post("/campaigns/{cid}/incoming/accept")
 def post_accept(cid: str, body: RefList):
     try:
+        store.campaigns.ensure_campaign_copy(cid)
         store.sync.accept(cid, [r.model_dump() for r in body.refs])
     except store.campaigns.CampaignNotFound:
         raise HTTPException(status_code=404, detail="campaign not found")
@@ -1208,6 +1210,7 @@ def post_accept(cid: str, body: RefList):
 @router.post("/campaigns/{cid}/incoming/reject")
 def post_reject(cid: str, body: RefList):
     try:
+        store.campaigns.ensure_campaign_copy(cid)
         store.sync.reject(cid, [r.model_dump() for r in body.refs])
     except store.campaigns.CampaignNotFound:
         raise HTTPException(status_code=404, detail="campaign not found")

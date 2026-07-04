@@ -56,10 +56,8 @@ export function CastPanel({
 
   // characters/pcs available to add: the campaign copy holds every actor
   useEffect(() => {
-    api.getCampaign(cid).then((c) => {
-      api.listCharacters({ kind: "campaign", id: cid }).then(setChars);
-      api.listCampaignPCs(cid).then(setPCs);
-    });
+    api.listCharacters({ kind: "campaign", id: cid }).then(setChars);
+    api.listCampaignPCs(cid).then(setPCs);
     api.listEntities({ kind: "campaign", id: cid }, "locations").then(setLocations).catch(() => setLocations([]));
   }, [cid]);
 

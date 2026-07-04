@@ -158,8 +158,9 @@ def ensure_campaign_copy(cid: str) -> None:
             for aid in refs_of(wroot):
                 if f"{kind}/{aid}" in locked:
                     continue
-                shutil.copytree(wroot / kind / aid, root / kind / aid, dirs_exist_ok=True)
-                manifest[f"{kind}/{aid}"] = dir_hash(wroot, aid) or ""
+                if not (root / kind / aid).exists():  # never clobber an existing copy;
+                    shutil.copytree(wroot / kind / aid, root / kind / aid)
+                manifest[f"{kind}/{aid}"] = dir_hash(wroot, aid) or ""  # diverged dirs become sync conflicts
         write_manifest(cid, manifest)
     meta["world_copy"] = "full"
     mp.write_text(dump_frontmatter(meta, body), encoding="utf-8")
