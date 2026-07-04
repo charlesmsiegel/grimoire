@@ -109,7 +109,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
       </div>
 
       {tab === "characters" && <CharacterEditor wid={wid} resetSignal={charReset} focus={focusChar} onOpenLore={openLore} onOpenGreeting={openGreeting} />}
-      {tab === "pcs" && <PCEditor wid={wid} onOpenLore={openLore} />}
+      {tab === "pcs" && <PCEditor scope={scope} wid={wid} onOpenLore={openLore} />}
       {tab === "tags" && <TagEditor wid={wid} />}
       {tab === "locations" && <EntityEditor wid={wid} scope={scope} kind="locations" onOpenLore={openLore} />}
       {tab === "lore" && (
