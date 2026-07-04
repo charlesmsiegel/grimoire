@@ -307,6 +307,7 @@ def import_card(root: Path, data: bytes, fmt: str, into_cid: str | None = None,
                 name: str | None = None, update_vid: str | None = None) -> tuple[str, str]:
     from . import cards
     card = cards.loads(data, fmt)  # raises cards.CardParseError on bad input
+    cards.bake_char_name(card)
     if update_vid is not None:
         cid, vid = into_cid, update_vid
         update_version(root, cid, vid, card)
@@ -445,7 +446,9 @@ def import_from_chub(root: Path, url_or_path: str, into_cid: str | None = None,
     definition = (node or {}).get("definition")
     if isinstance(definition, dict):
         card = read_card(root, cid, vid)
-        if merge_chub_definition(card, definition):
+        merged = merge_chub_definition(card, definition)
+        baked = cards.bake_char_name(card)  # definition text carries {{char}} again
+        if merged or baked:
             update_version(root, cid, vid, card)
 
     gallery = _download_gallery(root, cid, vid, node) if node else {"attempted": 0, "stored": 0}

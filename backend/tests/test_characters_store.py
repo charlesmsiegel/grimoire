@@ -690,6 +690,30 @@ def test_import_from_chub_no_definition_keeps_png_card(tmp_path, monkeypatch):
     assert data["alternate_greetings"] == ["old alt"]
 
 
+def test_import_card_bakes_char_macro(tmp_path):
+    import json as _json
+
+    card = ch.blank_card("Sera")
+    card["data"]["first_mes"] = "{{char}} smiles at {{user}}"
+    cid, vid = ch.import_card(tmp_path, _json.dumps(card).encode(), "json")
+    assert ch.read_card(tmp_path, cid, vid)["data"]["first_mes"] == "Sera smiles at {{user}}"
+
+
+def test_import_from_chub_bakes_char_macro_in_definition_fields(tmp_path, monkeypatch):
+    from grimoire.store import chub
+
+    png, node = _stale_png_and_node({"name": "Imp", "first_message": "{{char}} bows",
+                                     "alternate_greetings": ["{{char}} waves"]})
+    monkeypatch.setattr(chub, "fetch_character_node", lambda fp: node)
+    monkeypatch.setattr(fetch, "_http_get_bytes", lambda url: (png, "image/png"))
+
+    result = ch.import_from_chub(tmp_path, "creator/imp")
+
+    data = ch.read_card(tmp_path, result["character"], result["version"])["data"]
+    assert data["first_mes"] == "Imp bows"
+    assert data["alternate_greetings"] == ["Imp waves"]
+
+
 def test_import_from_chub_definition_applies_on_in_place_update(tmp_path, monkeypatch):
     from grimoire.store import chub
 

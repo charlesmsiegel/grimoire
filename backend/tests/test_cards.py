@@ -25,6 +25,37 @@ def _png_with_text(keyword: str, text: str) -> bytes:
     return sig + chunk(b"IHDR", ihdr) + text_chunk + chunk(b"IEND", b"")
 
 
+def test_bake_char_name_replaces_macro_across_text_fields():
+    card = {"spec": "chara_card_v3", "spec_version": "3.0", "data": {
+        "name": "Seraphine",
+        "description": "{{char}} keeps the ledgers.",
+        "first_mes": "{{Char}}: hello",
+        "mes_example": "{{user}}: hi\n{{char}}: welcome",
+        "alternate_greetings": ["{{CHAR}} waves"],
+        "character_book": {"entries": [{"content": "{{char}} lore"}]},
+        "extensions": {},
+    }}
+    assert cards.bake_char_name(card) is True
+    d = card["data"]
+    assert d["description"] == "Seraphine keeps the ledgers."
+    assert d["first_mes"] == "Seraphine: hello"  # case-insensitive
+    assert d["mes_example"] == "{{user}}: hi\nSeraphine: welcome"  # {{user}} untouched
+    assert d["alternate_greetings"] == ["Seraphine waves"]
+    assert d["character_book"]["entries"][0]["content"] == "Seraphine lore"
+
+
+def test_bake_char_name_noop_without_name_or_macro():
+    unnamed = {"spec": "chara_card_v3", "spec_version": "3.0",
+               "data": {"name": "", "description": "{{char}} x", "extensions": {}}}
+    assert cards.bake_char_name(unnamed) is False
+    assert unnamed["data"]["description"] == "{{char}} x"  # no name -> left alone
+
+    plain = {"spec": "chara_card_v3", "spec_version": "3.0",
+             "data": {"name": "Sera", "description": "no macros here", "extensions": {}}}
+    assert cards.bake_char_name(plain) is False
+    assert plain["data"]["description"] == "no macros here"
+
+
 def test_loads_bare_v3_json():
     card = cards.loads(json.dumps(_v3()).encode(), "json")
     assert card["spec"] == "chara_card_v3"
