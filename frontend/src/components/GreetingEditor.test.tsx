@@ -6,7 +6,7 @@ vi.mock("../api/client", () => ({
     listGreetings: vi.fn(), listCharacters: vi.fn(), listTags: vi.fn(), readGreeting: vi.fn(),
     createGreeting: vi.fn(), updateGreeting: vi.fn(), deleteGreeting: vi.fn(),
     setEdges: vi.fn(), importGreetings: vi.fn(),
-    getGreetingSubjects: vi.fn(), setImageSubjects: vi.fn(),
+    getGreetingSubjects: vi.fn(), setImageSubjects: vi.fn(), listUntaggedImages: vi.fn(),
   },
 }));
 import { api } from "../api/client";
@@ -15,6 +15,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   (api.getGreetingSubjects as any).mockResolvedValue({});
   (api.setImageSubjects as any).mockResolvedValue({ ok: true });
+  (api.listUntaggedImages as any).mockResolvedValue([]);
   (api.listGreetings as any).mockResolvedValue([]);
   (api.listCharacters as any).mockResolvedValue([
     { id: "seraphine", name: "Seraphine", default_version: "default", versions: [{ id: "default", name: "default" }] },
@@ -275,4 +276,38 @@ test("focus prop opens that greeting in view mode", async () => {
   render(<GreetingEditor wid="w" focus="open" />);
   await waitFor(() => expect(api.readGreeting).toHaveBeenCalledWith("w", "open"));
   expect(await screen.findByRole("button", { name: /^edit$/i })).toBeInTheDocument();
+});
+
+const UNTAGGED = [
+  { gid: "open", greeting_name: "Open", name: "embed-one", url: "/api/worlds/w/greetings/open/images/embed-one" },
+  { gid: "open", greeting_name: "Open", name: "embed-two", url: "/api/worlds/w/greetings/open/images/embed-two" },
+];
+
+test("rail button opens the tagging queue; save/no-subjects advance it", async () => {
+  (api.listUntaggedImages as any).mockResolvedValue(UNTAGGED);
+  (api.listGreetings as any).mockResolvedValue([
+    { id: "open", name: "Open", character: "seraphine", version: "default", present: ["seraphine"], requires_tags: [], predecessor_join: "all" },
+  ]);
+  render(<GreetingEditor wid="w" />);
+  fireEvent.click(await screen.findByRole("button", { name: /tag images \(2\)/i }));
+  await screen.findByText(/tagging 1 \/ 2/i);
+  fireEvent.click(screen.getByRole("button", { name: "Seraphine" }));
+  fireEvent.click(screen.getByRole("button", { name: /save & next/i }));
+  await waitFor(() => expect(api.setImageSubjects).toHaveBeenCalledWith("w", "open", "embed-one", ["seraphine"]));
+  await screen.findByText(/tagging 2 \/ 2/i);
+  fireEvent.click(screen.getByRole("button", { name: /no subjects/i }));
+  await waitFor(() => expect(api.setImageSubjects).toHaveBeenCalledWith("w", "open", "embed-two", []));
+  await screen.findByText(/all images tagged/i);
+});
+
+test("skip advances without a PUT and close leaves the queue", async () => {
+  (api.listUntaggedImages as any).mockResolvedValue(UNTAGGED);
+  render(<GreetingEditor wid="w" />);
+  fireEvent.click(await screen.findByRole("button", { name: /tag images \(2\)/i }));
+  await screen.findByText(/tagging 1 \/ 2/i);
+  fireEvent.click(screen.getByRole("button", { name: /^skip$/i }));
+  await screen.findByText(/tagging 2 \/ 2/i);
+  expect(api.setImageSubjects).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: /^close$/i }));
+  expect(await screen.findByRole("button", { name: /new greeting/i })).toBeInTheDocument();
 });
