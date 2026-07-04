@@ -76,3 +76,40 @@ def set_image_subjects(root: Path, gid: str, name: str, cids: list[str]) -> None
             cur = {}
     cur[name] = list(cids)
     write_subjects(root, gid, cur)
+
+
+def appearances(root: Path, cid: str) -> list[dict]:
+    """Every tagged image featuring `cid`, across all greetings — the
+    character page's 'Appears in' gallery. Cheap: ~one small file per
+    greeting. Sorted by (gid, name) = the greetings tab's order."""
+    out: list[dict] = []
+    gdir = root / _BASE
+    if not gdir.exists():
+        return out
+    for p in sorted(gdir.glob(f"*/assets/{_VID}/{SUBJECTS_FILE}")):
+        gid = p.parents[2].name
+        for name, subs in sorted(read_subjects(root, gid).items()):
+            if cid in subs:
+                out.append({"gid": gid, "name": name})
+    return out
+
+
+def copy_to_character(root: Path, gid: str, name: str, cid: str, vid: str, slot: str) -> str:
+    """Copy a greeting image's bytes into a character version's assets.
+    slot 'avatar' overwrites the avatar (focus resets, per put_image);
+    slot 'gallery' takes the next free gallery_N. Returns the stored name."""
+    if slot not in ("avatar", "gallery"):
+        raise ValueError(f"unknown slot: {slot}")
+    src = assets.image_path(root, gid, _VID, name, base=_BASE)
+    if src is None:
+        raise FileNotFoundError(name)
+    raw, ext = src.read_bytes(), src.suffix.lstrip(".")
+    if slot == "avatar":
+        assets.put_image(root, cid, vid, assets.AVATAR, raw, ext)
+        return assets.AVATAR
+    taken = {i["name"] for i in assets.list_images(root, cid, vid)}
+    n = 1
+    while f"gallery_{n}" in taken:
+        n += 1
+    assets.put_image(root, cid, vid, f"gallery_{n}", raw, ext)
+    return f"gallery_{n}"

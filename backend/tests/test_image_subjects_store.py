@@ -45,3 +45,40 @@ def test_set_image_subjects_updates_one_entry(tmp_path):
     image_subjects.set_image_subjects(tmp_path, gid, "art_2", [cid])
     image_subjects.set_image_subjects(tmp_path, gid, "art_1", [])
     assert image_subjects.read_subjects(tmp_path, gid) == {"art_2": [cid]}
+
+
+def test_appearances_scans_across_greetings_in_order(tmp_path):
+    cid, _vid = characters.create_character(tmp_path, "Mira", "main")
+    g1 = greetings.create_greeting(tmp_path, "B scene", cid, "main", "x")
+    g2 = greetings.create_greeting(tmp_path, "A scene", cid, "main", "x")
+    for gid in (g1, g2):
+        assets.put_image(tmp_path, gid, "default", "art_1", b"p", "png", base="greetings")
+    image_subjects.set_image_subjects(tmp_path, g1, "art_1", [cid])
+    image_subjects.set_image_subjects(tmp_path, g2, "art_1", [cid])
+    got = image_subjects.appearances(tmp_path, cid)
+    assert got == sorted(got, key=lambda a: (a["gid"], a["name"]))
+    assert {a["gid"] for a in got} == {g1, g2}
+    assert image_subjects.appearances(tmp_path, "nobody") == []
+
+
+def test_copy_to_character_gallery_numbers_and_avatar(tmp_path):
+    cid, vid = characters.create_character(tmp_path, "Mira", "main")
+    gid = greetings.create_greeting(tmp_path, "Opener", cid, vid, "x")
+    assets.put_image(tmp_path, gid, "default", "art_1", b"artbytes", "png", base="greetings")
+    assets.put_image(tmp_path, cid, vid, "gallery_1", b"old", "png")  # occupy slot 1
+
+    n1 = image_subjects.copy_to_character(tmp_path, gid, "art_1", cid, vid, "gallery")
+    assert n1 == "gallery_2"
+    p = assets.image_path(tmp_path, cid, vid, "gallery_2")
+    assert p is not None and p.read_bytes() == b"artbytes"
+
+    assets.write_focus(tmp_path, cid, vid, 30)
+    n2 = image_subjects.copy_to_character(tmp_path, gid, "art_1", cid, vid, "avatar")
+    assert n2 == "avatar"
+    assert assets.image_path(tmp_path, cid, vid, "avatar").read_bytes() == b"artbytes"
+    assert assets.read_focus(tmp_path, cid, vid) is None  # avatar semantics reset the crop
+
+    with pytest.raises(FileNotFoundError):
+        image_subjects.copy_to_character(tmp_path, gid, "missing", cid, vid, "gallery")
+    with pytest.raises(ValueError):
+        image_subjects.copy_to_character(tmp_path, gid, "art_1", cid, vid, "banner")
