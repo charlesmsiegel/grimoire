@@ -132,7 +132,9 @@ export type GreetingDraft = {
   requires_tags?: string[];
   predecessor_join?: "all" | "any";
 };
-export type Availability = { id: string; name: string; available: boolean; reasons: string[] };
+export type Availability = {
+  id: string; name: string; available: boolean; reasons: string[]; unlocked: boolean;
+};
 export type Appearance = { gid: string; greeting_name: string; name: string; url: string };
 
 // cast
@@ -423,8 +425,9 @@ export const api = {
   addToCast: (cid: string, sid: string,
               body: { kind: string; id: string; version?: string; role?: string }) =>
     request<{ ok: boolean }>("POST", `/api/campaigns/${cid}/scenes/${sid}/cast`, body),
-  availableGreetings: (cid: string) =>
-    request<Availability[]>("GET", `/api/campaigns/${cid}/greetings/available`),
+  availableGreetings: (cid: string, after?: string) =>
+    request<Availability[]>("GET",
+      `/api/campaigns/${cid}/greetings/available${after ? `?after=${encodeURIComponent(after)}` : ""}`),
   startFromGreeting: (cid: string, sid: string, greeting: string) =>
     request<{ ok: boolean }>("POST", `/api/campaigns/${cid}/scenes/${sid}/start-from-greeting`, { greeting }),
   getSceneLocation: (cid: string, sid: string) =>
