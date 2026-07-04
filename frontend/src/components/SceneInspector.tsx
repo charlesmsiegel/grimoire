@@ -30,15 +30,13 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    api.getCampaign(cid).then((c) => {
-      Promise.all([api.listCharacters({ kind: "campaign", id: cid }), api.listCampaignPCs(cid), api.listCampaignPCs(cid)])
-        .then(([chars, worldPCs, localPCs]) => {
-          const m: Record<string, string> = {};
-          for (const x of chars) m[`characters/${x.id}`] = x.name;
-          for (const x of [...worldPCs, ...localPCs]) m[`pcs/${x.id}`] = x.name;
-          setNames(m);
-        });
-    });
+    Promise.all([api.listCharacters({ kind: "campaign", id: cid }), api.listCampaignPCs(cid)])
+      .then(([chars, pcs]) => {
+        const m: Record<string, string> = {};
+        for (const x of chars) m[`characters/${x.id}`] = x.name;
+        for (const x of pcs) m[`pcs/${x.id}`] = x.name;
+        setNames(m);
+      });
     fetchModels().then(setModels).catch(() => setModels([]));
   }, [cid]);
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, type EntityScope, type PCDetail, type PCSummary, type Persona, type VersionRef } from "../api/client";
@@ -18,6 +18,7 @@ export function PCEditor({ scope, wid, onOpenLore }:
   const [persona, setPersona] = useState<Persona>(BLANK);
   const [mode, setMode] = useState<"view" | "edit">("view");
   const [error, setError] = useState<string | null>(null);
+  const lockReq = useRef(0);
   const [locked, setLocked] = useState<string | null>(null);       // campaign: locked version id
   const [worldVersions, setWorldVersions] = useState<VersionRef[]>([]);
   const [importVid, setImportVid] = useState("");
@@ -38,13 +39,16 @@ export function PCEditor({ scope, wid, onOpenLore }:
     setPersona(v?.persona ?? BLANK);
     setMode("view");
     if (!worldScope) {
+      // token drops a slow earlier response so selecting A then B can't show A's lock on B
+      const req = ++lockReq.current;
       const roster = await api.listAppearances(scope.id).catch(() => []);
+      if (lockReq.current !== req) return;
       setLocked(roster.find((r) => r.kind === "pcs" && r.id === pid)?.version ?? null);
       setImportVid("");
       // the source world's versions feed the import picker; a deleted world PC just offers none
       api.readPC({ kind: "world", id: wid }, pid)
-        .then((w) => setWorldVersions(w.versions.map((x) => ({ id: x.id, name: x.name }))))
-        .catch(() => setWorldVersions([]));
+        .then((w) => { if (lockReq.current === req) setWorldVersions(w.versions.map((x) => ({ id: x.id, name: x.name }))); })
+        .catch(() => { if (lockReq.current === req) setWorldVersions([]); });
     }
   }
 

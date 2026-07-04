@@ -859,3 +859,21 @@ test("campaign scope: picking a version calls pickVersion", async () => {
   fireEvent.click(await screen.findByRole("button", { name: "Pick this version" }));
   await waitFor(() => expect(api.pickVersion).toHaveBeenCalledWith("run", "characters", "mara", "young"));
 });
+
+
+test("campaign scope: the avatar crop control is absent (world-side mutation)", async () => {
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "mara", name: "Mara", default_version: "young", versions: [] },
+  ]);
+  (api.readCharacter as any).mockResolvedValue({
+    meta: { id: "mara", name: "Mara", default_version: "young" },
+    versions: [{ id: "young", name: "Young", images: ["avatar"],
+                 card: { spec: "chara_card_v3", spec_version: "3.0", data: { name: "Mara" } } }],
+  });
+  (api.listAppearances as any).mockResolvedValue([]);
+  const { container } = render(<CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+  fireEvent.click(await screen.findByText("Mara"));
+  await screen.findByText("Images");
+  expect(screen.queryByRole("button", { name: "Adjust avatar crop" })).toBeNull();
+  expect(container.querySelector("img.detail-avatar")).not.toBeNull();  // still displayed read-only
+});
