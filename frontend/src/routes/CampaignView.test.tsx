@@ -5,7 +5,12 @@ import CampaignView from "./CampaignView";
 // CastPanel, NewSceneChooser, and CalendarConfig have their own tests + make their own
 // API calls; stub them here.
 vi.mock("../components/CastPanel", () => ({
-  CastPanel: ({ initialPrompt }: any) => <div data-testid="cast-panel">{initialPrompt ?? ""}</div>,
+  CastPanel: ({ initialPrompt, onSceneRenamed }: any) => (
+    <div data-testid="cast-panel">
+      {initialPrompt ?? ""}
+      <button onClick={() => onSceneRenamed?.("s10")}>stub-datestamp</button>
+    </div>
+  ),
 }));
 vi.mock("../components/NewSceneChooser", () => ({
   NewSceneChooser: ({ onCreated, onClose }: any) => (
@@ -273,6 +278,21 @@ test("a chooser pick refreshes the rail, selects the scene, and seeds the prompt
   expect(screen.queryByTestId("scene-chooser")).toBeNull();
   // the premise reaches the empty scene's CastPanel
   expect(await screen.findByText("A premise")).toBeInTheDocument();
+});
+
+test("a seeded premise survives the rename from the first date set", async () => {
+  (api.listScenes as any)
+    .mockResolvedValueOnce([])                       // initial load
+    .mockResolvedValueOnce([{ id: "s9", title: "New", model: "", created: "", updated: "" }])
+    .mockResolvedValue([{ id: "s10", title: "New", model: "", created: "", updated: "" }]);
+  renderCampaign();
+  await screen.findByText(/Run One/);
+  fireEvent.click(screen.getByRole("button", { name: /\+ new scene/i }));
+  fireEvent.click(await screen.findByText("stub-pick"));
+  await screen.findByText("A premise");
+  fireEvent.click(screen.getByText("stub-datestamp"));   // first date set renames s9 -> s10
+  await waitFor(() => expect(api.getScene).toHaveBeenCalledWith("run", "s10"));
+  expect(screen.getByTestId("cast-panel")).toHaveTextContent("A premise");
 });
 
 test("closing the chooser creates nothing", async () => {

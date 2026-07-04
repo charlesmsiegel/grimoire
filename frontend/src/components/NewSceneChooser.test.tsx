@@ -5,6 +5,7 @@ vi.mock("../api/client", () => ({
   api: {
     availableGreetings: vi.fn(), sceneSuggestions: vi.fn(), createScene: vi.fn(),
     startFromGreeting: vi.fn(), addToCast: vi.fn(), setSceneLocation: vi.fn(),
+    deleteScene: vi.fn(),
   },
 }));
 import { api } from "../api/client";
@@ -30,6 +31,7 @@ beforeEach(() => {
   (api.startFromGreeting as any).mockResolvedValue({ ok: true });
   (api.addToCast as any).mockResolvedValue({ ok: true });
   (api.setSceneLocation as any).mockResolvedValue({ ok: true, moved: false, name: "" });
+  (api.deleteScene as any).mockResolvedValue({ ok: true });
 });
 
 function renderChooser(props: Partial<{ afterSid: string | null; keySet: boolean;
@@ -93,6 +95,16 @@ test("without a key: no suggestions fetch, hint shown, up to 4 greetings", async
   expect(api.sceneSuggestions).not.toHaveBeenCalled();
   expect(screen.getByText(/set an openrouter key/i)).toBeInTheDocument();
   expect(screen.getByText("Dawn")).toBeInTheDocument(); // slot cap grows to 4
+});
+
+test("a failed seed deletes the orphan scene and keeps the chooser open", async () => {
+  (api.startFromGreeting as any).mockRejectedValue({ detail: "boom" });
+  const onCreated = vi.fn();
+  renderChooser({ onCreated });
+  fireEvent.click(await screen.findByText("Reckoning"));
+  await waitFor(() => expect(api.deleteScene).toHaveBeenCalledWith("c", "s9"));
+  expect(onCreated).not.toHaveBeenCalled();
+  expect(await screen.findByText("boom")).toBeInTheDocument();
 });
 
 test("no afterSid fetches availability without the param", async () => {
