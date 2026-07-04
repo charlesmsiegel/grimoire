@@ -1831,3 +1831,79 @@ def test_campaign_greeting_mark_played_conflicts(client):
                        json={"greeting": g}).status_code == 200
     r = client.post(f"/api/campaigns/{cid}/greetings/{g}/mark", json={"status": "completed"})
     assert r.status_code == 409
+
+
+# ---- campaign characters / pcs / pick / import ----
+def _campaign_with_actor(client):
+    wid = _world(client)
+    client.post(f"/api/worlds/{wid}/characters",
+                json={"name": "Mara", "version_name": "young"})
+    client.post(f"/api/worlds/{wid}/characters/mara/versions",
+                json={"name": "veteran", "card": {"spec": "chara_card_v3",
+                                                  "spec_version": "3.0",
+                                                  "data": {"name": "Mara"}}})
+    cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
+    return wid, cid
+
+
+def test_campaign_character_read_and_edit(client):
+    wid, cid = _campaign_with_actor(client)
+    chars = client.get(f"/api/campaigns/{cid}/characters").json()
+    assert [c["id"] for c in chars] == ["mara"]
+    detail = client.get(f"/api/campaigns/{cid}/characters/mara").json()
+    assert {v["id"] for v in detail["versions"]} == {"young", "veteran"}
+    # campaign card edit leaves the world untouched
+    card = {"spec": "chara_card_v3", "spec_version": "3.0", "data": {"name": "C-Mara"}}
+    r = client.put(f"/api/campaigns/{cid}/characters/mara/versions/young", json={"card": card})
+    assert r.status_code == 200
+    world = client.get(f"/api/worlds/{wid}/characters/mara").json()
+    young = next(v for v in world["versions"] if v["id"] == "young")
+    assert young["card"]["data"]["name"] == "Mara"
+
+
+def test_campaign_pick_and_import_version(client):
+    wid, cid = _campaign_with_actor(client)
+    # unknown version -> 404 (checked while unlocked; after a pick the lock wins)
+    assert client.post(f"/api/campaigns/{cid}/characters/mara/pick-version",
+                       json={"version": "bogus"}).status_code == 404
+    r = client.post(f"/api/campaigns/{cid}/characters/mara/pick-version",
+                    json={"version": "young"})
+    assert r.status_code == 200
+    detail = client.get(f"/api/campaigns/{cid}/characters/mara").json()
+    assert [v["id"] for v in detail["versions"]] == ["young"]
+    # any pick on a locked actor -> 409, even naming a version the pick purged
+    assert client.post(f"/api/campaigns/{cid}/characters/mara/pick-version",
+                       json={"version": "veteran"}).status_code == 409
+    # import replaces the pick
+    r = client.post(f"/api/campaigns/{cid}/characters/mara/import-version",
+                    json={"version": "veteran"})
+    assert r.status_code == 200
+    detail = client.get(f"/api/campaigns/{cid}/characters/mara").json()
+    assert [v["id"] for v in detail["versions"]] == ["veteran"]
+    # locked actor refuses new campaign versions
+    assert client.post(f"/api/campaigns/{cid}/characters/mara/versions",
+                       json={"name": "extra", "card": {"spec": "chara_card_v3",
+                                                       "spec_version": "3.0",
+                                                       "data": {"name": "X"}}}).status_code == 409
+
+
+def test_campaign_import_requires_lock_and_actor_kind(client):
+    wid, cid = _campaign_with_actor(client)
+    assert client.post(f"/api/campaigns/{cid}/characters/mara/import-version",
+                       json={"version": "veteran"}).status_code == 409
+    assert client.post(f"/api/campaigns/{cid}/locations/somewhere/pick-version",
+                       json={"version": "x"}).status_code == 404
+
+
+def test_campaign_pc_read_and_versions(client):
+    wid = _world(client)
+    client.post(f"/api/worlds/{wid}/pcs", json={"name": "Elara", "tags": []})
+    cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
+    detail = client.get(f"/api/campaigns/{cid}/pcs/elara").json()
+    assert detail["meta"]["id"] == "elara"
+    r = client.put(f"/api/campaigns/{cid}/pcs/elara", json={"tags": ["anything-goes"]})
+    assert r.status_code == 200
+    r = client.post(f"/api/campaigns/{cid}/pcs/elara/versions",
+                    json={"name": "older", "persona": {"name": "Elara", "pronouns": "",
+                                                       "summary": "", "description": "x"}})
+    assert r.status_code == 200

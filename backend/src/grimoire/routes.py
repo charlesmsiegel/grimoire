@@ -48,6 +48,10 @@ class NewCampaign(BaseModel):
     region: str | None = None
 
 
+class PickBody(BaseModel):
+    version: str
+
+
 class MarkBody(BaseModel):
     status: str  # "completed" | "skipped" | "none" — validated in the store
 
@@ -1521,6 +1525,161 @@ def post_campaign_pc(cid: str, body: PCCreate):
 @router.get("/campaigns/{cid}/characters/{char}/versions/{vid}/images/{name}")
 def get_campaign_image(cid: str, char: str, vid: str, name: str):
     return _serve_image(_campaign_root_or_404(cid), char, vid, name)
+
+
+def _campaign_wroot(cid: str):
+    return store.worlds.world_root(store.campaigns.read_campaign(cid)["meta"].get("world", ""))
+
+
+@router.get("/campaigns/{cid}/characters")
+def get_campaign_characters(cid: str):
+    return store.characters.list_characters(_campaign_root_or_404(cid))
+
+
+@router.get("/campaigns/{cid}/characters/{char}")
+def get_campaign_character(cid: str, char: str):
+    try:
+        return store.characters.read_character(_campaign_root_or_404(cid), char)
+    except store.characters.CharacterNotFound:
+        raise HTTPException(status_code=404, detail="character not found")
+
+
+@router.put("/campaigns/{cid}/characters/{char}")
+def put_campaign_character(cid: str, char: str, body: DefaultVersion):
+    try:
+        store.characters.set_default_version(_campaign_root_or_404(cid), char, body.default_version)
+    except store.characters.CharacterNotFound:
+        raise HTTPException(status_code=404, detail="character not found")
+    except store.characters.VersionNotFound:
+        raise HTTPException(status_code=404, detail="version not found")
+    return {"ok": True}
+
+
+@router.post("/campaigns/{cid}/characters/{char}/versions")
+def post_campaign_character_version(cid: str, char: str, body: VersionCreate):
+    root = _campaign_root_or_404(cid)
+    if store.appearances.locked_version(cid, "characters", char) is not None:
+        raise HTTPException(status_code=409, detail="character is locked to one version")
+    try:
+        vid = store.characters.create_version(root, char, body.name, body.card)
+    except store.characters.CharacterNotFound:
+        raise HTTPException(status_code=404, detail="character not found")
+    return {"version": vid}
+
+
+@router.put("/campaigns/{cid}/characters/{char}/versions/{vid}")
+def put_campaign_character_version(cid: str, char: str, vid: str, body: VersionUpdate):
+    try:
+        store.characters.update_version(_campaign_root_or_404(cid), char, vid, body.card)
+    except store.characters.CharacterNotFound:
+        raise HTTPException(status_code=404, detail="character not found")
+    except store.characters.VersionNotFound:
+        raise HTTPException(status_code=404, detail="version not found")
+    return {"ok": True}
+
+
+@router.delete("/campaigns/{cid}/characters/{char}/versions/{vid}")
+def delete_campaign_character_version(cid: str, char: str, vid: str):
+    try:
+        store.characters.delete_version(_campaign_root_or_404(cid), char, vid)
+    except store.characters.CharacterNotFound:
+        raise HTTPException(status_code=404, detail="character not found")
+    except store.characters.VersionNotFound:
+        raise HTTPException(status_code=404, detail="version not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True}
+
+
+@router.get("/campaigns/{cid}/pcs/{pid}")
+def get_campaign_pc(cid: str, pid: str):
+    try:
+        return store.pcs.read_pc(_campaign_root_or_404(cid), pid)
+    except store.pcs.PCNotFound:
+        raise HTTPException(status_code=404, detail="pc not found")
+
+
+@router.put("/campaigns/{cid}/pcs/{pid}")
+def put_campaign_pc(cid: str, pid: str, body: PCUpdate):
+    # Campaign tags are free strings: no world-vocabulary check on this side.
+    root = _campaign_root_or_404(cid)
+    try:
+        if body.tags is not None:
+            store.pcs.set_tags(root, pid, body.tags)
+        if body.default_version is not None:
+            store.pcs.set_default_version(root, pid, body.default_version)
+    except store.pcs.PCNotFound:
+        raise HTTPException(status_code=404, detail="pc not found")
+    except store.pcs.PCVersionNotFound:
+        raise HTTPException(status_code=404, detail="version not found")
+    return {"ok": True}
+
+
+@router.post("/campaigns/{cid}/pcs/{pid}/versions")
+def post_campaign_pc_version(cid: str, pid: str, body: PersonaVersionCreate):
+    root = _campaign_root_or_404(cid)
+    if store.appearances.locked_version(cid, "pcs", pid) is not None:
+        raise HTTPException(status_code=409, detail="pc is locked to one version")
+    try:
+        vid = store.pcs.create_version(root, pid, body.name, body.persona)
+    except store.pcs.PCNotFound:
+        raise HTTPException(status_code=404, detail="pc not found")
+    return {"version": vid}
+
+
+@router.put("/campaigns/{cid}/pcs/{pid}/versions/{vid}")
+def put_campaign_pc_version(cid: str, pid: str, vid: str, body: PersonaVersionUpdate):
+    try:
+        store.pcs.update_version(_campaign_root_or_404(cid), pid, vid, body.persona)
+    except store.pcs.PCNotFound:
+        raise HTTPException(status_code=404, detail="pc not found")
+    except store.pcs.PCVersionNotFound:
+        raise HTTPException(status_code=404, detail="version not found")
+    return {"ok": True}
+
+
+@router.delete("/campaigns/{cid}/pcs/{pid}/versions/{vid}")
+def delete_campaign_pc_version(cid: str, pid: str, vid: str):
+    try:
+        store.pcs.delete_version(_campaign_root_or_404(cid), pid, vid)
+    except store.pcs.PCNotFound:
+        raise HTTPException(status_code=404, detail="pc not found")
+    except store.pcs.PCVersionNotFound:
+        raise HTTPException(status_code=404, detail="version not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True}
+
+
+@router.post("/campaigns/{cid}/{kind}/{aid}/pick-version")
+def post_pick_version(cid: str, kind: str, aid: str, body: PickBody):
+    root = _campaign_root_or_404(cid)
+    if kind not in store.appearances.ACTOR_KINDS:
+        raise HTTPException(status_code=404, detail="unknown actor kind")
+    if store.appearances.locked_version(cid, kind, aid) is not None:
+        # checked before existence: the sibling versions were purged by the pick
+        raise HTTPException(status_code=409, detail=f"{kind}/{aid} is already locked")
+    if store.appearances.actor_hash(root, kind, aid, body.version) is None:
+        raise HTTPException(status_code=404, detail="actor or version not found in campaign")
+    try:
+        store.appearances.pick_version(cid, kind, aid, body.version)
+    except store.appearances.AppearError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {"ok": True}
+
+
+@router.post("/campaigns/{cid}/{kind}/{aid}/import-version")
+def post_import_version(cid: str, kind: str, aid: str, body: PickBody):
+    _campaign_root_or_404(cid)
+    if kind not in store.appearances.ACTOR_KINDS:
+        raise HTTPException(status_code=404, detail="unknown actor kind")
+    if store.appearances.actor_hash(_campaign_wroot(cid), kind, aid, body.version) is None:
+        raise HTTPException(status_code=404, detail="actor or version not found in world")
+    try:
+        store.appearances.import_version(cid, kind, aid, body.version)
+    except store.appearances.AppearError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {"ok": True}
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}/cast")
