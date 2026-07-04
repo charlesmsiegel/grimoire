@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 
@@ -114,6 +115,54 @@ def read_campaign(cid: str) -> dict:
         raise CampaignNotFound(cid)
     meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
     return {"meta": {"id": cid, **meta}, "body": body}
+
+
+def ensure_campaign_copy(cid: str) -> None:
+    """Backfill a pre-full-copy campaign (greetings, plot map, actors) from its
+    world. Idempotent: `world_copy: full` in campaign.md marks it done. Locations
+    and lore are never backfilled — they were copied at creation, and anything the
+    world added since must arrive through sync, not a silent copy. Locked actors
+    keep their purged state: a lock means the pick already happened."""
+    mp = campaign_meta_path(cid)
+    if not mp.exists():
+        raise CampaignNotFound(cid)
+    meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
+    if meta.get("world_copy") == "full":
+        return
+    root = campaign_root(cid)
+    wroot = worlds.world_root(meta.get("world", ""))
+    if wroot.exists():
+        manifest = read_manifest(cid)
+        for kind, eid in entities.synced_refs(wroot):
+            if kind in entities.ENTITY_KINDS:
+                continue
+            dst = root / kind / f"{eid}.md"
+            if not dst.exists():
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                dst.write_text((wroot / kind / f"{eid}.md").read_text(encoding="utf-8"),
+                               encoding="utf-8")
+                assets_dir = wroot / kind / eid / "assets"
+                if assets_dir.exists():
+                    shutil.copytree(assets_dir, root / kind / eid / "assets", dirs_exist_ok=True)
+            manifest[f"{kind}/{eid}"] = entities.entity_hash(wroot, kind, eid) or ""
+        if (wroot / "plotmap.json").exists() and not (root / "plotmap.json").exists():
+            (root / "plotmap.json").write_text(
+                (wroot / "plotmap.json").read_text(encoding="utf-8"), encoding="utf-8")
+        manifest["plotmap"] = greetings.plotmap_hash(wroot) or ""
+        # appearances.json is read directly: store.appearances imports this module,
+        # so importing it back would be a cycle
+        ap = root / "appearances.json"
+        locked = set(json.loads(ap.read_text(encoding="utf-8"))) if ap.exists() else set()
+        for kind, refs_of, dir_hash in (("characters", characters.character_refs, characters.dir_hash),
+                                        ("pcs", pcs.pc_refs, pcs.dir_hash)):
+            for aid in refs_of(wroot):
+                if f"{kind}/{aid}" in locked:
+                    continue
+                shutil.copytree(wroot / kind / aid, root / kind / aid, dirs_exist_ok=True)
+                manifest[f"{kind}/{aid}"] = dir_hash(wroot, aid) or ""
+        write_manifest(cid, manifest)
+    meta["world_copy"] = "full"
+    mp.write_text(dump_frontmatter(meta, body), encoding="utf-8")
 
 
 def rename_campaign(cid: str, name: str) -> None:

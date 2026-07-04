@@ -957,7 +957,9 @@ def _world_root_or_404(wid: str):
 
 
 def _campaign_root_or_404(cid: str):
-    if not store.campaigns.campaign_meta_path(cid).exists():
+    try:
+        store.campaigns.ensure_campaign_copy(cid)  # lazy backfill of legacy campaigns
+    except store.campaigns.CampaignNotFound:
         raise HTTPException(status_code=404, detail="campaign not found")
     return store.campaigns.campaign_root(cid)
 
@@ -1148,6 +1150,7 @@ def post_campaign(body: NewCampaign):
 @router.get("/campaigns/{cid}")
 def get_campaign(cid: str):
     try:
+        store.campaigns.ensure_campaign_copy(cid)
         return store.campaigns.read_campaign(cid)
     except store.campaigns.CampaignNotFound:
         raise HTTPException(status_code=404, detail="campaign not found")
