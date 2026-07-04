@@ -147,6 +147,36 @@ def pick_version(cid: str, kind: str, actor_id: str, version_id: str) -> None:
     campaigns.touch(cid)
 
 
+def import_version(cid: str, kind: str, actor_id: str, version_id: str) -> None:
+    """Replace the locked version with `version_id` from the source world. The
+    one-version-per-locked-actor invariant always holds; unlocked actors take
+    world changes via sync instead."""
+    data = record(cid)
+    ref = _ref(kind, actor_id)
+    rec = data.get(ref)
+    if rec is None:
+        raise AppearError(f"{ref} is not locked; world changes arrive via sync until a version is picked")
+    wroot = worlds.world_root(_world_id(cid))
+    base = actor_hash(wroot, kind, actor_id, version_id)
+    if base is None:
+        raise AppearError(f"no {ref}/{version_id} in world")
+    croot = campaigns.campaign_root(cid)
+    ext = _version_ext(kind)
+    d = croot / kind / actor_id
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{version_id}.{ext}").write_text(
+        (wroot / kind / actor_id / f"{version_id}.{ext}").read_text(encoding="utf-8"),
+        encoding="utf-8")
+    _set_default(croot, kind, actor_id, version_id)
+    old = rec["version"]
+    if old != version_id and (d / f"{old}.{ext}").exists():
+        (d / f"{old}.{ext}").unlink()
+    rec["version"] = version_id
+    rec["base"] = base
+    _write(cid, data)
+    campaigns.touch(cid)
+
+
 def appear(cid: str, scene_id: str, kind: str, actor_id: str, version_id: str, role: str) -> None:
     data = record(cid)
     ref = _ref(kind, actor_id)

@@ -236,3 +236,30 @@ def test_appear_after_pick_adds_scene(monkeypatch, tmp_path):
     sid = scenes.create_scene(cid, "S")
     ap.appear(cid, sid, "characters", char_id, "veteran", "npc")
     assert ap.record(cid)[f"characters/{char_id}"]["scenes"] == [sid]
+
+
+def test_import_version_replaces_pick(monkeypatch, tmp_path):
+    wid, cid, char_id = _fork(monkeypatch, tmp_path)
+    ap.pick_version(cid, "characters", char_id, "young")
+    ap.import_version(cid, "characters", char_id, "veteran")
+    croot = campaigns.campaign_root(cid)
+    assert ap.locked_version(cid, "characters", char_id) == "veteran"
+    assert (croot / "characters" / char_id / "veteran.json").exists()
+    assert not (croot / "characters" / char_id / "young.json").exists()
+    assert characters.read_character(croot, char_id)["meta"]["default_version"] == "veteran"
+    wroot = worlds.world_root(wid)
+    assert ap.record(cid)[f"characters/{char_id}"]["base"] == \
+        characters.card_hash(wroot, char_id, "veteran")
+
+
+def test_import_version_requires_lock(monkeypatch, tmp_path):
+    wid, cid, char_id = _fork(monkeypatch, tmp_path)
+    with pytest.raises(ap.AppearError):
+        ap.import_version(cid, "characters", char_id, "veteran")
+
+
+def test_import_version_unknown_world_version(monkeypatch, tmp_path):
+    wid, cid, char_id = _fork(monkeypatch, tmp_path)
+    ap.pick_version(cid, "characters", char_id, "young")
+    with pytest.raises(ap.AppearError):
+        ap.import_version(cid, "characters", char_id, "bogus")
