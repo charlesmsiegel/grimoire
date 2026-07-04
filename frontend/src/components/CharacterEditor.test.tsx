@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
 import { CharacterEditor } from "./CharacterEditor";
 
 vi.mock("../api/client", () => ({
@@ -14,6 +14,7 @@ vi.mock("../api/client", () => ({
     downloadCharacterChubGallery: vi.fn(), downloadCharacterChubLorebooks: vi.fn(),
     findChubUnlinked: vi.fn(),
     getCharacterTagline: vi.fn(), setCharacterTagline: vi.fn(), generateCharacterTagline: vi.fn(),
+    listImageAppearances: vi.fn(), copyGreetingImage: vi.fn(), listGreetings: vi.fn(),
     imageUrl: (w: string, c: string, v: string, n: string) => `/img/${w}/${c}/${v}/${n}`,
   },
 }));
@@ -50,6 +51,9 @@ beforeEach(() => {
   (api.importCharacterBook as any).mockResolvedValue({ created: [{ kind: "lore", id: "pact" }] });
   (api.setCharacterBirthdate as any).mockResolvedValue({ ok: true });
   (api.getCharacterTagline as any).mockResolvedValue({ tagline: "" });
+  (api.listImageAppearances as any).mockResolvedValue([]);
+  (api.copyGreetingImage as any).mockResolvedValue({ name: "avatar", ext: "png" });
+  (api.listGreetings as any).mockResolvedValue([]);
 });
 
 // reach the edit form: grid -> click a card's Edit button -> form
@@ -788,4 +792,34 @@ test("plain-text creator notes keep line breaks via pre-wrap", async () => {
   const frame = await screen.findByTitle("Creator notes");
   expect(frame.getAttribute("srcdoc")).toContain("white-space:pre-wrap");
   expect(frame.getAttribute("srcdoc")).toContain("line one\nline two");
+});
+
+test("appears-in gallery copies to avatar and world greetings link with primary star", async () => {
+  (api.listImageAppearances as any).mockResolvedValue([
+    { gid: "sol-1", greeting_name: "SoL 1", name: "embed-a", url: "/api/worlds/w/greetings/sol-1/images/embed-a" },
+  ]);
+  (api.listGreetings as any).mockResolvedValue([
+    { id: "sol-1", name: "SoL 1", character: "seraphine", version: "main", present: ["seraphine"], requires_tags: [], predecessor_join: "all" },
+    { id: "sol-2", name: "SoL 2", character: "other", version: "main", present: ["seraphine", "other"], requires_tags: [], predecessor_join: "all" },
+    { id: "sol-3", name: "SoL 3", character: "other", version: "main", present: ["other"], requires_tags: [], predecessor_join: "all" },
+  ]);
+  const onOpenGreeting = vi.fn();
+  render(<CharacterEditor wid="w" onOpenGreeting={onOpenGreeting} />);
+  fireEvent.click(await screen.findByText("Seraphine"));
+
+  // appears-in strip: copy to avatar
+  const label = await screen.findByText("Appears in");
+  const strip = label.parentElement as HTMLElement;
+  fireEvent.click(within(strip).getByRole("button", { name: /set as avatar/i }));
+  await waitFor(() => expect(api.copyGreetingImage).toHaveBeenCalledWith(
+    "w", "seraphine", "default", { gid: "sol-1", name: "embed-a", slot: "avatar" }));
+  expect(within(strip).getByRole("button", { name: /add to gallery/i })).toBeInTheDocument();
+
+  // world greetings: present-only listed, primary starred, absent one missing
+  const wg = screen.getByText("World greetings").parentElement as HTMLElement;
+  expect(within(wg).getByText(/★\s*SoL 1/)).toBeInTheDocument();
+  expect(within(wg).getByText("SoL 2")).toBeInTheDocument();
+  expect(within(wg).queryByText(/SoL 3/)).toBeNull();
+  fireEvent.click(within(wg).getByText("SoL 2"));
+  expect(onOpenGreeting).toHaveBeenCalledWith("sol-2");
 });
