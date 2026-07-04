@@ -656,6 +656,31 @@ test("grid cards show gallery/localized badges only when nonzero", async () => {
 });
 
 
+test("greeting scene labels are demoted and single newlines keep line breaks", async () => {
+  const card = {
+    ...CARD,
+    data: {
+      ...CARD.data,
+      first_mes: "#Rooftop Setting#\n\nFirst line\nSecond line",
+      alternate_greetings: ["#Alt Scene#\n\nalt body"],
+    },
+  };
+  (api.readCharacter as any).mockResolvedValue({
+    meta: { id: "seraphine", name: "Seraphine", default_version: "default" },
+    versions: [{ id: "default", name: "default", card, images: ["avatar"] }],
+  });
+  render(<CharacterEditor wid="w" />);
+  fireEvent.click(await screen.findByText("Seraphine"));
+  // `#Scene Label#` lines become a small scene label (trailing # stripped), not an h1
+  await screen.findByText("Rooftop Setting");
+  expect(screen.queryByRole("heading", { name: /rooftop setting/i })).toBeNull();
+  expect(screen.getByText("Alt Scene")).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: /alt scene/i })).toBeNull();
+  // a single \n inside a paragraph renders as a line break, not a collapsed space
+  expect(document.querySelector(".detail-rendered br")).not.toBeNull();
+});
+
+
 test("first message and alternate greetings render markdown images; other fields stay plain", async () => {
   const card = {
     ...CARD,

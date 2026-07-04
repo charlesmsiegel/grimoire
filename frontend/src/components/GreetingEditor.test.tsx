@@ -47,6 +47,24 @@ test("clicking a greeting shows a read-only rendered view; Edit reveals the form
   expect(container.querySelector("textarea")).not.toBeNull();
 });
 
+test("greeting body demotes scene-label headings and keeps single newlines", async () => {
+  (api.listGreetings as any).mockResolvedValue([
+    { id: "open", name: "Open", character: "seraphine", version: "default", present: [], requires_tags: [], predecessor_join: "all" },
+  ]);
+  (api.readGreeting as any).mockResolvedValue({
+    meta: { id: "open", name: "Open", character: "seraphine", version: "default", present: [], requires_tags: [], predecessor_join: "all" },
+    body: "#Rooftop Setting#\n\nFirst line\nSecond line",
+    edges: { leads_to: [], excludes: [] }, predecessors: [],
+  });
+  const { container } = render(<GreetingEditor wid="w" />);
+  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
+  fireEvent.click(await within(rail).findByText("Open"));
+  await screen.findByText("Rooftop Setting");
+  expect(screen.queryByRole("heading", { name: /rooftop setting/i })).toBeNull();
+  expect(container.querySelector(".detail-rendered br")).not.toBeNull();
+});
+
+
 test("creating a greeting posts the draft then sets edges", async () => {
   render(<GreetingEditor wid="w" />);
   await waitFor(() => expect(api.listCharacters).toHaveBeenCalled());
