@@ -71,7 +71,7 @@ def _birthdays(croot, now: str, roster: list[dict]) -> list[dict]:
     return out
 
 
-def build_snapshot(cid: str) -> dict:
+def build_snapshot(cid: str, offscreen: bool = False) -> dict:
     croot = campaigns.campaign_root(cid)
     roster = appearances.roster(cid)
 
@@ -107,19 +107,20 @@ def build_snapshot(cid: str) -> dict:
         tok = f"characters:{c['id']}"
         seen.add(tok)
         available_cast.append({"token": tok, "name": c.get("name", c["id"])})
-    for a in roster:
-        if a["role"] != "player":
-            continue
-        tok = f"{a['kind']}:{a['id']}"
-        if tok in seen:
-            continue
-        seen.add(tok)
-        try:
-            name = (pcs.read_pc(croot, a["id"])["meta"].get("name", a["id"])
-                    if a["kind"] == "pcs" else _char_name(croot, a["id"]))
-        except pcs.PCNotFound:
-            name = a["id"]
-        available_cast.append({"token": tok, "name": name})
+    if not offscreen:  # offscreen scenes never cast the player
+        for a in roster:
+            if a["role"] != "player":
+                continue
+            tok = f"{a['kind']}:{a['id']}"
+            if tok in seen:
+                continue
+            seen.add(tok)
+            try:
+                name = (pcs.read_pc(croot, a["id"])["meta"].get("name", a["id"])
+                        if a["kind"] == "pcs" else _char_name(croot, a["id"]))
+            except pcs.PCNotFound:
+                name = a["id"]
+            available_cast.append({"token": tok, "name": name})
 
     available_locations = [{"id": e["id"], "name": e.get("name", e["id"])}
                            for e in entities.list_entities(croot, "locations")]
@@ -138,11 +139,12 @@ RANK_INSTRUCTION = (
 )
 
 
-def greeting_candidates(cid: str, after: str | None = None) -> list[dict]:
+def greeting_candidates(cid: str, after: str | None = None, pcless: bool = False) -> list[dict]:
     """Available greetings worth ranking — only when more than two are startable
     (with two or fewer the chooser simply shows them all)."""
     from . import playing  # lazy: playing pulls in context; keep the import graph flat
-    avail = [g for g in playing.available_greetings(cid, after) if g["available"]]
+    avail = [g for g in playing.available_greetings(cid, after)
+             if g["available"] and g.get("pcless", False) == pcless]
     if len(avail) <= 2:
         return []
     croot = campaigns.campaign_root(cid)
@@ -166,6 +168,19 @@ INSTRUCTION = (
     '"cast" (list of "<kind>:<id>" tokens chosen ONLY from the available cast below), '
     '"location" (one location id from the available locations, or "")}. Use only the ids '
     "given; do not invent ids."
+)
+
+OFFSCREEN_INSTRUCTION = (
+    "You help a game master write OFFSCREEN scenes for a role-play campaign — scenes "
+    "that happen away from the player character, showing what NPCs do, plan, and want "
+    "when the player is not there. Given the current situation below, propose 3-4 "
+    "DISTINCT offscreen scene openings that each advance an open plot thread, reveal "
+    "an NPC's motivations, or land on an upcoming date or birthday. Never include the "
+    'player character in the cast. Reply with ONLY a JSON object with key "suggestions": '
+    'a list of {"title" (a short label), "premise" (2-3 sentences the GM can open on), '
+    '"cast" (list of "<kind>:<id>" tokens chosen ONLY from the available cast below), '
+    '"location" (one location id from the available locations, or "")}. Use only the '
+    "ids given; do not invent ids."
 )
 
 DATE_INSTRUCTION = (
@@ -204,8 +219,10 @@ def _render_snapshot(s: dict) -> str:
     return "\n\n".join(parts) if parts else "No campaign history yet; propose fresh openings."
 
 
-def build_prompt(snapshot: dict, greeting_candidates: list[dict] | None = None) -> list[dict]:
-    instruction, content = INSTRUCTION, _render_snapshot(snapshot)
+def build_prompt(snapshot: dict, greeting_candidates: list[dict] | None = None,
+                 offscreen: bool = False) -> list[dict]:
+    instruction = OFFSCREEN_INSTRUCTION if offscreen else INSTRUCTION
+    content = _render_snapshot(snapshot)
     if snapshot["now"]:  # no reference date -> no gap to estimate; don't invite invention
         instruction += DATE_INSTRUCTION
     if greeting_candidates:
@@ -259,7 +276,7 @@ def _extract_json(text: str):
     return None
 
 
-def parse_output(text: str, cid: str) -> list[dict]:
+def parse_output(text: str, cid: str, offscreen: bool = False) -> list[dict]:
     parsed = _extract_json(text)
     if isinstance(parsed, dict):
         suggestions = parsed.get("suggestions", [])
@@ -274,7 +291,9 @@ def parse_output(text: str, cid: str) -> list[dict]:
 
     def _valid_token(tok: str) -> bool:
         kind, _, aid = tok.partition(":")
-        return (kind == "characters" and aid in char_ids) or tok in player_tokens
+        if kind == "characters" and aid in char_ids:
+            return True
+        return not offscreen and tok in player_tokens
 
     out: list[dict] = []
     for e in suggestions:

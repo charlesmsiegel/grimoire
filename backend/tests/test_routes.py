@@ -2341,3 +2341,48 @@ def test_offscreen_greeting_rejects_a_scene_with_players(client):
         "pcless": True}).json()["id"]
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/start-from-greeting",
                        json={"greeting": g}).status_code == 409
+
+
+class FakeCompleter:
+    def __init__(self, text):
+        self.text = text
+
+    async def complete(self, messages, model, key):
+        self.messages = messages
+        return self.text
+
+
+def test_offscreen_suggestions_filter_player_cast(client):
+    wid, cid = _campaign(client)
+    other = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Tavern"}).json()["id"]
+    pid = _cast_pc(client, wid, cid, other, name="Elara Vane")
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Vex"})
+    # seating vex copies him into the campaign, making his token valid for suggestions
+    client.post(f"/api/campaigns/{cid}/scenes/{other}/cast", json={"kind": "characters", "id": "vex"})
+    client.put("/api/config", json={"openrouter_key": "k"})
+    fake = FakeCompleter(json.dumps({"suggestions": [{
+        "title": "Plot", "premise": "The cult schemes.",
+        "cast": ["characters:vex", f"pcs:{pid}"], "location": ""}]}))
+    client.app.dependency_overrides[routes.get_openrouter] = lambda: fake
+    out = client.post(f"/api/campaigns/{cid}/scene-suggestions?offscreen=true").json()
+    assert out["suggestions"][0]["cast"] == [{"kind": "characters", "id": "vex", "name": "Vex"}]
+    assert "offscreen" in fake.messages[0]["content"].lower()
+    assert f"pcs:{pid}" not in fake.messages[1]["content"]  # players withheld from the cast list
+
+
+def test_offscreen_suggestions_rank_only_offscreen_greetings(client):
+    wid, cid = _campaign(client)
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Vex"})
+    ver = client.get(f"/api/worlds/{wid}/characters/vex").json()["meta"]["default_version"]
+    for name in ("Alpha", "Beta", "Gamma"):
+        client.post(f"/api/campaigns/{cid}/greetings", json={
+            "name": name, "character": "vex", "version": ver, "body": "x", "pcless": True})
+    client.post(f"/api/campaigns/{cid}/greetings", json={
+        "name": "Normal", "character": "vex", "version": ver, "body": "y"})
+    client.put("/api/config", json={"openrouter_key": "k"})
+    fake = FakeCompleter(json.dumps({"suggestions": [], "greeting_picks": ["alpha", "beta"]}))
+    client.app.dependency_overrides[routes.get_openrouter] = lambda: fake
+    out = client.post(f"/api/campaigns/{cid}/scene-suggestions?offscreen=true").json()
+    assert "Available greetings" in fake.messages[1]["content"]
+    assert "Normal" not in fake.messages[1]["content"]
+    assert out["greeting_picks"] == ["alpha", "beta"]
