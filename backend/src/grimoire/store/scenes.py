@@ -7,7 +7,7 @@ from pathlib import Path
 
 from . import calendars, campaigns, entities, scene_ids, scene_refs
 from .config import read_config
-from .frontmatter import dump_frontmatter, parse_frontmatter
+from .frontmatter import dump_frontmatter, parse_frontmatter, parse_frontmatter_head
 from .paths import now_iso, slugify, uniquify
 
 # The body is a script: every message is `**<Speaker>:** content`. Role is not
@@ -115,7 +115,7 @@ def list_scenes(cid: str) -> list[dict]:
     d = _scenes_dir(cid)
     if d.exists():
         for p in d.glob("*.md"):
-            meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
+            meta = parse_frontmatter_head(p)  # never reads the transcript body
             out.append({
                 "id": p.stem,
                 "title": meta.get("title", p.stem),

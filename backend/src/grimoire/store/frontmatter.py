@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 
 def _needs_quotes(value: str) -> bool:
     if value == "":
@@ -47,6 +49,27 @@ def parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
             continue
         meta[key.strip()] = _unquote(value)
     return meta, after
+
+
+def parse_frontmatter_head(path: Path) -> dict[str, str]:
+    """parse_frontmatter's meta dict, reading only the header block from disk.
+    List endpoints use this so a scene with a megabyte of transcript costs a
+    few buffered lines, not a whole-file read. Same shape as the full parser:
+    {} when the fence is missing or never terminated."""
+    meta: dict[str, str] = {}
+    # universal newlines, same as the read_text the full parser sees
+    with open(path, encoding="utf-8") as f:
+        if f.readline() != "---\n":
+            return {}
+        for line in f:
+            if line.startswith("---"):
+                return meta
+            if not line.strip():
+                continue
+            key, sep, value = line.partition(":")
+            if sep:
+                meta[key.strip()] = _unquote(value)
+    return {}  # unterminated block: the full parser treats this as no frontmatter
 
 
 def dump_frontmatter(meta: dict[str, str], body: str) -> str:
