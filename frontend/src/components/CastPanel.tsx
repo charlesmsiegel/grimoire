@@ -5,7 +5,7 @@ import {
 } from "../api/client";
 
 export function CastPanel({
-  cid, sid, keySet, onSeeded, onSceneRenamed, initialPrompt,
+  cid, sid, keySet, onSeeded, onSceneRenamed, initialPrompt, pcless,
 }: {
   cid: string;
   sid: string;
@@ -13,6 +13,7 @@ export function CastPanel({
   onSeeded: () => void;
   onSceneRenamed?: (id: string) => void;
   initialPrompt?: string;
+  pcless?: boolean;
 }) {
   const [cast, setCast] = useState<Actor[]>([]);
   const [chars, setChars] = useState<CharacterSummary[]>([]);
@@ -67,7 +68,10 @@ export function CastPanel({
     if (!actorId) return;
     setError(null);
     try {
-      await api.addToCast(cid, sid, { kind, id: actorId, role: kind === "pcs" ? "player" : role });
+      await api.addToCast(cid, sid, {
+        kind, id: actorId,
+        role: pcless ? "npc" : kind === "pcs" ? "player" : role,
+      });
       setActorId("");
       await reloadCast();
     } catch (err: any) {
@@ -218,16 +222,18 @@ export function CastPanel({
         <div>
           <div className="role">Add to scene</div>
           <div className="picker">
-            <select aria-label="Actor kind" value={kind}
-                    onChange={(e) => { setKind(e.target.value as "characters" | "pcs"); setActorId(""); }}>
-              <option value="characters">Character</option>
-              <option value="pcs">PC</option>
-            </select>
+            {!pcless && (
+              <select aria-label="Actor kind" value={kind}
+                      onChange={(e) => { setKind(e.target.value as "characters" | "pcs"); setActorId(""); }}>
+                <option value="characters">Character</option>
+                <option value="pcs">PC</option>
+              </select>
+            )}
             <select aria-label="Actor" value={actorId} onChange={(e) => setActorId(e.target.value)}>
               <option value="">— pick —</option>
               {options.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
             </select>
-            {kind === "characters" && (
+            {kind === "characters" && !pcless && (
               <select aria-label="Role" value={role} onChange={(e) => setRole(e.target.value as "player" | "npc")}>
                 <option value="npc">npc</option>
                 <option value="player">player</option>

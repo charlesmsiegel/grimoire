@@ -176,3 +176,10 @@ test("first date set renames the scene: adopts the new id via onSceneRenamed", a
   await waitFor(() => expect(onSceneRenamed).toHaveBeenCalledWith("001--2026-07-04--s"));
   expect(onSeeded).not.toHaveBeenCalled();  // the parent re-selects via the new id instead
 });
+
+test("offscreen scene hides PC and player seating", async () => {
+  render(<CastPanel cid="c" sid="s" keySet onSeeded={() => {}} pcless />);
+  await screen.findByText(/add to scene/i);
+  expect(screen.queryByLabelText("Actor kind")).toBeNull();
+  expect(screen.queryByLabelText("Role")).toBeNull();
+});
