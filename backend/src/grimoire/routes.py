@@ -160,7 +160,7 @@ class ChronicleSave(BaseModel):
 
 
 class ChatTurn(BaseModel):
-    content: str
+    content: str = ""
 
 
 class Appear(BaseModel):
@@ -1412,6 +1412,13 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, client: OpenRouterClient = Dep
     _require_scene(cid, sid)
     cfg = store.read_config()
     _require_key(cfg)
+    if store.scenes.is_pcless(cid, sid):
+        # director turn: the note steers this one generation and is never stored
+        note = turn.content.strip() or "Continue the scene."
+        messages = store.context.build_director_messages(cid, sid, note)
+        return _chat_stream(cid, sid, messages, cfg, client)
+    if not turn.content.strip():
+        raise HTTPException(status_code=400, detail="empty message")
     names = store.appearances.player_names(cid, sid)
     speaker = names[0] if len(names) == 1 else None
     if speaker:

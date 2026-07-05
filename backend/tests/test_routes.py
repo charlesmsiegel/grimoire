@@ -2247,3 +2247,40 @@ def test_offscreen_opener_uses_third_person_instruction(client):
         r.read()
     assert "offscreen scene" in cap.messages[0]["content"].lower()
     assert "No player character is present" in cap.messages[0]["content"]
+
+
+def test_offscreen_chat_never_persists_the_director_note(client):
+    _, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes",
+                      json={"title": "Cabal", "pcless": True}).json()["id"]
+    client.put("/api/config", json={"openrouter_key": "k"})
+    client.app.dependency_overrides[routes.get_openrouter] = \
+        lambda: FakeOpenRouter(["**Grimoire:** The cult convenes."])
+    with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/chat",
+                       json={"content": "the guard grows suspicious"}) as r:
+        r.read()
+    msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    assert msgs and all(m["role"] == "assistant" for m in msgs)
+    assert "guard grows suspicious" not in json.dumps(msgs)
+
+
+def test_offscreen_chat_empty_note_sends_continue(client):
+    _, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes",
+                      json={"title": "Cabal", "pcless": True}).json()["id"]
+    client.put("/api/config", json={"openrouter_key": "k"})
+    cap = CapturingOpenRouter()
+    client.app.dependency_overrides[routes.get_openrouter] = lambda: cap
+    with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/chat",
+                       json={"content": ""}) as r:
+        r.read()
+    assert [m for m in cap.messages if m["role"] == "user"] == \
+        [{"role": "user", "content": "Continue the scene."}]
+
+
+def test_chat_rejects_blank_content_in_a_normal_scene(client):
+    _, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    client.put("/api/config", json={"openrouter_key": "k"})
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat",
+                       json={"content": " "}).status_code == 400
