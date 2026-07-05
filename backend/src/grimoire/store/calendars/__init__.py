@@ -1,4 +1,4 @@
-from . import gregorian  # noqa: F401  (registers the provider)
+from . import gregorian, hebrew  # noqa: F401  (import registers the providers)
 from .base import (  # noqa: F401
     UPCOMING_WINDOW_DAYS,
     CalendarError, CalendarProvider, get_provider, register,
