@@ -2216,3 +2216,34 @@ def test_offscreen_scene_rejects_player_seating(client):
     # NPCs still seat fine
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
                        json={"kind": "characters", "id": "desmond"}).status_code == 200
+
+
+def test_offscreen_context_has_director_section_and_absent_pc(client):
+    wid, cid = _campaign(client)
+    # the PC enters the campaign roster by being seated in a *different* scene
+    other = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Tavern"}).json()["id"]
+    _cast_pc(client, wid, cid, other, name="Elara Vane")
+    sid = client.post(f"/api/campaigns/{cid}/scenes",
+                      json={"title": "Cabal", "pcless": True}).json()["id"]
+    sections = client.get(f"/api/campaigns/{cid}/scenes/{sid}/context").json()["sections"]
+    labels = {s["label"]: s["text"] for s in sections}
+    assert "director's notes" in labels["Offscreen scene"]
+    assert "Elara Vane" in labels["Offscreen scene"]           # named as not-present
+    assert "Elara Vane" in labels["Absent player characters"]  # persona as reference
+    normal = {s["label"] for s in
+              client.get(f"/api/campaigns/{cid}/scenes/{other}/context").json()["sections"]}
+    assert "Offscreen scene" not in normal
+
+
+def test_offscreen_opener_uses_third_person_instruction(client):
+    _, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes",
+                      json={"title": "Cabal", "pcless": True}).json()["id"]
+    client.put("/api/config", json={"openrouter_key": "k"})
+    cap = CapturingOpenRouter()
+    client.app.dependency_overrides[routes.get_openrouter] = lambda: cap
+    with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/opener",
+                       json={"prompt": "the cult meets"}) as r:
+        r.read()
+    assert "offscreen scene" in cap.messages[0]["content"].lower()
+    assert "No player character is present" in cap.messages[0]["content"]
