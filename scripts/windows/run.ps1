@@ -11,6 +11,20 @@ if (Test-Path $PidFile) {
         Write-Host "grimoire is already running ($Url). Use shutdown.ps1 to stop it."
         exit 0
     }
+    # Stale pid file: the recorded parents died, but on Windows their children
+    # (uvicorn's reload worker, npm's node) survive them. Kill the full trees.
+    foreach ($id in Get-Content $PidFile) {
+        if ($id) { taskkill /PID $id /T /F 2>$null | Out-Null }
+    }
+}
+# Orphaned workers can hold the ports even with no pid file on record (a killed
+# supervisor never takes its children with it) — a fresh launch would then bind
+# alongside a zombie serving stale code. Free the ports before starting.
+foreach ($port in 8173, 5173) {
+    $owners = (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).OwningProcess | Select-Object -Unique
+    foreach ($o in $owners) {
+        if ($o) { taskkill /PID $o /T /F 2>$null | Out-Null }
+    }
 }
 
 $back = Start-Process -FilePath "$Root\backend\.venv\Scripts\python.exe" `
