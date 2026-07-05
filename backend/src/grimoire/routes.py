@@ -144,6 +144,7 @@ class RefList(BaseModel):
 class NewScene(BaseModel):
     title: str | None = None
     suggested_date: str | None = None
+    pcless: bool = False
 
 
 class RenameScene(BaseModel):
@@ -1315,7 +1316,8 @@ def get_scenes(cid: str):
 def post_scene(cid: str, body: NewScene):
     title = body.title or "New scene"
     try:
-        return {"id": store.scenes.create_scene(cid, title, body.suggested_date)}
+        return {"id": store.scenes.create_scene(cid, title, body.suggested_date,
+                                                pcless=body.pcless)}
     except store.campaigns.CampaignNotFound:
         raise HTTPException(status_code=404, detail="campaign not found")
 
