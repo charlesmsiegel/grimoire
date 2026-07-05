@@ -2201,3 +2201,18 @@ def test_scene_pcless_flag_roundtrip(client):
     assert store.scenes.is_pcless(cid, sid) is True
     assert store.scenes.is_pcless(cid, normal) is False
     assert store.scenes.is_pcless(cid, "missing") is False
+
+
+def test_offscreen_scene_rejects_player_seating(client):
+    wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes",
+                      json={"title": "Cabal", "pcless": True}).json()["id"]
+    pid = client.post(f"/api/worlds/{wid}/pcs", json={"name": "Elara"}).json()["pc"]
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                       json={"kind": "pcs", "id": pid}).status_code == 400
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "desmond"})
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                       json={"kind": "characters", "id": "desmond", "role": "player"}).status_code == 400
+    # NPCs still seat fine
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                       json={"kind": "characters", "id": "desmond"}).status_code == 200
