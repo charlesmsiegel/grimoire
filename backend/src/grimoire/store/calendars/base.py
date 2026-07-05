@@ -54,6 +54,52 @@ class CalendarProvider(ABC):
         b, a = self.describe(birth_fixed), self.describe(asof_fixed)
         return (a["month"], a["day"]) == (b["month"], b["day"])
 
+    # Fixed {name, month, day} custom-holiday rules, validated against months().
+    RULE_REFERENCE_YEAR = 2024  # a leap year, so Feb-29-style rules validate
+
+    def _month_entry(self, key) -> dict | None:
+        wanted = str(key)
+        if wanted.isdigit():
+            wanted = f"{int(wanted):02d}"  # legacy integer months (Gregorian)
+        wanted = wanted.lower()
+        for m in self.months(self.RULE_REFERENCE_YEAR):
+            if m["key"].lower() == wanted:
+                return m
+        return None
+
+    def validate_rule(self, rule: dict) -> None:
+        """Raise CalendarError unless rule is a valid fixed {name, month, day} rule."""
+        if not rule.get("name"):
+            raise CalendarError(f"custom holiday needs a name: {rule!r}")
+        if "day" not in rule:
+            raise CalendarError(f"only fixed {{month, day}} custom holidays are supported: {rule!r}")
+        try:
+            day = int(rule["day"])
+        except (ValueError, TypeError) as e:
+            raise CalendarError(f"custom holiday day is malformed: {rule!r}") from e
+        m = self._month_entry(rule.get("month"))
+        if m is None:
+            raise CalendarError(f"custom holiday month is unknown: {rule!r}")
+        if not (1 <= day <= m["days"]):
+            raise CalendarError(f"custom holiday day out of range: {rule!r}")
+
+    def _custom_fixed(self, start_fixed: int, end_fixed: int) -> list[dict]:
+        """Resolve this provider's fixed custom rules within a fixed-day range."""
+        out: list[dict] = []
+        y0 = self.describe(start_fixed)["year"]
+        y1 = self.describe(end_fixed)["year"]
+        for rule in getattr(self, "custom_holidays", []) or []:
+            if "day" not in rule:
+                continue
+            for y in range(y0, y1 + 1):
+                try:
+                    f = self.parse(f"{y}-{rule['month']}-{int(rule['day']):02d}")
+                except (CalendarError, KeyError, ValueError, TypeError):
+                    continue
+                if start_fixed <= f <= end_fixed:
+                    out.append({"name": rule.get("name", ""), "fixed": f})
+        return out
+
 
 REGISTRY: dict[str, type[CalendarProvider]] = {}
 
