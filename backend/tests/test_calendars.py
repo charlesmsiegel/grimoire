@@ -245,3 +245,18 @@ def test_validate_rule_is_provider_aware():
                 {"name": "X", "month": 2, "day": 30}):
         with pytest.raises(CalendarError):
             p.validate_rule(bad)
+
+
+def test_today_facts_with_hebrew_and_harptos_primaries():
+    heb_cfg = {"primary": {"provider": "hebrew", "region": "", "custom_holidays": [],
+                           "anchor": None}, "secondary": None}
+    facts = today_facts(heb_cfg, "5786-Kislev-25")
+    assert facts["friendly"] == "25 Kislev 5786"
+    assert any("Chanuka" in n for n in facts["holidays_today"])
+
+    har_cfg = {"primary": {"provider": "harptos", "region": "", "custom_holidays": [],
+                           "anchor": None}, "secondary": None}
+    facts = today_facts(har_cfg, "1492-Midsummer-01")
+    assert facts["friendly"].startswith("Midsummer, 1492 DR")
+    assert "Midsummer" in facts["holidays_today"]
+    assert facts["upcoming"] == {"name": "Shieldmeet", "in_days": 1}
