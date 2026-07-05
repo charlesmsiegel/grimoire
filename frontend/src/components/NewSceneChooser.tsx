@@ -19,6 +19,8 @@ export function NewSceneChooser({ cid, afterSid, keySet, onClose, onCreated }: {
   const [suggestions, setSuggestions] = useState<SceneSuggestion[] | null>(keySet ? null : []);
   // the same LLM call ranks greetings when >2 are available; null = pending
   const [picks, setPicks] = useState<string[] | null>(keySet ? null : []);
+  // the same call estimates when the next scene opens; undefined until it answers
+  const [nextDate, setNextDate] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -31,7 +33,7 @@ export function NewSceneChooser({ cid, afterSid, keySet, onClose, onCreated }: {
   useEffect(() => {
     if (!keySet) return;
     api.sceneSuggestions(cid, afterSid ?? undefined)
-      .then((r) => { setSuggestions(r.suggestions); setPicks(r.greeting_picks ?? []); })
+      .then((r) => { setSuggestions(r.suggestions); setPicks(r.greeting_picks ?? []); setNextDate(r.next_date || undefined); })
       .catch((err) => { setSuggestions([]); setPicks([]); setError(errMsg(err)); });
   }, [cid, afterSid, keySet]);
 
@@ -53,12 +55,12 @@ export function NewSceneChooser({ cid, afterSid, keySet, onClose, onCreated }: {
   const greetingCards = rankPending ? [] : orderedGreetings.slice(0, wantGenerated ? 2 : 4);
   const generatedCards = (suggestions ?? []).slice(0, 4 - (rankPending ? 2 : greetingCards.length));
 
-  async function create(seed: (sid: string) => Promise<string | undefined>) {
+  async function create(seed: (sid: string) => Promise<string | undefined>, date?: string) {
     setBusy(true);
     setError(null);
     let created: string | null = null;
     try {
-      const { id } = await api.createScene(cid);
+      const { id } = date ? await api.createScene(cid, undefined, date) : await api.createScene(cid);
       created = id;
       const prompt = await seed(id);
       if (prompt !== undefined) onCreated(id, prompt);
@@ -72,11 +74,11 @@ export function NewSceneChooser({ cid, afterSid, keySet, onClose, onCreated }: {
     }
   }
 
-  const pickManual = () => create(async () => undefined);
+  const pickManual = () => create(async () => undefined, nextDate);
   const pickGreeting = (gid: string) => create(async (sid) => {
     await api.startFromGreeting(cid, sid, gid);
     return undefined;
-  });
+  }, nextDate);
   const pickSuggestion = (s: SceneSuggestion) => create(async (sid) => {
     if (s.cast.length) {
       // one request; members already cast come back in `skipped`, which is fine
@@ -84,7 +86,7 @@ export function NewSceneChooser({ cid, afterSid, keySet, onClose, onCreated }: {
     }
     if (s.location) await api.setSceneLocation(cid, sid, s.location.id);
     return s.premise;
-  });
+  }, s.date || nextDate);
 
   return (
     <div className="chooser-backdrop" role="dialog" aria-label="New scene"

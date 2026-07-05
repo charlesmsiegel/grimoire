@@ -165,7 +165,7 @@ export type SceneDatetimeFacts = {
   native: string; friendly: string; weekday: string; secondary_friendly: string | null;
   holidays_today: string[]; upcoming: { name: string; in_days: number } | null; cast: SceneDatetimeCast[];
 };
-export type SceneDatetime = { current: SceneDatetimeFacts | null; history: string[] };
+export type SceneDatetime = { current: SceneDatetimeFacts | null; history: string[]; suggested: string | null };
 export type CalendarBlock = {
   provider: string; region: string;
   custom_holidays: Array<{ name: string; month: number; day?: number; nth?: number; weekday?: number }>;
@@ -188,7 +188,7 @@ export type SceneAbsorb = {
   edits: StagedEdit[];
 };
 export type SceneSuggestion = {
-  title: string; premise: string;
+  title: string; premise: string; date?: string;
   cast: { kind: string; id: string; name: string }[];
   location: { id: string; name: string } | null;
 };
@@ -287,8 +287,9 @@ export const api = {
 
   // scenes
   listScenes: (cid: string) => request<SceneMeta[]>("GET", `/api/campaigns/${cid}/scenes`),
-  createScene: (cid: string, title?: string) =>
-    request<{ id: string }>("POST", `/api/campaigns/${cid}/scenes`, { title }),
+  createScene: (cid: string, title?: string, suggestedDate?: string) =>
+    request<{ id: string }>("POST", `/api/campaigns/${cid}/scenes`,
+      { title, suggested_date: suggestedDate }),
   getScene: (cid: string, sid: string) =>
     request<Scene>("GET", `/api/campaigns/${cid}/scenes/${sid}`),
   renameScene: (cid: string, sid: string, title: string) =>
@@ -501,7 +502,7 @@ export const api = {
   getSceneContext: (cid: string, sid: string) =>
     request<SceneContext>("GET", `/api/campaigns/${cid}/scenes/${sid}/context`),
   sceneSuggestions: (cid: string, after?: string) =>
-    request<{ suggestions: SceneSuggestion[]; greeting_picks?: string[] }>(
+    request<{ suggestions: SceneSuggestion[]; greeting_picks?: string[]; next_date?: string }>(
       "POST", `/api/campaigns/${cid}/scene-suggestions${after ? `?after=${encodeURIComponent(after)}` : ""}`),
   getCastDetail: (cid: string, sid: string, kind: string, id: string) =>
     request<CastDetail>("GET", `/api/campaigns/${cid}/scenes/${sid}/cast/${kind}/${id}`),
