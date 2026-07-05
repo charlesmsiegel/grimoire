@@ -395,3 +395,27 @@ def test_split_reply_guards_player_first_name():
         {"speaker": None, "content": "forged line"},
         {"speaker": "Seraphine", "content": '"Fine."'},
     ]
+
+
+def test_create_scene_stores_a_valid_suggested_date(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S", suggested_date="2026-07-10")
+    assert scenes.get_suggested_date(cid, sid) == "2026-07-10"
+
+
+def test_create_scene_ignores_an_invalid_suggested_date(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S", suggested_date="soonish")
+    assert scenes.get_suggested_date(cid, sid) == ""
+
+
+def test_get_suggested_date_missing_scene_is_empty(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    assert scenes.get_suggested_date(cid, "nope") == ""
+
+
+def test_set_datetime_clears_the_suggested_date(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S", suggested_date="2026-07-10")
+    sid = scenes.set_datetime(cid, sid, "2026-07-12")["id"]
+    assert scenes.get_suggested_date(cid, sid) == ""
