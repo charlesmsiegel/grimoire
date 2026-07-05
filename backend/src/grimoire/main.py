@@ -27,7 +27,8 @@ def create_app() -> FastAPI:
     app = FastAPI(title="grimoire", lifespan=_lifespan)
     # character detail responses run to hundreds of KB of JSON; payloads under
     # the floor (and streaming responses) pass through untouched
-    app.add_middleware(GZipMiddleware, minimum_size=1024)
+    # compresslevel 6 over the default 9: ~2-3x less CPU for ~1% larger output
+    app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
