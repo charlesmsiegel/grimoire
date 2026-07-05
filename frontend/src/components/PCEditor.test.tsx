@@ -1,14 +1,34 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { PCEditor } from "./PCEditor";
 
-vi.mock("../api/client", () => ({
-  api: {
-    listAppearances: vi.fn(), pickVersion: vi.fn(), importVersion: vi.fn(), createCampaignPC: vi.fn(),
-    listPCs: vi.fn(), listTags: vi.fn(), readPC: vi.fn(), createPC: vi.fn(),
-    updatePC: vi.fn(), deletePC: vi.fn(), createPCVersion: vi.fn(), updatePCVersion: vi.fn(),
-  },
-}));
+vi.mock("../api/client", async () => {
+  const actual = await vi.importActual<typeof import("../api/client")>("../api/client");
+  return {
+    ...actual,
+    api: {
+      listAppearances: vi.fn(), pickVersion: vi.fn(), importVersion: vi.fn(), createCampaignPC: vi.fn(),
+      listPCs: vi.fn(), listTags: vi.fn(), readPC: vi.fn(), createPC: vi.fn(),
+      updatePC: vi.fn(), deletePC: vi.fn(), createPCVersion: vi.fn(), updatePCVersion: vi.fn(),
+      getCalendarMonths: vi.fn(),
+    },
+  };
+});
 import { api } from "../api/client";
+
+const GREG_MONTHS = [
+  { key: "01", name: "January", days: 31 },
+  { key: "02", name: "February", days: 28 },
+  { key: "03", name: "March", days: 31 },
+  { key: "04", name: "April", days: 30 },
+  { key: "05", name: "May", days: 31 },
+  { key: "06", name: "June", days: 30 },
+  { key: "07", name: "July", days: 31 },
+  { key: "08", name: "August", days: 31 },
+  { key: "09", name: "September", days: 30 },
+  { key: "10", name: "October", days: 31 },
+  { key: "11", name: "November", days: 30 },
+  { key: "12", name: "December", days: 31 },
+];
 
 const DETAIL = {
   meta: { id: "elara", name: "Elara", tags: ["student"], default_version: "default" },
@@ -24,6 +44,7 @@ beforeEach(() => {
   (api.updatePC as any).mockResolvedValue({ ok: true });
   (api.updatePCVersion as any).mockResolvedValue({ ok: true });
   (api.createPCVersion as any).mockResolvedValue({ version: "young" });
+  (api.getCalendarMonths as any).mockResolvedValue({ months: GREG_MONTHS });
 });
 
 test("clicking a PC shows a read-only view; Edit reveals the form", async () => {
@@ -73,7 +94,13 @@ test("editing the birthdate saves it on the persona", async () => {
   render(<PCEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   fireEvent.click(await screen.findByText("Elara"));
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
-  fireEvent.change(await screen.findByLabelText("Birthdate"), { target: { value: "1990-06-29" } });
+  fireEvent.change(await screen.findByLabelText("Birthdate year"), { target: { value: "1990" } });
+  const monthSelect = await screen.findByLabelText("Birthdate month");
+  await waitFor(() => expect(monthSelect).not.toBeDisabled());
+  fireEvent.change(monthSelect, { target: { value: "06" } });
+  const daySelect = screen.getByLabelText("Birthdate day");
+  await waitFor(() => expect(daySelect).not.toBeDisabled());
+  fireEvent.change(daySelect, { target: { value: "29" } });
   fireEvent.click(screen.getByRole("button", { name: /save persona/i }));
   await waitFor(() =>
     expect(api.updatePCVersion).toHaveBeenCalledWith({ kind: "world", id: "w" }, "elara", "default",

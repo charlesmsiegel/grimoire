@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, type EntityScope, type PCDetail, type PCSummary, type Persona, type VersionRef } from "../api/client";
+import { CalendarDatePicker } from "./CalendarDatePicker";
 import { Field } from "./Field";
 import { OwnedLorePanel } from "./OwnedLorePanel";
 
@@ -271,8 +272,9 @@ export function PCEditor({ scope, wid, onOpenLore }:
               <input type="text" value={persona.summary} onChange={(e) => setPersona({ ...persona, summary: e.target.value })} />
             </Field>
             <Field label="Birthdate">
-              <input type="date" aria-label="Birthdate" value={persona.birthdate ?? ""}
-                     onChange={(e) => setPersona({ ...persona, birthdate: e.target.value })} />
+              <CalendarDatePicker scope={scope} value={persona.birthdate ?? ""}
+                                  onChange={(v) => setPersona({ ...persona, birthdate: v })}
+                                  ariaLabel="Birthdate" />
             </Field>
             <Field label="Description">
               <textarea value={persona.description} rows={6} onChange={(e) => setPersona({ ...persona, description: e.target.value })} />
