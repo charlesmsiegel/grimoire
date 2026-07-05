@@ -53,6 +53,20 @@ test("an external value change re-syncs the fields", async () => {
   expect(screen.getByLabelText("Scene date day")).toHaveValue("5");
 });
 
+test("a prefill arriving mid-edit does not clobber typed input", async () => {
+  (api.getCalendarMonths as any).mockResolvedValue({ months: HARPTOS_1492 });
+  const onChange = vi.fn();
+  const { rerender } = render(
+    <CalendarDatePicker scope={{ kind: "campaign", id: "c1" }} value=""
+                        onChange={onChange} ariaLabel="Scene date" />);
+  await userEvent.type(screen.getByLabelText("Scene date year"), "20");
+  rerender(
+    <CalendarDatePicker scope={{ kind: "campaign", id: "c1" }} value="2026-06-29"
+                        onChange={onChange} ariaLabel="Scene date" />);
+  expect(screen.getByLabelText("Scene date year")).toHaveValue(20);
+  expect(onChange).not.toHaveBeenCalledWith("2026-06-29");
+});
+
 test("a year change that shortens the month clears a day that no longer fits", async () => {
   const CHESHVAN_30 = [{ key: "Cheshvan", name: "Cheshvan", days: 30 }];
   const CHESHVAN_29 = [{ key: "Cheshvan", name: "Cheshvan", days: 29 }];
