@@ -27,6 +27,8 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   const [when, setWhen] = useState<SceneDatetime | null>(null);
   const [provider, setProvider] = useState("gregorian");
   const [dateInput, setDateInput] = useState("");
+  const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
+  const [locPick, setLocPick] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -38,6 +40,9 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
         setNames(m);
       });
     getModels().then(setModels).catch(() => setModels([]));
+    api.listEntities({ kind: "campaign", id: cid }, "locations")
+      .then((ls) => setLocations(ls.map((l) => ({ id: l.id, name: l.name }))))
+      .catch(() => setLocations([]));
   }, [cid]);
 
   const reloadWhen = useCallback(
@@ -73,6 +78,19 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
       await api.setCalendarConfig(cid, {
         ...cfg, primary: { ...cfg.primary, provider }, confirmed: true });
       await reloadCfg();
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
+  }
+
+  async function moveTo() {
+    if (!locPick) return;
+    setError(null);
+    try {
+      await api.setSceneLocation(cid, sid, locPick);
+      setLocPick("");
+      await api.getSceneLocation(cid, sid).then(setSetting).catch(() => setSetting(null));
+      onSceneChanged(); // surface the location-transition line in the stream
     } catch (err: any) {
       setError(err.detail ?? String(err));
     }
@@ -148,6 +166,18 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
               <span>{setting.current.name}</span>
             </button>
           : <div className="field-hint">No setting</div>}
+        {locations.length > 0 && (
+          <div className="picker">
+            <select aria-label="Move to location" value={locPick}
+                    onChange={(e) => setLocPick(e.target.value)}>
+              <option value="">Move to…</option>
+              {locations
+                .filter((l) => l.id !== setting?.current?.id)
+                .map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+            </select>
+            <button className="primary" onClick={moveTo} disabled={!locPick}>Move to</button>
+          </div>
+        )}
       </div>
 
       <div className="side-section">

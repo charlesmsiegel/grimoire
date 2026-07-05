@@ -9,6 +9,7 @@ vi.mock("../api/client", () => ({
     getCalendarConfig: vi.fn(), setCalendarConfig: vi.fn(),
     getSceneDatetime: vi.fn(), setSceneDatetime: vi.fn(),
     listAppearances: vi.fn(), listEntityImages: vi.fn(),
+    listEntities: vi.fn(), setSceneLocation: vi.fn(),
     campaignImageUrl: () => "/img",
     entityImageUrl: () => "/loc-img",
   },
@@ -42,6 +43,8 @@ beforeEach(() => {
   (api.setSceneDatetime as any).mockResolvedValue({ ok: true, advanced: false, friendly: "", id: "s" });
   (api.listAppearances as any).mockResolvedValue([]);
   (api.listEntityImages as any).mockResolvedValue([]);
+  (api.listEntities as any).mockResolvedValue([]);
+  (api.setSceneLocation as any).mockResolvedValue({ ok: true, moved: true, name: "" });
 });
 
 function renderInspector(onSceneChanged: () => void = () => {}) {
@@ -147,4 +150,24 @@ test("shows the current date when one is set", async () => {
     history: ["2026-07-04"] });
   renderInspector();
   await screen.findByText(/4 July 2026/);
+});
+
+test("Move to sets the scene location, reloads it, and refreshes the stream", async () => {
+  (api.listEntities as any).mockResolvedValue([
+    { id: "crypt", name: "The Crypt" }, { id: "docks", name: "The Docks" }]);
+  const onSceneChanged = vi.fn();
+  renderInspector(onSceneChanged);
+  await screen.findByText("The Crypt");
+  fireEvent.change(await screen.findByLabelText(/move to location/i), { target: { value: "docks" } });
+  fireEvent.click(screen.getByRole("button", { name: /move to/i }));
+  await waitFor(() => expect(api.setSceneLocation).toHaveBeenCalledWith("c", "s", "docks"));
+  await waitFor(() => expect(onSceneChanged).toHaveBeenCalled());
+  expect((api.getSceneLocation as any).mock.calls.length).toBeGreaterThan(1); // reloaded after the move
+});
+
+test("Move to is disabled until a location is chosen", async () => {
+  (api.listEntities as any).mockResolvedValue([{ id: "docks", name: "The Docks" }]);
+  renderInspector();
+  await screen.findByText("The Crypt");
+  expect(await screen.findByRole("button", { name: /move to/i })).toBeDisabled();
 });

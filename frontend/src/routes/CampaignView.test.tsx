@@ -44,7 +44,7 @@ vi.mock("../api/client", () => ({
     getSceneDatetime: vi.fn(), setSceneDatetime: vi.fn(),
     listCharacters: vi.fn(), listPCs: vi.fn(), listCampaignPCs: vi.fn(),
     campaignChanges: vi.fn(),
-    listAppearances: vi.fn(), listEntityImages: vi.fn(),
+    listAppearances: vi.fn(), listEntityImages: vi.fn(), listEntities: vi.fn(),
     campaignImageUrl: (_c: string, char: string, v: string, n: string) => `/img/${char}/${v}/${n}`,
     entityImageUrl: () => "/loc-img",
   },
@@ -81,6 +81,7 @@ beforeEach(() => {
   (api.listCampaignPCs as any).mockResolvedValue([]);
   (api.listAppearances as any).mockResolvedValue([]);
   (api.listEntityImages as any).mockResolvedValue([]);
+  (api.listEntities as any).mockResolvedValue([]);
   (getModels as any).mockResolvedValue([]);
   (api.absorbScene as any).mockResolvedValue({
     one_line: "They met.", summary: "A met B.", keywords: ["salt"],
