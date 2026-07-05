@@ -14,6 +14,8 @@ export function NewSceneChooser({ cid, afterSid, keySet, onClose, onCreated }: {
   onClose: () => void;
   onCreated: (sid: string, initialPrompt?: string) => void;
 }) {
+  // scene mode is picked first; nothing is fetched until then
+  const [mode, setMode] = useState<"pc" | "offscreen" | null>(null);
   const [greetings, setGreetings] = useState<Availability[]>([]);
   // null = still generating; [] = nothing to offer (no key, empty, or failed)
   const [suggestions, setSuggestions] = useState<SceneSuggestion[] | null>(keySet ? null : []);
@@ -25,17 +27,19 @@ export function NewSceneChooser({ cid, afterSid, keySet, onClose, onCreated }: {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
+    if (!mode) return;
     api.availableGreetings(cid, afterSid ?? undefined)
-      .then((all) => setGreetings(all.filter((g) => g.available)))
+      .then((all) => setGreetings(all.filter(
+        (g) => g.available && !!g.pcless === (mode === "offscreen"))))
       .catch((err) => { setGreetings([]); setError(errMsg(err)); });
-  }, [cid, afterSid]);
+  }, [cid, afterSid, mode]);
 
   useEffect(() => {
-    if (!keySet) return;
-    api.sceneSuggestions(cid, afterSid ?? undefined)
+    if (!keySet || !mode) return;
+    api.sceneSuggestions(cid, afterSid ?? undefined, mode === "offscreen")
       .then((r) => { setSuggestions(r.suggestions); setPicks(r.greeting_picks ?? []); setNextDate(r.next_date || undefined); })
       .catch((err) => { setSuggestions([]); setPicks([]); setError(errMsg(err)); });
-  }, [cid, afterSid, keySet]);
+  }, [cid, afterSid, keySet, mode]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !busy) onClose(); };
@@ -60,7 +64,7 @@ export function NewSceneChooser({ cid, afterSid, keySet, onClose, onCreated }: {
     setError(null);
     let created: string | null = null;
     try {
-      const { id } = date ? await api.createScene(cid, undefined, date) : await api.createScene(cid);
+      const { id } = await api.createScene(cid, undefined, date, mode === "offscreen");
       created = id;
       const prompt = await seed(id);
       if (prompt !== undefined) onCreated(id, prompt);
@@ -95,6 +99,25 @@ export function NewSceneChooser({ cid, afterSid, keySet, onClose, onCreated }: {
         <h3>New scene</h3>
         {error && <div className="banner">{error}</div>}
 
+        {mode === null ? (
+          <>
+            <div className="role">What kind of scene?</div>
+            <button className="chooser-card" onClick={() => setMode("pc")}>
+              <span className="chooser-card-title">With your PC</span>
+              <span className="chooser-card-premise">Your player character takes part.</span>
+            </button>
+            <button className="chooser-card" onClick={() => setMode("offscreen")}>
+              <span className="chooser-card-title">Offscreen (NPCs only)</span>
+              <span className="chooser-card-premise">
+                What happens away from your PC — NPC plans, motivations, and events you don't witness.
+              </span>
+            </button>
+            <div className="form-actions">
+              <button className="subtle" onClick={onClose}>Cancel</button>
+            </div>
+          </>
+        ) : (
+        <>
         <div className="role">From a greeting</div>
         {rankPending && <div className="field-hint">Choosing…</div>}
         {!rankPending && greetingCards.length === 0 && <div className="field-hint">No available greetings.</div>}
@@ -122,6 +145,8 @@ export function NewSceneChooser({ cid, afterSid, keySet, onClose, onCreated }: {
           <button className="subtle" disabled={busy} onClick={onClose}>Cancel</button>
           <button className="primary" disabled={busy} onClick={pickManual}>Create manually</button>
         </div>
+        </>
+        )}
       </div>
     </div>
   );
