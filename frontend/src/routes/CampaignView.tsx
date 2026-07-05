@@ -81,6 +81,12 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
     return players.length === 1 ? players[0].name : null;
   }, [cast]);
 
+  // offscreen scenes take director notes instead of PC dialogue
+  const activePcless = useMemo(
+    () => scenes.find((s) => s.id === activeId)?.pcless ?? false,
+    [scenes, activeId]);
+  const [directorNote, setDirectorNote] = useState<string | null>(null);
+
   async function selectScene(id: string) {
     setActiveId(id);
     api.getSceneDatetime(cid, id).then(setDt).catch(() => setDt(null));
@@ -156,15 +162,27 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
   }
 
   async function send() {
-    if (!input.trim() || busy) return;
+    if (busy) return;
+    const content = input.trim();
+    if (!content && !activePcless) return;
     let id = activeId;
     if (!id) {
+      if (!content) return;
       id = (await api.createScene(cid)).id;
       setScenes(await api.listScenes(cid));
       setActiveId(id);
     }
-    const content = input.trim();
     setInput("");
+    if (activePcless) {
+      // the note steers one generation and is never stored — show it transiently
+      setDirectorNote(content || null);
+      try {
+        await runStream(id, (onEvent) => api.chat(cid, id!, content, onEvent));
+      } finally {
+        setDirectorNote(null);
+      }
+      return;
+    }
     setMessages((m) => [...m, { role: "user", content }]);
     await runStream(id, (onEvent) => api.chat(cid, id!, content, onEvent));
   }
@@ -307,6 +325,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
               key={s.id}
               label={s.title}
               prefix={String(scenes.length - i).padStart(2, "0")}
+              subtitle={s.pcless ? "Offscreen" : undefined}
               active={s.id === activeId}
               onSelect={() => selectScene(s.id)}
               onRename={(title) => renameScene(s.id, title)}
@@ -407,10 +426,14 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
             onSeeded={() => selectScene(activeId)}
             onSceneRenamed={sceneRenamed}
             initialPrompt={seedPrompt?.sid === activeId ? seedPrompt.prompt : undefined}
+            pcless={activePcless}
           />
         )}
         {activeId && (
-          <h2 className="scene-title">{scenes.find((s) => s.id === activeId)?.title ?? ""}</h2>
+          <h2 className="scene-title">
+            {scenes.find((s) => s.id === activeId)?.title ?? ""}
+            {activePcless && <span className="chip on offscreen-badge">Offscreen</span>}
+          </h2>
         )}
         <div className={"stream" + (colorQuotes ? " color-quotes" : "")} ref={streamRef}>
           {runs.map((run) => (
@@ -484,6 +507,14 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
               ))}
             </div>
           ))}
+          {directorNote && busy && (
+            <div className="run director-note">
+              <div className="msg assistant">
+                <span className="msg-gutter" />
+                <div className="msg-body">🎬 {directorNote}</div>
+              </div>
+            </div>
+          )}
           {streaming && (
             <div className="run">
               {(messages.length === 0 ||
@@ -507,20 +538,20 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
         <div className="inputbar">
           <textarea
             rows={3}
-            placeholder="Speak your intent…"
+            placeholder={activePcless ? "Direct the scene (optional)…" : "Speak your intent…"}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onKeyDown}
           />
           <button className="send" onClick={send} disabled={busy}>
-            {busy ? "…" : "Send ▸"}
+            {busy ? "…" : activePcless && !input.trim() ? "Continue ▶" : "Send ▸"}
           </button>
         </div>
       </section>
       {activeId && (
         <SceneInspector cid={cid} sid={activeId} refreshKey={ctxKey}
                         onSceneChanged={() => selectScene(activeId)}
-                        onSceneRenamed={sceneRenamed} />
+                        onSceneRenamed={sceneRenamed} pcless={activePcless} />
       )}
       {drawer && activeId && (
         <RecordDrawer cid={cid} sid={activeId} target={drawer} onClose={() => setDrawer(null)} />

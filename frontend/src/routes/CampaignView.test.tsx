@@ -626,3 +626,41 @@ test("a first-name speaker matches its cast member (fuzzy, unique prefix)", asyn
   expect(winifred).toBeInTheDocument();
   expect(document.querySelector(".plate.pc")).not.toBeNull(); // "Yara" -> player Yara Vane
 });
+
+const OFFSCREEN_SCENE = [{ id: "s1", title: "Cabal", model: "", created: "", updated: "", pcless: true }];
+
+test("offscreen scene: director composer, Continue button, badges", async () => {
+  (api.listScenes as any).mockResolvedValue(OFFSCREEN_SCENE);
+  renderCampaign();
+  await screen.findByPlaceholderText(/direct the scene/i);
+  expect(screen.getByRole("button", { name: /continue ▶/i })).toBeInTheDocument();
+  // one "Offscreen" chip by the title + one subtitle on the rail row
+  expect(screen.getAllByText("Offscreen")).toHaveLength(2);
+});
+
+test("offscreen scene: empty Continue sends an empty note", async () => {
+  (api.listScenes as any).mockResolvedValue(OFFSCREEN_SCENE);
+  renderCampaign();
+  fireEvent.click(await screen.findByRole("button", { name: /continue ▶/i }));
+  await waitFor(() => expect(api.chat).toHaveBeenCalledWith("run", "s1", "", expect.any(Function)));
+});
+
+test("offscreen scene: typed note shows transiently, never lands in messages", async () => {
+  (api.listScenes as any).mockResolvedValue(OFFSCREEN_SCENE);
+  let release: () => void = () => {};
+  (api.chat as any).mockReturnValue(new Promise<void>((r) => { release = () => r(); }));
+  renderCampaign();
+  const box = await screen.findByPlaceholderText(/direct the scene/i);
+  fireEvent.change(box, { target: { value: "the guard grows suspicious" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  await screen.findByText(/🎬 the guard grows suspicious/);
+  release();
+  await waitFor(() => expect(screen.queryByText(/🎬/)).toBeNull());
+});
+
+test("normal scene keeps the plain composer", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  renderCampaign();
+  await screen.findByPlaceholderText(/speak your intent/i);
+  expect(screen.queryByRole("button", { name: /continue/i })).toBeNull();
+});
