@@ -2146,3 +2146,44 @@ def test_scene_suggestions_skip_ranking_at_two_or_fewer(client):
     r = client.post(f"/api/campaigns/{cid}/scene-suggestions")
     assert r.status_code == 200
     assert r.json()["greeting_picks"] == []  # nothing was ranked, nothing honored
+
+
+def test_datetime_get_returns_creation_hint_as_suggested(client):
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes",
+                      json={"title": "S", "suggested_date": "2026-07-10"}).json()["id"]
+    got = client.get(f"/api/campaigns/{cid}/scenes/{sid}/datetime").json()
+    assert got["current"] is None and got["suggested"] == "2026-07-10"
+
+
+def test_datetime_suggested_falls_back_to_chronicle_date(client):
+    _wid, cid = _campaign(client)
+    store.chronicle.absorb(cid, {"id": "001--old", "one_line": "x", "summary": "y",
+                                 "keywords": [], "cast": [], "location": "",
+                                 "date": "2026-07-04T21:30"})
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    got = client.get(f"/api/campaigns/{cid}/scenes/{sid}/datetime").json()
+    assert got["suggested"] == "2026-07-04"  # time-of-day never reaches the date input
+
+
+def test_datetime_suggested_is_null_without_signals_and_once_dated(client):
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/datetime").json()["suggested"] is None
+    sid2 = client.post(f"/api/campaigns/{cid}/scenes",
+                       json={"title": "S2", "suggested_date": "2026-07-10"}).json()["id"]
+    sid2 = client.put(f"/api/campaigns/{cid}/scenes/{sid2}/datetime",
+                      json={"datetime": "2026-07-12"}).json()["id"]
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid2}/datetime").json()["suggested"] is None
+
+
+def test_scene_suggestions_include_dates_and_next_date(client):
+    client.put("/api/config", json={"openrouter_key": "sk-or-x"})
+    _wid, cid = _campaign(client)
+    client.app.dependency_overrides[routes.get_openrouter] = lambda: FakeOpenRouterComplete(
+        '{"suggestions": [{"title": "T", "premise": "P", "cast": [], "location": "",'
+        ' "date": "2026-07-10"}], "next_date": "2026-07-08"}')
+    r = client.post(f"/api/campaigns/{cid}/scene-suggestions")
+    assert r.status_code == 200
+    assert r.json()["suggestions"][0]["date"] == "2026-07-10"
+    assert r.json()["next_date"] == "2026-07-08"
