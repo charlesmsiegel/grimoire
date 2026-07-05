@@ -56,6 +56,8 @@ def scene_substitutions(cid: str, sid: str) -> dict[str, str]:
         except (characters.CharacterNotFound, characters.VersionNotFound,
                 pcs.PCNotFound, pcs.PCVersionNotFound):
             continue
+    if not any(player_names) and scenes.is_pcless(cid, sid):
+        player_names = _campaign_player_refs(cid, croot)[1]
     return {"{{user}}": ", ".join(n for n in player_names if n),
             "{{char}}": ", ".join(n for n in npc_names if n)}
 
@@ -100,6 +102,45 @@ def _char_player_block(data: dict) -> str:
     return "\n".join(x for x in (data.get("name", ""), body) if x).strip()
 
 
+def _campaign_player_refs(cid: str, croot) -> tuple[list[str], list[str]]:
+    """(persona blocks, names) of every campaign-level player actor, seated in
+    the scene or not — the offscreen reference cast."""
+    blocks: list[str] = []
+    names: list[str] = []
+    for a in appearances.roster(cid):
+        if a["role"] != "player":
+            continue
+        try:
+            if a["kind"] == "pcs":
+                p = pcs.read_persona(croot, a["id"], a["version"])
+                blocks.append(_pc_persona_block(p))
+                names.append(p.get("name", a["id"]))
+            else:
+                data = characters.read_card(croot, a["id"], a["version"])["data"]
+                blocks.append(_char_player_block(data))
+                names.append(data.get("name", a["id"]))
+        except (pcs.PCNotFound, pcs.PCVersionNotFound,
+                characters.CharacterNotFound, characters.VersionNotFound):
+            continue
+    return blocks, names
+
+
+def _offscreen_instruction(ref_names: list[str]) -> str:
+    text = (
+        "This is an offscreen scene: no player character is present. The user's "
+        "messages are out-of-scene director's notes — follow their steering, never "
+        "acknowledge them in the fiction, and never address the director. Write "
+        "only the NPCs and the world."
+    )
+    if ref_names:
+        text += (
+            " The player character(s) " + ", ".join(ref_names) + " are known to "
+            "the world but NOT present: they may be discussed or referenced, but "
+            "must never appear, speak, or act in this scene."
+        )
+    return text
+
+
 def _world_info(croot, recent_text: str, exclude: frozenset = frozenset(),
                 present: frozenset = frozenset()) -> str:
     entries = []
@@ -123,6 +164,12 @@ OPENER_INSTRUCTION = (
     "Set the scene vividly in the second person. Do not speak or act for the player."
 )
 
+OFFSCREEN_OPENER_INSTRUCTION = (
+    "Write the opening narration for a new offscreen scene based on the prompt below. "
+    "Set the scene vividly in the third person. No player character is present; write "
+    "only the NPCs and the world."
+)
+
 OPENER_RECAP_DEPTH = 5  # opener recap: full summaries of the last N scenes
 
 
@@ -133,8 +180,10 @@ def build_opener_messages(cid: str, sid: str, prompt: str) -> list[dict]:
     scene has no history. No conversation history is included — the opener is for a scene
     with no messages. Ephemeral: the caller does not persist the result."""
     a = _assemble(cid, sid, wi_seed=prompt, full_recap=OPENER_RECAP_DEPTH)
+    instruction = (OFFSCREEN_OPENER_INSTRUCTION if scenes.is_pcless(cid, sid)
+                   else OPENER_INSTRUCTION)
     sections = "\n\n".join(t for _, t in a["system"]).strip()
-    system_text = (OPENER_INSTRUCTION + "\n\n" + sections).strip() if sections else OPENER_INSTRUCTION
+    system_text = (instruction + "\n\n" + sections).strip() if sections else instruction
     messages = [{"role": "system", "content": system_text},
                 {"role": "user", "content": _substitute(prompt, scene_substitutions(cid, sid))}]
     if a["post_history"]:  # kept last, right before generation (mirrors build_messages)
@@ -353,7 +402,12 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0) -> dic
             continue
 
     npc_names = [d.get("name", "") for d in npc_cards if d.get("name")]
-    subs = {"{{user}}": ", ".join(player_names), "{{char}}": ", ".join(npc_names)}
+    pcless = scene["meta"].get("pcless") == "true"
+    ref_blocks: list[str] = []
+    ref_names: list[str] = []
+    if pcless:
+        ref_blocks, ref_names = _campaign_player_refs(cid, croot)
+    subs = {"{{user}}": ", ".join(player_names or ref_names), "{{char}}": ", ".join(npc_names)}
 
     try:
         depth = max(int(config.read_config().get("context_scan_depth", "8")), 0)
@@ -377,6 +431,9 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0) -> dic
     add("Character state", _character_state(croot, cast))
     add("Relationships", _relationships(cid, croot, cast))
     add("Player personas", "\n\n".join(b for b in player_blocks if b))
+    if pcless:
+        add("Offscreen scene", _offscreen_instruction(ref_names))
+        add("Absent player characters", "\n\n".join(b for b in ref_blocks if b))
     add("Message examples", "\n\n".join(d.get("mes_example", "").strip() for d in npc_cards if d.get("mes_example", "").strip()))
 
     add("Story so far", _story_so_far(cid, depth=full_recap or None, full=bool(full_recap)))
@@ -425,6 +482,21 @@ def build_messages(cid: str, sid: str) -> list[dict]:
     if system_text:
         messages.append({"role": "system", "content": system_text})
     messages += a["history"]
+    if a["post_history"]:
+        messages.append({"role": "system", "content": a["post_history"]})
+    return messages
+
+
+def build_director_messages(cid: str, sid: str, note: str) -> list[dict]:
+    """One offscreen director turn: full system + history, then the note as the
+    final user message. The note rides only this call — never persisted."""
+    a = _assemble(cid, sid)
+    messages: list[dict] = []
+    system_text = "\n\n".join(t for _, t in a["system"]).strip()
+    if system_text:
+        messages.append({"role": "system", "content": system_text})
+    messages += a["history"]
+    messages.append({"role": "user", "content": note})
     if a["post_history"]:
         messages.append({"role": "system", "content": a["post_history"]})
     return messages
