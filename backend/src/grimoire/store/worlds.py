@@ -71,6 +71,16 @@ def read_world(wid: str) -> dict:
                        "pcs": pcs.pc_count(root)}}
 
 
+def world_name(wid: str) -> str | None:
+    """Just the display name — no entity counts, one file read (for embedding
+    in other payloads without read_world's directory sweeps)."""
+    mp = world_meta_path(wid)
+    if not mp.exists():
+        return None
+    meta, _ = parse_frontmatter(mp.read_text(encoding="utf-8"))
+    return meta.get("name", wid)
+
+
 def rename_world(wid: str, name: str) -> None:
     mp = world_meta_path(wid)
     if not mp.exists():

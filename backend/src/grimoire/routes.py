@@ -1171,9 +1171,13 @@ def post_campaign(body: NewCampaign):
 def get_campaign(cid: str):
     try:
         store.campaigns.ensure_campaign_copy(cid)
-        return store.campaigns.read_campaign(cid)
+        out = store.campaigns.read_campaign(cid)
     except store.campaigns.CampaignNotFound:
         raise HTTPException(status_code=404, detail="campaign not found")
+    # embedded so the frontend needn't chain a world fetch after this one
+    wid = out["meta"].get("world", "")
+    out["meta"]["world_name"] = store.worlds.world_name(wid) or wid
+    return out
 
 
 @router.put("/campaigns/{cid}")

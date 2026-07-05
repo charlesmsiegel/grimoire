@@ -37,9 +37,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
       api.getCampaign(cid).then((c) => {
         setCampaignName(c.meta.name);
         setWid(c.meta.world);
-        api.getWorld(c.meta.world)
-          .then((w) => setName(w.meta.name))
-          .catch(() => setName(c.meta.world));
+        setName(c.meta.world_name ?? c.meta.world); // embedded: no second fetch
       });
     } else {
       setWid(widParam);
