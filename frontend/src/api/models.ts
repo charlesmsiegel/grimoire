@@ -23,6 +23,24 @@ export async function fetchModels(): Promise<Model[]> {
     .sort((a, b) => a.id.localeCompare(b.id));
 }
 
+// The OpenRouter catalog is a large download and changes rarely; every mount
+// of the model pickers used to re-fetch it. One copy per page load is enough.
+let modelsCache: Promise<Model[]> | null = null;
+
+export function invalidateModelsCache() {
+  modelsCache = null;
+}
+
+export function getModels(): Promise<Model[]> {
+  if (!modelsCache) {
+    modelsCache = fetchModels().catch((err) => {
+      modelsCache = null; // never cache a failure
+      throw err;
+    });
+  }
+  return modelsCache;
+}
+
 function compact(n: number): string {
   if (n >= 1e6) return strip(n / 1e6) + "M";
   if (n >= 1e3) return strip(n / 1e3) + "K";

@@ -4,10 +4,10 @@ import ModelCombobox from "./ModelCombobox";
 
 vi.mock("../api/models", async (orig) => {
   const actual = await orig<typeof import("../api/models")>();
-  return { ...actual, fetchModels: vi.fn() };
+  return { ...actual, getModels: vi.fn() };
 });
-import { fetchModels } from "../api/models";
-const mockFetchModels = fetchModels as unknown as ReturnType<typeof vi.fn>;
+import { getModels } from "../api/models";
+const mockFetchModels = getModels as unknown as ReturnType<typeof vi.fn>;
 
 const MODELS = [
   { id: "anthropic/claude", name: "Claude", context: 200000, prompt: "0.00001", completion: "0.00002" },
