@@ -55,6 +55,7 @@ def _meta_dict(gid: str, meta: dict) -> dict:
         "present": present,
         "requires_tags": _tags_list(meta.get("requires_tags", "")),
         "predecessor_join": meta.get("predecessor_join", "all"),
+        "pcless": meta.get("pcless") == "true",
     }
 
 
@@ -77,12 +78,13 @@ def present_in(body: str, source: str, roster: dict[str, str]) -> list[str]:
 
 def create_greeting(root: Path, name: str, character: str, version: str, body: str = "",
                     requires_tags: list[str] | None = None, predecessor_join: str = "all",
-                    present: list[str] | None = None) -> str:
+                    present: list[str] | None = None, pcless: bool = False) -> str:
     _greetings_dir(root).mkdir(parents=True, exist_ok=True)
     gid = uniquify(slugify(name), lambda c: _greeting_path(root, c).exists())
     meta = {"name": name, "character": character, "version": version,
             "present": ",".join(present or []),
-            "requires_tags": ",".join(requires_tags or []), "predecessor_join": predecessor_join}
+            "requires_tags": ",".join(requires_tags or []), "predecessor_join": predecessor_join,
+            "pcless": "true" if pcless else ""}
     _greeting_path(root, gid).write_text(dump_frontmatter(meta, body), encoding="utf-8")
     return gid
 
@@ -106,7 +108,7 @@ def list_greetings(root: Path) -> list[dict]:
 
 def update_greeting(root: Path, gid: str, *, name: str | None = None, body: str | None = None,
                     requires_tags: list[str] | None = None, predecessor_join: str | None = None,
-                    present: list[str] | None = None) -> None:
+                    present: list[str] | None = None, pcless: bool | None = None) -> None:
     p = _greeting_path(root, gid)
     if not _safe(gid) or not p.exists():
         raise GreetingNotFound(gid)
@@ -119,6 +121,8 @@ def update_greeting(root: Path, gid: str, *, name: str | None = None, body: str 
         meta["present"] = ",".join(present)
     if predecessor_join is not None:
         meta["predecessor_join"] = predecessor_join
+    if pcless is not None:
+        meta["pcless"] = "true" if pcless else ""
     new_body = cur_body if body is None else body
     p.write_text(dump_frontmatter(meta, new_body), encoding="utf-8")
 
@@ -230,5 +234,6 @@ def availability(world_root: Path, plotmap: dict, played, player_tags,
             reasons.append("excluded by a played greeting")
         if not (set(g["requires_tags"]) <= player_tags):
             reasons.append("missing required tags")
-        out.append({"id": gid, "name": g["name"], "available": not reasons, "reasons": reasons})
+        out.append({"id": gid, "name": g["name"], "available": not reasons,
+                    "reasons": reasons, "pcless": g["pcless"]})
     return out
