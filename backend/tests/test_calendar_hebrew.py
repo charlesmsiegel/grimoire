@@ -61,3 +61,52 @@ def test_months_leap_and_common_years():
     # composition contract
     for m in leap:
         assert p.format(p.parse(f"5784-{m['key']}-{m['days']:02d}")) == f"5784-{m['key']}-{m['days']:02d}"
+
+
+def test_holidays_chanukah_and_observance_toggle():
+    p = get_provider(heb())          # diaspora
+    il = get_provider(heb("IL"))     # Israel
+    start, end = p.parse("5786-Kislev-24"), p.parse("5786-Tevet-03")
+    names = [h["name"] for h in p.holidays(start, end)]
+    assert any("Chanuka" in n for n in names)
+    # 22 Nisan is yom tov in the diaspora only (2nd day of the last day of Pesach)
+    day = p.parse("5786-Nisan-22")
+    assert any("Pesach" in h["name"] for h in p.holidays(day, day))
+    assert il.holidays(day, day) == []
+
+
+def test_holidays_include_fasts_and_customs():
+    p = get_provider(heb())
+    # 3 Tishrei 5786 is a Thursday (25 Sep 2025) — Tzom Gedaliah, not deferred.
+    fast = p.parse("5786-Tishrei-03")
+    assert any("Gedalia" in h["name"] for h in p.holidays(fast, fast))
+    custom = get_provider({"provider": "hebrew", "region": "",
+                           "custom_holidays": [{"name": "Grandma's yahrzeit", "month": "Shevat", "day": 10}],
+                           "anchor": None})
+    day = custom.parse("5786-Shevat-10")
+    assert any(h["name"] == "Grandma's yahrzeit" for h in custom.holidays(day, day))
+
+
+def test_age_and_anniversary_across_tishrei_and_adar():
+    p = get_provider(heb())
+    # born 10 Tishrei 5750; year rolls at Rosh Hashanah
+    birth = "5750-Tishrei-10"
+    from grimoire.store.calendars import age, is_anniversary
+    assert age(p, birth, "5786-Tishrei-09") == 35
+    assert age(p, birth, "5786-Tishrei-10") == 36
+    assert is_anniversary(p, birth, "5786-Tishrei-10") is True
+    # born in Adar II of leap 5784 → observed in plain Adar of common 5786
+    assert is_anniversary(p, "5784-Adar2-14", "5786-Adar-14") is True
+    # born 30 Cheshvan (long 5785) → observed 29 Cheshvan when short (5786)
+    assert is_anniversary(p, "5785-Cheshvan-30", "5786-Cheshvan-29") is True
+
+
+def test_validate_rule_hebrew():
+    p = get_provider(heb())
+    p.validate_rule({"name": "OK", "month": "Adar", "day": 14})
+    p.validate_rule({"name": "OK", "month": "Kislev", "day": 30})
+    for bad in ({"name": "X", "month": "Adar", "day": 30},      # Adar caps at 29
+                {"name": "X", "month": "Floof", "day": 1},
+                {"name": "X", "month": "Elul", "nth": 1, "weekday": 0}):  # nth-weekday off-Gregorian
+        with pytest.raises(CalendarError):
+            p.validate_rule(bad)

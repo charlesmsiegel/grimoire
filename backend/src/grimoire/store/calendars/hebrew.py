@@ -82,8 +82,67 @@ class HebrewProvider(CalendarProvider):
                 "weekday_name": _WEEKDAYS[widx], "weekday_index": widx,
                 "friendly": f"{h.day} {disp} {h.year}"}
 
+    _MAX_DAYS = {"Tishrei": 30, "Cheshvan": 30, "Kislev": 30, "Tevet": 29,
+                 "Shevat": 30, "Adar": 29, "Adar1": 30, "Adar2": 29, "Nisan": 30,
+                 "Iyar": 29, "Sivan": 30, "Tammuz": 29, "Av": 30, "Elul": 29}
+
     def holidays(self, start_fixed: int, end_fixed: int) -> list[dict]:
-        return []  # Task 5
+        israel = self.region == "IL"
+        out: list[dict] = []
+        for f in range(start_fixed, end_fixed + 1):
+            h = _pd.HebrewDate.from_pydate(date.fromordinal(f))
+            for name in (h.festival(israel=israel, include_working_days=True),
+                         h.fast_day()):
+                if name:
+                    out.append({"name": name, "fixed": f})
+        out.extend(self._custom_fixed(start_fixed, end_fixed))
+        out.sort(key=lambda h: h["fixed"])
+        return out
+
+    def _anniversary_fixed(self, birth_fixed: int, asof_year: int) -> int:
+        """The fixed day the birth date is observed in asof_year (Adar folding,
+        day-30 births observed on the 29th when the month is short)."""
+        b = _pd.HebrewDate.from_pydate(date.fromordinal(birth_fixed))
+        token = next(e[0] for e in _year_months(b.year) if e[2] == b.month)
+        if _is_leap(asof_year):
+            if token == "Adar":
+                token = "Adar2"
+        elif token in ("Adar1", "Adar2"):
+            token = "Adar"
+        num = next(e[2] for e in _year_months(asof_year) if e[0] == token)
+        try:
+            return _pd.HebrewDate(asof_year, num, b.day).to_pydate().toordinal()
+        except ValueError:
+            return _pd.HebrewDate(asof_year, num, 29).to_pydate().toordinal()
+
+    def age(self, birth_fixed: int, asof_fixed: int) -> int:
+        b_year = _pd.HebrewDate.from_pydate(date.fromordinal(birth_fixed)).year
+        a_year = _pd.HebrewDate.from_pydate(date.fromordinal(asof_fixed)).year
+        years = a_year - b_year
+        if self._anniversary_fixed(birth_fixed, a_year) > asof_fixed:
+            years -= 1
+        return years
+
+    def is_anniversary(self, birth_fixed: int, asof_fixed: int) -> bool:
+        a_year = _pd.HebrewDate.from_pydate(date.fromordinal(asof_fixed)).year
+        return self._anniversary_fixed(birth_fixed, a_year) == asof_fixed
+
+    def validate_rule(self, rule: dict) -> None:
+        if "day" not in rule:
+            raise CalendarError(
+                f"the hebrew calendar supports only fixed {{month, day}} custom holidays: {rule!r}")
+        if not rule.get("name"):
+            raise CalendarError(f"custom holiday needs a name: {rule!r}")
+        token = next((t for t in self._MAX_DAYS
+                      if t.lower() == str(rule.get("month", "")).lower()), None)
+        if token is None:
+            raise CalendarError(f"custom holiday month is unknown: {rule!r}")
+        try:
+            day = int(rule["day"])
+        except (ValueError, TypeError) as e:
+            raise CalendarError(f"custom holiday day is malformed: {rule!r}") from e
+        if not (1 <= day <= self._MAX_DAYS[token]):
+            raise CalendarError(f"custom holiday day out of range: {rule!r}")
 
     def months(self, year: int) -> list[dict]:
         try:
