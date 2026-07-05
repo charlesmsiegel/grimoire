@@ -195,9 +195,17 @@ test("a dateless scene with a suggestion pre-fills the date input", async () => 
   (api.getSceneDatetime as any).mockResolvedValue(
     { current: null, history: [], suggested: "2026-07-06" });
   renderPanel();
-  const input = await screen.findByLabelText("Scene date");
-  await waitFor(() => expect((input as HTMLInputElement).value).toBe("2026-07-06"));
-  fireEvent.click(screen.getByRole("button", { name: /set date/i }));
+  await screen.findByLabelText("Scene date year");
+  // the picker's visible fields show the prefill once it arrives...
+  await waitFor(() =>
+    expect(screen.getByLabelText("Scene date year")).toHaveValue(2026));
+  await waitFor(() =>
+    expect(screen.getByLabelText("Scene date month")).toHaveValue("07"));
+  expect(screen.getByLabelText("Scene date day")).toHaveValue("6");
+  // ...and "Set date" is immediately enabled and submits the suggestion
+  const button = await screen.findByRole("button", { name: /set date/i });
+  await waitFor(() => expect(button).not.toBeDisabled());
+  fireEvent.click(button);
   await waitFor(() => expect(api.setSceneDatetime).toHaveBeenCalledWith("c", "s", "2026-07-06"));
 });
 
