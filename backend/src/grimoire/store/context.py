@@ -159,15 +159,21 @@ def _world_info(croot, recent_text: str, exclude: frozenset = frozenset(),
     return "\n\n".join(e["body"] for e in selected if e["body"])
 
 
+_OPENER_SHAPE = (
+    " Keep the opener to at most five paragraphs: one **Grimoire:** paragraph that "
+    "sets the scene, then at most one paragraph from each character present."
+)
+
 OPENER_INSTRUCTION = (
     "Write the opening narration for a new scene based on the prompt below. "
     "Set the scene vividly in the second person. Do not speak or act for the player."
+    + _OPENER_SHAPE
 )
 
 OFFSCREEN_OPENER_INSTRUCTION = (
     "Write the opening narration for a new offscreen scene based on the prompt below. "
     "Set the scene vividly in the third person. No player character is present; write "
-    "only the NPCs and the world."
+    "only the NPCs and the world." + _OPENER_SHAPE
 )
 
 OPENER_RECAP_DEPTH = 5  # opener recap: full summaries of the last N scenes

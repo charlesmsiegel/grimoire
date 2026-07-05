@@ -285,6 +285,23 @@ def test_build_opener_messages(monkeypatch, tmp_path):
     assert user_msg["content"] == "A storm over the salt marshes for Elara."
 
 
+def test_opener_instruction_caps_paragraphs(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    sys = context.build_opener_messages(cid, sid, "A storm.")[0]["content"]
+    assert "at most five paragraphs" in sys
+    assert "at most one paragraph" in sys
+    assert "**Grimoire:**" in sys.split("\n\n")[0]  # the shape rule rides the instruction
+
+
+def test_offscreen_opener_instruction_caps_paragraphs(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    sid2 = scenes.create_scene(cid, "Off", pcless=True)
+    sys = context.build_opener_messages(cid, sid2, "A storm.")[0]["content"]
+    assert "offscreen" in sys.split("\n\n")[0]
+    assert "at most five paragraphs" in sys
+    assert "at most one paragraph" in sys
+
+
 def test_depth_zero_and_unparseable_fallback(monkeypatch, tmp_path):
     from grimoire.store import config
     wid, cid, sid = _campaign(monkeypatch, tmp_path)
