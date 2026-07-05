@@ -10,6 +10,7 @@ dependencies = [
     "python-multipart>=0.0.9",
     "tiktoken>=0.7",
     "holidays>=0.40",
+    "pyluach>=2.2",
     "pillow>=10.0",
     "jinja2>=3.1",
 ]
