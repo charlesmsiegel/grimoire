@@ -245,6 +245,16 @@ def stamp_greeting(cid: str, sid: str, gid: str) -> None:
     p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
 
 
+def set_pcless(cid: str, sid: str) -> None:
+    """Flag a scene as deliberately player-less (an offscreen greeting stamps it)."""
+    p = _scene_path(cid, sid)
+    if not _safe_id(sid) or not p.exists():
+        raise SceneNotFound(sid)
+    meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
+    meta["pcless"] = "true"
+    p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+
+
 def append_message(cid: str, sid: str, role: str, content: str, speaker: str | None = None) -> None:
     p = _scene_path(cid, sid)
     if not _safe_id(sid) or not p.exists():

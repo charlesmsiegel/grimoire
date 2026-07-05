@@ -101,6 +101,11 @@ def start_from_greeting(cid: str, sid: str, gid: str) -> None:
     scene = scenes.read_scene(cid, sid)               # raises SceneNotFound
     if scene["messages"]:
         raise PlayError("scene already has messages")
+    scene_pcless = scene["meta"].get("pcless") == "true"
+    if scene_pcless and not g["pcless"]:
+        raise PlayError("an offscreen scene must start from an offscreen greeting")
+    if g["pcless"] and appearances.players_in_scene(cid, sid):
+        raise PlayError("an offscreen greeting cannot start a scene with players seated")
     if not {a["id"]: a["available"] for a in available_greetings(cid)}.get(gid, False):
         raise PlayError(f"greeting {gid} is not available")
     # Cast everyone present at the opener. A locked version always wins; otherwise
@@ -111,6 +116,8 @@ def start_from_greeting(cid: str, sid: str, gid: str) -> None:
             version = g["version"] if actor == g["character"] else \
                 characters.read_character(croot, actor)["meta"]["default_version"]
         appearances.appear(cid, sid, "characters", actor, version, "npc")
+    if g["pcless"] and not scene_pcless:
+        scenes.set_pcless(cid, sid)  # before substitution: {{user}} needs the pcless fallback
     _mark_played(cid, gid)
     scenes.stamp_greeting(cid, sid, gid)
     text = context._substitute(greetings.read_greeting(croot, gid)["body"],
