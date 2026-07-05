@@ -68,3 +68,15 @@ def test_negative_and_zero_years():
     # deep negative years: the year-estimate drift must not corrupt dates
     for native in ("-488-Nightal-30", "-1000-Hammer-01", "-3000-Mirtul-15"):
         assert p.format(p.parse(native)) == native
+
+
+def test_friendly_includes_roll_of_years_name():
+    from grimoire.store.calendars.harptos_years import YEAR_NAMES
+    assert YEAR_NAMES[1492] == "Year of Three Ships Sailing"
+    assert YEAR_NAMES[1372] == "Year of Wild Magic"
+    assert len(YEAR_NAMES) > 1000
+    p = get_provider(har())
+    d = p.describe(p.parse("1492-Mirtul-05"))
+    assert d["friendly"] == "5 Mirtul, 1492 DR (Year of Three Ships Sailing)"
+    # unnamed years render without the suffix
+    assert "(" not in p.describe(p.parse("9999-Hammer-01"))["friendly"]
