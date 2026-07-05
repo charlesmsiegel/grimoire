@@ -2015,12 +2015,12 @@ def post_campaign_greeting_mark(cid: str, gid: str, body: MarkBody):
 def post_start_from_greeting(cid: str, sid: str, body: StartFromGreeting):
     _require_scene(cid, sid)
     try:
-        store.playing.start_from_greeting(cid, sid, body.greeting)
+        new_sid = store.playing.start_from_greeting(cid, sid, body.greeting)
     except store.greetings.GreetingNotFound:
         raise HTTPException(status_code=404, detail="greeting not found")
     except (store.playing.PlayError, store.appearances.AppearError) as exc:
         raise HTTPException(status_code=409, detail=str(exc))
-    return {"ok": True}
+    return {"ok": True, "id": new_sid}
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/opener")
