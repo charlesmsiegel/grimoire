@@ -26,10 +26,16 @@ export function CalendarDatePicker({ scope, value, onChange, ariaLabel }: {
 
   // An EXTERNAL value change (e.g. a suggested date arriving asynchronously)
   // re-syncs the fields; our own emits echoing back are ignored so an
-  // in-progress edit is never clobbered.
+  // in-progress edit is never clobbered. When the fields are dirty (partially
+  // filled — the user is mid-edit) the external value is dropped outright:
+  // we still record it in lastEmitted, so a prefill that races an active edit
+  // is simply lost rather than kept pending. Idle fields (all empty, or a
+  // complete composed date) re-sync as usual.
   useEffect(() => {
     if (value === lastEmitted.current) return;
     lastEmitted.current = value;
+    const complete = !isNaN(parseInt(year, 10)) && month && day;
+    if ((year || month || day) && !complete) return; // mid-edit: don't stomp
     const [y, m, d] = parseParts(splitNativeDate(value).date);
     setYear(y); setMonth(m); setDay(d);
   }, [value]);
