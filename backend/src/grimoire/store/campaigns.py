@@ -64,7 +64,8 @@ def list_campaigns() -> list[dict]:
     return out
 
 
-def create_campaign(name: str, world_id: str, region: str | None = None) -> str:
+def create_campaign(name: str, world_id: str, region: str | None = None,
+                     calendar: str | None = None) -> str:
     ensure_home()
     if not worlds.world_meta_path(world_id).exists():
         raise worlds.WorldNotFound(world_id)
@@ -102,9 +103,14 @@ def create_campaign(name: str, world_id: str, region: str | None = None) -> str:
             manifest[f"{kind}/{aid}"] = dir_hash(wroot, aid) or ""
     write_manifest(cid, manifest)
     calendars.copy_calendar(wroot, root)
-    if region is not None:
+    if region is not None or calendar is not None:
         cfg = calendars.read_calendar(root)
-        cfg["primary"]["region"] = region
+        if calendar is not None:
+            cfg["primary"]["provider"] = calendar
+            cfg["confirmed"] = True   # an explicit wizard choice
+        if region is not None:
+            cfg["primary"]["region"] = region
+        calendars.validate_calendar(cfg)   # unknown provider -> CalendarError
         calendars.write_calendar(root, cfg)
     return cid
 

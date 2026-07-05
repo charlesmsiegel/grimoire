@@ -1387,6 +1387,17 @@ def test_campaign_create_defaults_region_us(client):
     assert calendars.read_calendar(campaigns.campaign_root(cid))["primary"]["region"] == "US"
 
 
+def test_create_campaign_with_calendar_provider(client):
+    wid = _world(client, "Faerun")
+    cid = client.post("/api/campaigns",
+                      json={"name": "FR", "world": wid, "calendar": "harptos"}).json()["id"]
+    cfg = client.get(f"/api/campaigns/{cid}/calendar").json()
+    assert cfg["primary"]["provider"] == "harptos"
+    assert cfg["confirmed"] is True
+    r = client.post("/api/campaigns", json={"name": "X", "world": wid, "calendar": "bogus"})
+    assert r.status_code == 400
+
+
 def test_datetime_get_put_roundtrip(client):
     _wid, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
