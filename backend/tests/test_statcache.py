@@ -1,6 +1,8 @@
 """statcache: stat-keyed memo for derivations of file content, + its hash consumers."""
 
 import hashlib
+import os
+import time
 
 from grimoire.store import characters, entities, statcache
 
@@ -9,15 +11,38 @@ def _sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _age(*paths):
+    """Back-date mtimes past the racy window so the cache is allowed to hold them."""
+    old = time.time_ns() - 2 * statcache.RACY_WINDOW_NS
+    for p in paths:
+        os.utime(p, ns=(old, old))
+
+
+def _age_tree(root):
+    _age(*(p for p in root.rglob("*") if p.is_file()))
+
+
 # ---- the memo itself ----
 def test_memo_computes_once_while_file_unchanged(tmp_path):
     p = tmp_path / "a.md"
     p.write_text("hello", encoding="utf-8")
+    _age(p)
     calls = []
     for _ in range(3):
         got = statcache.memo("t", statcache.signature(p), lambda: calls.append(1) or "value")
     assert got == "value"
     assert len(calls) == 1
+
+
+def test_same_size_rapid_rewrite_is_never_served_stale(tmp_path):
+    # "Old." -> "New." is a same-size write that can share an mtime tick; the
+    # racy window must keep such fresh files out of the cache
+    p = tmp_path / "a.md"
+    for content in ("Old.", "New."):
+        p.write_text(content, encoding="utf-8")
+        got = statcache.memo("racy", statcache.signature(p),
+                             lambda: p.read_text(encoding="utf-8"))
+        assert got == content
 
 
 def test_memo_recomputes_when_file_changes(tmp_path):
@@ -47,6 +72,7 @@ def test_signature_none_when_any_file_missing(tmp_path):
 def test_memo_stays_bounded(tmp_path):
     p = tmp_path / "a.md"
     p.write_text("x", encoding="utf-8")
+    _age(p)
     sig = statcache.signature(p)
     for i in range(statcache.MAX_ENTRIES + 100):
         statcache.memo(f"kind-{i}", sig, lambda: i)
