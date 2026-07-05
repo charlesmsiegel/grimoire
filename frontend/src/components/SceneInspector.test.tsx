@@ -1,22 +1,41 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { SceneInspector } from "./SceneInspector";
 
-vi.mock("../api/client", () => ({
-  api: {
-    getCast: vi.fn(), getCampaign: vi.fn(), listCharacters: vi.fn(), listPCs: vi.fn(),
-    listCampaignPCs: vi.fn(), getSceneLocation: vi.fn(), getSceneContext: vi.fn(),
-    getCastDetail: vi.fn(), readEntity: vi.fn(), getChronicle: vi.fn(),
-    getCalendarConfig: vi.fn(), setCalendarConfig: vi.fn(),
-    getSceneDatetime: vi.fn(), setSceneDatetime: vi.fn(),
-    listAppearances: vi.fn(), listEntityImages: vi.fn(),
-    listEntities: vi.fn(), setSceneLocation: vi.fn(),
-    campaignImageUrl: () => "/img",
-    entityImageUrl: () => "/loc-img",
-  },
-}));
+vi.mock("../api/client", async () => {
+  const actual = await vi.importActual<typeof import("../api/client")>("../api/client");
+  return {
+    ...actual,
+    api: {
+      getCast: vi.fn(), getCampaign: vi.fn(), listCharacters: vi.fn(), listPCs: vi.fn(),
+      listCampaignPCs: vi.fn(), getSceneLocation: vi.fn(), getSceneContext: vi.fn(),
+      getCastDetail: vi.fn(), readEntity: vi.fn(), getChronicle: vi.fn(),
+      getCalendarConfig: vi.fn(), setCalendarConfig: vi.fn(),
+      getSceneDatetime: vi.fn(), setSceneDatetime: vi.fn(), getCalendarMonths: vi.fn(),
+      listAppearances: vi.fn(), listEntityImages: vi.fn(),
+      listEntities: vi.fn(), setSceneLocation: vi.fn(),
+      campaignImageUrl: () => "/img",
+      entityImageUrl: () => "/loc-img",
+    },
+  };
+});
 vi.mock("../api/models", () => ({ getModels: vi.fn() }));
 import { api } from "../api/client";
 import { getModels } from "../api/models";
+
+const GREG_MONTHS = [
+  { key: "01", name: "January", days: 31 },
+  { key: "02", name: "February", days: 28 },
+  { key: "03", name: "March", days: 31 },
+  { key: "04", name: "April", days: 30 },
+  { key: "05", name: "May", days: 31 },
+  { key: "06", name: "June", days: 30 },
+  { key: "07", name: "July", days: 31 },
+  { key: "08", name: "August", days: 31 },
+  { key: "09", name: "September", days: 30 },
+  { key: "10", name: "October", days: 31 },
+  { key: "11", name: "November", days: 30 },
+  { key: "12", name: "December", days: 31 },
+];
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -41,6 +60,7 @@ beforeEach(() => {
   (api.setCalendarConfig as any).mockResolvedValue({ ok: true });
   (api.getSceneDatetime as any).mockResolvedValue({ current: null, history: [], suggested: null });
   (api.setSceneDatetime as any).mockResolvedValue({ ok: true, advanced: false, friendly: "", id: "s" });
+  (api.getCalendarMonths as any).mockResolvedValue({ months: GREG_MONTHS });
   (api.listAppearances as any).mockResolvedValue([]);
   (api.listEntityImages as any).mockResolvedValue([]);
   (api.listEntities as any).mockResolvedValue([]);
@@ -124,8 +144,13 @@ test("no calendar selected: choosing one confirms the calendar", async () => {
 test("calendar but no date: setting a date calls setSceneDatetime and notifies", async () => {
   const onChanged = vi.fn();
   renderInspector(onChanged);
-  const input = await screen.findByLabelText("Scene date");
-  fireEvent.change(input, { target: { value: "2026-07-04" } });
+  fireEvent.change(await screen.findByLabelText("Scene date year"), { target: { value: "2026" } });
+  const monthSelect = await screen.findByLabelText("Scene date month");
+  await waitFor(() => expect(monthSelect).not.toBeDisabled());
+  fireEvent.change(monthSelect, { target: { value: "07" } });
+  const daySelect = screen.getByLabelText("Scene date day");
+  await waitFor(() => expect(daySelect).not.toBeDisabled());
+  fireEvent.change(daySelect, { target: { value: "4" } });
   fireEvent.click(screen.getByRole("button", { name: /set date/i }));
   await waitFor(() => expect(api.setSceneDatetime).toHaveBeenCalledWith("c", "s", "2026-07-04"));
   await waitFor(() => expect(onChanged).toHaveBeenCalled());
@@ -137,8 +162,13 @@ test("first date set renames the scene: adopts the new id via onSceneRenamed", a
   const onRenamed = vi.fn();
   render(<SceneInspector cid="c" sid="s" refreshKey={0}
                          onSceneChanged={() => {}} onSceneRenamed={onRenamed} />);
-  const input = await screen.findByLabelText("Scene date");
-  fireEvent.change(input, { target: { value: "2026-07-04" } });
+  fireEvent.change(await screen.findByLabelText("Scene date year"), { target: { value: "2026" } });
+  const monthSelect = await screen.findByLabelText("Scene date month");
+  await waitFor(() => expect(monthSelect).not.toBeDisabled());
+  fireEvent.change(monthSelect, { target: { value: "07" } });
+  const daySelect = screen.getByLabelText("Scene date day");
+  await waitFor(() => expect(daySelect).not.toBeDisabled());
+  fireEvent.change(daySelect, { target: { value: "4" } });
   fireEvent.click(screen.getByRole("button", { name: /set date/i }));
   await waitFor(() => expect(onRenamed).toHaveBeenCalledWith("001--2026-07-04--s"));
 });
@@ -176,9 +206,12 @@ test("a dateless scene with a suggestion pre-fills the date input", async () => 
   (api.getSceneDatetime as any).mockResolvedValue(
     { current: null, history: [], suggested: "2026-07-06" });
   renderInspector();
-  const input = await screen.findByLabelText("Scene date");
-  await waitFor(() => expect((input as HTMLInputElement).value).toBe("2026-07-06"));
-  fireEvent.click(screen.getByRole("button", { name: /set date/i }));
+  await screen.findByLabelText("Scene date year");
+  // the suggestion pre-fills the underlying date value, so "Set date" is
+  // immediately enabled and submits the suggestion without further picks
+  const button = await screen.findByRole("button", { name: /set date/i });
+  await waitFor(() => expect(button).not.toBeDisabled());
+  fireEvent.click(button);
   await waitFor(() => expect(api.setSceneDatetime).toHaveBeenCalledWith("c", "s", "2026-07-06"));
 });
 

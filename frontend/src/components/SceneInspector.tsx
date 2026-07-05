@@ -6,10 +6,14 @@ import {
 import { getModels, type Model } from "../api/models";
 import { Portrait } from "./Portrait";
 import { RecordDrawer, type DrawerTarget } from "./RecordDrawer";
+import { CalendarDatePicker } from "./CalendarDatePicker";
 
-// The calendars a campaign can select. Only Gregorian ships today; this list
-// grows as providers are added.
-const CALENDARS = [{ id: "gregorian", name: "Gregorian" }];
+// The calendars a campaign can select.
+const CALENDARS = [
+  { id: "gregorian", name: "Gregorian" },
+  { id: "hebrew", name: "Hebrew" },
+  { id: "harptos", name: "Calendar of Harptos" },
+];
 
 export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRenamed, pcless }:
   { cid: string; sid: string; refreshKey: number; onSceneChanged: () => void;
@@ -200,8 +204,8 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
               <div className="field-hint">Holidays: {when.current.holidays_today.join(", ")}</div>
             )}
             <div className="picker">
-              <input type="date" aria-label="Scene date" value={dateInput}
-                     onChange={(e) => setDateInput(e.target.value)} />
+              <CalendarDatePicker scope={{ kind: "campaign", id: cid }} value={dateInput}
+                                  onChange={setDateInput} ariaLabel="Scene date" />
               <button className="primary" onClick={applyDatetime} disabled={!dateInput}>Advance to</button>
             </div>
           </>
@@ -219,8 +223,8 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
           <>
             <div className="field-hint">No date</div>
             <div className="picker">
-              <input type="date" aria-label="Scene date" value={dateInput}
-                     onChange={(e) => setDateInput(e.target.value)} />
+              <CalendarDatePicker scope={{ kind: "campaign", id: cid }} value={dateInput}
+                                  onChange={setDateInput} ariaLabel="Scene date" />
               <button className="primary" onClick={applyDatetime} disabled={!dateInput}>Set date</button>
             </div>
           </>

@@ -1,18 +1,37 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { CastPanel } from "./CastPanel";
 
-vi.mock("../api/client", () => ({
-  api: {
-    getCast: vi.fn(), getCampaign: vi.fn(), listCharacters: vi.fn(), listPCs: vi.fn(),
-    listCampaignPCs: vi.fn(),
-    listEntities: vi.fn(), getSceneLocation: vi.fn(), setSceneLocation: vi.fn(),
-    getSceneDatetime: vi.fn(), setSceneDatetime: vi.fn(),
-    addToCast: vi.fn(),
-    opener: vi.fn(), firstPost: vi.fn(), createGreeting: vi.fn(), listAppearances: vi.fn(),
-    campaignImageUrl: (c: string, ch: string, v: string, n: string) => `/cimg/${c}/${ch}/${v}/${n}`,
-  },
-}));
+vi.mock("../api/client", async () => {
+  const actual = await vi.importActual<typeof import("../api/client")>("../api/client");
+  return {
+    ...actual,
+    api: {
+      getCast: vi.fn(), getCampaign: vi.fn(), listCharacters: vi.fn(), listPCs: vi.fn(),
+      listCampaignPCs: vi.fn(),
+      listEntities: vi.fn(), getSceneLocation: vi.fn(), setSceneLocation: vi.fn(),
+      getSceneDatetime: vi.fn(), setSceneDatetime: vi.fn(), getCalendarMonths: vi.fn(),
+      addToCast: vi.fn(),
+      opener: vi.fn(), firstPost: vi.fn(), createGreeting: vi.fn(), listAppearances: vi.fn(),
+      campaignImageUrl: (c: string, ch: string, v: string, n: string) => `/cimg/${c}/${ch}/${v}/${n}`,
+    },
+  };
+});
 import { api } from "../api/client";
+
+const GREG_MONTHS = [
+  { key: "01", name: "January", days: 31 },
+  { key: "02", name: "February", days: 28 },
+  { key: "03", name: "March", days: 31 },
+  { key: "04", name: "April", days: 30 },
+  { key: "05", name: "May", days: 31 },
+  { key: "06", name: "June", days: 30 },
+  { key: "07", name: "July", days: 31 },
+  { key: "08", name: "August", days: 31 },
+  { key: "09", name: "September", days: 30 },
+  { key: "10", name: "October", days: 31 },
+  { key: "11", name: "November", days: 30 },
+  { key: "12", name: "December", days: 31 },
+];
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -25,6 +44,7 @@ beforeEach(() => {
   (api.setSceneLocation as any).mockResolvedValue({ ok: true, moved: false, name: "" });
   (api.getSceneDatetime as any).mockResolvedValue({ current: null, history: [] });
   (api.setSceneDatetime as any).mockResolvedValue({ ok: true, advanced: true, friendly: "1 January 2027", id: "s" });
+  (api.getCalendarMonths as any).mockResolvedValue({ months: GREG_MONTHS });
   (api.addToCast as any).mockResolvedValue({ ok: true });
   (api.createGreeting as any).mockResolvedValue({ id: "g" });
   (api.listAppearances as any).mockResolvedValue([
@@ -159,7 +179,13 @@ test("When section shows the current date and advances", async () => {
   const onSeeded = vi.fn();
   renderPanel({ onSeeded });
   expect(await screen.findByText(/25 December 2026/)).toBeInTheDocument();
-  fireEvent.change(screen.getByLabelText("Scene date"), { target: { value: "2027-01-01" } });
+  fireEvent.change(screen.getByLabelText("Scene date year"), { target: { value: "2027" } });
+  const monthSelect = await screen.findByLabelText("Scene date month");
+  await waitFor(() => expect(monthSelect).not.toBeDisabled());
+  fireEvent.change(monthSelect, { target: { value: "01" } });
+  const daySelect = screen.getByLabelText("Scene date day");
+  await waitFor(() => expect(daySelect).not.toBeDisabled());
+  fireEvent.change(daySelect, { target: { value: "1" } });
   fireEvent.click(screen.getByRole("button", { name: /advance to|set date/i }));
   await waitFor(() => expect(api.setSceneDatetime).toHaveBeenCalledWith("c", "s", "2027-01-01"));
   await waitFor(() => expect(onSeeded).toHaveBeenCalled());
@@ -181,7 +207,13 @@ test("first date set renames the scene: adopts the new id via onSceneRenamed", a
   const onSceneRenamed = vi.fn();
   const onSeeded = vi.fn();
   renderPanel({ onSeeded, onSceneRenamed });
-  fireEvent.change(await screen.findByLabelText("Scene date"), { target: { value: "2026-07-04" } });
+  fireEvent.change(await screen.findByLabelText("Scene date year"), { target: { value: "2026" } });
+  const monthSelect = await screen.findByLabelText("Scene date month");
+  await waitFor(() => expect(monthSelect).not.toBeDisabled());
+  fireEvent.change(monthSelect, { target: { value: "07" } });
+  const daySelect = screen.getByLabelText("Scene date day");
+  await waitFor(() => expect(daySelect).not.toBeDisabled());
+  fireEvent.change(daySelect, { target: { value: "4" } });
   fireEvent.click(screen.getByRole("button", { name: /advance to|set date/i }));
   await waitFor(() => expect(onSceneRenamed).toHaveBeenCalledWith("001--2026-07-04--s"));
   expect(onSeeded).not.toHaveBeenCalled();  // the parent re-selects via the new id instead
