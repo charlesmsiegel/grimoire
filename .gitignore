@@ -21,3 +21,4 @@ frontend/*.tsbuildinfo
 # Run-time pidfiles
 .run/
 **/results.json
+.playwright-mcp/
