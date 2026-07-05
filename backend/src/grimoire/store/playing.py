@@ -95,7 +95,7 @@ def available_greetings(cid: str, after: str | None = None) -> list[dict]:
     return out
 
 
-def start_from_greeting(cid: str, sid: str, gid: str) -> None:
+def start_from_greeting(cid: str, sid: str, gid: str) -> str:
     croot = campaigns.campaign_root(cid)
     g = greetings.read_greeting(croot, gid)["meta"]   # raises GreetingNotFound
     scene = scenes.read_scene(cid, sid)               # raises SceneNotFound
@@ -123,3 +123,5 @@ def start_from_greeting(cid: str, sid: str, gid: str) -> None:
     text = context._substitute(greetings.read_greeting(croot, gid)["body"],
                                context.scene_substitutions(cid, sid))
     scenes.append_message(cid, sid, "assistant", text)
+    # retitle last: any earlier failure leaves the caller's sid valid for cleanup
+    return scenes.rename_scene(cid, sid, g["name"])

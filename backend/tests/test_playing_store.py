@@ -68,7 +68,7 @@ def test_start_from_greeting_seeds_appears_marks(monkeypatch, tmp_path):
                                   body="{{char}} greets {{user}}.")
     cid, sid = _campaign_after_seed(wid)
     ap.appear(cid, sid, "pcs", "elara", "default", "player")
-    playing.start_from_greeting(cid, sid, g)
+    sid = playing.start_from_greeting(cid, sid, g)
     scene = scenes.read_scene(cid, sid)
     assert scene["messages"][0]["role"] == "assistant"
     assert scene["messages"][0]["content"] == "Seraphine greets Elara."   # tokens substituted
@@ -112,7 +112,7 @@ def test_start_from_greeting_stamps_greeting(monkeypatch, tmp_path):
     characters.create_character(wroot, "Seraphine", "default", characters.blank_card("Seraphine"))
     g = greetings.create_greeting(wroot, "Open", "seraphine", "default", body="Hi.")
     cid, sid = _campaign_after_seed(wid)
-    playing.start_from_greeting(cid, sid, g)
+    sid = playing.start_from_greeting(cid, sid, g)
     assert scenes.read_scene(cid, sid)["meta"]["greeting"] == g
 
 
@@ -144,7 +144,7 @@ def test_available_greetings_after_flags_and_sorts_unlocked(monkeypatch, tmp_pat
     g3 = greetings.create_greeting(wroot, "Middle", "s", "default", body="M.")
     greetings.set_edges(wroot, g1, leads_to=[g3])
     cid, sid = _campaign_after_seed(wid)
-    playing.start_from_greeting(cid, sid, g1)
+    sid = playing.start_from_greeting(cid, sid, g1)
     got = playing.available_greetings(cid, after=sid)
     assert got[0]["id"] == g3                      # the unlocked greeting sorts first
     assert {x["id"]: x["unlocked"] for x in got} == {g1: False, g2: False, g3: True}
@@ -227,7 +227,7 @@ def test_campaign_play_isolated_from_world_edits(monkeypatch, tmp_path):
     greetings.update_greeting(wroot, g, body="Edited in world.")   # after the fork
     greetings.delete_greeting(wroot, g)                            # even deleted
     assert {x["id"] for x in playing.available_greetings(cid)} == {g}
-    playing.start_from_greeting(cid, sid, g)
+    sid = playing.start_from_greeting(cid, sid, g)
     assert scenes.read_scene(cid, sid)["messages"][0]["content"] == "Original."
 
 
