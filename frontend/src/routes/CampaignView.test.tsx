@@ -22,33 +22,37 @@ vi.mock("../components/NewSceneChooser", () => ({
 }));
 vi.mock("../components/CalendarConfig", () => ({ CalendarConfig: () => <div data-testid="calendar-config" /> }));
 
-vi.mock("../api/client", () => ({
-  api: {
-    getCampaign: vi.fn(),
-    getWorld: vi.fn(),
-    listScenes: vi.fn(),
-    getScene: vi.fn(),
-    createScene: vi.fn(),
-    renameScene: vi.fn(),
-    deleteScene: vi.fn(),
-    chat: vi.fn(),
-    retry: vi.fn(),
-    regenerate: vi.fn(),
-    getConfig: vi.fn(),
-    editMessage: vi.fn(),
-    absorbScene: vi.fn(), saveChronicle: vi.fn(), getChronicle: vi.fn(),
-    // consumed by the embedded SceneInspector
-    getCast: vi.fn(), getSceneLocation: vi.fn(), getSceneContext: vi.fn(),
-    getCastDetail: vi.fn(), readEntity: vi.fn(),
-    getCalendarConfig: vi.fn(), setCalendarConfig: vi.fn(),
-    getSceneDatetime: vi.fn(), setSceneDatetime: vi.fn(),
-    listCharacters: vi.fn(), listPCs: vi.fn(), listCampaignPCs: vi.fn(),
-    campaignChanges: vi.fn(),
-    listAppearances: vi.fn(), listEntityImages: vi.fn(), listEntities: vi.fn(),
-    campaignImageUrl: (_c: string, char: string, v: string, n: string) => `/img/${char}/${v}/${n}`,
-    entityImageUrl: () => "/loc-img",
-  },
-}));
+vi.mock("../api/client", async () => {
+  const actual = await vi.importActual<typeof import("../api/client")>("../api/client");
+  return {
+    ...actual,
+    api: {
+      getCampaign: vi.fn(),
+      getWorld: vi.fn(),
+      listScenes: vi.fn(),
+      getScene: vi.fn(),
+      createScene: vi.fn(),
+      renameScene: vi.fn(),
+      deleteScene: vi.fn(),
+      chat: vi.fn(),
+      retry: vi.fn(),
+      regenerate: vi.fn(),
+      getConfig: vi.fn(),
+      editMessage: vi.fn(),
+      absorbScene: vi.fn(), saveChronicle: vi.fn(), getChronicle: vi.fn(),
+      // consumed by the embedded SceneInspector
+      getCast: vi.fn(), getSceneLocation: vi.fn(), getSceneContext: vi.fn(),
+      getCastDetail: vi.fn(), readEntity: vi.fn(),
+      getCalendarConfig: vi.fn(), setCalendarConfig: vi.fn(),
+      getSceneDatetime: vi.fn(), setSceneDatetime: vi.fn(), getCalendarMonths: vi.fn(),
+      listCharacters: vi.fn(), listPCs: vi.fn(), listCampaignPCs: vi.fn(),
+      campaignChanges: vi.fn(),
+      listAppearances: vi.fn(), listEntityImages: vi.fn(), listEntities: vi.fn(),
+      campaignImageUrl: (_c: string, char: string, v: string, n: string) => `/img/${char}/${v}/${n}`,
+      entityImageUrl: () => "/loc-img",
+    },
+  };
+});
 vi.mock("../api/models", () => ({ getModels: vi.fn() }));
 import { api } from "../api/client";
 import { getModels } from "../api/models";

@@ -3,6 +3,7 @@ import {
   api, type Actor, type CharacterSummary, type EntitySummary,
   type PCSummary, type RosterEntry, type SceneLocation, type SceneDatetime,
 } from "../api/client";
+import { CalendarDatePicker } from "./CalendarDatePicker";
 
 export function CastPanel({
   cid, sid, keySet, onSeeded, onSceneRenamed, initialPrompt, pcless,
@@ -194,8 +195,8 @@ export function CastPanel({
             <div className="field-hint">Holidays: {when.current.holidays_today.join(", ")}</div>
           ) : null}
           <div className="picker">
-            <input type="date" aria-label="Scene date" value={dateInput}
-                   onChange={(e) => setDateInput(e.target.value)} />
+            <CalendarDatePicker scope={{ kind: "campaign", id: cid }} value={dateInput}
+                                onChange={setDateInput} ariaLabel="Scene date" />
             <button className="primary" onClick={applyDatetime} disabled={!dateInput}>
               {when?.current ? "Advance to" : "Set date"}
             </button>
