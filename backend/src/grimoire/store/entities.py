@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
+from . import statcache
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import slugify, uniquify
 
@@ -111,9 +112,12 @@ def entity_hash(root: Path, kind: str, eid: str) -> str | None:
     if not _safe_id(eid):
         return None
     p = _entity_path(root, kind, eid)
-    if not p.exists():
+    sig = statcache.signature(p)
+    if sig is None:
         return None
-    return hashlib.sha256(p.read_text(encoding="utf-8").encode("utf-8")).hexdigest()
+    return statcache.memo(
+        "entity_hash", sig,
+        lambda: hashlib.sha256(p.read_text(encoding="utf-8").encode("utf-8")).hexdigest())
 
 
 def all_refs(root: Path) -> list[tuple[str, str]]:

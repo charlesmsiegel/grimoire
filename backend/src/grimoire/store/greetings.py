@@ -13,7 +13,7 @@ import json
 import re
 from pathlib import Path
 
-from . import characters
+from . import characters, statcache
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import slugify, uniquify
 
@@ -130,9 +130,12 @@ def read_plotmap(root: Path) -> dict:
 
 def plotmap_hash(root: Path) -> str | None:
     p = _plotmap_path(root)
-    if not p.exists():
+    sig = statcache.signature(p)
+    if sig is None:
         return None
-    return hashlib.sha256(p.read_text(encoding="utf-8").encode("utf-8")).hexdigest()
+    return statcache.memo(
+        "plotmap_hash", sig,
+        lambda: hashlib.sha256(p.read_text(encoding="utf-8").encode("utf-8")).hexdigest())
 
 
 def _write_plotmap(root: Path, data: dict) -> None:
