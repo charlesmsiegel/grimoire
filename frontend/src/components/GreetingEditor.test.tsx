@@ -354,3 +354,31 @@ test("campaign scope: hides the tagging queue and never fetches untagged images"
   await screen.findByRole("button", { name: "+ New greeting" });
   expect(api.listUntaggedImages).not.toHaveBeenCalled();
 });
+
+test("view shows the Offscreen chip for a pcless greeting", async () => {
+  (api.listGreetings as any).mockResolvedValue([
+    { id: "cabal", name: "Cabal", character: "seraphine", version: "default", present: [], requires_tags: [], predecessor_join: "all", pcless: true },
+  ]);
+  (api.readGreeting as any).mockResolvedValue({
+    meta: { id: "cabal", name: "Cabal", character: "seraphine", version: "default", present: [], requires_tags: [], predecessor_join: "all", pcless: true },
+    body: "The cult meets.", edges: { leads_to: [], excludes: [] }, predecessors: [],
+  });
+  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
+  fireEvent.click(await within(rail).findByText("Cabal"));
+  await screen.findByText("NPC-only opener");
+});
+
+test("the form's Offscreen toggle is sent on save", async () => {
+  (api.listGreetings as any).mockResolvedValue([
+    { id: "open", name: "Open", character: "seraphine", version: "default", present: [], requires_tags: [], predecessor_join: "all" },
+  ]);
+  const { container } = render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
+  fireEvent.click(await within(rail).findByText("Open"));
+  fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
+  fireEvent.click(screen.getByRole("button", { name: /offscreen \(no pc\)/i }));
+  fireEvent.click(screen.getByRole("button", { name: /save greeting/i }));
+  await waitFor(() => expect(api.updateGreeting).toHaveBeenCalledWith(
+    { kind: "world", id: "w" }, "open", expect.objectContaining({ pcless: true })));
+});

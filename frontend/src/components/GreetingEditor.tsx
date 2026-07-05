@@ -5,7 +5,7 @@ import { GreetingMarkdown } from "./GreetingMarkdown";
 import { SubjectsPopover } from "./SubjectsPopover";
 import { TaggingQueue } from "./TaggingQueue";
 
-const BLANK = { name: "", character: "", version: "", body: "", present: [] as string[], requires_tags: [] as string[], predecessor_join: "all" as "all" | "any" };
+const BLANK = { name: "", character: "", version: "", body: "", present: [] as string[], requires_tags: [] as string[], predecessor_join: "all" as "all" | "any", pcless: false };
 const NO_EDGES: Edges = { leads_to: [], excludes: [] };
 
 export function GreetingEditor({ scope, wid, onOpenCharacter, focus }:
@@ -64,7 +64,7 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, focus }:
     setForm({
       name: g.meta.name, character: g.meta.character, version: g.meta.version,
       body: g.body.trim(), present: g.meta.present ?? [], requires_tags: g.meta.requires_tags,
-      predecessor_join: g.meta.predecessor_join,
+      predecessor_join: g.meta.predecessor_join, pcless: g.meta.pcless ?? false,
     });
     setEdges(g.edges);
     setPredecessors(g.predecessors ?? []);
@@ -84,6 +84,7 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, focus }:
         await api.updateGreeting(scope, id, {
           name: form.name, body: form.body, present: form.present,
           requires_tags: form.requires_tags, predecessor_join: form.predecessor_join,
+          pcless: form.pcless,
         });
       } else {
         id = (await api.createGreeting(scope, { ...form })).id;
@@ -220,6 +221,12 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, focus }:
               <div className="form-actions">
                 <button className="subtle" onClick={() => setMode("edit")}>Edit</button>
               </div>
+              {form.pcless && (
+                <div className="side-section">
+                  <h4>Offscreen</h4>
+                  <span className="chip on">NPC-only opener</span>
+                </div>
+              )}
               {!worldScope && (
                 <div className="side-section">
                   <h4>Status</h4>
@@ -297,6 +304,15 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, focus }:
           )}
           <Field label="Greeting text">
             <textarea value={form.body} rows={6} onChange={(e) => setForm({ ...form, body: e.target.value })} />
+          </Field>
+          <Field label="Offscreen"
+                 hint="an NPC-only opener — no player character; {{user}} becomes your PC's name">
+            <div className="chips">
+              <button className={"chip" + (form.pcless ? " on" : "")}
+                      onClick={() => setForm({ ...form, pcless: !form.pcless })}>
+                Offscreen (no PC)
+              </button>
+            </div>
           </Field>
           <Field label="Present characters" hint="everyone cast into the scene when it starts from this greeting">
             <div className="chips">
