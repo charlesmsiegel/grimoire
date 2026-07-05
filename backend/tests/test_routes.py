@@ -316,8 +316,10 @@ def test_appearances_and_copy_from_greeting(client):
                json={"subjects": [cid]})
 
     apps = client.get(f"/api/worlds/{wid}/characters/{cid}/appearances").json()
-    assert apps == [{"gid": gid, "greeting_name": "Opener", "name": "embed-abc123def456",
-                     "url": f"/api/worlds/{wid}/greetings/{gid}/images/embed-abc123def456"}]
+    assert [(a["gid"], a["greeting_name"], a["name"]) for a in apps] == [
+        (gid, "Opener", "embed-abc123def456")]
+    assert apps[0]["url"].startswith(
+        f"/api/worlds/{wid}/greetings/{gid}/images/embed-abc123def456?v=")
 
     copy_url = f"/api/worlds/{wid}/characters/{cid}/versions/default/images/copy-from-greeting"
     r = client.post(copy_url, json={"gid": gid, "name": "embed-abc123def456", "slot": "avatar"})
@@ -339,8 +341,10 @@ def test_untagged_images_route_and_empty_marker(client):
                            base="greetings")
 
     r = client.get(f"/api/worlds/{wid}/subjects/untagged")
-    assert r.json() == [{"gid": gid, "greeting_name": "Opener", "name": "embed-abc123def456",
-                         "url": f"/api/worlds/{wid}/greetings/{gid}/images/embed-abc123def456"}]
+    assert [(a["gid"], a["greeting_name"], a["name"]) for a in r.json()] == [
+        (gid, "Opener", "embed-abc123def456")]
+    assert r.json()[0]["url"].startswith(
+        f"/api/worlds/{wid}/greetings/{gid}/images/embed-abc123def456?v=")
     # an explicit [] PUT marks it reviewed and removes it from the queue
     client.put(f"/api/worlds/{wid}/greetings/{gid}/images/embed-abc123def456/subjects",
                json={"subjects": []})
@@ -2052,3 +2056,62 @@ def test_cast_batch_unknown_actor_404s(client):
         {"kind": "characters", "id": "ghost"},
     ]})
     assert r.status_code == 404
+
+
+# ---- image thumbnails ----
+def _real_png(w=1200, h=800):
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (w, h), (180, 40, 40)).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def test_image_w_param_serves_downscaled_webp(client):
+    wid = _world(client)
+    cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mira"}).json()["character"]
+    base = f"/api/worlds/{wid}/characters/{cid}/versions/default/images/avatar"
+    png = _real_png()
+    client.put(base, files={"file": ("a.png", io.BytesIO(png), "image/png")})
+    full = client.get(base)
+    assert full.headers["content-type"] == "image/png" and len(full.content) == len(png)
+    thumb = client.get(f"{base}?w=320")
+    assert thumb.status_code == 200
+    assert thumb.headers["content-type"] == "image/webp"
+    assert len(thumb.content) < len(png) / 4
+    # w + v caches immutable, like any versioned image URL
+    v = client.get(f"/api/worlds/{wid}/characters/{cid}/versions/default/images").json()[0]["v"]
+    both = client.get(f"{base}?w=320&v={v}")
+    assert "immutable" in both.headers["cache-control"]
+
+
+def test_image_w_param_falls_back_to_original_when_not_decodable(client):
+    wid = _world(client)
+    cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mira"}).json()["character"]
+    base = f"/api/worlds/{wid}/characters/{cid}/versions/default/images/avatar"
+    client.put(base, files={"file": ("a.png", io.BytesIO(b"not an image"), "image/png")})
+    r = client.get(f"{base}?w=320")
+    assert r.status_code == 200
+    assert r.content == b"not an image"  # original bytes, not an error
+
+
+def test_appearances_and_untagged_carry_versioned_thumb_urls(client):
+    wid = _world(client)
+    cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mira"}).json()["character"]
+    gid = client.post(f"/api/worlds/{wid}/greetings",
+                      json={"name": "Opener", "character": cid, "version": "default"}).json()["id"]
+    root = store.worlds.world_root(wid)
+    store.assets.put_image(root, gid, "default", "embed-abc123def456", _real_png(), "png",
+                           base="greetings")
+    base = f"/api/worlds/{wid}/greetings/{gid}/images/embed-abc123def456"
+
+    ut = client.get(f"/api/worlds/{wid}/subjects/untagged").json()[0]
+    assert ut["url"].startswith(f"{base}?v=")
+    assert "w=320" in ut["thumb"] and "v=" in ut["thumb"]
+
+    client.put(f"{base}/subjects", json={"subjects": [cid]})
+    app = client.get(f"/api/worlds/{wid}/characters/{cid}/appearances").json()[0]
+    assert app["url"].startswith(f"{base}?v=")
+    assert "w=320" in app["thumb"] and "v=" in app["thumb"]
+    # the thumb URL actually serves a small webp
+    t = client.get(app["thumb"])
+    assert t.headers["content-type"] == "image/webp"

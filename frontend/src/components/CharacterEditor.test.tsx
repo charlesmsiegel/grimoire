@@ -877,3 +877,16 @@ test("campaign scope: the avatar crop control is absent (world-side mutation)", 
   expect(screen.queryByRole("button", { name: "Adjust avatar crop" })).toBeNull();
   expect(container.querySelector("img.detail-avatar")).not.toBeNull();  // still displayed read-only
 });
+
+test("appears-in tiles render the thumbnail and link to the full image", async () => {
+  (api.listImageAppearances as any).mockResolvedValue([
+    { gid: "sol-1", greeting_name: "SoL 1", name: "embed-a",
+      url: "/api/worlds/w/greetings/sol-1/images/embed-a?v=abc",
+      thumb: "/api/worlds/w/greetings/sol-1/images/embed-a?w=320&v=abc" },
+  ]);
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  fireEvent.click(await screen.findByText("Seraphine"));
+  const img = await screen.findByAltText("SoL 1 art");
+  expect(img.getAttribute("src")).toBe("/api/worlds/w/greetings/sol-1/images/embed-a?w=320&v=abc");
+  expect(img.closest("a")!.getAttribute("href")).toBe("/api/worlds/w/greetings/sol-1/images/embed-a?v=abc");
+});

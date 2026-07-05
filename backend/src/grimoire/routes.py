@@ -755,6 +755,12 @@ def _serve_image(root, cid: str, vid: str, name: str, base: str = "characters",
     headers = {"Cache-Control": cache, "ETag": etag}
     if request is not None and etag in request.headers.get("if-none-match", ""):
         return Response(status_code=304, headers=headers)
+    # ?w= asks for a downscaled variant — tiles shouldn't pull multi-MB originals.
+    # An undecodable source just serves the original bytes.
+    if request is not None and (w := request.query_params.get("w", "")).isdigit():
+        tp = store.thumbs.thumbnail(p, max(16, min(1024, int(w))))
+        if tp is not None:
+            return Response(content=tp.read_bytes(), media_type="image/webp", headers=headers)
     ext = p.suffix.lstrip(".").lower()
     return Response(content=p.read_bytes(),
                     media_type=_IMAGE_MEDIA.get(ext, "application/octet-stream"),
@@ -916,12 +922,27 @@ def put_world_greeting_image_subjects(wid: str, gid: str, name: str, body: Subje
     return {"ok": True}
 
 
+_THUMB_W = 320  # tiles render at 96-154px; 320 covers retina
+
+
+def _greeting_image_urls(root, wid: str, a: dict) -> dict:
+    """Versioned full + thumbnail URLs for one greeting image: both cache
+    immutable, and the thumb keeps a 70-tile gallery from pulling 100MB+
+    of full-resolution art."""
+    base = f"/api/worlds/{wid}/greetings/{a['gid']}/images/{a['name']}"
+    p = store.assets.image_path(root, a["gid"], "default", a["name"], base="greetings")
+    if p is None:  # vanished between sweep and stat: bare URLs, still renderable
+        return {"url": base, "thumb": base}
+    v = store.assets.image_version(p)
+    return {"url": f"{base}?v={v}", "thumb": f"{base}?w={_THUMB_W}&v={v}"}
+
+
 @router.get("/worlds/{wid}/subjects/untagged")
 def get_world_untagged_images(wid: str):
     root = _world_root_or_404(wid)
     names = {g["id"]: g["name"] for g in store.greetings.list_greetings(root)}
     return [{**a, "greeting_name": names.get(a["gid"], a["gid"]),
-             "url": f"/api/worlds/{wid}/greetings/{a['gid']}/images/{a['name']}"}
+             **_greeting_image_urls(root, wid, a)}
             for a in store.image_subjects.untagged(root)]
 
 
@@ -930,7 +951,7 @@ def get_world_character_appearances(wid: str, cid: str):
     root = _world_root_or_404(wid)
     names = {g["id"]: g["name"] for g in store.greetings.list_greetings(root)}
     return [{**a, "greeting_name": names.get(a["gid"], a["gid"]),
-             "url": f"/api/worlds/{wid}/greetings/{a['gid']}/images/{a['name']}"}
+             **_greeting_image_urls(root, wid, a)}
             for a in store.image_subjects.appearances(root, cid)]
 
 

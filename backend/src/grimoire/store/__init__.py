@@ -6,7 +6,7 @@ from . import (
     absorb, appearances, assets, campaigns, cards, changes, characters, chronicle,
     chub, context, dossiers, entities, fetch, greetings, image_subjects, localize,
     lorebook, migrations, pcs, playing, playstate, plot, relationships, scene_ids,
-    scene_refs, scenes, suggest, sync, tags, taglines, worlds,
+    scene_refs, scenes, suggest, sync, tags, taglines, thumbs, worlds,
 )
 from .appearances import AppearError
 from .campaigns import CampaignNotFound

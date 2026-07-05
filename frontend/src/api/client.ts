@@ -153,7 +153,7 @@ export type Availability = {
   id: string; name: string; available: boolean; reasons: string[]; unlocked: boolean;
   mark?: GreetingMark;
 };
-export type Appearance = { gid: string; greeting_name: string; name: string; url: string };
+export type Appearance = { gid: string; greeting_name: string; name: string; url: string; thumb?: string };
 
 // cast
 export type Actor = { kind: "characters" | "pcs"; id: string; role: "player" | "npc"; name: string };
