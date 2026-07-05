@@ -1396,6 +1396,8 @@ def test_create_campaign_with_calendar_provider(client):
     assert cfg["confirmed"] is True
     r = client.post("/api/campaigns", json={"name": "X", "world": wid, "calendar": "bogus"})
     assert r.status_code == 400
+    names = [c["name"] for c in client.get("/api/campaigns").json()]
+    assert "X" not in names
 
 
 def test_datetime_get_put_roundtrip(client):

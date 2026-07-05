@@ -171,7 +171,7 @@ export type SceneDatetimeFacts = {
 export type SceneDatetime = { current: SceneDatetimeFacts | null; history: string[]; suggested: string | null };
 export type CalendarBlock = {
   provider: string; region: string;
-  custom_holidays: Array<{ name: string; month: number; day?: number; nth?: number; weekday?: number }>;
+  custom_holidays: Array<{ name: string; month: number | string; day?: number; nth?: number; weekday?: number }>;
   anchor: { native: string; gregorian: string } | null;
 };
 export type CalendarMonth = { key: string; name: string; days: number };
