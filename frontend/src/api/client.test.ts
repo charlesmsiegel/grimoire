@@ -324,3 +324,19 @@ test("getConfig is cached across sequential calls until a config write", async (
   expect(fetchMock).toHaveBeenCalledTimes(2);
   invalidateConfigCache();
 });
+
+test("addCastBatch POSTs every ref to the batch endpoint", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ ok: true, added: 2, skipped: [] }));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  await api.addCastBatch("run", "s1", [
+    { kind: "pcs", id: "elara" },
+    { kind: "characters", id: "sera" },
+  ]);
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/campaigns/run/scenes/s1/cast/batch",
+    expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ refs: [{ kind: "pcs", id: "elara" }, { kind: "characters", id: "sera" }] }),
+    }),
+  );
+});

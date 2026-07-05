@@ -69,11 +69,9 @@ export function NewSceneChooser({ cid, afterSid, keySet, onClose, onCreated }: {
     return undefined;
   });
   const pickSuggestion = (s: SceneSuggestion) => create(async (sid) => {
-    for (const c of s.cast) {
-      try { await api.addToCast(cid, sid, { kind: c.kind, id: c.id }); }
-      catch (err: any) {
-        if (err?.status !== 409) throw err;  // 409 = already cast; keep seeding
-      }
+    if (s.cast.length) {
+      // one request; members already cast come back in `skipped`, which is fine
+      await api.addCastBatch(cid, sid, s.cast.map((c) => ({ kind: c.kind, id: c.id })));
     }
     if (s.location) await api.setSceneLocation(cid, sid, s.location.id);
     return s.premise;

@@ -2006,3 +2006,49 @@ def test_campaign_detail_embeds_world_name(client):
     meta = client.get(f"/api/campaigns/{cid}").json()["meta"]
     assert meta["world"] == "drowned-realm"
     assert meta["world_name"] == "Drowned Realm"
+
+
+# ---- batch cast ----
+def test_cast_batch_seats_everyone_in_one_request(client):
+    wid, cid = _campaign(client)
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"})
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Bran"})
+    client.post(f"/api/campaigns/{cid}/pcs", json={"name": "Mara", "persona": {
+        "name": "Mara", "pronouns": "", "summary": "", "description": ""}})
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast/batch", json={"refs": [
+        {"kind": "characters", "id": "sera"},
+        {"kind": "characters", "id": "bran"},
+        {"kind": "pcs", "id": "mara"},
+    ]})
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "added": 3, "skipped": []}
+    cast = client.get(f"/api/campaigns/{cid}/scenes/{sid}/cast").json()
+    assert {(a["kind"], a["id"]) for a in cast} == {
+        ("characters", "sera"), ("characters", "bran"), ("pcs", "mara")}
+
+
+def test_cast_batch_skips_conflicting_members_and_keeps_going(client):
+    wid, cid = _campaign(client)
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"})
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Bran"})
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    # lock sera as npc; batch-seating her as player is the 409 the serial loop tolerated
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast", json={"kind": "characters", "id": "sera"})
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast/batch", json={"refs": [
+        {"kind": "characters", "id": "sera", "role": "player"},
+        {"kind": "characters", "id": "bran"},
+    ]})
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "added": 1, "skipped": ["characters/sera"]}
+    cast = client.get(f"/api/campaigns/{cid}/scenes/{sid}/cast").json()
+    assert {(a["kind"], a["id"]) for a in cast} == {("characters", "sera"), ("characters", "bran")}
+
+
+def test_cast_batch_unknown_actor_404s(client):
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast/batch", json={"refs": [
+        {"kind": "characters", "id": "ghost"},
+    ]})
+    assert r.status_code == 404

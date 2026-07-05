@@ -472,6 +472,9 @@ export const api = {
 
   // campaign cast & play
   listAppearances: (cid: string) => request<RosterEntry[]>("GET", `/api/campaigns/${cid}/appearances`),
+  addCastBatch: (cid: string, sid: string, refs: { kind: string; id: string; version?: string; role?: string }[]) =>
+    request<{ ok: boolean; added: number; skipped: string[] }>(
+      "POST", `/api/campaigns/${cid}/scenes/${sid}/cast/batch`, { refs }),
   getCast: (cid: string, sid: string) => request<Actor[]>("GET", `/api/campaigns/${cid}/scenes/${sid}/cast`),
   addToCast: (cid: string, sid: string,
               body: { kind: string; id: string; version?: string; role?: string }) =>
