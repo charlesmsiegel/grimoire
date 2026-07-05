@@ -108,3 +108,47 @@ def test_build_snapshot_dedupes_available_cast(monkeypatch, tmp_path):
     appearances.appear(cid, s1, "characters", hero, "main", "player")  # campaign char AND roster player
     tokens = [c["token"] for c in suggest.build_snapshot(cid)["available_cast"]]
     assert tokens.count(f"characters:{hero}") == 1  # listed once, not duplicated
+
+
+# ---- greeting ranking (folded into the suggestions call) ----
+def _campaign_with_greetings(monkeypatch, tmp_path, n):
+    wid = _world(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    ch = _char(wroot, "Ann")
+    from grimoire.store import greetings as gr
+    gids = [gr.create_greeting(wroot, f"Opening {i}", ch, "main", f"Body of opening {i}. " * 30)
+            for i in range(n)]
+    return campaigns.create_campaign("Run", wid), gids
+
+
+def test_greeting_candidates_only_when_more_than_two(monkeypatch, tmp_path):
+    cid, gids = _campaign_with_greetings(monkeypatch, tmp_path, 3)
+    cands = suggest.greeting_candidates(cid)
+    assert [c["id"] for c in cands] == gids
+    assert all(c["name"].startswith("Opening") for c in cands)
+    assert all(0 < len(c["excerpt"]) <= 300 for c in cands)
+
+
+def test_greeting_candidates_empty_at_two_or_fewer(monkeypatch, tmp_path):
+    cid, _gids = _campaign_with_greetings(monkeypatch, tmp_path, 2)
+    assert suggest.greeting_candidates(cid) == []
+
+
+def test_build_prompt_lists_greeting_candidates(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    snapshot = suggest.build_snapshot(cid)
+    cands = [{"id": "g1", "name": "Reckoning", "excerpt": "A debt comes due."}]
+    messages = suggest.build_prompt(snapshot, greeting_candidates=cands)
+    assert "greeting_picks" in messages[0]["content"]
+    assert "g1 = Reckoning" in messages[1]["content"]
+    assert "A debt comes due." in messages[1]["content"]
+    # without candidates the prompt is unchanged (no phantom instruction)
+    plain = suggest.build_prompt(snapshot)
+    assert "greeting_picks" not in plain[0]["content"]
+
+
+def test_parse_greeting_picks_validates_dedupes_and_keeps_order(monkeypatch, tmp_path):
+    text = '{"suggestions": [], "greeting_picks": ["g2", "ghost", "g1", "g2", 7]}'
+    assert suggest.parse_greeting_picks(text, {"g1", "g2", "g3"}) == ["g2", "g1"]
+    assert suggest.parse_greeting_picks("no json here", {"g1"}) == []
+    assert suggest.parse_greeting_picks('{"greeting_picks": "g1"}', {"g1"}) == []

@@ -17,6 +17,8 @@ export function NewSceneChooser({ cid, afterSid, keySet, onClose, onCreated }: {
   const [greetings, setGreetings] = useState<Availability[]>([]);
   // null = still generating; [] = nothing to offer (no key, empty, or failed)
   const [suggestions, setSuggestions] = useState<SceneSuggestion[] | null>(keySet ? null : []);
+  // the same LLM call ranks greetings when >2 are available; null = pending
+  const [picks, setPicks] = useState<string[] | null>(keySet ? null : []);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -28,10 +30,10 @@ export function NewSceneChooser({ cid, afterSid, keySet, onClose, onCreated }: {
 
   useEffect(() => {
     if (!keySet) return;
-    api.sceneSuggestions(cid)
-      .then((r) => setSuggestions(r.suggestions))
-      .catch((err) => { setSuggestions([]); setError(errMsg(err)); });
-  }, [cid, keySet]);
+    api.sceneSuggestions(cid, afterSid ?? undefined)
+      .then((r) => { setSuggestions(r.suggestions); setPicks(r.greeting_picks ?? []); })
+      .catch((err) => { setSuggestions([]); setPicks([]); setError(errMsg(err)); });
+  }, [cid, afterSid, keySet]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !busy) onClose(); };
@@ -41,8 +43,15 @@ export function NewSceneChooser({ cid, afterSid, keySet, onClose, onCreated }: {
 
   // 4 slots: 2 greetings + 2 generated; greetings grow to 4 when nothing will generate
   const wantGenerated = keySet && (suggestions === null || suggestions.length > 0);
-  const greetingCards = greetings.slice(0, wantGenerated ? 2 : 4);
-  const generatedCards = (suggestions ?? []).slice(0, 4 - greetingCards.length);
+  // with >2 available the LLM chooses; until it answers, show nothing rather than
+  // cards that would shuffle. Empty/failed picks fall back to today's order.
+  const rankPending = keySet && greetings.length > 2 && picks === null;
+  const picked = (picks ?? [])
+    .map((id) => greetings.find((g) => g.id === id))
+    .filter((g): g is Availability => g !== undefined);
+  const orderedGreetings = picked.length ? picked : greetings;
+  const greetingCards = rankPending ? [] : orderedGreetings.slice(0, wantGenerated ? 2 : 4);
+  const generatedCards = (suggestions ?? []).slice(0, 4 - (rankPending ? 2 : greetingCards.length));
 
   async function create(seed: (sid: string) => Promise<string | undefined>) {
     setBusy(true);
@@ -85,7 +94,8 @@ export function NewSceneChooser({ cid, afterSid, keySet, onClose, onCreated }: {
         {error && <div className="banner">{error}</div>}
 
         <div className="role">From a greeting</div>
-        {greetingCards.length === 0 && <div className="field-hint">No available greetings.</div>}
+        {rankPending && <div className="field-hint">Choosing…</div>}
+        {!rankPending && greetingCards.length === 0 && <div className="field-hint">No available greetings.</div>}
         {greetingCards.map((g) => (
           <button className="chooser-card" key={g.id} disabled={busy} onClick={() => pickGreeting(g.id)}>
             <span className="chooser-card-title">{g.name}</span>

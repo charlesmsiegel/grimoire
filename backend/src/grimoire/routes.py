@@ -1340,14 +1340,17 @@ def _resolve_cast(cid: str, tokens: list[str]) -> list[dict]:
 
 
 @router.post("/campaigns/{cid}/scene-suggestions")
-async def post_scene_suggestions(cid: str, client: OpenRouterClient = Depends(get_openrouter)):
+async def post_scene_suggestions(cid: str, after: str | None = None,
+                                 client: OpenRouterClient = Depends(get_openrouter)):
     try:
         store.campaigns.read_campaign(cid)
     except store.campaigns.CampaignNotFound:
         raise HTTPException(status_code=404, detail="campaign not found")
     cfg = store.read_config()
     _require_key(cfg)
-    messages = store.suggest.build_prompt(store.suggest.build_snapshot(cid))
+    # with >2 startable greetings the same call also ranks them for the chooser
+    candidates = store.suggest.greeting_candidates(cid, after)
+    messages = store.suggest.build_prompt(store.suggest.build_snapshot(cid), candidates)
     try:
         text = await client.complete(messages, cfg["model"], cfg["openrouter_key"])
     except OpenRouterError as exc:
@@ -1359,7 +1362,9 @@ async def post_scene_suggestions(cid: str, client: OpenRouterClient = Depends(ge
         loc = {"id": s["location"], "name": loc_names.get(s["location"], s["location"])} if s["location"] else None
         out.append({"title": s["title"], "premise": s["premise"],
                     "cast": _resolve_cast(cid, s["cast"]), "location": loc})
-    return {"suggestions": out}
+    picks = (store.suggest.parse_greeting_picks(text, {c["id"] for c in candidates})
+             if candidates else [])
+    return {"suggestions": out, "greeting_picks": picks}
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}")

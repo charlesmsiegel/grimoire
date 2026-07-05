@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 
 from . import (appearances, calendars, campaigns, characters, chronicle,
-               entities, pcs, plot, taglines)
+               entities, greetings, pcs, plot, taglines)
 
 RECENT_WINDOW = 5
 
@@ -130,6 +130,33 @@ def build_snapshot(cid: str) -> dict:
             "available_cast": available_cast, "available_locations": available_locations}
 
 
+GREETING_EXCERPT = 300
+
+RANK_INSTRUCTION = (
+    ' Also include key "greeting_picks": up to 4 ids chosen ONLY from the available '
+    "greetings below, ordered most relevant to the current situation first."
+)
+
+
+def greeting_candidates(cid: str, after: str | None = None) -> list[dict]:
+    """Available greetings worth ranking — only when more than two are startable
+    (with two or fewer the chooser simply shows them all)."""
+    from . import playing  # lazy: playing pulls in context; keep the import graph flat
+    avail = [g for g in playing.available_greetings(cid, after) if g["available"]]
+    if len(avail) <= 2:
+        return []
+    croot = campaigns.campaign_root(cid)
+    out: list[dict] = []
+    for g in avail:
+        try:
+            body = greetings.read_greeting(croot, g["id"])["body"]
+        except greetings.GreetingNotFound:
+            body = ""
+        out.append({"id": g["id"], "name": g["name"],
+                    "excerpt": " ".join(body.split())[:GREETING_EXCERPT]})
+    return out
+
+
 INSTRUCTION = (
     "You help a game master start the next scene of a role-play campaign. Given the "
     "current situation below, propose 3-4 DISTINCT scene openings that each advance an "
@@ -169,9 +196,14 @@ def _render_snapshot(s: dict) -> str:
     return "\n\n".join(parts) if parts else "No campaign history yet; propose fresh openings."
 
 
-def build_prompt(snapshot: dict) -> list[dict]:
-    return [{"role": "system", "content": INSTRUCTION},
-            {"role": "user", "content": _render_snapshot(snapshot)}]
+def build_prompt(snapshot: dict, greeting_candidates: list[dict] | None = None) -> list[dict]:
+    instruction, content = INSTRUCTION, _render_snapshot(snapshot)
+    if greeting_candidates:
+        instruction += RANK_INSTRUCTION
+        content += "\n\nAvailable greetings (use these ids):\n" + "\n".join(
+            f"- {g['id']} = {g['name']}: {g['excerpt']}" for g in greeting_candidates)
+    return [{"role": "system", "content": instruction},
+            {"role": "user", "content": content}]
 
 
 def _valid_ids(cid: str):
@@ -228,4 +260,17 @@ def parse_output(text: str, cid: str) -> list[dict]:
         loc = str(e.get("location", "")).strip()
         out.append({"title": title, "premise": premise, "cast": cast,
                     "location": loc if loc in loc_ids else ""})
+    return out
+
+
+def parse_greeting_picks(text: str, allowed: set[str]) -> list[str]:
+    """The model's greeting_picks, kept in order: unknown ids and duplicates drop."""
+    parsed = _extract_json(text)
+    picks = parsed.get("greeting_picks", []) if isinstance(parsed, dict) else []
+    if not isinstance(picks, list):
+        return []
+    out: list[str] = []
+    for p in picks:
+        if isinstance(p, str) and p in allowed and p not in out:
+            out.append(p)
     return out

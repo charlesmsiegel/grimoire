@@ -500,8 +500,9 @@ export const api = {
     request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/calendar`, cfg),
   getSceneContext: (cid: string, sid: string) =>
     request<SceneContext>("GET", `/api/campaigns/${cid}/scenes/${sid}/context`),
-  sceneSuggestions: (cid: string) =>
-    request<{ suggestions: SceneSuggestion[] }>("POST", `/api/campaigns/${cid}/scene-suggestions`),
+  sceneSuggestions: (cid: string, after?: string) =>
+    request<{ suggestions: SceneSuggestion[]; greeting_picks?: string[] }>(
+      "POST", `/api/campaigns/${cid}/scene-suggestions${after ? `?after=${encodeURIComponent(after)}` : ""}`),
   getCastDetail: (cid: string, sid: string, kind: string, id: string) =>
     request<CastDetail>("GET", `/api/campaigns/${cid}/scenes/${sid}/cast/${kind}/${id}`),
   editMessage: (cid: string, sid: string, index: number, content: string) =>

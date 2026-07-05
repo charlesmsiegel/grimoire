@@ -2115,3 +2115,34 @@ def test_appearances_and_untagged_carry_versioned_thumb_urls(client):
     # the thumb URL actually serves a small webp
     t = client.get(app["thumb"])
     assert t.headers["content-type"] == "image/webp"
+
+
+def _campaign_with_greetings(client, n):
+    wid = _world(client)
+    ann = client.post(f"/api/worlds/{wid}/characters", json={"name": "Ann"}).json()["character"]
+    gids = [client.post(f"/api/worlds/{wid}/greetings",
+                        json={"name": f"Opening {i}", "character": ann, "version": "default",
+                              "body": f"Opening body {i}"}).json()["id"]
+            for i in range(n)]
+    cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
+    return cid, gids
+
+
+def test_scene_suggestions_rank_greetings_when_more_than_two(client):
+    client.put("/api/config", json={"openrouter_key": "sk-or-x"})
+    cid, gids = _campaign_with_greetings(client, 3)
+    client.app.dependency_overrides[routes.get_openrouter] = lambda: FakeOpenRouterComplete(
+        '{"suggestions": [], "greeting_picks": ["' + gids[2] + '", "ghost", "' + gids[0] + '"]}')
+    r = client.post(f"/api/campaigns/{cid}/scene-suggestions")
+    assert r.status_code == 200
+    assert r.json()["greeting_picks"] == [gids[2], gids[0]]
+
+
+def test_scene_suggestions_skip_ranking_at_two_or_fewer(client):
+    client.put("/api/config", json={"openrouter_key": "sk-or-x"})
+    cid, gids = _campaign_with_greetings(client, 2)
+    client.app.dependency_overrides[routes.get_openrouter] = lambda: FakeOpenRouterComplete(
+        '{"suggestions": [], "greeting_picks": ["' + gids[0] + '"]}')
+    r = client.post(f"/api/campaigns/{cid}/scene-suggestions")
+    assert r.status_code == 200
+    assert r.json()["greeting_picks"] == []  # nothing was ranked, nothing honored

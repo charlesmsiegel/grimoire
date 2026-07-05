@@ -148,3 +148,30 @@ test("renders exactly the server-filtered greeting list (skipped absent, marks t
   await screen.findByText("Gala");                     // a marked-complete greeting still renders
   expect(screen.queryByText("Reckoning")).toBeNull();  // nothing beyond the server's list
 });
+
+test("with >2 greetings the section shows Choosing… until the LLM call lands", async () => {
+  let release: (v: unknown) => void = () => {};
+  (api.sceneSuggestions as any).mockReturnValue(new Promise((r) => { release = r; }));
+  renderChooser();
+  await screen.findByText(/choosing…/i);
+  expect(screen.queryByText("Reckoning")).toBeNull();
+  release({ suggestions: [SUGGESTION], greeting_picks: [] });
+  await screen.findByText("Reckoning"); // empty picks: falls back to today's order
+  expect(screen.queryByText(/choosing…/i)).toBeNull();
+});
+
+test("greeting picks choose and order the greeting cards", async () => {
+  (api.sceneSuggestions as any).mockResolvedValue({
+    suggestions: [SUGGESTION], greeting_picks: ["dawn", "reck"] });
+  renderChooser();
+  await screen.findByText("Dawn");
+  expect(screen.getByText("Reckoning")).toBeInTheDocument();
+  expect(screen.queryByText("Open")).toBeNull(); // present but not picked
+  expect(api.sceneSuggestions).toHaveBeenCalledWith("c", "s1");
+});
+
+test("without a key greetings render immediately, no Choosing…", async () => {
+  renderChooser({ keySet: false });
+  await screen.findByText("Reckoning");
+  expect(screen.queryByText(/choosing…/i)).toBeNull();
+});
