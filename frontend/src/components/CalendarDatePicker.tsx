@@ -26,12 +26,17 @@ export function CalendarDatePicker({ scope, value, onChange, ariaLabel }: {
     return () => { stale = true; };
   }, [scope.kind, scope.id, year]);
 
-  // A year change can invalidate the month (Shieldmeet, Adar I/II).
+  // A year change can invalidate the month (Shieldmeet, Adar I/II) or shrink
+  // it under the selected day (Cheshvan/Kislev vary 29↔30 between years).
   useEffect(() => {
-    if (months.length && month && !months.some((m) => m.key === month)) {
+    if (!months.length) return;
+    const entry = months.find((m) => m.key === month);
+    if (month && !entry) {
       setMonth(""); setDay(""); onChange("");
+    } else if (entry && day && parseInt(day, 10) > entry.days) {
+      setDay(""); onChange("");
     }
-  }, [months]);
+  }, [months, month, day]);
 
   function emit(y: string, mKey: string, d: string) {
     const n = parseInt(y, 10);

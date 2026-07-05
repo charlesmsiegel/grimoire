@@ -39,6 +39,31 @@ test("festival pseudo-months offer a single day", async () => {
   expect([...day.options].map(o => o.value)).toEqual(["", "1"]);
 });
 
+test("a year change that shortens the month clears a day that no longer fits", async () => {
+  const CHESHVAN_30 = [{ key: "Cheshvan", name: "Cheshvan", days: 30 }];
+  const CHESHVAN_29 = [{ key: "Cheshvan", name: "Cheshvan", days: 29 }];
+  (api.getCalendarMonths as any).mockImplementation(
+    (_scope: unknown, year: number) =>
+      Promise.resolve({ months: year === 5785 ? CHESHVAN_30 : CHESHVAN_29 }));
+  const onChange = vi.fn();
+  render(<CalendarDatePicker scope={{ kind: "campaign", id: "c1" }} value=""
+                             onChange={onChange} ariaLabel="Scene date" />);
+  await userEvent.type(screen.getByLabelText("Scene date year"), "5785");
+  await userEvent.selectOptions(await screen.findByLabelText("Scene date month"), "Cheshvan");
+  await userEvent.selectOptions(screen.getByLabelText("Scene date day"), "30");
+  expect(onChange).toHaveBeenLastCalledWith("5785-Cheshvan-30");
+
+  const yearInput = screen.getByLabelText("Scene date year");
+  await userEvent.clear(yearInput);
+  await userEvent.type(yearInput, "5786");
+  const day = screen.getByLabelText("Scene date day") as HTMLSelectElement;
+  await waitFor(() =>
+    expect([...day.options].map(o => o.value)).toEqual(
+      ["", ...Array.from({ length: 29 }, (_, i) => String(i + 1))]));
+  expect(day).toHaveValue("");
+  expect(onChange).toHaveBeenLastCalledWith("");
+});
+
 test("an existing value pre-fills the controls", async () => {
   (api.getCalendarMonths as any).mockResolvedValue({ months: HARPTOS_1492 });
   render(<CalendarDatePicker scope={{ kind: "campaign", id: "c1" }} value="1492-Mirtul-05"
