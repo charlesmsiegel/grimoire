@@ -240,6 +240,22 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
   const speakerOf = (m: Message) =>
     m.speaker ?? (m.role === "user" ? playerName ?? labels.user : labels.assistant);
 
+  // A speaker label names a cast member if it matches exactly (case-insensitive)
+  // or is a word-boundary prefix of exactly one name — "winifred" is winifred
+  // winterbourne; an ambiguous or mid-word label matches no one. Mirrors the
+  // backend's scenes.match_name so role attribution and plates agree.
+  function matchActor(speaker: string): Actor | undefined {
+    const low = speaker.trim().toLowerCase();
+    if (!low) return undefined;
+    const exact = cast.filter((a) => a.name.toLowerCase() === low);
+    if (exact.length) return exact.length === 1 ? exact[0] : undefined;
+    const prefixed = cast.filter((a) => {
+      const n = a.name.toLowerCase();
+      return n.startsWith(low) && !/[\p{L}\p{N}]/u.test(n[low.length] ?? "");
+    });
+    return prefixed.length === 1 ? prefixed[0] : undefined;
+  }
+
   // consecutive messages by the same speaker form one run under a single plate
   type Run = { speaker: string; pc: boolean; actor: Actor | undefined;
                posts: { m: Message; index: number }[] };
@@ -251,7 +267,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
       last.posts.push({ m, index });
       return;
     }
-    const actor = cast.find((a) => a.name === speaker);
+    const actor = matchActor(speaker);
     runs.push({ speaker, pc: actor ? actor.role === "player" : m.role === "user",
                 actor, posts: [{ m, index }] });
   });

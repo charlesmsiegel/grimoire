@@ -606,3 +606,23 @@ test("world name comes from the campaign payload, with no world fetch", async ()
   expect(await screen.findByText(/World ▸ Saltmarch/)).toBeInTheDocument();
   expect(api.getWorld).not.toHaveBeenCalled();
 });
+
+test("a first-name speaker matches its cast member (fuzzy, unique prefix)", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getCast as any).mockResolvedValue([
+    { kind: "characters", id: "winifred", role: "npc", name: "winifred winterbourne" },
+    { kind: "pcs", id: "yara", role: "player", name: "Yara Vane" },
+  ]);
+  (api.getScene as any).mockResolvedValue({
+    meta: { id: "s1", title: "Old" },
+    messages: [
+      { role: "assistant", content: "She smiles.", speaker: "winifred" },
+      { role: "user", content: "Hello.", speaker: "Yara" },
+    ],
+  });
+  renderCampaign();
+  // both short labels resolve to cast members: clickable plates, pc coloring
+  const winifred = await screen.findByRole("button", { name: "winifred" });
+  expect(winifred).toBeInTheDocument();
+  expect(document.querySelector(".plate.pc")).not.toBeNull(); // "Yara" -> player Yara Vane
+});
