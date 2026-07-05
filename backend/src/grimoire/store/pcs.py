@@ -11,6 +11,7 @@ import hashlib
 import shutil
 from pathlib import Path
 
+from . import statcache
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import slugify, uniquify
 
@@ -175,10 +176,23 @@ def delete_pc(root: Path, pid: str) -> None:
 
 
 def version_hash(root: Path, pid: str, vid: str) -> str | None:
-    p = _version_path(root, pid, vid)
-    if not _safe(pid) or not _safe(vid) or not p.exists():
+    if not _safe(pid) or not _safe(vid):
         return None
-    return hashlib.sha256(p.read_text(encoding="utf-8").encode("utf-8")).hexdigest()
+    p = _version_path(root, pid, vid)
+    sig = statcache.signature(p)
+    if sig is None:
+        return None
+    return statcache.memo(
+        "pc_version_hash", sig,
+        lambda: hashlib.sha256(p.read_text(encoding="utf-8").encode("utf-8")).hexdigest())
+
+
+def _dir_hash_compute(files: list[Path]) -> str:
+    h = hashlib.sha256()
+    for p in files:
+        h.update(p.name.encode("utf-8"))
+        h.update(p.read_text(encoding="utf-8").encode("utf-8"))
+    return h.hexdigest()
 
 
 def dir_hash(root: Path, pid: str) -> str | None:
@@ -186,11 +200,9 @@ def dir_hash(root: Path, pid: str) -> str | None:
     Only these files feed the hash, so nothing else in the dir can surface in sync."""
     if not _safe(pid) or not _meta_path(root, pid).exists():
         return None
-    h = hashlib.sha256()
-    for p in [_meta_path(root, pid)] + [_version_path(root, pid, v) for v in _version_ids(root, pid)]:
-        h.update(p.name.encode("utf-8"))
-        h.update(p.read_text(encoding="utf-8").encode("utf-8"))
-    return h.hexdigest()
+    files = [_meta_path(root, pid)] + [_version_path(root, pid, v) for v in _version_ids(root, pid)]
+    return statcache.memo("pc_dir_hash", statcache.signature(*files),
+                          lambda: _dir_hash_compute(files))
 
 
 def pc_count(root: Path) -> int:

@@ -13,7 +13,7 @@ import json
 import shutil
 from pathlib import Path
 
-from . import assets, chub, fetch, lorebook, taglines
+from . import assets, chub, fetch, lorebook, statcache, taglines
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import slugify, uniquify
 
@@ -247,10 +247,23 @@ def delete_character(root: Path, cid: str) -> None:
 
 
 def card_hash(root: Path, cid: str, vid: str) -> str | None:
-    p = _card_path(root, cid, vid)
-    if not _safe(cid) or not _safe(vid) or not p.exists():
+    if not _safe(cid) or not _safe(vid):
         return None
-    return hashlib.sha256(p.read_text(encoding="utf-8").encode("utf-8")).hexdigest()
+    p = _card_path(root, cid, vid)
+    sig = statcache.signature(p)
+    if sig is None:
+        return None
+    return statcache.memo(
+        "card_hash", sig,
+        lambda: hashlib.sha256(p.read_text(encoding="utf-8").encode("utf-8")).hexdigest())
+
+
+def _dir_hash_compute(files: list[Path]) -> str:
+    h = hashlib.sha256()
+    for p in files:
+        h.update(p.name.encode("utf-8"))
+        h.update(p.read_text(encoding="utf-8").encode("utf-8"))
+    return h.hexdigest()
 
 
 def dir_hash(root: Path, cid: str) -> str | None:
@@ -258,11 +271,10 @@ def dir_hash(root: Path, cid: str) -> str | None:
     Assets are excluded so an image-only change never surfaces in sync."""
     if not _safe(cid) or not _meta_path(root, cid).exists():
         return None
-    h = hashlib.sha256()
-    for p in [_meta_path(root, cid)] + [_card_path(root, cid, v) for v in _version_ids(root, cid)]:
-        h.update(p.name.encode("utf-8"))
-        h.update(p.read_text(encoding="utf-8").encode("utf-8"))
-    return h.hexdigest()
+    files = [_meta_path(root, cid)] + [_card_path(root, cid, v) for v in _version_ids(root, cid)]
+    # the signature spans the whole file set, so adding/removing a version invalidates too
+    return statcache.memo("dir_hash", statcache.signature(*files),
+                          lambda: _dir_hash_compute(files))
 
 
 def character_count(root: Path) -> int:
