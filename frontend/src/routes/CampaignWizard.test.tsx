@@ -71,7 +71,7 @@ test("Create campaign commits the full sequence in order", async () => {
   fireEvent.change(screen.getByLabelText(/location name/i), { target: { value: "The Tavern" } });
   fireEvent.click(screen.getByRole("button", { name: /create campaign/i }));
 
-  await waitFor(() => expect(api.createCampaign).toHaveBeenCalledWith("Run One", "w1", "US"));
+  await waitFor(() => expect(api.createCampaign).toHaveBeenCalledWith("Run One", "w1", "US", "gregorian"));
   expect(api.createCampaignPC).toHaveBeenCalledWith("run", expect.objectContaining({
     name: "Mara", tags: [], persona: expect.objectContaining({ name: "Mara" }),
   }));
@@ -88,7 +88,6 @@ test("step 1 shows the calendar select alongside holidays", async () => {
   await screen.findByText("Realm");
   const calendar = screen.getByLabelText(/^calendar$/i) as HTMLSelectElement;
   expect(calendar.value).toBe("gregorian");
-  expect(screen.getByText(/more providers to come/i)).toBeInTheDocument();
   expect(screen.getByText(/regional holiday set/i)).toBeInTheDocument();
 });
 
@@ -101,7 +100,35 @@ test("selecting a holidays region passes it to createCampaign", async () => {
   fireEvent.change(screen.getByLabelText(/character name/i), { target: { value: "Mara" } });
   fireEvent.click(screen.getByRole("button", { name: /next/i }));
   fireEvent.click(screen.getByRole("button", { name: /create campaign/i }));
-  await waitFor(() => expect(api.createCampaign).toHaveBeenCalledWith("Run One", "w1", "GB"));
+  await waitFor(() => expect(api.createCampaign).toHaveBeenCalledWith("Run One", "w1", "GB", "gregorian"));
+});
+
+test("choosing Calendar of Harptos hides the Holidays select and creates with no region", async () => {
+  renderWizard();
+  await screen.findByText("Realm");
+  fireEvent.change(screen.getByLabelText(/campaign name/i), { target: { value: "FR" } });
+  fireEvent.change(screen.getByLabelText(/^calendar$/i), { target: { value: "harptos" } });
+  expect(screen.queryByLabelText("Holidays region")).toBeNull();
+  expect(screen.queryByLabelText("Observance")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: /next/i }));
+  fireEvent.change(screen.getByLabelText(/character name/i), { target: { value: "Mara" } });
+  fireEvent.click(screen.getByRole("button", { name: /next/i }));
+  fireEvent.click(screen.getByRole("button", { name: /create campaign/i }));
+  await waitFor(() => expect(api.createCampaign).toHaveBeenCalledWith("FR", "w1", undefined, "harptos"));
+});
+
+test("choosing Hebrew and Israel passes the observance region to createCampaign", async () => {
+  renderWizard();
+  await screen.findByText("Realm");
+  fireEvent.change(screen.getByLabelText(/campaign name/i), { target: { value: "H" } });
+  fireEvent.change(screen.getByLabelText(/^calendar$/i), { target: { value: "hebrew" } });
+  expect(screen.queryByLabelText("Holidays region")).toBeNull();
+  fireEvent.change(screen.getByLabelText("Observance"), { target: { value: "IL" } });
+  fireEvent.click(screen.getByRole("button", { name: /next/i }));
+  fireEvent.change(screen.getByLabelText(/character name/i), { target: { value: "Mara" } });
+  fireEvent.click(screen.getByRole("button", { name: /next/i }));
+  fireEvent.click(screen.getByRole("button", { name: /create campaign/i }));
+  await waitFor(() => expect(api.createCampaign).toHaveBeenCalledWith("H", "w1", "IL", "hebrew"));
 });
 
 test("Finish on the opener step navigates to the campaign", async () => {
