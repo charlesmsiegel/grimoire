@@ -198,6 +198,26 @@ def _greeting_count(data: dict) -> int:
             + (len(greetings) if isinstance(greetings, list) else 0))
 
 
+def _card_summary(root: Path, cid: str, vid: str) -> dict:
+    """The small derived view of a card that list endpoints need (label,
+    greeting count, chub link), memoized by stat so unchanged cards are
+    never re-read or re-parsed."""
+    if not _safe(vid):
+        raise VersionNotFound(vid)
+    p = _card_path(root, cid, vid)
+    sig = statcache.signature(p)
+    if sig is None:
+        raise VersionNotFound(vid)
+
+    def compute() -> dict:
+        card = json.loads(p.read_text(encoding="utf-8"))
+        return {"label": _version_label(card, vid),
+                "greeting_count": _greeting_count(card.get("data", {})),
+                "chub_source": _version_chub_source(card)}
+
+    return statcache.memo("card_summary", sig, compute)
+
+
 def list_characters(root: Path) -> list[dict]:
     out: list[dict] = []
     d = _chars_dir(root)
@@ -208,9 +228,9 @@ def list_characters(root: Path) -> list[dict]:
             default = meta.get("default_version", "")
             names = [i["name"] for i in assets.list_images(root, cid, default)]
             try:
-                default_data = read_card(root, cid, default).get("data", {})
+                greeting_count = _card_summary(root, cid, default)["greeting_count"]
             except VersionNotFound:
-                default_data = {}
+                greeting_count = 0
             out.append({
                 "id": cid,
                 "name": meta.get("name", cid),
@@ -219,9 +239,9 @@ def list_characters(root: Path) -> list[dict]:
                 "avatar_focus": assets.read_focus(root, cid, default),
                 "gallery_count": sum(1 for n in names if n.startswith("gallery_")),
                 "localized_count": sum(1 for n in names if n.startswith("embed-")),
-                "greeting_count": _greeting_count(default_data),
+                "greeting_count": greeting_count,
                 "tagline": taglines.read(root, cid),
-                "versions": [{"id": v, "name": _version_label(read_card(root, cid, v), v)}
+                "versions": [{"id": v, "name": _card_summary(root, cid, v)["label"]}
                              for v in _version_ids(root, cid)],
             })
     return out
@@ -294,12 +314,16 @@ def find_unlinked_versions(root: Path) -> list[dict]:
     character in root -- for surfacing versions worth linking."""
     out: list[dict] = []
     for cid in character_refs(root):
-        detail = read_character(root, cid)
-        for v in detail["versions"]:
-            if not v["chub_source"]:
+        meta, _ = parse_frontmatter(_meta_path(root, cid).read_text(encoding="utf-8"))
+        default = meta.get("default_version", "")
+        legacy_chub_source = meta.get("chub_source", "")  # same fallback as read_character
+        for vid in _version_ids(root, cid):
+            summary = _card_summary(root, cid, vid)
+            chub_source = summary["chub_source"] or (legacy_chub_source if vid == default else "")
+            if not chub_source:
                 out.append({
-                    "character": cid, "character_name": detail["meta"]["name"],
-                    "version": v["id"], "version_name": v["name"],
+                    "character": cid, "character_name": meta.get("name", cid),
+                    "version": vid, "version_name": summary["label"],
                 })
     return out
 
