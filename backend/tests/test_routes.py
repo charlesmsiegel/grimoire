@@ -2187,3 +2187,17 @@ def test_scene_suggestions_include_dates_and_next_date(client):
     assert r.status_code == 200
     assert r.json()["suggestions"][0]["date"] == "2026-07-10"
     assert r.json()["next_date"] == "2026-07-08"
+
+
+# ---- offscreen (pcless) scenes ----
+def test_scene_pcless_flag_roundtrip(client):
+    _, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes",
+                      json={"title": "Cabal", "pcless": True}).json()["id"]
+    normal = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Tavern"}).json()["id"]
+    listing = {s["id"]: s["pcless"] for s in client.get(f"/api/campaigns/{cid}/scenes").json()}
+    assert listing[sid] is True and listing[normal] is False
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["meta"]["pcless"] == "true"
+    assert store.scenes.is_pcless(cid, sid) is True
+    assert store.scenes.is_pcless(cid, normal) is False
+    assert store.scenes.is_pcless(cid, "missing") is False

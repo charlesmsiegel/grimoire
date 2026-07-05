@@ -109,7 +109,8 @@ def repad(cid: str, width: int) -> None:
     scene_refs.repoint(cid, mapping)
 
 
-def create_scene(cid: str, title: str, suggested_date: str | None = None) -> str:
+def create_scene(cid: str, title: str, suggested_date: str | None = None,
+                 pcless: bool = False) -> str:
     _require_campaign(cid)
     d = _scenes_dir(cid)
     d.mkdir(parents=True, exist_ok=True)
@@ -121,6 +122,8 @@ def create_scene(cid: str, title: str, suggested_date: str | None = None) -> str
     base = scene_ids.format_sid(number, width, None, slugify(title))
     sid = uniquify(base, lambda c: _scene_path(cid, c).exists())
     meta = {"title": title, "model": read_config()["model"], "created": now, "updated": now}
+    if pcless:
+        meta["pcless"] = "true"
     if suggested_date:
         try:
             provider = calendars.get_provider(
@@ -145,9 +148,18 @@ def list_scenes(cid: str) -> list[dict]:
                 "model": meta.get("model", ""),
                 "created": meta.get("created", ""),
                 "updated": meta.get("updated", ""),
+                "pcless": meta.get("pcless") == "true",
             })
     out.sort(key=lambda m: m["updated"], reverse=True)
     return out
+
+
+def is_pcless(cid: str, sid: str) -> bool:
+    """A scene deliberately without a player character (director-driven)."""
+    p = _scene_path(cid, sid)
+    if not _safe_id(sid) or not p.exists():
+        return False
+    return parse_frontmatter_head(p).get("pcless") == "true"
 
 
 def _parse_messages(body: str, players: frozenset[str]) -> list[dict]:
