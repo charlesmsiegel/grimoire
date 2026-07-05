@@ -15,7 +15,7 @@ from pathlib import Path
 
 from . import characters, statcache
 from .frontmatter import dump_frontmatter, parse_frontmatter
-from .paths import slugify, uniquify
+from .paths import natural_key, slugify, uniquify
 
 
 class GreetingNotFound(Exception):
@@ -99,7 +99,9 @@ def list_greetings(root: Path) -> list[dict]:
     d = _greetings_dir(root)
     if not d.exists():
         return []
-    return [read_greeting(root, p.stem)["meta"] for p in sorted(d.glob("*.md"))]
+    metas = [read_greeting(root, p.stem)["meta"] for p in d.glob("*.md")]
+    metas.sort(key=lambda m: natural_key(m["name"]))  # A2 before A10
+    return metas
 
 
 def update_greeting(root: Path, gid: str, *, name: str | None = None, body: str | None = None,

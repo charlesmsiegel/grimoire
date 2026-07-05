@@ -110,6 +110,14 @@ def slugify(text: str) -> str:
     return slug or "untitled"
 
 
+def natural_key(text: str) -> tuple:
+    """Sort key that orders digit runs numerically: A2 before A10, SoL 2 before
+    SoL 19. Case-insensitive. Splitting on digit runs keeps types aligned
+    (str at even positions, int at odd), so mixed keys always compare."""
+    return tuple(int(tok) if tok.isdigit() else tok.lower()
+                 for tok in re.split(r"(\d+)", text))
+
+
 def uniquify(base_id: str, exists: Callable[[str], bool]) -> str:
     """Return base_id, or base_id-2, base_id-3, ... until `exists` is False."""
     candidate = base_id

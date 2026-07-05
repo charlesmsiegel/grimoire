@@ -181,3 +181,10 @@ def test_availability_sole_predecessor_skipped_frees_successor(tmp_path):
     pm = greetings.read_plotmap(tmp_path)
     out = {g["id"]: g for g in greetings.availability(tmp_path, pm, set(), set(), skipped={a})}
     assert out[c]["available"] is True
+
+
+def test_list_greetings_sorts_names_naturally(tmp_path):
+    for name in ["A10", "SoL 19", "A1c", "SoL 2", "A2", "sol 10", "A1", "B1"]:
+        greetings.create_greeting(tmp_path, name, "ann", "default", "body")
+    assert [g["name"] for g in greetings.list_greetings(tmp_path)] == [
+        "A1", "A1c", "A2", "A10", "B1", "SoL 2", "sol 10", "SoL 19"]
