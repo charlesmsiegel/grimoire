@@ -35,7 +35,10 @@ def incoming(cid: str) -> list[dict]:
     wid = _world_id(cid)  # raises CampaignNotFound if the campaign is missing
     wroot = worlds.world_root(wid)
     croot = campaigns.campaign_root(cid)
+    # read campaign.md / sync.md / appearances.json once and thread them through
+    # the passes -- each used to re-read all three per pass
     manifest = campaigns.read_manifest(cid)
+    locked = appearances.record(cid)
 
     refs: set[str] = set(manifest)
     if wroot.exists():
@@ -63,7 +66,9 @@ def incoming(cid: str) -> list[dict]:
         if mine_h is not None:
             item["mine"] = _entity_blob(croot, kind, eid)
         out.append(item)
-    return out + _plotmap_incoming(cid) + _actor_incoming(cid) + _unpicked_incoming(cid)
+    return (out + _plotmap_incoming(wroot, croot, manifest)
+            + _actor_incoming(wroot, croot, locked)
+            + _unpicked_incoming(wroot, croot, manifest, locked))
 
 
 def _plotmap_blob(root: Path) -> dict:
@@ -71,11 +76,9 @@ def _plotmap_blob(root: Path) -> dict:
     return {"name": "Plot map", "body": p.read_text(encoding="utf-8") if p.exists() else ""}
 
 
-def _plotmap_incoming(cid: str) -> list[dict]:
-    wroot = worlds.world_root(_world_id(cid))
-    croot = campaigns.campaign_root(cid)
+def _plotmap_incoming(wroot: Path, croot: Path, manifest: dict) -> list[dict]:
     world_h = greetings.plotmap_hash(wroot) if wroot.exists() else None
-    base = campaigns.read_manifest(cid).get("plotmap")
+    base = manifest.get("plotmap")
     if world_h is None or world_h == base:
         return []
     mine_h = greetings.plotmap_hash(croot)
@@ -95,11 +98,9 @@ def _actor_blob(root: Path, kind: str, actor_id: str, vid: str) -> dict:
     return {"name": persona.get("name", actor_id), "version": vid, "persona": persona}
 
 
-def _actor_incoming(cid: str) -> list[dict]:
-    wroot = worlds.world_root(_world_id(cid))
-    croot = campaigns.campaign_root(cid)
+def _actor_incoming(wroot: Path, croot: Path, locked: dict) -> list[dict]:
     out: list[dict] = []
-    for ref, rec in sorted(appearances.record(cid).items()):
+    for ref, rec in sorted(locked.items()):
         kind, actor_id = ref.split("/", 1)
         vid = rec["version"]
         world_h = appearances.actor_hash(wroot, kind, actor_id, vid)
@@ -126,13 +127,9 @@ def _actor_summary_blob(root: Path, kind: str, actor_id: str) -> dict:
     return {"name": detail["meta"].get("name", actor_id), "body": f"versions: {versions}"}
 
 
-def _unpicked_incoming(cid: str) -> list[dict]:
+def _unpicked_incoming(wroot: Path, croot: Path, manifest: dict, locked: dict) -> list[dict]:
     """Whole-actor diffs for actors with no version lock: one item per changed actor;
     accept re-copies the entire dir (deleted versions go too), reject advances the base."""
-    wroot = worlds.world_root(_world_id(cid))
-    croot = campaigns.campaign_root(cid)
-    manifest = campaigns.read_manifest(cid)
-    locked = set(appearances.record(cid))
     refs = {r for r in manifest if r.partition("/")[0] in appearances.ACTOR_KINDS}
     if wroot.exists():
         refs |= {f"characters/{a}" for a in characters.character_refs(wroot)}
