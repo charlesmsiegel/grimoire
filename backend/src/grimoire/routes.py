@@ -200,6 +200,7 @@ class GreetingCreate(BaseModel):
     requires_tags: list[str] = []
     predecessor_join: str = "all"
     present: list[str] | None = None
+    pcless: bool = False
 
 
 class SubjectsBody(BaseModel):
@@ -218,6 +219,7 @@ class GreetingUpdate(BaseModel):
     requires_tags: list[str] | None = None
     predecessor_join: str | None = None
     present: list[str] | None = None
+    pcless: bool | None = None
 
 
 class Edges(BaseModel):
@@ -826,7 +828,8 @@ def get_world_greetings(wid: str):
 def post_world_greeting(wid: str, body: GreetingCreate):
     gid = store.greetings.create_greeting(_world_root_or_404(wid), body.name, body.character,
                                           body.version, body.body, body.requires_tags,
-                                          body.predecessor_join, present=body.present)
+                                          body.predecessor_join, present=body.present,
+                                          pcless=body.pcless)
     return {"id": gid}
 
 
@@ -860,7 +863,8 @@ def put_world_greeting(wid: str, gid: str, body: GreetingUpdate):
     try:
         store.greetings.update_greeting(_world_root_or_404(wid), gid, name=body.name,
                                         body=body.body, requires_tags=body.requires_tags,
-                                        predecessor_join=body.predecessor_join, present=body.present)
+                                        predecessor_join=body.predecessor_join, present=body.present,
+                                        pcless=body.pcless)
     except store.greetings.GreetingNotFound:
         raise HTTPException(status_code=404, detail="greeting not found")
     return {"ok": True}
@@ -1943,7 +1947,8 @@ def post_campaign_greeting(cid: str, body: GreetingCreate):
     root = _campaign_root_or_404(cid)
     gid = store.greetings.create_greeting(root, body.name, body.character, body.version,
                                           body.body, body.requires_tags,
-                                          body.predecessor_join, present=body.present)
+                                          body.predecessor_join, present=body.present,
+                                          pcless=body.pcless)
     return {"id": gid}
 
 
@@ -1967,7 +1972,7 @@ def put_campaign_greeting(cid: str, gid: str, body: GreetingUpdate):
         store.greetings.update_greeting(root, gid, name=body.name, body=body.body,
                                         requires_tags=body.requires_tags,
                                         predecessor_join=body.predecessor_join,
-                                        present=body.present)
+                                        present=body.present, pcless=body.pcless)
     except store.greetings.GreetingNotFound:
         raise HTTPException(status_code=404, detail="greeting not found")
     return {"ok": True}

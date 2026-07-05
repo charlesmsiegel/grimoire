@@ -2284,3 +2284,18 @@ def test_chat_rejects_blank_content_in_a_normal_scene(client):
     client.put("/api/config", json={"openrouter_key": "k"})
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat",
                        json={"content": " "}).status_code == 400
+
+
+def test_greeting_pcless_roundtrip_and_availability(client):
+    wid, cid = _campaign(client)
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Vex"})
+    ver = client.get(f"/api/worlds/{wid}/characters/vex").json()["meta"]["default_version"]
+    g = client.post(f"/api/campaigns/{cid}/greetings", json={
+        "name": "Cabal", "character": "vex", "version": ver,
+        "body": "The cult meets.", "pcless": True}).json()["id"]
+    assert client.get(f"/api/campaigns/{cid}/greetings/{g}").json()["meta"]["pcless"] is True
+    client.put(f"/api/campaigns/{cid}/greetings/{g}", json={"pcless": False})
+    assert client.get(f"/api/campaigns/{cid}/greetings/{g}").json()["meta"]["pcless"] is False
+    client.put(f"/api/campaigns/{cid}/greetings/{g}", json={"pcless": True})
+    avail = client.get(f"/api/campaigns/{cid}/greetings/available").json()
+    assert [a["pcless"] for a in avail if a["id"] == g] == [True]
