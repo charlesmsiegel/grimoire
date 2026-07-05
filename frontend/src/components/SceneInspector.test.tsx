@@ -181,3 +181,9 @@ test("a dateless scene with a suggestion pre-fills the date input", async () => 
   fireEvent.click(screen.getByRole("button", { name: /set date/i }));
   await waitFor(() => expect(api.setSceneDatetime).toHaveBeenCalledWith("c", "s", "2026-07-06"));
 });
+
+test("offscreen scene shows the offscreen side-section", async () => {
+  render(<SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} pcless />);
+  await screen.findByText("Offscreen scene");
+  expect(screen.getByText(/no player character/i)).toBeInTheDocument();
+});

@@ -11,9 +11,9 @@ import { RecordDrawer, type DrawerTarget } from "./RecordDrawer";
 // grows as providers are added.
 const CALENDARS = [{ id: "gregorian", name: "Gregorian" }];
 
-export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRenamed }:
+export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRenamed, pcless }:
   { cid: string; sid: string; refreshKey: number; onSceneChanged: () => void;
-    onSceneRenamed?: (id: string) => void }) {
+    onSceneRenamed?: (id: string) => void; pcless?: boolean }) {
   const [cast, setCast] = useState<Actor[]>([]);
   const [roster, setRoster] = useState<RosterEntry[]>([]);
   const [names, setNames] = useState<Record<string, string>>({});
@@ -129,6 +129,12 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
 
   return (
     <aside className="inspector">
+      {pcless && (
+        <div className="side-section">
+          <h4>Offscreen scene</h4>
+          <div className="field-hint">No player character — you direct the NPCs.</div>
+        </div>
+      )}
       {recap.length > 0 && (
         <div className="side-section">
           <h4>Story so far</h4>
