@@ -1347,7 +1347,7 @@ def _resolve_cast(cid: str, tokens: list[str]) -> list[dict]:
 
 
 @router.post("/campaigns/{cid}/scene-suggestions")
-async def post_scene_suggestions(cid: str, after: str | None = None,
+async def post_scene_suggestions(cid: str, after: str | None = None, offscreen: bool = False,
                                  client: OpenRouterClient = Depends(get_openrouter)):
     try:
         store.campaigns.read_campaign(cid)
@@ -1356,8 +1356,9 @@ async def post_scene_suggestions(cid: str, after: str | None = None,
     cfg = store.read_config()
     _require_key(cfg)
     # with >2 startable greetings the same call also ranks them for the chooser
-    candidates = store.suggest.greeting_candidates(cid, after)
-    messages = store.suggest.build_prompt(store.suggest.build_snapshot(cid), candidates)
+    candidates = store.suggest.greeting_candidates(cid, after, pcless=offscreen)
+    messages = store.suggest.build_prompt(store.suggest.build_snapshot(cid, offscreen=offscreen),
+                                          candidates, offscreen=offscreen)
     try:
         text = await client.complete(messages, cfg["model"], cfg["openrouter_key"])
     except OpenRouterError as exc:
@@ -1365,7 +1366,7 @@ async def post_scene_suggestions(cid: str, after: str | None = None,
     croot = store.campaigns.campaign_root(cid)
     loc_names = {e["id"]: e.get("name", e["id"]) for e in store.entities.list_entities(croot, "locations")}
     out = []
-    for s in store.suggest.parse_output(text, cid):
+    for s in store.suggest.parse_output(text, cid, offscreen=offscreen):
         loc = {"id": s["location"], "name": loc_names.get(s["location"], s["location"])} if s["location"] else None
         out.append({"title": s["title"], "premise": s["premise"], "date": s["date"],
                     "cast": _resolve_cast(cid, s["cast"]), "location": loc})
