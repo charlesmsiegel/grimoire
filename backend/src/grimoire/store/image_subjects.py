@@ -25,10 +25,8 @@ def _image_names(root: Path, gid: str) -> set[str]:
     return {i["name"] for i in assets.list_images(root, gid, _VID, base=_BASE)}
 
 
-def read_subjects(root: Path, gid: str) -> dict[str, list[str]]:
-    """Tolerant: {} on missing/garbled file; vanished images and deleted
-    characters drop out silently (no dangling chips). An entry that empties
-    out stays as [] — it still means 'reviewed'."""
+def _read_raw(root: Path, gid: str) -> dict:
+    """The sidecar as stored: {} on missing/garbled file, no filtering."""
     p = subjects_path(root, gid)
     if not p.exists():
         return {}
@@ -36,10 +34,19 @@ def read_subjects(root: Path, gid: str) -> dict[str, list[str]]:
         raw = json.loads(p.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return {}
-    if not isinstance(raw, dict):
+    return raw if isinstance(raw, dict) else {}
+
+
+def read_subjects(root: Path, gid: str, known_cids: set[str] | None = None) -> dict[str, list[str]]:
+    """Tolerant: {} on missing/garbled file; vanished images and deleted
+    characters drop out silently (no dangling chips). An entry that empties
+    out stays as [] — it still means 'reviewed'. Sweeps over many greetings
+    pass `known_cids` so character ids are enumerated once, not per greeting."""
+    raw = _read_raw(root, gid)
+    if not raw:
         return {}
     names = _image_names(root, gid)
-    cids = {c["id"] for c in characters.list_characters(root)}
+    cids = set(characters.character_refs(root)) if known_cids is None else known_cids
     out: dict[str, list[str]] = {}
     for name, subs in raw.items():
         if name not in names or not isinstance(subs, list):
@@ -87,7 +94,7 @@ def untagged(root: Path) -> list[dict]:
         return out
     for d in sorted(p for p in gdir.iterdir() if p.is_dir()):
         gid = d.name
-        reviewed = set(read_subjects(root, gid))
+        reviewed = set(_read_raw(root, gid))  # key presence alone marks 'reviewed'
         for name in sorted(_image_names(root, gid)):
             if name not in reviewed:
                 out.append({"gid": gid, "name": name})
@@ -100,11 +107,12 @@ def appearances(root: Path, cid: str) -> list[dict]:
     greeting. Sorted by (gid, name) = the greetings tab's order."""
     out: list[dict] = []
     gdir = root / _BASE
-    if not gdir.exists():
+    if not gdir.exists() or cid not in characters.character_refs(root):
         return out
+    known = {cid}  # only this character's membership matters; skip re-filtering the rest
     for p in sorted(gdir.glob(f"*/assets/{_VID}/{SUBJECTS_FILE}")):
         gid = p.parents[2].name
-        for name, subs in sorted(read_subjects(root, gid).items()):
+        for name, subs in sorted(read_subjects(root, gid, known_cids=known).items()):
             if cid in subs:
                 out.append({"gid": gid, "name": name})
     return out

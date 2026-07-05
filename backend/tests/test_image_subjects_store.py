@@ -76,6 +76,30 @@ def test_appearances_scans_across_greetings_in_order(tmp_path):
     assert image_subjects.appearances(tmp_path, "nobody") == []
 
 
+def test_sweeps_skip_full_character_enumeration(tmp_path, monkeypatch):
+    """appearances/untagged scan every greeting; enumerating full character
+    detail per greeting made them O(greetings x characters) in disk reads."""
+    cid, gid = _world(tmp_path)
+    image_subjects.set_image_subjects(tmp_path, gid, "art_1", [cid])
+
+    def boom(root):
+        raise AssertionError("list_characters must not run during sweeps")
+    monkeypatch.setattr(image_subjects.characters, "list_characters", boom)
+    real_refs = image_subjects.characters.character_refs
+    refs_calls = []
+    monkeypatch.setattr(image_subjects.characters, "character_refs",
+                        lambda root: (refs_calls.append(1), real_refs(root))[1])
+
+    got = image_subjects.appearances(tmp_path, cid)
+    assert {(a["gid"], a["name"]) for a in got} == {(gid, "art_1")}
+    assert len(refs_calls) <= 1
+
+    refs_calls.clear()
+    got = image_subjects.untagged(tmp_path)
+    assert {(a["gid"], a["name"]) for a in got} == {(gid, "art_2")}
+    assert len(refs_calls) <= 1
+
+
 def test_copy_to_character_gallery_numbers_and_avatar(tmp_path):
     cid, vid = characters.create_character(tmp_path, "Mira", "main")
     gid = greetings.create_greeting(tmp_path, "Opener", cid, vid, "x")
