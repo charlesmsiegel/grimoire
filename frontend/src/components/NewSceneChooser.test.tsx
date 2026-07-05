@@ -4,7 +4,7 @@ import { NewSceneChooser } from "./NewSceneChooser";
 vi.mock("../api/client", () => ({
   api: {
     availableGreetings: vi.fn(), sceneSuggestions: vi.fn(), createScene: vi.fn(),
-    startFromGreeting: vi.fn(), addToCast: vi.fn(), setSceneLocation: vi.fn(),
+    startFromGreeting: vi.fn(), addToCast: vi.fn(), addCastBatch: vi.fn(), setSceneLocation: vi.fn(),
     deleteScene: vi.fn(),
   },
 }));
@@ -30,6 +30,7 @@ beforeEach(() => {
   (api.createScene as any).mockResolvedValue({ id: "s9" });
   (api.startFromGreeting as any).mockResolvedValue({ ok: true });
   (api.addToCast as any).mockResolvedValue({ ok: true });
+  (api.addCastBatch as any).mockResolvedValue({ ok: true, added: 1, skipped: [] });
   (api.setSceneLocation as any).mockResolvedValue({ ok: true, moved: false, name: "" });
   (api.deleteScene as any).mockResolvedValue({ ok: true });
 });
@@ -68,7 +69,7 @@ test("picking a generated card seeds cast + location and passes the premise", as
   renderChooser({ onCreated });
   fireEvent.click(await screen.findByText("The creditor"));
   await waitFor(() => expect(onCreated).toHaveBeenCalledWith("s9", "A debt-collector arrives."));
-  expect(api.addToCast).toHaveBeenCalledWith("c", "s9", { kind: "characters", id: "doran" });
+  expect(api.addCastBatch).toHaveBeenCalledWith("c", "s9", [{ kind: "characters", id: "doran" }]);
   expect(api.setSceneLocation).toHaveBeenCalledWith("c", "s9", "keep");
 });
 
@@ -78,7 +79,7 @@ test("Create manually only creates the scene", async () => {
   fireEvent.click(await screen.findByRole("button", { name: /create manually/i }));
   await waitFor(() => expect(onCreated).toHaveBeenCalledWith("s9"));
   expect(api.startFromGreeting).not.toHaveBeenCalled();
-  expect(api.addToCast).not.toHaveBeenCalled();
+  expect(api.addCastBatch).not.toHaveBeenCalled();
 });
 
 test("Cancel closes without creating anything", async () => {
@@ -107,8 +108,8 @@ test("a failed seed deletes the orphan scene and keeps the chooser open", async 
   expect(await screen.findByText("boom")).toBeInTheDocument();
 });
 
-test("a 409 while seeding cast is tolerated; the pick still completes", async () => {
-  (api.addToCast as any).mockRejectedValue({ status: 409, detail: "already cast" });
+test("already-cast members (skipped server-side) don't block the pick", async () => {
+  (api.addCastBatch as any).mockResolvedValue({ ok: true, added: 0, skipped: ["characters/doran"] });
   const onCreated = vi.fn();
   renderChooser({ onCreated });
   fireEvent.click(await screen.findByText("The creditor"));
@@ -116,8 +117,8 @@ test("a 409 while seeding cast is tolerated; the pick still completes", async ()
   expect(api.deleteScene).not.toHaveBeenCalled();
 });
 
-test("a non-409 cast failure aborts the pick and cleans up the scene", async () => {
-  (api.addToCast as any).mockRejectedValue({ status: 500, detail: "boom" });
+test("a cast seeding failure aborts the pick and cleans up the scene", async () => {
+  (api.addCastBatch as any).mockRejectedValue({ status: 500, detail: "boom" });
   const onCreated = vi.fn();
   renderChooser({ onCreated });
   fireEvent.click(await screen.findByText("The creditor"));

@@ -1707,17 +1707,15 @@ def get_scene_cast(cid: str, sid: str):
     return store.appearances.scene_cast(cid, sid)
 
 
-@router.post("/campaigns/{cid}/scenes/{sid}/cast")
-def post_scene_cast(cid: str, sid: str, body: Appear):
-    _require_scene(cid, sid)
+def _seat_cast_member(cid: str, sid: str, wroot, croot, body: Appear) -> None:
+    """Validate + resolve one cast addition and record it. Raises HTTPException
+    (404 unknown, 400 bad role) or store.appearances.AppearError (already cast)."""
     if body.kind not in store.appearances.ACTOR_KINDS:
         raise HTTPException(status_code=404, detail="unknown actor kind")
-    wroot = store.worlds.world_root(store.campaigns.read_campaign(cid)["meta"].get("world", ""))
     role = "player" if body.kind == "pcs" else (body.role or "npc")
     if role not in ("player", "npc"):
         raise HTTPException(status_code=400, detail="role must be player or npc")
     version = body.version
-    croot = store.campaigns.campaign_root(cid)
     try:
         if version is None:
             if body.kind == "characters":
@@ -1732,11 +1730,41 @@ def post_scene_cast(cid: str, sid: str, body: Appear):
                     version = store.pcs.read_pc(wroot, body.id)["meta"]["default_version"]
     except (store.characters.CharacterNotFound, store.pcs.PCNotFound):
         raise HTTPException(status_code=404, detail="actor not found")
+    store.appearances.appear(cid, sid, body.kind, body.id, version, role)
+
+
+@router.post("/campaigns/{cid}/scenes/{sid}/cast")
+def post_scene_cast(cid: str, sid: str, body: Appear):
+    _require_scene(cid, sid)
+    wroot = store.worlds.world_root(store.campaigns.read_campaign(cid)["meta"].get("world", ""))
+    croot = store.campaigns.campaign_root(cid)
     try:
-        store.appearances.appear(cid, sid, body.kind, body.id, version, role)
+        _seat_cast_member(cid, sid, wroot, croot, body)
     except store.appearances.AppearError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     return {"ok": True}
+
+
+class AppearBatch(BaseModel):
+    refs: list[Appear]
+
+
+@router.post("/campaigns/{cid}/scenes/{sid}/cast/batch")
+def post_scene_cast_batch(cid: str, sid: str, body: AppearBatch):
+    """Seat a whole suggestion cast in one request. Already-cast members are
+    skipped (the per-member 409), matching what the chooser's serial loop
+    tolerated; unknown actors still 404 the request."""
+    _require_scene(cid, sid)
+    wroot = store.worlds.world_root(store.campaigns.read_campaign(cid)["meta"].get("world", ""))
+    croot = store.campaigns.campaign_root(cid)
+    added, skipped = 0, []
+    for ref in body.refs:
+        try:
+            _seat_cast_member(cid, sid, wroot, croot, ref)
+            added += 1
+        except store.appearances.AppearError:
+            skipped.append(f"{ref.kind}/{ref.id}")
+    return {"ok": True, "added": added, "skipped": skipped}
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}/suggestions")
