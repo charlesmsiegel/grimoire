@@ -968,7 +968,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
                   {imageAppearances.map((a) => (
                     <div className="shelf-tile" key={`${a.gid}/${a.name}`}>
                       <a href={a.url} target="_blank" rel="noreferrer">
-                        <img alt={`${a.greeting_name} art`} src={a.url} />
+                        <img alt={`${a.greeting_name} art`} src={a.thumb ?? a.url} />
                       </a>
                       <button className="shelf-promote" onClick={() => copyFromGreeting(a, "avatar")}>Set as avatar</button>
                       <button className="shelf-promote" onClick={() => copyFromGreeting(a, "gallery")}>Add to gallery</button>
