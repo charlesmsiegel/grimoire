@@ -165,6 +165,16 @@ test("When section shows the current date and advances", async () => {
   await waitFor(() => expect(onSeeded).toHaveBeenCalled());
 });
 
+test("a dateless scene with a suggestion pre-fills the date input", async () => {
+  (api.getSceneDatetime as any).mockResolvedValue(
+    { current: null, history: [], suggested: "2026-07-06" });
+  renderPanel();
+  const input = await screen.findByLabelText("Scene date");
+  await waitFor(() => expect((input as HTMLInputElement).value).toBe("2026-07-06"));
+  fireEvent.click(screen.getByRole("button", { name: /set date/i }));
+  await waitFor(() => expect(api.setSceneDatetime).toHaveBeenCalledWith("c", "s", "2026-07-06"));
+});
+
 test("first date set renames the scene: adopts the new id via onSceneRenamed", async () => {
   (api.setSceneDatetime as any).mockResolvedValue(
     { ok: true, advanced: false, friendly: "4 July 2026", id: "001--2026-07-04--s" });
