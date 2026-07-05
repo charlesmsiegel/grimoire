@@ -2299,3 +2299,45 @@ def test_greeting_pcless_roundtrip_and_availability(client):
     client.put(f"/api/campaigns/{cid}/greetings/{g}", json={"pcless": True})
     avail = client.get(f"/api/campaigns/{cid}/greetings/available").json()
     assert [a["pcless"] for a in avail if a["id"] == g] == [True]
+
+
+def test_offscreen_greeting_stamps_scene_and_substitutes_pc_name(client):
+    wid, cid = _campaign(client)
+    other = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Tavern"}).json()["id"]
+    _cast_pc(client, wid, cid, other, name="Elara Vane")
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Vex"})
+    ver = client.get(f"/api/worlds/{wid}/characters/vex").json()["meta"]["default_version"]
+    g = client.post(f"/api/campaigns/{cid}/greetings", json={
+        "name": "Cabal", "character": "vex", "version": ver,
+        "body": "While {{user}} sleeps, the cult convenes.", "pcless": True}).json()["id"]
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/start-from-greeting",
+                       json={"greeting": g}).status_code == 200
+    scene = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()
+    assert scene["meta"]["pcless"] == "true"          # plain scene got flagged
+    assert "While Elara Vane sleeps" in scene["messages"][0]["content"]
+
+
+def test_pc_greeting_cannot_start_an_offscreen_scene(client):
+    wid, cid = _campaign(client)
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Vex"})
+    ver = client.get(f"/api/worlds/{wid}/characters/vex").json()["meta"]["default_version"]
+    g = client.post(f"/api/campaigns/{cid}/greetings", json={
+        "name": "Meet", "character": "vex", "version": ver, "body": "Hi {{user}}."}).json()["id"]
+    sid = client.post(f"/api/campaigns/{cid}/scenes",
+                      json={"title": "Cabal", "pcless": True}).json()["id"]
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/start-from-greeting",
+                       json={"greeting": g}).status_code == 409
+
+
+def test_offscreen_greeting_rejects_a_scene_with_players(client):
+    wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    _cast_pc(client, wid, cid, sid)
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Vex"})
+    ver = client.get(f"/api/worlds/{wid}/characters/vex").json()["meta"]["default_version"]
+    g = client.post(f"/api/campaigns/{cid}/greetings", json={
+        "name": "Cabal", "character": "vex", "version": ver, "body": "x",
+        "pcless": True}).json()["id"]
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/start-from-greeting",
+                       json={"greeting": g}).status_code == 409
