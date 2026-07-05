@@ -55,8 +55,16 @@ def list_images(root: Path, cid: str, vid: str, base: str = "characters") -> lis
     out: list[dict] = []
     for p in sorted(d.iterdir()):
         if p.is_file() and _norm_ext(p.suffix):
-            out.append({"name": p.stem, "ext": p.suffix.lstrip(".").lower()})
+            out.append({"name": p.stem, "ext": p.suffix.lstrip(".").lower(),
+                        "v": image_version(p)})
     return out
+
+
+def image_version(p: Path) -> str:
+    """Cache-busting token for an image file's current bytes; a `?v=` URL
+    carrying it is served immutable, so the browser never revalidates."""
+    st = p.stat()
+    return f"{st.st_mtime_ns:x}-{st.st_size:x}"
 
 
 def read_focus(root: Path, cid: str, vid: str, base: str = "characters") -> int | None:

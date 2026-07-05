@@ -744,11 +744,15 @@ def _serve_image(root, cid: str, vid: str, name: str, base: str = "characters",
     p = store.assets.image_path(root, cid, vid, name, base)
     if p is None:
         raise HTTPException(status_code=404, detail="image not found")
-    # no-cache: promotions swap file contents under stable URLs, so the browser
-    # must revalidate — but with an ETag that revalidation is a 304, not a re-download
+    # Bare URLs are no-cache: promotions swap file contents under stable URLs,
+    # so the browser must revalidate — with an ETag that's a 304, not a re-download.
+    # A `?v=` URL (built from list responses' version tokens) names one exact
+    # content state, so it caches immutable: zero requests on later renders.
     st = p.stat()
     etag = f'"{st.st_mtime_ns:x}-{st.st_size:x}"'
-    headers = {"Cache-Control": "no-cache", "ETag": etag}
+    versioned = request is not None and "v" in request.query_params
+    cache = "public, max-age=31536000, immutable" if versioned else "no-cache"
+    headers = {"Cache-Control": cache, "ETag": etag}
     if request is not None and etag in request.headers.get("if-none-match", ""):
         return Response(status_code=304, headers=headers)
     ext = p.suffix.lstrip(".").lower()
@@ -985,8 +989,9 @@ def _entity_list(root, kind: str):
     except store.entities.UnknownKind:
         raise HTTPException(status_code=404, detail="unknown kind")
     for it in items:
-        it["has_image"] = store.assets.image_path(
-            root, it["id"], "default", store.assets.AVATAR, base=kind) is not None
+        p = store.assets.image_path(root, it["id"], "default", store.assets.AVATAR, base=kind)
+        it["has_image"] = p is not None
+        it["image_v"] = store.assets.image_version(p) if p is not None else None
     return items
 
 

@@ -217,3 +217,23 @@ test("deletes after confirm", async () => {
   fireEvent.click(screen.getByRole("button", { name: /delete/i }));
   await waitFor(() => expect(api.deleteEntity).toHaveBeenCalledWith({ kind: "world", id: "w" }, "lore", "salt"));
 });
+
+test("image urls carry per-record version tokens for immutable caching", async () => {
+  (api.listEntities as any).mockResolvedValue([
+    { id: "warehouse", name: "Warehouse Nine", has_image: true, image_v: "aaa1" },
+  ]);
+  (api.readEntity as any).mockResolvedValue({ meta: { id: "warehouse", name: "Warehouse Nine" }, body: "docks" });
+  (api.listEntityImages as any).mockResolvedValue([
+    { name: "avatar", ext: "png", v: "aaa1" }, { name: "gallery_1", ext: "png", v: "bbb2" },
+  ]);
+  const { container } = render(<EntityEditor wid="w" kind="locations" />);
+  await screen.findByText("Warehouse Nine");
+  expect(container.querySelector(".loc-row-img")!.getAttribute("src"))
+    .toBe("/img/locations/warehouse/avatar?v=aaa1");
+  fireEvent.click(screen.getByText("Warehouse Nine"));
+  await screen.findByText("Images");
+  expect(screen.getByAltText("Warehouse Nine primary").getAttribute("src"))
+    .toBe("/img/locations/warehouse/avatar?v=aaa1");
+  expect(screen.getByAltText("gallery_1").getAttribute("src"))
+    .toBe("/img/locations/warehouse/gallery_1?v=bbb2");
+});

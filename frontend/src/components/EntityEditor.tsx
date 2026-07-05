@@ -26,8 +26,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
   const [ownerOpts, setOwnerOpts] = useState<LoreOwner[]>([]); // candidates for the picker
   const [mode, setMode] = useState<"view" | "edit">("edit"); // existing entries open read-only
   const [error, setError] = useState<string | null>(null);
-  const [images, setImages] = useState<string[]>([]);        // selected location's asset names
-  const [imgBust, setImgBust] = useState(0);
+  const [images, setImages] = useState<{ name: string; v: string }[]>([]); // selected location's assets
   const shelfFileRef = useRef<HTMLInputElement>(null);
   const label = kind === "lore" ? "lore entry" : "location";
 
@@ -70,7 +69,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
   const reloadImages = useCallback((id: string) => {
     if (kind !== "locations") { setImages([]); return; }
     api.listEntityImages(scope, kind, id)
-      .then((imgs) => setImages(imgs.map((i) => i.name)))
+      .then((imgs) => setImages(imgs.map((i) => ({ name: i.name, v: i.v }))))
       .catch(() => setImages([]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kind, scope.kind, scope.id]);
@@ -124,11 +123,18 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
   }
 
   // ---- location images shelf (the primary image is the asset named "avatar") ----
-  const hasPrimary = images.includes("avatar");
+  // ?v= names the exact content state, so the browser caches these immutable;
+  // uploads/promotes refresh the tokens via reloadImages/reload.
+  const hasPrimary = images.some((i) => i.name === "avatar");
   const galleryNames = images
+    .map((i) => i.name)
     .filter((n) => n.startsWith("gallery_"))
     .sort((a, b) => Number(a.slice("gallery_".length)) - Number(b.slice("gallery_".length)));
-  const imgSrc = (n: string) => `${api.entityImageUrl(scope, kind, editing ?? "", n)}?v=${imgBust}`;
+  const imgSrc = (n: string) => {
+    const base = api.entityImageUrl(scope, kind, editing ?? "", n);
+    const v = images.find((i) => i.name === n)?.v;
+    return v ? `${base}?v=${v}` : base;
+  };
 
   async function promoteImage(name: string) {
     if (!editing) return;
@@ -137,7 +143,6 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
       await api.promoteEntityImage(scope, kind, editing, name);
       reloadImages(editing);
       await reload();
-      setImgBust((n) => n + 1);
     } catch (err: any) {
       setError(err.detail ?? String(err));
     }
@@ -154,7 +159,6 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
       await api.putEntityImage(scope, kind, editing, next, file);
       reloadImages(editing);
       await reload();
-      setImgBust((n) => n + 1);
     } catch (err: any) {
       setError(err.detail ?? String(err));
     } finally {
@@ -186,7 +190,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
             onClick={() => select(e.id)}>
       {kind === "locations" && e.has_image && (
         <img className="loc-row-img" alt=""
-             src={`${api.entityImageUrl(scope, kind, e.id, "avatar")}?v=${imgBust}`}
+             src={`${api.entityImageUrl(scope, kind, e.id, "avatar")}${e.image_v ? `?v=${e.image_v}` : ""}`}
              onError={(ev) => { (ev.currentTarget as HTMLImageElement).style.display = "none"; }} />
       )}
       <span className="row-name">{e.name}</span>
