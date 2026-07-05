@@ -60,6 +60,14 @@ class GregorianProvider(CalendarProvider):
         out.sort(key=lambda h: h["fixed"])
         return out
 
+    def months(self, year: int) -> list[dict]:
+        try:
+            y = int(year)
+        except (ValueError, TypeError) as e:
+            raise CalendarError(f"bad gregorian year: {year!r}") from e
+        return [{"key": f"{m:02d}", "name": _cal.month_name[m],
+                 "days": _cal.monthrange(y, m)[1]} for m in range(1, 13)]
+
 
 def _custom_date(rule: dict, year: int):
     """Resolve a custom-holiday rule to a date in `year`: fixed {month, day} or

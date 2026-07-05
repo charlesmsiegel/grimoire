@@ -37,6 +37,11 @@ class CalendarProvider(ABC):
     def holidays(self, start_fixed: int, end_fixed: int) -> list[dict]:
         """Observances landing in [start_fixed, end_fixed], each {name, fixed}."""
 
+    @abstractmethod
+    def months(self, year: int) -> list[dict]:
+        """The year's months in calendar order, each {key, name, days}.
+        f"{year}-{key}-{day:02d}" must be a valid native date for 1 <= day <= days."""
+
     # Age helpers default to fixed-day arithmetic via describe(); override if needed.
     def age(self, birth_fixed: int, asof_fixed: int) -> int:
         b, a = self.describe(birth_fixed), self.describe(asof_fixed)
