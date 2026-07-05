@@ -159,22 +159,30 @@ def _world_info(croot, recent_text: str, exclude: frozenset = frozenset(),
     return "\n\n".join(e["body"] for e in selected if e["body"])
 
 
-_OPENER_SHAPE = (
-    " Keep the opener to at most five paragraphs: one **Grimoire:** paragraph that "
-    "sets the scene, then at most one paragraph from each character present."
-)
-
 OPENER_INSTRUCTION = (
-    "Write the opening narration for a new scene based on the prompt below. "
+    "Write the opening for a new scene based on the prompt below. "
     "Set the scene vividly in the second person. Do not speak or act for the player."
-    + _OPENER_SHAPE
 )
 
 OFFSCREEN_OPENER_INSTRUCTION = (
-    "Write the opening narration for a new offscreen scene based on the prompt below. "
+    "Write the opening for a new offscreen scene based on the prompt below. "
     "Set the scene vividly in the third person. No player character is present; write "
-    "only the NPCs and the world." + _OPENER_SHAPE
+    "only the NPCs and the world."
 )
+
+
+def _opener_shape(npc_names: list[str]) -> str:
+    """The opener's length/attribution rules. Sent as the final system message —
+    a plain sentence at the top of the big system prompt proved too weak to hold."""
+    markers = (", ".join(f"**{n}:**" for n in npc_names) if npc_names
+               else "**<Name>:**, one block per character")
+    return (
+        "Keep the opener to at most five short paragraphs. Open with exactly one "
+        "**Grimoire:** paragraph that sets the scene and contains no character "
+        "actions or dialogue. Then write at most one paragraph per character, "
+        f"each under its own marker: {markers}. Everything a character does or "
+        "says belongs in that character's block, never under **Grimoire:**."
+    )
 
 OPENER_RECAP_DEPTH = 5  # opener recap: full summaries of the last N scenes
 
@@ -192,8 +200,10 @@ def build_opener_messages(cid: str, sid: str, prompt: str) -> list[dict]:
     system_text = (instruction + "\n\n" + sections).strip() if sections else instruction
     messages = [{"role": "system", "content": system_text},
                 {"role": "user", "content": _substitute(prompt, scene_substitutions(cid, sid))}]
-    if a["post_history"]:  # kept last, right before generation (mirrors build_messages)
+    if a["post_history"]:  # mirrors build_messages
         messages.append({"role": "system", "content": a["post_history"]})
+    # the shape rules go last, right before generation, so they outrank everything above
+    messages.append({"role": "system", "content": _opener_shape(a["npc_names"])})
     return messages
 
 
@@ -478,7 +488,8 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0) -> dic
 
     sub_history = [{"role": m["role"], "content": _substitute(m["content"], subs)}
                    for m in _project_history(history)]
-    return {"system": sys, "history": sub_history, "post_history": post_history}
+    return {"system": sys, "history": sub_history, "post_history": post_history,
+            "npc_names": npc_names}
 
 
 def build_messages(cid: str, sid: str) -> list[dict]:
