@@ -19,6 +19,7 @@ export default function CampaignWizard({ keySet }: { keySet: boolean }) {
   const [name, setName] = useState("");
   const [world, setWorld] = useState("");
   const [region, setRegion] = useState("US");
+  const [calendar, setCalendar] = useState("gregorian");
 
   // step 2
   const [persona, setPersona] = useState<Persona>(blankPersona);
@@ -66,7 +67,8 @@ export default function CampaignWizard({ keySet }: { keySet: boolean }) {
     setError(null);
     setBusy(true);
     try {
-      const { id: cid } = await api.createCampaign(name.trim(), world, region || undefined);
+      const { id: cid } = await api.createCampaign(
+        name.trim(), world, calendar === "harptos" ? undefined : region || undefined, calendar);
       // an existing world PC is already copied into the new campaign — just seat it
       let cast: { kind: "pcs"; id: string; version?: string };
       if (pickedPC) {
@@ -163,24 +165,41 @@ export default function CampaignWizard({ keySet }: { keySet: boolean }) {
           <div className="field-row">
             <div className="field">
               <label htmlFor="wiz-calendar">Calendar</label>
-              <select id="wiz-calendar" aria-label="Calendar" value="gregorian" onChange={() => {}}>
+              <select id="wiz-calendar" aria-label="Calendar" value={calendar}
+                      onChange={(e) => { setCalendar(e.target.value);
+                                         setRegion(e.target.value === "gregorian" ? "US" : ""); }}>
                 <option value="gregorian">Gregorian</option>
+                <option value="hebrew">Hebrew</option>
+                <option value="harptos">Calendar of Harptos</option>
               </select>
-              <div className="field-caption">More providers to come</div>
+              <div className="field-caption">The campaign's primary calendar</div>
             </div>
-            <div className="field">
-              <label htmlFor="wiz-region">Holidays</label>
-              <select id="wiz-region" aria-label="Holidays region" value={region}
-                      onChange={(e) => setRegion(e.target.value)}>
-                <option value="US">United States</option>
-                <option value="GB">United Kingdom</option>
-                <option value="CA">Canada</option>
-                <option value="AU">Australia</option>
-                <option value="IL">Israel</option>
-                <option value="">None</option>
-              </select>
-              <div className="field-caption">Regional holiday set</div>
-            </div>
+            {calendar === "gregorian" && (
+              <div className="field">
+                <label htmlFor="wiz-region">Holidays</label>
+                <select id="wiz-region" aria-label="Holidays region" value={region}
+                        onChange={(e) => setRegion(e.target.value)}>
+                  <option value="US">United States</option>
+                  <option value="GB">United Kingdom</option>
+                  <option value="CA">Canada</option>
+                  <option value="AU">Australia</option>
+                  <option value="IL">Israel</option>
+                  <option value="">None</option>
+                </select>
+                <div className="field-caption">Regional holiday set</div>
+              </div>
+            )}
+            {calendar === "hebrew" && (
+              <div className="field">
+                <label htmlFor="wiz-observance">Observance</label>
+                <select id="wiz-observance" aria-label="Observance" value={region}
+                        onChange={(e) => setRegion(e.target.value)}>
+                  <option value="">Diaspora</option>
+                  <option value="IL">Israel</option>
+                </select>
+                <div className="field-caption">Israeli or diaspora holiday scheme</div>
+              </div>
+            )}
           </div>
           <div className="wizard-footer">
             <span />
