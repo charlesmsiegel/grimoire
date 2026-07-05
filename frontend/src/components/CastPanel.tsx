@@ -39,7 +39,11 @@ export function CastPanel({
     () => api.getSceneLocation(cid, sid).then(setSetting).catch(() => setSetting(null)),
     [cid, sid]);
   const reloadWhen = useCallback(
-    () => api.getSceneDatetime(cid, sid).then(setWhen).catch(() => setWhen(null)),
+    () => api.getSceneDatetime(cid, sid).then((w) => {
+      setWhen(w);
+      // dateless scene with a suggestion: pre-fill the input, but never clobber typing
+      if (!w.current && w.suggested) setDateInput((prev) => prev || w.suggested!);
+    }).catch(() => setWhen(null)),
     [cid, sid]);
 
   useEffect(() => {
