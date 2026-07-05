@@ -82,11 +82,14 @@ this pattern, which they can't (they contain no `:`).
   HaMoed, Chanukah, Purim/Shushan Purim, the minor fasts with their deferral
   rules, Tu BiShvat, Lag BaOmer, Pesach Sheni. Merge custom fixed rules.
 - **age/is_anniversary (override — required):** the base implementation compares
-  `(month, day)` tuples, which is wrong for Hebrew because month numbers
-  (Nisan=1) don't run in civil-year order across the Tishrei boundary. Compare
-  by **position in the civil year** instead. Adar-born in a non-leap year is
-  observed in Adar; 30-Cheshvan / 30-Kislev births are observed on the 29th in
-  years where the month is short.
+  `(month, day)` tuples, which breaks for Hebrew: month *positions* shift
+  between leap and non-leap years (Nisan is 7th or 8th), so no single numbering
+  makes tuple comparison correct across year shapes. The override compares
+  **month identity with Adar folding** — birth month mapped into the as-of
+  year's shape (`Adar`/`Adar2` ↔ `Adar2` in leap years, `Adar1`/`Adar2` → `Adar`
+  in non-leap years) — and day 30 births observed on the 29th when the as-of
+  month is short. `age` = year difference, minus one if the mapped anniversary
+  hasn't yet arrived in the as-of year.
 - **Dependency:** add `pyluach` to backend requirements.
 
 ## Harptos provider (`store/calendars/harptos.py`)
@@ -105,12 +108,18 @@ this pattern, which they can't (they contain no `:`).
 - **Epoch:** `1 Hammer, 1 DR` = fixed day 1. Internal constant; primaries-only
   means it never aligns with a real calendar. Years before 1 DR are accepted
   arithmetically (year 0, negatives) — no special casing.
-- **describe:** `weekday_name` is the tenday position (`"1st day of the
-  tenday"` … `"10th day of the tenday"`, `weekday_index` 0–9, computed as
-  `(day-1) % 10`); festivals get `weekday_name` `"festival day"` and
-  `weekday_index` `None`. Friendly: `"5 Mirtul, 1492 DR (Year of Three Ships
-  Sailing)"` — year name appended only when present in the Roll of Years;
-  festival friendly: `"Midsummer, 1492 DR (…)"` with no day number.
+- **describe:** `month` is a **stable calendar-position index 1–18** (Hammer=1,
+  Midwinter=2, Alturiak=3, … Midsummer=10, Shieldmeet=11, Eleasis=12, …
+  Nightal=18). Shieldmeet always owns slot 11 (simply absent in non-leap
+  years), so indices never shift between year shapes and the **default
+  `age`/`is_anniversary` stay correct** (a Shieldmeet birth anniversaries only
+  in leap years — acceptable, like Feb 29). `weekday_name` is the tenday
+  position (`"1st day of the tenday"` … `"10th day of the tenday"`,
+  `weekday_index` 0–9, computed as `(day-1) % 10`); festivals get
+  `weekday_name` `"festival day"` and `weekday_index` `None`. Friendly:
+  `"5 Mirtul, 1492 DR (Year of Three Ships Sailing)"` — year name appended only
+  when present in the Roll of Years; festival friendly: `"Midsummer, 1492 DR
+  (…)"` with no day number.
 - **Roll of Years:** `store/calendars/harptos_years.py`, a generated
   `YEAR_NAMES: dict[int, str]` scraped once from the Forgotten Realms wiki
   (coverage roughly 1 DR – 1600 DR where named) by a throwaway script during
@@ -118,10 +127,8 @@ this pattern, which they can't (they contain no `:`).
 - **Built-in holidays:** the five festivals + Shieldmeet + Spring Equinox
   (Ches 19), Summer Solstice (Kythorn 20), Autumn Equinox (Eleint 21), Winter
   Solstice (Nightal 20). Merged with custom fixed rules.
-- Default `age`/`is_anniversary` work as-is: months and festivals occupy stable
-  calendar positions, so `describe`-based month/day comparison is correct.
-  (A Shieldmeet birth anniversaries only in leap years — acceptable, like
-  Feb 29.)
+- Default `age`/`is_anniversary` work as-is thanks to the stable 1–18 month
+  indices above — no override needed.
 
 ## Custom holidays go provider-aware
 
@@ -155,9 +162,11 @@ this pattern, which they can't (they contain no `:`).
   (Hebrew leap months and Shieldmeet make month lists year-dependent). Day
   options are 1..days for the selected month; selections compose
   `{year}-{key}-{day padded to 2}`. An optional time field (existing `type="time"`,
-  appended as `T hh:mm`) where the caller wants it. Replaces the raw
-  `type="date"` input in the scene **When** panel (`CastPanel`) and the
-  birthdate inputs in the PC and Character editors.
+  appended as `T hh:mm`) where the caller wants it. Initial state: when editing
+  an existing value, its parsed year/month/day; otherwise the year field starts
+  empty and the month/day dropdowns stay disabled until a year is entered.
+  Replaces the raw `type="date"` input in the scene **When** panel (`CastPanel`)
+  and the birthdate inputs in the PC and Character editors.
 - **`CalendarConfig.tsx`:** provider `<select>` — Gregorian / Hebrew / Calendar
   of Harptos — plus a conditional second control: holidays-region dropdown
   (Gregorian, as today), Diaspora/Israel dropdown writing `region` `""`/`"IL"`
