@@ -1102,8 +1102,15 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
           </Field>
           {worldScope && <>
             <Field label="Birthdate">
+              {/* Persist only complete dates: the picker emits "" for every
+                  intermediate state, which must never blank the stored value.
+                  (Tradeoff: retyping the year with month/day set can briefly
+                  persist a transient valid year — accepted, no debouncing.) */}
               <CalendarDatePicker scope={{ kind: "world", id: wid }} value={birthdate}
-                                  onChange={saveBirthdate} ariaLabel="Birthdate" />
+                                  onChange={(v) => { setBirthdate(v); if (v) saveBirthdate(v); }}
+                                  ariaLabel="Birthdate" />
+              {birthdate && <button className="subtle" type="button"
+                                    onClick={() => saveBirthdate("")}>Clear</button>}
             </Field>
             <Field label="Tagline" hint="one-line identity for the off-scene cast">
               <textarea aria-label="Tagline" value={tagline} rows={2}

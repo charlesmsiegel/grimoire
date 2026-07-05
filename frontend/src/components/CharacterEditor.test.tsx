@@ -155,6 +155,23 @@ test("editing the birthdate persists it on the character", async () => {
   await waitFor(() => expect(daySelect).not.toBeDisabled());
   fireEvent.change(daySelect, { target: { value: "29" } });
   await waitFor(() => expect(api.setCharacterBirthdate).toHaveBeenCalledWith("w", "seraphine", "1990-06-29"));
+  // intermediate picker states (year-only, month change clearing the day) must
+  // never blank the stored birthdate
+  expect(api.setCharacterBirthdate).not.toHaveBeenCalledWith("w", "seraphine", "");
+});
+
+test("Clear removes a stored birthdate", async () => {
+  (api.readCharacter as any).mockResolvedValue({
+    ...DETAIL, meta: { ...DETAIL.meta, birthdate: "1985-03-14" },
+  });
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await openEditForm();
+  fireEvent.click(await screen.findByRole("button", { name: "Clear" }));
+  await waitFor(() => expect(api.setCharacterBirthdate).toHaveBeenCalledWith("w", "seraphine", ""));
+  expect(api.setCharacterBirthdate).toHaveBeenCalledTimes(1);
+  expect(screen.getByLabelText("Birthdate year")).toHaveValue(null);      // fields emptied
+  expect(screen.getByLabelText("Birthdate month")).toHaveValue("");
+  expect(screen.queryByRole("button", { name: "Clear" })).toBeNull();     // nothing left to clear
 });
 
 test("uploads an avatar for the selected version", async () => {
