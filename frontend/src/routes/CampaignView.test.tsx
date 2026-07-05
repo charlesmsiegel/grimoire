@@ -658,9 +658,18 @@ test("offscreen scene: typed note shows transiently, never lands in messages", a
   await waitFor(() => expect(screen.queryByText(/🎬/)).toBeNull());
 });
 
-test("normal scene keeps the plain composer", async () => {
+test("normal scene: plain placeholder, Continue on empty input, Send once typed", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   renderCampaign();
-  await screen.findByPlaceholderText(/speak your intent/i);
-  expect(screen.queryByRole("button", { name: /continue/i })).toBeNull();
+  const box = await screen.findByPlaceholderText(/speak your intent/i);
+  expect(screen.getByRole("button", { name: /continue ▶/i })).toBeInTheDocument();
+  fireEvent.change(box, { target: { value: "I draw my blade." } });
+  expect(screen.getByRole("button", { name: /send ▸/i })).toBeInTheDocument();
+});
+
+test("normal scene: empty Continue sends an ephemeral round, no user message added", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  renderCampaign();
+  fireEvent.click(await screen.findByRole("button", { name: /continue ▶/i }));
+  await waitFor(() => expect(api.chat).toHaveBeenCalledWith("run", "s1", "", expect.any(Function)));
 });

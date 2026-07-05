@@ -116,6 +116,19 @@ def test_start_from_greeting_stamps_greeting(monkeypatch, tmp_path):
     assert scenes.read_scene(cid, sid)["meta"]["greeting"] == g
 
 
+def test_start_from_greeting_takes_greeting_title(monkeypatch, tmp_path):
+    wid = _world(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    characters.create_character(wroot, "Seraphine", "default", characters.blank_card("Seraphine"))
+    g = greetings.create_greeting(wroot, "A Chance Meeting", "seraphine", "default", body="Hi.")
+    cid, sid = _campaign_after_seed(wid)
+    new_sid = playing.start_from_greeting(cid, sid, g)
+    assert new_sid != sid and "a-chance-meeting" in new_sid
+    scene = scenes.read_scene(cid, new_sid)
+    assert scene["meta"]["title"] == "A Chance Meeting"
+    assert scene["meta"]["greeting"] == g            # stamp survived the rename
+
+
 def test_stamp_greeting_missing_scene_raises(monkeypatch, tmp_path):
     _wid, cid, _sid = _campaign(monkeypatch, tmp_path)
     with pytest.raises(scenes.SceneNotFound):

@@ -2278,12 +2278,20 @@ def test_offscreen_chat_empty_note_sends_continue(client):
         [{"role": "user", "content": "Continue the scene."}]
 
 
-def test_chat_rejects_blank_content_in_a_normal_scene(client):
+def test_empty_chat_in_a_normal_scene_is_an_ephemeral_npc_round(client):
     _, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "assistant", "The tavern hums.")
     client.put("/api/config", json={"openrouter_key": "k"})
-    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat",
-                       json={"content": " "}).status_code == 400
+    cap = CapturingOpenRouter()
+    client.app.dependency_overrides[routes.get_openrouter] = lambda: cap
+    with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/chat",
+                       json={"content": " "}) as r:
+        r.read()
+    # the continue instruction rides the call but is never persisted
+    assert cap.messages[-1] == {"role": "user", "content": "Continue the scene."}
+    msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    assert all(m["role"] == "assistant" for m in msgs)
 
 
 def test_greeting_pcless_roundtrip_and_availability(client):

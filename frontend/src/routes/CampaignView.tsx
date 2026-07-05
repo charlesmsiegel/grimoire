@@ -164,7 +164,6 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
   async function send() {
     if (busy) return;
     const content = input.trim();
-    if (!content && !activePcless) return;
     let id = activeId;
     if (!id) {
       if (!content) return;
@@ -173,9 +172,10 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
       setActiveId(id);
     }
     setInput("");
-    if (activePcless) {
-      // the note steers one generation and is never stored — show it transiently
-      setDirectorNote(content || null);
+    // ephemeral turns are never stored: a director note (offscreen scene) or —
+    // in any scene — an empty send meaning "next NPC round"
+    if (activePcless || !content) {
+      if (activePcless) setDirectorNote(content || null);
       try {
         await runStream(id, (onEvent) => api.chat(cid, id!, content, onEvent));
       } finally {
@@ -544,7 +544,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
             onKeyDown={onKeyDown}
           />
           <button className="send" onClick={send} disabled={busy}>
-            {busy ? "…" : activePcless && !input.trim() ? "Continue ▶" : "Send ▸"}
+            {busy ? "…" : !input.trim() ? "Continue ▶" : "Send ▸"}
           </button>
         </div>
       </section>
