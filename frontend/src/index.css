@@ -732,3 +732,7 @@ button.primary { background: var(--accent); color: var(--on-accent); border: var
   padding: 0 0.45em;
 }
 .mark-badge.skipped { text-decoration: line-through; }
+
+/* offscreen scenes: transient director note + badge */
+.director-note .msg-body { opacity: 0.65; font-style: italic; }
+.offscreen-badge { margin-left: 0.5em; }
