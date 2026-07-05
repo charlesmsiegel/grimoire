@@ -80,3 +80,31 @@ def test_friendly_includes_roll_of_years_name():
     assert d["friendly"] == "5 Mirtul, 1492 DR (Year of Three Ships Sailing)"
     # unnamed years render without the suffix
     assert "(" not in p.describe(p.parse("9999-Hammer-01"))["friendly"]
+
+
+def test_builtin_holidays_and_customs():
+    p = get_provider(har())
+    year_start, year_end = p.parse("1492-Hammer-01"), p.parse("1492-Nightal-30")
+    names = [h["name"] for h in p.holidays(year_start, year_end)]
+    for expected in ("Midwinter", "Greengrass", "Midsummer", "Shieldmeet",
+                     "Highharvestide", "Feast of the Moon", "Spring Equinox",
+                     "Summer Solstice", "Autumn Equinox", "Winter Solstice"):
+        assert expected in names
+    assert "Shieldmeet" not in [h["name"] for h in
+                                get_provider(har()).holidays(p.parse("1491-Hammer-01"),
+                                                             p.parse("1491-Nightal-30"))]
+    custom = get_provider(har(custom=[{"name": "Founders' Day", "month": "Uktar", "day": 3}]))
+    day = custom.parse("1492-Uktar-03")
+    assert any(h["name"] == "Founders' Day" for h in custom.holidays(day, day))
+
+
+def test_validate_rule_harptos():
+    p = get_provider(har())
+    p.validate_rule({"name": "OK", "month": "Uktar", "day": 3})
+    p.validate_rule({"name": "OK", "month": "Shieldmeet", "day": 1})
+    for bad in ({"name": "X", "month": "Uktar", "day": 31},
+                {"name": "X", "month": "Midsummer", "day": 2},
+                {"name": "X", "month": "Floof", "day": 1},
+                {"name": "X", "month": "Uktar", "nth": 1, "weekday": 0}):
+        with pytest.raises(CalendarError):
+            p.validate_rule(bad)
