@@ -4,13 +4,12 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Grimoire — Visual Codebase Explainer</title>
-<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
 <style>
   :root{
     --bg:#15110e; --surface:#1f1813; --surface2:#2a2018; --fg:#e8dcc8;
     --muted:#9a8a72; --accent:#c8a45c; --accent2:#8a6db0; --line:#3a2e22;
     --ok:#6fae6f; --warn:#d6a24a; --bad:#c46b6b; --new:#5fa3c9;
-    --code:#e4d6b8; --radius:10px;
+    --code:#e4d6b8; --radius:10px; --paper:#fbf8f1; --paperink:#1c1208;
     --font-display:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
     --font-body:Georgia,"Times New Roman",serif;
     --font-mono:"SF Mono",ui-monospace,"Cascadia Code",Menlo,Consolas,monospace;
@@ -19,20 +18,20 @@
   html{scroll-behavior:smooth}
   body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--font-body);
        line-height:1.65;font-size:16px}
-  .wrap{display:grid;grid-template-columns:260px 1fr;gap:0;max-width:1500px;margin:0 auto}
+  .wrap{display:grid;grid-template-columns:270px minmax(0,1fr);gap:0;max-width:1520px;margin:0 auto}
   /* sidebar */
   nav{position:sticky;top:0;align-self:start;height:100vh;overflow-y:auto;
       border-right:1px solid var(--line);padding:24px 18px;background:var(--surface)}
   nav h1{font-family:var(--font-display);font-size:22px;color:var(--accent);margin:0 0 4px}
   nav .sub{color:var(--muted);font-size:12px;margin-bottom:20px;letter-spacing:.5px;text-transform:uppercase}
-  nav a{display:block;color:var(--fg);text-decoration:none;padding:5px 10px;border-radius:6px;
+  nav a{display:block;color:var(--fg);text-decoration:none;padding:4px 10px;border-radius:6px;
         font-size:14px;opacity:.85}
   nav a:hover{background:var(--surface2);opacity:1;color:var(--accent)}
   nav a.tier2{padding-left:24px;font-size:13px;opacity:.7}
   nav .grp{color:var(--accent);font-size:11px;text-transform:uppercase;letter-spacing:1px;
-           margin:16px 0 4px 10px;opacity:.7}
+           margin:14px 0 4px 10px;opacity:.7}
   /* content */
-  main{padding:40px 56px;min-width:0;max-width:1140px}
+  main{padding:40px 56px;min-width:0;max-width:1160px}
   section{margin-bottom:64px;scroll-margin-top:20px}
   h2{font-family:var(--font-display);font-size:30px;color:var(--accent);
      border-bottom:1px solid var(--line);padding-bottom:10px;margin-top:0}
@@ -48,36 +47,25 @@
       line-height:1.55;color:var(--code)}
   pre code{background:none;padding:0;font-size:inherit}
   .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
-        padding:20px 24px;margin:20px 0}
+        padding:20px 24px;margin:20px 0;min-width:0}
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
   .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
-  .diagram{background:#fbf8f1;border:1px solid var(--line);border-radius:var(--radius);
-           padding:22px;margin:20px 0;text-align:center;overflow-x:auto}
-  /* Mermaid renders inside <pre class="mermaid"> — strip the global <pre> box
-     (dark bg + light text) so the SVG sits on the light .diagram surface and
-     foreignObject labels don't inherit the cream text color. */
-  pre.mermaid{background:transparent !important;border:none;padding:0;margin:0 auto;
-              color:#1c1208;overflow:visible;font-family:Georgia,serif}
-  .diagram svg{max-width:100%;height:auto}
-  .diagram .nodeLabel,.diagram .nodeLabel *,
-  .diagram .edgeLabel,.diagram .edgeLabel *,
-  .diagram .cluster-label,.diagram .cluster-label *,
-  .diagram .label,.diagram .label *{color:#1c1208 !important}
-  .diagram .edgeLabel,.diagram .edgeLabel p{background-color:#fbf8f1 !important}
-  .diagram .messageText,.diagram .loopText,.diagram text.actor,
-  .diagram .note text,.diagram .noteText{fill:#1c1208 !important}
+  .grid2>*,.grid3>*{min-width:0}
   table{width:100%;border-collapse:collapse;margin:16px 0;font-size:14px}
-  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top;
+        overflow-wrap:break-word}
   th{color:var(--accent);font-family:var(--font-display);font-weight:600;font-size:13px;
      text-transform:uppercase;letter-spacing:.5px}
   td code{font-size:12px}
   tr:hover td{background:var(--surface)}
+  .tablewrap{overflow-x:auto}
   .pill{display:inline-block;font-size:11px;font-family:var(--font-mono);padding:2px 8px;
-        border-radius:20px;border:1px solid var(--line);margin-right:4px}
+        border-radius:20px;border:1px solid var(--line);margin-right:4px;white-space:nowrap}
   .pill.get{color:var(--ok);border-color:var(--ok)}
   .pill.post{color:var(--new);border-color:var(--new)}
   .pill.put{color:var(--warn);border-color:var(--warn)}
   .pill.del{color:var(--bad);border-color:var(--bad)}
+  .pill.sse{color:var(--accent2);border-color:var(--accent2)}
   .note{border-left:3px solid var(--accent);background:var(--surface);padding:12px 18px;
         margin:18px 0;border-radius:0 8px 8px 0}
   .note.star{border-left-color:var(--accent2)}
@@ -90,8 +78,61 @@
        border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:1px 6px}
   .filepath{font-family:var(--font-mono);font-size:12px;color:var(--accent2)}
   ol li,ul li{margin:5px 0}
-  .step{counter-reset:none}
   .toc-foot{color:var(--muted);font-size:12px;margin-top:30px;border-top:1px solid var(--line);padding-top:12px}
+
+  /* the system-block stack */
+  .stack{border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;margin:20px 0}
+  .stack .row{display:grid;grid-template-columns:44px 230px 1fr;gap:0;border-bottom:1px solid var(--line);
+              background:var(--surface)}
+  .stack .row:last-child{border-bottom:none}
+  .stack .row.alt{background:var(--surface2)}
+  .stack .n{font-family:var(--font-mono);font-size:12px;color:var(--muted);padding:10px 0 10px 14px}
+  .stack .name{font-family:var(--font-display);font-size:14px;color:var(--accent);padding:10px 8px}
+  .stack .desc{font-size:13px;color:var(--muted);padding:10px 14px 10px 8px}
+  .stack .desc code{font-size:11px}
+  .stack .row.pcless .name{color:var(--accent2)}
+  .stack .row.head{background:var(--bg)}
+  .stack .row.head .n,.stack .row.head .name,.stack .row.head .desc{
+    color:var(--accent);font-size:11px;text-transform:uppercase;letter-spacing:.5px;
+    font-family:var(--font-display);padding-top:8px;padding-bottom:8px}
+
+  /* ---- Mermaid diagram shells (zoom / pan / expand) ---- */
+  .diagram-shell{position:relative;margin:20px 0}
+  .diagram-shell__hint{font-family:var(--font-mono);font-size:11px;color:var(--muted);
+                       margin-bottom:6px;opacity:.75}
+  .mermaid-wrap{position:relative;background:var(--paper);border:1px solid var(--line);
+                border-radius:var(--radius);overflow:hidden;cursor:grab;min-height:300px}
+  .mermaid-wrap.is-panning{cursor:grabbing;user-select:none}
+  .zoom-controls{position:absolute;top:8px;right:8px;display:flex;gap:2px;z-index:10;
+                 background:#f1e8d4;border:1px solid #c9b98f;border-radius:6px;padding:2px;
+                 align-items:center}
+  .zoom-controls button{width:28px;height:28px;border:none;background:transparent;color:#6b5836;
+                        font-family:var(--font-mono);font-size:14px;cursor:pointer;border-radius:4px;
+                        display:flex;align-items:center;justify-content:center}
+  .zoom-controls button:hover{background:#e2d4b4;color:#2b1f0d}
+  .zoom-label{font-family:var(--font-mono);font-size:10px;color:#8a7a5a;padding:0 6px;white-space:nowrap}
+  .mermaid-viewport{position:relative;overflow:hidden;width:100%;height:100%;min-height:300px}
+  .mermaid-canvas{position:absolute;top:0;left:0}
+  .mermaid-canvas svg{display:block}
+  .mermaid-wrap .nodeLabel,.mermaid-wrap .nodeLabel *,
+  .mermaid-wrap .edgeLabel,.mermaid-wrap .edgeLabel *,
+  .mermaid-wrap .cluster-label,.mermaid-wrap .cluster-label *,
+  .mermaid-wrap .label,.mermaid-wrap .label *{color:var(--paperink) !important}
+  .mermaid-wrap .edgeLabel,.mermaid-wrap .edgeLabel p{background-color:var(--paper) !important}
+  .mermaid-wrap .messageText,.mermaid-wrap .loopText,.mermaid-wrap text.actor,
+  .mermaid-wrap .note text,.mermaid-wrap .noteText{fill:var(--paperink) !important}
+
+  @media (max-width:920px){
+    .wrap{grid-template-columns:1fr}
+    nav{position:static;height:auto;border-right:none;border-bottom:1px solid var(--line)}
+    main{padding:24px 20px}
+    .grid2,.grid3{grid-template-columns:1fr}
+    .stack .row{grid-template-columns:36px 1fr}
+    .stack .desc{grid-column:1 / -1;padding:0 14px 10px 36px}
+  }
+  @media (prefers-reduced-motion: reduce){
+    html{scroll-behavior:auto}
+  }
 </style>
 </head>
 <body>
@@ -108,40 +149,50 @@
   <a href="#worldcampaign">Worlds vs. Campaigns</a>
   <div class="grp">The Hot Path</div>
   <a href="#chatflow">Chat Request Lifecycle</a>
+  <a href="#templates">The Prompt Template Layer</a>
   <a href="#context" style="color:var(--accent2)">★ The Context Builder</a>
   <a href="#activation" class="tier2">World-Info Activation</a>
   <a href="#substitution" class="tier2">Token Substitution</a>
-  <a href="#opener" class="tier2">The Opener</a>
+  <a href="#opener" class="tier2">Openers</a>
+  <a href="#offscreen" class="tier2">Offscreen Scenes</a>
+  <div class="grp">Scene Lifecycle</div>
+  <a href="#scripts">Scenes Are Scripts</a>
+  <a href="#calendars">Calendars &amp; Dates</a>
+  <a href="#absorb" style="color:var(--accent2)">★ Chronicle &amp; Absorb</a>
+  <a href="#continuity" class="tier2">Continuity Stores</a>
+  <a href="#taglines" class="tier2">Taglines &amp; Dossiers</a>
+  <a href="#suggest">Scene Suggestions</a>
   <div class="grp">Subsystems</div>
   <a href="#sync">World → Campaign Sync</a>
-  <a href="#greetings">Greetings & Plotmap</a>
-  <a href="#cards">Character Cards</a>
-  <a href="#cast">Cast & Appearances</a>
+  <a href="#greetings">Greetings &amp; Plotmap</a>
+  <a href="#cards">Character Cards &amp; Chub</a>
+  <a href="#images">Images &amp; Assets</a>
   <div class="grp">Frontend</div>
   <a href="#frontend">React App Structure</a>
   <a href="#streaming">SSE Streaming Loop</a>
   <div class="grp">Reference</div>
   <a href="#stores">Store Module Map</a>
   <a href="#endpoints">API Endpoint Index</a>
-  <div class="toc-foot">Open this file in a browser.<br/>Diagrams render via Mermaid.</div>
+  <div class="toc-foot">Open this file in a browser.<br/>Diagrams render via Mermaid (CDN) —<br/>zoom, drag, and ⛶ to expand.</div>
 </nav>
 
 <main>
 
 <section id="overview">
   <h2>Overview</h2>
-  <p class="lead">Grimoire is a local-first, single-player AI roleplay studio — think SillyTavern, rebuilt around a clean <em>worlds → campaigns → scenes</em> hierarchy with git-friendly plaintext storage and a streaming chat engine backed by OpenRouter.</p>
+  <p class="lead">Grimoire is a local-first, single-player AI roleplay studio — think SillyTavern, rebuilt around a clean <em>worlds → campaigns → scenes</em> hierarchy with git-friendly plaintext storage, a streaming chat engine backed by OpenRouter, and a <strong>continuity engine</strong> that remembers what happened after every scene.</p>
 
   <div class="card">
-  <p>The core idea in three sentences:</p>
+  <p>The core idea in four sentences:</p>
   <ol>
-    <li>You build a <strong>World</strong>: a reusable library of character cards, player personas (PCs), lore &amp; location entries, and greetings.</li>
-    <li>You spin up a <strong>Campaign</strong> from a world — a deep copy that you can play and diverge, while still pulling curated updates back from the world via a three-way <strong>sync</strong>.</li>
-    <li>Inside a campaign you play <strong>Scenes</strong>: you add a <strong>cast</strong>, type a message, and the <strong>context builder</strong> assembles every relevant piece — character definitions, personas, and keyword-activated world-info — into the message list that streams to the model.</li>
+    <li>You build a <strong>World</strong>: a reusable library of character cards, player personas (PCs), lore &amp; location entries, greetings, tags, and a calendar.</li>
+    <li>You spin up a <strong>Campaign</strong> from a world — a <em>full deep copy</em> that you play and diverge, while still pulling curated world updates back through a three-way <strong>sync</strong>.</li>
+    <li>Inside a campaign you play <strong>Scenes</strong>: script-format transcripts where every post carries a speaker, and the <strong>context builder</strong> assembles cards, personas, keyword-activated world-info, and continuity state into the message list that streams to the model.</li>
+    <li>When a scene ends you <strong>absorb</strong> it: an LLM pass extracts a summary, character-state changes, relationship shifts, and plot-thread movements; you review the proposed edits and the accepted ones are written back — and fed into every future scene's prompt.</li>
   </ol>
   </div>
 
-  <p>Everything is stored as <strong>Markdown + YAML-ish frontmatter</strong> and <strong>JSON</strong> under <code>~/.grimoire/</code>. There is no database — the filesystem <em>is</em> the database, which makes the whole library diffable, portable, and inspectable.</p>
+  <p>Everything is stored as <strong>Markdown + YAML-ish frontmatter</strong> and <strong>JSON</strong> under <code>~/.grimoire/</code>. There is no database — the filesystem <em>is</em> the database, which makes the whole library diffable, portable, and inspectable. And every string sent to the LLM lives in a top-level <code>templates/</code> directory of Jinja2 files, editable without touching code.</p>
 </section>
 
 <section id="stack">
@@ -152,10 +203,11 @@
       <p><strong>Python · FastAPI</strong></p>
       <p class="tag">backend/src/grimoire/</p>
       <ul>
-        <li><code>main.py</code> — app assembly</li>
-        <li><code>routes.py</code> — HTTP surface</li>
-        <li><code>store/</code> — all persistence</li>
-        <li><code>openrouter.py</code> — LLM client</li>
+        <li><code>main.py</code> — app assembly, gzip, startup migrations</li>
+        <li><code>routes.py</code> — the whole HTTP surface (~2100 lines)</li>
+        <li><code>store/</code> — 30+ persistence modules</li>
+        <li><code>prompts.py</code> — Jinja2 renderer for <code>templates/</code></li>
+        <li><code>openrouter.py</code> — streaming LLM client</li>
       </ul>
     </div>
     <div class="card">
@@ -163,38 +215,51 @@
       <p><strong>React · TypeScript · Vite</strong></p>
       <p class="tag">frontend/src/</p>
       <ul>
-        <li><code>App.tsx</code> — router shell</li>
-        <li><code>routes/</code> — pages</li>
-        <li><code>components/</code> — editors</li>
-        <li><code>api/</code> — client + SSE</li>
+        <li><code>App.tsx</code> — router shell + theme</li>
+        <li><code>routes/</code> — pages (incl. campaign wizard)</li>
+        <li><code>components/</code> — editors, panels, chooser</li>
+        <li><code>api/</code> — client + SSE + model catalog</li>
+        <li><code>theme/</code> — codex / manuscript / astral</li>
       </ul>
     </div>
     <div class="card">
       <h4>External</h4>
-      <p><strong>OpenRouter</strong></p>
-      <p class="tag">openai-compatible</p>
+      <p><strong>OpenRouter · chub.ai</strong></p>
+      <p class="tag">openai-compatible · read-only</p>
       <ul>
-        <li>Streaming chat completions</li>
-        <li>Model catalog (picker)</li>
-        <li>User supplies their own key</li>
+        <li>Streaming chat completions (user's key)</li>
+        <li>Model catalog for the picker</li>
+        <li>chub.ai card / gallery / lorebook download</li>
       </ul>
     </div>
   </div>
   <div class="note">
-    <strong>Deployment shape:</strong> In production, <span class="filepath">main.py</span> mounts the built frontend (<code>frontend/dist</code>) as static files on <code>/</code> and serves the API under <code>/api</code> — one process, one origin. In dev, Vite runs on <code>:5173</code> and CORS is opened for it.
+    <strong>Deployment shape:</strong> In production, <span class="filepath">main.py</span> mounts the built frontend (<code>frontend/dist</code>) as static files on <code>/</code> and serves the API under <code>/api</code> — one process, one origin, gzip for JSON over 1&nbsp;KB. In dev, Vite runs on <code>:5173</code> and CORS is opened for it. Startup runs one idempotent migration (<code>migrations.migrate_scene_ids</code>) to rename legacy scene files into the current id grammar.
   </div>
 </section>
 
 <section id="bigpicture">
   <h2>Big Picture</h2>
-  <p>How the layers fit together. The frontend never touches storage; every action is an HTTP call into <code>routes.py</code>, which delegates to a <code>store</code> module, which reads/writes files.</p>
-  <div class="diagram">
-    <pre class="mermaid">
+  <p>How the layers fit together. The frontend never touches storage; every action is an HTTP call into <code>routes.py</code>, which delegates to a <code>store</code> module, which reads/writes files. Prompt <em>text</em> lives in <code>templates/</code>; store modules gather data and render.</p>
+
+  <div class="diagram-shell">
+    <p class="diagram-shell__hint">Ctrl/Cmd + wheel to zoom · drag to pan · double-click to fit · ⛶ opens full size</p>
+    <div class="mermaid-wrap">
+      <div class="zoom-controls">
+        <button type="button" data-action="zoom-in" title="Zoom in">+</button>
+        <button type="button" data-action="zoom-out" title="Zoom out">&minus;</button>
+        <button type="button" data-action="zoom-fit" title="Fit">&#8634;</button>
+        <button type="button" data-action="zoom-expand" title="Open full size">&#x26F6;</button>
+        <span class="zoom-label">Loading…</span>
+      </div>
+      <div class="mermaid-viewport"><div class="mermaid-canvas"></div></div>
+    </div>
+    <script type="text/plain" class="diagram-source">
 flowchart TB
     subgraph Browser["🖥️ Browser — React SPA"]
       direction LR
-      V["Routes / Views<br/>(Campaign, World, Config)"]
-      C["api/client.ts<br/>fetch + SSE parser"]
+      V["Routes / Views<br/>(Campaign, World, Wizard, Config)"]
+      C["api/client.ts<br/>fetch + SSE parser + GET dedup"]
       V <--> C
     end
 
@@ -202,38 +267,51 @@ flowchart TB
       direction TB
       R["routes.py<br/>HTTP surface · validation"]
       CTX["store/context.py<br/>★ message builder"]
-      ST["store/*<br/>worlds · campaigns · scenes<br/>characters · pcs · entities<br/>greetings · sync · appearances"]
+      LC["store/absorb · chronicle · playstate<br/>relationships · plot · suggest<br/>(the continuity engine)"]
+      ST["store/*<br/>worlds · campaigns · scenes · sync<br/>characters · pcs · entities · greetings<br/>appearances · calendars · assets · chub"]
+      TPL["templates/*.j2<br/>every LLM prompt (Jinja2)"]
       OR["openrouter.py<br/>streaming client"]
       R --> CTX
+      R --> LC
       R --> ST
       CTX --> ST
+      LC --> ST
+      CTX -. render .-> TPL
+      LC -. render .-> TPL
       R --> OR
     end
 
     FS[("🗄️ ~/.grimoire/<br/>Markdown + JSON")]
     LLM(["☁️ OpenRouter API"])
+    CHUB(["☁️ chub.ai API"])
 
     C -- "JSON / multipart" --> R
     R -- "text/event-stream" --> C
     ST <--> FS
     OR <--> LLM
+    ST -- read-only --> CHUB
 
     style CTX fill:#e3d4f5,stroke:#5e3f8c,stroke-width:3px,color:#1c1208
+    style LC fill:#e3d4f5,stroke:#5e3f8c,stroke-width:2px,color:#1c1208
+    style TPL fill:#fff1c2,stroke:#b88a2e,stroke-width:2px,color:#1c1208
     style FS fill:#efe1c2,stroke:#7a5c22,stroke-width:2px,color:#1c1208
     style LLM fill:#cfe4f2,stroke:#23607f,stroke-width:2px,color:#10202b
-    </pre>
+    style CHUB fill:#cfe4f2,stroke:#23607f,stroke-width:2px,color:#10202b
+    </script>
   </div>
-  <p>Three things to internalize from this diagram:</p>
+
+  <p>Four things to internalize from this diagram:</p>
   <ul>
     <li><strong>The store layer is the whole model.</strong> Routes are thin: validate input, catch <code>*NotFound</code> exceptions, map to HTTP codes. All real logic lives in <code>store/</code>.</li>
-    <li><strong><code>context.py</code> is the one place</strong> that turns persisted state into an LLM prompt. Everything upstream just feeds it.</li>
-    <li><strong>Streaming is one-way SSE.</strong> The chat endpoints return <code>text/event-stream</code>; the browser reads tokens as they arrive.</li>
+    <li><strong><code>context.py</code> gathers, <code>templates/</code> speaks.</strong> Store modules produce data dicts; every literal string the model sees is a Jinja2 template. Editing a template changes the app's prompts live (auto-reload), no restart.</li>
+    <li><strong>The continuity engine closes a loop.</strong> Scenes feed <em>absorb</em>, absorb writes chronicle/state/relationships/plot files, and those files feed the next scene's context.</li>
+    <li><strong>Streaming is one-way SSE.</strong> Chat, retry, regenerate, opener, chub-gallery downloads, and image localization all stream <code>text/event-stream</code> frames.</li>
   </ul>
 </section>
 
 <section id="datamodel">
   <h2>On-Disk Data Model</h2>
-  <p>All state lives under <code>~/.grimoire/</code> by default — overridable with <code>$GRIMOIRE_HOME</code> or the user-chosen <em>Storage location</em> on the Configuration page (recorded in <code>~/.grimoire.json</code>), e.g. a Syncthing/Dropbox folder shared across devices. Two top-level trees: <code>worlds/</code> (the reusable library) and <code>campaigns/</code> (playable instances). Files are Markdown-with-frontmatter for human-editable content and JSON for structured graphs/state.</p>
+  <p>All state lives under <code>~/.grimoire/</code> by default — overridable with <code>$GRIMOIRE_HOME</code> or the user-chosen <em>Storage location</em> on the Configuration page (recorded in <code>~/.grimoire.json</code>), e.g. a Syncthing/Dropbox folder shared across devices. Two top-level trees: <code>worlds/</code> (the reusable library) and <code>campaigns/</code> (playable instances).</p>
 
   <div class="grid2">
   <div>
@@ -241,70 +319,86 @@ flowchart TB
   <pre><code>worlds/&lt;wid&gt;/
 ├── world.md          name, created, updated
 ├── tags.md           id → label vocabulary
-├── plotmap.json      greeting graph (edges)
-├── characters/
-│   └── &lt;cid&gt;/
-│       ├── character.md      name, default_version
-│       ├── &lt;vid&gt;.json        V3 card (per version)
-│       └── assets/&lt;vid&gt;/      avatar.png, …
-├── pcs/
-│   └── &lt;pid&gt;/
-│       ├── pc.md             name, tags, default_version
-│       └── &lt;vid&gt;.md          persona (per version)
-├── lore/      &lt;eid&gt;.md   name, keys + body
-├── locations/ &lt;eid&gt;.md   name, keys + body
+├── plotmap.json      greeting graph
+│                     (leads_to / excludes)
+├── calendar.json     primary/secondary calendar,
+│                     region + custom holidays
+├── characters/&lt;cid&gt;/
+│   ├── character.md      name, default_version,
+│   │                     birthdate
+│   ├── &lt;vid&gt;.json        V3 card (per version,
+│   │                     chub_source link)
+│   ├── tagline.md        one-line blurb
+│   └── assets/&lt;vid&gt;/     avatar.*, gallery_N.*,
+│                         focus.json (crop)
+├── pcs/&lt;pid&gt;/
+│   ├── pc.md             name, tags, default_version
+│   └── &lt;vid&gt;.md          persona (per version)
+├── lore/      &lt;eid&gt;.md   keys, owners + body
+├── locations/ &lt;eid&gt;.md   (same shape)
+│   └── &lt;eid&gt;/assets/default/   entity images
 └── greetings/ &lt;gid&gt;.md   character, version,
-                          requires_tags, body</code></pre>
+    │                     requires_tags, pcless
+    └── &lt;gid&gt;/assets/default/  images +
+                          subjects.json (who's shown)</code></pre>
   </div>
   <div>
   <h4>A Campaign</h4>
   <pre><code>campaigns/&lt;cid&gt;/
-├── campaign.md       name, world, created, updated
-├── sync.md           manifest: ref → base hash
-│                     (locations & lore)
-├── appearances.json  actor lock-in state
-│                     (characters & pcs)
-├── played.json       greeting IDs consumed
+├── campaign.md       name, world, world_copy: full
+├── sync.md           base hashes: lore/locations/
+│                     greetings, plotmap,
+│                     unpicked actor dirs
+├── appearances.json  locked actors
+│                     {version, base, scenes, role}
+├── played.json       greeting marks
+│                     {played, completed, skipped}
+├── calendar.json     copied from the world
+├── chronicle.json    per-scene fact records  ┐
+├── timeline.md       dated event bullets     │ the
+├── relationships.json feelings + bonds       │ conti-
+├── plot.json         threads + beats         │ nuity
+├── changes.json      last write-back diff    ┘ engine
 ├── scenes/
-│   └── &lt;sid&gt;.md      transcript (see below)
-├── characters/  ← copied actors (locked vers)
-├── pcs/         ← copied actors
-├── lore/        ← copied entities
-└── locations/   ← copied entities</code></pre>
-  <p class="tag">A campaign is a partial deep-copy of its world: only the actors/entities you actually pull in are materialized, each pinned to a specific version + a "base" hash for sync.</p>
+│   └── &lt;n&gt;--&lt;date&gt;--&lt;slug&gt;.md   transcripts
+├── characters/ pcs/ lore/ locations/
+├── greetings/  plotmap.json
+│      ↑ a FULL copy of the world, made at creation
+├── characters/&lt;id&gt;/state.md    standing state
+│                     (current_state/knows/suspects)
+└── characters/&lt;id&gt;/dossier.md  campaign dossier ¶</code></pre>
   </div>
   </div>
 
-  <h4>A Scene transcript (<code>scenes/&lt;sid&gt;.md</code>)</h4>
-  <p>The chat log is plain Markdown — role-labeled blocks the store parses back into messages. This is why your roleplay is greppable.</p>
+  <h4>A Scene transcript (<code>scenes/012--2026-06-24--meeting-seraphine.md</code>)</h4>
+  <p>The chat log is a plain-Markdown <strong>script</strong>: every message is a <code>**&lt;Speaker&gt;:**</code> block. Scene filenames follow the grammar <code>&lt;number&gt;--&lt;date&gt;--&lt;title-slug&gt;</code> (number first, zero-padded, so filename order = play order; the date section appears once the scene has an in-world date).</p>
   <pre><code>---
 title: 'Meeting Seraphine'
-model: 'anthropic/claude-opus-4.1'
 created: '2026-06-24T14:30:00Z'
-updated: '2026-06-24T15:45:00Z'
-dismissed: 'goblin-king,the-warden'
+…plus: pcless flag, in-world date &amp; location history,
+ dismissed cast suggestions, absorbed one-liner/summary…
 ---
-
-**Grimoire:** You push open the tavern door…
 
 **You:** I scan the room for the hooded figure.
 
-**Grimoire:** Seraphine's eyes meet yours from the corner booth…</code></pre>
-  <div class="note"><strong>Format note:</strong> <code>frontmatter.py</code> implements a deliberately small YAML-ish parser (string scalars only, custom single-quote escaping) so there's no heavy YAML dependency. <code>**You:**</code> / <code>**Grimoire:**</code> markers (see <code>scenes.py</code>) delimit user vs. assistant turns.</p></div>
+**Seraphine Vale:** "You're late," she murmurs, not looking up…
+
+**Grimoire:** The tavern's hush deepens as the door swings shut.</code></pre>
+  <div class="note"><strong>Format notes:</strong> <code>frontmatter.py</code> implements a deliberately small YAML-ish parser (string scalars only) so there's no heavy YAML dependency. Roles are <em>derived</em>, not stored: a message is user-side iff its speaker is <code>You</code> or matches a role=player cast name (<span class="filepath">scenes.py</span>). One model reply is split into per-speaker posts when it contains multiple <code>**Name:**</code> blocks.</div>
 </section>
 
 <section id="worldcampaign">
   <h2>Worlds vs. Campaigns — the central distinction</h2>
   <p>This separation is the spine of the whole app, so it's worth making explicit.</p>
-  <table>
+  <div class="tablewrap"><table>
     <tr><th></th><th>World</th><th>Campaign</th></tr>
     <tr><td><strong>Role</strong></td><td>Authoring library / template</td><td>Playable, divergent instance</td></tr>
-    <tr><td><strong>Contains</strong></td><td>Characters, PCs, lore, locations, greetings, tags, plotmap</td><td>Scenes (chat), a <em>copy</em> of the actors/entities actually used, play-state</td></tr>
-    <tr><td><strong>Created from</strong></td><td>Scratch / imports</td><td><code>POST /campaigns</code> with a <code>world</code> id</td></tr>
-    <tr><td><strong>Mutation</strong></td><td>Edited freely in the World editor</td><td>Diverges as you play &amp; edit locally</td></tr>
-    <tr><td><strong>Reconciliation</strong></td><td>—</td><td>Pulls world edits via <a href="#sync">three-way sync</a></td></tr>
-  </table>
-  <p>Because the campaign holds <em>its own copy</em> of every actor (pinned to a version + a base hash), editing a world character later doesn't silently rewrite an in-progress campaign. Instead it surfaces as a pending "incoming" change you accept or reject.</p>
+    <tr><td><strong>Contains</strong></td><td>Characters, PCs, lore, locations, greetings, tags, plotmap, calendar, taglines</td><td>Scenes, a <em>full copy</em> of the world's records, play-state, and the continuity files (chronicle, relationships, plot, changes, dossiers)</td></tr>
+    <tr><td><strong>Created from</strong></td><td>Scratch / imports (cards, chub.ai, lorebooks)</td><td><code>POST /campaigns</code> with a <code>world</code> id — deep-copies every record and stamps <code>world_copy: full</code></td></tr>
+    <tr><td><strong>Mutation</strong></td><td>Edited freely in the World editor</td><td>Diverges as you play; most records are editable at campaign scope too (see <a href="#sync">sync</a>)</td></tr>
+    <tr><td><strong>Reconciliation</strong></td><td>—</td><td>Pulls world edits via three-way sync (lore, locations, greetings, plotmap, whole actors)</td></tr>
+  </table></div>
+  <p>Because the campaign holds <em>its own copy</em> of everything (each ref pinned to a recorded "base" hash), editing a world record later never silently rewrites an in-progress campaign — it surfaces as a pending <em>incoming</em> change you accept or reject. Pre-full-copy campaigns are lazily backfilled on first touch (<code>ensure_campaign_copy</code>), which never clobbers an existing campaign copy.</p>
 </section>
 
 <hr/>
@@ -312,124 +406,184 @@ dismissed: 'goblin-king,the-warden'
 <section id="chatflow">
   <h2>Chat Request Lifecycle</h2>
   <p>This is the hot path — what happens between pressing <span class="kbd">Enter</span> and seeing tokens stream in. Follow the numbers.</p>
-  <div class="diagram">
-    <pre class="mermaid">
+
+  <div class="diagram-shell">
+    <p class="diagram-shell__hint">Ctrl/Cmd + wheel to zoom · drag to pan · double-click to fit · ⛶ opens full size</p>
+    <div class="mermaid-wrap">
+      <div class="zoom-controls">
+        <button type="button" data-action="zoom-in" title="Zoom in">+</button>
+        <button type="button" data-action="zoom-out" title="Zoom out">&minus;</button>
+        <button type="button" data-action="zoom-fit" title="Fit">&#8634;</button>
+        <button type="button" data-action="zoom-expand" title="Open full size">&#x26F6;</button>
+        <span class="zoom-label">Loading…</span>
+      </div>
+      <div class="mermaid-viewport"><div class="mermaid-canvas"></div></div>
+    </div>
+    <script type="text/plain" class="diagram-source">
 sequenceDiagram
     autonumber
     participant U as User
     participant CV as CampaignView.tsx
     participant API as api/client.ts
     participant R as routes.py<br/>post_chat
-    participant CTX as context.build_messages
-    participant ST as store (scenes/<br/>appearances/…)
+    participant CTX as context.py
+    participant T as templates/scene/*
     participant OR as openrouter.stream
     participant LLM as OpenRouter
 
-    U->>CV: type message + Enter
-    CV->>CV: optimistic append user msg
+    U->>CV: type message + Enter (or empty = Continue)
     CV->>API: api.chat(cid, sid, content, onEvent)
     API->>R: POST /campaigns/{cid}/scenes/{sid}/chat
     R->>R: _require_scene · _require_key
-    R->>ST: append_message(user, content)
-    R->>CTX: build_messages(cid, sid)
-    CTX->>ST: read scene, cast, cards, world-info
-    CTX-->>R: messages[]  (system + history + post)
+    alt normal turn
+      R->>R: append_message(user, content)<br/>speaker stamped if exactly one player
+      R->>CTX: build_messages(cid, sid)
+    else pcless scene or empty send
+      R->>CTX: build_director_messages(cid, sid, note)<br/>note is EPHEMERAL — never stored
+    end
+    CTX->>T: render system.j2 + history_line.j2<br/>+ post_history.j2
+    CTX-->>R: messages[]
     R->>OR: stream(messages, model, key)
-    OR->>LLM: POST /chat/completions (stream)
     loop each token
       LLM-->>OR: delta
-      OR-->>R: yield delta
       R-->>API: data: {"delta": "…"}
       API-->>CV: onEvent → setStreaming(acc)
-      CV-->>U: live token render
     end
-    R->>ST: append_message(assistant, full text)
+    R->>R: _persist_reply — split the reply into<br/>per-speaker assistant posts
     R-->>API: data: {"done": true}
-    API-->>CV: finalize message
-    </pre>
+    API-->>CV: re-fetch scene → speaker plates
+    </script>
   </div>
 
   <h4>Key details in this flow</h4>
   <ul>
-    <li><strong>The user message is persisted <em>before</em> building context</strong> (<span class="filepath">routes.py</span> <code>post_chat</code>), so the new turn is part of the history the context builder sees.</li>
-    <li><strong>The assistant reply is persisted by the server, not the client</strong> — inside <code>_chat_stream</code>'s generator, deltas are accumulated and <code>append_message(assistant, …)</code> runs when the stream completes (or partially, on error, so nothing is lost).</li>
-    <li><strong><code>retry</code> is the same path minus the append</strong>: it just rebuilds messages from existing history and re-streams.</li>
+    <li><strong>The user message is persisted <em>before</em> building context</strong>, so the new turn is part of the history the context builder sees. If exactly one player is seated, the message is stamped with that PC's name as its speaker.</li>
+    <li><strong>An empty send is a turn too.</strong> Empty input (or any input in an <a href="#offscreen">offscreen scene</a>) becomes an ephemeral <em>director note</em> — sent as the final user message of that one call, never written to the transcript. The default note is <code>templates/scene/director_note.j2</code> ("Continue the scene.").</li>
+    <li><strong>The reply is persisted by the server</strong> — <code>_persist_reply</code> splits one model reply containing several <code>**Name:**</code> blocks into separate per-speaker assistant posts, so the frontend re-fetches the scene when the stream ends and renders each speaker under its own plate.</li>
+    <li><strong><code>retry</code> re-streams from current context; <code>regenerate</code></strong> drops the trailing assistant run first and optionally injects a one-shot guidance system message (<code>scene/regenerate_guidance.j2</code>) — the guided-reroll popover.</li>
     <li><strong>Errors are normalized</strong> by <code>openrouter.py</code> into <code>{kind, detail}</code> (<code>missing_key</code>, <code>auth</code>, <code>rate_limit</code>, <code>network</code>, <code>bad_response</code>) and forwarded as an SSE <code>error</code> event — the UI shows a readable banner + Retry.</li>
   </ul>
 </section>
 
+<section id="templates">
+  <h2>The Prompt Template Layer</h2>
+  <p class="lead">Every string grimoire sends to an LLM lives in the top-level <code>templates/</code> directory as Jinja2. Nothing prompt-shaped is hard-coded. <span class="filepath">grimoire/prompts.py</span> is a ~25-line renderer (<code>StrictUndefined</code>, auto-reload) — edit a template and the running app's prompts change immediately.</p>
+  <div class="grid2">
+    <div class="card">
+      <h4>Layout conventions</h4>
+      <ul>
+        <li><strong>One folder per LLM call</strong>, one file per message part: <code>system.j2</code> + <code>user.j2</code>.</li>
+        <li><strong>Variants live in subfolders</strong> — <code>scene/opener_instruction/{standard|offscreen}.j2</code>, <code>scene/sections/story_so_far/{full|compact}.j2</code> — selected by a variable.</li>
+        <li><code>snippets/</code> holds shared line formats (transcript lines, relationship lines, plot-thread lines).</li>
+        <li>Files starting with <code>_</code> are macro libraries (e.g. <code>scene/_persona_blocks.j2</code>).</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>The five calls</h4>
+      <ul>
+        <li><code>scene/</code> — the context builder (chat / retry / regenerate / director / opener)</li>
+        <li><code>absorb/</code> — end-of-scene extraction</li>
+        <li><code>dossier/</code> — per-NPC dossier refresh (inside absorb)</li>
+        <li><code>tagline/</code> — one-line character blurb generator</li>
+        <li><code>scene_suggestions/</code> — next-scene premises + greeting ranking</li>
+      </ul>
+    </div>
+  </div>
+  <div class="note"><strong>Keeping templates honest:</strong> <code>scripts/verify_templates.py</code> checks the <em>wiring</em> (each builder passes the documented variables to the right template) against a throwaway store exercising every section — it never pins template text, so editing a prompt cannot fail it. <code>templates/README.md</code> documents each template's variable contract.</div>
+</section>
+
 <section id="context">
   <h2><span style="color:var(--accent2)">★</span> The Context Builder</h2>
-  <p class="lead">This is the heart of Grimoire. <span class="filepath">store/context.py</span> turns a scene's cast + activated world-info into the exact <code>messages[]</code> list sent to the model — SillyTavern-faithful in ordering.</p>
+  <p class="lead">The heart of Grimoire. <span class="filepath">store/context.py</span> turns a scene's cast + continuity state + activated world-info into the exact <code>messages[]</code> list sent to the model. The module gathers <em>data</em>; <code>templates/scene/system.j2</code> owns the text and section order.</p>
 
   <div class="note star">
-    <strong>Why it matters:</strong> Prompt <em>order</em> is the product. The same cards in a different order produce a different roleplay. <code>build_messages()</code> is small (~65 lines) but every line encodes a deliberate decision about what the model sees and when.
+    <strong>Why it matters:</strong> Prompt <em>order</em> is the product. The same cards in a different order produce a different roleplay. One <code>_assemble()</code> pass feeds four different builders — <code>build_messages</code> (chat/retry/regenerate), <code>build_director_messages</code>, <code>build_opener_messages</code>, and <code>context_sections</code> (the inspector's token breakdown) — so what you inspect is exactly what the model sees.
   </div>
 
   <h3>The assembly pipeline</h3>
-  <div class="diagram">
-    <pre class="mermaid">
+  <div class="diagram-shell">
+    <p class="diagram-shell__hint">Ctrl/Cmd + wheel to zoom · drag to pan · double-click to fit · ⛶ opens full size</p>
+    <div class="mermaid-wrap">
+      <div class="zoom-controls">
+        <button type="button" data-action="zoom-in" title="Zoom in">+</button>
+        <button type="button" data-action="zoom-out" title="Zoom out">&minus;</button>
+        <button type="button" data-action="zoom-fit" title="Fit">&#8634;</button>
+        <button type="button" data-action="zoom-expand" title="Open full size">&#x26F6;</button>
+        <span class="zoom-label">Loading…</span>
+      </div>
+      <div class="mermaid-viewport"><div class="mermaid-canvas"></div></div>
+    </div>
+    <script type="text/plain" class="diagram-source">
 flowchart TB
-    START([build_messages cid, sid]) --> READ[Read scene → history<br/>Read scene_cast → actors]
-    READ --> SPLIT{For each actor:<br/>resolve locked_version,<br/>load card / persona}
-    SPLIT --> NPC[NPC cards<br/>role = npc]
-    SPLIT --> PLY[Player blocks<br/>role = player]
+    START(["_assemble(cid, sid)"]) --> CAST["Read scene + cast<br/>resolve locked versions"]
+    CAST --> CARDS["NPC cards +<br/>player personas"]
+    CAST --> CONT["Continuity reads:<br/>playstate · relationships<br/>chronicle recap · plot threads"]
+    CAST --> WORLD["World reads:<br/>calendar 'today' · current location<br/>world-info activate() ·<br/>off-scene cast (dossiers + taglines)"]
+    CARDS --> SYS[["templates/scene/system.j2<br/>16 labeled sections in fixed order,<br/>empty sections dropped"]]
+    CONT --> SYS
+    WORLD --> SYS
+    CAST --> HIST["history → history_line.j2<br/>script lines, same-role runs merged"]
+    SYS --> SUB["{{user}} / {{char}} substitution<br/>(code, not templates)"]
+    HIST --> SUB
+    SUB --> OUT(["system + history<br/>+ post_history messages"])
 
-    NPC --> DEPTH[Compute recent_text =<br/>last N msgs<br/>N = context_scan_depth, def 8]
-    PLY --> DEPTH
-    DEPTH --> WI[world_info: scan lore+locations<br/>activate against recent_text]
-
-    WI --> ASM[[Assemble SYSTEM block<br/>in fixed order ▼]]
-    NPC --> ASM
-    PLY --> ASM
-
-    ASM --> SUB[Apply token substitution<br/>user → players, char → npcs]
-    SUB --> OUT([messages: system + history + post_history])
-
-    style ASM fill:#e3d4f5,stroke:#5e3f8c,stroke-width:3px,color:#1c1208
-    style WI fill:#efe1c2,stroke:#7a5c22,stroke-width:2px,color:#1c1208
-    </pre>
+    style SYS fill:#e3d4f5,stroke:#5e3f8c,stroke-width:3px,color:#1c1208
+    style CONT fill:#fff1c2,stroke:#b88a2e,stroke-width:2px,color:#1c1208
+    style WORLD fill:#efe1c2,stroke:#7a5c22,stroke-width:2px,color:#1c1208
+    </script>
   </div>
 
-  <h3>The system block — exact ordering</h3>
-  <p>Everything below is concatenated (blank-line separated) into a <em>single</em> system message, in this order. Source: <code>build_messages</code> lines ~159–167.</p>
-  <div class="diagram">
-    <pre class="mermaid">
-flowchart TB
-    A["1 · NPC system_prompt(s)<br/><i>each NPC card's system_prompt</i>"]
-    B["2 · NPC definition blocks<br/><i>description + personality + scenario</i>"]
-    C["3 · Player persona blocks<br/><i>PC: name/pronouns/summary/description<br/>or player-char description+personality</i>"]
-    D["4 · NPC message examples<br/><i>mes_example</i>"]
-    E["5 · Activated World-Info<br/><i>keyword-selected lore & locations</i>"]
-    A --> B --> C --> D --> E
-    E --> SYS[[One system message]]
-    style E fill:#efe1c2,stroke:#7a5c22,stroke-width:2px,color:#1c1208
-    style SYS fill:#e3d4f5,stroke:#5e3f8c,stroke-width:3px,color:#1c1208
-    </pre>
+  <h3>The system block — all 16 sections, in order</h3>
+  <p>Everything below is rendered by <code>templates/scene/system.j2</code> into a <em>single</em> system message; empty sections are dropped and the rest are joined with blank lines. The scene inspector's <em>Context</em> panel shows this same list with per-section token counts (<code>context_sections()</code> + tiktoken).</p>
+
+  <div class="stack">
+    <div class="row head"><div class="n">#</div><div class="name">Section</div><div class="desc">Source</div></div>
+    <div class="row"><div class="n">1</div><div class="name">Global system prompt</div><div class="desc">Config <code>system_prompt</code> — set on the Configuration page.</div></div>
+    <div class="row alt"><div class="n">2</div><div class="name">Card system prompts</div><div class="desc">Each in-scene NPC card's own <code>system_prompt</code>.</div></div>
+    <div class="row"><div class="n">3</div><div class="name">Character descriptions</div><div class="desc">Per NPC: <code>description</code> + <code>personality</code> + <code>scenario</code>.</div></div>
+    <div class="row alt"><div class="n">4</div><div class="name">Character state</div><div class="desc"><code># Character state</code> — each present NPC's standing <code>current_state</code> plus <code>Knows:</code> / <code>Suspects:</code> from <code>state.md</code> (written by absorb).</div></div>
+    <div class="row"><div class="n">5</div><div class="name">Relationships</div><div class="desc"><code># Relationships</code> — present-cast directed feelings (trust/affection/tension) + bonds from <code>relationships.json</code>.</div></div>
+    <div class="row alt"><div class="n">6</div><div class="name">Player personas</div><div class="desc">Seated players: PC persona (name/pronouns/summary/description) or a card played as player.</div></div>
+    <div class="row pcless"><div class="n">7</div><div class="name">Offscreen scene <span class="tag">pcless only</span></div><div class="desc">The director-mode instruction: no PC present, user messages are out-of-scene notes, never address the director in fiction.</div></div>
+    <div class="row alt pcless"><div class="n">8</div><div class="name">Absent player characters <span class="tag">pcless only</span></div><div class="desc">Persona blocks of the campaign's player actors as an offscreen <em>reference</em> cast.</div></div>
+    <div class="row"><div class="n">9</div><div class="name">Message examples</div><div class="desc">Each NPC card's <code>mes_example</code>.</div></div>
+    <div class="row alt"><div class="n">10</div><div class="name">Story so far</div><div class="desc"><code># Story so far</code> — chronicle recap. Chat turns: compact one-line bullets (config <code>recap_depth</code>, default 5). Openers: full summaries of the last 5 scenes.</div></div>
+    <div class="row"><div class="n">11</div><div class="name">Plot threads</div><div class="desc"><code># Plot threads</code> — open/advanced threads with latest beat, from <code>plot.json</code>.</div></div>
+    <div class="row alt"><div class="n">12</div><div class="name">Today</div><div class="desc">In-world date: friendly date + weekday, secondary calendar, holidays today &amp; upcoming, and per-cast age / birthday-today facts.</div></div>
+    <div class="row"><div class="n">13</div><div class="name">Current setting</div><div class="desc"><code># Current setting</code> — the current location entity's body (from the scene's location history).</div></div>
+    <div class="row alt"><div class="n">14</div><div class="name">World info</div><div class="desc">Keyword-activated lore &amp; location bodies — see <a href="#activation">activation</a>. The current location is excluded here (it's section 13).</div></div>
+    <div class="row"><div class="n">15</div><div class="name">Off-scene cast</div><div class="desc"><code># Other characters in this world</code> — two tiers: campaign-active NPCs elsewhere (dossier paragraph) and every other world character with a tagline (+ available versions). See <a href="#taglines">Taglines &amp; Dossiers</a>.</div></div>
+    <div class="row alt"><div class="n">16</div><div class="name">Response format</div><div class="desc">Always last: write the reply as a script of <code>**Name:**</code> blocks, <code>**Grimoire:**</code> for narration, and <em>never write the players</em> (named explicitly).</div></div>
   </div>
 
   <p>Then the final message list is:</p>
   <pre><code>[
-  { role: "system",    content: &lt;assembled system block, substituted&gt; },   # if non-empty
-  ...history,                                                              # user/assistant turns, substituted
-  { role: "system",    content: &lt;NPCs' post_history_instructions&gt; },       # if any — a.k.a. "jailbreak"/UJB slot
+  { role: "system", content: &lt;system.j2 — the 16-section block, substituted&gt; },  # omitted if empty
+  ...history,                  # script lines via history_line.j2, same-role runs merged
+  { role: "user",   content: &lt;director note&gt; },              # director turn only (ephemeral)
+  { role: "system", content: &lt;regenerate_guidance.j2&gt; },     # guided reroll only
+  { role: "system", content: &lt;post_history.j2&gt; },            # NPC cards' post_history_instructions, if any
+  { role: "system", content: &lt;opener_shape.j2&gt; },            # opener only — ALWAYS last
 ]</code></pre>
 
-  <div class="note"><strong>The <code>post_history_instructions</code> slot</strong> (a.k.a. depth-0 / "UJB" in SillyTavern) is appended <em>after</em> the conversation. This is the classic trick for instructions that must not be drowned out by a long history — they sit closest to the generation point.</div>
+  <div class="note"><strong>The <code>post_history_instructions</code> slot</strong> (a.k.a. depth-0 / "UJB" in SillyTavern) is appended <em>after</em> the conversation — the classic trick for instructions that must not be drowned out by a long history. Openers go one further: the shape rules render <em>after even that</em>, right at the generation point.</div>
 
   <h3 id="activation">World-Info activation</h3>
-  <p>World-info (lore + locations entries) is selected, not dumped. The <code>activate()</code> function is intentionally the single swap point for smarter retrieval later (embeddings, etc.). Today the rule is keyword-based, faithful to SillyTavern:</p>
+  <p>World-info (lore + location entries) is selected, not dumped. <code>activate()</code> is intentionally the single swap point for smarter retrieval later. The rules today:</p>
   <div class="card">
     <ul>
-      <li><strong>Keyless entries → always on.</strong> An entry with no <code>keys</code> is unconditional background lore.</li>
-      <li><strong>Keyed entries → conditional.</strong> Included only if <em>any</em> key matches as a whole word (case-insensitive) within <code>recent_text</code>.</li>
-      <li><strong><code>recent_text</code> = the last <code>context_scan_depth</code> messages</strong> (config, default 8) joined together. Depth <code>0</code> is special-cased to mean "no scan window" (so keyed entries simply won't fire) — guarding against <code>history[-0:]</code> meaning the whole list.</li>
+      <li><strong>Owned entries are gated first.</strong> An entry whose <code>owners</code> list is non-empty stays silent unless one of its owners (a <code>kind:id</code> ref — character, PC, or the current location) is present in the scene. Secrets tied to a character never leak into scenes they're not in.</li>
+      <li><strong>Keyless entries → always on</strong> (once owner-gating passes) — unconditional background lore. <em>Exception:</em> a keyless <strong>location</strong> never rides world-info; it surfaces only as the <em>Current setting</em> when the scene is actually there.</li>
+      <li><strong>Keyed entries → conditional.</strong> Included only if <em>any</em> key matches as a whole word (case-insensitive) within <code>recent_text</code> — the last <code>context_scan_depth</code> messages (config, default 8; depth 0 is special-cased to "no scan window"). For openers, the prompt text stands in for the missing history.</li>
     </ul>
   </div>
   <pre><code># context.py — the activation rule
-def activate(entries, recent_text):
+def activate(entries, recent_text, present=frozenset()):
     out = []
     for e in entries:
+        owners = e.get("owners") or []
+        if owners and not any(o in present for o in owners):
+            continue                       # owned but no owner in scene -> never leak
         keys = e.get("keys") or []
         if not keys:                       # keyless = always-on
             out.append(e); continue
@@ -439,193 +593,360 @@ def activate(entries, recent_text):
     return out</code></pre>
 
   <h3 id="substitution">Token substitution</h3>
-  <p><code>{{user}}</code> and <code>{{char}}</code> placeholders in any card/lore text are replaced with the <em>actual</em> names of the scene's current cast before sending:</p>
-  <table>
+  <p><code>{{user}}</code> and <code>{{char}}</code> placeholders in any card/lore text are replaced with the <em>actual</em> names of the scene's current cast before sending. This is a <strong>data</strong> transformation applied by code (<code>context._substitute</code>) — never by templates.</p>
+  <div class="tablewrap"><table>
     <tr><th>Token</th><th>Replaced with</th></tr>
-    <tr><td><code>{{user}}</code></td><td>Comma-joined names of all <strong>player</strong>-role actors in the scene</td></tr>
+    <tr><td><code>{{user}}</code></td><td>Comma-joined names of all <strong>player</strong>-role actors in the scene (in a pcless scene: the campaign's player actors — the reference cast)</td></tr>
     <tr><td><code>{{char}}</code></td><td>Comma-joined names of all <strong>npc</strong>-role actors in the scene</td></tr>
-  </table>
-  <p>Substitution is case-insensitive and <em>skips empty values</em> — a player-less scene leaves <code>{{user}}</code> literal rather than substituting an empty string. The replacement uses a function callback so card text containing <code>\1</code>-style sequences is inserted verbatim (no regex group expansion footgun).</p>
+  </table></div>
+  <p>Substitution is case-insensitive and <em>skips empty values</em> — a player-less mapping leaves <code>{{user}}</code> literal rather than substituting an empty string. The replacement uses a function callback so card text containing <code>\1</code>-style sequences is inserted verbatim. At <em>import</em> time, <code>{{char}}</code> is additionally baked into the character's own name field so cards read naturally in editors.</p>
 
-  <h3 id="opener">The Opener — a parallel, ephemeral build</h3>
-  <p>Starting a fresh scene from a prompt uses a <em>second</em> builder, <code>build_opener_messages()</code>. It's deliberately character-less and world-informed:</p>
+  <h3 id="opener">Openers — full-context, ephemeral, shape-ruled</h3>
+  <p>Starting a fresh scene from a prompt uses <code>build_opener_messages()</code>. It is no longer a stripped-down build — it sees <em>everything</em>:</p>
   <div class="grid2">
     <div class="card">
       <h4>What goes in</h4>
       <ol>
-        <li>A fixed instruction: <em>"Write the opening narration… second person… don't act for the player."</em></li>
-        <li>Only the <strong>player</strong> persona blocks (no NPC cards).</li>
-        <li>World-info activated against <strong>the prompt itself</strong> (not history — there is none yet).</li>
+        <li>An opener instruction prepended to the full 16-section system block (<code>opener_instruction/standard.j2</code>: second person, don't act for the player; <code>offscreen.j2</code>: third person, NPCs only).</li>
+        <li>The full <em>Story so far</em> recap — complete summaries of the last 5 scenes.</li>
+        <li>World-info activated against <strong>the prompt itself</strong> (no history yet).</li>
+        <li>The (substituted) prompt as the user message.</li>
       </ol>
     </div>
     <div class="card">
       <h4>What's different</h4>
       <ul>
-        <li><strong>Ephemeral:</strong> streams via <code>_ephemeral_stream</code> and is <em>not</em> persisted — the user previews and decides.</li>
-        <li>The user message is the raw prompt (substituted).</li>
-        <li>Lets you set a vivid scene before any NPC has "appeared."</li>
+        <li><strong>Ephemeral:</strong> streams via <code>_ephemeral_stream</code>, never persisted. The UI previews it; <strong>Use</strong> adopts it as the scene's first post (<code>POST …/first-post</code>), or <strong>Save as greeting</strong> keeps it for later.</li>
+        <li><strong>Shape rules go last:</strong> <code>opener_shape.j2</code> rides the <em>final</em> system message — cap of five paragraphs, one per present character plus narration, each under its <code>**Name:**</code> marker — placed after everything so it outranks the big system block.</li>
       </ul>
     </div>
   </div>
+
+  <h3 id="offscreen">Offscreen (PC-less) scenes — director mode</h3>
+  <p>A scene created with <code>pcless: true</code> has no player seated (seating a player 409s). The model plays all the NPCs; you direct:</p>
+  <ul>
+    <li>The system block adds the <em>Offscreen scene</em> instruction and the <em>Absent player characters</em> reference section, so NPCs can talk <em>about</em> the PCs without them present.</li>
+    <li>Every user input becomes an ephemeral <strong>director note</strong> (<code>build_director_messages</code>) — steering that is followed but never acknowledged in fiction, and never stored in the transcript. Blank input sends "Continue the scene."</li>
+    <li>Greetings carry a matching <code>pcless</code> flag: offscreen scenes can only start from offscreen greetings (and vice versa — starting a pcless greeting in a fresh scene flips the scene offscreen).</li>
+  </ul>
+</section>
+
+<hr/>
+
+<section id="scripts">
+  <h2>Scenes Are Scripts</h2>
+  <p>Transcripts moved from a two-role chat log to a <strong>script grammar</strong> with named speakers — the enabler for multi-NPC scenes, speaker plates in the UI, and per-NPC posts.</p>
+  <div class="grid2">
+    <div class="card">
+      <h4>The grammar (<span class="filepath">scenes.py</span>)</h4>
+      <ul>
+        <li>Every message starts <code>**&lt;Speaker&gt;:**</code> at the top of the body or after a blank line (bold text inside a paragraph stays content).</li>
+        <li>Reserved labels: <code>**You:**</code> (user) and <code>**Grimoire:**</code> (assistant narration). Anything else is a named speaker.</li>
+        <li>Role is <em>derived</em>: user-side iff the speaker is "You" or matches a role=player cast member. <code>match_name()</code> resolves labels by case-insensitive exact match, else a unique word-boundary prefix ("winifred" names "winifred winterbourne"; ambiguous prefixes name no one).</li>
+        <li>One model reply with several <code>**Name:**</code> blocks is split into per-speaker posts on persist; the trailing assistant run is what <em>reroll</em> replaces.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>Scene ids (<span class="filepath">scene_ids.py</span>)</h4>
+      <ul>
+        <li>Grammar: <code>&lt;number&gt;--&lt;date-slug&gt;--&lt;title-slug&gt;.md</code>; the date section appears once the scene has an in-world date (first <code>set_datetime</code> renames the file).</li>
+        <li>Number first + zero-padding (min width 3, campaign-wide re-pad) ⇒ lexicographic filename order = play order.</li>
+        <li>Renames cascade: <code>scene_refs.repoint()</code> fixes every store that references scene ids (chronicle, plot, changes, appearances, played).</li>
+        <li>Legacy files are migrated once at startup (<code>migrations.migrate_scene_ids</code>).</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="calendars">
+  <h2>Calendars &amp; In-World Dates</h2>
+  <p>The <span class="filepath">store/calendars/</span> package gives scenes real in-world dates on a provider registry, so fictional calendars can slot in later without touching anything else.</p>
+  <ul>
+    <li><strong>A fixed-day integer axis</strong> (proleptic Gregorian ordinal) underlies every provider, so dates from different calendars are orderable and arithmetic is exact. Time-of-day (<code>Thh:mm</code>) is handled calendar-agnostically.</li>
+    <li><strong><code>gregorian</code> is the only shipping provider</strong> — region holidays via the <code>holidays</code> PyPI package plus custom fixed or nth-weekday rules. <code>calendar.json</code> (<code>{primary, secondary, confirmed}</code>) is world-scoped and copied into each campaign.</li>
+    <li><strong><code>today_facts()</code></strong> merges primary + secondary calendars into the prompt's <em>Today</em> section: friendly date, weekday, holidays today, next holiday within <code>UPCOMING_WINDOW_DAYS = 30</code> — plus each cast member's age and birthday-today flag (characters/PCs carry a <code>birthdate</code>).</li>
+    <li><strong>Scene datetime</strong> is a history (<code>GET/PUT …/datetime</code>); a <code>suggested</code> pre-fill comes from the creation-time hint or the last chronicle date, and the wizard/chooser/inspector all pre-fill it.</li>
+  </ul>
+</section>
+
+<section id="absorb">
+  <h2><span style="color:var(--accent2)">★</span> Chronicle &amp; Absorb — the continuity loop</h2>
+  <p class="lead">The other heart of the app. Ending a scene runs an LLM extraction ("absorb"), you review its proposed edits, and the accepted ones are written back into the campaign — where the <a href="#context">context builder</a> reads them for every subsequent scene. Play → extract → review → write back → play.</p>
+
+  <div class="diagram-shell">
+    <p class="diagram-shell__hint">Ctrl/Cmd + wheel to zoom · drag to pan · double-click to fit · ⛶ opens full size</p>
+    <div class="mermaid-wrap">
+      <div class="zoom-controls">
+        <button type="button" data-action="zoom-in" title="Zoom in">+</button>
+        <button type="button" data-action="zoom-out" title="Zoom out">&minus;</button>
+        <button type="button" data-action="zoom-fit" title="Fit">&#8634;</button>
+        <button type="button" data-action="zoom-expand" title="Open full size">&#x26F6;</button>
+        <span class="zoom-label">Loading…</span>
+      </div>
+      <div class="mermaid-viewport"><div class="mermaid-canvas"></div></div>
+    </div>
+    <script type="text/plain" class="diagram-source">
+flowchart TB
+    E(["'End scene' button"]) --> AB["POST …/scenes/{sid}/absorb"]
+    AB --> SNAP["Gather: transcript + scene facts<br/>+ current state / relationship / plot snapshots"]
+    SNAP --> LLM[["LLM — templates/absorb/<br/>extracts one_line, summary, keywords,<br/>timeline_events + SIX edit lists"]]
+    AB --> DOS[["LLM ×N — templates/dossier/<br/>refresh each present NPC's dossier<br/>(auto-applied, failures swallowed)"]]
+    LLM --> MAT["materialize() → StagedEdits<br/>{kind, target, label, before, after}<br/>no-ops and missing targets dropped"]
+    MAT --> REV["Review panel in the UI:<br/>approve / edit each StagedEdit,<br/>tweak one-liner + summary"]
+    REV --> PUT["PUT …/scenes/{sid}/chronicle"]
+    PUT --> C1["chronicle.json record<br/>+ timeline.md bullets<br/>+ scene marked absorbed"]
+    PUT --> C2["apply_edits →<br/>state.md · lore bodies · card fields ·<br/>relationships.json · plot.json"]
+    C2 --> C3["changes.json — rolling<br/>per-record write-back diff<br/>(the Changes tab)"]
+    C1 -. feeds next scene's<br/>'Story so far' .-> CTX(["context builder"])
+    C2 -. feeds Character state /<br/>Relationships / Plot threads .-> CTX
+
+    style LLM fill:#e3d4f5,stroke:#5e3f8c,stroke-width:3px,color:#1c1208
+    style DOS fill:#e3d4f5,stroke:#5e3f8c,stroke-width:2px,color:#1c1208
+    style REV fill:#fff1c2,stroke:#b88a2e,stroke-width:2px,color:#1c1208
+    style CTX fill:#efe1c2,stroke:#7a5c22,stroke-width:2px,color:#1c1208
+    </script>
+  </div>
+
+  <h4>What the LLM extracts (the six edit lists)</h4>
+  <div class="tablewrap"><table>
+    <tr><th>Edit kind</th><th>Shape</th><th>Applied to</th></tr>
+    <tr><td><code>character_state</code></td><td><code>{id, current_state, knows?, suspects?}</code> — omitted knows/suspects keep the stored value; explicit <code>""</code> clears</td><td><code>characters/&lt;id&gt;/state.md</code></td></tr>
+    <tr><td><code>lore</code></td><td><code>{id, append}</code></td><td>the lore entity's body</td></tr>
+    <tr><td><code>authored</code></td><td><code>{id, field, text}</code>, field ∈ description/personality/scenario (whitelist re-checked on apply)</td><td>the locked card version itself</td></tr>
+    <tr><td><code>relationship</code></td><td><code>{from, to, trust, affection, tension, note}</code> (0–5, clamped)</td><td><code>relationships.json</code> directed feelings</td></tr>
+    <tr><td><code>bond</code></td><td><code>{a, b, type}</code> (symmetric)</td><td><code>relationships.json</code> bonds</td></tr>
+    <tr><td><code>plot</code></td><td><code>{id, title, status, beat}</code>, status ∈ open/advanced/closed</td><td><code>plot.json</code> threads + beats</td></tr>
+  </table></div>
+  <p><strong>Nothing is persisted at absorb time</strong> except the dossiers — the review step is the write gate. On save, <code>apply_edits</code> is best-effort per edit, and the browsable kinds (character_state, lore, authored) are recorded into <code>changes.json</code> — a rolling "what did play change about this record" diff, one entry per record, rendered by the Changes tab with per-field line diffs (stdlib <code>difflib</code>).</p>
+
+  <h3 id="continuity">The continuity stores at a glance</h3>
+  <div class="tablewrap"><table>
+    <tr><th>File</th><th>Written by</th><th>Read by (prompt section)</th></tr>
+    <tr><td><code>chronicle.json</code> + <code>timeline.md</code></td><td>chronicle save</td><td><em>Story so far</em> recap; scene suggestions; inspector</td></tr>
+    <tr><td><code>characters/&lt;id&gt;/state.md</code></td><td>approved <code>character_state</code> edits</td><td><em>Character state</em> (current_state / knows / suspects)</td></tr>
+    <tr><td><code>relationships.json</code></td><td>approved relationship/bond edits</td><td><em>Relationships</em> (present cast only)</td></tr>
+    <tr><td><code>plot.json</code></td><td>approved plot edits</td><td><em>Plot threads</em>; scene suggestions</td></tr>
+    <tr><td><code>changes.json</code></td><td>every applied browsable edit</td><td>the Changes tab (never the prompt)</td></tr>
+    <tr><td><code>characters/&lt;id&gt;/dossier.md</code></td><td>auto-refreshed during absorb</td><td><em>Off-scene cast</em> tier 1</td></tr>
+  </table></div>
+  <div class="note"><strong>Fail-open by design:</strong> every continuity read in the context builder tolerates a garbled file (the store may live in a synced folder) — a corrupt <code>chronicle.json</code> or <code>relationships.json</code> silently omits its section rather than crashing the chat.</div>
+
+  <h3 id="taglines">Taglines &amp; Dossiers — the off-scene cast directory</h3>
+  <p>Two tiers of "who else exists," so the model can pull absent characters in sensibly (prompt section 15, <code># Other characters in this world</code>):</p>
+  <div class="grid2">
+    <div class="card">
+      <h4>Tagline <span class="tag">world-level · per character</span></h4>
+      <p><code>characters/&lt;cid&gt;/tagline.md</code> — one sentence. Generated on demand from the card (<code>templates/tagline/</code>) or hand-written; deliberately not hash-tied to the card so hand-written taglines never "expire." Feeds tier 2: <em>Known to exist</em> — every world character not yet in the campaign, with available version ids.</p>
+    </div>
+    <div class="card">
+      <h4>Dossier <span class="tag">campaign-level · per character</span></h4>
+      <p><code>campaigns/…/characters/&lt;cid&gt;/dossier.md</code> — a standing paragraph: who they are and where things stand <em>in this campaign</em>. Auto-refreshed by an extra LLM call per present NPC during every absorb (prior dossier + transcript in). Feeds tier 1: <em>Active in this campaign, elsewhere</em>.</p>
+    </div>
+  </div>
+</section>
+
+<section id="suggest">
+  <h2>Scene Suggestions &amp; the New-Scene Chooser</h2>
+  <p>The <code>+ New Scene</code> button opens a chooser modal (PC mode vs. offscreen mode first), which combines deterministic availability with one LLM call:</p>
+  <ul>
+    <li><strong><code>suggest.build_snapshot()</code></strong> gathers: the current in-world date + upcoming holidays/birthdays, open plot threads, cast absent from the last 5 absorbed scenes (with taglines), available cast and locations.</li>
+    <li><strong>One call to <code>templates/scene_suggestions/</code></strong> returns generated premises (<code>{title, premise, cast, location, date}</code> — id-validated against the snapshot), a <strong>ranking of startable greetings</strong> (only when more than two are available), and an estimated <code>next_date</code>.</li>
+    <li>The chooser shows ~4 cards: top-ranked greetings + generated premises. Picking a greeting runs <code>start-from-greeting</code> (which retitles the scene after the greeting); picking a premise creates the scene, seeds its whole cast in one batch call, sets the location, and pre-fills the opener prompt with the premise.</li>
+    <li>A failed seed <strong>deletes the half-created scene</strong> before surfacing the error — no orphans.</li>
+  </ul>
 </section>
 
 <hr/>
 
 <section id="sync">
   <h2>World → Campaign Sync</h2>
-  <p>Because a campaign owns copies of its actors/entities, world edits don't auto-propagate. <code>store/sync.py</code> implements a <strong>three-way merge</strong> per ref to classify what changed and let you accept/reject.</p>
+  <p>Because a campaign owns a full copy of its world, world edits don't auto-propagate. <code>store/sync.py</code> implements a <strong>three-way merge</strong> per ref. Coverage grew from lore/locations to <em>everything</em>: <code>incoming()</code> is four passes.</p>
 
-  <div class="card">
-    <p>For each ref (a <code>kind/id</code> like <code>lore/the-pact</code> or <code>characters/seraphine</code>) three content hashes are compared:</p>
-    <table>
-      <tr><th>Hash</th><th>Meaning</th></tr>
-      <tr><td><code>world</code></td><td>The world entity's current hash (or <code>None</code> if deleted)</td></tr>
-      <tr><td><code>base</code></td><td>The hash recorded when the campaign last synced this ref (the manifest / appearance <code>base</code>)</td></tr>
-      <tr><td><code>mine</code></td><td>The campaign's current copy hash (may have diverged through local edits)</td></tr>
-    </table>
-  </div>
+  <div class="tablewrap"><table>
+    <tr><th>Pass</th><th>Refs</th><th>Hash compared</th><th>Base lives in</th></tr>
+    <tr><td>Flat files</td><td><code>lore/*</code> · <code>locations/*</code> · <code>greetings/*</code></td><td>SHA-256 of file text</td><td><code>sync.md</code></td></tr>
+    <tr><td>Plotmap</td><td>the single <code>plotmap</code> ref</td><td>hash of <code>plotmap.json</code></td><td><code>sync.md</code></td></tr>
+    <tr><td>Locked actors</td><td>characters/pcs present in <code>appearances.json</code></td><td>the <em>locked version's</em> card/persona hash</td><td><code>appearances.json</code> <code>base</code></td></tr>
+    <tr><td>Unpicked actors</td><td>every other character/pc</td><td>whole-directory hash (meta + all versions)</td><td><code>sync.md</code></td></tr>
+  </table></div>
 
-  <div class="diagram">
-    <pre class="mermaid">
+  <div class="diagram-shell">
+    <p class="diagram-shell__hint">Ctrl/Cmd + wheel to zoom · drag to pan · double-click to fit · ⛶ opens full size</p>
+    <div class="mermaid-wrap">
+      <div class="zoom-controls">
+        <button type="button" data-action="zoom-in" title="Zoom in">+</button>
+        <button type="button" data-action="zoom-out" title="Zoom out">&minus;</button>
+        <button type="button" data-action="zoom-fit" title="Fit">&#8634;</button>
+        <button type="button" data-action="zoom-expand" title="Open full size">&#x26F6;</button>
+        <span class="zoom-label">Loading…</span>
+      </div>
+      <div class="mermaid-viewport"><div class="mermaid-canvas"></div></div>
+    </div>
+    <script type="text/plain" class="diagram-source">
 flowchart TB
-    S([compute world, base, mine]) --> Q1{world is None<br/>or world == base?}
-    Q1 -- yes --> SKIP[no incoming change<br/><i>world-side deletes also skipped</i>]
-    Q1 -- no --> Q2{mine is None?}
+    S(["compute world, base, mine hashes"]) --> Q1{"world is None<br/>or world == base?"}
+    Q1 -- yes --> SKIP["no incoming change<br/><i>world-side deletes also skipped</i>"]
+    Q1 -- no --> Q2{"mine is None?"}
     Q2 -- yes --> NEW["status: NEW<br/>not in campaign yet"]
-    Q2 -- no --> Q3{mine == base?}
+    Q2 -- no --> Q3{"mine == base?"}
     Q3 -- yes --> UPD["status: UPDATE<br/>campaign copy untouched"]
     Q3 -- no --> CONF["status: CONFLICT<br/>both sides changed"]
 
     style NEW fill:#cfe4f2,stroke:#23607f,stroke-width:2px,color:#10202b
     style UPD fill:#d7eccb,stroke:#356b22,stroke-width:2px,color:#13230d
     style CONF fill:#f4d2d2,stroke:#9e3838,stroke-width:2px,color:#2b0f0f
-    </pre>
+    </script>
   </div>
 
-  <div class="legend">
-    <span><span class="sw" style="background:#cfe4f2;border:1px solid #23607f"></span> NEW — exists in world, absent in campaign</span>
-    <span><span class="sw" style="background:#d7eccb;border:1px solid #356b22"></span> UPDATE — safe fast-forward</span>
-    <span><span class="sw" style="background:#f4d2d2;border:1px solid #9e3838"></span> CONFLICT — diverged both ways</span>
-  </div>
+  <p><strong>Accept vs. reject</strong> are the same operation with one flag (<code>_advance(…, copy=)</code>): accept overwrites the campaign copy with the world version (flat file write; whole-dir <code>rmtree</code>+<code>copytree</code> for unpicked actors, so deleted versions propagate; just the locked version file for locked actors) <em>and</em> advances the base hash; reject only advances the base ("keep mine, stop nagging"). <code>campaigns_for_world()</code> rolls up pending counts so the World view can badge each campaign with <span class="pill" style="color:var(--new);border-color:var(--new)">new</span> <span class="pill" style="color:var(--ok);border-color:var(--ok)">update</span> <span class="pill" style="color:var(--bad);border-color:var(--bad)">conflict</span>.</p>
 
-  <p><strong>Accept vs. reject</strong> are the same operation with one flag (<code>_advance(..., copy=)</code>):</p>
+  <h4>Version locking — one door, three keys</h4>
+  <p>An actor's campaign life has two phases. <em>Unpicked</em>: all versions ride along, world changes arrive whole-dir via sync. <em>Locked</em>: exactly one version, tracked per-version. All three entry points route through the same <code>_lock()</code>:</p>
   <ul>
-    <li><code>accept(refs)</code> → <code>copy=True</code>: overwrite the campaign copy with the world version <em>and</em> advance the base hash.</li>
-    <li><code>reject(refs)</code> → <code>copy=False</code>: keep your copy, but advance the base hash so the change stops nagging.</li>
+    <li><strong><code>appear()</code></strong> — first time an actor is seated in a scene (lazy pick). Re-appearing with a different version/role raises <code>AppearError</code>.</li>
+    <li><strong><code>pick_version</code></strong> — explicit pick from the campaign's world pages (409 if already locked).</li>
+    <li><strong><code>start_from_greeting</code></strong> — casting the greeting's characters.</li>
   </ul>
-  <p>Entities (lore/locations) track their base in <code>sync.md</code>; actors (characters/pcs) track it in <code>appearances.json</code>. <code>campaigns_for_world()</code> rolls up pending counts so the World view can badge each campaign with <span class="pill" style="color:var(--new);border-color:var(--new)">new</span> <span class="pill" style="color:var(--ok);border-color:var(--ok)">update</span> <span class="pill" style="color:var(--bad);border-color:var(--bad)">conflict</span>.</p>
+  <p>Locking <strong>purges every sibling version</strong>, points <code>default_version</code> at the pick, and migrates the sync base from <code>sync.md</code> to <code>appearances.json</code>. Later, <code>import_version</code> can swap the locked version for a different world version (requires an existing lock — until you pick, world changes come via sync).</p>
+
+  <h4>What's editable at campaign scope</h4>
+  <p>The campaign's world pages (<code>/campaigns/:cid/world</code>) edit the <em>campaign copy</em>: full CRUD for lore, locations, greetings (+ plotmap edges + marks), PCs (including campaign-local creation), and characters (edit versions; <em>creating</em> a new version 409s once locked). <strong>Tags stay world-only</strong> — campaign PC tags are free strings.</p>
 </section>
 
 <section id="greetings">
   <h2>Greetings &amp; the Plotmap</h2>
-  <p>Greetings are pre-written scene openers tied to a character+version, optionally gated by player <strong>tags</strong> and chained into a <strong>directed graph</strong> (the plotmap) that models story progression.</p>
+  <p>Greetings are pre-written scene openers tied to a character+version, optionally gated by player <strong>tags</strong> and chained into a directed graph (the plotmap) that models story progression.</p>
   <div class="grid2">
     <div class="card">
       <h4>A greeting</h4>
       <ul>
-        <li><code>character</code> + <code>version</code> it belongs to</li>
-        <li><code>body</code> — the opening message</li>
+        <li><code>character</code> + <code>version</code> it belongs to; optional co-cast via <code>present</code></li>
+        <li><code>body</code> — markdown, may embed localized images</li>
         <li><code>requires_tags</code> + <code>predecessor_join</code> (<code>all</code>/<code>any</code>) — gating</li>
-        <li>Imported in bulk from a card's <code>first_mes</code> + <code>alternate_greetings</code></li>
+        <li><code>pcless</code> — an offscreen greeting</li>
+        <li>Imported in bulk from a card's <code>first_mes</code> + <code>alternate_greetings</code>, or authored (incl. saving a generated opener)</li>
       </ul>
     </div>
     <div class="card">
-      <h4>The plotmap (<code>plotmap.json</code>)</h4>
+      <h4>Marks &amp; availability (<span class="filepath">playing.py</span>)</h4>
       <ul>
-        <li><code>leads_to</code> — greetings unlocked after this one is played</li>
-        <li><code>excludes</code> — greetings made unavailable (mutually-exclusive branches)</li>
-        <li><code>playing.py</code> computes <em>available</em> greetings from <code>played.json</code> + player tags</li>
+        <li><code>played.json</code> holds three sets: <strong>played</strong> (actually started), <strong>completed</strong> / <strong>skipped</strong> (off-screen marks you set by hand)</li>
+        <li>Availability treats <code>played ∪ completed</code> as done; <strong>skipped</strong> greetings are dropped <em>and pruned from predecessor joins</em> — the plot routes around them</li>
+        <li><code>?after=</code> flags greetings unlocked by a just-finished scene's greeting (they sort first in the chooser)</li>
       </ul>
     </div>
   </div>
-  <p>Starting a scene from a greeting (<code>playing.start_from_greeting</code>) does three things atomically: makes the character <em>appear</em> in the scene, records the greeting as played, and appends its body as the first assistant message.</p>
+  <p>Starting a scene from a greeting (<code>playing.start_from_greeting</code>) casts every listed character (locked version wins), records the greeting as played, appends its body as the first assistant post, <strong>retitles the scene to the greeting's name</strong> (the response carries the new scene id), and enforces the pcless pairing rules.</p>
 </section>
 
 <section id="cards">
-  <h2>Character Cards</h2>
-  <p>Characters use the SillyTavern <strong>Character Card V3</strong> shape (<code>spec: "chara_card_v3"</code>). <code>store/cards.py</code> handles import/export across three carriers — all in pure stdlib (no Pillow):</p>
-  <table>
+  <h2>Character Cards &amp; chub.ai</h2>
+  <p>Characters use the SillyTavern <strong>Character Card V3</strong> shape (<code>spec: "chara_card_v3"</code>). <code>store/cards.py</code> handles import/export across three carriers in pure stdlib:</p>
+  <div class="tablewrap"><table>
     <tr><th>Format</th><th>How the card travels</th></tr>
     <tr><td><code>json</code></td><td>Plain V3 JSON file</td></tr>
-    <tr><td><code>png</code></td><td>JSON base64-embedded in a PNG <code>tEXt</code> chunk (<code>ccv3</code>) — the iconic "character card image"</td></tr>
+    <tr><td><code>png</code></td><td>JSON base64-embedded in a PNG <code>tEXt</code> chunk — the iconic card image. Real PNGs can carry <em>duplicate</em> chara chunks (stale + current), so the reader scans every chunk and prefers the first rather than dict-ing by keyword.</td></tr>
     <tr><td><code>charx</code></td><td>ZIP archive containing <code>card.json</code> (+ optional embedded assets)</td></tr>
-  </table>
-  <p><code>to_v3()</code> normalizes older V2/bare cards up to V3 without mutating the input. Characters are <strong>versioned</strong>: a character folder holds many <code>&lt;vid&gt;.json</code> cards (e.g. <code>default</code>, <code>corrupted</code>, <code>future</code>) plus a <code>default_version</code> pointer. Per-version images live under <code>assets/&lt;vid&gt;/</code> and are served (not hashed into sync). A card's embedded <code>character_book</code> can be lifted into editable world lore via the lorebook importer.</p>
+  </table></div>
+  <p><code>to_v3()</code> normalizes older V2/bare cards up to V3 without mutating the input. Characters are <strong>versioned</strong>: many <code>&lt;vid&gt;.json</code> cards per character plus a <code>default_version</code> pointer. A card's embedded <code>character_book</code> can be lifted into editable world lore via the lorebook importer.</p>
+
+  <h4>chub.ai integration (<span class="filepath">store/chub.py</span> + <span class="filepath">fetch.py</span>)</h4>
+  <ul>
+    <li><strong>Read-only client</strong> for chub's undocumented API: paste a URL (or bare <code>creator/slug</code>) → <code>import_from_chub</code> fetches the card PNG, overlays the <em>current</em> API definition over the possibly-stale PNG payload, and optionally pulls the project gallery (streamed per-image SSE progress) and linked lorebooks.</li>
+    <li><strong><code>chub_source</code> is per-version</strong>, so one character can hold linked variants; one-click <em>Re-download</em> updates a linked version in place, and a bulk script re-downloads every linked character.</li>
+    <li><strong><code>fetch.py</code> is the safety layer</strong>: SSRF guard (private/loopback ranges blocked, re-checked per redirect hop), 100&nbsp;MB cap, magic-byte image sniffing, best-effort semantics (returns <code>None</code>, never raises into happy paths).</li>
+    <li><strong>Image localization</strong> (<span class="filepath">localize.py</span>): scans card fields / greetings for remote image refs (markdown, <code>&lt;img&gt;</code>, data-URIs, bare URLs), downloads them into version assets, and splices local URLs back in — streaming progress, and completed field rewrites survive a mid-stream disconnect.</li>
+  </ul>
 </section>
 
-<section id="cast">
-  <h2>Cast &amp; Appearances</h2>
-  <p><code>appearances.json</code> is the source of truth for <em>who is in a campaign</em>. When you add an actor to a scene (<code>appear()</code>), it:</p>
-  <ol>
-    <li><strong>Locks the version &amp; role.</strong> Re-appearing the same actor with a different version/role raises <code>AppearError</code> — an actor is consistent across the whole campaign.</li>
-    <li><strong>Copies the actor</strong> from world → campaign (card/persona + meta + assets) and records the <code>base</code> hash for sync.</li>
-    <li><strong>Appends the scene id</strong> to the actor's <code>scenes</code> list (so one actor can span scenes).</li>
-  </ol>
-  <p>Two derived features ride on this state:</p>
-  <ul>
-    <li><strong>Cast / roster</strong> — <code>scene_cast()</code> and <code>roster()</code> drive the CastPanel UI and feed the context builder.</li>
-    <li><strong>Suggestions</strong> — <code>suggestions()</code> scans the text of <em>in-scene</em> characters' cards for whole-word mentions of <em>other</em> world characters not yet present (minus dismissed ones), surfacing "you mentioned X — add them?" prompts.</li>
-  </ul>
+<section id="images">
+  <h2>Images &amp; Assets</h2>
+  <p><span class="filepath">store/assets.py</span> is a per-record image store — <code>&lt;kind&gt;/&lt;id&gt;/assets/&lt;version&gt;/&lt;name&gt;.&lt;ext&gt;</code> — shared by characters (per version), entities, and greetings (version <code>default</code>). Images are deliberately <em>not</em> hashed into sync.</p>
+  <div class="grid2">
+    <div class="card">
+      <h4>Slots &amp; operations</h4>
+      <ul>
+        <li><code>avatar</code> is the primary slot; <code>gallery_N</code> for the rest.</li>
+        <li><strong>Promote</strong> = a three-way rename swap (nothing lost) at both world and campaign scope.</li>
+        <li><strong>Crop focus</strong>: <code>focus.json</code> sidecar stores a 0–100 position along the avatar's long axis (the <code>AvatarFocusPicker</code>); any avatar write clears it.</li>
+        <li><strong>Image subjects</strong>: <code>subjects.json</code> per greeting records which characters appear in each image — powering the "Appears in" gallery on character pages, copy-image-to-character, and the untagged-image tagging queue.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>Serving &amp; caching</h4>
+      <ul>
+        <li>Bare URL → <code>Cache-Control: no-cache</code> + ETag (mtime/size) for 304 revalidation.</li>
+        <li><code>?v=&lt;version&gt;</code> → <code>immutable, max-age=1y</code> (the frontend appends the version token).</li>
+        <li><code>?w=N</code> → lazily cached WebP thumbnail (<span class="filepath">thumbs.py</span>, under <code>.cache/thumbs/</code> — derived data, safe to delete) so grids never ship full-res art.</li>
+        <li><span class="filepath">statcache.py</span> memoizes content hashes/summaries keyed on file stat signatures, with a git-style 1-second racy-clean guard.</li>
+      </ul>
+    </div>
+  </div>
 </section>
 
 <hr/>
 
 <section id="frontend">
   <h2>React App Structure</h2>
-  <p>A small React-Router SPA. <code>App.tsx</code> is the shell: it loads config (theme + whether a key is set), wraps everything in <code>ThemeProvider</code>, and defines the routes.</p>
-  <div class="diagram">
-    <pre class="mermaid">
+  <p>A React-Router SPA. <code>App.tsx</code> is the shell: it loads config (theme + whether a key is set), wraps everything in <code>ThemeProvider</code>, and renders the brutalist top bar (brand block, nav cells, <code>OPENROUTER · CONNECTED / NO KEY</code> status).</p>
+
+  <div class="diagram-shell">
+    <p class="diagram-shell__hint">Ctrl/Cmd + wheel to zoom · drag to pan · double-click to fit · ⛶ opens full size</p>
+    <div class="mermaid-wrap">
+      <div class="zoom-controls">
+        <button type="button" data-action="zoom-in" title="Zoom in">+</button>
+        <button type="button" data-action="zoom-out" title="Zoom out">&minus;</button>
+        <button type="button" data-action="zoom-fit" title="Fit">&#8634;</button>
+        <button type="button" data-action="zoom-expand" title="Open full size">&#x26F6;</button>
+        <span class="zoom-label">Loading…</span>
+      </div>
+      <div class="mermaid-viewport"><div class="mermaid-canvas"></div></div>
+    </div>
+    <script type="text/plain" class="diagram-source">
 flowchart TB
-    M["main.tsx<br/>BrowserRouter"] --> A["App.tsx<br/>ThemeProvider · nav · Routes"]
-    A --> CS["/ → CampaignsView<br/>list/create campaigns"]
+    M["main.tsx<br/>BrowserRouter + self-hosted fonts"] --> A["App.tsx<br/>ThemeProvider · top bar · Routes"]
+    A --> CS["/ → CampaignsView"]
+    A --> CW["/campaigns/new → CampaignWizard<br/>Backdrop · Character · Locations · Opening"]
     A --> CV["/campaigns/:cid → CampaignView<br/>★ play interface"]
+    A --> WC["/campaigns/:cid/world → WorldView<br/>(campaign-copy mode, fork banner, no Tags tab)"]
     A --> WS["/worlds → WorldsView"]
     A --> WV["/worlds/:wid → WorldView<br/>tabbed editor"]
     A --> CF["/config → ConfigView"]
 
-    CV --> CP["CastPanel<br/>cast · greetings · opener"]
-    WV --> CE["CharacterEditor"]
-    WV --> PE["PCEditor"]
-    WV --> EE["EntityEditor<br/>lore / locations"]
-    WV --> GE["GreetingEditor + edges"]
-    WV --> TE["TagEditor"]
-    WV --> LI["LorebookImport"]
-    CF --> MC["ModelCombobox<br/>openrouter catalog"]
+    CV --> RAIL["Scene rail + NewSceneChooser"]
+    CV --> STREAM["Transcript: speaker plates,<br/>grouped runs, edit/reroll gutter"]
+    CV --> INS["SceneInspector: story-so-far ·<br/>cast · location · date ·<br/>context token breakdown"]
+    CV --> PANELS["CastPanel (empty scene) ·<br/>End-scene review · ChangesPanel"]
+    WV --> ED["CharacterEditor · PCEditor ·<br/>EntityEditor · GreetingEditor ·<br/>TagEditor · LorebookImport ·<br/>TaggingQueue"]
 
     style CV fill:#e3d4f5,stroke:#5e3f8c,stroke-width:3px,color:#1c1208
-    </pre>
+    </script>
   </div>
-  <p>Shared primitives keep the editors consistent: <code>EditableRow</code> (inline rename/delete list item used everywhere), <code>Field</code> (label + control wrapper), and the <code>ThemeProvider</code> which applies a theme by writing CSS custom properties onto <code>:root</code>. Three themes ship: <strong>occult</strong> (default), <strong>terminal</strong>, <strong>ink</strong>.</p>
-  <p>The API layer is a single facade in <code>api/client.ts</code>: a generic <code>request()</code> (JSON, throws <code>ApiError{status,detail,kind}</code> on non-2xx), <code>requestForm()</code> (multipart uploads), and <code>streamPost()</code> (the SSE driver). All endpoints are same-origin <code>/api/…</code> paths.</p>
+
+  <h4>Themes</h4>
+  <p>Three token sets in <code>theme/themes/</code> — <strong>codex</strong> (default: light parchment, hard 2–3px rules, offset block shadows, red accent), <strong>manuscript</strong> (dark brown/gold), <strong>astral</strong> (near-black indigo, cyan, starfield). <code>ThemeProvider</code> applies a theme by writing CSS custom properties onto <code>:root</code> (colors, rule widths, shadows, fonts, background <code>--fx</code>). Fonts are <strong>self-hosted via @fontsource</strong> (Big Shoulders Display / Newsreader / JetBrains Mono for codex; Cormorant + EB Garamond for manuscript; Cinzel / Spectral / Space Mono for astral).</p>
+
+  <h4>CampaignView anatomy (the play screen)</h4>
+  <ul>
+    <li><strong>Sub-header:</strong> campaign name, <code>World ▸ name ↗</code> link, <em>Changes</em> toggle, <em>End scene</em> button.</li>
+    <li><strong>Scene rail:</strong> numbered scenes (offscreen ones badged), <code>+ New Scene</code> → chooser, footer date button → calendar config.</li>
+    <li><strong>Transcript:</strong> consecutive same-speaker messages group into a <em>run</em> under one plate (portrait + name + pc/npc chip); speaker labels fuzzy-match the cast like the backend does; clicking a plate opens the <code>RecordDrawer</code>. Double-quoted spans get theme quote colors via a rehype plugin. Gutter icons: ✎ edit, ↻ guided reroll (popover) on the last post.</li>
+    <li><strong>Composer:</strong> Enter sends; empty input reads <code>Continue ▶</code> (ephemeral NPC round); offscreen scenes show a 🎬 director-note placeholder.</li>
+    <li><strong>SceneInspector:</strong> story-so-far one-liners, active-cast portrait rows, location (+ move), in-world date (+ advance), and the <strong>Context</strong> breakdown — the exact prompt sections with token counts and a % bar against the model's context length (catalog fetched once per page load).</li>
+    <li><strong>Empty scene → CastPanel:</strong> setting/date pickers (pre-filled with the suggested date), add-to-scene, and the opener box (generate → preview → <em>Use</em> or <em>Save as greeting</em>).</li>
+  </ul>
+  <p>The API layer is a single facade in <code>api/client.ts</code>: <code>request()</code> (JSON + <code>ApiError{status, detail, kind}</code>), <code>requestForm()</code> (multipart), <code>streamPost()</code> (SSE driver), plus in-flight GET de-duplication and a config cache — opening a scene fires identical GETs from several components, and they coalesce.</p>
 </section>
 
 <section id="streaming">
   <h2>The SSE Streaming Loop (frontend)</h2>
-  <p>The mirror image of the server's <code>_chat_stream</code>. <code>CampaignView</code> owns three pieces of state: <code>messages</code> (committed turns), <code>streaming</code> (the in-flight assistant text), and <code>busy/error</code>.</p>
-  <div class="diagram">
-    <pre class="mermaid">
-flowchart LR
-    subgraph send["send() — CampaignView"]
-      I["input + Enter"] --> APP["optimistic push<br/>user message"]
-      APP --> RS["runStream(start)"]
-    end
-    RS --> SP["streamPost()<br/>client.ts"]
-    SP --> PARSE["parseSSEChunk()<br/>stream.ts"]
-    PARSE -->|"{delta}"| ACC["acc += delta<br/>setStreaming(acc)"]
-    ACC --> RENDER["live render<br/>+ cursor"]
-    RENDER -.next token.-> PARSE
-    PARSE -->|"{done}"| FIN["push final assistant msg<br/>clear streaming"]
-    PARSE -->|"{error}"| ERR["error banner + Retry"]
-
-    style ACC fill:#e3d4f5,stroke:#5e3f8c,stroke-width:3px,color:#1c1208
-    </pre>
-  </div>
+  <p>The mirror image of the server's <code>_chat_stream</code>. <code>CampaignView</code> owns <code>messages</code> (committed posts), <code>streaming</code> (the in-flight blob), and <code>busy/error</code>.</p>
   <ol>
     <li><code>send()</code> optimistically appends the user message and calls <code>runStream(onEvent =&gt; api.chat(cid, sid, content, onEvent))</code>.</li>
-    <li><code>streamPost()</code> POSTs, then reads <code>res.body</code> as a byte stream, decoding into a buffer.</li>
-    <li><code>parseSSEChunk()</code> splits on <code>\n\n</code>, JSON-parses each <code>data:</code> line into a <code>ChatEvent</code>, and fires <code>onEvent</code>.</li>
-    <li>Each <code>delta</code> accumulates into <code>acc</code> and re-renders via <code>setStreaming(acc)</code> — that's the live typing effect.</li>
-    <li>On <code>done</code>, the accumulated text is committed to <code>messages</code> and <code>streaming</code> is cleared; on <code>error</code>, a readable banner appears with a Retry button.</li>
+    <li><code>streamPost()</code> POSTs, reads <code>res.body</code> via <code>getReader()</code> + <code>TextDecoder</code>; <code>parseSSEChunk()</code> splits on <code>\n\n</code>, JSON-parses each <code>data:</code> line into a <code>ChatEvent</code>, ignoring malformed fragments.</li>
+    <li>Each <code>delta</code> accumulates into <code>acc</code> → <code>setStreaming(acc)</code> — the live typing effect under a provisional plate with a blinking cursor.</li>
+    <li>On <code>done</code>, the view <strong>re-fetches the scene</strong> — the server persisted the reply as per-speaker posts, so the one streamed blob is replaced by split messages with speakers. On <code>error</code>, a readable banner + Retry.</li>
+    <li>The same plumbing drives <code>LocalizeEvent</code> and <code>ChubGalleryEvent</code> progress streams (image localization, gallery downloads).</li>
   </ol>
 </section>
 
@@ -633,118 +954,324 @@ flowchart LR
 
 <section id="stores">
   <h2>Store Module Map</h2>
-  <p>Every file under <code>backend/src/grimoire/store/</code>. This is the layer to read first if you're learning the codebase.</p>
-  <table>
+  <p>Every module under <code>backend/src/grimoire/store/</code>. This is the layer to read first when learning the codebase.</p>
+  <div class="tablewrap"><table>
     <tr><th>Module</th><th>Responsibility</th><th>Key exceptions</th></tr>
-    <tr><td><code>paths.py</code></td><td>Root resolution (<code>$GRIMOIRE_HOME</code> → bootstrap pointer → default), <code>set_data_dir</code>/<code>data_dir_info</code>, slugify, uniquify, timestamps</td><td>—</td></tr>
-    <tr><td><code>frontmatter.py</code></td><td>Tiny Markdown + frontmatter parse/dump (no YAML dep)</td><td>—</td></tr>
-    <tr><td><code>config.py</code></td><td>Global <code>config.md</code>: model, theme, key, <code>context_scan_depth</code></td><td>—</td></tr>
-    <tr><td><code>worlds.py</code></td><td>World CRUD + entity counts</td><td><code>WorldNotFound</code></td></tr>
-    <tr><td><code>campaigns.py</code></td><td>Campaign CRUD; deep-copy on create; sync manifest</td><td><code>CampaignNotFound</code></td></tr>
-    <tr><td><code>entities.py</code></td><td>Generic lore/locations CRUD + content hashing</td><td><code>EntityNotFound</code>, <code>UnknownKind</code></td></tr>
-    <tr><td><code>characters.py</code></td><td>Versioned V3 character cards + import/export</td><td><code>CharacterNotFound</code>, <code>VersionNotFound</code></td></tr>
-    <tr><td><code>cards.py</code></td><td>V2/V3 parsing; PNG <code>tEXt</code> / charx / json carriers</td><td><code>CardParseError</code></td></tr>
-    <tr><td><code>pcs.py</code></td><td>Player personas (versioned, tagged)</td><td><code>PCNotFound</code>, <code>PCVersionNotFound</code></td></tr>
-    <tr><td><code>tags.py</code></td><td>World tag vocabulary (gates PCs &amp; greetings)</td><td><code>TagNotFound</code></td></tr>
-    <tr><td><code>greetings.py</code></td><td>Greetings + plotmap edges + availability logic</td><td><code>GreetingNotFound</code></td></tr>
-    <tr><td><code>playing.py</code></td><td>Play-state: available/start-from greeting, played set</td><td><code>PlayError</code></td></tr>
-    <tr><td><code>appearances.py</code></td><td>Actor lock-in (version/role/scenes), roster, suggestions</td><td><code>AppearError</code></td></tr>
-    <tr><td><code>scenes.py</code></td><td>Scene transcripts (Markdown markers), dismissed set</td><td><code>SceneNotFound</code></td></tr>
-    <tr><td><code>sync.py</code></td><td>Three-way merge: incoming / accept / reject</td><td>—</td></tr>
-    <tr><td><code>lorebook.py</code></td><td>Import SillyTavern world-info / character_book → entities</td><td><code>LorebookError</code></td></tr>
-    <tr><td><code>assets.py</code></td><td>Per-version character images (avatar, emotions)</td><td>—</td></tr>
-    <tr><td><code>context.py</code></td><td><strong>★ message builder</strong> — cards + world-info → prompt</td><td>—</td></tr>
-  </table>
-  <div class="note"><strong>Recurring patterns to recognize:</strong> (1) <em>path-safety</em> guards reject <code>""</code>/<code>.</code>/<code>..</code>/slashes to prevent traversal; (2) <em>content hashing</em> (SHA-256 of file text) powers all sync; (3) <em>frontmatter + body</em> split is universal for human-editable records; (4) campaigns <em>copy-on-use</em> and remember a <code>base</code> hash.</div>
+    <tr><td><code>paths.py</code></td><td>Root resolution (<code>$GRIMOIRE_HOME</code> → bootstrap pointer → default), <code>set_data_dir</code>, slugify, uniquify, timestamps</td><td>—</td></tr>
+    <tr><td><code>frontmatter.py</code></td><td>Tiny Markdown + frontmatter parse/dump (no YAML dep); head-only fast parse for lists</td><td>—</td></tr>
+    <tr><td><code>config.py</code></td><td><code>config.md</code>: key, model, theme, <code>context_scan_depth</code>, <code>recap_depth</code>, <code>system_prompt</code>, quote color, transcript labels</td><td>—</td></tr>
+    <tr><td><code>worlds.py</code> / <code>campaigns.py</code></td><td>World/campaign CRUD; full deep copy on create; sync manifest; lazy backfill</td><td><code>WorldNotFound</code>, <code>CampaignNotFound</code></td></tr>
+    <tr><td><code>entities.py</code></td><td>Generic lore/locations CRUD, <code>SYNCED_KINDS</code>, content hashing, owners</td><td><code>EntityNotFound</code>, <code>UnknownKind</code></td></tr>
+    <tr><td><code>characters.py</code> / <code>pcs.py</code></td><td>Versioned V3 cards / personas, import/export, dir hashes, birthdates</td><td><code>CharacterNotFound</code>, <code>VersionNotFound</code>, <code>PCNotFound</code>, …</td></tr>
+    <tr><td><code>cards.py</code></td><td>V2/V3 parsing; PNG <code>tEXt</code> / charx / json carriers; <code>{{char}}</code> name baking</td><td><code>CardParseError</code></td></tr>
+    <tr><td><code>tags.py</code> / <code>greetings.py</code></td><td>Tag vocabulary; greetings + plotmap edges + availability + pcless</td><td><code>TagNotFound</code>, <code>GreetingNotFound</code></td></tr>
+    <tr><td><code>playing.py</code></td><td>Play-state: available greetings, marks (played/completed/skipped), start-from-greeting</td><td><code>PlayError</code></td></tr>
+    <tr><td><code>appearances.py</code></td><td>Actor lock-in (version/role/scenes/base), roster, pick/import version, cast suggestions</td><td><code>AppearError</code></td></tr>
+    <tr><td><code>scenes.py</code> / <code>scene_ids.py</code> / <code>scene_refs.py</code></td><td>Script transcripts, speaker/role derivation, reply splitting; id grammar; cross-store repointing</td><td><code>SceneNotFound</code></td></tr>
+    <tr><td><code>sync.py</code></td><td>Three-way merge, four passes: flat files, plotmap, locked + unpicked actors</td><td>—</td></tr>
+    <tr><td><code>context.py</code></td><td><strong>★ message builder</strong> — data for <code>templates/scene/</code>; activation, substitution, token counts</td><td>—</td></tr>
+    <tr><td><code>absorb.py</code> / <code>chronicle.py</code></td><td><strong>★ end-scene extraction</strong> — StagedEdits, apply; scene fact records + timeline</td><td>—</td></tr>
+    <tr><td><code>playstate.py</code> / <code>relationships.py</code> / <code>plot.py</code> / <code>changes.py</code></td><td>NPC standing state; feelings + bonds; plot threads; write-back diffs</td><td>—</td></tr>
+    <tr><td><code>taglines.py</code> / <code>dossiers.py</code></td><td>World one-liners; campaign dossiers (both LLM-assisted)</td><td>—</td></tr>
+    <tr><td><code>suggest.py</code></td><td>Scene-suggestion snapshot, prompt, tolerant parse, greeting ranking</td><td>—</td></tr>
+    <tr><td><code>calendars/</code></td><td>Provider registry on a fixed-day axis; gregorian + holidays; <code>today_facts</code></td><td><code>CalendarError</code></td></tr>
+    <tr><td><code>lorebook.py</code></td><td>Import SillyTavern world-info / character_book → entities (exact-dup skip)</td><td><code>LorebookError</code></td></tr>
+    <tr><td><code>chub.py</code> / <code>fetch.py</code></td><td>chub.ai API client; SSRF-guarded, capped, best-effort downloads</td><td><code>ChubParseError</code>, <code>ChubFetchError</code></td></tr>
+    <tr><td><code>assets.py</code> / <code>thumbs.py</code> / <code>image_subjects.py</code> / <code>localize.py</code></td><td>Image store + promote + crop focus; WebP thumbnails; who-is-in-this-image sidecars; remote-image localization</td><td>—</td></tr>
+    <tr><td><code>statcache.py</code> / <code>migrations.py</code></td><td>Stat-keyed hash memoization; startup scene-id migration</td><td>—</td></tr>
+  </table></div>
+  <div class="note"><strong>Recurring patterns to recognize:</strong> (1) <em>path-safety</em> guards reject <code>""</code>/<code>.</code>/<code>..</code>/slashes everywhere; (2) <em>content hashing</em> (SHA-256 of file text, statcache-memoized) powers all sync; (3) <em>frontmatter + body</em> is universal for human-editable records; (4) campaigns copy-everything and remember <code>base</code> hashes; (5) continuity reads <em>fail open</em> — a garbled JSON omits its prompt section, never crashes a chat.</div>
 </section>
 
 <section id="endpoints">
   <h2>API Endpoint Index</h2>
-  <p>All under <code>/api</code>. Route order in <code>routes.py</code> is significant: literal sub-paths (<code>/scenes</code>, <code>/incoming</code>, <code>/tags</code>…) are declared <em>before</em> the generic <code>/{kind}</code> entity routes so they're never captured as an entity kind.</p>
+  <p>All under <code>/api</code>. Route order in <code>routes.py</code> is significant: literal sub-paths (<code>/scenes</code>, <code>/incoming</code>, <code>/tags</code>, <code>/chronicle</code>, <code>/scene-suggestions</code>…) are declared <em>before</em> the generic <code>/{kind}</code> entity routes so they're never captured as an entity kind. <span class="pill sse">SSE</span> marks <code>text/event-stream</code> responses.</p>
 
   <h4>Config &amp; Worlds</h4>
-  <table>
+  <div class="tablewrap"><table>
     <tr><th>Method</th><th>Path</th><th>Purpose</th></tr>
-    <tr><td><span class="pill get">GET</span><span class="pill put">PUT</span></td><td><code>/config</code></td><td>Read / update model, theme, key</td></tr>
+    <tr><td><span class="pill get">GET</span><span class="pill put">PUT</span></td><td><code>/config</code> · <code>/config/data-dir</code></td><td>Model, theme, key, labels, depths · storage root</td></tr>
     <tr><td><span class="pill get">GET</span><span class="pill post">POST</span></td><td><code>/worlds</code></td><td>List / create worlds</td></tr>
     <tr><td><span class="pill get">GET</span><span class="pill put">PUT</span><span class="pill del">DEL</span></td><td><code>/worlds/{wid}</code></td><td>Read / rename / delete a world</td></tr>
     <tr><td><span class="pill get">GET</span></td><td><code>/worlds/{wid}/campaigns</code></td><td>Campaigns of a world + pending-sync counts</td></tr>
-    <tr><td colspan="3" class="tag">…plus full CRUD for <code>/worlds/{wid}/</code> → <code>characters</code>, <code>pcs</code>, <code>tags</code>, <code>greetings</code>, and generic <code>{kind}</code> (lore/locations), with character import/export, images, and lorebook parse/import.</td></tr>
-  </table>
+    <tr><td colspan="3" class="tag">…plus full world-scoped CRUD for <code>characters</code> (versions, import json/png/charx, export, birthdate, tagline + generate, images + promote + focus, localize <span class="pill sse">SSE</span>, chub import/link/gallery <span class="pill sse">SSE</span>/lorebooks), <code>pcs</code>, <code>tags</code>, <code>greetings</code> (+ edges, image subjects, untagged queue), lorebook parse/import, and generic <code>{kind}</code> (lore/locations) with entity images.</td></tr>
+  </table></div>
 
-  <h4>Campaigns &amp; Play</h4>
-  <table>
+  <h4>Campaigns</h4>
+  <div class="tablewrap"><table>
     <tr><th>Method</th><th>Path</th><th>Purpose</th></tr>
-    <tr><td><span class="pill get">GET</span><span class="pill post">POST</span></td><td><code>/campaigns</code></td><td>List / create (from a world)</td></tr>
-    <tr><td><span class="pill get">GET</span><span class="pill put">PUT</span><span class="pill del">DEL</span></td><td><code>/campaigns/{cid}</code></td><td>Read / rename / delete</td></tr>
+    <tr><td><span class="pill get">GET</span><span class="pill post">POST</span></td><td><code>/campaigns</code></td><td>List (scene counts) / create from a world (full copy)</td></tr>
+    <tr><td><span class="pill get">GET</span><span class="pill put">PUT</span><span class="pill del">DEL</span></td><td><code>/campaigns/{cid}</code></td><td>Read (embeds world name; backfills legacy copies) / rename / delete</td></tr>
     <tr><td><span class="pill get">GET</span></td><td><code>/campaigns/{cid}/incoming</code></td><td>Pending sync changes (new/update/conflict)</td></tr>
-    <tr><td><span class="pill post">POST</span></td><td><code>/campaigns/{cid}/incoming/accept</code> · <code>/reject</code></td><td>Reconcile selected refs</td></tr>
-    <tr><td><span class="pill get">GET</span><span class="pill post">POST</span></td><td><code>/campaigns/{cid}/scenes</code></td><td>List / create scenes</td></tr>
-    <tr><td><span class="pill post">POST</span></td><td><code>/campaigns/{cid}/scenes/{sid}/chat</code></td><td><strong>Send a turn → SSE stream</strong></td></tr>
-    <tr><td><span class="pill post">POST</span></td><td><code>/campaigns/{cid}/scenes/{sid}/retry</code></td><td>Re-generate last reply → SSE</td></tr>
-    <tr><td><span class="pill post">POST</span></td><td><code>/campaigns/{cid}/scenes/{sid}/opener</code></td><td>Ephemeral world-informed opener → SSE</td></tr>
-    <tr><td><span class="pill get">GET</span><span class="pill post">POST</span></td><td><code>/campaigns/{cid}/scenes/{sid}/cast</code></td><td>Read / add to scene cast</td></tr>
-    <tr><td><span class="pill get">GET</span></td><td><code>/campaigns/{cid}/scenes/{sid}/suggestions</code></td><td>Mentioned-but-absent characters</td></tr>
-    <tr><td><span class="pill post">POST</span></td><td><code>/campaigns/{cid}/scenes/{sid}/start-from-greeting</code></td><td>Seed scene from a greeting</td></tr>
-  </table>
-  <p class="tag">SSE endpoints (chat / retry / opener) return <code>text/event-stream</code> with <code>{delta}</code>, <code>{done}</code>, or <code>{error:{detail,kind}}</code> events.</p>
+    <tr><td><span class="pill post">POST</span></td><td><code>…/incoming/accept</code> · <code>…/incoming/reject</code></td><td>Reconcile selected refs</td></tr>
+    <tr><td><span class="pill get">GET</span></td><td><code>/campaigns/{cid}/changes</code> · <code>…/chronicle</code></td><td>Write-back diffs (Changes tab) · last 50 chronicle records</td></tr>
+    <tr><td><span class="pill get">GET</span><span class="pill put">PUT</span></td><td><code>/campaigns/{cid}/calendar</code></td><td>Campaign calendar config</td></tr>
+    <tr><td><span class="pill post">POST</span></td><td><code>/campaigns/{cid}/scene-suggestions</code></td><td>LLM premises + greeting ranking + next date</td></tr>
+    <tr><td><span class="pill post">POST</span></td><td><code>…/{kind}/{aid}/pick-version</code> · <code>…/import-version</code></td><td>Lock an actor's version / swap it from the world</td></tr>
+    <tr><td colspan="3" class="tag">…plus campaign-scoped CRUD mirroring the world side: characters &amp; PCs (version create 409s when locked), greetings (+ edges, marks, <code>available?after=</code>), generic <code>{kind}</code> entities + images.</td></tr>
+  </table></div>
+
+  <h4>Scenes &amp; Play</h4>
+  <div class="tablewrap"><table>
+    <tr><th>Method</th><th>Path</th><th>Purpose</th></tr>
+    <tr><td><span class="pill get">GET</span><span class="pill post">POST</span></td><td><code>/campaigns/{cid}/scenes</code></td><td>List / create (<code>title?, suggested_date?, pcless</code>)</td></tr>
+    <tr><td><span class="pill post">POST</span> <span class="pill sse">SSE</span></td><td><code>…/scenes/{sid}/chat</code></td><td>Send a turn (or ephemeral director note) → stream</td></tr>
+    <tr><td><span class="pill post">POST</span> <span class="pill sse">SSE</span></td><td><code>…/scenes/{sid}/retry</code> · <code>…/regenerate</code></td><td>Re-stream · drop last run + optional guidance</td></tr>
+    <tr><td><span class="pill post">POST</span> <span class="pill sse">SSE</span></td><td><code>…/scenes/{sid}/opener</code></td><td>Ephemeral full-context opener preview</td></tr>
+    <tr><td><span class="pill post">POST</span></td><td><code>…/scenes/{sid}/first-post</code> · <code>…/start-from-greeting</code></td><td>Adopt an opener · seed from a greeting (retitles)</td></tr>
+    <tr><td><span class="pill get">GET</span><span class="pill post">POST</span></td><td><code>…/scenes/{sid}/cast</code> (+ <code>/batch</code>, <code>/{kind}/{id}</code>)</td><td>Read / add cast (batch-seed a suggestion's whole cast)</td></tr>
+    <tr><td><span class="pill get">GET</span><span class="pill put">PUT</span></td><td><code>…/scenes/{sid}/location</code> · <code>…/datetime</code></td><td>Location history · in-world date (+ suggested pre-fill)</td></tr>
+    <tr><td><span class="pill get">GET</span></td><td><code>…/scenes/{sid}/context</code> · <code>…/suggestions</code></td><td>Prompt-section token breakdown · mentioned-but-absent cast</td></tr>
+    <tr><td><span class="pill post">POST</span><span class="pill put">PUT</span></td><td><code>…/scenes/{sid}/absorb</code> · <code>…/chronicle</code></td><td>Extract + StagedEdits (and dossier refresh) · save approved result</td></tr>
+    <tr><td><span class="pill put">PUT</span></td><td><code>…/scenes/{sid}/messages/{index}</code></td><td>Edit a stored post</td></tr>
+  </table></div>
+  <p class="tag">SSE chat endpoints emit <code>{delta}</code>… then <code>{done}</code> or <code>{error:{detail,kind}}</code>. Non-streaming LLM endpoints (absorb, scene-suggestions, tagline) map upstream failures to 502 and a missing key to 409 <code>{kind:"missing_key"}</code>.</p>
 </section>
 
 <div class="toc-foot" style="margin:60px 0 20px">
-  Generated as a static explainer for the Grimoire codebase. Diagrams: Mermaid (loaded from CDN). Re-read the source for ground truth — <code>store/context.py</code> is the best 65 lines to start with.
+  Generated as a static explainer for the Grimoire codebase · last regenerated 2026-07-05 at commit <code>0361e4f3</code>.
+  Diagrams: Mermaid (CDN). Re-read the source for ground truth — <code>store/context.py</code> + <code>templates/scene/system.j2</code> are the best place to start, then <code>store/absorb.py</code> for the continuity loop.
 </div>
 
 </main>
 </div>
 
-<script>
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+
+  const config = {
+    fitPadding: 26, minHeight: 300, maxHeightPx: 900, maxHeightVh: 0.85,
+    maxInitialZoom: 1.6, minZoom: 0.08, maxZoom: 6, zoomStep: 0.14,
+    readabilityFloor: 0.55
+  };
+  const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
+  let activeDrag = null;
+  addEventListener('mousemove', e => activeDrag?.onMove(e));
+  addEventListener('mouseup', () => { activeDrag?.onEnd(); activeDrag = null; });
+
   mermaid.initialize({
-    startOnLoad:true,
-    theme:'base',
-    themeVariables:{
-      darkMode:false,
-      fontFamily:'Georgia, serif',
-      fontSize:'15px',
-      background:'#fbf8f1',
-      /* flowchart nodes */
-      mainBkg:'#efe1c2',
-      primaryColor:'#efe1c2',
-      primaryBorderColor:'#7a5c22',
-      primaryTextColor:'#1c1208',
-      nodeTextColor:'#1c1208',
-      secondaryColor:'#e3d4f5',
-      secondaryBorderColor:'#5e3f8c',
-      secondaryTextColor:'#1c1208',
-      tertiaryColor:'#ffffff',
-      tertiaryBorderColor:'#7a5c22',
-      tertiaryTextColor:'#1c1208',
-      /* edges + clusters */
-      lineColor:'#5b4636',
-      edgeLabelBackground:'#fbf8f1',
-      clusterBkg:'#f4ecda',
-      clusterBorder:'#7a5c22',
-      titleColor:'#3a2a12',
-      /* sequence diagram */
-      actorBkg:'#efe1c2',
-      actorBorder:'#7a5c22',
-      actorTextColor:'#1c1208',
-      actorLineColor:'#8a7a62',
-      signalColor:'#3a2a12',
-      signalTextColor:'#1c1208',
-      labelBoxBkgColor:'#e3d4f5',
-      labelBoxBorderColor:'#5e3f8c',
-      labelTextColor:'#1c1208',
-      loopTextColor:'#1c1208',
-      noteBkgColor:'#fff1c2',
-      noteBorderColor:'#b88a2e',
-      noteTextColor:'#1c1208',
-      sequenceNumberColor:'#ffffff',
-      activationBkgColor:'#e3d4f5',
-      activationBorderColor:'#5e3f8c'
+    startOnLoad: false,
+    theme: 'base',
+    themeVariables: {
+      darkMode: false,
+      fontFamily: 'Georgia, serif',
+      fontSize: '15px',
+      background: '#fbf8f1',
+      mainBkg: '#efe1c2',
+      primaryColor: '#efe1c2',
+      primaryBorderColor: '#7a5c22',
+      primaryTextColor: '#1c1208',
+      nodeTextColor: '#1c1208',
+      secondaryColor: '#e3d4f5',
+      secondaryBorderColor: '#5e3f8c',
+      secondaryTextColor: '#1c1208',
+      tertiaryColor: '#ffffff',
+      tertiaryBorderColor: '#7a5c22',
+      tertiaryTextColor: '#1c1208',
+      lineColor: '#5b4636',
+      edgeLabelBackground: '#fbf8f1',
+      clusterBkg: '#f4ecda',
+      clusterBorder: '#7a5c22',
+      titleColor: '#3a2a12',
+      actorBkg: '#efe1c2',
+      actorBorder: '#7a5c22',
+      actorTextColor: '#1c1208',
+      actorLineColor: '#8a7a62',
+      signalColor: '#3a2a12',
+      signalTextColor: '#1c1208',
+      labelBoxBkgColor: '#e3d4f5',
+      labelBoxBorderColor: '#5e3f8c',
+      labelTextColor: '#1c1208',
+      loopTextColor: '#1c1208',
+      noteBkgColor: '#fff1c2',
+      noteBorderColor: '#b88a2e',
+      noteTextColor: '#1c1208',
+      sequenceNumberColor: '#ffffff',
+      activationBkgColor: '#e3d4f5',
+      activationBorderColor: '#5e3f8c'
     },
-    flowchart:{curve:'basis',useMaxWidth:true},
-    sequence:{useMaxWidth:true}
+    flowchart: { curve: 'basis', useMaxWidth: false },
+    sequence: { useMaxWidth: false }
   });
+
+  function initDiagram(shell) {
+    const wrap = shell.querySelector('.mermaid-wrap');
+    const viewport = shell.querySelector('.mermaid-viewport');
+    const canvas = shell.querySelector('.mermaid-canvas');
+    const source = shell.querySelector('.diagram-source');
+    const label = shell.querySelector('.zoom-label');
+    if (!wrap || !viewport || !canvas || !source || !label) return;
+
+    let zoom = 1, fitMode = 'contain', panX = 0, panY = 0, svgW = 0, svgH = 0;
+    let sx = 0, sy = 0, spx = 0, spy = 0;
+    let touchDist = 0, touchCx = 0, touchCy = 0;
+
+    function constrainPan() {
+      const vpW = viewport.clientWidth, vpH = viewport.clientHeight;
+      const rW = svgW * zoom, rH = svgH * zoom, pad = config.fitPadding;
+      panX = (rW + pad * 2 <= vpW) ? (vpW - rW) / 2 : clamp(panX, vpW - rW - pad, pad);
+      panY = (rH + pad * 2 <= vpH) ? (vpH - rH) / 2 : clamp(panY, vpH - rH - pad, pad);
+    }
+    function applyTransform() {
+      const svg = canvas.querySelector('svg');
+      if (!svg || !svgW) return;
+      constrainPan();
+      svg.style.width = (svgW * zoom) + 'px';
+      svg.style.height = (svgH * zoom) + 'px';
+      canvas.style.transform = `translate(${panX}px, ${panY}px)`;
+      label.textContent = Math.round(zoom * 100) + '%';
+    }
+    function canPan() {
+      return svgW * zoom + config.fitPadding * 2 > viewport.clientWidth
+          || svgH * zoom + config.fitPadding * 2 > viewport.clientHeight;
+    }
+    function computeSmartFit() {
+      const aW = Math.max(80, viewport.clientWidth - config.fitPadding * 2);
+      const aH = Math.max(80, viewport.clientHeight - config.fitPadding * 2);
+      const contain = Math.min(aW / svgW, aH / svgH);
+      let z = contain;
+      if (contain < config.readabilityFloor) {
+        z = (svgH / svgW >= viewport.clientHeight / Math.max(viewport.clientWidth, 1))
+          ? aW / svgW : aH / svgH;
+      }
+      return clamp(z, config.minZoom, config.maxInitialZoom);
+    }
+    function fitDiagram() {
+      if (!svgW) return;
+      zoom = computeSmartFit(); fitMode = 'fit';
+      panX = (viewport.clientWidth - svgW * zoom) / 2;
+      panY = (viewport.clientHeight - svgH * zoom) / 2;
+      applyTransform();
+    }
+    function zoomAround(factor, cx, cy) {
+      const next = clamp(zoom * factor, config.minZoom, config.maxZoom);
+      const ratio = next / zoom;
+      panX = cx - ratio * (cx - panX);
+      panY = cy - ratio * (cy - panY);
+      zoom = next; fitMode = 'custom';
+      applyTransform();
+    }
+    function readSvgNaturalSize(svg) {
+      let w = 0, h = 0;
+      if (svg.viewBox?.baseVal?.width > 0) { w = svg.viewBox.baseVal.width; h = svg.viewBox.baseVal.height; }
+      if (!w) { w = parseFloat(svg.getAttribute('width')) || 0; h = parseFloat(svg.getAttribute('height')) || 0; }
+      if (!w) { try { const b = svg.getBBox(); w = b.width; h = b.height; } catch (e) {} }
+      if (!w) { const r = svg.getBoundingClientRect(); w = r.width || 1000; h = r.height || 700; }
+      if (!svg.getAttribute('viewBox')) svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+      return { w, h };
+    }
+    function setAdaptiveHeight() {
+      if (!svgW) return;
+      const usableW = Math.max(280, wrap.getBoundingClientRect().width - 2);
+      const idealH = (svgH / svgW) * usableW + config.fitPadding * 2;
+      const maxVp = Math.floor(innerHeight * config.maxHeightVh);
+      const hardMax = Math.min(config.maxHeightPx, Math.max(config.minHeight + 40, maxVp));
+      wrap.style.height = Math.round(clamp(idealH, config.minHeight, hardMax)) + 'px';
+    }
+    function openInNewTab() {
+      const svg = canvas.querySelector('svg');
+      if (!svg) return;
+      const clone = svg.cloneNode(true);
+      clone.style.width = ''; clone.style.height = '';
+      const html = `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Diagram — Grimoire explainer</title><style>
+      body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+      background:#fbf8f1;padding:40px;box-sizing:border-box}
+      svg{max-width:100%;max-height:92vh;height:auto}
+      </style></head><body>${clone.outerHTML}</body></html>`;
+      open(URL.createObjectURL(new Blob([html], { type: 'text/html' })), '_blank');
+    }
+
+    async function render() {
+      try {
+        const code = source.textContent.trim();
+        if (!code) { label.textContent = 'Empty source'; return; }
+        const id = 'd' + Math.random().toString(36).slice(2, 10);
+        const { svg } = await mermaid.render(id, code);
+        const parsed = new DOMParser().parseFromString(svg, 'text/html');
+        const parsedSvg = parsed.body.querySelector('svg');
+        if (!parsedSvg) { label.textContent = 'Render failed'; return; }
+        canvas.replaceChildren(document.adoptNode(parsedSvg));
+        const svgNode = canvas.querySelector('svg');
+        const size = readSvgNaturalSize(svgNode);
+        svgW = size.w; svgH = size.h;
+        svgNode.removeAttribute('width');
+        svgNode.removeAttribute('height');
+        svgNode.style.maxWidth = 'none';
+        svgNode.style.display = 'block';
+        setAdaptiveHeight();
+        fitDiagram();
+      } catch (err) {
+        console.error('Mermaid render failed:', err);
+        label.textContent = 'Error: ' + (err && err.message ? err.message : 'render failed');
+      }
+    }
+
+    const actions = {
+      'zoom-in': () => zoomAround(1 + config.zoomStep, viewport.clientWidth / 2, viewport.clientHeight / 2),
+      'zoom-out': () => zoomAround(1 / (1 + config.zoomStep), viewport.clientWidth / 2, viewport.clientHeight / 2),
+      'zoom-fit': fitDiagram,
+      'zoom-expand': openInNewTab
+    };
+    Object.entries(actions).forEach(([action, handler]) => {
+      wrap.querySelector(`[data-action="${action}"]`)?.addEventListener('click', handler);
+    });
+    viewport.addEventListener('dblclick', fitDiagram);
+    viewport.addEventListener('wheel', e => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        const rect = viewport.getBoundingClientRect();
+        zoomAround(e.deltaY < 0 ? 1 + config.zoomStep : 1 / (1 + config.zoomStep),
+                   e.clientX - rect.left, e.clientY - rect.top);
+        return;
+      }
+      if (canPan()) { e.preventDefault(); panX -= e.deltaX; panY -= e.deltaY; applyTransform(); }
+    }, { passive: false });
+    viewport.addEventListener('mousedown', e => {
+      if (e.target.closest('.zoom-controls') || !canPan()) return;
+      wrap.classList.add('is-panning');
+      sx = e.clientX; sy = e.clientY; spx = panX; spy = panY;
+      e.preventDefault();
+      activeDrag = {
+        onMove: ev => { panX = spx + (ev.clientX - sx); panY = spy + (ev.clientY - sy); applyTransform(); },
+        onEnd: () => wrap.classList.remove('is-panning')
+      };
+    });
+    viewport.addEventListener('touchstart', e => {
+      if (e.touches.length === 1) {
+        sx = e.touches[0].clientX; sy = e.touches[0].clientY; spx = panX; spy = panY;
+      } else if (e.touches.length === 2) {
+        const dx = e.touches[0].clientX - e.touches[1].clientX;
+        const dy = e.touches[0].clientY - e.touches[1].clientY;
+        touchDist = Math.sqrt(dx * dx + dy * dy);
+        const r = viewport.getBoundingClientRect();
+        touchCx = (e.touches[0].clientX + e.touches[1].clientX) / 2 - r.left;
+        touchCy = (e.touches[0].clientY + e.touches[1].clientY) / 2 - r.top;
+      }
+    }, { passive: true });
+    viewport.addEventListener('touchmove', e => {
+      if (e.touches.length === 1 && canPan()) {
+        if (touchDist > 0) { sx = e.touches[0].clientX; sy = e.touches[0].clientY; spx = panX; spy = panY; touchDist = 0; }
+        e.preventDefault();
+        panX = spx + (e.touches[0].clientX - sx);
+        panY = spy + (e.touches[0].clientY - sy);
+        applyTransform();
+      } else if (e.touches.length === 2 && touchDist > 0) {
+        e.preventDefault();
+        const dx = e.touches[0].clientX - e.touches[1].clientX;
+        const dy = e.touches[0].clientY - e.touches[1].clientY;
+        const d = Math.sqrt(dx * dx + dy * dy);
+        zoomAround(d / touchDist, touchCx, touchCy);
+        touchDist = d;
+      }
+    }, { passive: false });
+
+    new ResizeObserver(() => { if (svgW) { setAdaptiveHeight(); fitDiagram(); } }).observe(wrap);
+    render();
+  }
+
+  document.querySelectorAll('.diagram-shell').forEach(initDiagram);
 </script>
 </body>
 </html>
