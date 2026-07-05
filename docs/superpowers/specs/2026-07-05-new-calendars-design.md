@@ -149,7 +149,13 @@ this pattern, which they can't (they contain no `:`).
 
 - **New:** `GET /api/campaigns/{cid}/calendar/months?year=N` →
   `{"months": [{key, name, days}]}` from the campaign's **primary** provider.
-  400 with detail on `CalendarError` / non-integer year.
+  400 with detail on `CalendarError`; non-integer year is a FastAPI 422.
+- **New:** `GET /api/worlds/{wid}/calendar/months?year=N` — same shape against
+  the world's calendar config (the PC/Character birthdate editors are
+  world-scoped, so the picker needs a world-side source of months).
+- **Campaign creation:** `NewCampaign` gains optional `calendar` (provider id);
+  `create_campaign` sets `primary.provider` and marks the config `confirmed`
+  when given (the wizard now makes an explicit choice). Unknown provider → 400.
 - Everything else rides existing endpoints: calendar GET/PUT already carries
   `provider`; scene datetime PUT already normalizes via the provider and 400s
   on `CalendarError`.
