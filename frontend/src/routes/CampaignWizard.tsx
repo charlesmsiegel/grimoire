@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  api, type Availability, type Persona, type WorldMeta,
+  api, type Availability, type PCSummary, type Persona, type WorldMeta,
 } from "../api/client";
 import type { ChatEvent } from "../api/stream";
 
@@ -25,6 +25,8 @@ export default function CampaignWizard({ keySet }: { keySet: boolean }) {
   const [tags, setTags] = useState<string[]>([]);
   const [tagInput, setTagInput] = useState("");
   const [worldTags, setWorldTags] = useState<string[]>([]);
+  const [worldPCs, setWorldPCs] = useState<PCSummary[]>([]);
+  const [pickedPC, setPickedPC] = useState<string | null>(null); // an existing world PC to play
 
   // step 3
   const [locations, setLocations] = useState<LocationDraft[]>([{ name: "", body: "", keys: "" }]);
@@ -46,6 +48,8 @@ export default function CampaignWizard({ keySet }: { keySet: boolean }) {
   useEffect(() => {
     if (!world) return;
     api.listTags(world).then((m) => setWorldTags(Object.values(m))).catch(() => setWorldTags([]));
+    setPickedPC(null); // a pick belongs to one world
+    api.listPCs({ kind: "world", id: world }).then(setWorldPCs).catch(() => setWorldPCs([]));
   }, [world]);
 
   function addTag() {
@@ -63,11 +67,18 @@ export default function CampaignWizard({ keySet }: { keySet: boolean }) {
     setBusy(true);
     try {
       const { id: cid } = await api.createCampaign(name.trim(), world, region || undefined);
-      const { pc, version } = await api.createCampaignPC(cid, {
-        name: persona.name.trim(), tags, persona: { ...persona, name: persona.name.trim() },
-      });
+      // an existing world PC is already copied into the new campaign — just seat it
+      let cast: { kind: "pcs"; id: string; version?: string };
+      if (pickedPC) {
+        cast = { kind: "pcs", id: pickedPC };
+      } else {
+        const { pc, version } = await api.createCampaignPC(cid, {
+          name: persona.name.trim(), tags, persona: { ...persona, name: persona.name.trim() },
+        });
+        cast = { kind: "pcs", id: pc, version };
+      }
       const { id: sid } = await api.createScene(cid);
-      await api.addToCast(cid, sid, { kind: "pcs", id: pc, version });
+      await api.addToCast(cid, sid, cast);
       for (const loc of locations.filter((l) => l.name.trim())) {
         await api.createEntity({ kind: "campaign", id: cid }, "locations",
           { name: loc.name.trim(), body: loc.body, keys: loc.keys });
@@ -112,8 +123,9 @@ export default function CampaignWizard({ keySet }: { keySet: boolean }) {
   }
 
   const canNext1 = name.trim() !== "" && world !== "";
-  const canNext2 = persona.name.trim() !== "";
-  const who = persona.name.trim() || "your character";
+  const canNext2 = pickedPC !== null || persona.name.trim() !== "";
+  const who = (pickedPC && worldPCs.find((p) => p.id === pickedPC)?.name)
+    || persona.name.trim() || "your character";
 
   return (
     <div className="page page-narrow view-anim wizard">
@@ -179,8 +191,25 @@ export default function CampaignWizard({ keySet }: { keySet: boolean }) {
 
       {step === 2 && (
         <div className="wizard-body">
-          <h3>Create your character</h3>
+          <h3>{worldPCs.length > 0 ? "Choose your character" : "Create your character"}</h3>
           <p className="wizard-intro">The player character you’ll inhabit. Tags unlock matching openings.</p>
+          {worldPCs.length > 0 && (
+            <div className="field">
+              <div className="role">Play an existing character</div>
+              <div className="chips">
+                {worldPCs.map((p) => (
+                  <button key={p.id} className={"chip" + (pickedPC === p.id ? " on" : "")}
+                          onClick={() => setPickedPC(pickedPC === p.id ? null : p.id)}>
+                    {p.name}{p.tags.length > 0 ? ` · ${p.tags.join(", ")}` : ""}
+                  </button>
+                ))}
+              </div>
+              <div className="field-hint">
+                {pickedPC ? "Click again to create someone new instead." : "— or create someone new below —"}
+              </div>
+            </div>
+          )}
+          {!pickedPC && <>
           <div className="field">
             <label htmlFor="wiz-pc-name">Character name</label>
             <input id="wiz-pc-name" type="text" value={persona.name}
@@ -223,6 +252,7 @@ export default function CampaignWizard({ keySet }: { keySet: boolean }) {
               <button className="subtle" onClick={addTag} disabled={!tagInput.trim()}>Add</button>
             </div>
           </div>
+          </>}
           <div className="wizard-footer">
             <button className="subtle" onClick={() => setStep(1)}>Back</button>
             <button className="btn-accent" disabled={!canNext2} onClick={() => setStep(3)}>Next ▸</button>
