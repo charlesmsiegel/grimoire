@@ -62,7 +62,7 @@ export type Scene = { meta: { id: string; title: string }; messages: Message[] }
 // entities (locations | lore)
 export type EntityKind = "locations" | "lore";
 export type EntityScope = { kind: "world" | "campaign"; id: string };
-export type EntitySummary = { id: string; name: string; keys?: string; owners?: string; has_image?: boolean };
+export type EntitySummary = { id: string; name: string; keys?: string; owners?: string; has_image?: boolean; image_v?: string | null };
 export type EntityDetail = { meta: { id: string; name: string; keys?: string; owners?: string }; body: string };
 
 // characters (V3 cards)
@@ -343,7 +343,7 @@ export const api = {
   entityImageUrl: (scope: EntityScope, kind: EntityKind, eid: string, name: string) =>
     `${entityBase(scope)}/${kind}/${eid}/images/${name}`,
   listEntityImages: (scope: EntityScope, kind: EntityKind, eid: string) =>
-    request<{ name: string; ext: string }[]>("GET", `${entityBase(scope)}/${kind}/${eid}/images`),
+    request<{ name: string; ext: string; v: string }[]>("GET", `${entityBase(scope)}/${kind}/${eid}/images`),
   putEntityImage: (scope: EntityScope, kind: EntityKind, eid: string, name: string, file: File) => {
     const form = new FormData();
     form.append("file", file);

@@ -3,11 +3,16 @@ import pytest
 from grimoire.store import assets
 
 
+def _named(imgs):
+    """(name, ext) pairs — the identity part of a listing, ignoring the v token."""
+    return [(i["name"], i["ext"]) for i in imgs]
+
+
 def test_put_list_get_round_trip(tmp_path):
     assert assets.list_images(tmp_path, "sera", "default") == []
     ext = assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"\x89PNG", "png")
     assert ext == "png"
-    assert assets.list_images(tmp_path, "sera", "default") == [{"name": "avatar", "ext": "png"}]
+    assert _named(assets.list_images(tmp_path, "sera", "default")) == [("avatar", "png")]
     p = assets.image_path(tmp_path, "sera", "default", "avatar")
     assert p is not None and p.read_bytes() == b"\x89PNG"
 
@@ -16,7 +21,7 @@ def test_replace_with_different_ext_leaves_one_file(tmp_path):
     assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"a", "png")
     assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"b", "jpg")
     imgs = assets.list_images(tmp_path, "sera", "default")
-    assert imgs == [{"name": "avatar", "ext": "jpg"}]  # exactly one, new ext
+    assert _named(imgs) == [("avatar", "jpg")]  # exactly one, new ext
     assert assets.image_path(tmp_path, "sera", "default", "avatar").read_bytes() == b"b"
 
 
@@ -80,7 +85,7 @@ def test_focus_round_trip_and_clamp(tmp_path):
 def test_focus_sidecar_not_listed_as_image(tmp_path):
     assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"a", "png")
     assets.write_focus(tmp_path, "sera", "default", 30)
-    assert assets.list_images(tmp_path, "sera", "default") == [{"name": "avatar", "ext": "png"}]
+    assert _named(assets.list_images(tmp_path, "sera", "default")) == [("avatar", "png")]
 
 
 def test_focus_cleared_when_avatar_changes(tmp_path):
@@ -107,7 +112,20 @@ def test_base_param_roots_other_kinds(tmp_path):
     assert p is not None and "locations" in p.parts
     # not visible under the default characters/ base
     assert assets.image_path(tmp_path, "docks", "default", "avatar") is None
-    assert assets.list_images(tmp_path, "docks", "default", base="locations") == [
-        {"name": "avatar", "ext": "png"}]
+    assert _named(assets.list_images(tmp_path, "docks", "default", base="locations")) == [
+        ("avatar", "png")]
     assets.delete_image(tmp_path, "docks", "default", "avatar", base="locations")
     assert assets.image_path(tmp_path, "docks", "default", "avatar", base="locations") is None
+
+
+def test_list_images_version_token_tracks_content(tmp_path):
+    from grimoire.store import assets
+
+    assets.put_image(tmp_path, "c", "v1", "avatar", b"png-one", "png")
+    first = assets.list_images(tmp_path, "c", "v1")
+    assert first[0]["v"]
+    import os
+    p = tmp_path / "characters" / "c" / "assets" / "v1" / "avatar.png"
+    os.utime(p, ns=(p.stat().st_atime_ns, p.stat().st_mtime_ns + 1_000_000))
+    second = assets.list_images(tmp_path, "c", "v1")
+    assert second[0]["v"] != first[0]["v"]

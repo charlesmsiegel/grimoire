@@ -124,7 +124,8 @@ def test_character_image_routes(client):
     files = {"file": ("a.png", io.BytesIO(b"\x89PNGdata"), "image/png")}
     r = client.put(f"{base}/avatar", files=files)
     assert r.status_code == 200 and r.json() == {"name": "avatar", "ext": "png"}
-    assert client.get(base).json() == [{"name": "avatar", "ext": "png"}]
+    listed = client.get(base).json()
+    assert [(i["name"], i["ext"]) for i in listed] == [("avatar", "png")] and listed[0]["v"]
     got = client.get(f"{base}/avatar")
     assert got.status_code == 200 and got.content == b"\x89PNGdata"
     assert got.headers["content-type"].startswith("image/png")
@@ -1961,3 +1962,39 @@ def test_large_json_responses_are_gzipped(client):
     assert r.status_code == 200
     assert r.headers.get("content-encoding") == "gzip"
     assert r.json()["body"].strip() == body.strip()
+
+
+# ---- image caching ----
+def _png_upload(client, wid, cid):
+    return client.put(
+        f"/api/worlds/{wid}/characters/{cid}/versions/default/images/avatar",
+        files={"file": ("a.png", io.BytesIO(b"png-bytes"), "image/png")})
+
+
+def test_versioned_image_url_is_immutable_unversioned_revalidates(client):
+    wid = _world(client)
+    cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Ada"}).json()["character"]
+    assert _png_upload(client, wid, cid).status_code == 200
+    base = f"/api/worlds/{wid}/characters/{cid}/versions/default/images/avatar"
+    plain = client.get(base)
+    assert plain.headers["cache-control"] == "no-cache"
+    assert plain.headers.get("etag")
+    v = client.get(f"/api/worlds/{wid}/characters/{cid}/versions/default/images").json()[0]["v"]
+    versioned = client.get(f"{base}?v={v}")
+    assert versioned.status_code == 200
+    assert "immutable" in versioned.headers["cache-control"]
+
+
+def test_entity_list_exposes_image_version(client):
+    wid = _world(client)
+    client.post(f"/api/worlds/{wid}/locations", json={"name": "Docks"})
+    up = client.put(f"/api/worlds/{wid}/locations/docks/images/avatar",
+                    files={"file": ("a.png", io.BytesIO(b"png-bytes"), "image/png")})
+    assert up.status_code == 200
+    items = client.get(f"/api/worlds/{wid}/locations").json()
+    assert items[0]["has_image"] is True
+    assert items[0]["image_v"]
+    client.post(f"/api/worlds/{wid}/locations", json={"name": "Bare"})
+    items = client.get(f"/api/worlds/{wid}/locations").json()
+    bare = next(i for i in items if i["id"] == "bare")
+    assert bare["has_image"] is False and bare.get("image_v") is None
