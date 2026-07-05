@@ -13,9 +13,9 @@ vi.mock("../api/client", () => ({
     entityImageUrl: () => "/loc-img",
   },
 }));
-vi.mock("../api/models", () => ({ fetchModels: vi.fn() }));
+vi.mock("../api/models", () => ({ getModels: vi.fn() }));
 import { api } from "../api/client";
-import { fetchModels } from "../api/models";
+import { getModels } from "../api/models";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -30,7 +30,7 @@ beforeEach(() => {
     sections: [{ label: "World info", text: "lore text", tokens: 100 }],
   });
   (api.getCastDetail as any).mockResolvedValue({ kind: "characters", id: "seraphine", name: "Seraphine", version: "default", body: "keeper" });
-  (fetchModels as any).mockResolvedValue([{ id: "m", name: "M", context: 1000, prompt: "0", completion: "0" }]);
+  (getModels as any).mockResolvedValue([{ id: "m", name: "M", context: 1000, prompt: "0", completion: "0" }]);
   (api.getChronicle as any).mockResolvedValue([
     { id: "s0", one_line: "They first met.", summary: "", keywords: [],
       cast: [], location: "", date: "", absorbed: "t" }]);

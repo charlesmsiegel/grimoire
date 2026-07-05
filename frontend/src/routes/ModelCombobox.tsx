@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { fetchModels, priceLabel, contextLabel, type Model } from "../api/models";
+import { getModels, priceLabel, contextLabel, type Model } from "../api/models";
 
 export default function ModelCombobox({
   value,
@@ -16,7 +16,7 @@ export default function ModelCombobox({
 
   useEffect(() => {
     let alive = true;
-    fetchModels()
+    getModels()
       .then((m) => alive && setModels(m))
       .catch(() => alive && setError(true));
     return () => {

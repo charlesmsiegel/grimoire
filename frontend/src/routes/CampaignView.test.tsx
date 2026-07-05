@@ -49,9 +49,9 @@ vi.mock("../api/client", () => ({
     entityImageUrl: () => "/loc-img",
   },
 }));
-vi.mock("../api/models", () => ({ fetchModels: vi.fn() }));
+vi.mock("../api/models", () => ({ getModels: vi.fn() }));
 import { api } from "../api/client";
-import { fetchModels } from "../api/models";
+import { getModels } from "../api/models";
 
 const ONE_SCENE = [{ id: "s1", title: "Old", model: "", created: "", updated: "" }];
 
@@ -81,7 +81,7 @@ beforeEach(() => {
   (api.listCampaignPCs as any).mockResolvedValue([]);
   (api.listAppearances as any).mockResolvedValue([]);
   (api.listEntityImages as any).mockResolvedValue([]);
-  (fetchModels as any).mockResolvedValue([]);
+  (getModels as any).mockResolvedValue([]);
   (api.absorbScene as any).mockResolvedValue({
     one_line: "They met.", summary: "A met B.", keywords: ["salt"],
     timeline_events: [], cast: [], location: "", date: "",

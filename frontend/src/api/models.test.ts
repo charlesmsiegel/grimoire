@@ -1,4 +1,4 @@
-import { fetchModels, tokensPerDollar, priceLabel, contextLabel } from "./models";
+import { fetchModels, getModels, invalidateModelsCache, tokensPerDollar, priceLabel, contextLabel } from "./models";
 
 function mockFetch(data: unknown, ok = true) {
   globalThis.fetch = vi.fn().mockResolvedValue({
@@ -68,4 +68,24 @@ test("contextLabel formats compactly and omits when unknown", () => {
   expect(contextLabel(1048576)).toBe("1M ctx");
   expect(contextLabel(8192)).toBe("8K ctx");
   expect(contextLabel(0)).toBe("");
+});
+
+test("getModels fetches once and serves later mounts from cache", async () => {
+  invalidateModelsCache();
+  const f = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data: [] }) });
+  globalThis.fetch = f as unknown as typeof fetch;
+  await getModels();
+  await getModels();
+  expect(f).toHaveBeenCalledTimes(1);
+});
+
+test("getModels does not cache a failure", async () => {
+  invalidateModelsCache();
+  const f = vi.fn()
+    .mockResolvedValueOnce({ ok: false, status: 502, json: async () => ({}) })
+    .mockResolvedValue({ ok: true, json: async () => ({ data: [] }) });
+  globalThis.fetch = f as unknown as typeof fetch;
+  await expect(getModels()).rejects.toThrow();
+  await expect(getModels()).resolves.toEqual([]);
+  expect(f).toHaveBeenCalledTimes(2);
 });

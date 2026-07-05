@@ -3,7 +3,7 @@ import {
   api, type Actor, type SceneContext, type SceneLocation, type ChronicleEntry,
   type CalendarConfig, type RosterEntry, type SceneDatetime,
 } from "../api/client";
-import { fetchModels, type Model } from "../api/models";
+import { getModels, type Model } from "../api/models";
 import { Portrait } from "./Portrait";
 import { RecordDrawer, type DrawerTarget } from "./RecordDrawer";
 
@@ -37,7 +37,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
         for (const x of pcs) m[`pcs/${x.id}`] = x.name;
         setNames(m);
       });
-    fetchModels().then(setModels).catch(() => setModels([]));
+    getModels().then(setModels).catch(() => setModels([]));
   }, [cid]);
 
   const reloadWhen = useCallback(
