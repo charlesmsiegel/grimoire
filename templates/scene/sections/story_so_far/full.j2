@@ -1,0 +1,6 @@
+{#- Chronicle recap, full form (the opener): each absorbed scene's summary
+    (falling back to one_line) as its own paragraph.
+    Vars: story_entries ([str], oldest first). -#}
+{%- set entries = story_entries | select | list -%}
+{%- if entries %}# Story so far
+{{ entries | join("\n\n") }}{% endif -%}

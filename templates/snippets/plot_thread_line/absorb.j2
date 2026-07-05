@@ -1,0 +1,8 @@
+{#- One open/advanced plot thread, absorb-prompt form (leads with the id so
+    the model can reference the thread in plot_movements).
+    Vars: t ({id, title, status, latest_beat}). -#}
+{%- if t.latest_beat -%}
+{{ t.id }}: {{ t.title }} ({{ t.status }}) — {{ t.latest_beat }}
+{%- else -%}
+{{ t.id }}: {{ t.title }} ({{ t.status }})
+{%- endif -%}

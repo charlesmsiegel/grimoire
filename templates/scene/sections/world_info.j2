@@ -1,0 +1,4 @@
+{#- Activated lore/location entries, blank-line separated. Selection
+    (key matching, owner gating) happens in code — context.activate(); this
+    template receives the selected bodies. Vars: world_info_bodies ([str]). -#}
+{{ world_info_bodies | select | join("\n\n") }}

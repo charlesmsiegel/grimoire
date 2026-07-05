@@ -96,7 +96,5 @@ def scene_facts(cid: str, sid: str) -> dict:
 
 
 def transcript_text(messages: list[dict]) -> str:
-    from .scenes import ROLE_TO_LABEL
-    return "\n\n".join(
-        f"**{m.get('speaker') or ROLE_TO_LABEL.get(m['role'], m['role'])}:** {m['content']}"
-        for m in messages)
+    from .. import prompts
+    return prompts.render("snippets/transcript.j2", messages=messages)

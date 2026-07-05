@@ -1,0 +1,9 @@
+{#- One block per NPC card: description / personality / scenario, non-empty
+    fields joined by newlines, cards separated by blank lines.
+    Vars: npc_cards ([card data dict]). -#}
+{%- set blocks = [] -%}
+{%- for d in npc_cards -%}
+{%- set parts = [d.get("description", "").strip(), d.get("personality", "").strip(), d.get("scenario", "").strip()] | select | list -%}
+{%- if parts -%}{%- set _ = blocks.append(parts | join("\n")) -%}{%- endif -%}
+{%- endfor -%}
+{{ blocks | join("\n\n") }}

@@ -1,0 +1,7 @@
+{#- Chronicle recap, compact form: one bullet per absorbed scene (one_line,
+    falling back to summary). Vars: story_entries ([str], oldest first). -#}
+{%- set entries = story_entries | select | list -%}
+{%- set lines = [] -%}
+{%- for s in entries -%}{%- set _ = lines.append("- " ~ s) -%}{%- endfor -%}
+{%- if lines %}# Story so far
+{{ lines | join("\n") }}{% endif -%}

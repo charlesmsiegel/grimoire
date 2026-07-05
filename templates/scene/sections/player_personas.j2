@@ -1,0 +1,9 @@
+{#- One persona block per seated player, blank-line separated.
+    Vars: players ([{kind: "pcs"|"characters", ...persona/card fields}]).
+    Block formats live in scene/_persona_blocks.j2. -#}
+{%- from "scene/_persona_blocks.j2" import pc_block, char_block -%}
+{%- set blocks = [] -%}
+{%- for p in players -%}
+{%- set _ = blocks.append((pc_block(p) if p.kind == "pcs" else char_block(p)) | string) -%}
+{%- endfor -%}
+{{ blocks | select | join("\n\n") }}

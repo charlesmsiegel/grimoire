@@ -1,0 +1,20 @@
+{#- Per-NPC standing state: "Name: <current_state>" then indented Knows:/
+    Suspects: lines (multi-line values re-indented so prose stays attached).
+    When current_state is empty the first knowledge label rides the name line.
+    Vars: states ([{name, current_state, knows, suspects}]). -#}
+{%- set lines = [] -%}
+{%- for st in states -%}
+{%- set cs = st.current_state.strip() -%}
+{%- set knowledge = [] -%}
+{%- if st.knows.strip() -%}{%- set _ = knowledge.append(("Knows", st.knows.strip().replace("\n", "\n    "))) -%}{%- endif -%}
+{%- if st.suspects.strip() -%}{%- set _ = knowledge.append(("Suspects", st.suspects.strip().replace("\n", "\n    "))) -%}{%- endif -%}
+{%- if cs -%}
+{%- set _ = lines.append(st.name ~ ": " ~ cs) -%}
+{%- for label, value in knowledge -%}{%- set _ = lines.append("  " ~ label ~ ": " ~ value) -%}{%- endfor -%}
+{%- elif knowledge -%}
+{%- set _ = lines.append(st.name ~ ": " ~ knowledge[0][0] ~ ": " ~ knowledge[0][1]) -%}
+{%- for label, value in knowledge[1:] -%}{%- set _ = lines.append("  " ~ label ~ ": " ~ value) -%}{%- endfor -%}
+{%- endif -%}
+{%- endfor -%}
+{%- if lines %}# Character state
+{{ lines | join("\n") }}{% endif -%}

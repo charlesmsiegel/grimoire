@@ -483,9 +483,9 @@ def test_story_so_far_section_is_injected(monkeypatch, tmp_path):
     sid = scenes.create_scene(cid, "Now")
     chronicle.absorb(cid, {"id": "2026-01-01-past", "one_line": "They first met.",
                            "summary": "A met B.", "keywords": []})
-    system = context._assemble(cid, sid)["system"]
-    assert "Story so far" in [label for label, _ in system]
-    text = dict(system)["Story so far"]
+    sections = {s["label"]: s["text"] for s in context.context_sections(cid, sid)}
+    assert "Story so far" in sections
+    text = sections["Story so far"]
     assert "They first met." in text and text.startswith("# Story so far")
 
 
@@ -495,7 +495,7 @@ def test_story_so_far_absent_when_empty(monkeypatch, tmp_path):
     wid = worlds.create_world("W")
     cid = campaigns.create_campaign("Run", wid)
     sid = scenes.create_scene(cid, "Now")
-    assert "Story so far" not in [label for label, _ in context._assemble(cid, sid)["system"]]
+    assert "Story so far" not in {s["label"] for s in context.context_sections(cid, sid)}
 
 
 def test_story_so_far_tolerates_garbled_chronicle(monkeypatch, tmp_path):
@@ -505,7 +505,7 @@ def test_story_so_far_tolerates_garbled_chronicle(monkeypatch, tmp_path):
     cid = campaigns.create_campaign("Run", wid)
     sid = scenes.create_scene(cid, "Now")
     (campaigns.campaign_root(cid) / "chronicle.json").write_text("{ not valid json", encoding="utf-8")
-    labels = [label for label, _ in context._assemble(cid, sid)["system"]]  # must not raise
+    labels = {s["label"] for s in context.context_sections(cid, sid)}  # must not raise
     assert "Story so far" not in labels
     context.build_messages(cid, sid)  # the real consumer must not crash either
 
@@ -521,7 +521,7 @@ def test_character_state_section_injected(monkeypatch, tmp_path):
     sid = scenes.create_scene(cid, "Now")
     appearances.appear(cid, sid, "characters", ch, "main", "npc")
     playstate.write_state(croot, ch, "Wounded; travels with the party.")
-    system = dict(context._assemble(cid, sid)["system"])
+    system = {s["label"]: s["text"] for s in context.context_sections(cid, sid)}
     assert "Character state" in system
     assert "Seraphine: Wounded; travels with the party." in system["Character state"]
 
@@ -537,7 +537,7 @@ def test_character_state_renders_knowledge(monkeypatch, tmp_path):
     sid = scenes.create_scene(cid, "Now")
     appearances.appear(cid, sid, "characters", ch, "main", "npc")
     playstate.write_state(croot, ch, playstate.compose_body("Hurt.", "map is fake", "elara lies"))
-    section = dict(context._assemble(cid, sid)["system"])["Character state"]
+    section = {s["label"]: s["text"] for s in context.context_sections(cid, sid)}["Character state"]
     assert "Seraphine: Hurt." in section
     assert "Knows: map is fake" in section
     assert "Suspects: elara lies" in section
@@ -554,7 +554,7 @@ def test_character_state_no_dangling_name_when_current_state_empty(monkeypatch, 
     sid = scenes.create_scene(cid, "Now")
     appearances.appear(cid, sid, "characters", ch, "main", "npc")
     playstate.write_state(croot, ch, playstate.compose_body("", "the password", ""))
-    section = dict(context._assemble(cid, sid)["system"])["Character state"]
+    section = {s["label"]: s["text"] for s in context.context_sections(cid, sid)}["Character state"]
     assert "Alice:\n" not in section and not section.endswith("Alice:")  # no dangling colon
     assert "Alice: Knows: the password" in section
 
@@ -570,7 +570,7 @@ def test_character_state_multiline_knowledge_stays_indented(monkeypatch, tmp_pat
     sid = scenes.create_scene(cid, "Now")
     appearances.appear(cid, sid, "characters", ch, "main", "npc")
     playstate.write_state(croot, ch, playstate.compose_body("Hurt.", "line one\nline two", ""))
-    section = dict(context._assemble(cid, sid)["system"])["Character state"]
+    section = {s["label"]: s["text"] for s in context.context_sections(cid, sid)}["Character state"]
     assert "  Knows: line one" in section
     assert "\n    line two" in section  # continuation re-indented, not flush-left
 
@@ -582,7 +582,7 @@ def test_plot_threads_section_injected(monkeypatch, tmp_path):
     sid = scenes.create_scene(cid, "Now")
     plot.set_movement(cid, "the-map", "The map", "advanced", "It is a forgery.", "s12")
     plot.set_movement(cid, "done", "Done", "closed", "resolved", "s5")
-    section = dict(context._assemble(cid, sid)["system"])["Plot threads"]
+    section = {s["label"]: s["text"] for s in context.context_sections(cid, sid)}["Plot threads"]
     assert "The map (advanced): It is a forgery." in section
     assert "Done" not in section  # closed excluded
 
@@ -592,7 +592,7 @@ def test_plot_threads_absent_when_none(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = campaigns.create_campaign("Run", worlds.create_world("W"))
     sid = scenes.create_scene(cid, "Now")
-    assert "Plot threads" not in [l for l, _ in context._assemble(cid, sid)["system"]]
+    assert "Plot threads" not in {s["label"] for s in context.context_sections(cid, sid)}
 
 
 def test_plot_threads_tolerates_garbled(monkeypatch, tmp_path):
@@ -601,7 +601,7 @@ def test_plot_threads_tolerates_garbled(monkeypatch, tmp_path):
     cid = campaigns.create_campaign("Run", worlds.create_world("W"))
     sid = scenes.create_scene(cid, "Now")
     (campaigns.campaign_root(cid) / "plot.json").write_text("{ not json", encoding="utf-8")
-    context._assemble(cid, sid)  # must not raise
+    context.context_sections(cid, sid)  # must not raise
 
 
 def test_character_state_absent_when_none(monkeypatch, tmp_path):
@@ -610,7 +610,7 @@ def test_character_state_absent_when_none(monkeypatch, tmp_path):
     wid = worlds.create_world("W")
     cid = campaigns.create_campaign("Run", wid)
     sid = scenes.create_scene(cid, "Now")
-    assert "Character state" not in [l for l, _ in context._assemble(cid, sid)["system"]]
+    assert "Character state" not in {s["label"] for s in context.context_sections(cid, sid)}
 
 
 def test_relationships_section_injected(monkeypatch, tmp_path):
@@ -625,7 +625,7 @@ def test_relationships_section_injected(monkeypatch, tmp_path):
     appearances.appear(cid, sid, "characters", a, "main", "npc")
     appearances.appear(cid, sid, "characters", b, "main", "npc")
     relationships.set_feeling(cid, f"characters:{a}", f"characters:{b}", 4, 3, 1, "warm")
-    system = dict(context._assemble(cid, sid)["system"])
+    system = {s["label"]: s["text"] for s in context.context_sections(cid, sid)}
     assert "Relationships" in system
     assert "Ann → Bo: trust 4, affection 3, tension 1 (warm)" in system["Relationships"]
 
@@ -635,7 +635,7 @@ def test_relationships_absent_when_none(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = campaigns.create_campaign("Run", worlds.create_world("W"))
     sid = scenes.create_scene(cid, "Now")
-    assert "Relationships" not in [l for l, _ in context._assemble(cid, sid)["system"]]
+    assert "Relationships" not in {s["label"] for s in context.context_sections(cid, sid)}
 
 
 def test_history_projection_labels_and_merges(monkeypatch, tmp_path):

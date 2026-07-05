@@ -1,0 +1,7 @@
+{#- One open/advanced plot thread, context form (the # Plot threads block —
+    no id, the model just reads it). Vars: t ({title, status, latest_beat}). -#}
+{%- if t.latest_beat -%}
+{{ t.title }} ({{ t.status }}): {{ t.latest_beat }}
+{%- else -%}
+{{ t.title }} ({{ t.status }})
+{%- endif -%}

@@ -1,0 +1,9 @@
+{#- A scene's messages as a labeled transcript (feeds the absorb and dossier
+    prompts). Every line carries a speaker label; unstamped lines fall back to
+    the role label. Vars: messages ([{role, speaker, content}]). -#}
+{%- set role_labels = {"user": "You", "assistant": "Grimoire"} -%}
+{%- set lines = [] -%}
+{%- for m in messages -%}
+{%- set _ = lines.append("**" ~ (m.get("speaker") or role_labels.get(m.role, m.role)) ~ ":** " ~ m.content) -%}
+{%- endfor -%}
+{{ lines | join("\n\n") }}

@@ -1,0 +1,46 @@
+{#- The campaign-situation snapshot. Vars:
+      s — dict from suggest.build_snapshot(): now, friendly, holidays_today,
+          upcoming ({name, in_days} | None), birthdays ([{name, age, when}]),
+          open_threads ([{title, status, latest_beat}]),
+          absent_cast ([{name, tagline}]), available_cast ([{token, name}]),
+          available_locations ([{id, name}])
+      greeting_candidates — [{id, name, excerpt}] | None -#}
+{%- set parts = [] -%}
+{%- if s.now -%}
+{%- set line = "Current date: " ~ (s.friendly or s.now) ~ "." -%}
+{%- if s.holidays_today -%}{%- set line = line ~ " Today: " ~ (s.holidays_today | join(", ")) ~ "." -%}{%- endif -%}
+{%- if s.upcoming -%}{%- set line = line ~ " Upcoming: " ~ s.upcoming.name ~ " in " ~ s.upcoming.in_days ~ " days." -%}{%- endif -%}
+{%- set _ = parts.append(line) -%}
+{%- endif -%}
+{%- if s.birthdays -%}
+{%- set bits = [] -%}
+{%- for b in s.birthdays -%}{%- set _ = bits.append(b.name ~ " (age " ~ b.age ~ ") " ~ b.when) -%}{%- endfor -%}
+{%- set _ = parts.append("Birthdays: " ~ (bits | join("; "))) -%}
+{%- endif -%}
+{%- if s.open_threads -%}
+{%- set lines = [] -%}
+{%- for t in s.open_threads -%}{%- set _ = lines.append(("- " ~ t.title ~ " (" ~ t.status ~ "): " ~ t.latest_beat).rstrip(": ")) -%}{%- endfor -%}
+{%- set _ = parts.append("Open plot threads:\n" ~ (lines | join("\n"))) -%}
+{%- endif -%}
+{%- if s.absent_cast -%}
+{%- set lines = [] -%}
+{%- for a in s.absent_cast -%}{%- set _ = lines.append(("- " ~ a.name ~ ": " ~ a.tagline).rstrip(": ")) -%}{%- endfor -%}
+{%- set _ = parts.append("Long-absent characters:\n" ~ (lines | join("\n"))) -%}
+{%- endif -%}
+{%- if s.available_cast -%}
+{%- set lines = [] -%}
+{%- for c in s.available_cast -%}{%- set _ = lines.append("- " ~ c.token ~ " = " ~ c.name) -%}{%- endfor -%}
+{%- set _ = parts.append("Available cast (use these tokens):\n" ~ (lines | join("\n"))) -%}
+{%- endif -%}
+{%- if s.available_locations -%}
+{%- set lines = [] -%}
+{%- for loc in s.available_locations -%}{%- set _ = lines.append("- " ~ loc.id ~ " = " ~ loc.name) -%}{%- endfor -%}
+{%- set _ = parts.append("Available locations (use these ids):\n" ~ (lines | join("\n"))) -%}
+{%- endif -%}
+{%- set content = (parts | join("\n\n")) if parts else "No campaign history yet; propose fresh openings." -%}
+{%- if greeting_candidates -%}
+{%- set lines = [] -%}
+{%- for g in greeting_candidates -%}{%- set _ = lines.append("- " ~ g.id ~ " = " ~ g.name ~ ": " ~ g.excerpt) -%}{%- endfor -%}
+{%- set content = content ~ "\n\nAvailable greetings (use these ids):\n" ~ (lines | join("\n")) -%}
+{%- endif -%}
+{{ content }}

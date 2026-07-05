@@ -1,0 +1,13 @@
+{#- Shared persona-block formats for the "Player personas" and "Absent player
+    characters" sections. pc_block: a PC persona ({name, pronouns, summary,
+    description}); char_block: a character card played as a player
+    ({name, description, personality}). -#}
+{%- macro pc_block(p) -%}
+{%- set head = [p.get("name", ""), p.get("pronouns", "")] | select | join(", ") -%}
+{%- set body = [p.get("summary", ""), p.get("description", "")] | select | join("\n") -%}
+{{ ([head, body] | select | join("\n")).strip() }}
+{%- endmacro -%}
+{%- macro char_block(p) -%}
+{%- set body = [p.get("description", "").strip(), p.get("personality", "").strip()] | select | join("\n") -%}
+{{ ([p.get("name", ""), body] | select | join("\n")).strip() }}
+{%- endmacro -%}

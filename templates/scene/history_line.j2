@@ -1,0 +1,11 @@
+{#- One stored scene message as a script line for the conversation history.
+    Assistant lines always carry a speaker label (Grimoire when unnamed);
+    user lines only when stamped. Consecutive same-role lines are merged by
+    code with blank lines between them. Vars: m ({role, speaker, content}). -#}
+{%- if m.role == "assistant" -%}
+**{{ m.get("speaker") or "Grimoire" }}:** {{ m.content }}
+{%- elif m.get("speaker") -%}
+**{{ m.speaker }}:** {{ m.content }}
+{%- else -%}
+{{ m.content }}
+{%- endif -%}

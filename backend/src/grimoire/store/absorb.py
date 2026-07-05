@@ -1,42 +1,17 @@
 """The scene-absorption extraction: one deterministic-primed LLM call producing the
 chronicle summary plus proposed state/lore/authored edits, their diff materialization,
 and their application. Prompt/parse only here + pure materialize/apply; the LLM call
-lives in the route layer (mirrors briefs.py).
+lives in the route layer and the prompt text in templates/absorb/.
 """
 
 from __future__ import annotations
 
 import json
 
+from .. import prompts
 from . import (appearances, campaigns, changes, characters, chronicle, entities, pcs,
                playstate, plot, relationships)
 from .paths import slugify
-
-EXTRACT_INSTRUCTION = (
-    "You are absorbing a completed role-play scene into a campaign chronicle and "
-    "evolving its records. Read the transcript and reply with ONLY a JSON object, no "
-    "prose around it, with keys: "
-    '"one_line" (a one-sentence summary), "summary" (one self-contained paragraph), '
-    '"keywords" (list of significant nouns/concepts, lowercase), '
-    '"timeline_events" (list of {"date","text"} for concrete datable HAPPENINGS; [] if none), '
-    '"character_state_edits" (list of {"id","current_state","knows","suspects"} — for each '
-    "present character whose standing snapshot changed, the FULL rewritten snapshot: "
-    '"current_state" is their standing condition, "knows" is what they now hold as certain, '
-    '"suspects" is what they believe but have not confirmed; drop what is no longer true, '
-    'standing facts only (not a running log). Use "" for a field that does not apply), '
-    '"lore_edits" (list of {"id","append"} — a paragraph to add to a lore/location entry), '
-    '"authored_edits" (list of {"id","field","text"} — ONLY when a character\'s core '
-    "card field (description/personality/scenario) fundamentally and durably changed; rare), "
-    '"relationship_deltas" (list of {"from","to","trust","affection","tension","note"} — '
-    "for each directed pair whose feelings changed, the FULL updated values; use the "
-    '"<kind>:<id>" tokens from the context block; trust/affection/tension are 0-5), '
-    '"bond_changes" (list of {"a","b","type"} — a shared relationship type for a pair), '
-    'and "plot_movements" (list of {"id","title","status","beat"} — for each plot thread '
-    "this scene moved: the thread id from the context block to advance or close it, or a "
-    'NEW thread (omit "id", give a "title"); "status" is one of open/advanced/closed; '
-    '"beat" is one sentence on how this scene moved it; only threads that actually moved). '
-    "Write in third person, past tense. Use the ids given in the context block."
-)
 
 
 def _int05(v) -> int:
@@ -48,23 +23,11 @@ def _int05(v) -> int:
 
 def build_prompt(transcript: str, facts: dict, state_snapshot: dict | None = None,
                  rel_snapshot: str | None = None, plot_snapshot: str | None = None) -> list[dict]:
-    head = []
-    if facts.get("location"):
-        head.append(f"Location: {facts['location']}")
-    if facts.get("date"):
-        head.append(f"Date: {facts['date']}")
-    if facts.get("cast"):
-        head.append("Present: " + ", ".join(facts["cast"]))
-    if state_snapshot:
-        head.append("Current character state:\n" +
-                    "\n".join(f"- {name}: {s}" for name, s in state_snapshot.items()))
-    if rel_snapshot:
-        head.append("Current relationships:\n" + rel_snapshot)
-    if plot_snapshot:
-        head.append("Current plot threads:\n" + plot_snapshot)
-    prefix = ("\n".join(head) + "\n\n") if head else ""
-    return [{"role": "system", "content": EXTRACT_INSTRUCTION},
-            {"role": "user", "content": prefix + transcript}]
+    return [{"role": "system", "content": prompts.render("absorb/system.j2")},
+            {"role": "user", "content": prompts.render(
+                "absorb/user.j2", facts=facts, state_snapshot=state_snapshot,
+                rel_snapshot=rel_snapshot, plot_snapshot=plot_snapshot,
+                transcript=transcript)}]
 
 
 def _obj(text: str) -> dict:
@@ -385,9 +348,4 @@ def state_snapshot(cid: str, sid: str) -> dict:
 
 
 def _snapshot_line(st: dict) -> str:
-    parts = [st["current_state"].strip()]
-    if st["knows"].strip():
-        parts.append(f"Knows: {st['knows'].strip()}")
-    if st["suspects"].strip():
-        parts.append(f"Suspects: {st['suspects'].strip()}")
-    return " ".join(p for p in parts if p)
+    return prompts.render("snippets/state_snapshot_line.j2", st=st)

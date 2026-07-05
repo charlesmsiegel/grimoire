@@ -1,0 +1,7 @@
+{#- The in-scene NPC cards' own system prompts, blank-line separated.
+    Vars: npc_cards. -#}
+{%- set blocks = [] -%}
+{%- for d in npc_cards -%}
+{%- if d.get("system_prompt", "").strip() -%}{%- set _ = blocks.append(d.get("system_prompt", "").strip()) -%}{%- endif -%}
+{%- endfor -%}
+{{ blocks | join("\n\n") }}

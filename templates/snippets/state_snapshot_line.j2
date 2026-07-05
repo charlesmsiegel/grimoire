@@ -1,0 +1,7 @@
+{#- One NPC's standing snapshot on a single line (feeds the absorb prompt's
+    "Current character state" head). Vars: st ({current_state, knows,
+    suspects}). -#}
+{%- set parts = [st.current_state.strip()] -%}
+{%- if st.knows.strip() -%}{%- set _ = parts.append("Knows: " ~ st.knows.strip()) -%}{%- endif -%}
+{%- if st.suspects.strip() -%}{%- set _ = parts.append("Suspects: " ~ st.suspects.strip()) -%}{%- endif -%}
+{{ parts | select | join(" ") }}

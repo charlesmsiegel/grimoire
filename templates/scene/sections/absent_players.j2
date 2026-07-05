@@ -1,0 +1,9 @@
+{#- Persona blocks for the campaign's player characters when the scene is
+    pcless — the offscreen reference cast. Vars: refs (same shape as
+    `players` in player_personas.j2). -#}
+{%- from "scene/_persona_blocks.j2" import pc_block, char_block -%}
+{%- set blocks = [] -%}
+{%- for p in refs -%}
+{%- set _ = blocks.append((pc_block(p) if p.kind == "pcs" else char_block(p)) | string) -%}
+{%- endfor -%}
+{{ blocks | select | join("\n\n") }}
