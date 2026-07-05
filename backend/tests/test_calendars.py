@@ -231,3 +231,17 @@ def test_gregorian_months_shape_and_leap_february():
     assert p.format(p.parse("2026-02-28")) == "2026-02-28"
     with pytest.raises(CalendarError):
         p.months("nope")
+
+
+def test_validate_rule_is_provider_aware():
+    p = get_provider(greg())
+    p.validate_rule({"name": "Founding Day", "month": 4, "day": 12})     # int month (legacy)
+    p.validate_rule({"name": "Founding Day", "month": "04", "day": 12})  # key form
+    p.validate_rule({"name": "Leap", "month": 2, "day": 29})             # Feb 29 allowed
+    p.validate_rule({"name": "Harvest", "month": 9, "nth": 3, "weekday": 6})
+    for bad in ({"name": "X", "month": 13, "day": 1},
+                {"name": "X", "month": 4},
+                {"month": 4, "day": 12},
+                {"name": "X", "month": 2, "day": 30}):
+        with pytest.raises(CalendarError):
+            p.validate_rule(bad)

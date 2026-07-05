@@ -68,6 +68,19 @@ class GregorianProvider(CalendarProvider):
         return [{"key": f"{m:02d}", "name": _cal.month_name[m],
                  "days": _cal.monthrange(y, m)[1]} for m in range(1, 13)]
 
+    def validate_rule(self, rule: dict) -> None:
+        if "day" in rule:
+            super().validate_rule(rule)
+            return
+        if not rule.get("name"):
+            raise CalendarError(f"custom holiday needs a name: {rule!r}")
+        try:
+            month, nth, weekday = int(rule["month"]), int(rule["nth"]), int(rule["weekday"])
+        except (KeyError, ValueError, TypeError) as e:
+            raise CalendarError(f"custom holiday rule is malformed: {rule!r}") from e
+        if not (1 <= month <= 12 and 1 <= nth <= 5 and 0 <= weekday <= 6):
+            raise CalendarError(f"custom holiday rule is malformed: {rule!r}")
+
 
 def _custom_date(rule: dict, year: int):
     """Resolve a custom-holiday rule to a date in `year`: fixed {month, day} or
