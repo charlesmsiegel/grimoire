@@ -1745,6 +1745,8 @@ def _seat_cast_member(cid: str, sid: str, wroot, croot, body: Appear) -> None:
     role = "player" if body.kind == "pcs" else (body.role or "npc")
     if role not in ("player", "npc"):
         raise HTTPException(status_code=400, detail="role must be player or npc")
+    if role == "player" and store.scenes.is_pcless(cid, sid):
+        raise HTTPException(status_code=400, detail="cannot seat a player in an offscreen scene")
     version = body.version
     try:
         if version is None:
