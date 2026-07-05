@@ -51,9 +51,4 @@ if (-not (Wait-Port "frontend" 5173)) {
     Write-Host "Frontend did not become ready in time. Check logs; opening $Url anyway."
 }
 
-# Prefer browser app mode for a chromeless, app-like window.
-$edge = "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe"
-$chrome = "$env:ProgramFiles\Google\Chrome\Application\chrome.exe"
-if (Test-Path $edge) { Start-Process $edge "--app=$Url" }
-elseif (Test-Path $chrome) { Start-Process $chrome "--app=$Url" }
-else { Start-Process $Url }
+Start-Process $Url
