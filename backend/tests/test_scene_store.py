@@ -372,3 +372,26 @@ def test_remove_trailing_assistant_run(monkeypatch, tmp_path):
     assert scenes.read_scene(cid, sid)["messages"] == [{"role": "user", "content": "hi"}]
     with pytest.raises(IndexError):
         scenes.remove_trailing_assistant_run(cid, sid)
+
+
+# ---- fuzzy speaker matching (a first name refers to the cast member) ----
+def test_match_name_prefix_and_ambiguity_rules():
+    names = ["winifred winterbourne", "Seraphine Vale"]
+    assert scenes.match_name("winifred", names) == "winifred winterbourne"
+    assert scenes.match_name("winifred winterbourne", names) == "winifred winterbourne"  # case-insensitive
+    assert scenes.match_name("Flo", names) is None          # mid-word: not a match
+    assert scenes.match_name("Vale", names) is None          # not a prefix
+    assert scenes.match_name("", names) is None
+    both = ["winifred winterbourne", "winifred Nightingale"]
+    assert scenes.match_name("winifred", both) is None       # ambiguous: match nothing
+    assert scenes.match_name("winifred winterbourne", both) == "winifred winterbourne"
+
+
+def test_split_reply_guards_player_first_name():
+    players = frozenset({"Elara Vane"})
+    text = '**Elara:** forged line\n\n**Seraphine:** "Fine."'
+    assert scenes.split_reply(text, players) == [
+        # "Elara" refers to the player: reassigned to the narrator like the full name
+        {"speaker": None, "content": "forged line"},
+        {"speaker": "Seraphine", "content": '"Fine."'},
+    ]

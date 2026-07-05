@@ -34,12 +34,28 @@ def _markers(body: str) -> list[re.Match]:
             if m.start() == 0 or body[max(0, m.start() - 2):m.start()] == "\n\n"]
 
 
+def match_name(label: str, names) -> str | None:
+    """The cast name `label` refers to, if unambiguous: exact match first
+    (case-insensitive), else the single name the label is a word-boundary
+    prefix of — "winifred" names "winifred winterbourne"; "Flo" names no one,
+    and neither does "winifred" with two Florences present."""
+    low = label.strip().lower()
+    if not low:
+        return None
+    exact = [n for n in names if n.lower() == low]
+    if exact:
+        return exact[0] if len(exact) == 1 else None
+    prefixed = [n for n in names
+                if n.lower().startswith(low) and not n[len(low)].isalnum()]
+    return prefixed[0] if len(prefixed) == 1 else None
+
+
 def _speaker_and_role(m: re.Match, players: frozenset[str]) -> tuple[str | None, str]:
     base, sub = m.group(1), m.group(2)
     if base in RESERVED_LABELS:
         return sub, RESERVED_LABELS[base]
     speaker = f"{base} ({sub})" if sub else base
-    return speaker, "user" if speaker in players else "assistant"
+    return speaker, "user" if match_name(speaker, players) else "assistant"
 
 
 class SceneNotFound(Exception):
