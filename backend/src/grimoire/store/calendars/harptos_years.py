@@ -1087,7 +1087,7 @@ YEAR_NAMES: dict[int, str] = {
     1083: 'Year of the Sighted Hind',
     1084: 'Year of the Tireless Lute',
     1085: 'Year of the Vacant Plain',
-    1086: "Year of the Seer's Fires)",
+    1086: "Year of the Seer's Fires",
     1087: 'Year of Forgotten Anger',
     1088: 'Year of Shambles',
     1089: 'Year of Three Faces',
