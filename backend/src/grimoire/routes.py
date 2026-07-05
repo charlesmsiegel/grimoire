@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
@@ -739,15 +739,22 @@ _IMAGE_MEDIA = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
                 "gif": "image/gif", "webp": "image/webp"}
 
 
-def _serve_image(root, cid: str, vid: str, name: str, base: str = "characters"):
+def _serve_image(root, cid: str, vid: str, name: str, base: str = "characters",
+                 request: Request | None = None):
     p = store.assets.image_path(root, cid, vid, name, base)
     if p is None:
         raise HTTPException(status_code=404, detail="image not found")
+    # no-cache: promotions swap file contents under stable URLs, so the browser
+    # must revalidate — but with an ETag that revalidation is a 304, not a re-download
+    st = p.stat()
+    etag = f'"{st.st_mtime_ns:x}-{st.st_size:x}"'
+    headers = {"Cache-Control": "no-cache", "ETag": etag}
+    if request is not None and etag in request.headers.get("if-none-match", ""):
+        return Response(status_code=304, headers=headers)
     ext = p.suffix.lstrip(".").lower()
-    # no-cache: promotions swap file contents under stable URLs
     return Response(content=p.read_bytes(),
                     media_type=_IMAGE_MEDIA.get(ext, "application/octet-stream"),
-                    headers={"Cache-Control": "no-cache"})
+                    headers=headers)
 
 
 @router.get("/worlds/{wid}/characters/{cid}/versions/{vid}/images")
@@ -756,8 +763,8 @@ def list_world_images(wid: str, cid: str, vid: str):
 
 
 @router.get("/worlds/{wid}/characters/{cid}/versions/{vid}/images/{name}")
-def get_world_image(wid: str, cid: str, vid: str, name: str):
-    return _serve_image(_world_root_or_404(wid), cid, vid, name)
+def get_world_image(wid: str, cid: str, vid: str, name: str, request: Request):
+    return _serve_image(_world_root_or_404(wid), cid, vid, name, request=request)
 
 
 @router.put("/worlds/{wid}/characters/{cid}/versions/{vid}/images/{name}")
@@ -1094,9 +1101,9 @@ def list_world_entity_images(wid: str, kind: str, eid: str):
 
 
 @router.get("/worlds/{wid}/{kind}/{eid}/images/{name}")
-def get_world_entity_image(wid: str, kind: str, eid: str, name: str):
+def get_world_entity_image(wid: str, kind: str, eid: str, name: str, request: Request):
     _image_kind_or_404(kind)
-    return _serve_image(_world_root_or_404(wid), eid, "default", name, base=kind)
+    return _serve_image(_world_root_or_404(wid), eid, "default", name, base=kind, request=request)
 
 
 @router.put("/worlds/{wid}/{kind}/{eid}/images/{name}")
@@ -1526,8 +1533,8 @@ def post_campaign_pc(cid: str, body: PCCreate):
 
 
 @router.get("/campaigns/{cid}/characters/{char}/versions/{vid}/images/{name}")
-def get_campaign_image(cid: str, char: str, vid: str, name: str):
-    return _serve_image(_campaign_root_or_404(cid), char, vid, name)
+def get_campaign_image(cid: str, char: str, vid: str, name: str, request: Request):
+    return _serve_image(_campaign_root_or_404(cid), char, vid, name, request=request)
 
 
 def _campaign_wroot(cid: str):
@@ -1977,9 +1984,9 @@ def list_campaign_entity_images(cid: str, kind: str, eid: str):
 
 
 @router.get("/campaigns/{cid}/{kind}/{eid}/images/{name}")
-def get_campaign_entity_image(cid: str, kind: str, eid: str, name: str):
+def get_campaign_entity_image(cid: str, kind: str, eid: str, name: str, request: Request):
     _image_kind_or_404(kind)
-    return _serve_image(_campaign_root_or_404(cid), eid, "default", name, base=kind)
+    return _serve_image(_campaign_root_or_404(cid), eid, "default", name, base=kind, request=request)
 
 
 @router.put("/campaigns/{cid}/{kind}/{eid}/images/{name}")

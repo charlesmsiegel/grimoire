@@ -254,6 +254,32 @@ def test_greeting_images_served_readonly(client):
     assert client.get(f"/api/worlds/{wid}/potions/x/images").status_code == 404
 
 
+def test_image_serving_revalidates_with_etag(client):
+    """no-cache without a validator forced a full re-download of every image
+    on every view; an mtime+size ETag lets the browser get 304s instead."""
+    wid = _world(client)
+    gid = client.post(f"/api/worlds/{wid}/greetings",
+                      json={"name": "Opener", "character": "mira", "version": "v1"}).json()["id"]
+    root = store.worlds.world_root(wid)
+    store.assets.put_image(root, gid, "default", "embed-abc123def456", b"art", "png",
+                           base="greetings")
+    url = f"/api/worlds/{wid}/greetings/{gid}/images/embed-abc123def456"
+
+    r = client.get(url)
+    assert r.status_code == 200 and r.content == b"art"
+    etag = r.headers["etag"]
+    assert r.headers["cache-control"] == "no-cache"
+
+    r304 = client.get(url, headers={"If-None-Match": etag})
+    assert r304.status_code == 304 and r304.content == b""
+
+    # promotions swap bytes under a stable URL: the swap must invalidate
+    store.assets.put_image(root, gid, "default", "embed-abc123def456", b"new-art", "png",
+                           base="greetings")
+    r2 = client.get(url, headers={"If-None-Match": etag})
+    assert r2.status_code == 200 and r2.content == b"new-art"
+
+
 def test_image_subjects_routes_roundtrip_and_validation(client):
     wid = _world(client)
     cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mira"}).json()["character"]
