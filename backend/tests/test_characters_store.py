@@ -940,3 +940,55 @@ def test_dir_hash_tracks_meta_and_versions_not_assets(tmp_path):
     (tmp_path / "characters" / cid / "assets").mkdir()
     (tmp_path / "characters" / cid / "assets" / "x.png").write_bytes(b"png")
     assert ch.dir_hash(tmp_path, cid) == h2
+
+
+def test_list_characters_reads_no_cards_when_unchanged(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    cid, vid = ch.create_character(tmp_path, "Ada")
+    ch.create_version(tmp_path, cid, "alt", ch.blank_card("Ada"))
+    ch.list_characters(tmp_path)  # warm the summary cache
+    reads: list[str] = []
+    orig = Path.read_text
+
+    def counting(self, *args, **kwargs):
+        reads.append(str(self))
+        return orig(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", counting)
+    out = ch.list_characters(tmp_path)
+    assert [r for r in reads if r.endswith(".json")] == []
+    assert out[0]["greeting_count"] == 0
+    assert {v["id"] for v in out[0]["versions"]} == {"default", "alt"}
+
+
+def test_list_characters_reflects_card_edits_after_warm_cache(tmp_path):
+    cid, vid = ch.create_character(tmp_path, "Ada")
+    assert ch.list_characters(tmp_path)[0]["greeting_count"] == 0  # warm
+    card = ch.read_card(tmp_path, cid, vid)
+    card["data"]["first_mes"] = "hello there"
+    card["data"]["extensions"]["grimoire_label"] = "Custom Label"
+    ch.update_version(tmp_path, cid, vid, card)
+    got = ch.list_characters(tmp_path)[0]
+    assert got["greeting_count"] == 1
+    assert got["versions"][0]["name"] == "Custom Label"
+
+
+def test_find_unlinked_versions_reads_no_cards_when_unchanged(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    cid, vid = ch.create_character(tmp_path, "Ada")
+    ch.set_chub_source(tmp_path, cid, vid, "https://chub.ai/characters/a/b")
+    ch.create_version(tmp_path, cid, "alt", ch.blank_card("Ada"))
+    ch.find_unlinked_versions(tmp_path)  # warm
+    reads: list[str] = []
+    orig = Path.read_text
+
+    def counting(self, *args, **kwargs):
+        reads.append(str(self))
+        return orig(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", counting)
+    out = ch.find_unlinked_versions(tmp_path)
+    assert [r for r in reads if r.endswith(".json")] == []
+    assert [v["version"] for v in out] == ["alt"]
