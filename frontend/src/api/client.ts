@@ -70,7 +70,7 @@ export type CampaignMeta = {
   scenes: number;
   last_scene: string;
 };
-export type SceneMeta = { id: string; title: string; model: string; created: string; updated: string };
+export type SceneMeta = { id: string; title: string; model: string; created: string; updated: string; pcless?: boolean };
 export type Message = { role: "user" | "assistant"; content: string; speaker?: string };
 export type Scene = { meta: { id: string; title: string }; messages: Message[] };
 
@@ -136,6 +136,7 @@ export type Greeting = {
   present: string[];
   requires_tags: string[];
   predecessor_join: "all" | "any";
+  pcless?: boolean;
   mark?: GreetingMark;   // campaign lists carry it
 };
 export type Edges = { leads_to: string[]; excludes: string[] };
@@ -148,9 +149,11 @@ export type GreetingDraft = {
   present?: string[];
   requires_tags?: string[];
   predecessor_join?: "all" | "any";
+  pcless?: boolean;
 };
 export type Availability = {
   id: string; name: string; available: boolean; reasons: string[]; unlocked: boolean;
+  pcless?: boolean;
   mark?: GreetingMark;
 };
 export type Appearance = { gid: string; greeting_name: string; name: string; url: string; thumb?: string };
@@ -287,9 +290,9 @@ export const api = {
 
   // scenes
   listScenes: (cid: string) => request<SceneMeta[]>("GET", `/api/campaigns/${cid}/scenes`),
-  createScene: (cid: string, title?: string, suggestedDate?: string) =>
+  createScene: (cid: string, title?: string, suggestedDate?: string, pcless?: boolean) =>
     request<{ id: string }>("POST", `/api/campaigns/${cid}/scenes`,
-      { title, suggested_date: suggestedDate }),
+      { title, suggested_date: suggestedDate, pcless }),
   getScene: (cid: string, sid: string) =>
     request<Scene>("GET", `/api/campaigns/${cid}/scenes/${sid}`),
   renameScene: (cid: string, sid: string, title: string) =>
@@ -440,7 +443,7 @@ export const api = {
   readGreeting: (scope: EntityScope, gid: string) =>
     request<GreetingDetail>("GET", `${entityBase(scope)}/greetings/${gid}`),
   updateGreeting: (scope: EntityScope, gid: string,
-                   patch: { name?: string; body?: string; present?: string[]; requires_tags?: string[]; predecessor_join?: string }) =>
+                   patch: { name?: string; body?: string; present?: string[]; requires_tags?: string[]; predecessor_join?: string; pcless?: boolean }) =>
     request<{ ok: boolean }>("PUT", `${entityBase(scope)}/greetings/${gid}`, patch),
   deleteGreeting: (scope: EntityScope, gid: string) =>
     request<{ ok: boolean }>("DELETE", `${entityBase(scope)}/greetings/${gid}`),
@@ -501,9 +504,14 @@ export const api = {
     request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/calendar`, cfg),
   getSceneContext: (cid: string, sid: string) =>
     request<SceneContext>("GET", `/api/campaigns/${cid}/scenes/${sid}/context`),
-  sceneSuggestions: (cid: string, after?: string) =>
-    request<{ suggestions: SceneSuggestion[]; greeting_picks?: string[]; next_date?: string }>(
-      "POST", `/api/campaigns/${cid}/scene-suggestions${after ? `?after=${encodeURIComponent(after)}` : ""}`),
+  sceneSuggestions: (cid: string, after?: string, offscreen?: boolean) => {
+    const params = new URLSearchParams();
+    if (after) params.set("after", after);
+    if (offscreen) params.set("offscreen", "true");
+    const qs = params.toString();
+    return request<{ suggestions: SceneSuggestion[]; greeting_picks?: string[]; next_date?: string }>(
+      "POST", `/api/campaigns/${cid}/scene-suggestions${qs ? `?${qs}` : ""}`);
+  },
   getCastDetail: (cid: string, sid: string, kind: string, id: string) =>
     request<CastDetail>("GET", `/api/campaigns/${cid}/scenes/${sid}/cast/${kind}/${id}`),
   editMessage: (cid: string, sid: string, index: number, content: string) =>
