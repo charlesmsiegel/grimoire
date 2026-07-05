@@ -1051,6 +1051,7 @@ def test_greeting_crud_import_edges_and_start(client):
     r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/start-from-greeting",
                     json={"greeting": imported[0]})
     assert r.status_code == 200
+    sid = r.json()["id"]
     scene = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()
     assert scene["messages"][0]["content"] == "You meet Seraphine."
     # starting again on a non-empty scene -> 409
@@ -1065,6 +1066,23 @@ def test_start_from_greeting_unknown_404(client):
                        json={"greeting": "nope"}).status_code == 404
 
 
+def test_start_from_greeting_retitles_scene(client):
+    wid, cid = _campaign(client)
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Vex"})
+    ver = client.get(f"/api/worlds/{wid}/characters/vex").json()["meta"]["default_version"]
+    g = client.post(f"/api/campaigns/{cid}/greetings", json={
+        "name": "A Chance Meeting", "character": "vex", "version": ver,
+        "body": "Hi."}).json()["id"]
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/start-from-greeting",
+                    json={"greeting": g})
+    assert r.status_code == 200
+    new_sid = r.json()["id"]
+    assert new_sid != sid and "a-chance-meeting" in new_sid
+    scene = client.get(f"/api/campaigns/{cid}/scenes/{new_sid}").json()
+    assert scene["meta"]["title"] == "A Chance Meeting"
+
+
 def test_available_greetings_after_param(client):
     wid = _world(client)
     client.post(f"/api/worlds/{wid}/characters", json={"name": "Seraphine"})
@@ -1077,7 +1095,8 @@ def test_available_greetings_after_param(client):
     client.put(f"/api/worlds/{wid}/greetings/{g1}/edges", json={"leads_to": [g2]})
     cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Opening"}).json()["id"]
-    client.post(f"/api/campaigns/{cid}/scenes/{sid}/start-from-greeting", json={"greeting": g1})
+    sid = client.post(f"/api/campaigns/{cid}/scenes/{sid}/start-from-greeting",
+                      json={"greeting": g1}).json()["id"]
     avail = client.get(f"/api/campaigns/{cid}/greetings/available", params={"after": sid}).json()
     assert avail[0]["id"] == g2 and avail[0]["unlocked"] is True
     # no param: same shape, nothing flagged
@@ -2319,8 +2338,10 @@ def test_offscreen_greeting_stamps_scene_and_substitutes_pc_name(client):
         "name": "Cabal", "character": "vex", "version": ver,
         "body": "While {{user}} sleeps, the cult convenes.", "pcless": True}).json()["id"]
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
-    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/start-from-greeting",
-                       json={"greeting": g}).status_code == 200
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/start-from-greeting",
+                    json={"greeting": g})
+    assert r.status_code == 200
+    sid = r.json()["id"]
     scene = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()
     assert scene["meta"]["pcless"] == "true"          # plain scene got flagged
     assert "While Elara Vane sleeps" in scene["messages"][0]["content"]
