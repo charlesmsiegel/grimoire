@@ -1059,6 +1059,17 @@ def _entity_delete(root, kind: str, eid: str):
     return {"ok": True}
 
 
+@router.get("/worlds/{wid}/calendar/months")
+def get_world_calendar_months(wid: str, year: int):
+    if not store.worlds.world_meta_path(wid).exists():
+        raise HTTPException(status_code=404, detail="world not found")
+    cfg = store.calendars.read_calendar(store.worlds.world_root(wid))
+    try:
+        return {"months": store.calendars.get_provider(cfg["primary"]).months(year)}
+    except store.calendars.CalendarError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.get("/worlds/{wid}/{kind}")
 def get_world_entities(wid: str, kind: str):
     return _entity_list(_world_root_or_404(wid), kind)
@@ -1184,6 +1195,17 @@ def put_calendar_config(cid: str, body: CalendarConfig):
         raise HTTPException(status_code=400, detail=str(e))
     store.calendars.write_calendar(store.campaigns.campaign_root(cid), cfg)
     return {"ok": True}
+
+
+@router.get("/campaigns/{cid}/calendar/months")
+def get_calendar_months(cid: str, year: int):
+    if not store.campaigns.campaign_meta_path(cid).exists():
+        raise HTTPException(status_code=404, detail="campaign not found")
+    cfg = store.calendars.read_calendar(store.campaigns.campaign_root(cid))
+    try:
+        return {"months": store.calendars.get_provider(cfg["primary"]).months(year)}
+    except store.calendars.CalendarError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/campaigns")

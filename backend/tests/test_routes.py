@@ -1466,6 +1466,42 @@ def test_calendar_config_rejects_malformed_custom_holiday(client):
     assert client.put(f"/api/campaigns/{cid}/calendar", json=bogus).status_code == 400
 
 
+def test_calendar_months_campaign_and_world(client):
+    wid, cid = _campaign(client)
+    # default gregorian
+    r = client.get(f"/api/campaigns/{cid}/calendar/months", params={"year": 2024})
+    assert r.status_code == 200
+    assert r.json()["months"][1] == {"key": "02", "name": "February", "days": 29}
+    # switch the campaign to harptos and re-read
+    cfg = client.get(f"/api/campaigns/{cid}/calendar").json()
+    cfg["primary"]["provider"] = "harptos"
+    assert client.put(f"/api/campaigns/{cid}/calendar", json=cfg).status_code == 200
+    months = client.get(f"/api/campaigns/{cid}/calendar/months", params={"year": 1492}).json()["months"]
+    assert len(months) == 18 and months[10]["key"] == "Shieldmeet"
+    # world-level (defaults to gregorian)
+    r = client.get(f"/api/worlds/{wid}/calendar/months", params={"year": 2026})
+    assert r.status_code == 200 and len(r.json()["months"]) == 12
+    # errors
+    assert client.get("/api/campaigns/nope/calendar/months", params={"year": 2026}).status_code == 404
+    assert client.get(f"/api/campaigns/{cid}/calendar/months", params={"year": "abc"}).status_code == 422
+
+
+def test_scene_datetime_with_harptos_primary(client):
+    _wid, cid = _campaign(client)
+    cfg = client.get(f"/api/campaigns/{cid}/calendar").json()
+    cfg["primary"]["provider"] = "harptos"
+    client.put(f"/api/campaigns/{cid}/calendar", json=cfg)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/datetime",
+                   json={"datetime": "1492-mirtul-05"})
+    assert r.status_code == 200
+    assert r.json()["friendly"].startswith("5 Mirtul, 1492 DR")
+    sid = r.json()["id"]  # first date set renames the scene
+    got = client.get(f"/api/campaigns/{cid}/scenes/{sid}/datetime").json()
+    assert got["current"]["native"] == "1492-Mirtul-05"   # normalized casing
+    assert got["history"] == ["1492-Mirtul-05"]
+
+
 def test_absorb_returns_preview_without_persisting(client):
     _, cid = _campaign(client)
     client.put("/api/config", json={"openrouter_key": "sk-or-x"})
