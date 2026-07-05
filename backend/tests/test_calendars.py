@@ -218,3 +218,16 @@ def test_copy_calendar_preserves_confirmed(tmp_path):
     write_calendar(wroot, cfg)
     copy_calendar(wroot, croot)
     assert read_calendar(croot)["confirmed"] is True
+
+
+def test_gregorian_months_shape_and_leap_february():
+    p = get_provider(greg())
+    ms = p.months(2024)
+    assert len(ms) == 12
+    assert ms[0] == {"key": "01", "name": "January", "days": 31}
+    assert ms[1]["days"] == 29                      # leap February
+    assert p.months(2026)[1]["days"] == 28
+    # composition contract: year-key-day parses
+    assert p.format(p.parse("2026-02-28")) == "2026-02-28"
+    with pytest.raises(CalendarError):
+        p.months("nope")
