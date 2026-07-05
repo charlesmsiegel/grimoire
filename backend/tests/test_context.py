@@ -285,21 +285,33 @@ def test_build_opener_messages(monkeypatch, tmp_path):
     assert user_msg["content"] == "A storm over the salt marshes for Elara."
 
 
-def test_opener_instruction_caps_paragraphs(monkeypatch, tmp_path):
+def test_opener_shape_is_the_last_message_and_names_the_cast(monkeypatch, tmp_path):
     wid, cid, sid = _campaign(monkeypatch, tmp_path)
-    sys = context.build_opener_messages(cid, sid, "A storm.")[0]["content"]
-    assert "at most five paragraphs" in sys
-    assert "at most one paragraph" in sys
-    assert "**Grimoire:**" in sys.split("\n\n")[0]  # the shape rule rides the instruction
+    characters.create_character(worlds.world_root(wid), "Seraphine", "default",
+                                _npc_card("Seraphine", description="a harbor keeper"))
+    ap.appear(cid, sid, "characters", "seraphine", "default", "npc")
+    msgs = context.build_opener_messages(cid, sid, "A storm.")
+    last = msgs[-1]
+    assert last["role"] == "system" and msgs[-2]["role"] == "user"  # rides last, after the prompt
+    assert "at most five short paragraphs" in last["content"]
+    assert "**Seraphine:**" in last["content"]              # names the present cast's markers
+    assert "never under **Grimoire:**" in last["content"]   # actions belong to the character
 
 
-def test_offscreen_opener_instruction_caps_paragraphs(monkeypatch, tmp_path):
+def test_opener_shape_without_npcs_uses_generic_marker(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    last = context.build_opener_messages(cid, sid, "A storm.")[-1]
+    assert last["role"] == "system"
+    assert "**<Name>:**" in last["content"]
+    assert "at most five short paragraphs" in last["content"]
+
+
+def test_offscreen_opener_keeps_shape_last(monkeypatch, tmp_path):
     wid, cid, sid = _campaign(monkeypatch, tmp_path)
     sid2 = scenes.create_scene(cid, "Off", pcless=True)
-    sys = context.build_opener_messages(cid, sid2, "A storm.")[0]["content"]
-    assert "offscreen" in sys.split("\n\n")[0]
-    assert "at most five paragraphs" in sys
-    assert "at most one paragraph" in sys
+    msgs = context.build_opener_messages(cid, sid2, "A storm.")
+    assert "offscreen" in msgs[0]["content"].split("\n\n")[0]
+    assert "at most five short paragraphs" in msgs[-1]["content"]
 
 
 def test_depth_zero_and_unparseable_fallback(monkeypatch, tmp_path):
