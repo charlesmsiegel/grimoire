@@ -143,6 +143,7 @@ class RefList(BaseModel):
 
 class NewScene(BaseModel):
     title: str | None = None
+    suggested_date: str | None = None
 
 
 class RenameScene(BaseModel):
@@ -1314,7 +1315,7 @@ def get_scenes(cid: str):
 def post_scene(cid: str, body: NewScene):
     title = body.title or "New scene"
     try:
-        return {"id": store.scenes.create_scene(cid, title)}
+        return {"id": store.scenes.create_scene(cid, title, body.suggested_date)}
     except store.campaigns.CampaignNotFound:
         raise HTTPException(status_code=404, detail="campaign not found")
 
@@ -1360,11 +1361,12 @@ async def post_scene_suggestions(cid: str, after: str | None = None,
     out = []
     for s in store.suggest.parse_output(text, cid):
         loc = {"id": s["location"], "name": loc_names.get(s["location"], s["location"])} if s["location"] else None
-        out.append({"title": s["title"], "premise": s["premise"],
+        out.append({"title": s["title"], "premise": s["premise"], "date": s["date"],
                     "cast": _resolve_cast(cid, s["cast"]), "location": loc})
     picks = (store.suggest.parse_greeting_picks(text, {c["id"] for c in candidates})
              if candidates else [])
-    return {"suggestions": out, "greeting_picks": picks}
+    return {"suggestions": out, "greeting_picks": picks,
+            "next_date": store.suggest.parse_next_date(text, cid)}
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}")
@@ -1838,6 +1840,7 @@ def get_scene_datetime(cid: str, sid: str):
     _require_scene(cid, sid)
     history = store.scenes.get_time_history(cid, sid)
     current = None
+    suggested = None
     if history:
         cfg = store.calendars.read_calendar(store.campaigns.campaign_root(cid))
         native = history[-1]
@@ -1846,7 +1849,18 @@ def get_scene_datetime(cid: str, sid: str):
                        "cast": store.context.cast_datetime_facts(cid, sid, native)}
         except store.calendars.CalendarError:
             current = None  # misconfigured calendar — surface "no date" rather than 500
-    return {"current": current, "history": history}
+    else:
+        # dateless: offer a pre-fill — the creation-time hint, else where the story left off
+        hint = store.scenes.get_suggested_date(cid, sid)
+        if not hint:
+            try:
+                recent = store.chronicle.recent(cid, 1)
+                hint = recent[-1].get("date", "") if recent else ""
+            except Exception:  # noqa: BLE001 — garbled chronicle.json
+                hint = ""
+        if hint:
+            suggested = store.calendars.split_native(hint)[0]
+    return {"current": current, "history": history, "suggested": suggested}
 
 
 @router.put("/campaigns/{cid}/scenes/{sid}/datetime")
