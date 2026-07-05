@@ -233,3 +233,24 @@ def test_locked_actor_new_world_version_invisible(monkeypatch, tmp_path):
     ap.pick_version(cid, "characters", char_id, "young")
     characters.create_version(wroot, char_id, "elder", characters.blank_card("Mara"))
     assert sync.incoming(cid) == []  # only the locked version's own edits would show
+
+
+def test_incoming_reads_campaign_meta_and_manifest_once(monkeypatch, tmp_path):
+    from pathlib import Path
+
+    wid, cid = _setup(monkeypatch, tmp_path)
+    characters.create_character(worlds.world_root(wid), "Ada")  # exercise the actor passes too
+    entities.update_entity(worlds.world_root(wid), "locations", "seraphine", body="v2")
+    reads: list[str] = []
+    orig = Path.read_text
+
+    def counting(self, *args, **kwargs):
+        reads.append(self.name)
+        return orig(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", counting)
+    pend = sync.incoming(cid)
+    assert {p["ref"]["id"] for p in pend} == {"seraphine", "ada"}
+    assert reads.count("campaign.md") == 1
+    assert reads.count("sync.md") == 1
+    assert reads.count("appearances.json") <= 1
