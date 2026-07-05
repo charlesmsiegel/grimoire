@@ -1,0 +1,61 @@
+import { useEffect, useState } from "react";
+import { api, splitNativeDate, type CalendarMonth, type CalendarScope } from "../api/client";
+
+// "1492-Mirtul-05" -> ["1492", "Mirtul", "5"]; tolerates negative years.
+function parseParts(dateOnly: string): [string, string, string] {
+  const m = dateOnly.match(/^(-?\d+)-(.+)-(\d{1,2})$/);
+  return m ? [m[1], m[2], String(parseInt(m[3], 10))] : ["", "", ""];
+}
+
+export function CalendarDatePicker({ scope, value, onChange, ariaLabel }: {
+  scope: CalendarScope; value: string; onChange: (native: string) => void; ariaLabel: string;
+}) {
+  const [initYear, initMonth, initDay] = parseParts(splitNativeDate(value).date);
+  const [year, setYear] = useState(initYear);
+  const [month, setMonth] = useState(initMonth);
+  const [day, setDay] = useState(initDay);
+  const [months, setMonths] = useState<CalendarMonth[]>([]);
+
+  useEffect(() => {
+    const n = parseInt(year, 10);
+    if (isNaN(n)) { setMonths([]); return; }
+    let stale = false;
+    api.getCalendarMonths(scope, n)
+      .then((r) => { if (!stale) setMonths(r.months); })
+      .catch(() => { if (!stale) setMonths([]); });
+    return () => { stale = true; };
+  }, [scope.kind, scope.id, year]);
+
+  // A year change can invalidate the month (Shieldmeet, Adar I/II).
+  useEffect(() => {
+    if (months.length && month && !months.some((m) => m.key === month)) {
+      setMonth(""); setDay(""); onChange("");
+    }
+  }, [months]);
+
+  function emit(y: string, mKey: string, d: string) {
+    const n = parseInt(y, 10);
+    if (!isNaN(n) && mKey && d) onChange(`${y}-${mKey}-${d.padStart(2, "0")}`);
+    else onChange("");
+  }
+
+  const entry = months.find((m) => m.key === month);
+  const dayCount = entry?.days ?? 0;
+  return (
+    <span className="date-picker">
+      <input type="number" aria-label={`${ariaLabel} year`} value={year}
+             onChange={(e) => { setYear(e.target.value); emit(e.target.value, month, day); }} />
+      <select aria-label={`${ariaLabel} month`} value={month} disabled={!months.length}
+              onChange={(e) => { setMonth(e.target.value); setDay(""); onChange(""); }}>
+        <option value="">— month —</option>
+        {months.map((m) => <option key={m.key} value={m.key}>{m.name}</option>)}
+      </select>
+      <select aria-label={`${ariaLabel} day`} value={day} disabled={!entry}
+              onChange={(e) => { setDay(e.target.value); emit(year, month, e.target.value); }}>
+        <option value="">—</option>
+        {Array.from({ length: dayCount }, (_, i) => String(i + 1)).map((d) =>
+          <option key={d} value={d}>{d}</option>)}
+      </select>
+    </span>
+  );
+}
