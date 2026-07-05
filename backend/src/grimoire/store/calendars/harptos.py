@@ -32,6 +32,8 @@ _MONTHS = [
     ("Nightal", "Nightal", 30),
 ]
 _ORDINALS = ["1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th", "9th", "10th"]
+_OBSERVANCES = [("Spring Equinox", "Ches", 19), ("Summer Solstice", "Kythorn", 20),
+                ("Autumn Equinox", "Eleint", 21), ("Winter Solstice", "Nightal", 20)]
 
 
 def _is_leap(year: int) -> bool:
@@ -109,7 +111,30 @@ class HarptosProvider(CalendarProvider):
                 "friendly": friendly}
 
     def holidays(self, start_fixed: int, end_fixed: int) -> list[dict]:
-        return []  # Task 8
+        out: list[dict] = []
+        y0 = self.describe(start_fixed)["year"]
+        y1 = self.describe(end_fixed)["year"]
+        for y in range(y0, y1 + 1):
+            for _i, key, name, days in _year_entries(y):
+                if days == 1:
+                    f = _days_before_year(y) + self._offset_of(y, key) + 1
+                    if start_fixed <= f <= end_fixed:
+                        out.append({"name": name, "fixed": f})
+            for name, key, d in _OBSERVANCES:
+                f = self.parse(f"{y}-{key}-{d:02d}")
+                if start_fixed <= f <= end_fixed:
+                    out.append({"name": name, "fixed": f})
+        out.extend(self._custom_fixed(start_fixed, end_fixed))
+        out.sort(key=lambda h: h["fixed"])
+        return out
+
+    def _offset_of(self, year: int, key: str) -> int:
+        offset = 0
+        for _i, k, _n, days in _year_entries(year):
+            if k == key:
+                return offset
+            offset += days
+        raise CalendarError(f"unknown harptos month: {key!r}")
 
     def months(self, year: int) -> list[dict]:
         try:
