@@ -59,16 +59,17 @@ export function NewSceneChooser({ cid, afterSid, keySet, onClose, onCreated }: {
   const greetingCards = rankPending ? [] : orderedGreetings.slice(0, wantGenerated ? 2 : 4);
   const generatedCards = (suggestions ?? []).slice(0, 4 - (rankPending ? 2 : greetingCards.length));
 
-  async function create(seed: (sid: string) => Promise<string | undefined>, date?: string) {
+  async function create(seed: (sid: string) => Promise<{ id?: string; prompt?: string }>,
+                        title?: string, date?: string) {
     setBusy(true);
     setError(null);
     let created: string | null = null;
     try {
-      const { id } = await api.createScene(cid, undefined, date, mode === "offscreen");
+      const { id } = await api.createScene(cid, title, date, mode === "offscreen");
       created = id;
-      const prompt = await seed(id);
-      if (prompt !== undefined) onCreated(id, prompt);
-      else onCreated(id);
+      const r = await seed(id);
+      if (r.prompt !== undefined) onCreated(r.id ?? id, r.prompt);
+      else onCreated(r.id ?? id);
     } catch (err: any) {
       // a half-seeded scene would be a stray — remove it before surfacing the error
       if (created) await api.deleteScene(cid, created).catch(() => {});
@@ -78,19 +79,20 @@ export function NewSceneChooser({ cid, afterSid, keySet, onClose, onCreated }: {
     }
   }
 
-  const pickManual = () => create(async () => undefined, nextDate);
+  const pickManual = () => create(async () => ({}), undefined, nextDate);
   const pickGreeting = (gid: string) => create(async (sid) => {
-    await api.startFromGreeting(cid, sid, gid);
-    return undefined;
-  }, nextDate);
+    // the backend retitles the scene to the greeting's name; adopt the new id
+    const { id } = await api.startFromGreeting(cid, sid, gid);
+    return { id };
+  }, undefined, nextDate);
   const pickSuggestion = (s: SceneSuggestion) => create(async (sid) => {
     if (s.cast.length) {
       // one request; members already cast come back in `skipped`, which is fine
       await api.addCastBatch(cid, sid, s.cast.map((c) => ({ kind: c.kind, id: c.id })));
     }
     if (s.location) await api.setSceneLocation(cid, sid, s.location.id);
-    return s.premise;
-  }, s.date || nextDate);
+    return { prompt: s.premise };
+  }, s.title, s.date || nextDate);
 
   return (
     <div className="chooser-backdrop" role="dialog" aria-label="New scene"

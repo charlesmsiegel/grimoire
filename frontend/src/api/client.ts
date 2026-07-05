@@ -487,7 +487,7 @@ export const api = {
     request<Availability[]>("GET",
       `/api/campaigns/${cid}/greetings/available${after ? `?after=${encodeURIComponent(after)}` : ""}`),
   startFromGreeting: (cid: string, sid: string, greeting: string) =>
-    request<{ ok: boolean }>("POST", `/api/campaigns/${cid}/scenes/${sid}/start-from-greeting`, { greeting }),
+    request<{ ok: boolean; id: string }>("POST", `/api/campaigns/${cid}/scenes/${sid}/start-from-greeting`, { greeting }),
   getSceneLocation: (cid: string, sid: string) =>
     request<SceneLocation>("GET", `/api/campaigns/${cid}/scenes/${sid}/location`),
   setSceneLocation: (cid: string, sid: string, location: string) =>
