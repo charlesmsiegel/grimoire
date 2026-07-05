@@ -1998,3 +1998,11 @@ def test_entity_list_exposes_image_version(client):
     items = client.get(f"/api/worlds/{wid}/locations").json()
     bare = next(i for i in items if i["id"] == "bare")
     assert bare["has_image"] is False and bare.get("image_v") is None
+
+
+def test_campaign_detail_embeds_world_name(client):
+    client.post("/api/worlds", json={"name": "Drowned Realm"})
+    cid = client.post("/api/campaigns", json={"name": "Run", "world": "drowned-realm"}).json()["id"]
+    meta = client.get(f"/api/campaigns/{cid}").json()["meta"]
+    assert meta["world"] == "drowned-realm"
+    assert meta["world_name"] == "Drowned Realm"

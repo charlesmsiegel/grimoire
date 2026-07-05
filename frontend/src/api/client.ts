@@ -64,6 +64,7 @@ export type CampaignMeta = {
   id: string;
   name: string;
   world: string;
+  world_name?: string;
   created: string;
   updated: string;
   scenes: number;

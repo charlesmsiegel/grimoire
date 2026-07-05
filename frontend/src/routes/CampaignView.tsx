@@ -58,7 +58,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
   useEffect(() => {
     api.getCampaign(cid).then((c) => {
       setName(c.meta.name);
-      api.getWorld(c.meta.world).then((w) => setWorldName(w.meta.name)).catch(() => setWorldName(""));
+      setWorldName(c.meta.world_name ?? ""); // embedded: no second fetch
     });
     api.listScenes(cid).then((list) => {
       setScenes(list);

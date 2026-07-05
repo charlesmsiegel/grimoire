@@ -57,7 +57,7 @@ const ONE_SCENE = [{ id: "s1", title: "Old", model: "", created: "", updated: ""
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.getCampaign as any).mockResolvedValue({ meta: { id: "run", name: "Run One", world: "w" }, body: "" });
+  (api.getCampaign as any).mockResolvedValue({ meta: { id: "run", name: "Run One", world: "w", world_name: "Saltmarch" }, body: "" });
   (api.getWorld as any).mockResolvedValue({ meta: { id: "w", name: "Saltmarch" }, body: "", counts: {} });
   (api.listScenes as any).mockResolvedValue([]);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [] });
@@ -596,4 +596,12 @@ test("no Reroll when every message is assistant-side (multi-post opener)", async
   renderCampaign();
   await screen.findByText("opener two");
   expect(screen.queryByRole("button", { name: /reroll/i })).toBeNull();
+});
+
+test("world name comes from the campaign payload, with no world fetch", async () => {
+  (api.getCampaign as any).mockResolvedValue({
+    meta: { id: "run", name: "Run One", world: "w", world_name: "Saltmarch" }, body: "" });
+  renderCampaign();
+  expect(await screen.findByText(/World ▸ Saltmarch/)).toBeInTheDocument();
+  expect(api.getWorld).not.toHaveBeenCalled();
 });
