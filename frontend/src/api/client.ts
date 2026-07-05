@@ -174,6 +174,15 @@ export type CalendarBlock = {
   custom_holidays: Array<{ name: string; month: number; day?: number; nth?: number; weekday?: number }>;
   anchor: { native: string; gregorian: string } | null;
 };
+export type CalendarMonth = { key: string; name: string; days: number };
+export type CalendarScope = { kind: "campaign" | "world"; id: string };
+
+/** Split a native datetime on its trailing Thh:mm only — month tokens may contain T. */
+export function splitNativeDate(native: string): { date: string; time: string | null } {
+  const m = native.match(/T(\d{1,2}:\d{2})$/);
+  return m ? { date: native.slice(0, m.index), time: m[1] } : { date: native, time: null };
+}
+
 export type CalendarConfig = { primary: CalendarBlock; secondary: CalendarBlock | null; confirmed: boolean };
 export type ContextSection = { label: string; text: string; tokens: number };
 export type SceneContext = { model: string; total_tokens: number; sections: ContextSection[] };
@@ -278,8 +287,9 @@ export const api = {
 
   // campaigns
   listCampaigns: () => request<CampaignMeta[]>("GET", "/api/campaigns"),
-  createCampaign: (name: string, world: string, region?: string) =>
-    request<{ id: string }>("POST", "/api/campaigns", region ? { name, world, region } : { name, world }),
+  createCampaign: (name: string, world: string, region?: string, calendar?: string) =>
+    request<{ id: string }>("POST", "/api/campaigns",
+      { name, world, ...(region ? { region } : {}), ...(calendar ? { calendar } : {}) }),
   getCampaign: (cid: string) =>
     request<{ meta: CampaignMeta; body: string }>("GET", `/api/campaigns/${cid}`),
   renameCampaign: (cid: string, name: string) =>
@@ -500,6 +510,10 @@ export const api = {
       "PUT", `/api/campaigns/${cid}/scenes/${sid}/datetime`, { datetime }),
   getCalendarConfig: (cid: string) =>
     request<CalendarConfig>("GET", `/api/campaigns/${cid}/calendar`),
+  getCalendarMonths: (scope: CalendarScope, year: number) =>
+    request<{ months: CalendarMonth[] }>(
+      "GET",
+      `/api/${scope.kind === "campaign" ? "campaigns" : "worlds"}/${scope.id}/calendar/months?year=${year}`),
   setCalendarConfig: (cid: string, cfg: CalendarConfig) =>
     request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/calendar`, cfg),
   getSceneContext: (cid: string, sid: string) =>
