@@ -1950,3 +1950,14 @@ def test_sync_routes_backfill_legacy_campaigns(client):
     croot = store.campaigns.campaign_root(cid)
     assert (croot / "greetings" / f"{g}.md").exists()
     assert store.campaigns.read_campaign(cid)["meta"]["world_copy"] == "full"
+
+
+# ---- gzip ----
+def test_large_json_responses_are_gzipped(client):
+    wid = _world(client)
+    body = "lorem ipsum " * 500  # ~6KB, comfortably past the compression floor
+    client.post(f"/api/worlds/{wid}/lore", json={"name": "Big", "body": body})
+    r = client.get(f"/api/worlds/{wid}/lore/big", headers={"accept-encoding": "gzip"})
+    assert r.status_code == 200
+    assert r.headers.get("content-encoding") == "gzip"
+    assert r.json()["body"].strip() == body.strip()
