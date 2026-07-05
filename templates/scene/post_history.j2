@@ -1,0 +1,8 @@
+{#- The trailing system message: the NPC cards' post-history instructions,
+    blank-line separated. Sent last, right before generation; omitted when
+    empty. Vars: npc_cards. -#}
+{%- set blocks = [] -%}
+{%- for d in npc_cards -%}
+{%- if d.get("post_history_instructions", "").strip() -%}{%- set _ = blocks.append(d.get("post_history_instructions", "").strip()) -%}{%- endif -%}
+{%- endfor -%}
+{{ blocks | join("\n\n") }}

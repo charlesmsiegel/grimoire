@@ -1,0 +1,7 @@
+{#- Example dialogue from the NPC cards, blank-line separated.
+    Vars: npc_cards. -#}
+{%- set blocks = [] -%}
+{%- for d in npc_cards -%}
+{%- if d.get("mes_example", "").strip() -%}{%- set _ = blocks.append(d.get("mes_example", "").strip()) -%}{%- endif -%}
+{%- endfor -%}
+{{ blocks | join("\n\n") }}

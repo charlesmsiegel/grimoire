@@ -3,18 +3,15 @@
 a hand-written tagline must not silently expire when a card changes.
 
 Stored at <root>/characters/<cid>/tagline.md as the trimmed sentence. Pure file IO +
-prompt/parse only; the LLM call lives in the route layer.
+prompt/parse only; the LLM call lives in the route layer and the prompt text in
+templates/tagline/.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-TAGLINE_INSTRUCTION = (
-    "Summarize this character in a single vivid sentence for a game master's quick "
-    "reference — who they are and their defining trait. Third person, present tense. "
-    "Reply with the one sentence only: no headings, labels, or quotes."
-)
+from .. import prompts
 
 
 def tagline_path(root: Path, cid: str) -> Path:
@@ -33,10 +30,8 @@ def write(root: Path, cid: str, text: str) -> None:
 
 
 def build_prompt(card_data: dict) -> list[dict]:
-    fields = [card_data.get(f, "") for f in ("name", "description", "personality", "scenario")]
-    card_text = "\n".join(x for x in fields if x)
-    return [{"role": "system", "content": TAGLINE_INSTRUCTION},
-            {"role": "user", "content": card_text}]
+    return [{"role": "system", "content": prompts.render("tagline/system.j2")},
+            {"role": "user", "content": prompts.render("tagline/user.j2", card=card_data)}]
 
 
 def parse_output(text: str) -> str:

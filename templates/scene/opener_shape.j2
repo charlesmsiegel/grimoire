@@ -1,0 +1,7 @@
+{#- The opener's length/attribution rules. Always the FINAL system message of
+    an opener call — last, right before generation, so it outranks the big
+    system prompt above. Vars: npc_names ([str] — present NPC display names;
+    empty list falls back to a generic marker instruction). -#}
+{%- set markers = [] -%}
+{%- for n in npc_names -%}{%- set _ = markers.append("**" ~ n ~ ":**") -%}{%- endfor -%}
+Keep the opener to at most five short paragraphs. Open with exactly one **Grimoire:** paragraph that sets the scene and contains no character actions or dialogue. Then write at most one paragraph per character, each under its own marker: {{ (markers | join(", ")) if markers else "**<Name>:**, one block per character" }}. Everything a character does or says belongs in that character's block, never under **Grimoire:**.

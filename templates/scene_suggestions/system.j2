@@ -1,0 +1,8 @@
+{#- The scene-suggestion instruction. Selector: `offscreen` (bool) picks the
+    instruction/ variant; `s.now` (a current date exists) appends the date
+    addendum; `greeting_candidates` (non-empty list) appends the ranking
+    addendum. Vars: offscreen, s (the snapshot — same as user.j2),
+    greeting_candidates. -#}
+{%- include "scene_suggestions/instruction/" ~ ("offscreen" if offscreen else "standard") ~ ".j2" -%}
+{%- if s.now -%}{%- include "scene_suggestions/instruction/date_addendum.j2" -%}{%- endif -%}
+{%- if greeting_candidates -%}{%- include "scene_suggestions/instruction/rank_addendum.j2" -%}{%- endif -%}

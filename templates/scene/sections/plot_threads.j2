@@ -1,0 +1,4 @@
+{#- Open/advanced plot threads. Vars: plot_lines ([str] — lines rendered per
+    snippets/plot_thread_line/context.j2). -#}
+{%- if plot_lines %}# Plot threads
+{{ plot_lines | join("\n") }}{% endif -%}

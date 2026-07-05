@@ -1,13 +1,15 @@
 """Ephemeral scene-suggestion helper: assemble deterministic campaign signals (open plot
 threads, long-absent cast, calendar facts at the current moment, seedable ids), build the
 one-shot prompt, and parse the model's proposed openings. Assembly + prompt/parse only;
-the LLM call lives in the route (mirrors absorb.py / briefs.py).
+the LLM call lives in the route (mirrors absorb.py) and the prompt text in
+templates/scene_suggestions/.
 """
 
 from __future__ import annotations
 
 import json
 
+from .. import prompts
 from . import (appearances, calendars, campaigns, characters, chronicle,
                entities, greetings, pcs, plot, taglines)
 
@@ -133,11 +135,6 @@ def build_snapshot(cid: str, offscreen: bool = False) -> dict:
 
 GREETING_EXCERPT = 300
 
-RANK_INSTRUCTION = (
-    ' Also include key "greeting_picks": up to 4 ids chosen ONLY from the available '
-    "greetings below, ordered most relevant to the current situation first."
-)
-
 
 def greeting_candidates(cid: str, after: str | None = None, pcless: bool = False) -> list[dict]:
     """Available greetings worth ranking — only when more than two are startable
@@ -159,78 +156,12 @@ def greeting_candidates(cid: str, after: str | None = None, pcless: bool = False
     return out
 
 
-INSTRUCTION = (
-    "You help a game master start the next scene of a role-play campaign. Given the "
-    "current situation below, propose 3-4 DISTINCT scene openings that each advance an "
-    "open plot thread, revisit a long-absent character, or land on an upcoming date or "
-    "birthday. Reply with ONLY a JSON object with key \"suggestions\": a list of "
-    '{"title" (a short label), "premise" (2-3 sentences the GM can open on), '
-    '"cast" (list of "<kind>:<id>" tokens chosen ONLY from the available cast below), '
-    '"location" (one location id from the available locations, or "")}. Use only the ids '
-    "given; do not invent ids."
-)
-
-OFFSCREEN_INSTRUCTION = (
-    "You help a game master write OFFSCREEN scenes for a role-play campaign — scenes "
-    "that happen away from the player character, showing what NPCs do, plan, and want "
-    "when the player is not there. Given the current situation below, propose 3-4 "
-    "DISTINCT offscreen scene openings that each advance an open plot thread, reveal "
-    "an NPC's motivations, or land on an upcoming date or birthday. Never include the "
-    'player character in the cast. Reply with ONLY a JSON object with key "suggestions": '
-    'a list of {"title" (a short label), "premise" (2-3 sentences the GM can open on), '
-    '"cast" (list of "<kind>:<id>" tokens chosen ONLY from the available cast below), '
-    '"location" (one location id from the available locations, or "")}. Use only the '
-    "ids given; do not invent ids."
-)
-
-DATE_INSTRUCTION = (
-    ' Each suggestion also includes key "date": the date that scene most plausibly opens '
-    "on, given how much in-world time its premise implies has passed since the current "
-    'date (same notation as the current date, date only). Also include a top-level key '
-    '"next_date": your single best estimate of the next scene\'s date if none of the '
-    "suggestions is used."
-)
-
-
-def _render_snapshot(s: dict) -> str:
-    parts: list[str] = []
-    if s["now"]:
-        line = f"Current date: {s['friendly'] or s['now']}."
-        if s["holidays_today"]:
-            line += " Today: " + ", ".join(s["holidays_today"]) + "."
-        if s["upcoming"]:
-            line += f" Upcoming: {s['upcoming']['name']} in {s['upcoming']['in_days']} days."
-        parts.append(line)
-    if s["birthdays"]:
-        parts.append("Birthdays: " + "; ".join(
-            f"{b['name']} (age {b['age']}) {b['when']}" for b in s["birthdays"]))
-    if s["open_threads"]:
-        parts.append("Open plot threads:\n" + "\n".join(
-            f"- {t['title']} ({t['status']}): {t['latest_beat']}".rstrip(": ") for t in s["open_threads"]))
-    if s["absent_cast"]:
-        parts.append("Long-absent characters:\n" + "\n".join(
-            f"- {a['name']}: {a['tagline']}".rstrip(": ") for a in s["absent_cast"]))
-    if s["available_cast"]:
-        parts.append("Available cast (use these tokens):\n" + "\n".join(
-            f"- {c['token']} = {c['name']}" for c in s["available_cast"]))
-    if s["available_locations"]:
-        parts.append("Available locations (use these ids):\n" + "\n".join(
-            f"- {loc['id']} = {loc['name']}" for loc in s["available_locations"]))
-    return "\n\n".join(parts) if parts else "No campaign history yet; propose fresh openings."
-
-
 def build_prompt(snapshot: dict, greeting_candidates: list[dict] | None = None,
                  offscreen: bool = False) -> list[dict]:
-    instruction = OFFSCREEN_INSTRUCTION if offscreen else INSTRUCTION
-    content = _render_snapshot(snapshot)
-    if snapshot["now"]:  # no reference date -> no gap to estimate; don't invite invention
-        instruction += DATE_INSTRUCTION
-    if greeting_candidates:
-        instruction += RANK_INSTRUCTION
-        content += "\n\nAvailable greetings (use these ids):\n" + "\n".join(
-            f"- {g['id']} = {g['name']}: {g['excerpt']}" for g in greeting_candidates)
-    return [{"role": "system", "content": instruction},
-            {"role": "user", "content": content}]
+    # the templates pick the instruction variant and addenda from the same vars
+    vars = {"s": snapshot, "offscreen": offscreen, "greeting_candidates": greeting_candidates}
+    return [{"role": "system", "content": prompts.render("scene_suggestions/system.j2", **vars)},
+            {"role": "user", "content": prompts.render("scene_suggestions/user.j2", **vars)}]
 
 
 def _valid_ids(cid: str):

@@ -1,0 +1,24 @@
+{#- The in-world date block. Vars: today (None, or a dict with:
+      friendly, weekday, secondary_friendly (str, may be ""),
+      holidays_today ([str]), upcoming ({name, in_days} | None),
+      cast ([{name, age, birthday_today}] — in-scene actors with birthdates)). -#}
+{%- if today -%}
+{%- set lines = [] -%}
+{%- if today.secondary_friendly -%}
+{%- set _ = lines.append("It is " ~ today.friendly ~ " (" ~ today.weekday ~ "); " ~ today.secondary_friendly ~ ".") -%}
+{%- else -%}
+{%- set _ = lines.append("It is " ~ today.friendly ~ " (" ~ today.weekday ~ ").") -%}
+{%- endif -%}
+{%- if today.holidays_today -%}{%- set _ = lines.append("Holidays today: " ~ (today.holidays_today | join(", ")) ~ ".") -%}{%- endif -%}
+{%- if today.upcoming -%}{%- set _ = lines.append("Upcoming: " ~ today.upcoming.name ~ " in " ~ today.upcoming.in_days ~ " days.") -%}{%- endif -%}
+{%- if today.cast -%}
+{%- set bits = [] -%}
+{%- for c in today.cast -%}
+{%- if c.birthday_today -%}{%- set _ = bits.append("it is " ~ c.name ~ "'s birthday (age " ~ c.age ~ ")") -%}
+{%- else -%}{%- set _ = bits.append(c.name ~ " (age " ~ c.age ~ ")") -%}{%- endif -%}
+{%- endfor -%}
+{%- set _ = lines.append("Present today: " ~ (bits | join("; ")) ~ ".") -%}
+{%- endif -%}
+# Today
+{{ lines | join("\n") }}
+{%- endif -%}

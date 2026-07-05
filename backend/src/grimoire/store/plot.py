@@ -77,19 +77,13 @@ def open_threads(cid: str) -> list[dict]:
 
 def render_open(cid: str, with_id: bool) -> list[str]:
     """Formatted lines for open/advanced threads, shared by the absorb prompt snapshot and
-    the # Plot threads context block. `with_id=True` → prompt form
-    ("id: Title (status) — beat", so the model can reference the thread); `False` → context
-    form ("Title (status): beat"). Tolerant of a garbled plot.json (returns [])."""
+    the # Plot threads context block. `with_id=True` → absorb form (leads with the id so
+    the model can reference the thread); `False` → context form. The line formats live in
+    templates/snippets/plot_thread_line/. Tolerant of a garbled plot.json (returns [])."""
+    from .. import prompts
     try:
         threads = open_threads(cid)
     except Exception:  # noqa: BLE001 — garbled plot.json: omit, don't crash callers
         return []
-    lines: list[str] = []
-    for t in threads:
-        if with_id:
-            head = f"{t['id']}: {t['title']} ({t['status']})"
-            lines.append(f"{head} — {t['latest_beat']}" if t["latest_beat"] else head)
-        else:
-            head = f"{t['title']} ({t['status']})"
-            lines.append(f"{head}: {t['latest_beat']}" if t["latest_beat"] else head)
-    return lines
+    template = f"snippets/plot_thread_line/{'absorb' if with_id else 'context'}.j2"
+    return [prompts.render(template, t=t) for t in threads]

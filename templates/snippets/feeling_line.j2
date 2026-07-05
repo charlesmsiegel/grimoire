@@ -1,0 +1,4 @@
+{#- One directed feeling as a line (feeds the # Relationships context block
+    and the absorb prompt's relationships head). Vars: a, b (display names),
+    f ({trust, affection, tension, note}). -#}
+{{ a }} → {{ b }}: trust {{ f.trust }}, affection {{ f.affection }}, tension {{ f.tension }}{% if f.get("note") %} ({{ f.note }}){% endif %}

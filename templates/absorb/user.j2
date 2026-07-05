@@ -1,0 +1,28 @@
+{#- Deterministic context head + the scene transcript. Vars:
+      facts — dict from chronicle.scene_facts(): location (str), date (str),
+              cast ([str] of "<kind>/<id>" refs)
+      state_snapshot — ordered dict name -> snapshot line (see
+                       snippets/state_snapshot_line.j2) | None
+      rel_snapshot — rendered feelings/bonds lines, "\n"-joined (see
+                     snippets/feeling_line.j2, snippets/bond_line.j2) | None
+      plot_snapshot — rendered thread lines, "\n"-joined (see
+                      snippets/plot_thread_line/absorb.j2) | None
+      transcript — str (see snippets/transcript.j2) -#}
+{%- set head = [] -%}
+{%- if facts.get("location") -%}{%- set _ = head.append("Location: " ~ facts.location) -%}{%- endif -%}
+{%- if facts.get("date") -%}{%- set _ = head.append("Date: " ~ facts.date) -%}{%- endif -%}
+{%- if facts.get("cast") -%}{%- set _ = head.append("Present: " ~ (facts.cast | join(", "))) -%}{%- endif -%}
+{%- if state_snapshot -%}
+{%- set lines = [] -%}
+{%- for name, snapshot in state_snapshot.items() -%}{%- set _ = lines.append("- " ~ name ~ ": " ~ snapshot) -%}{%- endfor -%}
+{%- set _ = head.append("Current character state:\n" ~ (lines | join("\n"))) -%}
+{%- endif -%}
+{%- if rel_snapshot -%}{%- set _ = head.append("Current relationships:\n" ~ rel_snapshot) -%}{%- endif -%}
+{%- if plot_snapshot -%}{%- set _ = head.append("Current plot threads:\n" ~ plot_snapshot) -%}{%- endif -%}
+{%- if head -%}
+{{ head | join("\n") }}
+
+{{ transcript }}
+{%- else -%}
+{{ transcript }}
+{%- endif -%}

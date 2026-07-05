@@ -2,19 +2,14 @@
 current status in this campaign) feeding the off-scene cast's "Active in this campaign,
 elsewhere" tier. Campaign-level; written at absorb. Plain text at
 <croot>/characters/<cid>/dossier.md. Pure file IO + prompt/parse only; the LLM call
-lives in the route layer.
+lives in the route layer and the prompt text in templates/dossier/.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-DOSSIER_INSTRUCTION = (
-    "You are updating a game master's dossier on a character in an ongoing campaign. "
-    "Given the character's prior dossier (may be empty) and the latest scene transcript, "
-    "reply with ONE short paragraph (3-4 sentences) on who they are and their current "
-    "standing after this scene. Third person, present tense. No headings or labels."
-)
+from .. import prompts
 
 
 def dossier_path(croot: Path, cid: str) -> Path:
@@ -33,9 +28,9 @@ def write(croot: Path, cid: str, text: str) -> None:
 
 
 def build_prompt(name: str, prior: str, transcript: str) -> list[dict]:
-    head = f"Character: {name}\nPrior dossier: {prior or '(none)'}\n\nScene transcript:\n"
-    return [{"role": "system", "content": DOSSIER_INSTRUCTION},
-            {"role": "user", "content": head + transcript}]
+    return [{"role": "system", "content": prompts.render("dossier/system.j2")},
+            {"role": "user", "content": prompts.render("dossier/user.j2", name=name,
+                                                       prior=prior, transcript=transcript)}]
 
 
 def parse_output(text: str) -> str:

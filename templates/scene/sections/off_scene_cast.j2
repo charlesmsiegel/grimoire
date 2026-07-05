@@ -1,0 +1,18 @@
+{#- The two-tier off-scene cast directory. Vars:
+      offscene_active — [{name, dossier}] campaign-active characters not in
+                        the scene (dossier paragraph)
+      offscene_known — [{name, tagline, versions: [str]}] every other world
+                       character with a tagline -#}
+{%- set active_lines = [] -%}
+{%- for a in offscene_active -%}{%- set _ = active_lines.append(a.name ~ ": " ~ a.dossier) -%}{%- endfor -%}
+{%- set known_lines = [] -%}
+{%- for k in offscene_known -%}
+{%- set suffix = (" (available as: " ~ (k.versions | join(", ")) ~ ")") if k.versions else "" -%}
+{%- set _ = known_lines.append(k.name ~ ": " ~ k.tagline ~ suffix) -%}
+{%- endfor -%}
+{%- if active_lines or known_lines -%}
+{%- set parts = ["# Other characters in this world", "# (Not present. Introduce them only if the story calls for it.)"] -%}
+{%- if active_lines -%}{%- set _ = parts.append("## Active in this campaign, elsewhere\n" ~ (active_lines | join("\n"))) -%}{%- endif -%}
+{%- if known_lines -%}{%- set _ = parts.append("## Known to exist\n" ~ (known_lines | join("\n"))) -%}{%- endif -%}
+{{ parts | join("\n\n") }}
+{%- endif -%}

@@ -1,0 +1,7 @@
+{#- Vars: name (str), prior (str, may be empty), transcript (str — rendered via
+    snippets/transcript.j2). -#}
+Character: {{ name }}
+Prior dossier: {{ prior or "(none)" }}
+
+Scene transcript:
+{{ transcript }}

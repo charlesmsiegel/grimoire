@@ -1,0 +1,422 @@
+"""Prove the prompt builders and templates/ agree byte-for-byte.
+
+The store modules render prompts from templates/ — this harness verifies the
+WIRING (each builder passes the documented variables to the right template)
+and the DATA CONTRACT (the gather() mirror below assembles the same data from
+public store reads that context._assemble gathers; templates/README.md
+documents that contract). It builds a throwaway store (GRIMOIRE_HOME -> temp
+dir) exercising every context section, then compares direct template renders
+against the live builders. It never pins template text to literals, so
+editing a prompt in templates/ cannot fail it. Run after touching either
+side:
+
+    backend/.venv/Scripts/python.exe scripts/verify_templates.py
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / "backend" / "src"))
+os.environ["GRIMOIRE_HOME"] = tempfile.mkdtemp(prefix="grimoire-verify-")
+
+from jinja2 import Environment, FileSystemLoader, StrictUndefined  # noqa: E402
+
+env = Environment(loader=FileSystemLoader(str(REPO / "templates")),
+                  undefined=StrictUndefined)
+
+FAILURES: list[str] = []
+CHECKS = 0
+
+
+def render(_template: str, **vars) -> str:
+    return env.get_template(_template).render(**vars)
+
+
+def check(label: str, expected: str, actual: str) -> None:
+    global CHECKS
+    CHECKS += 1
+    if expected == actual:
+        return
+    i = next((n for n, (a, b) in enumerate(zip(expected, actual)) if a != b),
+             min(len(expected), len(actual)))
+    FAILURES.append(
+        f"{label}: mismatch at char {i}\n"
+        f"  expected …{expected[max(0, i - 60):i + 60]!r}…\n"
+        f"  actual   …{actual[max(0, i - 60):i + 60]!r}…")
+
+
+def check_messages(label: str, expected: list[dict], actual: list[dict]) -> None:
+    global CHECKS
+    if [m["role"] for m in expected] != [m["role"] for m in actual]:
+        CHECKS += 1
+        FAILURES.append(f"{label}: role shape {[m['role'] for m in expected]} != "
+                        f"{[m['role'] for m in actual]}")
+        return
+    for n, (e, a) in enumerate(zip(expected, actual)):
+        check(f"{label}[{n}] ({e['role']})", e["content"], a["content"])
+
+
+# ---------------------------------------------------------------- pure checks
+
+from grimoire.store import absorb, chronicle, context, dossiers, relationships, suggest, taglines  # noqa: E402
+
+card = {"name": "Seraphine Vale", "description": "Tall, sharp-eyed smuggler.",
+        "personality": "Wry and wary.", "scenario": "Runs the night dock."}
+exp = taglines.build_prompt(card)
+check("tagline system", exp[0]["content"], render("tagline/system.j2"))
+check("tagline user", exp[1]["content"], render("tagline/user.j2", card=card))
+sparse = {"name": "Bob", "description": "", "scenario": "A bar."}  # missing keys too
+exp = taglines.build_prompt(sparse)
+check("tagline user (sparse)", exp[1]["content"], render("tagline/user.j2", card=sparse))
+
+transcript = "**You:** Where is it?\n\n**Seraphine Vale:** Gone."
+for prior in ("", "She ran the dock and owed the Guild."):
+    exp = dossiers.build_prompt("Seraphine Vale", prior, transcript)
+    check(f"dossier system (prior={bool(prior)})", exp[0]["content"], render("dossier/system.j2"))
+    check(f"dossier user (prior={bool(prior)})", exp[1]["content"],
+          render("dossier/user.j2", name="Seraphine Vale", prior=prior, transcript=transcript))
+
+EMPTY_SNAP = {"now": "", "friendly": "", "holidays_today": [], "upcoming": None,
+              "birthdays": [], "open_threads": [], "absent_cast": [],
+              "available_cast": [], "available_locations": []}
+FULL_SNAP = {"now": "2026-07-05", "friendly": "July 5, 2026", "holidays_today": ["Founding Day"],
+             "upcoming": {"name": "The Regatta", "in_days": 3},
+             "birthdays": [{"name": "Hero", "age": 26, "when": "today"},
+                           {"name": "Mora", "age": 51, "when": "in 2 days"}],
+             "open_threads": [{"title": "Find the ledger", "status": "open",
+                               "latest_beat": "Hero learned it exists."},
+                              {"title": "The Guild debt", "status": "advanced", "latest_beat": ""}],
+             "absent_cast": [{"name": "Mora", "tagline": "A fortune-teller who deals in secrets."},
+                             {"name": "Silent Jim", "tagline": ""}],
+             "available_cast": [{"token": "characters:mora", "name": "Mora"},
+                                {"token": "pcs:hero", "name": "Hero"}],
+             "available_locations": [{"id": "night-dock", "name": "Night Dock"}]}
+GREETINGS = [{"id": "g1", "name": "Storm greeting", "excerpt": "Rain hammers the piers."},
+             {"id": "g2", "name": "Quiet morning", "excerpt": "The dock sleeps."},
+             {"id": "g3", "name": "Debt call", "excerpt": "A collector knocks."}]
+for label, snap, cands, off in (("empty", EMPTY_SNAP, None, False),
+                                ("full", FULL_SNAP, None, False),
+                                ("full+greetings", FULL_SNAP, GREETINGS, False),
+                                ("offscreen", FULL_SNAP, None, True)):
+    exp = suggest.build_prompt(snap, cands, offscreen=off)
+    check(f"suggestions system ({label})", exp[0]["content"],
+          render("scene_suggestions/system.j2", s=snap, offscreen=off, greeting_candidates=cands))
+    check(f"suggestions user ({label})", exp[1]["content"],
+          render("scene_suggestions/user.j2", s=snap, offscreen=off, greeting_candidates=cands))
+
+for label, facts, st, rel, plt in (
+        ("bare", {}, None, None, None),
+        ("full", {"location": "Night Dock", "date": "2026-07-05",
+                  "cast": ["characters/seraphine-vale", "pcs/hero"]},
+         {"Seraphine Vale": "Wounded. Knows: The ledger is real."},
+         "Seraphine Vale → Hero: trust 2, affection 3, tension 4 (suspects a tail)",
+         "find-the-ledger: Find the ledger (open) — Hero learned it exists.")):
+    exp = absorb.build_prompt(transcript, facts, st, rel, plt)
+    check(f"absorb system ({label})", exp[0]["content"], render("absorb/system.j2"))
+    check(f"absorb user ({label})", exp[1]["content"],
+          render("absorb/user.j2", facts=facts, state_snapshot=st, rel_snapshot=rel,
+                 plot_snapshot=plt, transcript=transcript))
+
+msgs = [{"role": "user", "content": "hi"},
+        {"role": "user", "speaker": "Hero", "content": "yo"},
+        {"role": "assistant", "speaker": "Seraphine Vale", "content": "Try me."},
+        {"role": "assistant", "content": "Fog rolls in."}]
+check("transcript", chronicle.transcript_text(msgs), render("snippets/transcript.j2", messages=msgs))
+
+for st in ({"current_state": "Wounded.", "knows": "The ledger is real.", "suspects": "Bob lied."},
+           {"current_state": "", "knows": "The ledger is real.", "suspects": ""},
+           {"current_state": "Hiding.", "knows": "", "suspects": ""}):
+    check(f"state snapshot line ({st['current_state'] or 'no-cs'})",
+          absorb._snapshot_line(st), render("snippets/state_snapshot_line.j2", st=st))
+
+routes_src = (REPO / "backend/src/grimoire/routes.py").read_text(encoding="utf-8")
+assert 'prompts.render("scene/director_note.j2")' in routes_src, \
+    "routes.py no longer renders the director-note template"
+assert 'prompts.render("scene/regenerate_guidance.j2"' in routes_src, \
+    "routes.py no longer renders the regenerate-guidance template"
+
+# ------------------------------------------------------------- store fixture
+
+from grimoire.store import appearances as ap  # noqa: E402
+from grimoire.store import (calendars, campaigns, characters, config, dossiers as dstore,  # noqa: E402
+                            entities, pcs, playstate, plot, scenes, taglines as tstore, worlds)
+
+config.write_config(system_prompt="Global GM rules: be vivid, be fair.")
+wid = worlds.create_world("W")
+cid = campaigns.create_campaign("Run", wid)
+croot = campaigns.campaign_root(cid)
+sid = scenes.create_scene(cid, "S1")
+
+ncard = characters.blank_card("Seraphine Vale")
+ncard["data"].update({"description": "Tall, sharp-eyed smuggler.", "personality": "Wry and wary.",
+                      "scenario": "Runs the night dock.", "system_prompt": "Voice Seraphine with dry wit.",
+                      "mes_example": "<START>\n**Seraphine Vale:** Try me.",
+                      "post_history_instructions": "Keep replies under four paragraphs."})
+sera, _ = characters.create_character(croot, "Seraphine Vale", "default", ncard)
+ap.appear(cid, sid, "characters", sera, "default", "npc")
+playstate.write_state(croot, sera, playstate.compose_body(
+    "Wounded and hiding.", "The ledger is real.\nIt names the harbormaster.", "The Guild watches her."))
+
+persona = pcs.blank_persona("Hero")
+persona.update({"pronouns": "she/her", "summary": "A debt-ridden courier.",
+                "description": "Quick, kind, unlucky.", "birthdate": "2000-07-05"})
+pid, _ = pcs.create_pc(croot, "Hero", [], persona=persona)
+ap.appear(cid, sid, "pcs", pid, "default", "player")
+
+kcard = characters.blank_card("Doc Kessler")
+kcard["data"].update({"description": "A weary back-alley medic."})
+kessler, _ = characters.create_character(croot, "Doc Kessler", "default", kcard)
+sid0 = scenes.create_scene(cid, "S0")
+ap.appear(cid, sid0, "characters", kessler, "default", "npc")
+dstore.write(croot, kessler, "Kessler patches up smugglers and quietly owes the Guild.")
+
+mcard = characters.blank_card("Mora")
+mora, _ = characters.create_character(croot, "Mora", "default", mcard)
+tstore.write(croot, mora, "A fortune-teller who deals in secrets.")
+
+dock = entities.create_entity(croot, "locations", "Night Dock",
+                              "Fog-slick piers stacked with contraband.", keys="dock, pier")
+entities.create_entity(croot, "locations", "Bonded Warehouse",
+                       "Crates to the ceiling, one door.", keys="warehouse")
+entities.create_entity(croot, "lore", "Salt Pact", "The Pact taxes every crossing.")
+entities.create_entity(croot, "lore", "The Ledger", "The ledger lists a decade of bribes.",
+                       keys="ledger")
+entities.create_entity(croot, "lore", "Sera secret", "She was exiled from the Guild.",
+                       owners=f"characters:{sera}")
+scenes.set_location(cid, sid, dock)
+sid = scenes.set_datetime(cid, sid, "2026-07-05")["id"]  # first date set renames the scene
+
+scenes.append_message(cid, sid, "user", "Where is the ledger?")
+scenes.append_message(cid, sid, "assistant", "Seraphine glances toward the warehouse.",
+                      speaker="Seraphine Vale")
+scenes.append_message(cid, sid, "assistant", "Fog rolls in off the water.")
+scenes.append_message(cid, sid, "user", "I follow her.", speaker="Hero")
+
+relationships.set_feeling(cid, f"characters:{sera}", f"pcs:{pid}", 2, 3, 4, "suspects a tail")
+relationships.set_bond(cid, f"characters:{sera}", f"pcs:{pid}", "reluctant allies")
+plot.set_movement(cid, "find-the-ledger", "Find the ledger", "open", "Hero learned it exists.", sid)
+chronicle.absorb(cid, {"id": sid0, "one_line": "Hero met Kessler.",
+                       "summary": "Hero met Doc Kessler in his clinic and traded a favor for gossip.",
+                       "keywords": ["clinic"], "cast": [f"characters/{kessler}"],
+                       "location": "", "date": "2026-07-01"})
+
+
+def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) -> dict:
+    """Mirror context._assemble's data gathering through public store reads —
+    this is the data contract documented in templates/README.md."""
+    cfg = config.read_config()
+    scene = scenes.read_scene(cid, scene_id)
+    cast = ap.scene_cast(cid, scene_id)
+
+    npc_cards, states = [], []
+    for a in cast:
+        if a["role"] != "npc":
+            continue
+        vid = ap.locked_version(cid, a["kind"], a["id"])
+        npc_cards.append(characters.read_card(croot, a["id"], vid)["data"])
+        st = playstate.read_state(croot, a["id"])
+        if st and (st["current_state"] or st["knows"] or st["suspects"]):
+            name = characters.read_character(croot, a["id"])["meta"].get("name", a["id"])
+            states.append({"name": name, **st})
+
+    players, player_names = [], []
+    for a in cast:
+        if a["role"] != "player":
+            continue
+        vid = ap.locked_version(cid, a["kind"], a["id"])
+        if a["kind"] == "pcs":
+            p = pcs.read_persona(croot, a["id"], vid)
+            players.append({"kind": "pcs", **p})
+            player_names.append(p.get("name", a["id"]))
+        else:
+            d = characters.read_card(croot, a["id"], vid)["data"]
+            players.append({"kind": "characters", **d})
+            player_names.append(d.get("name", a["id"]))
+
+    refs, ref_names = [], []
+    if pcless:
+        for a in ap.roster(cid):
+            if a["role"] != "player":
+                continue
+            if a["kind"] == "pcs":
+                p = pcs.read_persona(croot, a["id"], a["version"])
+                refs.append({"kind": "pcs", **p})
+                ref_names.append(p.get("name", a["id"]))
+            else:
+                d = characters.read_card(croot, a["id"], a["version"])["data"]
+                refs.append({"kind": "characters", **d})
+                ref_names.append(d.get("name", a["id"]))
+
+    tokens = [f"{a['kind']}:{a['id']}" for a in cast]
+    relationship_lines = relationships.render_present(
+        cid, tokens, lambda t: relationships.actor_name(croot, t))
+
+    depth = full_recap or max(int(cfg.get("recap_depth", "5")), 0)
+    records = chronicle.recent(cid, depth) if depth > 0 else []
+    story_entries = [((r.get("summary") or r.get("one_line") or "") if full_recap
+                      else (r.get("one_line") or r.get("summary") or "")).strip()
+                     for r in records]
+
+    history_ids = scenes.get_location_history(cid, scene_id)
+    current_loc = history_ids[-1] if history_ids else None
+    current_setting = ""
+    if current_loc:
+        current_setting = entities.read_entity(croot, "locations", current_loc)["body"].strip()
+
+    scan = max(int(cfg.get("context_scan_depth", "8")), 0)
+    recent_text = "\n".join(m["content"] for m in scene["messages"][-scan:]) if scan else ""
+    if wi_seed:
+        recent_text = (recent_text + "\n" + wi_seed).strip()
+    entries = []
+    for kind in ("lore", "locations"):
+        for meta in entities.list_entities(croot, kind):
+            if kind == "locations" and meta["id"] == current_loc:
+                continue
+            e = entities.read_entity(croot, kind, meta["id"])
+            keys = [k.strip() for k in e["meta"].get("keys", "").split(",") if k.strip()]
+            owners = [o.strip() for o in e["meta"].get("owners", "").split(",") if o.strip()]
+            if kind == "locations" and not keys:
+                continue
+            entries.append({"body": e["body"].strip(), "keys": keys, "owners": owners})
+    present = set(tokens) | ({f"locations:{current_loc}"} if current_loc else set())
+    world_info_bodies = [e["body"] for e in context.activate(entries, recent_text, frozenset(present))]
+
+    today = None
+    time_history = scenes.get_time_history(cid, scene_id)
+    if time_history:
+        facts = calendars.today_facts(calendars.read_calendar(croot), time_history[-1])
+        today = {"friendly": facts["friendly"], "weekday": facts["weekday"],
+                 "secondary_friendly": facts["secondary_friendly"],
+                 "holidays_today": facts["holidays_today"], "upcoming": facts["upcoming"],
+                 "cast": context.cast_datetime_facts(cid, scene_id, time_history[-1])}
+
+    present_chars = {a["id"] for a in cast if a["kind"] == "characters"}
+    roster = ap.roster(cid)
+    roster_ids = {a["id"] for a in roster if a["kind"] == "characters"}
+    offscene_active = []
+    for a in roster:
+        if a["kind"] != "characters" or a["role"] != "npc" or a["id"] in present_chars:
+            continue
+        body = dstore.read(croot, a["id"])
+        if body:
+            name = characters.read_character(croot, a["id"])["meta"]["name"]
+            offscene_active.append({"name": name, "dossier": body})
+    offscene_known = []
+    for char_id in characters.character_refs(croot):
+        if char_id in roster_ids or char_id in present_chars:
+            continue
+        tag = tstore.read(croot, char_id)
+        if not tag:
+            continue
+        ch = characters.read_character(croot, char_id)
+        offscene_known.append({"name": ch["meta"]["name"], "tagline": tag,
+                               "versions": [v["id"] for v in ch["versions"]]})
+
+    return {"global_system_prompt": cfg.get("system_prompt", ""), "npc_cards": npc_cards,
+            "states": states, "relationship_lines": relationship_lines, "players": players,
+            "ref_names": ref_names, "refs": refs, "story_entries": story_entries,
+            "plot_lines": plot.render_open(cid, with_id=False), "today": today,
+            "current_setting": current_setting, "world_info_bodies": world_info_bodies,
+            "offscene_active": offscene_active, "offscene_known": offscene_known,
+            "player_names": player_names, "pcless": pcless,
+            "story_full": bool(full_recap), "opener": False}
+
+
+def rendered_messages(scene_id: str, data: dict, note: str | None = None,
+                      opener_prompt: str | None = None) -> list[dict]:
+    out = []
+    system = render("scene/system.j2", **data)
+    if system:
+        out.append({"role": "system", "content": system})
+    if opener_prompt is None:
+        for m in scenes.read_scene(cid, scene_id)["messages"]:
+            line = render("scene/history_line.j2", m=m)
+            if out and out[-1]["role"] == m["role"] and out[-1]["role"] != "system":
+                out[-1]["content"] += "\n\n" + line
+            else:
+                out.append({"role": m["role"], "content": line})
+    if note is not None:
+        out.append({"role": "user", "content": note})
+    if opener_prompt is not None:
+        out.append({"role": "user", "content": opener_prompt})
+    post = render("scene/post_history.j2", npc_cards=data["npc_cards"])
+    if post:
+        out.append({"role": "system", "content": post})
+    if opener_prompt is not None:  # the shape rules always ride last on openers
+        npc_names = [d.get("name", "") for d in data["npc_cards"] if d.get("name")]
+        out.append({"role": "system",
+                    "content": render("scene/opener_shape.j2", npc_names=npc_names)})
+    return out
+
+
+# --------------------------------------------------- context builder checks
+
+data = gather(sid, pcless=False)
+check_messages("chat", context.build_messages(cid, sid), rendered_messages(sid, data))
+note = render("scene/director_note.j2")
+check_messages("director", context.build_director_messages(cid, sid, note),
+               rendered_messages(sid, data, note=note))
+
+opener_prompt = "A storm rolls in while they reach the warehouse ledger."
+odata = {**gather(sid, pcless=False, wi_seed=opener_prompt, full_recap=context.OPENER_RECAP_DEPTH),
+         "opener": True}
+check_messages("opener", context.build_opener_messages(cid, sid, opener_prompt),
+               rendered_messages(sid, odata, opener_prompt=opener_prompt))
+
+sid_off = scenes.create_scene(cid, "Offscreen", pcless=True)
+ap.appear(cid, sid_off, "characters", sera, "default", "npc")
+ap.appear(cid, sid_off, "characters", kessler, "default", "npc")
+scenes.append_message(cid, sid_off, "assistant", "Kessler locks the clinic door.",
+                      speaker="Doc Kessler")
+off_data = gather(sid_off, pcless=True)
+check_messages("offscreen chat", context.build_messages(cid, sid_off),
+               rendered_messages(sid_off, off_data))
+off_odata = {**gather(sid_off, pcless=True, wi_seed="The pact at the pier.",
+                      full_recap=context.OPENER_RECAP_DEPTH), "opener": True}
+check_messages("offscreen opener",
+               context.build_opener_messages(cid, sid_off, "The pact at the pier."),
+               rendered_messages(sid_off, off_odata, opener_prompt="The pact at the pier."))
+
+# ------------------------------------------------ store-level simple prompts
+
+snap = suggest.build_snapshot(cid)
+exp = suggest.build_prompt(snap, None)
+check("suggestions system (store)", exp[0]["content"],
+      render("scene_suggestions/system.j2", s=snap, offscreen=False, greeting_candidates=None))
+check("suggestions user (store)", exp[1]["content"],
+      render("scene_suggestions/user.j2", s=snap, offscreen=False, greeting_candidates=None))
+
+scene_msgs = scenes.read_scene(cid, sid)["messages"]
+tr = render("snippets/transcript.j2", messages=scene_msgs)
+check("transcript (store)", chronicle.transcript_text(scene_msgs), tr)
+facts = chronicle.scene_facts(cid, sid)
+st_snap = absorb.state_snapshot(cid, sid)
+rel_snap = absorb.relationships_snapshot(cid, sid)
+plot_snap = absorb.plot_snapshot(cid)
+exp = absorb.build_prompt(tr, facts, st_snap, rel_snap, plot_snap)
+check("absorb user (store)", exp[1]["content"],
+      render("absorb/user.j2", facts=facts, state_snapshot=st_snap, rel_snapshot=rel_snap,
+             plot_snapshot=plot_snap, transcript=tr))
+for name, line in st_snap.items():
+    st = playstate.read_state(croot, sera)
+    check(f"state snapshot line (store, {name})", line,
+          render("snippets/state_snapshot_line.j2", st=st))
+
+threads = plot.open_threads(cid)
+check("plot lines (context form)", "\n".join(plot.render_open(cid, with_id=False)),
+      "\n".join(render("snippets/plot_thread_line/context.j2", t=t) for t in threads))
+check("plot lines (absorb form)", "\n".join(plot.render_open(cid, with_id=True)),
+      "\n".join(render("snippets/plot_thread_line/absorb.j2", t=t) for t in threads))
+
+# ---------------------------------------------------------------------------
+
+if FAILURES:
+    print(f"{len(FAILURES)}/{CHECKS} checks FAILED\n")
+    print("\n\n".join(FAILURES))
+    sys.exit(1)
+print(f"all {CHECKS} checks passed — builders and templates/ agree byte-for-byte")

@@ -1,0 +1,4 @@
+{#- The character card, one non-empty field per line. Vars: card (dict with
+    name/description/personality/scenario). -#}
+{%- set fields = [card.get("name", ""), card.get("description", ""), card.get("personality", ""), card.get("scenario", "")] -%}
+{{ fields | select | join("\n") }}

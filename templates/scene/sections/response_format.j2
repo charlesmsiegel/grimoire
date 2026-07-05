@@ -1,0 +1,4 @@
+{#- The reply-format instruction, always last in the system message.
+    Vars: player_names ([str] — seated players the model must never write). -#}
+Write your reply as a script. Each character who acts or speaks gets their own block starting with **<Name>:** on its own line, e.g. **Seraphine Vale:**. Use **Grimoire:** for narration, scene description, and any voice that isn't a named character.
+{%- if player_names %} Never write dialogue or actions for: {{ player_names | join(", ") }}.{% endif -%}

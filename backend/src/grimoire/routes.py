@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
-from . import store
+from . import prompts, store
 from .openrouter import OpenRouterClient, OpenRouterError
 
 router = APIRouter()
@@ -1420,7 +1420,7 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, client: OpenRouterClient = Dep
     if store.scenes.is_pcless(cid, sid) or not turn.content.strip():
         # ephemeral turn, never stored: a director note steering one generation
         # (pcless), or — in any scene — an empty send meaning "next NPC round"
-        note = turn.content.strip() or "Continue the scene."
+        note = turn.content.strip() or prompts.render("scene/director_note.j2")
         messages = store.context.build_director_messages(cid, sid, note)
         return _chat_stream(cid, sid, messages, cfg, client)
     names = store.appearances.player_names(cid, sid)
@@ -1462,7 +1462,7 @@ def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
     if guidance:
         messages.append({
             "role": "system",
-            "content": f"Regenerate your previous reply. Guidance from the player: {guidance}",
+            "content": prompts.render("scene/regenerate_guidance.j2", guidance=guidance),
         })
     return _chat_stream(cid, sid, messages, cfg, client)
 

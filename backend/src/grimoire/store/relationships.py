@@ -71,11 +71,14 @@ def actor_name(croot, token: str) -> str:
 
 
 def _render_feeling(f: dict) -> str:
+    # the staged-edit diff format (absorb.materialize); the PROMPT line format
+    # lives in templates/snippets/feeling_line.j2
     note = f" ({f['note']})" if f.get("note") else ""
     return f"trust {f['trust']}, affection {f['affection']}, tension {f['tension']}{note}"
 
 
 def render_present(cid: str, tokens: list[str], name_of) -> list[str]:
+    from .. import prompts
     data = read(cid)
     lines: list[str] = []
     for a in tokens:
@@ -84,12 +87,14 @@ def render_present(cid: str, tokens: list[str], name_of) -> list[str]:
                 continue
             f = data["feelings"].get(feeling_key(a, b))
             if f:
-                lines.append(f"{name_of(a)} → {name_of(b)}: {_render_feeling(f)}")
+                lines.append(prompts.render("snippets/feeling_line.j2",
+                                            a=name_of(a), b=name_of(b), f=f))
     for a in tokens:
         for b in tokens:
             if a >= b:  # each unordered pair once (tokens are unique)
                 continue
             bd = data["bonds"].get(bond_key(a, b))
             if bd:
-                lines.append(f"{name_of(a)} & {name_of(b)}: {bd['type']}")
+                lines.append(prompts.render("snippets/bond_line.j2",
+                                            a=name_of(a), b=name_of(b), bond=bd))
     return lines

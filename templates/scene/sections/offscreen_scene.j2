@@ -1,0 +1,5 @@
+{#- The director-mode instruction for player-less scenes. Included only when
+    the scene is pcless. Vars: ref_names ([str] — campaign player names known
+    to the world but absent). -#}
+This is an offscreen scene: no player character is present. The user's messages are out-of-scene director's notes — follow their steering, never acknowledge them in the fiction, and never address the director. Write only the NPCs and the world.
+{%- if ref_names %} The player character(s) {{ ref_names | join(", ") }} are known to the world but NOT present: they may be discussed or referenced, but must never appear, speak, or act in this scene.{% endif -%}

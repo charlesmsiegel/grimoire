@@ -1,0 +1,4 @@
+{#- Present-cast feelings and bonds. Vars: relationship_lines ([str] — lines
+    rendered per snippets/feeling_line.j2 and snippets/bond_line.j2). -#}
+{%- if relationship_lines %}# Relationships
+{{ relationship_lines | join("\n") }}{% endif -%}
