@@ -41,6 +41,15 @@ def test_split_native_and_minutes():
     assert minutes_of("2026-06-29") is None
 
 
+def test_split_native_survives_month_names_containing_T():
+    # Hebrew and Harptos month tokens contain a capital T; only a trailing
+    # Thh:mm may be treated as a time suffix.
+    assert split_native("5786-Tishrei-01") == ("5786-Tishrei-01", None)
+    assert split_native("1492-Tarsakh-05") == ("1492-Tarsakh-05", None)
+    assert split_native("5786-Tishrei-01T14:30") == ("5786-Tishrei-01", "14:30")
+    assert split_native("1492-Tarsakh-05T9:05") == ("1492-Tarsakh-05", "9:05")
+
+
 def test_normalize_preserves_time_and_canonicalizes_date():
     p = get_provider(greg())
     assert normalize(p, "2026-06-29T14:30") == "2026-06-29T14:30"

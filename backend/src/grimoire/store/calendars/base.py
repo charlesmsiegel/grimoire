@@ -12,6 +12,7 @@ not the providers — providers are purely calendrical (date-level).
 
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
 
 
@@ -65,9 +66,14 @@ def get_provider(config: dict) -> CalendarProvider:
 
 # ---- time-of-day-aware, calendar-agnostic helpers ----
 
+_TIME_SUFFIX = re.compile(r"T(\d{1,2}:\d{1,2})$")
+
+
 def split_native(native: str) -> tuple[str, str | None]:
-    date_str, sep, time_str = native.partition("T")
-    return date_str, (time_str if sep else None)
+    m = _TIME_SUFFIX.search(native)
+    if m:
+        return native[: m.start()], m.group(1)
+    return native, None
 
 
 def minutes_of(native: str) -> int | None:
