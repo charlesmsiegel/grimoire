@@ -152,3 +152,31 @@ def test_parse_greeting_picks_validates_dedupes_and_keeps_order(monkeypatch, tmp
     assert suggest.parse_greeting_picks(text, {"g1", "g2", "g3"}) == ["g2", "g1"]
     assert suggest.parse_greeting_picks("no json here", {"g1"}) == []
     assert suggest.parse_greeting_picks('{"greeting_picks": "g1"}', {"g1"}) == []
+
+
+# ---- suggested dates (per-suggestion "date" + top-level "next_date") ----
+def test_build_prompt_requests_dates_only_with_a_current_date():
+    snap = {"now": "2026-01-01", "friendly": "Jan 1", "holidays_today": [], "upcoming": None,
+            "birthdays": [], "open_threads": [], "absent_cast": [],
+            "available_cast": [], "available_locations": []}
+    assert "next_date" in suggest.build_prompt(snap)[0]["content"]
+    snap["now"] = ""
+    assert "next_date" not in suggest.build_prompt(snap)[0]["content"]
+
+
+def test_parse_output_keeps_valid_dates_and_drops_bad_ones(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    text = ('{"suggestions": ['
+            '{"title": "A", "premise": "P", "cast": [], "location": "", "date": "2026-07-10"},'
+            '{"title": "B", "premise": "P", "cast": [], "location": "", "date": "2026-13-40"},'
+            '{"title": "C", "premise": "P", "cast": [], "location": ""}]}')
+    out = suggest.parse_output(text, cid)
+    assert [s["date"] for s in out] == ["2026-07-10", "", ""]
+
+
+def test_parse_next_date_validates_and_tolerates_garbage(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    assert suggest.parse_next_date('{"suggestions": [], "next_date": "2026-07-08"}', cid) == "2026-07-08"
+    assert suggest.parse_next_date('{"suggestions": [], "next_date": "soonish"}', cid) == ""
+    assert suggest.parse_next_date('{"suggestions": []}', cid) == ""
+    assert suggest.parse_next_date("not json", cid) == ""

@@ -168,6 +168,14 @@ INSTRUCTION = (
     "given; do not invent ids."
 )
 
+DATE_INSTRUCTION = (
+    ' Each suggestion also includes key "date": the date that scene most plausibly opens '
+    "on, given how much in-world time its premise implies has passed since the current "
+    'date (same notation as the current date, date only). Also include a top-level key '
+    '"next_date": your single best estimate of the next scene\'s date if none of the '
+    "suggestions is used."
+)
+
 
 def _render_snapshot(s: dict) -> str:
     parts: list[str] = []
@@ -198,6 +206,8 @@ def _render_snapshot(s: dict) -> str:
 
 def build_prompt(snapshot: dict, greeting_candidates: list[dict] | None = None) -> list[dict]:
     instruction, content = INSTRUCTION, _render_snapshot(snapshot)
+    if snapshot["now"]:  # no reference date -> no gap to estimate; don't invite invention
+        instruction += DATE_INSTRUCTION
     if greeting_candidates:
         instruction += RANK_INSTRUCTION
         content += "\n\nAvailable greetings (use these ids):\n" + "\n".join(
@@ -212,6 +222,24 @@ def _valid_ids(cid: str):
     player_tokens = {f"{a['kind']}:{a['id']}" for a in appearances.roster(cid) if a["role"] == "player"}
     loc_ids = {e["id"] for e in entities.list_entities(croot, "locations")}
     return char_ids, player_tokens, loc_ids
+
+
+def _date_normalizer(cid: str):
+    """Canonical native date or "" — a suggested date is only a hint, so never raise."""
+    try:
+        provider = calendars.get_provider(
+            calendars.read_calendar(campaigns.campaign_root(cid))["primary"])
+    except (calendars.CalendarError, KeyError):
+        return lambda _s: ""
+
+    def norm(s: str) -> str:
+        if not s:
+            return ""
+        try:
+            return calendars.normalize(provider, s)
+        except calendars.CalendarError:
+            return ""
+    return norm
 
 
 def _extract_json(text: str):
@@ -242,6 +270,7 @@ def parse_output(text: str, cid: str) -> list[dict]:
     if not isinstance(suggestions, list):
         return []
     char_ids, player_tokens, loc_ids = _valid_ids(cid)
+    norm = _date_normalizer(cid)
 
     def _valid_token(tok: str) -> bool:
         kind, _, aid = tok.partition(":")
@@ -259,8 +288,16 @@ def parse_output(text: str, cid: str) -> list[dict]:
                 if isinstance(raw_cast, list) else [])
         loc = str(e.get("location", "")).strip()
         out.append({"title": title, "premise": premise, "cast": cast,
-                    "location": loc if loc in loc_ids else ""})
+                    "location": loc if loc in loc_ids else "",
+                    "date": norm(str(e.get("date", "")).strip())})
     return out
+
+
+def parse_next_date(text: str, cid: str) -> str:
+    """The model's general next-scene date estimate, validated; "" when absent/bad."""
+    parsed = _extract_json(text)
+    raw = parsed.get("next_date", "") if isinstance(parsed, dict) else ""
+    return _date_normalizer(cid)(str(raw).strip())
 
 
 def parse_greeting_picks(text: str, allowed: set[str]) -> list[str]:
