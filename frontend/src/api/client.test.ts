@@ -1,4 +1,4 @@
-import { api } from "./client";
+import { api, invalidateConfigCache } from "./client";
 import type { LocalizeEvent } from "./stream";
 
 function sseResponse(chunks: string[]) {
@@ -272,4 +272,55 @@ test("greeting marks and version picks POST to their campaign routes", async () 
   await api.pickVersion("run", "characters", "mara", "veteran");
   expect(fetchMock).toHaveBeenLastCalledWith("/api/campaigns/run/characters/mara/pick-version",
     expect.objectContaining({ method: "POST", body: JSON.stringify({ version: "veteran" }) }));
+});
+
+// ---- request coalescing ----
+const CFG = { model: "m", theme: "t", key_set: false, system_prompt: "",
+  quote_color: "off", user_label: "You", assistant_label: "Grimoire" };
+
+test("concurrent identical GETs share one request; later calls fetch fresh", async () => {
+  let release: (v: unknown) => void = () => {};
+  const fetchMock = vi.fn().mockReturnValue(new Promise((r) => { release = r; }));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const a = api.getCast("run", "s1");
+  const b = api.getCast("run", "s1");
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  release(jsonOk([]));
+  expect(await a).toEqual([]);
+  expect(await b).toEqual([]);
+  fetchMock.mockResolvedValue(jsonOk([{ kind: "pcs", id: "x" }]));
+  await api.getCast("run", "s1");
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+});
+
+test("concurrent GETs to different URLs are not coalesced", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk([]));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  await Promise.all([api.getCast("run", "s1"), api.getCast("run", "s2")]);
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+});
+
+test("a failed GET is not reused by the next call", async () => {
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce({ ok: false, status: 500, statusText: "boom", json: async () => ({}) })
+    .mockResolvedValue(jsonOk([]));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  await expect(api.getCast("run", "s1")).rejects.toThrow();
+  await expect(api.getCast("run", "s1")).resolves.toEqual([]);
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+});
+
+test("getConfig is cached across sequential calls until a config write", async () => {
+  invalidateConfigCache();
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk(CFG));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  await api.getConfig();
+  await api.getConfig();
+  expect(fetchMock).toHaveBeenCalledTimes(1); // App + CampaignView share one fetch
+  fetchMock.mockResolvedValue(jsonOk({ ...CFG, theme: "dark" }));
+  await api.putConfig({ theme: "dark" });     // the write refreshes the cache…
+  const got = await api.getConfig();          // …so this needs no new GET
+  expect(got.theme).toBe("dark");
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  invalidateConfigCache();
 });

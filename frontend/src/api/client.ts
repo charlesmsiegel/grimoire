@@ -6,7 +6,7 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function requestRaw<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
     method,
     headers: body ? { "Content-Type": "application/json" } : undefined,
@@ -17,6 +17,20 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     throw new ApiError(res.status, data.detail ?? res.statusText, data.kind);
   }
   return res.json() as Promise<T>;
+}
+
+// Identical GETs that overlap share one request: opening a scene fires the
+// same cast/appearances/datetime lookups from several components at once.
+// The map only holds in-flight promises, so nothing is ever served stale.
+const inflightGets = new Map<string, Promise<unknown>>();
+
+function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  if (method !== "GET") return requestRaw<T>(method, path, body);
+  const pending = inflightGets.get(path);
+  if (pending) return pending as Promise<T>;
+  const p = requestRaw<T>(method, path, body).finally(() => inflightGets.delete(path));
+  inflightGets.set(path, p);
+  return p;
 }
 
 async function requestForm<T>(path: string, form: FormData, method = "POST"): Promise<T> {
@@ -220,13 +234,36 @@ async function streamPost<T = ChatEvent>(
   }
 }
 
+// The config is fetched at app start and again by campaign/config views; it
+// only changes through putConfig / a data-dir move, so cache it until then.
+let configCache: Promise<Config> | null = null;
+
+export function invalidateConfigCache() {
+  configCache = null;
+}
+
 export const api = {
-  getConfig: () => request<Config>("GET", "/api/config"),
+  getConfig: () => {
+    if (!configCache) {
+      configCache = request<Config>("GET", "/api/config").catch((err) => {
+        configCache = null; // never cache a failure
+        throw err;
+      });
+    }
+    return configCache;
+  },
   putConfig: (body: Partial<{ model: string; theme: string; openrouter_key: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string }>) =>
-    request<Config>("PUT", "/api/config", body),
+    request<Config>("PUT", "/api/config", body).then((cfg) => {
+      configCache = Promise.resolve(cfg); // the write's response is the fresh config
+      return cfg;
+    }),
   getDataDir: () => request<DataDirInfo>("GET", "/api/config/data-dir"),
   putDataDir: (data_dir: string | null) =>
-    request<DataDirInfo>("PUT", "/api/config/data-dir", { data_dir }),
+    request<DataDirInfo>("PUT", "/api/config/data-dir", { data_dir })
+      .then((info) => {
+        invalidateConfigCache(); // a store move can change everything
+        return info;
+      }),
 
   // worlds
   listWorlds: () => request<WorldMeta[]>("GET", "/api/worlds"),
