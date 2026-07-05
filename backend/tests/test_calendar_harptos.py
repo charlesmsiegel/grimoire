@@ -65,3 +65,6 @@ def test_negative_and_zero_years():
     assert p.format(p.parse("0-Hammer-01")) == "0-Hammer-01"
     assert p.format(p.parse("-100-Nightal-30")) == "-100-Nightal-30"
     assert p.parse("1-Hammer-01") - p.parse("0-Hammer-01") == 366  # year 0 is leap (0 % 4 == 0)
+    # deep negative years: the year-estimate drift must not corrupt dates
+    for native in ("-488-Nightal-30", "-1000-Hammer-01", "-3000-Mirtul-15"):
+        assert p.format(p.parse(native)) == native
