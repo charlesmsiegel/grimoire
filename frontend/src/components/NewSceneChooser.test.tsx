@@ -175,3 +175,37 @@ test("without a key greetings render immediately, no Choosing…", async () => {
   await screen.findByText("Reckoning");
   expect(screen.queryByText(/choosing…/i)).toBeNull();
 });
+
+test("picking a generated card passes its suggested date to createScene", async () => {
+  (api.sceneSuggestions as any).mockResolvedValue({
+    suggestions: [{ ...SUGGESTION, date: "2026-07-10" }], next_date: "2026-07-08" });
+  renderChooser();
+  fireEvent.click(await screen.findByText("The creditor"));
+  await waitFor(() => expect(api.createScene).toHaveBeenCalledWith("c", undefined, "2026-07-10"));
+});
+
+test("manual creation passes the general next_date once suggestions land", async () => {
+  (api.sceneSuggestions as any).mockResolvedValue({
+    suggestions: [SUGGESTION], next_date: "2026-07-08", greeting_picks: [] });
+  renderChooser();
+  await screen.findByText("The creditor"); // suggestions resolved → nextDate is set
+  fireEvent.click(screen.getByRole("button", { name: /create manually/i }));
+  await waitFor(() => expect(api.createScene).toHaveBeenCalledWith("c", undefined, "2026-07-08"));
+});
+
+test("a greeting pick passes the general next_date when available", async () => {
+  (api.sceneSuggestions as any).mockResolvedValue({
+    suggestions: [SUGGESTION], next_date: "2026-07-08", greeting_picks: [] });
+  renderChooser();
+  await screen.findByText("The creditor");
+  fireEvent.click(screen.getByText("Reckoning"));
+  await waitFor(() => expect(api.createScene).toHaveBeenCalledWith("c", undefined, "2026-07-08"));
+});
+
+test("a card without a date falls back to next_date", async () => {
+  (api.sceneSuggestions as any).mockResolvedValue({
+    suggestions: [SUGGESTION], next_date: "2026-07-08", greeting_picks: [] });
+  renderChooser();
+  fireEvent.click(await screen.findByText("The creditor"));
+  await waitFor(() => expect(api.createScene).toHaveBeenCalledWith("c", undefined, "2026-07-08"));
+});
