@@ -77,9 +77,11 @@ class HarptosProvider(CalendarProvider):
         raise CalendarError(f"unknown harptos month: {native!r}")
 
     def _locate(self, fixed: int) -> tuple[int, tuple[int, str, str, int], int]:
-        y = fixed // 366  # underestimate; walk up to the right year
+        y = fixed // 366  # rough start; loops below settle on the right year
         while _days_before_year(y + 1) < fixed:
             y += 1
+        while _days_before_year(y) >= fixed:
+            y -= 1
         rem = fixed - _days_before_year(y)
         for entry in _year_entries(y):
             if rem <= entry[3]:
