@@ -39,6 +39,20 @@ test("festival pseudo-months offer a single day", async () => {
   expect([...day.options].map(o => o.value)).toEqual(["", "1"]);
 });
 
+test("an external value change re-syncs the fields", async () => {
+  (api.getCalendarMonths as any).mockResolvedValue({ months: HARPTOS_1492 });
+  const { rerender } = render(
+    <CalendarDatePicker scope={{ kind: "campaign", id: "c1" }} value=""
+                        onChange={() => {}} ariaLabel="Scene date" />);
+  rerender(
+    <CalendarDatePicker scope={{ kind: "campaign", id: "c1" }} value="1492-Mirtul-05"
+                        onChange={() => {}} ariaLabel="Scene date" />);
+  expect(screen.getByLabelText("Scene date year")).toHaveValue(1492);
+  await waitFor(() =>
+    expect(screen.getByLabelText("Scene date month")).toHaveValue("Mirtul"));
+  expect(screen.getByLabelText("Scene date day")).toHaveValue("5");
+});
+
 test("a year change that shortens the month clears a day that no longer fits", async () => {
   const CHESHVAN_30 = [{ key: "Cheshvan", name: "Cheshvan", days: 30 }];
   const CHESHVAN_29 = [{ key: "Cheshvan", name: "Cheshvan", days: 29 }];
