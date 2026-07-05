@@ -109,7 +109,7 @@ def repad(cid: str, width: int) -> None:
     scene_refs.repoint(cid, mapping)
 
 
-def create_scene(cid: str, title: str) -> str:
+def create_scene(cid: str, title: str, suggested_date: str | None = None) -> str:
     _require_campaign(cid)
     d = _scenes_dir(cid)
     d.mkdir(parents=True, exist_ok=True)
@@ -121,6 +121,13 @@ def create_scene(cid: str, title: str) -> str:
     base = scene_ids.format_sid(number, width, None, slugify(title))
     sid = uniquify(base, lambda c: _scene_path(cid, c).exists())
     meta = {"title": title, "model": read_config()["model"], "created": now, "updated": now}
+    if suggested_date:
+        try:
+            provider = calendars.get_provider(
+                calendars.read_calendar(campaigns.campaign_root(cid))["primary"])
+            meta["suggested_date"] = calendars.normalize(provider, suggested_date)
+        except (calendars.CalendarError, KeyError):
+            pass  # only a hint — a bad one is dropped, never an error
     _scene_path(cid, sid).write_text(dump_frontmatter(meta, ""), encoding="utf-8")
     return sid
 
@@ -367,6 +374,15 @@ def get_time_history(cid: str, sid: str) -> list[str]:
     return [x for x in meta.get("time_history", "").split(",") if x]
 
 
+def get_suggested_date(cid: str, sid: str) -> str:
+    """The creation-time date hint, if the scene still carries one. Missing ⇒ ""."""
+    p = _scene_path(cid, sid)
+    if not _safe_id(sid) or not p.exists():
+        return ""
+    meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
+    return meta.get("suggested_date", "")
+
+
 def set_datetime(cid: str, sid: str, native: str) -> dict:
     """Set the scene's current moment (in the primary calendar). The first set is
     silent and stamps the start date into the filename (the id changes); later
@@ -386,6 +402,7 @@ def set_datetime(cid: str, sid: str, native: str) -> dict:
     if advanced:
         append_message(cid, sid, "assistant", f"*Time passes. It is now {friendly}.*")
     meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
+    meta.pop("suggested_date", None)  # the hint is stale once a real date exists
     history.append(canonical)
     meta["time_history"] = ",".join(history)
     p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
