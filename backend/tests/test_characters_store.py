@@ -942,11 +942,25 @@ def test_dir_hash_tracks_meta_and_versions_not_assets(tmp_path):
     assert ch.dir_hash(tmp_path, cid) == h2
 
 
+def _age_tree(root):
+    """Back-date every file past statcache's racy window so caches may hold them."""
+    import os
+    import time
+
+    from grimoire.store import statcache
+
+    old = time.time_ns() - 2 * statcache.RACY_WINDOW_NS
+    for f in root.rglob("*"):
+        if f.is_file():
+            os.utime(f, ns=(old, old))
+
+
 def test_list_characters_reads_no_cards_when_unchanged(tmp_path, monkeypatch):
     from pathlib import Path
 
     cid, vid = ch.create_character(tmp_path, "Ada")
     ch.create_version(tmp_path, cid, "alt", ch.blank_card("Ada"))
+    _age_tree(tmp_path)
     ch.list_characters(tmp_path)  # warm the summary cache
     reads: list[str] = []
     orig = Path.read_text
@@ -980,6 +994,7 @@ def test_find_unlinked_versions_reads_no_cards_when_unchanged(tmp_path, monkeypa
     cid, vid = ch.create_character(tmp_path, "Ada")
     ch.set_chub_source(tmp_path, cid, vid, "https://chub.ai/characters/a/b")
     ch.create_version(tmp_path, cid, "alt", ch.blank_card("Ada"))
+    _age_tree(tmp_path)
     ch.find_unlinked_versions(tmp_path)  # warm
     reads: list[str] = []
     orig = Path.read_text

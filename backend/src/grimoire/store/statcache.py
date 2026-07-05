@@ -9,12 +9,17 @@ signature at all, so callers fall back to their not-found path.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Callable, TypeVar
 
 T = TypeVar("T")
 
 MAX_ENTRIES = 4096
+# Filesystem timestamps tick coarsely (up to ~15ms on Windows), so a same-size
+# rewrite moments after the cached read can leave the signature unchanged. Like
+# git's racy-clean handling: never cache a file whose mtime is this recent.
+RACY_WINDOW_NS = 1_000_000_000
 _cache: dict[tuple, object] = {}
 
 
@@ -36,6 +41,9 @@ def memo(kind: str, sig: tuple | None, compute: Callable[[], T]) -> T:
     cached. Eviction is FIFO; races under the threadpool at worst recompute."""
     if sig is None:
         return compute()
+    now = time.time_ns()
+    if any(now - mtime_ns < RACY_WINDOW_NS for _, mtime_ns, _ in sig):
+        return compute()  # too fresh to trust the signature; compute, don't cache
     key = (kind, sig)
     try:
         return _cache[key]  # type: ignore[return-value]
