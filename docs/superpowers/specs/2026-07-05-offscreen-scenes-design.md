@@ -59,6 +59,10 @@ For pcless scenes the chat endpoint changes behavior:
   `stamp_user_speaker` stays inert.
 - Because the script on disk contains only assistant posts, speaker plates,
   `match_name`, and role derivation need zero changes.
+- **Empty send in ANY scene** (not just pcless) is the same ephemeral
+  mechanism: an unstored "Continue the scene." turn that generates the next
+  NPC round. The composer's send button reads **Continue ▶** whenever the box
+  is empty, in every scene.
 
 ## 2. Prompt assembly (`store/context.py`)
 

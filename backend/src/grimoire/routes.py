@@ -1417,13 +1417,12 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, client: OpenRouterClient = Dep
     _require_scene(cid, sid)
     cfg = store.read_config()
     _require_key(cfg)
-    if store.scenes.is_pcless(cid, sid):
-        # director turn: the note steers this one generation and is never stored
+    if store.scenes.is_pcless(cid, sid) or not turn.content.strip():
+        # ephemeral turn, never stored: a director note steering one generation
+        # (pcless), or — in any scene — an empty send meaning "next NPC round"
         note = turn.content.strip() or "Continue the scene."
         messages = store.context.build_director_messages(cid, sid, note)
         return _chat_stream(cid, sid, messages, cfg, client)
-    if not turn.content.strip():
-        raise HTTPException(status_code=400, detail="empty message")
     names = store.appearances.player_names(cid, sid)
     speaker = names[0] if len(names) == 1 else None
     if speaker:
