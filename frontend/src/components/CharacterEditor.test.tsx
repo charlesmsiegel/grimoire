@@ -1,26 +1,45 @@
 import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
 import { CharacterEditor } from "./CharacterEditor";
 
-vi.mock("../api/client", () => ({
-  api: {
-    listAppearances: vi.fn(), pickVersion: vi.fn(), importVersion: vi.fn(),
-    actorImageUrl: (sc: { id: string }, c: string, v: string, n: string) => `/img/${sc.id}/${c}/${v}/${n}`,
-    listCharacters: vi.fn(), readCharacter: vi.fn(), createCharacter: vi.fn(),
-    updateVersion: vi.fn(), createVersion: vi.fn(), setDefaultVersion: vi.fn(),
-    deleteCharacter: vi.fn(), importCharacter: vi.fn(), localizeImages: vi.fn(),
-    putImage: vi.fn(), deleteImage: vi.fn(), promoteImage: vi.fn(), setAvatarFocus: vi.fn(),
-    importCharacterBook: vi.fn(),
-    importCharacterFromChub: vi.fn(),
-    setCharacterBirthdate: vi.fn(),
-    setCharacterChubSource: vi.fn(), clearCharacterChubSource: vi.fn(),
-    downloadCharacterChubGallery: vi.fn(), downloadCharacterChubLorebooks: vi.fn(),
-    findChubUnlinked: vi.fn(),
-    getCharacterTagline: vi.fn(), setCharacterTagline: vi.fn(), generateCharacterTagline: vi.fn(),
-    listImageAppearances: vi.fn(), copyGreetingImage: vi.fn(), listGreetings: vi.fn(),
-    imageUrl: (w: string, c: string, v: string, n: string) => `/img/${w}/${c}/${v}/${n}`,
-  },
-}));
+vi.mock("../api/client", async () => {
+  const actual = await vi.importActual<typeof import("../api/client")>("../api/client");
+  return {
+    ...actual,
+    api: {
+      listAppearances: vi.fn(), pickVersion: vi.fn(), importVersion: vi.fn(),
+      actorImageUrl: (sc: { id: string }, c: string, v: string, n: string) => `/img/${sc.id}/${c}/${v}/${n}`,
+      listCharacters: vi.fn(), readCharacter: vi.fn(), createCharacter: vi.fn(),
+      updateVersion: vi.fn(), createVersion: vi.fn(), setDefaultVersion: vi.fn(),
+      deleteCharacter: vi.fn(), importCharacter: vi.fn(), localizeImages: vi.fn(),
+      putImage: vi.fn(), deleteImage: vi.fn(), promoteImage: vi.fn(), setAvatarFocus: vi.fn(),
+      importCharacterBook: vi.fn(),
+      importCharacterFromChub: vi.fn(),
+      setCharacterBirthdate: vi.fn(), getCalendarMonths: vi.fn(),
+      setCharacterChubSource: vi.fn(), clearCharacterChubSource: vi.fn(),
+      downloadCharacterChubGallery: vi.fn(), downloadCharacterChubLorebooks: vi.fn(),
+      findChubUnlinked: vi.fn(),
+      getCharacterTagline: vi.fn(), setCharacterTagline: vi.fn(), generateCharacterTagline: vi.fn(),
+      listImageAppearances: vi.fn(), copyGreetingImage: vi.fn(), listGreetings: vi.fn(),
+      imageUrl: (w: string, c: string, v: string, n: string) => `/img/${w}/${c}/${v}/${n}`,
+    },
+  };
+});
 import { api } from "../api/client";
+
+const GREG_MONTHS = [
+  { key: "01", name: "January", days: 31 },
+  { key: "02", name: "February", days: 28 },
+  { key: "03", name: "March", days: 31 },
+  { key: "04", name: "April", days: 30 },
+  { key: "05", name: "May", days: 31 },
+  { key: "06", name: "June", days: 30 },
+  { key: "07", name: "July", days: 31 },
+  { key: "08", name: "August", days: 31 },
+  { key: "09", name: "September", days: 30 },
+  { key: "10", name: "October", days: 31 },
+  { key: "11", name: "November", days: 30 },
+  { key: "12", name: "December", days: 31 },
+];
 
 const CARD = {
   spec: "chara_card_v3", spec_version: "3.0",
@@ -56,6 +75,7 @@ beforeEach(() => {
   (api.listImageAppearances as any).mockResolvedValue([]);
   (api.copyGreetingImage as any).mockResolvedValue({ name: "avatar", ext: "png" });
   (api.listGreetings as any).mockResolvedValue([]);
+  (api.getCalendarMonths as any).mockResolvedValue({ months: GREG_MONTHS });
 });
 
 // reach the edit form: grid -> click a card's Edit button -> form
@@ -127,8 +147,14 @@ test("imports an embedded character_book and shows the result", async () => {
 test("editing the birthdate persists it on the character", async () => {
   render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await openEditForm();
-  fireEvent.change(screen.getByLabelText("Birthdate"), { target: { value: "1985-03-14" } });
-  await waitFor(() => expect(api.setCharacterBirthdate).toHaveBeenCalledWith("w", "seraphine", "1985-03-14"));
+  fireEvent.change(await screen.findByLabelText("Birthdate year"), { target: { value: "1990" } });
+  const monthSelect = await screen.findByLabelText("Birthdate month");
+  await waitFor(() => expect(monthSelect).not.toBeDisabled());
+  fireEvent.change(monthSelect, { target: { value: "06" } });
+  const daySelect = screen.getByLabelText("Birthdate day");
+  await waitFor(() => expect(daySelect).not.toBeDisabled());
+  fireEvent.change(daySelect, { target: { value: "29" } });
+  await waitFor(() => expect(api.setCharacterBirthdate).toHaveBeenCalledWith("w", "seraphine", "1990-06-29"));
 });
 
 test("uploads an avatar for the selected version", async () => {

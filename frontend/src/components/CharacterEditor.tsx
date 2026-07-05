@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type Appearance, type Card, type CharacterDetail, type CharacterSummary, type ChubImportResult, type ChubUnlinkedVersion, type EntityScope, type Greeting, type VersionRef } from "../api/client";
 import { AvatarFocusPicker } from "./AvatarFocusPicker";
+import { CalendarDatePicker } from "./CalendarDatePicker";
 import { Field } from "./Field";
 import { GreetingMarkdown } from "./GreetingMarkdown";
 import { HtmlNote } from "./HtmlNote";
@@ -1101,8 +1102,8 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
           </Field>
           {worldScope && <>
             <Field label="Birthdate">
-              <input type="date" aria-label="Birthdate" value={birthdate}
-                     onChange={(e) => saveBirthdate(e.target.value)} />
+              <CalendarDatePicker scope={{ kind: "world", id: wid }} value={birthdate}
+                                  onChange={saveBirthdate} ariaLabel="Birthdate" />
             </Field>
             <Field label="Tagline" hint="one-line identity for the off-scene cast">
               <textarea aria-label="Tagline" value={tagline} rows={2}
