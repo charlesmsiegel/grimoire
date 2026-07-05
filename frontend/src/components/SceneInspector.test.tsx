@@ -39,7 +39,7 @@ beforeEach(() => {
     primary: { provider: "gregorian", region: "US", custom_holidays: [], anchor: null },
     secondary: null, confirmed: true });
   (api.setCalendarConfig as any).mockResolvedValue({ ok: true });
-  (api.getSceneDatetime as any).mockResolvedValue({ current: null, history: [] });
+  (api.getSceneDatetime as any).mockResolvedValue({ current: null, history: [], suggested: null });
   (api.setSceneDatetime as any).mockResolvedValue({ ok: true, advanced: false, friendly: "", id: "s" });
   (api.listAppearances as any).mockResolvedValue([]);
   (api.listEntityImages as any).mockResolvedValue([]);
@@ -170,4 +170,14 @@ test("Move to is disabled until a location is chosen", async () => {
   renderInspector();
   await screen.findByText("The Crypt");
   expect(await screen.findByRole("button", { name: /move to/i })).toBeDisabled();
+});
+
+test("a dateless scene with a suggestion pre-fills the date input", async () => {
+  (api.getSceneDatetime as any).mockResolvedValue(
+    { current: null, history: [], suggested: "2026-07-06" });
+  renderInspector();
+  const input = await screen.findByLabelText("Scene date");
+  await waitFor(() => expect((input as HTMLInputElement).value).toBe("2026-07-06"));
+  fireEvent.click(screen.getByRole("button", { name: /set date/i }));
+  await waitFor(() => expect(api.setSceneDatetime).toHaveBeenCalledWith("c", "s", "2026-07-06"));
 });

@@ -46,7 +46,11 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   }, [cid]);
 
   const reloadWhen = useCallback(
-    () => api.getSceneDatetime(cid, sid).then(setWhen).catch(() => setWhen(null)),
+    () => api.getSceneDatetime(cid, sid).then((w) => {
+      setWhen(w);
+      // dateless scene with a suggestion: pre-fill the input, but never clobber typing
+      if (!w.current && w.suggested) setDateInput((prev) => prev || w.suggested!);
+    }).catch(() => setWhen(null)),
     [cid, sid]);
   const reloadCfg = useCallback(
     () => api.getCalendarConfig(cid).then(setCfg).catch(() => setCfg(null)),
