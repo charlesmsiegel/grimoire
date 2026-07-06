@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import functools
 import io
+import json
 import re
 import zipfile
 from pathlib import Path
@@ -177,8 +178,8 @@ def _appendix_entries(cid: str, croot: Path, wroot: Path | None, sids: list[str]
     for a in roster:
         try:
             name, sections = _actor_sections(croot, a["kind"], a["id"], a["version"])
-        except (characters.CharacterNotFound, characters.VersionNotFound,
-                pcs.PCNotFound, pcs.PCVersionNotFound):
+        except (json.JSONDecodeError, characters.CharacterNotFound,
+                characters.VersionNotFound, pcs.PCNotFound, pcs.PCVersionNotFound):
             continue  # unreadable actor: skip the entry, never fail the book
         portrait = (_avatar(croot, wroot, a["id"], a["version"], "characters", images)
                     if a["kind"] == "characters" else None)

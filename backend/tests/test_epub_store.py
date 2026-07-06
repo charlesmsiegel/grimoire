@@ -257,3 +257,6 @@ def test_no_appendix_no_divider(monkeypatch, tmp_path):
     z = _open(blob)
     assert "text/appendix.xhtml" not in z.namelist()
     assert "text/titlepage.xhtml" in z.namelist()
+    nav = z.read("nav.xhtml").decode()
+    assert "Scenes" not in nav          # no empty Scenes <ol> in a zero-scene book
+    ET.fromstring(nav)                  # nav stays well-formed XML
