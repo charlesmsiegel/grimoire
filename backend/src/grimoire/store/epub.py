@@ -36,8 +36,8 @@ def _env():
                        undefined=StrictUndefined, autoescape=True)
 
 
-def _render(name: str, **vars) -> str:
-    return _env().get_template(f"epub/{name}").render(**vars)
+def _render(template: str, **vars) -> str:
+    return _env().get_template(f"epub/{template}").render(**vars)
 
 
 def _md(text: str) -> str:
@@ -140,9 +140,74 @@ def _chapter(cid: str, croot: Path, wroot: Path | None, provider, sid: str,
     return {"file": f"chapter-{number:03d}.xhtml", "title": title, "doc": doc}
 
 
+def _actor_sections(croot: Path, kind: str, actor_id: str, vid: str) -> tuple[str, list[dict]]:
+    """(display name, labeled markdown sections) — the reader-facing
+    cast_detail field set; prompt plumbing is deliberately excluded."""
+    if kind == "characters":
+        data = characters.read_card(croot, actor_id, vid).get("data", {})
+        name = data.get("name") or actor_id
+        labelled = [("Description", "description"), ("Personality", "personality"),
+                    ("Scenario", "scenario")]
+        sections = [{"label": lbl, "text": data[f]} for lbl, f in labelled
+                    if isinstance(data.get(f), str) and data[f].strip()]
+    else:
+        p = pcs.read_persona(croot, actor_id, vid)
+        name = p.get("name") or actor_id
+        sections = [{"label": None, "text": t}
+                    for t in (p.get("summary", "").strip(), p.get("description", "").strip()) if t]
+    return name, sections
+
+
+def _avatar(croot: Path, wroot: Path | None, rid: str, vid: str, base: str,
+            images: _Images) -> str | None:
+    for root in (croot, wroot):
+        if root is None:
+            continue
+        p = assets.image_path(root, rid, vid, assets.AVATAR, base=base)
+        if p is not None:
+            return images.add(p)
+    return None
+
+
 def _appendix_entries(cid: str, croot: Path, wroot: Path | None, sids: list[str],
                       images: _Images) -> list[dict]:
-    return []  # Task 4
+    entries: list[dict] = []
+    roster = sorted(appearances.roster(cid),
+                    key=lambda a: (a["role"] != "player", a["kind"], a["id"]))
+    for a in roster:
+        try:
+            name, sections = _actor_sections(croot, a["kind"], a["id"], a["version"])
+        except (characters.CharacterNotFound, characters.VersionNotFound,
+                pcs.PCNotFound, pcs.PCVersionNotFound):
+            continue  # unreadable actor: skip the entry, never fail the book
+        portrait = (_avatar(croot, wroot, a["id"], a["version"], "characters", images)
+                    if a["kind"] == "characters" else None)
+        doc = _render("appendix.xhtml", name=name, portrait=portrait,
+                      role="Player character" if a["role"] == "player" else None,
+                      sections=[{"label": s["label"],
+                                 "html": Markup(_md(_rewrite_images(s["text"], croot, wroot, images)))}
+                                for s in sections])
+        entries.append({"file": f"actor-{a['kind']}-{a['id']}.xhtml", "title": name, "doc": doc})
+
+    visited: dict[str, None] = {}  # insertion-ordered de-dupe
+    for sid in sids:
+        for eid in scenes.get_location_history(cid, sid):
+            visited.setdefault(eid, None)
+    locs = []
+    for eid in visited:
+        try:
+            ent = entities.read_entity(croot, "locations", eid)
+        except entities.EntityNotFound:
+            continue
+        locs.append((ent["meta"].get("name", eid), eid, ent["body"]))
+    for name, eid, body in sorted(locs):
+        doc = _render("appendix.xhtml", name=name,
+                      portrait=_avatar(croot, wroot, eid, "default", "locations", images),
+                      role=None,
+                      sections=[{"label": None,
+                                 "html": Markup(_md(_rewrite_images(body, croot, wroot, images)))}])
+        entries.append({"file": f"location-{eid}.xhtml", "title": name, "doc": doc})
+    return entries
 
 
 def build_epub(cid: str) -> tuple[bytes, str]:
