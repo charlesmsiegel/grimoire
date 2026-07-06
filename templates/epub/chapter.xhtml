@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <title>{{ title }}</title>
+  <link rel="stylesheet" type="text/css" href="../css/stylesheet.css"/>
+</head>
+<body class="chapter">
+  <h1>{{ title }}</h1>
+{% if date or location or cast %}  <div class="scene-meta">
+{% if date %}    <p class="scene-date">{{ date }}</p>
+{% endif %}{% if location %}    <p class="scene-location">{{ location }}</p>
+{% endif %}{% if cast %}    <p class="scene-cast">{{ cast | join(" · ") }}</p>
+{% endif %}  </div>
+{% endif %}{% if epigraph %}  <p class="epigraph">{{ epigraph }}</p>
+{% endif %}{{ body }}
+</body>
+</html>
