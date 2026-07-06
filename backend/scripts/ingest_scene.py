@@ -113,9 +113,23 @@ def apply_scene(cid: str, sid: str, parsed: dict, edits: list[dict]) -> list[str
 async def ingest_one_scene(cid: str, scene: dict, client, cfg: dict) -> dict:
     manifest = load_manifest(cid)
     key = scene["key"]
-    if manifest.get(key, {}).get("status") == "done":
-        return {"key": key, **manifest[key], "status": "skipped"}
-    sid = build_scene(cid, scene)
+    entry = manifest.get(key)
+    if entry and entry.get("status") == "done":
+        return {"key": key, **entry, "status": "skipped"}
+
+    # build_scene runs at most once per key: an "in_progress" entry means a prior
+    # attempt already minted the scene and died before absorb/apply completed, so
+    # this retry resumes with that sid instead of creating a duplicate scene. There
+    # remains a narrow window — a crash between apply_scene succeeding and the
+    # manifest save below — where a retry re-absorbs an already-applied scene; see
+    # SKILL.md for that residual risk.
+    if entry and entry.get("status") == "in_progress" and entry.get("sid"):
+        sid = entry["sid"]
+    else:
+        sid = build_scene(cid, scene)
+        manifest[key] = {"status": "in_progress", "sid": sid}
+        save_manifest(cid, manifest)
+
     result = await run_absorb(cid, sid, client, cfg)
     applied = apply_scene(cid, sid, result["parsed"], result["edits"])
     manifest[key] = {"status": "done", "sid": sid, "one_line": result["parsed"]["one_line"],
