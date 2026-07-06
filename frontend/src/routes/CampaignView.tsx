@@ -306,6 +306,9 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
           <Link to={`/campaigns/${cid}/world`} className="sub-world">World ▸ {worldName} ↗</Link>
         )}
         <div className="sub-actions">
+          <a className="sub-export" href={`/api/campaigns/${cid}/export.epub`} download>
+            Export EPUB
+          </a>
           <button className="sub-changes" onClick={() => setShowChanges((v) => !v)}>
             {showChanges ? "Close" : "Changes"}
           </button>

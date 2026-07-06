@@ -677,3 +677,10 @@ test("normal scene: empty Continue sends an ephemeral round, no user message add
   fireEvent.click(await screen.findByRole("button", { name: /continue ▶/i }));
   await waitFor(() => expect(api.chat).toHaveBeenCalledWith("run", "s1", "", expect.any(Function)));
 });
+
+test("renders an Export EPUB download link", async () => {
+  renderCampaign();
+  const link = await screen.findByRole("link", { name: /export epub/i });
+  expect(link).toHaveAttribute("href", "/api/campaigns/run/export.epub");
+  expect(link).toHaveAttribute("download");
+});
