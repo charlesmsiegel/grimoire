@@ -11,7 +11,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from grimoire.store import campaigns  # noqa: E402
+from grimoire.store import campaigns, characters, entities  # noqa: E402
+from grimoire.store.paths import slugify  # noqa: E402
 
 
 def ensure_campaign(name: str, world_id: str) -> str:
@@ -35,3 +36,29 @@ def load_manifest(cid: str) -> dict:
 def save_manifest(cid: str, data: dict) -> None:
     _manifest_path(cid).write_text(
         json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def ensure_character(croot: Path, spec: dict) -> str:
+    target = slugify(spec["name"])
+    if target in characters.character_refs(croot):
+        return target
+    card = characters.blank_card(spec["name"])
+    card["data"]["personality"] = spec.get("personality", "")
+    card["data"]["description"] = spec.get("description", "")
+    cid, _ = characters.create_character(croot, spec["name"], "main", card)
+    return cid
+
+
+def ensure_location(croot: Path, spec: dict) -> str:
+    target = slugify(spec["name"])
+    existing = {e["id"] for e in entities.list_entities(croot, "locations")}
+    if target in existing:
+        return target
+    return entities.create_entity(croot, "locations", spec["name"], body=spec.get("notes", ""))
+
+
+def resolve_version(croot: Path, kind: str, actor_id: str) -> str:
+    if kind == "pcs":
+        from grimoire.store import pcs
+        return pcs.read_pc(croot, actor_id)["meta"]["default_version"]
+    return characters.read_character(croot, actor_id)["meta"]["default_version"]
