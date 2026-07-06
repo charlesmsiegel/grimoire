@@ -194,3 +194,14 @@ def test_build_epub_unknown_campaign(monkeypatch, tmp_path):
     import pytest
     with pytest.raises(campaigns.CampaignNotFound):
         epub.build_epub("nope")
+
+
+def test_chapter_omits_deleted_location(monkeypatch, tmp_path):
+    _wid, cid, _s1, _s2 = _fixture_campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    (croot / "locations" / "the-docks.md").unlink()
+    blob, _ = epub.build_epub(cid)
+    z = _open(blob)
+    ch1 = z.read("text/chapter-001.xhtml").decode()
+    assert 'class="scene-location"' not in ch1   # deleted location: line silently omitted
+    assert 'class="scene-date"' in ch1           # rest of the header intact
