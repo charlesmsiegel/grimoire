@@ -18,6 +18,9 @@ call while reading — this skill does not delegate that to another LLM call.
   copy its `state/` prose directly into grimoire — every fact must come from re-running absorb on
   the actual transcript.
 - A target grimoire World id, and a campaign name.
+- Any player character (PC) referenced via `{"kind": "pcs", "id": "..."}` in a scene's `characters`
+  field must already exist in the target World — PCs are copied to the campaign only at creation
+  time. Add missing PCs to the World via the Worlds editor before running `setup`.
 
 ## Workflow
 
