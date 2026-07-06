@@ -77,8 +77,13 @@ call while reading — this skill does not delegate that to another LLM call.
       Re-running `ingest` with the same `--campaign` and the same `key` is a no-op if that scene
       already completed — check with:
       `backend/.venv/Scripts/python.exe backend/scripts/ingest_scene.py status --campaign <cid>`
-      A failed or interrupted run resumes cleanly: fix the problem and re-issue `ingest` for the
-      scene that failed and everything after it.
+      A failed or interrupted run resumes cleanly: the scene is only ever created once per `key`
+      (recorded `in_progress` with its `sid` right after creation, before the LLM call), so
+      fixing the problem and re-issuing `ingest` for the scene that failed resumes work on that
+      same scene rather than duplicating it. Residual risk: if the process dies between the
+      absorb call finishing and the manifest being marked `done`, a retry re-absorbs and
+      re-applies that one scene — rare, and applying the same edits twice is the only
+      consequence.
 
 3. **After each source file finishes**, if an old skill archive was provided, compare the
    resulting campaign's state/relationships/plot against its hand-authored `state/` files (prose
@@ -98,3 +103,4 @@ call while reading — this skill does not delegate that to another LLM call.
 - Running scenes out of order, or re-running an already-`"done"` key expecting it to refresh —
   `ingest_one_scene` treats "done" as final; delete the manifest entry first if a scene genuinely
   needs redoing (this also un-applies nothing — you'd be re-applying on top of the old state).
+  The manifest lives at `<campaign_root>/ingest_manifest.json`.
