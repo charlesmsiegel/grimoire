@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from grimoire.store import appearances, campaigns, characters, entities, scenes  # noqa: E402
+from grimoire.store import absorb, appearances, campaigns, characters, chronicle, entities, scenes  # noqa: E402
 from grimoire.store.paths import slugify  # noqa: E402
 
 
@@ -83,3 +83,25 @@ def build_scene(cid: str, scene: dict) -> str:
         vid = resolve_version(croot, kind, aid)
         appearances.appear(cid, sid, kind, aid, vid, "player" if kind == "pcs" else "npc")
     return sid
+
+
+async def run_absorb(cid: str, sid: str, client, cfg: dict) -> dict:
+    scene = scenes.read_scene(cid, sid)
+    facts = chronicle.scene_facts(cid, sid)
+    transcript = chronicle.transcript_text(scene["messages"])
+    messages = absorb.build_prompt(
+        transcript, facts, absorb.state_snapshot(cid, sid),
+        absorb.relationships_snapshot(cid, sid), absorb.plot_snapshot(cid))
+    text = await client.complete(messages, cfg["model"], cfg["openrouter_key"])
+    parsed = absorb.parse_output(text)
+    edits = absorb.materialize(cid, sid, parsed)
+    return {"parsed": parsed, "edits": edits}
+
+
+def apply_scene(cid: str, sid: str, parsed: dict, edits: list[dict]) -> list[str]:
+    facts = chronicle.scene_facts(cid, sid)
+    chronicle.absorb(cid, {"id": sid, "one_line": parsed["one_line"], "summary": parsed["summary"],
+                           "keywords": parsed["keywords"], **facts})
+    chronicle.append_timeline(cid, parsed["timeline_events"])
+    scenes.mark_absorbed(cid, sid, parsed["one_line"], parsed["summary"])
+    return absorb.apply_edits(cid, edits, sid)
