@@ -176,6 +176,44 @@ def test_ingest_one_scene_is_resumable(monkeypatch, tmp_path):
     assert len(client.calls) == 1  # no second LLM call
 
 
+def test_ingest_one_scene_resumes_after_build_then_crash(monkeypatch, tmp_path):
+    """If build_scene succeeded but absorb/apply never ran (process died in between),
+    a retry must reuse the recorded sid instead of minting a duplicate scene."""
+    from grimoire.store import campaigns as campaigns_store, scenes, worlds as worlds_store
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds_store.create_world("ashgrove")
+    cid = ingest_scene.ensure_campaign("Silver Oath", wid)
+    croot = campaigns_store.campaign_root(cid)
+    ingest_scene.ensure_character(croot, {"name": "marisol"})
+
+    scene = {
+        "key": "file1-scene01",
+        "title": "The Reckoning",
+        "characters": [{"kind": "characters", "id": "marisol"}],
+        "turns": [{"role": "assistant", "speaker": "marisol", "content": "\"You've grown bold.\""}],
+    }
+
+    # Simulate the crash: build_scene ran (creating the real scene on disk) but the
+    # manifest was written as "in_progress" and the process died before absorb/apply.
+    sid = ingest_scene.build_scene(cid, scene)
+    manifest = ingest_scene.load_manifest(cid)
+    manifest[scene["key"]] = {"status": "in_progress", "sid": sid}
+    ingest_scene.save_manifest(cid, manifest)
+
+    fake_text = json_module.dumps({
+        "one_line": "marisol needles julian.", "summary": "s", "keywords": [],
+        "timeline_events": [], "character_state_edits": [], "lore_edits": [],
+        "authored_edits": [], "relationship_deltas": [], "bond_changes": [], "plot_movements": [],
+    })
+    client = FakeClient(fake_text)
+    cfg = {"model": "test/model", "openrouter_key": "k"}
+
+    result = asyncio.run(ingest_scene.ingest_one_scene(cid, scene, client, cfg))
+    assert result["status"] == "done"
+    assert result["sid"] == sid
+    assert len(scenes.list_scenes(cid)) == 1
+
+
 def test_two_scenes_accumulate_state_in_order(monkeypatch, tmp_path):
     """Scene 2's snapshot must see scene 1's applied character-state edit."""
     from grimoire.store import campaigns as campaigns_store, worlds as worlds_store
