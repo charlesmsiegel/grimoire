@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head>
+  <title>Contents</title>
+  <link rel="stylesheet" type="text/css" href="css/stylesheet.css"/>
+</head>
+<body>
+  <nav epub:type="toc">
+    <h1>Contents</h1>
+    <ol>
+      <li><a href="text/titlepage.xhtml">Title</a></li>
+      <li><span>Scenes</span>
+        <ol>
+{% for ch in chapters %}          <li><a href="text/{{ ch.file }}">{{ ch.title }}</a></li>
+{% endfor %}        </ol>
+      </li>
+{% if appendix %}      <li><a href="text/appendix.xhtml">Appendix</a>
+        <ol>
+{% for ap in appendix %}          <li><a href="text/{{ ap.file }}">{{ ap.title }}</a></li>
+{% endfor %}        </ol>
+      </li>
+{% endif %}    </ol>
+  </nav>
+</body>
+</html>

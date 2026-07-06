@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <title>{{ title }}</title>
+  <link rel="stylesheet" type="text/css" href="../css/stylesheet.css"/>
+</head>
+<body class="titlepage">
+  <h1>{{ title }}</h1>
+{% if world %}  <p class="world">{{ world }}</p>
+{% endif %}{% if date_range %}  <p class="daterange">{{ date_range }}</p>
+{% endif %}</body>
+</html>

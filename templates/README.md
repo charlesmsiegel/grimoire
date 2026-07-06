@@ -118,3 +118,14 @@ editing a prompt here cannot fail it:
 Run it after renaming/moving a template, changing a template's variables, or
 touching the prompt-building code in `backend/src/`. The regular test suite
 (`backend/.venv/Scripts/python.exe -m pytest backend -q`) covers the rest.
+
+### `epub/` — not prompts: campaign EPUB export pages
+
+The one non-LLM family. `store/epub.py` renders these (its own jinja2
+environment, `autoescape=True`, unlike the prompt contract above) into the
+book's XHTML/OPF/CSS. `container.xml` and `stylesheet.css` are static;
+`package.opf` takes `identifier`/`title`/`modified`/`items`/`spine`;
+`nav.xhtml` takes `chapters`/`appendix`; `titlepage.xhtml` takes
+`title`/`world`/`date_range`; `chapter.xhtml` takes
+`title`/`date`/`location`/`cast`/`epigraph`/`body`; `divider.xhtml` takes
+`title`; `appendix.xhtml` takes `name`/`role`/`portrait`/`sections`.

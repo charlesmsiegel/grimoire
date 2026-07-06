@@ -1,0 +1,23 @@
+@font-face { font-family: "EB Garamond"; src: url(../fonts/EBGaramond-Regular.ttf); font-weight: 400; font-style: normal; }
+@font-face { font-family: "EB Garamond"; src: url(../fonts/EBGaramond-Italic.ttf); font-weight: 400; font-style: italic; }
+@font-face { font-family: "EB Garamond"; src: url(../fonts/EBGaramond-SemiBold.ttf); font-weight: 600; font-style: normal; }
+@font-face { font-family: "Cinzel"; src: url(../fonts/Cinzel-SemiBold.ttf); font-weight: 600; font-style: normal; }
+
+body { font-family: "EB Garamond", Georgia, serif; line-height: 1.5; margin: 1em; }
+h1, h2 { font-family: "Cinzel", "EB Garamond", Georgia, serif; font-weight: 600; line-height: 1.2; }
+h1 { font-size: 1.6em; margin: 1.5em 0 0.5em; }
+h2 { font-size: 1.1em; margin: 1.2em 0 0.3em; }
+img { max-width: 100%; }
+
+.titlepage { text-align: center; }
+.titlepage h1 { font-size: 2.2em; margin-top: 30%; }
+.titlepage .world { font-style: italic; margin-top: 1em; }
+.titlepage .daterange { font-size: 0.9em; margin-top: 2.5em; }
+
+.scene-meta { font-size: 0.85em; color: #555; margin-bottom: 1.5em; }
+.scene-meta p { margin: 0.15em 0; }
+.epigraph { font-style: italic; margin: 1em 2em 1.5em; }
+.speaker { font-family: "Cinzel", Georgia, serif; font-weight: 600; font-size: 0.82em; letter-spacing: 0.04em; }
+
+.appendix .portrait { max-width: 40%; float: right; margin: 0 0 1em 1em; }
+.actor-role { font-size: 0.8em; text-transform: uppercase; letter-spacing: 0.1em; color: #666; margin-top: -0.5em; }

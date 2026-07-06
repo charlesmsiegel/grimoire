@@ -74,3 +74,123 @@ def test_rewrite_images_world_fallback(monkeypatch, tmp_path):
     out2 = epub._rewrite_images(f"![gone](/api/worlds/{wid}/greetings/g1/images/nope)",
                                 croot, wroot, images)
     assert out2 == "gone"
+
+
+import io
+import xml.etree.ElementTree as ET
+import zipfile
+
+from grimoire.store import appearances, characters, entities, pcs, scenes
+
+OPF_NS = {"opf": "http://www.idpf.org/2007/opf"}
+
+
+def _fixture_campaign(monkeypatch, tmp_path):
+    """World + campaign with 2 scenes, cast, dates, locations, images, epigraph."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Saltmarch")
+    wroot = worlds.world_root(wid)
+    card = characters.blank_card("Seraphine")
+    card["data"]["description"] = "the drowned keeper"
+    card["data"]["personality"] = "grim"
+    characters.create_character(wroot, "Seraphine", "default", card)
+    pcs.create_pc(wroot, "Elara", [], persona={"name": "Elara", "pronouns": "she/her",
+                                               "summary": "scholar", "description": "A wanderer."})
+    cid = campaigns.create_campaign("Run One", wid)
+    croot = campaigns.campaign_root(cid)
+    docks = entities.create_entity(croot, "locations", "The Docks", body="Salt-stained piers.")
+    entities.create_entity(croot, "locations", "The Keep", body="Never visited.")
+    assets.put_image(croot, docks, "default", "pier", b"pierbytes", "png", base="locations")
+
+    sid1 = scenes.create_scene(cid, "Arrival")
+    appearances.appear(cid, sid1, "pcs", "elara", "default", "player")
+    appearances.appear(cid, sid1, "characters", "seraphine", "default", "npc")
+    scenes.append_message(cid, sid1, "user", "I step off the boat.", speaker="Elara")
+    scenes.append_message(cid, sid1, "assistant",
+                          f"The docks reek. ![The docks](/api/campaigns/{cid}/locations/{docks}/images/pier) "
+                          "![lost](https://example.com/x.png)")
+    scenes.append_message(cid, sid1, "assistant", "\"Welcome,\" she says.", speaker="Seraphine")
+    sid1 = scenes.set_datetime(cid, sid1, "2025-03-01")["id"]  # renames; appearances repoint
+    scenes.set_location(cid, sid1, docks)
+    scenes.mark_absorbed(cid, sid1, "They arrive.", "A long summary.")
+
+    sid2 = scenes.create_scene(cid, "Below")
+    scenes.append_message(cid, sid2, "assistant", "Deeper still.")
+    return wid, cid, sid1, sid2
+
+
+def _open(blob: bytes) -> zipfile.ZipFile:
+    return zipfile.ZipFile(io.BytesIO(blob))
+
+
+def test_build_epub_ocf_shape(monkeypatch, tmp_path):
+    _wid, cid, _s1, _s2 = _fixture_campaign(monkeypatch, tmp_path)
+    blob, filename = epub.build_epub(cid)
+    assert filename == f"{cid}.epub"
+    z = _open(blob)
+    infos = z.infolist()
+    assert infos[0].filename == "mimetype"
+    assert infos[0].compress_type == zipfile.ZIP_STORED
+    assert z.read("mimetype") == b"application/epub+zip"
+    assert "full-path=\"package.opf\"" in z.read("META-INF/container.xml").decode()
+
+
+def test_build_epub_manifest_and_spine_complete(monkeypatch, tmp_path):
+    _wid, cid, _s1, _s2 = _fixture_campaign(monkeypatch, tmp_path)
+    blob, _ = epub.build_epub(cid)
+    z = _open(blob)
+    opf = ET.fromstring(z.read("package.opf"))
+    items = opf.findall(".//opf:item", OPF_NS)
+    by_id = {i.get("id"): i for i in items}
+    for i in items:
+        assert i.get("href") in z.namelist(), i.get("href")
+    for ref in opf.findall(".//opf:itemref", OPF_NS):
+        assert ref.get("idref") in by_id
+    navs = [i for i in items if i.get("properties") == "nav"]
+    assert len(navs) == 1 and navs[0].get("href") == "nav.xhtml"
+    title = opf.find(".//{http://purl.org/dc/elements/1.1/}title")
+    assert title.text == "Run One"
+
+
+def test_build_epub_chapters_in_scene_order_with_meta(monkeypatch, tmp_path):
+    _wid, cid, _s1, _s2 = _fixture_campaign(monkeypatch, tmp_path)
+    blob, _ = epub.build_epub(cid)
+    z = _open(blob)
+    ch1 = z.read("text/chapter-001.xhtml").decode()
+    ch2 = z.read("text/chapter-002.xhtml").decode()
+    assert "Arrival" in ch1 and "Below" in ch2
+    assert '<span class="speaker">Seraphine</span>' in ch1
+    assert '<span class="speaker">Elara</span>' in ch1
+    assert "The docks reek." in ch1
+    assert 'class="epigraph"' in ch1 and "They arrive." in ch1
+    assert 'class="scene-date"' in ch1
+    assert "The Docks" in ch1          # location line
+    assert "Elara" in ch1 and "Seraphine" in ch1  # cast line
+    assert 'class="scene-date"' not in ch2  # undated scene has no date line
+    # title page
+    tp = z.read("text/titlepage.xhtml").decode()
+    assert "Run One" in tp and "Saltmarch" in tp and 'class="daterange"' in tp
+
+
+def test_build_epub_packs_images_and_fonts(monkeypatch, tmp_path):
+    _wid, cid, _s1, _s2 = _fixture_campaign(monkeypatch, tmp_path)
+    blob, _ = epub.build_epub(cid)
+    z = _open(blob)
+    imgs = [n for n in z.namelist() if n.startswith("images/")]
+    assert imgs == ["images/img-000.png"]
+    assert z.read("images/img-000.png") == b"pierbytes"
+    ch1 = z.read("text/chapter-001.xhtml").decode()
+    assert 'src="../images/img-000.png"' in ch1
+    assert "example.com" not in ch1 and "lost" in ch1  # remote image degraded to alt
+    fonts = sorted(n for n in z.namelist() if n.startswith("fonts/"))
+    assert fonts == ["fonts/Cinzel-SemiBold.ttf", "fonts/EBGaramond-Italic.ttf",
+                     "fonts/EBGaramond-Regular.ttf", "fonts/EBGaramond-SemiBold.ttf"]
+    assert "css/stylesheet.css" in z.namelist()
+    assert "@font-face" in z.read("css/stylesheet.css").decode()
+
+
+def test_build_epub_unknown_campaign(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    import pytest
+    with pytest.raises(campaigns.CampaignNotFound):
+        epub.build_epub("nope")
