@@ -1233,6 +1233,16 @@ def get_campaign(cid: str):
     return out
 
 
+@router.get("/campaigns/{cid}/export.epub")
+def export_campaign_epub(cid: str):
+    try:
+        blob, filename = store.epub.build_epub(cid)
+    except store.campaigns.CampaignNotFound:
+        raise HTTPException(status_code=404, detail="campaign not found")
+    return Response(content=blob, media_type="application/epub+zip",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
 @router.put("/campaigns/{cid}")
 def put_campaign(cid: str, body: NameBody):
     name = body.name.strip()
