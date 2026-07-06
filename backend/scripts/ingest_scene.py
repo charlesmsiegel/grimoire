@@ -5,13 +5,16 @@ the real absorb pipeline. Built for the ingest-campaign-log skill — see
 
 from __future__ import annotations
 
+import argparse
+import asyncio
 import json
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from grimoire.store import absorb, appearances, campaigns, characters, chronicle, entities, scenes  # noqa: E402
+from grimoire.openrouter import OpenRouterClient  # noqa: E402
+from grimoire.store import absorb, appearances, campaigns, characters, chronicle, entities, read_config, scenes  # noqa: E402
 from grimoire.store.paths import slugify  # noqa: E402
 
 
@@ -105,3 +108,57 @@ def apply_scene(cid: str, sid: str, parsed: dict, edits: list[dict]) -> list[str
     chronicle.append_timeline(cid, parsed["timeline_events"])
     scenes.mark_absorbed(cid, sid, parsed["one_line"], parsed["summary"])
     return absorb.apply_edits(cid, edits, sid)
+
+
+async def ingest_one_scene(cid: str, scene: dict, client, cfg: dict) -> dict:
+    manifest = load_manifest(cid)
+    key = scene["key"]
+    if manifest.get(key, {}).get("status") == "done":
+        return {"key": key, **manifest[key], "status": "skipped"}
+    sid = build_scene(cid, scene)
+    result = await run_absorb(cid, sid, client, cfg)
+    applied = apply_scene(cid, sid, result["parsed"], result["edits"])
+    manifest[key] = {"status": "done", "sid": sid, "one_line": result["parsed"]["one_line"],
+                     "applied": applied}
+    save_manifest(cid, manifest)
+    return {"key": key, **manifest[key], "status": "done"}
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        description="Ingest a rewritten campaign-log scene into a grimoire campaign.")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    p_setup = sub.add_parser("setup", help="create (or find) the target campaign")
+    p_setup.add_argument("--world", required=True)
+    p_setup.add_argument("--name", required=True)
+
+    p_ingest = sub.add_parser("ingest", help="ingest one scene JSON file")
+    p_ingest.add_argument("--campaign", required=True)
+    p_ingest.add_argument("--input", required=True, type=Path)
+
+    p_status = sub.add_parser("status", help="print the ingest manifest")
+    p_status.add_argument("--campaign", required=True)
+
+    args = ap.parse_args()
+    if args.cmd == "setup":
+        print(ensure_campaign(args.name, args.world))
+        return 0
+    if args.cmd == "status":
+        print(json.dumps(load_manifest(args.campaign), indent=2, sort_keys=True))
+        return 0
+
+    scene = json.loads(args.input.read_text(encoding="utf-8"))
+    cfg = read_config()
+    if not cfg["openrouter_key"]:
+        print("error: OpenRouter key not configured (set it in grimoire's Configuration page)",
+              file=sys.stderr)
+        return 1
+    client = OpenRouterClient()
+    result = asyncio.run(ingest_one_scene(args.campaign, scene, client, cfg))
+    print(json.dumps(result, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

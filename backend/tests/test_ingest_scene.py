@@ -142,3 +142,83 @@ def test_run_absorb_and_apply_scene(monkeypatch, tmp_path):
     st = playstate.read_state(croot, "marisol")
     assert "wary of julian" in st["current_state"]
     assert client.calls[0][1] == "test/model" and client.calls[0][2] == "k"
+
+
+def test_ingest_one_scene_is_resumable(monkeypatch, tmp_path):
+    from grimoire.store import campaigns as campaigns_store, worlds as worlds_store
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds_store.create_world("ashgrove")
+    cid = ingest_scene.ensure_campaign("Silver Oath", wid)
+    croot = campaigns_store.campaign_root(cid)
+    ingest_scene.ensure_character(croot, {"name": "marisol"})
+
+    scene = {
+        "key": "file1-scene01",
+        "title": "The Reckoning",
+        "characters": [{"kind": "characters", "id": "marisol"}],
+        "turns": [{"role": "assistant", "speaker": "marisol", "content": "\"You've grown bold.\""}],
+    }
+    fake_text = json_module.dumps({
+        "one_line": "marisol needles julian.", "summary": "s", "keywords": [],
+        "timeline_events": [], "character_state_edits": [], "lore_edits": [],
+        "authored_edits": [], "relationship_deltas": [], "bond_changes": [], "plot_movements": [],
+    })
+    client = FakeClient(fake_text)
+    cfg = {"model": "test/model", "openrouter_key": "k"}
+
+    first = asyncio.run(ingest_scene.ingest_one_scene(cid, scene, client, cfg))
+    assert first["status"] == "done"
+    assert len(client.calls) == 1
+
+    second = asyncio.run(ingest_scene.ingest_one_scene(cid, scene, client, cfg))
+    assert second["status"] == "skipped"
+    assert second["sid"] == first["sid"]
+    assert len(client.calls) == 1  # no second LLM call
+
+
+def test_two_scenes_accumulate_state_in_order(monkeypatch, tmp_path):
+    """Scene 2's snapshot must see scene 1's applied character-state edit."""
+    from grimoire.store import campaigns as campaigns_store, worlds as worlds_store
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds_store.create_world("ashgrove")
+    cid = ingest_scene.ensure_campaign("Silver Oath", wid)
+    croot = campaigns_store.campaign_root(cid)
+    ingest_scene.ensure_character(croot, {"name": "marisol"})
+    cfg = {"model": "test/model", "openrouter_key": "k"}
+
+    scene1 = {
+        "key": "file1-scene01", "title": "Scene One",
+        "characters": [{"kind": "characters", "id": "marisol"}],
+        "turns": [{"role": "assistant", "speaker": "marisol", "content": "\"You've grown bold.\""}],
+    }
+    text1 = json_module.dumps({
+        "one_line": "a", "summary": "a", "keywords": [], "timeline_events": [],
+        "character_state_edits": [{"id": "marisol", "current_state": "wary of julian"}],
+        "lore_edits": [], "authored_edits": [], "relationship_deltas": [],
+        "bond_changes": [], "plot_movements": [],
+    })
+    asyncio.run(ingest_scene.ingest_one_scene(cid, scene1, FakeClient(text1), cfg))
+
+    captured = {}
+    real_snapshot = ingest_scene.absorb.state_snapshot
+
+    def spying_snapshot(cid_, sid_):
+        snap = real_snapshot(cid_, sid_)
+        captured.update(snap)
+        return snap
+
+    monkeypatch.setattr(ingest_scene.absorb, "state_snapshot", spying_snapshot)
+
+    scene2 = {
+        "key": "file1-scene02", "title": "Scene Two",
+        "characters": [{"kind": "characters", "id": "marisol"}],
+        "turns": [{"role": "assistant", "speaker": "marisol", "content": "\"Still bold, I see.\""}],
+    }
+    text2 = json_module.dumps({
+        "one_line": "b", "summary": "b", "keywords": [], "timeline_events": [],
+        "character_state_edits": [], "lore_edits": [], "authored_edits": [],
+        "relationship_deltas": [], "bond_changes": [], "plot_movements": [],
+    })
+    asyncio.run(ingest_scene.ingest_one_scene(cid, scene2, FakeClient(text2), cfg))
+
+    assert any("wary of julian" in v for v in captured.values())
