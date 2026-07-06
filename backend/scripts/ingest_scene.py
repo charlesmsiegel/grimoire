@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from grimoire.store import campaigns, characters, entities  # noqa: E402
+from grimoire.store import appearances, campaigns, characters, entities, scenes  # noqa: E402
 from grimoire.store.paths import slugify  # noqa: E402
 
 
@@ -62,3 +62,24 @@ def resolve_version(croot: Path, kind: str, actor_id: str) -> str:
         from grimoire.store import pcs
         return pcs.read_pc(croot, actor_id)["meta"]["default_version"]
     return characters.read_character(croot, actor_id)["meta"]["default_version"]
+
+
+def build_scene(cid: str, scene: dict) -> str:
+    croot = campaigns.campaign_root(cid)
+    for spec in scene.get("new_characters", []):
+        ensure_character(croot, spec)
+    for spec in scene.get("new_locations", []):
+        ensure_location(croot, spec)
+
+    sid = scenes.create_scene(cid, scene["title"])
+    if scene.get("date"):
+        sid = scenes.set_datetime(cid, sid, scene["date"])["id"]
+    if scene.get("location"):
+        scenes.set_location(cid, sid, scene["location"])
+    for turn in scene["turns"]:
+        scenes.append_message(cid, sid, turn["role"], turn["content"], speaker=turn.get("speaker"))
+    for actor in scene["characters"]:
+        kind, aid = actor["kind"], actor["id"]
+        vid = resolve_version(croot, kind, aid)
+        appearances.appear(cid, sid, kind, aid, vid, "player" if kind == "pcs" else "npc")
+    return sid
