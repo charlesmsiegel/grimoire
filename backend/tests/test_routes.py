@@ -2464,3 +2464,18 @@ def test_offscreen_suggestions_rank_only_offscreen_greetings(client):
     assert "Available greetings" in fake.messages[1]["content"]
     assert "Normal" not in fake.messages[1]["content"]
     assert out["greeting_picks"] == ["alpha", "beta"]
+
+
+# ---- campaign EPUB export ----
+
+def test_export_epub_route(client):
+    _wid, cid = _campaign(client)
+    r = client.get(f"/api/campaigns/{cid}/export.epub")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/epub+zip"
+    assert r.headers["content-disposition"] == f'attachment; filename="{cid}.epub"'
+    assert r.content[:2] == b"PK"
+
+
+def test_export_epub_unknown_campaign_404(client):
+    assert client.get("/api/campaigns/nope/export.epub").status_code == 404
