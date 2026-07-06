@@ -1233,6 +1233,7 @@ def get_campaign(cid: str):
     return out
 
 
+# Declared before the generic /campaigns/{cid}/{kind} routes so "export.epub" isn't captured as a kind.
 @router.get("/campaigns/{cid}/export.epub")
 def export_campaign_epub(cid: str):
     try:

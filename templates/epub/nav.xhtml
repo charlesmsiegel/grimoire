@@ -10,12 +10,12 @@
     <h1>Contents</h1>
     <ol>
       <li><a href="text/titlepage.xhtml">Title</a></li>
-      <li><span>Scenes</span>
+{% if chapters %}      <li><span>Scenes</span>
         <ol>
 {% for ch in chapters %}          <li><a href="text/{{ ch.file }}">{{ ch.title }}</a></li>
 {% endfor %}        </ol>
       </li>
-{% if appendix %}      <li><a href="text/appendix.xhtml">Appendix</a>
+{% endif %}{% if appendix %}      <li><a href="text/appendix.xhtml">Appendix</a>
         <ol>
 {% for ap in appendix %}          <li><a href="text/{{ ap.file }}">{{ ap.title }}</a></li>
 {% endfor %}        </ol>
