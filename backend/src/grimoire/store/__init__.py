@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from . import (
     absorb, appearances, assets, campaigns, cards, changes, characters, chronicle,
-    chub, context, dossiers, entities, fetch, greetings, image_subjects, localize,
+    chub, context, dossiers, entities, epub, fetch, greetings, image_subjects, localize,
     lorebook, migrations, pcs, playing, playstate, plot, relationships, scene_ids,
     scene_refs, scenes, suggest, sync, tags, taglines, thumbs, worlds,
 )
@@ -43,6 +43,7 @@ __all__ = [
     "DEFAULT_MODEL",
     "DEFAULT_THEME",
     "entities",
+    "epub",
     "EntityNotFound",
     "UnknownKind",
     "worlds",
