@@ -205,3 +205,55 @@ def test_chapter_omits_deleted_location(monkeypatch, tmp_path):
     ch1 = z.read("text/chapter-001.xhtml").decode()
     assert 'class="scene-location"' not in ch1   # deleted location: line silently omitted
     assert 'class="scene-date"' in ch1           # rest of the header intact
+
+
+def test_appendix_actors_and_visited_locations(monkeypatch, tmp_path):
+    _wid, cid, _s1, _s2 = _fixture_campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    assets.put_image(croot, "seraphine", "default", assets.AVATAR, b"face", "png")
+    blob, _ = epub.build_epub(cid)
+    z = _open(blob)
+    names = z.namelist()
+    assert "text/appendix.xhtml" in names  # divider page
+    sera = z.read("text/actor-characters-seraphine.xhtml").decode()
+    assert "the drowned keeper" in sera and "grim" in sera
+    assert "Description" in sera and "Personality" in sera
+    assert 'class="portrait"' in sera
+    elara = z.read("text/actor-pcs-elara.xhtml").decode()
+    assert "A wanderer." in elara and "Player character" in elara
+    docks = z.read("text/location-the-docks.xhtml").decode()
+    assert "Salt-stained piers." in docks
+    assert "text/location-the-keep.xhtml" not in names  # never visited
+    # players come before NPCs in the spine
+    spine_docs = [n for n in names if n.startswith("text/actor-")]
+    assert spine_docs.index("text/actor-pcs-elara.xhtml") >= 0
+    import xml.etree.ElementTree as ET
+    opf = ET.fromstring(z.read("package.opf"))
+    hrefs = [i.get("href") for i in opf.findall(".//opf:item", OPF_NS)]
+    a = hrefs.index("text/actor-pcs-elara.xhtml")
+    b = hrefs.index("text/actor-characters-seraphine.xhtml")
+    c = hrefs.index("text/location-the-docks.xhtml")
+    assert a < b < c
+    # nav lists the appendix
+    nav = z.read("nav.xhtml").decode()
+    assert "Appendix" in nav and "text/actor-pcs-elara.xhtml" in nav
+
+
+def test_appendix_skips_unreadable_actor(monkeypatch, tmp_path):
+    _wid, cid, _s1, _s2 = _fixture_campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    (croot / "characters" / "seraphine" / "default.json").unlink()
+    blob, _ = epub.build_epub(cid)
+    z = _open(blob)
+    assert "text/actor-characters-seraphine.xhtml" not in z.namelist()
+    assert "text/actor-pcs-elara.xhtml" in z.namelist()  # book still builds
+
+
+def test_no_appendix_no_divider(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Bare")
+    cid = campaigns.create_campaign("Empty Run", wid)
+    blob, _ = epub.build_epub(cid)  # zero scenes: title page + nothing else
+    z = _open(blob)
+    assert "text/appendix.xhtml" not in z.namelist()
+    assert "text/titlepage.xhtml" in z.namelist()
