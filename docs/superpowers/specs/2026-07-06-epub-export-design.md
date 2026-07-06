@@ -37,8 +37,8 @@ Data flow:
    everything else DEFLATED.
 
 Book metadata: `dc:title` = campaign name, `dc:language` = `en`,
-`dc:identifier` = `urn:grimoire:campaign:<cid>`, `dc:date` = campaign `updated`.
-Filename: `<cid>.epub`.
+`dc:identifier` = `urn:grimoire:campaign:<cid>`, `dcterms:modified` = campaign
+`updated`. Filename: `<cid>.epub`.
 
 New backend dependency: `markdown>=3.5` (pure Python).
 
@@ -135,7 +135,10 @@ No loading state; the browser handles the download.
 `markdown` passes raw inline HTML through untouched. In-app text never contains
 raw HTML (react-markdown drops it, so nobody writes it), so v1 escapes nothing;
 a hand-imported body containing raw HTML could yield non-valid XHTML in that
-chapter. Most readers parse leniently. Accepted for v1.
+chapter. The same applies to named HTML entities (`&mdash;`, `&nbsp;`, …), which
+are not XML's predefined entities and pass through unmapped — the likelier
+variant in prose imported from the web. Most readers parse leniently. Accepted
+for v1.
 
 ## Testing
 
