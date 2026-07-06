@@ -1,3 +1,5 @@
+import asyncio
+import json as json_module
 import sys
 from pathlib import Path
 
@@ -94,3 +96,49 @@ def test_build_scene_writes_transcript_cast_location_date(monkeypatch, tmp_path)
     assert "1818-05-15" in sid  # first date-set stamps the filename
     cast = {(a["kind"], a["id"]) for a in appearances.scene_cast(cid, sid)}
     assert cast == {("pcs", "julian"), ("characters", "marisol")}
+
+
+class FakeClient:
+    def __init__(self, text: str):
+        self.text = text
+        self.calls = []
+
+    async def complete(self, messages, model, key):
+        self.calls.append((messages, model, key))
+        return self.text
+
+
+def test_run_absorb_and_apply_scene(monkeypatch, tmp_path):
+    from grimoire.store import campaigns as campaigns_store, playstate, worlds as worlds_store
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds_store.create_world("ashgrove")
+    cid = ingest_scene.ensure_campaign("Silver Oath", wid)
+    croot = campaigns_store.campaign_root(cid)
+    ingest_scene.ensure_character(croot, {"name": "marisol"})
+
+    scene = {
+        "title": "The Reckoning",
+        "characters": [{"kind": "characters", "id": "marisol"}],
+        "turns": [{"role": "assistant", "speaker": "marisol", "content": "\"You've grown bold.\""}],
+    }
+    sid = ingest_scene.build_scene(cid, scene)
+
+    fake_text = json_module.dumps({
+        "one_line": "marisol needles julian.",
+        "summary": "A tense study confrontation.",
+        "keywords": ["study", "confrontation"],
+        "timeline_events": [{"date": "1818-05-15", "text": "julian confronts marisol."}],
+        "character_state_edits": [{"id": "marisol", "current_state": "wary of julian"}],
+        "lore_edits": [], "authored_edits": [], "relationship_deltas": [],
+        "bond_changes": [], "plot_movements": [],
+    })
+    client = FakeClient(fake_text)
+    result = asyncio.run(ingest_scene.run_absorb(cid, sid, client, {"model": "test/model", "openrouter_key": "k"}))
+    assert result["parsed"]["one_line"] == "marisol needles julian."
+    assert any(e["kind"] == "character_state" for e in result["edits"])
+
+    applied = ingest_scene.apply_scene(cid, sid, result["parsed"], result["edits"])
+    assert applied
+    st = playstate.read_state(croot, "marisol")
+    assert "wary of julian" in st["current_state"]
+    assert client.calls[0][1] == "test/model" and client.calls[0][2] == "k"
