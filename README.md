@@ -1,0 +1,174 @@
+# ✦ Grimoire
+
+**Grimoire is a local-first app for AI-driven collaborative storytelling and
+character roleplay.** It runs entirely on your own machine, talks to whichever
+language model you choose through [OpenRouter](https://openrouter.ai/), and
+keeps your whole library — worlds, characters, campaigns, and every scene you
+play — as plain Markdown and JSON files under `~/.grimoire`. Nothing is locked
+in a database or a cloud account: your stories are files you own.
+
+---
+
+## What it does
+
+Grimoire organizes roleplay the way a long-running campaign actually works,
+with three layers:
+
+- **Worlds** — a setting and its cast. A world holds your **characters** (NPC
+  cards), **PCs** (the personas you play), reusable **greetings** (scene
+  openers), and worldbuilding records: **lore** and **locations**. Worlds can
+  have their own calendar, tags, and colour theme.
+- **Campaigns** — an ongoing playthrough set in a world. A campaign strings
+  together scenes over time and keeps continuity for you: a **chronicle**
+  (running recap/memory), **cast** with per-character **dossiers**, tracked
+  **relationships**, open **plot threads**, character **state**, in-world
+  **dates**, and a log of **changes** the story has made to the world.
+- **Scenes** — the actual chat. You roleplay turn by turn against a streaming
+  model response, with **retry** and **regenerate-with-guidance** when a reply
+  misses, an **opener** generator to start a scene, and **scene suggestions**
+  that propose what to play next based on where the campaign stands.
+
+When a scene wraps, **absorb** distills it back into the campaign: it updates
+the chronicle, refreshes each present NPC's dossier, and advances
+relationships, plot threads, and character state — so the next scene starts
+from an up-to-date world.
+
+### Other highlights
+
+- **Import character cards** — bring in character cards (including PNG cards
+  with embedded lorebooks) and import directly from [chub.ai](https://chub.ai/),
+  with galleries, avatars, and multiple versions per character.
+- **Lorebooks / world info** — parse and import character-book / world-info
+  entries into a world's lore.
+- **LLM-generated taglines** and **image localization** for characters.
+- **EPUB export** — turn a finished campaign into a readable book.
+- **Editable prompts** — every prompt Grimoire sends to the model lives as a
+  Jinja2 template under [`templates/`](templates/README.md). Edit a template
+  and the change takes effect immediately; nothing prompt-shaped is hard-coded.
+- **Themes** — ships with `codex`, `astral`, and `manuscript`.
+
+---
+
+## Requirements
+
+- **Python 3.11+**
+- **Node 18+**
+- An **[OpenRouter](https://openrouter.ai/) API key** (you supply the model;
+  Grimoire defaults to `anthropic/claude-opus-4.1` and you can change it in the
+  app).
+
+---
+
+## Install
+
+Clone the repo, then run the installer for your platform. It creates the
+backend virtualenv, installs the frontend packages, and adds a desktop
+launcher.
+
+**macOS / Linux**
+
+```bash
+git clone https://github.com/charlesmsiegel/grimoire.git
+cd grimoire
+scripts/unix/install.sh
+```
+
+**Windows (PowerShell)**
+
+```powershell
+git clone https://github.com/charlesmsiegel/grimoire.git
+cd grimoire
+scripts\windows\install.ps1
+```
+
+---
+
+## Run
+
+**macOS / Linux**
+
+```bash
+scripts/unix/run.sh
+```
+
+**Windows (PowerShell)**
+
+```powershell
+scripts\windows\run.ps1
+```
+
+This starts the backend (port **8173**) and the frontend (port **5173**),
+waits for both to be ready, and opens **http://127.0.0.1:5173** in your
+browser. The installer also drops a **Grimoire** launcher on your desktop that
+does the same thing.
+
+To stop everything:
+
+```bash
+scripts/unix/shutdown.sh        # macOS / Linux
+scripts\windows\shutdown.ps1    # Windows
+```
+
+---
+
+## First steps
+
+1. Open **Config** (top-right) and paste your **OpenRouter API key**. The
+   status pill in the header turns to `CONNECTED`. Here you can also pick the
+   model, theme, and the default system prompt.
+2. Go to **Worlds → + New**, create a world, and add a character or two (build
+   one by hand or import a card / a chub.ai character).
+3. Add a **greeting** to open a scene, and optionally some **lore** and
+   **locations**.
+4. Go to **Campaigns → + New**, start a campaign in that world, and open a
+   scene to begin playing. Use **absorb** when a scene is done to fold it into
+   the campaign's memory.
+
+---
+
+## Where your data lives
+
+Everything is stored as Markdown and JSON under a single data directory,
+resolved by `store.home()` in this order:
+
+1. the `GRIMOIRE_HOME` environment variable (used for tests / overrides), then
+2. the path you choose on the **Config** page (recorded in the bootstrap
+   pointer `~/.grimoire.json`), then
+3. the default `~/.grimoire`.
+
+Because the whole library is just files, you can back it up, version it, or
+**point the data directory at a synced folder (Dropbox, iCloud, etc.) to share
+one library across devices** — change the **Storage location** on the Config
+page.
+
+---
+
+## Development
+
+Grimoire is a **FastAPI** backend (`backend/`, pytest) plus a **Vite/React**
+frontend (`frontend/`, vitest).
+
+```bash
+# Backend tests
+cd backend && .venv/bin/python -m pytest -q          # macOS / Linux
+#   backend\.venv\Scripts\python.exe -m pytest backend -q   (Windows)
+
+# Frontend tests + typecheck (run from frontend/)
+cd frontend
+npx vitest run
+npx tsc -b
+```
+
+Project conventions and the frontend list/detail page pattern are documented in
+[`CLAUDE.md`](CLAUDE.md); the prompt template layout is in
+[`templates/README.md`](templates/README.md).
+
+Repository layout:
+
+```
+backend/    FastAPI app, the ~/.grimoire file store, OpenRouter client
+frontend/   Vite/React UI (Campaigns, Worlds, scene play, Config)
+templates/  every LLM prompt, as Jinja2
+scripts/    install / run / shutdown for unix and windows
+docs/        design notes and specs
+```
