@@ -43,11 +43,18 @@ def _obj(text: str) -> dict:
 def parse_output(text: str) -> dict:
     obj = _obj(text)
 
+    def _str(e, f):
+        # A JSON `null` is a present-but-empty value the model uses interchangeably with
+        # omitting the key (e.g. "no existing id, this is new"); str(e.get(f, "")) turns
+        # that null into the literal text "None" instead of "", corrupting ids/titles
+        # downstream. `.get(f) or ""` collapses null and absent to the same "".
+        return str(e.get(f) or "").strip()
+
     def _list(key, fields):
         out = []
         for e in obj.get(key, []):
             if isinstance(e, dict):
-                out.append({f: str(e.get(f, "")).strip() for f in fields})
+                out.append({f: _str(e, f) for f in fields})
         return out
 
     # Preserve key PRESENCE for knowledge: a field the model omitted must be left
@@ -57,28 +64,26 @@ def parse_output(text: str) -> dict:
     for e in obj.get("character_state_edits", []):
         if not isinstance(e, dict):
             continue
-        row = {"id": str(e.get("id", "")).strip(),
-               "current_state": str(e.get("current_state", "") or "").strip()}
+        row = {"id": _str(e, "id"), "current_state": _str(e, "current_state")}
         for k in ("knows", "suspects"):
             if k in e:
-                row[k] = str(e.get(k) or "").strip()
+                row[k] = _str(e, k)
         cs_edits.append(row)
 
     rel_deltas = []
     for e in obj.get("relationship_deltas", []):
         if isinstance(e, dict):
-            rel_deltas.append({"from": str(e.get("from", "")).strip(), "to": str(e.get("to", "")).strip(),
+            rel_deltas.append({"from": _str(e, "from"), "to": _str(e, "to"),
                                "trust": _int05(e.get("trust")), "affection": _int05(e.get("affection")),
-                               "tension": _int05(e.get("tension")), "note": str(e.get("note", "")).strip()})
+                               "tension": _int05(e.get("tension")), "note": _str(e, "note")})
 
     plot_moves = []
     for e in obj.get("plot_movements", []):
         if isinstance(e, dict):
-            status = str(e.get("status", "")).strip().lower()
-            plot_moves.append({"id": str(e.get("id", "")).strip(),
-                               "title": str(e.get("title", "")).strip(),
+            status = _str(e, "status").lower()
+            plot_moves.append({"id": _str(e, "id"), "title": _str(e, "title"),
                                "status": status if status in plot.STATUSES else "open",
-                               "beat": str(e.get("beat", "")).strip()})
+                               "beat": _str(e, "beat")})
 
     return {
         "one_line": str(obj.get("one_line", "")).strip(),
@@ -135,8 +140,18 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
     out: list[dict] = []
 
     for e in parsed.get("character_state_edits", []):
-        char_id = e.get("id", "")
-        if not char_id:
+        raw_id = e.get("id", "")
+        if not raw_id:
+            continue
+        # The model echoes ids from the "Present: <kind>/<id>, ..." context line (or,
+        # less reliably, a bare id) — strip any "characters/" or "characters:" prefix so
+        # both forms resolve. playstate.py only tracks "characters" (not "pcs"), matching
+        # its own docstring scope, so a pcs-prefixed id is dropped rather than misfiled.
+        kind, sep, rest = raw_id.partition("/")
+        if not sep:
+            kind, _, rest = raw_id.partition(":")
+        char_id = rest if kind in ("characters", "pcs") else raw_id
+        if kind == "pcs":
             continue
         try:
             characters.read_character(croot, char_id)

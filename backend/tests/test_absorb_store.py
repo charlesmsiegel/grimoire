@@ -67,6 +67,20 @@ def test_parse_output_plot_movements():
         {"id": "", "title": "New thread", "status": "open", "beat": "starts"}]  # bad status -> open
 
 
+def test_parse_output_treats_null_id_as_new_thread_not_the_string_none():
+    """A model emitting explicit JSON null for "id" (its natural way to say "no existing
+    thread") must parse the same as omitting the key — not become the literal string
+    "None", which materialize() would then treat as a real (bogus) thread id."""
+    text = ('{"one_line": "", "summary": "", "keywords": [], "timeline_events": [],'
+            ' "character_state_edits": [{"id": null, "current_state": "x"}],'
+            ' "lore_edits": [], "authored_edits": [],'
+            ' "plot_movements": [{"id": null, "title": "New thread", "status": "open",'
+            '   "beat": "starts"}]}')
+    out = absorb.parse_output(text)
+    assert out["character_state_edits"][0]["id"] == ""
+    assert out["plot_movements"][0]["id"] == ""
+
+
 def test_plot_snapshot_renders_open_threads(monkeypatch, tmp_path):
     from grimoire.store import plot, scenes
     cid = _campaign(monkeypatch, tmp_path)
@@ -106,6 +120,36 @@ def test_materialize_builds_before_after(monkeypatch, tmp_path):
     assert lore["before"] == "A ruined cathedral." and lore["after"].endswith("Now flooded.")
     auth = edits[f"authored:{ch}:personality"]
     assert auth["authored"] is True and auth["before"] == "aloof" and auth["after"] == "guardedly loyal"
+
+
+def test_materialize_character_state_edit_strips_kind_prefix(monkeypatch, tmp_path):
+    """The model echoes ids from the "Present: characters/<id>, ..." context line, so
+    character_state_edits arrives "characters/<id>"-prefixed far more often than bare —
+    materialize must resolve that form, not just the bare id the model sometimes uses."""
+    from grimoire.store import appearances, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    ch = _char(croot, "Seraphine")
+    sid = scenes.create_scene(cid, "S")
+    appearances.appear(cid, sid, "characters", ch, "main", "npc")
+    parsed = {"character_state_edits": [
+        {"id": f"characters/{ch}", "current_state": "Now travels with them."}]}
+    edits = {e["id"]: e for e in absorb.materialize(cid, sid, parsed)}
+    cs = edits[f"character_state:{ch}"]
+    assert cs["before"] == "" and cs["after"] == "Now travels with them."
+    assert cs["target"] == {"kind": "characters", "id": ch}
+
+
+def test_materialize_character_state_edit_ignores_pcs_prefix(monkeypatch, tmp_path):
+    """playstate.py only tracks NPCs (see its module docstring) — a pcs-prefixed id must
+    be dropped, not misfiled under the characters/ tree using the PC's id as if it were
+    a character slug."""
+    cid = _campaign(monkeypatch, tmp_path)
+    from grimoire.store import scenes
+    sid = scenes.create_scene(cid, "S")
+    parsed = {"character_state_edits": [
+        {"id": "pcs/shia", "current_state": "Should not be applied."}]}
+    assert absorb.materialize(cid, sid, parsed) == []
 
 
 def test_materialize_composes_knowledge_blob(monkeypatch, tmp_path):
