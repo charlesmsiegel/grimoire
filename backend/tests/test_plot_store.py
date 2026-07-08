@@ -39,7 +39,7 @@ def test_open_threads_excludes_closed_and_sorts(monkeypatch, tmp_path):
     plot.set_movement(cid, "z", "Zed", "closed", "done", "s3")
     got = plot.open_threads(cid)
     assert [t["id"] for t in got] == ["a", "b"]  # closed 'z' gone; sorted by last_scene
-    assert got[0] == {"id": "a", "title": "Ay", "status": "advanced", "latest_beat": "beat a"}
+    assert got[0] == {"id": "a", "title": "Ay", "status": "advanced", "last_scene": "s1", "latest_beat": "beat a"}
 
 
 def test_render_open_forms(monkeypatch, tmp_path):
