@@ -1,11 +1,23 @@
 {#- The campaign-situation snapshot. Vars:
       s — dict from suggest.build_snapshot(): now, friendly, holidays_today,
           upcoming ({name, in_days} | None), birthdays ([{name, age, when}]),
-          open_threads ([{title, status, latest_beat}]),
-          absent_cast ([{name, tagline}]), available_cast ([{token, name}]),
+          story_so_far ([{one_line, location, date}]),
+          open_threads ([{title, status, latest_beat, dormancy}]),
+          cast ([{token, name, tagline, status, role}]),
           available_locations ([{id, name}])
       greeting_candidates — [{id, name, excerpt}] | None -#}
 {%- set parts = [] -%}
+{%- if s.story_so_far -%}
+{%- set lines = [] -%}
+{%- for r in s.story_so_far -%}
+{%- set tail = [] -%}
+{%- if r.location -%}{%- set _ = tail.append(r.location) -%}{%- endif -%}
+{%- if r.date -%}{%- set _ = tail.append(r.date) -%}{%- endif -%}
+{%- set suffix = (" (" ~ (tail | join(", ")) ~ ")") if tail else "" -%}
+{%- set _ = lines.append("- " ~ r.one_line ~ suffix) -%}
+{%- endfor -%}
+{%- set _ = parts.append("Story so far (most recent first):\n" ~ (lines | join("\n"))) -%}
+{%- endif -%}
 {%- if s.now -%}
 {%- set line = "Current date: " ~ (s.friendly or s.now) ~ "." -%}
 {%- if s.holidays_today -%}{%- set line = line ~ " Today: " ~ (s.holidays_today | join(", ")) ~ "." -%}{%- endif -%}
@@ -19,18 +31,28 @@
 {%- endif -%}
 {%- if s.open_threads -%}
 {%- set lines = [] -%}
-{%- for t in s.open_threads -%}{%- set _ = lines.append(("- " ~ t.title ~ " (" ~ t.status ~ "): " ~ t.latest_beat).rstrip(": ")) -%}{%- endfor -%}
-{%- set _ = parts.append("Open plot threads:\n" ~ (lines | join("\n"))) -%}
+{%- for t in s.open_threads -%}
+{%- if t.dormancy is defined and t.dormancy == 0 -%}{%- set dz = "advanced last scene" -%}
+{%- elif t.dormancy is defined and t.dormancy == 1 -%}{%- set dz = "cold — 1 scene" -%}
+{%- elif t.dormancy is defined -%}{%- set dz = "cold — " ~ t.dormancy ~ " scenes" -%}
+{%- else -%}{%- set dz = t.status -%}{%- endif -%}
+{%- set _ = lines.append(("- " ~ t.title ~ " (" ~ dz ~ "): " ~ t.latest_beat).rstrip(": ")) -%}
+{%- endfor -%}
+{%- set _ = parts.append("Open plot threads (cold threads are especially worth reviving):\n" ~ (lines | join("\n"))) -%}
 {%- endif -%}
-{%- if s.absent_cast -%}
-{%- set lines = [] -%}
-{%- for a in s.absent_cast -%}{%- set _ = lines.append(("- " ~ a.name ~ ": " ~ a.tagline).rstrip(": ")) -%}{%- endfor -%}
-{%- set _ = parts.append("Long-absent characters:\n" ~ (lines | join("\n"))) -%}
-{%- endif -%}
-{%- if s.available_cast -%}
-{%- set lines = [] -%}
-{%- for c in s.available_cast -%}{%- set _ = lines.append("- " ~ c.token ~ " = " ~ c.name) -%}{%- endfor -%}
-{%- set _ = parts.append("Available cast (use these tokens):\n" ~ (lines | join("\n"))) -%}
+{%- if s.cast -%}
+{%- set present = [] -%}{%- set offstage = [] -%}{%- set unseen = [] -%}
+{%- for c in s.cast -%}
+{%- set label = c.token ~ " = " ~ c.name ~ (" (the player character)" if c.role == "player" else ((" — " ~ c.tagline) if c.tagline else "")) -%}
+{%- if c.status == "present" -%}{%- set _ = present.append(label) -%}
+{%- elif c.status == "appeared" -%}{%- set _ = offstage.append(label) -%}
+{%- else -%}{%- set _ = unseen.append(label) -%}{%- endif -%}
+{%- endfor -%}
+{%- set blocks = [] -%}
+{%- if present -%}{%- set _ = blocks.append("In the most recent scene (present):\n- " ~ (present | join("\n- "))) -%}{%- endif -%}
+{%- if offstage -%}{%- set _ = blocks.append("Appeared earlier, now offstage:\n- " ~ (offstage | join("\n- "))) -%}{%- endif -%}
+{%- if unseen -%}{%- set _ = blocks.append("Not yet appeared — introduce only with an in-world reason:\n- " ~ (unseen | join("\n- "))) -%}{%- endif -%}
+{%- set _ = parts.append("Available cast (use these tokens):\n" ~ (blocks | join("\n"))) -%}
 {%- endif -%}
 {%- if s.available_locations -%}
 {%- set lines = [] -%}
