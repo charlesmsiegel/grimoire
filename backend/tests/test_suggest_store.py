@@ -57,16 +57,22 @@ def test_build_snapshot_tolerates_empty_campaign(monkeypatch, tmp_path):
 
 def test_build_prompt_includes_signals():
     snap = {"now": "2026-01-01", "friendly": "Jan 1", "holidays_today": ["New Year"],
-            "upcoming": {"name": "Festival", "in_days": 5}, "birthdays": [{"name": "Ann", "age": 30, "when": "today"}],
-            "open_threads": [{"id": "the-map", "title": "The map", "status": "open", "latest_beat": "found it"}],
-            "absent_cast": [{"name": "Doran", "tagline": "a sellsword"}],
-            "available_cast": [{"token": "characters:ann", "name": "Ann"}],
+            "upcoming": {"name": "Festival", "in_days": 5},
+            "birthdays": [{"name": "Ann", "age": 30, "when": "today"}],
+            "story_so_far": [{"one_line": "They met at the keep.", "location": "The Keep", "date": "2026-01-01"}],
+            "open_threads": [{"id": "the-map", "title": "The map", "status": "open",
+                              "latest_beat": "found it", "dormancy": 2}],
+            "cast": [{"token": "characters:ann", "name": "Ann", "tagline": "a healer",
+                      "status": "present", "role": "npc"},
+                     {"token": "characters:doran", "name": "Doran", "tagline": "a sellsword",
+                      "status": "unseen", "role": "npc"}],
             "available_locations": [{"id": "keep", "name": "The Keep"}]}
-    msgs = suggest.build_prompt(snap)
-    assert msgs[0]["role"] == "system"
-    user = msgs[1]["content"]
-    assert "The map" in user and "Doran" in user and "Ann" in user and "The Keep" in user
-    assert "New Year" in user and "today" in user
+    user = suggest.build_prompt(snap)[1]["content"]
+    assert "The map" in user and "cold — 2 scenes" in user
+    assert "Ann" in user and "a healer" in user
+    assert "Doran" in user and "Not yet appeared" in user
+    assert "The Keep" in user and "New Year" in user and "today" in user
+    assert "They met at the keep." in user
 
 
 def test_parse_output_validates_ids(monkeypatch, tmp_path):
@@ -165,8 +171,8 @@ def test_parse_greeting_picks_validates_dedupes_and_keeps_order(monkeypatch, tmp
 # ---- suggested dates (per-suggestion "date" + top-level "next_date") ----
 def test_build_prompt_requests_dates_only_with_a_current_date():
     snap = {"now": "2026-01-01", "friendly": "Jan 1", "holidays_today": [], "upcoming": None,
-            "birthdays": [], "open_threads": [], "absent_cast": [],
-            "available_cast": [], "available_locations": []}
+            "birthdays": [], "open_threads": [], "story_so_far": [],
+            "cast": [], "available_locations": []}
     assert "next_date" in suggest.build_prompt(snap)[0]["content"]
     snap["now"] = ""
     assert "next_date" not in suggest.build_prompt(snap)[0]["content"]
