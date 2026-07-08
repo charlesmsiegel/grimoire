@@ -33,7 +33,7 @@
 {%- set lines = [] -%}
 {%- for t in s.open_threads -%}
 {%- if t.dormancy is defined and t.dormancy == 0 -%}{%- set dz = "advanced last scene" -%}
-{%- elif t.dormancy is defined and t.dormancy == 1 -%}{%- set dz = "cold — 1 scene" -%}
+{%- elif t.dormancy is defined and t.dormancy == 1 -%}{%- set dz = "advanced 1 scene ago" -%}
 {%- elif t.dormancy is defined -%}{%- set dz = "cold — " ~ t.dormancy ~ " scenes" -%}
 {%- else -%}{%- set dz = t.status -%}{%- endif -%}
 {%- set _ = lines.append(("- " ~ t.title ~ " (" ~ dz ~ "): " ~ t.latest_beat).rstrip(": ")) -%}

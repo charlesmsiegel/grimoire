@@ -1,8 +1,8 @@
-"""Ephemeral scene-suggestion helper: assemble deterministic campaign signals (open plot
-threads, long-absent cast, calendar facts at the current moment, seedable ids), build the
-one-shot prompt, and parse the model's proposed openings. Assembly + prompt/parse only;
-the LLM call lives in the route (mirrors absorb.py) and the prompt text in
-templates/scene_suggestions/.
+"""Ephemeral scene-suggestion helper: assemble deterministic campaign signals (a
+story-so-far anchor, open plot threads with dormancy, a status-annotated cast, calendar
+facts at the current moment, seedable ids), build the one-shot prompt, and parse the
+model's proposed openings. Assembly + prompt/parse only; the LLM call lives in the route
+(mirrors absorb.py) and the prompt text in templates/scene_suggestions/.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ import json
 from .. import prompts
 from . import (appearances, calendars, campaigns, characters, chronicle,
                entities, greetings, pcs, plot, taglines)
+
 
 def _char_name(croot, aid: str) -> str:
     try:
@@ -86,7 +87,7 @@ def build_snapshot(cid: str, offscreen: bool = False) -> dict:
     def _dormancy(last_scene: str) -> int:
         if last_scene and last_scene in scene_ids:
             return len(scene_ids) - 1 - scene_ids.index(last_scene)
-        return len(scene_ids)  # unknown/missing -> maximally cold
+        return len(scene_ids)  # unknown/missing last_scene (deleted or not-yet-absorbed scene) -> treat as maximally cold
 
     for t in open_threads:
         t["dormancy"] = _dormancy(t.get("last_scene", ""))
