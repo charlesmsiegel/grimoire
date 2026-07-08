@@ -97,12 +97,18 @@ scripts/unix/run.sh
 scripts\windows\run.ps1
 ```
 
-This starts the backend (port **8173**) and the frontend (port **5173**),
-waits for both to be ready, and opens **http://127.0.0.1:5173** in your
-browser. The installer also drops a **Grimoire** launcher on your desktop that
-does the same thing.
+This starts the backend (port **8173**) and the frontend (port **5173**) in the
+**current terminal**, waits for both to be ready, opens
+**http://127.0.0.1:5173** in your browser, and then streams both servers' logs
+into that terminal so you can watch status and errors live. The installer also
+drops a **Grimoire** launcher on your desktop that opens the same console.
 
-To stop everything:
+**The terminal stays open while grimoire runs.** Closing the window — or pressing
+**Ctrl+C** — shuts down both servers cleanly (no leftover process holding a
+port).
+
+If you ever start grimoire another way and need to stop it, the shutdown scripts
+still work:
 
 ```bash
 scripts/unix/shutdown.sh        # macOS / Linux
