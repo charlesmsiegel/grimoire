@@ -75,6 +75,23 @@ def test_build_prompt_includes_signals():
     assert "They met at the keep." in user
 
 
+def test_standard_instruction_enforces_presence_and_gender():
+    snap = {"now": "", "friendly": "", "holidays_today": [], "upcoming": None, "birthdays": [],
+            "story_so_far": [], "open_threads": [], "cast": [], "available_locations": []}
+    system = suggest.build_prompt(snap)[0]["content"]
+    assert "Never assume a character is present" in system
+    assert "gender" in system and "reviving" in system
+
+
+def test_offscreen_instruction_keeps_presence_discipline():
+    snap = {"now": "", "friendly": "", "holidays_today": [], "upcoming": None, "birthdays": [],
+            "story_so_far": [], "open_threads": [], "cast": [], "available_locations": []}
+    system = suggest.build_prompt(snap, offscreen=True)[0]["content"]
+    assert "OFFSCREEN" in system
+    assert "Never include the player character" in system
+    assert "Do not assume a character is present" in system
+
+
 def test_parse_output_validates_ids(monkeypatch, tmp_path):
     wid = _world(monkeypatch, tmp_path)
     wroot = worlds.world_root(wid)
