@@ -23,15 +23,16 @@ $shell = New-Object -ComObject WScript.Shell
 
 # The shortcut must target powershell.exe directly: Explorer offers "Pin to taskbar"
 # only for shortcuts to ordinary executables, and shortcuts hosted by wscript.exe
-# (the previous launch.vbs approach) don't get the option. WindowStyle 7 starts the
-# console minimized so nothing flashes on screen before -WindowStyle Hidden hides it.
+# (the previous launch.vbs approach) don't get the option. WindowStyle 1 opens a
+# normal, visible console: run.ps1 stays attached and streams the backend and
+# frontend logs, and closing that window shuts grimoire down.
 function New-GrimoireShortcut($path) {
     $lnk = $shell.CreateShortcut($path)
     $lnk.TargetPath = $powershell
-    $lnk.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""$run"""
+    $lnk.Arguments = "-NoProfile -ExecutionPolicy Bypass -File ""$run"""
     $lnk.WorkingDirectory = $Root
     $lnk.IconLocation = $icon
-    $lnk.WindowStyle = 7
+    $lnk.WindowStyle = 1
     $lnk.Description = "Grimoire"
     $lnk.Save()
 }
