@@ -55,6 +55,27 @@ def test_build_snapshot_tolerates_empty_campaign(monkeypatch, tmp_path):
     assert snap["now"] == "" and snap["birthdays"] == []
 
 
+def test_build_snapshot_dormancy_counts_scenes_since_last_advance(monkeypatch, tmp_path):
+    wid = _world(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    hero = _char(wroot, "Hero")
+    cid = campaigns.create_campaign("Run", wid)
+    s1 = scenes.create_scene(cid, "One")
+    s2 = scenes.create_scene(cid, "Two")
+    appearances.appear(cid, s1, "characters", hero, "main", "npc")
+    chronicle.absorb(cid, {"id": s1, "one_line": "a", "summary": "", "keywords": [],
+                           "cast": [], "location": "", "date": "2026-01-01"})
+    chronicle.absorb(cid, {"id": s2, "one_line": "b", "summary": "", "keywords": [],
+                           "cast": [], "location": "", "date": "2026-01-02"})
+    plot.set_movement(cid, "hot", "Hot thread", "advanced", "just moved", s2)   # advanced in the most recent scene
+    plot.set_movement(cid, "cool", "Cool thread", "open", "went quiet", s1)     # last advanced one scene back
+    plot.set_movement(cid, "orphan", "Orphan thread", "open", "lost", "ghost-scene")  # last_scene not in chronicle
+    threads = {t["id"]: t for t in suggest.build_snapshot(cid)["open_threads"]}
+    assert threads["hot"]["dormancy"] == 0     # advanced in the most recent scene
+    assert threads["cool"]["dormancy"] == 1    # one scene (s2) has passed since s1
+    assert threads["orphan"]["dormancy"] == 2  # unknown last_scene -> maximally cold (len scene_ids)
+
+
 def test_build_prompt_includes_signals():
     snap = {"now": "2026-01-01", "friendly": "Jan 1", "holidays_today": ["New Year"],
             "upcoming": {"name": "Festival", "in_days": 5},
@@ -65,7 +86,11 @@ def test_build_prompt_includes_signals():
             "cast": [{"token": "characters:ann", "name": "Ann", "tagline": "a healer",
                       "status": "present", "role": "npc"},
                      {"token": "characters:doran", "name": "Doran", "tagline": "a sellsword",
-                      "status": "unseen", "role": "npc"}],
+                      "status": "unseen", "role": "npc"},
+                     {"token": "characters:mira", "name": "Mira", "tagline": "an old ally",
+                      "status": "appeared", "role": "npc"},
+                     {"token": "pcs:kit", "name": "Kit", "tagline": "",
+                      "status": "present", "role": "player"}],
             "available_locations": [{"id": "keep", "name": "The Keep"}]}
     user = suggest.build_prompt(snap)[1]["content"]
     assert "The map" in user and "cold — 2 scenes" in user
@@ -73,6 +98,8 @@ def test_build_prompt_includes_signals():
     assert "Doran" in user and "Not yet appeared" in user
     assert "The Keep" in user and "New Year" in user and "today" in user
     assert "They met at the keep." in user
+    assert "Appeared earlier, now offstage:" in user and "Mira" in user
+    assert "Kit (the player character)" in user
 
 
 def test_standard_instruction_enforces_presence_and_gender():
