@@ -20,6 +20,28 @@ FRONT=$!
 echo "$BACK" > "$PIDFILE"
 echo "$FRONT" >> "$PIDFILE"
 
+# Guaranteed teardown: closing the terminal sends SIGHUP, Ctrl+C sends SIGINT;
+# either way kill the recorded servers AND their descendants (uvicorn's reload
+# worker, npm's node) so nothing keeps holding ports 8173/5173. Idempotent so the
+# EXIT trap can fire after a signal trap already cleaned up.
+cleanup() {
+  [ -f "$PIDFILE" ] || return 0
+  while read -r pid; do
+    if kill -0 "$pid" 2>/dev/null; then
+      pkill -TERM -P "$pid" 2>/dev/null || true
+      kill -TERM "$pid" 2>/dev/null || true
+    fi
+  done < "$PIDFILE"
+  sleep 1
+  while read -r pid; do
+    pkill -9 -P "$pid" 2>/dev/null || true
+    kill -9 "$pid" 2>/dev/null || true
+  done < "$PIDFILE"
+  rm -f "$PIDFILE"
+  echo "grimoire stopped."
+}
+trap cleanup EXIT INT TERM HUP
+
 echo "grimoire running at $URL (backend pid $BACK, frontend pid $FRONT)"
 
 # Wait for a TCP port to accept connections (cold starts can exceed any fixed delay:
