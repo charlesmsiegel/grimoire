@@ -13,28 +13,11 @@ from .. import prompts
 from . import (appearances, calendars, campaigns, characters, chronicle,
                entities, greetings, pcs, plot, taglines)
 
-RECENT_WINDOW = 5
-
-
 def _char_name(croot, aid: str) -> str:
     try:
         return characters.read_character(croot, aid)["meta"].get("name", aid)
     except characters.CharacterNotFound:
         return aid
-
-
-def _recent_char_ids(cid: str) -> set[str]:
-    ids: set[str] = set()
-    try:
-        recent = chronicle.recent(cid, RECENT_WINDOW)
-    except Exception:  # noqa: BLE001 — garbled chronicle.json
-        return ids
-    for r in recent:
-        for ref in r.get("cast", []) or []:
-            kind, _, aid = str(ref).partition("/")
-            if kind == "characters" and aid:
-                ids.add(aid)
-    return ids
 
 
 def _birthdays(croot, now: str, roster: list[dict]) -> list[dict]:
@@ -73,6 +56,11 @@ def _birthdays(croot, now: str, roster: list[dict]) -> list[dict]:
     return out
 
 
+def _tok(ref: str) -> str:
+    kind, _, aid = str(ref).partition("/")
+    return f"{kind}:{aid}"
+
+
 def build_snapshot(cid: str, offscreen: bool = False) -> dict:
     croot = campaigns.campaign_root(cid)
     roster = appearances.roster(cid)
@@ -83,10 +71,25 @@ def build_snapshot(cid: str, offscreen: bool = False) -> dict:
         open_threads = []
 
     try:
-        recent = chronicle.recent(cid, 1)
+        recent = chronicle.recent(cid, 3)
     except Exception:  # noqa: BLE001 — garbled chronicle.json
         recent = []
     now = recent[-1].get("date", "") if recent else ""
+    story_so_far = [{"one_line": r.get("one_line", ""), "location": r.get("location", ""),
+                     "date": r.get("date", "")} for r in reversed(recent)]
+
+    try:
+        scene_ids = sorted(chronicle.read_chronicle(cid).keys())
+    except Exception:  # noqa: BLE001 — garbled chronicle.json
+        scene_ids = []
+
+    def _dormancy(last_scene: str) -> int:
+        if last_scene and last_scene in scene_ids:
+            return len(scene_ids) - 1 - scene_ids.index(last_scene)
+        return len(scene_ids)  # unknown/missing -> maximally cold
+
+    for t in open_threads:
+        t["dormancy"] = _dormancy(t.get("last_scene", ""))
 
     friendly, holidays_today, upcoming = "", [], None
     if now:
@@ -96,19 +99,25 @@ def build_snapshot(cid: str, offscreen: bool = False) -> dict:
         except (calendars.CalendarError, KeyError):
             pass
 
-    recent_ids = _recent_char_ids(cid)
-    absent_cast = []
-    for a in roster:
-        if a["kind"] != "characters" or a["role"] != "npc" or a["id"] in recent_ids:
-            continue
-        absent_cast.append({"name": _char_name(croot, a["id"]),
-                            "tagline": taglines.read(croot, a["id"])})
+    present = {_tok(ref) for ref in (recent[-1].get("cast") or [])} if recent else set()
+    roster_tokens = {f"{a['kind']}:{a['id']}" for a in roster}
+    player_tokens = {f"{a['kind']}:{a['id']}" for a in roster if a["role"] == "player"}
 
-    available_cast, seen = [], set()
+    def _status(tok: str) -> str:
+        if tok in present:
+            return "present"
+        if tok in roster_tokens:
+            return "appeared"
+        return "unseen"
+
+    cast, seen = [], set()
     for c in characters.list_characters(croot):
         tok = f"characters:{c['id']}"
         seen.add(tok)
-        available_cast.append({"token": tok, "name": c.get("name", c["id"])})
+        cast.append({"token": tok, "name": c.get("name", c["id"]),
+                     "tagline": taglines.read(croot, c["id"]),
+                     "status": _status(tok),
+                     "role": "player" if tok in player_tokens else "npc"})
     if not offscreen:  # offscreen scenes never cast the player
         for a in roster:
             if a["role"] != "player":
@@ -122,15 +131,16 @@ def build_snapshot(cid: str, offscreen: bool = False) -> dict:
                         if a["kind"] == "pcs" else _char_name(croot, a["id"]))
             except pcs.PCNotFound:
                 name = a["id"]
-            available_cast.append({"token": tok, "name": name})
+            cast.append({"token": tok, "name": name, "tagline": "",
+                         "status": _status(tok), "role": "player"})
 
     available_locations = [{"id": e["id"], "name": e.get("name", e["id"])}
                            for e in entities.list_entities(croot, "locations")]
 
     return {"now": now, "friendly": friendly, "holidays_today": holidays_today,
             "upcoming": upcoming, "birthdays": _birthdays(croot, now, roster),
-            "open_threads": open_threads, "absent_cast": absent_cast,
-            "available_cast": available_cast, "available_locations": available_locations}
+            "story_so_far": story_so_far, "open_threads": open_threads,
+            "cast": cast, "available_locations": available_locations}
 
 
 GREETING_EXCERPT = 300

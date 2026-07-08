@@ -19,33 +19,39 @@ def _char(root, name, birthdate=""):
     return cid_
 
 
-def test_build_snapshot_gathers_signals(monkeypatch, tmp_path):
+def test_build_snapshot_classifies_cast_and_annotates_threads(monkeypatch, tmp_path):
     wid = _world(monkeypatch, tmp_path)
     wroot = worlds.world_root(wid)
-    absent = _char(wroot, "Doran")            # appears then absent from recent chronicle
-    present = _char(wroot, "Seraphine")
+    absent = _char(wroot, "Doran")        # appears in s1 but not in s1's chronicle cast
+    present = _char(wroot, "Seraphine")   # in the most recent scene's cast
+    unseen = _char(wroot, "Mira")         # never on screen
     taglines.write(wroot, absent, "a quiet sellsword")   # seeded before the fork
+    taglines.write(wroot, unseen, "a wandering oracle")
     cid = campaigns.create_campaign("Run", wid)
     s1 = scenes.create_scene(cid, "One")
     appearances.appear(cid, s1, "characters", absent, "main", "npc")
     appearances.appear(cid, s1, "characters", present, "main", "npc")
-    chronicle.absorb(cid, {"id": s1, "one_line": "x", "summary": "y", "keywords": [],
-                           "cast": [f"characters/{present}"], "location": "", "date": ""})
+    chronicle.absorb(cid, {"id": s1, "one_line": "They gathered at dusk.", "summary": "y",
+                           "keywords": [], "cast": [f"characters/{present}"],
+                           "location": "The Hall", "date": "2026-01-02"})
     plot.set_movement(cid, "the-map", "The map", "advanced", "It is a forgery.", s1)
 
     snap = suggest.build_snapshot(cid)
+    by_name = {c["name"]: c for c in snap["cast"]}
+    assert by_name["Seraphine"]["status"] == "present"
+    assert by_name["Doran"]["status"] == "appeared" and by_name["Doran"]["tagline"] == "a quiet sellsword"
+    assert by_name["Mira"]["status"] == "unseen" and by_name["Mira"]["tagline"] == "a wandering oracle"
     assert [t["title"] for t in snap["open_threads"]] == ["The map"]
-    absent_by_name = {a["name"]: a["tagline"] for a in snap["absent_cast"]}
-    assert absent_by_name.get("Doran") == "a quiet sellsword"   # tagline travels with the copy
-    assert "Seraphine" not in absent_by_name                    # present is not absent
-    tokens = [c["token"] for c in snap["available_cast"]]
-    assert f"characters:{absent}" in tokens and f"characters:{present}" in tokens
+    assert snap["open_threads"][0]["dormancy"] == 0            # advanced in the most recent scene
+    assert snap["story_so_far"][0]["one_line"] == "They gathered at dusk."
+    assert snap["story_so_far"][0]["location"] == "The Hall"
 
 
 def test_build_snapshot_tolerates_empty_campaign(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     snap = suggest.build_snapshot(cid)  # no scenes/chronicle/plot/calendar
-    assert snap["open_threads"] == [] and snap["absent_cast"] == []
+    assert snap["open_threads"] == [] and snap["cast"] == []
+    assert snap["story_so_far"] == []
     assert snap["now"] == "" and snap["birthdays"] == []
 
 
@@ -99,15 +105,17 @@ def test_build_snapshot_tolerates_garbled_chronicle(monkeypatch, tmp_path):
     assert snap["now"] == ""
 
 
-def test_build_snapshot_dedupes_available_cast(monkeypatch, tmp_path):
+def test_build_snapshot_dedupes_cast(monkeypatch, tmp_path):
     wid = _world(monkeypatch, tmp_path)
     wroot = worlds.world_root(wid)
     hero = _char(wroot, "Hero")
     cid = campaigns.create_campaign("Run", wid)
     s1 = scenes.create_scene(cid, "One")
     appearances.appear(cid, s1, "characters", hero, "main", "player")  # campaign char AND roster player
-    tokens = [c["token"] for c in suggest.build_snapshot(cid)["available_cast"]]
-    assert tokens.count(f"characters:{hero}") == 1  # listed once, not duplicated
+    cast = suggest.build_snapshot(cid)["cast"]
+    tokens = [c["token"] for c in cast]
+    assert tokens.count(f"characters:{hero}") == 1                    # listed once, not duplicated
+    assert next(c for c in cast if c["token"] == f"characters:{hero}")["role"] == "player"
 
 
 # ---- greeting ranking (folded into the suggestions call) ----

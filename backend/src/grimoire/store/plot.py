@@ -71,6 +71,7 @@ def open_threads(cid: str) -> list[dict]:
     for pid, t in items:
         beats = t.get("beats") or []
         out.append({"id": pid, "title": t.get("title", pid), "status": t.get("status", "open"),
+                    "last_scene": t.get("last_scene", ""),
                     "latest_beat": beats[-1]["text"] if beats else ""})
     return out
 
