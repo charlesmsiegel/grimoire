@@ -7,7 +7,7 @@ if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw "Node 18+ not
 Write-Host "Installing backend..."
 Push-Location "$Root\backend"
 python -m venv .venv
-.\.venv\Scripts\python -m pip install -e ".[dev]"
+.\.venv\Scripts\python -m pip install -e ".[dev,desktop]"
 Pop-Location
 
 Write-Host "Installing frontend..."

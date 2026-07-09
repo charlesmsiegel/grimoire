@@ -8,7 +8,7 @@ command -v node >/dev/null || { echo "Node 18+ not found"; exit 1; }
 echo "Installing backend…"
 cd "$ROOT/backend"
 python3 -m venv .venv
-.venv/bin/python -m pip install -e ".[dev]"
+.venv/bin/python -m pip install -e ".[dev,desktop]"
 
 echo "Installing frontend…"
 cd "$ROOT/frontend"

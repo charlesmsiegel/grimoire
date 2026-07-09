@@ -4,8 +4,8 @@
 A small Kotlin app embeds the Python backend with [Chaquopy](https://chaquo.com/chaquopy/),
 starts the existing FastAPI app on `127.0.0.1:<random port>`, and renders the existing
 React frontend in a full-screen WebView pointed at that server. The markdown/JSON store
-lives on the device's filesystem, selected via the same `GRIMOIRE_HOME` mechanism the
-backend already honors. LLM calls go from the device straight to OpenRouter, exactly as
+lives on the device's filesystem, resolved by the same `store.paths` home/pointer
+mechanism the backend already honors. LLM calls go from the device straight to OpenRouter, exactly as
 they do today. No server, no new business-logic implementation, no fork.
 
 This document records why, what the shell looks like, the changes required in the
@@ -113,13 +113,13 @@ android/                          ← new top-level Gradle project
 │                   ├─ StaticFiles → extracted frontend assets   │
 │                   ├─ /api/*     → routes.py, store/*           │
 │                   └─ httpx ──HTTPS──► openrouter.ai / chub.ai  │
-│  GRIMOIRE_HOME → store root on device storage                  │
+│  HOME → app storage, so the store root resolves on-device      │
 └────────────────────────────────────────────────────────────────┘
 ```
 
-- **`android_entry.py`** sets `GRIMOIRE_HOME`, `GRIMOIRE_TEMPLATES`, `GRIMOIRE_DIST`
-  (§6), binds uvicorn to `127.0.0.1:0`, and reports the OS-assigned port back to
-  Kotlin via a callback so the WebView knows what to load. Binding to loopback only
+- **`android_entry.py`** sets `HOME` (store root, §Storage), `GRIMOIRE_TEMPLATES`
+  and `GRIMOIRE_DIST` (§6), binds uvicorn to `127.0.0.1:0`, and reports the
+  OS-assigned port back to Kotlin via a callback so the WebView knows what to load. Binding to loopback only
   means nothing on the network can reach the server; a per-boot random bearer token
   appended by the shell and checked by a middleware is a cheap hardening step if we
   ever care about other apps on the same device probing localhost.
@@ -141,10 +141,13 @@ android/                          ← new top-level Gradle project
 
 Two modes, mirroring the existing "Storage location" config page:
 
-1. **Default (zero-permission):** `GRIMOIRE_HOME` → `getExternalFilesDir(null)/grimoire`
-   (`/storage/emulated/0/Android/data/<pkg>/files/grimoire`). Private-ish, backed up
-   by nothing external, visible over USB. Right default for a self-contained phone
-   library.
+1. **Default (zero-permission):** the shell points `HOME` — not `GRIMOIRE_HOME`,
+   which would permanently override the settings page — at
+   `getExternalFilesDir(null)`, so the store lands at
+   `/storage/emulated/0/Android/data/<pkg>/files/.grimoire` and the bootstrap
+   pointer beside it. Private-ish, backed up by nothing external, visible over
+   USB. Right default for a self-contained phone library, and the whole
+   pointer/env/default resolution in `store/paths.py` keeps working.
 2. **Synced-folder mode (opt-in):** the user grants **All files access**
    (`MANAGE_EXTERNAL_STORAGE`) and points the store at a real POSIX path such as
    `/storage/emulated/0/Documents/grimoire` — the same folder a sync agent
@@ -200,11 +203,13 @@ platforms, because both platforms run that exact code.
 
 ## 6. Changes required in the existing codebase
 
-Deliberately tiny; each also makes the desktop build more relocatable:
+Deliberately tiny; each also makes the desktop build more relocatable.
+Items 1, 2 and 5 (plus the `routes._dump` shim from §7 risk 1) shipped together
+with the `android/` scaffold:
 
 1. **`prompts.py`:** `TEMPLATES_DIR` is `Path(__file__)…/templates` (repo-relative).
-   Honor a `GRIMOIRE_TEMPLATES` env var first. (2 lines + test.)
-2. **`main.py`:** `DIST` likewise repo-relative. Honor `GRIMOIRE_DIST`. (2 lines + test.)
+   Honor a `GRIMOIRE_TEMPLATES` env var first. (2 lines + test.) ✅
+2. **`main.py`:** `DIST` likewise repo-relative. Honor `GRIMOIRE_DIST`. (2 lines + test.) ✅
 3. **`main.py`:** keep `migrate_scene_ids()` in lifespan — it already runs against
    `home()`, nothing to change; listed here only as verified.
 4. **Frontend responsive pass (Phase 2):** the two-pane `.editor` pattern
@@ -214,9 +219,10 @@ Deliberately tiny; each also makes the desktop build more relocatable:
    frontend — it also fixes narrow desktop windows, so it is *not* Android-only debt.
    `SceneView` chat is already a single column and mostly needs touch-target and
    composer-inset polish.
-5. **Optional `pyproject.toml` extras split:** move `uvicorn[standard]` to a
-   `desktop` extra; Android installs plain `uvicorn` (pure-python h11 worker —
-   uvloop/httptools don't build there and a single local client doesn't need them).
+5. **`pyproject.toml` extras split:** `uvicorn[standard]` and `tiktoken` moved
+   to a `desktop` extra; Android installs plain `uvicorn` (pure-python h11
+   worker — uvloop/httptools don't build there and a single local client
+   doesn't need them) and skips tiktoken (heuristic fallback). ✅
 
 Nothing in `routes.py` or `store/` changes.
 
@@ -224,7 +230,7 @@ Nothing in `routes.py` or `store/` changes.
 
 | # | Risk | Severity | Mitigation |
 |---|------|----------|------------|
-| 1 | **`pydantic-core` wheel on Android.** `fastapi>=0.110` → pydantic v2 → Rust `pydantic-core`. Chaquopy's package repo may not carry it. | **High — the Phase 0 gate** | In order: (a) check Chaquopy's repo / recent releases; (b) build the wheel ourselves once per pydantic upgrade with maturin + Android NDK (`aarch64-linux-android`) — pydantic-core is a clean maturin build, and Chaquopy accepts local wheel dirs via `pip { options "--find-links", … }`; (c) worst case, pin an Android-compatible FastAPI/pydantic pair and constrain desktop to match — acceptable because our pydantic usage is plain `BaseModel` request bodies. |
+| 1 | **`pydantic-core` wheel on Android.** `fastapi>=0.110` → pydantic v2 → Rust `pydantic-core`. Chaquopy's package repo may not carry it. | **Medium — fallback proven** (still the Phase 0 device check) | In order: (a) check Chaquopy's repo / recent releases; (b) build the wheel ourselves once per pydantic upgrade with maturin + Android NDK (`aarch64-linux-android`) — pydantic-core is a clean maturin build, and Chaquopy accepts local wheel dirs via `pip { options "--find-links", … }`; (c) pin the pure-python pydantic 1.10 line — FastAPI still dual-supports v1. The codebase was audited for this: ~50 request models that are plain typed fields (no `Field`, validators, or `ConfigDict`), and the only v2-specific API (`model_dump()`, 4 call sites) is wrapped in a v1/v2-agnostic `routes._dump()` helper — so (c) is an install-time pin, not a code change. **Verified:** the full 738-test backend suite passes under pydantic 1.10 / FastAPI 0.115 / plain uvicorn / no tiktoken — i.e. under the exact Android dependency set. Dataclasses are *not* a fallback: the pydantic dependency is structural to FastAPI's request parsing, not to our models. |
 | 2 | **`tiktoken` wheel (Rust).** | Low | Ship without it — `count_tokens` already falls back to `len//4` (context.py:439). Optionally build the wheel later (same maturin path) for exact budgeting. |
 | 3 | **`Pillow` wheel (C).** | Low | In Chaquopy's official repo. Thumbnails (`store/thumbs.py`) work. |
 | 4 | Remaining deps (`httpx`, `jinja2`, `holidays`, `pyluach`, `certifi`, `python-multipart`, `uvicorn` sans extras) | None | Pure Python. |

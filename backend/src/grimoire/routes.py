@@ -15,6 +15,14 @@ router = APIRouter()
 _openrouter = OpenRouterClient()
 
 
+def _dump(model: BaseModel) -> dict:
+    """model_dump() on pydantic v2, dict() on v1. The Android build may pin the
+    pure-python pydantic 1.x wheel (docs/android-architecture.md §7); this is
+    the only v2-specific API the codebase uses."""
+    dump = getattr(model, "model_dump", None)
+    return dump() if dump is not None else model.dict()
+
+
 def get_openrouter() -> OpenRouterClient:
     return _openrouter
 
@@ -271,7 +279,7 @@ def get_config():
 
 @router.put("/config")
 def put_config(update: ConfigUpdate):
-    fields = {k: v for k, v in update.model_dump().items() if v is not None}
+    fields = {k: v for k, v in _dump(update).items() if v is not None}
     return _public_config(store.write_config(**fields))
 
 
@@ -990,7 +998,7 @@ async def post_lorebook_parse(wid: str, file: UploadFile = File(...), format: st
 def post_lorebook_import(wid: str, body: LorebookCommit):
     root = _world_root_or_404(wid)
     try:
-        created = store.lorebook.commit(root, [e.model_dump() for e in body.entries])
+        created = store.lorebook.commit(root, [_dump(e) for e in body.entries])
     except store.lorebook.LorebookError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"created": created}
@@ -1281,7 +1289,7 @@ def get_incoming(cid: str):
 def post_accept(cid: str, body: RefList):
     try:
         store.campaigns.ensure_campaign_copy(cid)
-        store.sync.accept(cid, [r.model_dump() for r in body.refs])
+        store.sync.accept(cid, [_dump(r) for r in body.refs])
     except store.campaigns.CampaignNotFound:
         raise HTTPException(status_code=404, detail="campaign not found")
     return {"ok": True}
@@ -1291,7 +1299,7 @@ def post_accept(cid: str, body: RefList):
 def post_reject(cid: str, body: RefList):
     try:
         store.campaigns.ensure_campaign_copy(cid)
-        store.sync.reject(cid, [r.model_dump() for r in body.refs])
+        store.sync.reject(cid, [_dump(r) for r in body.refs])
     except store.campaigns.CampaignNotFound:
         raise HTTPException(status_code=404, detail="campaign not found")
     return {"ok": True}

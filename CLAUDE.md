@@ -42,6 +42,22 @@ read-only detail view and an explicit edit step. Canonical implementations:
 `textarea`) with its sidebar; **Edit** reveals the form; `+ New` opens the form
 directly. See `GreetingEditor.test.tsx` / `EntityEditor.test.tsx`.
 
+## Android (`android/`)
+
+The Android app is a thin Kotlin/WebView shell that packages `backend/src` and
+the built frontend **verbatim** (Chaquopy + APK assets) — never copy grimoire
+code into `android/`. Rules that keep the platforms in lockstep
+(docs/android-architecture.md):
+
+- Backend code must not assume a repo checkout layout or a desktop `~`:
+  filesystem access goes through `store.paths`, `prompts.templates_dir()`
+  (`GRIMOIRE_TEMPLATES`) and `main.dist_dir()` (`GRIMOIRE_DIST`).
+- `pyproject.toml` **base** deps must stay Android-installable (pure python or
+  Chaquopy-wheel'd); compiled desktop-only deps go in the `desktop` extra, and
+  the pip block in `android/app/build.gradle.kts` mirrors the base list.
+- pydantic usage stays v1/v2-agnostic: plain `BaseModel` fields only, dump via
+  `routes._dump` (no `model_dump()`, `Field`, validators, `ConfigDict`).
+
 ## Working notes
 
 - Backend tests isolate the store via `monkeypatch.setenv("GRIMOIRE_HOME", tmp_path)`.
