@@ -95,6 +95,19 @@ def test_start_from_greeting_casts_all_present(monkeypatch, tmp_path):
     assert ap.is_appeared(cid, "characters", "rowan")
 
 
+def test_start_from_greeting_no_character_casts_nobody(monkeypatch, tmp_path):
+    wid = _world(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    pcs.create_pc(wroot, "Elara", [])
+    g = greetings.create_greeting(wroot, "Cold open", "", "", body="The tavern falls silent.")
+    cid, sid = _campaign_after_seed(wid)
+    ap.appear(cid, sid, "pcs", "elara", "default", "player")
+    sid = playing.start_from_greeting(cid, sid, g)
+    scene = scenes.read_scene(cid, sid)
+    assert scene["messages"][0]["content"] == "The tavern falls silent."
+    assert [a for a in ap.scene_cast(cid, sid) if a["kind"] == "characters"] == []
+
+
 def test_start_unavailable_raises(monkeypatch, tmp_path):
     wid = _world(monkeypatch, tmp_path)
     wroot = worlds.world_root(wid)

@@ -87,6 +87,21 @@ test("creating a greeting posts the draft then sets edges", async () => {
   await waitFor(() => expect(api.setEdges).toHaveBeenCalledWith({ kind: "world", id: "w" }, "open", { leads_to: [], excludes: [] }));
 });
 
+test("creating a narrator-only greeting needs no character or version", async () => {
+  render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await waitFor(() => expect(api.listCharacters).toHaveBeenCalled());
+  // Version and Present characters stay hidden until a character is picked
+  expect(screen.queryByLabelText("Version")).toBeNull();
+  expect(screen.queryByText("Present characters")).toBeNull();
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Cold open" } });
+  fireEvent.click(screen.getByRole("button", { name: /create greeting/i }));
+  await waitFor(() =>
+    expect(api.createGreeting).toHaveBeenCalledWith({ kind: "world", id: "w" }, expect.objectContaining({
+      name: "Cold open", character: "", version: "",
+    })),
+  );
+});
+
 test("version options follow the selected character", async () => {
   render(<GreetingEditor scope={{ kind: "world", id: "w" }} wid="w" />);
   await waitFor(() => expect(api.listCharacters).toHaveBeenCalled());
