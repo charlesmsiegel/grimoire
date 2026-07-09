@@ -20,7 +20,7 @@ import markdown as _md_lib
 from markupsafe import Markup, escape
 
 from . import appearances, assets, calendars, campaigns, characters, entities, pcs, scenes, worlds
-from ..prompts import TEMPLATES_DIR
+from ..prompts import templates_dir
 from .paths import now_iso
 
 FONTS_DIR = Path(__file__).resolve().parents[1] / "assets" / "fonts"
@@ -33,7 +33,7 @@ _EXT_MEDIA = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
 def _env():
     # A separate environment from prompts._env: book pages need autoescape.
     from jinja2 import Environment, FileSystemLoader, StrictUndefined
-    return Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)),
+    return Environment(loader=FileSystemLoader(str(templates_dir())),
                        undefined=StrictUndefined, autoescape=True)
 
 

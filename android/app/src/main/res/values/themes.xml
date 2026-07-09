@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark chrome matches the app's default codex theme while the WebView
+         loads; no appcompat/material dependency needed for a WebView shell. -->
+    <style name="Theme.Grimoire" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#141210</item>
+        <item name="android:statusBarColor">#141210</item>
+        <item name="android:navigationBarColor">#141210</item>
+    </style>
+</resources>

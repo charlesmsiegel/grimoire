@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -14,7 +15,18 @@ from fastapi.staticfiles import StaticFiles
 from .routes import router
 from .store import migrations
 
-DIST = Path(__file__).resolve().parents[2].parent / "frontend" / "dist"
+DEFAULT_DIST = Path(__file__).resolve().parents[2].parent / "frontend" / "dist"
+
+
+def dist_dir() -> Path:
+    """Resolve the built-frontend directory.
+
+    ``GRIMOIRE_DIST`` overrides the repo-relative default for builds where the
+    source tree isn't laid out as a checkout (the Android APK extracts the
+    bundle to app storage).
+    """
+    env = os.environ.get("GRIMOIRE_DIST")
+    return Path(env) if env else DEFAULT_DIST
 
 
 @asynccontextmanager
@@ -44,8 +56,9 @@ def create_app() -> FastAPI:
 
     app.include_router(router, prefix="/api")
 
-    if DIST.exists():
-        app.mount("/", StaticFiles(directory=str(DIST), html=True), name="static")
+    dist = dist_dir()
+    if dist.exists():
+        app.mount("/", StaticFiles(directory=str(dist), html=True), name="static")
 
     return app
 
