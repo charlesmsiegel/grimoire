@@ -110,7 +110,7 @@ def start_from_greeting(cid: str, sid: str, gid: str) -> str:
         raise PlayError(f"greeting {gid} is not available")
     # Cast everyone present at the opener. A locked version always wins; otherwise
     # the primary uses the greeting's version and co-present characters their default.
-    for actor in dict.fromkeys([g["character"], *g["present"]]):
+    for actor in dict.fromkeys(a for a in [g["character"], *g["present"]] if a):
         version = appearances.locked_version(cid, "characters", actor)
         if version is None:
             version = g["version"] if actor == g["character"] else \

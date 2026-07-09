@@ -76,7 +76,7 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, focus }:
   const versions = chars.find((c) => c.id === form.character)?.versions ?? [];
 
   async function save() {
-    if (!form.name.trim() || !form.character || !form.version) return;
+    if (!form.name.trim() || (form.character && !form.version)) return;
     setError(null);
     try {
       let id = gid;
@@ -284,18 +284,20 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, focus }:
           <Field label="Character" hint={gid ? "character and version are fixed after creation" : undefined}>
             <select value={form.character} aria-label="Character" disabled={!!gid}
                     onChange={(e) => setForm({ ...form, character: e.target.value, version: "" })}>
-              <option value="">— pick a character —</option>
+              <option value="">— no character (narrator-only) —</option>
               {chars.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </Field>
-          <Field label="Version">
-            <select value={form.version} aria-label="Version" disabled={!!gid}
-                    onChange={(e) => setForm({ ...form, version: e.target.value })}>
-              <option value="">— pick a version —</option>
-              {versions.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
-            </select>
-          </Field>
-          {worldScope && (
+          {form.character && (
+            <Field label="Version">
+              <select value={form.version} aria-label="Version" disabled={!!gid}
+                      onChange={(e) => setForm({ ...form, version: e.target.value })}>
+                <option value="">— pick a version —</option>
+                {versions.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
+              </select>
+            </Field>
+          )}
+          {worldScope && form.character && (
             <div className="form-actions">
               <button className="subtle" onClick={importFromCharacter} disabled={!form.character || !form.version}>
                 Import greetings from this character/version
@@ -314,15 +316,17 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, focus }:
               </button>
             </div>
           </Field>
-          <Field label="Present characters" hint="everyone cast into the scene when it starts from this greeting">
-            <div className="chips">
-              {chars.map((c) => (
-                <button key={c.id} className={"chip" + (form.present.includes(c.id) ? " on" : "")}
-                        onClick={() => togglePresent(c.id)}>{c.name}</button>
-              ))}
-              {chars.length === 0 && <span className="field-hint">No characters in this world yet.</span>}
-            </div>
-          </Field>
+          {form.character && (
+            <Field label="Present characters" hint="everyone cast into the scene when it starts from this greeting">
+              <div className="chips">
+                {chars.map((c) => (
+                  <button key={c.id} className={"chip" + (form.present.includes(c.id) ? " on" : "")}
+                          onClick={() => togglePresent(c.id)}>{c.name}</button>
+                ))}
+                {chars.length === 0 && <span className="field-hint">No characters in this world yet.</span>}
+              </div>
+            </Field>
+          )}
           <Field label="Required tags" hint="the greeting unlocks only if a player PC carries these">
             <div className="chips">
               {Object.keys(tags).sort().map((tid) => (
@@ -360,7 +364,7 @@ export function GreetingEditor({ scope, wid, onOpenCharacter, focus }:
             {gid && <button className="subtle" onClick={() => remove(greetings.find((g) => g.id === gid)!)}>Delete</button>}
             {gid && <button className="subtle" onClick={() => setMode("view")}>Cancel</button>}
             <button className="primary" onClick={save}
-                    disabled={!form.name.trim() || !form.character || !form.version}>
+                    disabled={!form.name.trim() || (!!form.character && !form.version)}>
               {gid ? "Save greeting" : "Create greeting"}
             </button>
           </div>
