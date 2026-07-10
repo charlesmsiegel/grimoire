@@ -67,6 +67,12 @@ and go create a character/location/lore entry by hand before continuing.
   "guess the first one" behavior.
 - **No world-level (non-campaign) version of this.** Absorb only ever runs
   against a campaign's scene transcript.
+- **No dedicated item/faction/monster extraction.** `ENTITY_KINDS` on `main`
+  is only `("locations", "lore")` — there is no separate stored kind for
+  those yet (planned separately, per the mechanics/dice roadmap). This spec
+  covers every kind that currently exists: characters, locations, and lore.
+  An item or faction the model notices in the transcript today has nowhere
+  else to go but `new_lore`, same as any other lore/concept entry.
 - **No changes to the `/absorb` or `/chronicle` route signatures.** `edits`
   is already `list[dict]` on the wire (`ChronicleSave.edits: list[dict]`), so
   new edit kinds/payload shapes need no Pydantic model change.
