@@ -344,6 +344,8 @@ def delete_world(wid: str):
         store.worlds.delete_world(wid)
     except store.worlds.WorldNotFound:
         raise HTTPException(status_code=404, detail="world not found")
+    except store.worlds.WorldInUse as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     return {"ok": True}
 
 

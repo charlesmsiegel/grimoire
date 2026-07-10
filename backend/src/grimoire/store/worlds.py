@@ -14,6 +14,12 @@ class WorldNotFound(Exception):
     pass
 
 
+class WorldInUse(Exception):
+    def __init__(self, wid: str, names: list[str]):
+        self.names = names
+        super().__init__(f"world is used by campaigns: {', '.join(names)}")
+
+
 def _worlds_dir() -> Path:
     return home() / "worlds"
 
@@ -95,4 +101,8 @@ def delete_world(wid: str) -> None:
     root = world_root(wid)
     if not world_meta_path(wid).exists():
         raise WorldNotFound(wid)
+    from . import campaigns  # function-level: campaigns imports worlds at module level
+    used_by = [c["name"] for c in campaigns.list_campaigns() if c.get("world") == wid]
+    if used_by:
+        raise WorldInUse(wid, used_by)
     shutil.rmtree(root)
