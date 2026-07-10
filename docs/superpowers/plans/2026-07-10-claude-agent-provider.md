@@ -8,7 +8,7 @@
 
 **Tech Stack:** FastAPI backend (pytest), Vite/React frontend (vitest), `claude-agent-sdk` as an optional extra.
 
-**Design doc:** `docs/superpowers/specs/2026-07-05-claude-provider-design.md` — read it first; it records the auth/policy findings and the deferred items.
+**Design doc:** `docs/superpowers/specs/2026-07-10-claude-provider-design.md` — read it first; it records the auth/policy findings and the deferred items.
 
 ## Global Constraints
 
@@ -342,7 +342,7 @@ Create `backend/src/grimoire/claude_agent.py`:
 
 Auth is inherited from the host's Claude Code session (or CLAUDE_CODE_OAUTH_TOKEN);
 usage bills against the owner's Claude subscription, not an API key. See
-docs/superpowers/specs/2026-07-05-claude-provider-design.md for the policy notes.
+docs/superpowers/specs/2026-07-10-claude-provider-design.md for the policy notes.
 """
 
 from __future__ import annotations
