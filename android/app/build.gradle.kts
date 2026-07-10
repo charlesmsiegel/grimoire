@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -42,20 +44,31 @@ android {
     }
 }
 
+// Chaquopy's build-machine Python (distinct from the 3.11 runtime packaged in
+// the APK) must be a version the plugin supports — <= 3.12 for Chaquopy 15.
+// Resolution: -Pgrimoire.buildPython=... > grimoire.buildPython in
+// local.properties (written by scripts/*/android-bootstrap) > plugin default.
+val localProps = Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+val buildPythonOverride = (findProperty("grimoire.buildPython") as? String)
+    ?: localProps.getProperty("grimoire.buildPython")
+
 chaquopy {
     defaultConfig {
         version = "3.11"
+        buildPythonOverride?.let { buildPython(it) }
         pip {
             // Keep in lockstep with backend/pyproject.toml *base* dependencies
             // (the `desktop` extra — uvicorn[standard], tiktoken — is desktop-only;
             // count_tokens falls back to a heuristic without tiktoken).
             //
-            // If pip fails resolving pydantic-core for Android here, apply the
-            // documented fallback (docs/android-architecture.md §7 risk 1):
-            // either add a locally built pydantic-core wheel via
-            //   options("--find-links", "wheels/")
-            // or pin the pure-python line:
-            //   install("pydantic==1.10.*")  — routes.py is v1/v2-agnostic (_dump)
+            // pydantic is pinned to the pure-python 1.10 line: pydantic v2's
+            // Rust core has no Android wheel in Chaquopy 15's repository
+            // (docs/android-architecture.md §7 risk 1, fallback 2). FastAPI
+            // supports both lines, and routes.py is v1/v2-agnostic (_dump).
+            install("pydantic==1.10.*")
             install("fastapi>=0.110")
             install("uvicorn>=0.29")
             install("httpx>=0.27")
@@ -64,6 +77,7 @@ chaquopy {
             install("pyluach>=2.2")
             install("pillow>=10.0")
             install("jinja2>=3.1")
+            install("markdown>=3.5")
             install("certifi")
         }
     }

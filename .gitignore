@@ -18,6 +18,9 @@ frontend/node_modules/
 frontend/dist/
 frontend/*.tsbuildinfo
 
+# Build outputs staged by the Makefile (APKs)
+/build/
+
 # Run-time pidfiles
 .run/
 **/results.json

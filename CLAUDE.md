@@ -58,6 +58,10 @@ code into `android/`. Rules that keep the platforms in lockstep
 - pydantic usage stays v1/v2-agnostic: plain `BaseModel` fields only, dump via
   `routes._dump` (no `model_dump()`, `Field`, validators, `ConfigDict`).
 
+Build: `make android-bootstrap` (once per machine — JDK 17, Android SDK,
+licenses, `android/local.properties`), then `make apk` (debug) /
+`make apk-release`. On Windows run make from Git Bash.
+
 ## Working notes
 
 - Backend tests isolate the store via `monkeypatch.setenv("GRIMOIRE_HOME", tmp_path)`.
