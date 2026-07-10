@@ -93,6 +93,17 @@ def test_owners_round_trip(tmp_path: Path):
     assert got["meta"]["keys"] == "exile"
 
 
+def test_sd_prompt_round_trip(tmp_path: Path):
+    eid = entities.create_entity(tmp_path, "locations", "The Crypt", "cold", sd_prompt="a dark crypt")
+    got = entities.read_entity(tmp_path, "locations", eid)
+    assert got["meta"]["sd_prompt"] == "a dark crypt"
+    entities.update_entity(tmp_path, "locations", eid, sd_prompt="an even darker crypt")
+    assert entities.read_entity(tmp_path, "locations", eid)["meta"]["sd_prompt"] == "an even darker crypt"
+    # entities without sd_prompt read as empty string, and it's omitted from meta (mirrors keys/owners)
+    e2 = entities.create_entity(tmp_path, "locations", "No Prompt")
+    assert entities.read_entity(tmp_path, "locations", e2)["meta"].get("sd_prompt", "") == ""
+
+
 def test_owners_absent_when_empty(tmp_path: Path):
     eid = entities.create_entity(tmp_path, "lore", "World fact", "Always true.")
     got = entities.read_entity(tmp_path, "lore", eid)
