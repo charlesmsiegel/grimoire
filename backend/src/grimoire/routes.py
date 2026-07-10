@@ -2304,7 +2304,7 @@ async def put_campaign_entity_image(cid: str, kind: str, eid: str, name: str, fi
 @router.delete("/campaigns/{cid}/{kind}/{eid}/images/{name}")
 def delete_campaign_entity_image(cid: str, kind: str, eid: str, name: str):
     _campaign_root_or_404(cid)
-    _image_kind_or_404(kind)
+    _entity_kind_or_404(kind)
     store.overlay.delete_image(cid, eid, "default", name, base=kind)
     return {"ok": True}
 
