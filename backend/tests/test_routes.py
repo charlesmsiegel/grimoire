@@ -315,6 +315,15 @@ def test_campaign_entity_images_served(client):
     assert client.get(f"/api/campaigns/{cid}/locations").json()[0]["has_image"] is True
 
 
+def test_campaign_greeting_image_delete_unknown_kind_404(client):
+    # write surface stays entity-only: greetings is not an accepted kind for
+    # campaign-scoped image mutation routes either.
+    _, cid = _campaign(client)
+    gid = client.post(f"/api/campaigns/{cid}/greetings",
+                      json={"name": "Opener", "character": "mira", "version": "v1"}).json()["id"]
+    assert client.delete(f"/api/campaigns/{cid}/greetings/{gid}/images/embed-x").status_code == 404
+
+
 def test_greeting_images_served_readonly(client):
     wid = _world(client)
     gid = client.post(f"/api/worlds/{wid}/greetings",
