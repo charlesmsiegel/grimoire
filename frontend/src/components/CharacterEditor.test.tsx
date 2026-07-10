@@ -103,7 +103,7 @@ test("detail shows the Images shelf with avatar tile, gallery promote, and add t
   await screen.findByText("Images");
   expect(screen.getByText("avatar")).toBeInTheDocument();               // shelf caption
   fireEvent.click(screen.getByRole("button", { name: /set as avatar/i }));
-  await waitFor(() => expect(api.promoteImage).toHaveBeenCalledWith("w", "seraphine", "default", "gallery_1"));
+  await waitFor(() => expect(api.promoteImage).toHaveBeenCalledWith({ kind: "world", id: "w" }, "seraphine", "default", "gallery_1"));
   expect(screen.getByRole("button", { name: /\+ add/i })).toBeInTheDocument();
 });
 
@@ -199,7 +199,7 @@ test("uploads an avatar for the selected version", async () => {
   await openEditForm();
   const input = screen.getByLabelText("Upload avatar");
   fireEvent.change(input, { target: { files: [new File(["x"], "a.png", { type: "image/png" })] } });
-  await waitFor(() => expect(api.putImage).toHaveBeenCalledWith("w", "seraphine", "default", "avatar", expect.any(File)));
+  await waitFor(() => expect(api.putImage).toHaveBeenCalledWith({ kind: "world", id: "w" }, "seraphine", "default", "avatar", expect.any(File)));
 });
 
 test("creating a character prompts and posts the name", async () => {
@@ -806,7 +806,7 @@ test("clicking the profile avatar opens the crop picker and saves the focus", as
   const slider = await screen.findByLabelText("Crop position");
   fireEvent.change(slider, { target: { value: "80" } });
   fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
-  await waitFor(() => expect(api.setAvatarFocus).toHaveBeenCalledWith("w", "seraphine", "default", 80));
+  await waitFor(() => expect(api.setAvatarFocus).toHaveBeenCalledWith({ kind: "world", id: "w" }, "seraphine", "default", 80));
 });
 
 test("stored focus is applied as object-position on detail and grid avatars", async () => {
@@ -877,7 +877,7 @@ test("appears-in gallery copies to avatar and world greetings link with primary 
   const strip = label.parentElement as HTMLElement;
   fireEvent.click(within(strip).getByRole("button", { name: /set as avatar/i }));
   await waitFor(() => expect(api.copyGreetingImage).toHaveBeenCalledWith(
-    "w", "seraphine", "default", { gid: "sol-1", name: "embed-a", slot: "avatar" }));
+    { kind: "world", id: "w" }, "seraphine", "default", { gid: "sol-1", name: "embed-a", slot: "avatar" }));
   expect(within(strip).getByRole("button", { name: /add to gallery/i })).toBeInTheDocument();
 
   // world greetings: present-only listed, primary starred, absent one missing

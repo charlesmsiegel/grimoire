@@ -428,7 +428,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     if (!file || !detail) return;
     setError(null);
     try {
-      await api.putImage(wid, detail.meta.id, vid, "avatar", file);
+      await api.putImage(scope, detail.meta.id, vid, "avatar", file);
       await select(detail.meta.id);
       await reload();
       setAvatarBust((n) => n + 1);
@@ -441,7 +441,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
 
   async function removeAvatar() {
     if (!detail) return;
-    await api.deleteImage(wid, detail.meta.id, vid, "avatar");
+    await api.deleteImage(scope, detail.meta.id, vid, "avatar");
     await select(detail.meta.id);
     await reload();
     setAvatarBust((n) => n + 1);
@@ -461,7 +461,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     if (!detail) return;
     setError(null);
     try {
-      await api.promoteImage(wid, detail.meta.id, vid, name);
+      await api.promoteImage(scope, detail.meta.id, vid, name);
       await refreshVersion();
     } catch (err: any) {
       setError(err.detail ?? String(err));
@@ -472,7 +472,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     if (!detail) return;
     setError(null);
     try {
-      await api.copyGreetingImage(wid, detail.meta.id, vid, { gid: a.gid, name: a.name, slot });
+      await api.copyGreetingImage(scope, detail.meta.id, vid, { gid: a.gid, name: a.name, slot });
       await refreshVersion();
     } catch (err: any) {
       setError(err.detail ?? String(err));
@@ -484,7 +484,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     setCropOpen(false);
     setError(null);
     try {
-      await api.setAvatarFocus(wid, detail.meta.id, vid, f);
+      await api.setAvatarFocus(scope, detail.meta.id, vid, f);
       await refreshVersion();
     } catch (err: any) {
       setError(err.detail ?? String(err));
@@ -499,7 +499,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       ? `gallery_${galleryImages.reduce((m, n) => Math.max(m, Number(n.slice("gallery_".length))), 0) + 1}`
       : "avatar";
     try {
-      await api.putImage(wid, detail.meta.id, vid, next, file);
+      await api.putImage(scope, detail.meta.id, vid, next, file);
       await refreshVersion();
     } catch (err: any) {
       setError(err.detail ?? String(err));
