@@ -9,7 +9,7 @@ vi.mock("../theme/ThemeProvider", () => ({ useTheme: () => ({ setTheme: vi.fn() 
 vi.mock("./ModelCombobox", () => ({ default: () => <div /> }));
 import { api } from "../api/client";
 
-const cfg = { model: "m", theme: "codex", key_set: false, system_prompt: "", quote_color: "off", user_label: "You", assistant_label: "Grimoire" };
+const cfg = { model: "m", theme: "codex", key_set: false, system_prompt: "", quote_color: "off", user_label: "You", assistant_label: "Grimoire", provider: "openrouter", claude_model: "opus" };
 const dataDir = {
   data_dir: "/home/u/.grimoire", default: "/home/u/.grimoire",
   is_default: true, source: "default" as const, exists: true,
@@ -61,4 +61,26 @@ test("shows the three theme cards", async () => {
   expect(await screen.findByText("CODEX")).toBeInTheDocument();
   expect(screen.getByText("MANUSCRIPT")).toBeInTheDocument();
   expect(screen.getByText("ASTRAL")).toBeInTheDocument();
+});
+
+it("switching provider to claude swaps key/model fields for a claude model input", async () => {
+  render(<ConfigView />);
+  const select = await screen.findByLabelText("LLM provider");
+  expect(screen.getByLabelText("OpenRouter API key")).toBeInTheDocument();
+  fireEvent.change(select, { target: { value: "claude" } });
+  expect(screen.queryByLabelText("OpenRouter API key")).toBeNull();
+  expect(screen.getByLabelText("Claude model")).toBeInTheDocument();
+});
+
+it("save sends provider and claude_model", async () => {
+  render(<ConfigView />);
+  const select = await screen.findByLabelText("LLM provider");
+  fireEvent.change(select, { target: { value: "claude" } });
+  fireEvent.change(screen.getByLabelText("Claude model"), { target: { value: "sonnet" } });
+  fireEvent.click(screen.getByText("Save"));
+  await waitFor(() =>
+    expect(api.putConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "claude", claude_model: "sonnet" }),
+    ),
+  );
 });

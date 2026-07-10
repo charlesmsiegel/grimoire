@@ -9,6 +9,8 @@ export default function ConfigView() {
   const [config, setConfig] = useState<Config | null>(null);
   const [model, setModel] = useState("");
   const [key, setKey] = useState("");
+  const [provider, setProvider] = useState("openrouter");
+  const [claudeModel, setClaudeModel] = useState("");
   const [systemPrompt, setSystemPrompt] = useState("");
   const [userLabel, setUserLabel] = useState("");
   const [assistantLabel, setAssistantLabel] = useState("");
@@ -22,6 +24,8 @@ export default function ConfigView() {
     api.getConfig().then((c) => {
       setConfig(c);
       setModel(c.model);
+      setProvider(c.provider);
+      setClaudeModel(c.claude_model);
       setSystemPrompt(c.system_prompt);
       setUserLabel(c.user_label);
       setAssistantLabel(c.assistant_label);
@@ -47,7 +51,7 @@ export default function ConfigView() {
 
   if (!config) return <div className="page page-narrow config">Loading…</div>;
 
-  async function save(fields: Partial<{ model: string; theme: string; openrouter_key: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string }>) {
+  async function save(fields: Partial<{ model: string; theme: string; openrouter_key: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string; provider: string; claude_model: string }>) {
     const next = await api.putConfig(fields);
     setConfig(next);
     setKey("");
@@ -104,17 +108,46 @@ export default function ConfigView() {
         </p>
       )}
 
-      <div className="section-label">OpenRouter API key</div>
-      <input
-        type="password"
-        aria-label="OpenRouter API key"
-        placeholder={config.key_set ? "A key is set — type to replace" : "sk-or-…"}
-        value={key}
-        onChange={(e) => setKey(e.target.value)}
-      />
+      <div className="section-label">LLM provider</div>
+      <select
+        aria-label="LLM provider"
+        value={provider}
+        onChange={(e) => setProvider(e.target.value)}
+      >
+        <option value="openrouter">OpenRouter (API key)</option>
+        <option value="claude">Claude (subscription via Claude Code)</option>
+      </select>
 
-      <div className="section-label">Model</div>
-      <ModelCombobox value={model} onChange={setModel} />
+      {provider === "openrouter" ? (
+        <>
+          <div className="section-label">OpenRouter API key</div>
+          <input
+            type="password"
+            aria-label="OpenRouter API key"
+            placeholder={config.key_set ? "A key is set — type to replace" : "sk-or-…"}
+            value={key}
+            onChange={(e) => setKey(e.target.value)}
+          />
+
+          <div className="section-label">Model</div>
+          <ModelCombobox value={model} onChange={setModel} />
+        </>
+      ) : (
+        <>
+          <div className="section-label">Claude model</div>
+          <input
+            aria-label="Claude model"
+            placeholder="opus"
+            value={claudeModel}
+            onChange={(e) => setClaudeModel(e.target.value)}
+          />
+          <p className="field-hint">
+            Uses the local Claude Code login (run <code>claude setup-token</code> on a
+            headless machine) and bills your Claude subscription. Requires the backend
+            extra: <code>pip install grimoire[claude]</code>.
+          </p>
+        </>
+      )}
 
       <div className="section-label">System prompt</div>
       <label className="sr-only" htmlFor="cfg-system-prompt">
@@ -168,7 +201,8 @@ export default function ConfigView() {
         <button
           className="btn-accent"
           onClick={() => save({
-            model, system_prompt: systemPrompt,
+            model, provider, claude_model: claudeModel,
+            system_prompt: systemPrompt,
             user_label: userLabel, assistant_label: assistantLabel,
             ...(key ? { openrouter_key: key } : {}),
           })}

@@ -45,6 +45,7 @@ async function requestForm<T>(path: string, form: FormData, method = "POST"): Pr
 export type Config = {
   model: string; theme: string; key_set: boolean; system_prompt: string;
   quote_color: string; user_label: string; assistant_label: string;
+  provider: string; claude_model: string;
 };
 export type DataDirInfo = {
   data_dir: string;
@@ -270,7 +271,7 @@ export const api = {
     }
     return configCache;
   },
-  putConfig: (body: Partial<{ model: string; theme: string; openrouter_key: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string }>) =>
+  putConfig: (body: Partial<{ model: string; theme: string; openrouter_key: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string; provider: string; claude_model: string }>) =>
     request<Config>("PUT", "/api/config", body).then((cfg) => {
       configCache = Promise.resolve(cfg); // the write's response is the fresh config
       return cfg;
