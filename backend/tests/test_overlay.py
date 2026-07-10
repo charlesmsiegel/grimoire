@@ -1,6 +1,6 @@
 import pytest
 
-from grimoire.store import campaigns, characters, entities, greetings, overlay, pcs, taglines, worlds
+from grimoire.store import assets, campaigns, characters, entities, greetings, overlay, pcs, taglines, worlds
 
 
 def _pair(monkeypatch, tmp_path):
@@ -189,3 +189,43 @@ def test_dematerialize_keeps_sidecars_and_assets(monkeypatch, tmp_path):
     assert not (d / "character.md").exists() and not list(d.glob("*.json"))
     assert (d / "dossier.md").exists()
     assert overlay.char_root(cid, aid) == wroot
+
+
+PNG = b"\x89PNG\r\n\x1a\nfake"
+
+
+def test_images_union_campaign_wins_and_tombstones(monkeypatch, tmp_path):
+    wroot, cid, aid = _actor_pair(monkeypatch, tmp_path)
+    assets.put_image(wroot, aid, "default", "avatar", PNG, "png")
+    assets.put_image(wroot, aid, "default", "gallery_0", PNG, "png")
+    names = {i["name"] for i in overlay.list_images(cid, aid, "default")}
+    assert names == {"avatar", "gallery_0"}
+    assert overlay.image_root(cid, aid, "default", "avatar") == wroot
+    croot = campaigns.campaign_root(cid)
+    assets.put_image(croot, aid, "default", "avatar", PNG + b"2", "png")
+    assert overlay.image_root(cid, aid, "default", "avatar") == croot
+    overlay.delete_image(cid, aid, "default", "gallery_0")
+    assert {i["name"] for i in overlay.list_images(cid, aid, "default")} == {"avatar"}
+    # the tombstone makes serving 404 at the campaign root, not fall through
+    assert overlay.image_root(cid, aid, "default", "gallery_0") == croot
+
+
+def test_focus_world_fallback_until_campaign_avatar(monkeypatch, tmp_path):
+    wroot, cid, aid = _actor_pair(monkeypatch, tmp_path)
+    assets.put_image(wroot, aid, "default", "avatar", PNG, "png")
+    assets.write_focus(wroot, aid, "default", 80)
+    assert overlay.read_focus(cid, aid, "default") == 80
+    assets.put_image(campaigns.campaign_root(cid), aid, "default", "avatar", PNG + b"2", "png")
+    assert overlay.read_focus(cid, aid, "default") is None   # new avatar, campaign focus unset
+
+
+def test_read_character_patches_images_from_union(monkeypatch, tmp_path):
+    wroot, cid, aid = _actor_pair(monkeypatch, tmp_path)
+    assets.put_image(wroot, aid, "default", "avatar", PNG, "png")
+    overlay.materialize_actor(cid, "characters", aid)   # cards in campaign, assets in world
+    detail = overlay.read_character(cid, aid)
+    default = next(v for v in detail["versions"] if v["id"] == "default")
+    assert "avatar" in default["images"]
+    listed = next(c for c in overlay.list_characters(cid) if c["id"] == aid)
+    assert listed["has_avatar"] is True
+    assert listed["tagline"] == "A hero of legend."
