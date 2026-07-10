@@ -227,7 +227,7 @@ test("campaignChanges GETs the campaign changes endpoint", async () => {
 test("promoteImage POSTs the promote route", async () => {
   const fetchMock = vi.fn().mockResolvedValue(jsonOk({ ok: true }));
   globalThis.fetch = fetchMock as unknown as typeof fetch;
-  await api.promoteImage("w", "sera", "v1", "gallery_2");
+  await api.promoteImage({ kind: "world", id: "w" }, "sera", "v1", "gallery_2");
   expect(fetchMock).toHaveBeenCalledWith(
     "/api/worlds/w/characters/sera/versions/v1/images/gallery_2/promote",
     expect.objectContaining({ method: "POST" }),

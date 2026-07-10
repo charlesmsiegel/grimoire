@@ -385,19 +385,19 @@ export const api = {
     `/api/worlds/${wid}/characters/${cid}/versions/${vid}/images/${name}`,
   campaignImageUrl: (cid: string, char: string, vid: string, name: string) =>
     `/api/campaigns/${cid}/characters/${char}/versions/${vid}/images/${name}`,
-  putImage: (wid: string, cid: string, vid: string, name: string, file: File) => {
+  putImage: (scope: EntityScope, cid: string, vid: string, name: string, file: File) => {
     const form = new FormData();
     form.append("file", file);
     return requestForm<{ name: string; ext: string }>(
-      `/api/worlds/${wid}/characters/${cid}/versions/${vid}/images/${name}`, form, "PUT");
+      `${entityBase(scope)}/characters/${cid}/versions/${vid}/images/${name}`, form, "PUT");
   },
-  deleteImage: (wid: string, cid: string, vid: string, name: string) =>
-    request<{ ok: boolean }>("DELETE", `/api/worlds/${wid}/characters/${cid}/versions/${vid}/images/${name}`),
-  promoteImage: (wid: string, cid: string, vid: string, name: string) =>
-    request<{ ok: boolean }>("POST", `/api/worlds/${wid}/characters/${cid}/versions/${vid}/images/${name}/promote`),
-  setAvatarFocus: (wid: string, cid: string, vid: string, focus: number) =>
+  deleteImage: (scope: EntityScope, cid: string, vid: string, name: string) =>
+    request<{ ok: boolean }>("DELETE", `${entityBase(scope)}/characters/${cid}/versions/${vid}/images/${name}`),
+  promoteImage: (scope: EntityScope, cid: string, vid: string, name: string) =>
+    request<{ ok: boolean }>("POST", `${entityBase(scope)}/characters/${cid}/versions/${vid}/images/${name}/promote`),
+  setAvatarFocus: (scope: EntityScope, cid: string, vid: string, focus: number) =>
     request<{ ok: boolean }>("PUT",
-      `/api/worlds/${wid}/characters/${cid}/versions/${vid}/images/avatar/focus`, { focus }),
+      `${entityBase(scope)}/characters/${cid}/versions/${vid}/images/avatar/focus`, { focus }),
   entityImageUrl: (scope: EntityScope, kind: EntityKind, eid: string, name: string) =>
     `${entityBase(scope)}/${kind}/${eid}/images/${name}`,
   listEntityImages: (scope: EntityScope, kind: EntityKind, eid: string) =>
@@ -475,10 +475,10 @@ export const api = {
     request<Appearance[]>("GET", `/api/worlds/${wid}/characters/${cid}/appearances`),
   listUntaggedImages: (wid: string) =>
     request<Appearance[]>("GET", `/api/worlds/${wid}/subjects/untagged`),
-  copyGreetingImage: (wid: string, cid: string, vid: string,
+  copyGreetingImage: (scope: EntityScope, cid: string, vid: string,
                       body: { gid: string; name: string; slot: "avatar" | "gallery" }) =>
     request<{ name: string; ext: string }>(
-      "POST", `/api/worlds/${wid}/characters/${cid}/versions/${vid}/images/copy-from-greeting`, body),
+      "POST", `${entityBase(scope)}/characters/${cid}/versions/${vid}/images/copy-from-greeting`, body),
 
   // campaign world-copy actions
   markGreeting: (cid: string, gid: string, status: "completed" | "skipped" | "none") =>
