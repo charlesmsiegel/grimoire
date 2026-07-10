@@ -11,8 +11,11 @@ DEFAULT_SCAN_DEPTH = "8"
 DEFAULT_RECAP_DEPTH = "5"
 DEFAULT_USER_LABEL = "You"
 DEFAULT_ASSISTANT_LABEL = "Grimoire"
+DEFAULT_PROVIDER = "openrouter"
+DEFAULT_CLAUDE_MODEL = "opus"
 _CONFIG_KEYS = ("openrouter_key", "model", "theme", "context_scan_depth", "system_prompt",
-                "quote_color", "recap_depth", "user_label", "assistant_label")
+                "quote_color", "recap_depth", "user_label", "assistant_label",
+                "provider", "claude_model")
 
 
 def _config_path():
@@ -25,7 +28,8 @@ def read_config() -> dict[str, str]:
     defaults = {"openrouter_key": "", "model": DEFAULT_MODEL, "theme": DEFAULT_THEME,
                 "context_scan_depth": DEFAULT_SCAN_DEPTH, "system_prompt": "", "quote_color": "off",
                 "recap_depth": DEFAULT_RECAP_DEPTH,
-                "user_label": DEFAULT_USER_LABEL, "assistant_label": DEFAULT_ASSISTANT_LABEL}
+                "user_label": DEFAULT_USER_LABEL, "assistant_label": DEFAULT_ASSISTANT_LABEL,
+                "provider": DEFAULT_PROVIDER, "claude_model": DEFAULT_CLAUDE_MODEL}
     if not path.exists():
         path.write_text(dump_frontmatter(defaults, ""), encoding="utf-8")
         return defaults

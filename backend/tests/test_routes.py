@@ -54,6 +54,20 @@ def test_config_system_prompt_and_quote_color_roundtrip(client):
     assert "openrouter_key" not in body
 
 
+def test_config_provider_roundtrip(client):
+    r = client.put("/api/config", json={"provider": "claude", "claude_model": "sonnet"})
+    assert r.status_code == 200
+    assert r.json()["provider"] == "claude"
+    r = client.get("/api/config")
+    assert r.json()["provider"] == "claude"
+    assert r.json()["claude_model"] == "sonnet"
+
+
+def test_config_rejects_unknown_provider(client):
+    r = client.put("/api/config", json={"provider": "gemini"})
+    assert r.status_code == 422
+
+
 def test_data_dir_reports_env_override(client, tmp_path):
     body = client.get("/api/config/data-dir").json()
     assert body["data_dir"] == str(tmp_path)

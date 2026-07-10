@@ -50,3 +50,18 @@ def test_label_defaults_and_write(monkeypatch, tmp_path):
     cfg = s.write_config(user_label="Kestrel", assistant_label="Narrator")
     assert cfg["user_label"] == "Kestrel"
     assert s.read_config()["assistant_label"] == "Narrator"
+
+
+def test_provider_defaults(monkeypatch, tmp_path):
+    s = reload_with_home(monkeypatch, tmp_path)
+    cfg = s.read_config()
+    assert cfg["provider"] == "openrouter"
+    assert cfg["claude_model"] == "opus"
+
+
+def test_provider_roundtrip(monkeypatch, tmp_path):
+    s = reload_with_home(monkeypatch, tmp_path)
+    s.write_config(provider="claude", claude_model="sonnet")
+    cfg = s.read_config()
+    assert cfg["provider"] == "claude"
+    assert cfg["claude_model"] == "sonnet"
