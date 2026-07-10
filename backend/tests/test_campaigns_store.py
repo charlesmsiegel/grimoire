@@ -1,9 +1,8 @@
-import json
 import shutil
 
 import pytest
 
-from grimoire.store import campaigns, characters, entities, greetings, overlay, pcs, worlds
+from grimoire.store import assets, campaigns, characters, entities, greetings, overlay, pcs, worlds
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 
 
@@ -134,79 +133,57 @@ def test_create_campaign_is_thin_even_with_a_full_world(monkeypatch, tmp_path):
     assert pid in [p["id"] for p in overlay.list_pcs(cid)]
 
 
-def _strip_to_legacy(cid):
-    """Rewind a freshly created campaign to the pre-full-copy on-disk layout."""
+def _fat_campaign(monkeypatch, tmp_path):
+    """A pre-overlay full-copy campaign: build thin, then hand-copy the world
+    like the old create_campaign did, stamp world_copy: full. Three lore
+    entries cover the slim cases: `same` (redundant copy), `diverged`
+    (campaign body differs), `removed` (user deleted the copy, base ref kept)."""
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    same = entities.create_entity(wroot, "lore", "Same", "same")
+    diverged = entities.create_entity(wroot, "lore", "Diverged", "world text")
+    removed = entities.create_entity(wroot, "lore", "Removed", "removed text")
+    aid, vid = characters.create_character(wroot, "Hero")
+    assets.put_image(wroot, aid, vid, "avatar", b"\x89PNG\r\n\x1a\nx", "png")
+    cid = campaigns.create_campaign("C", wid)
     croot = campaigns.campaign_root(cid)
-    for sub in ("greetings", "characters", "pcs"):
-        if (croot / sub).exists():
-            shutil.rmtree(croot / sub)
-    (croot / "plotmap.json").unlink(missing_ok=True)
-    manifest = {r: h for r, h in campaigns.read_manifest(cid).items()
-                if r.split("/")[0] in ("locations", "lore")}
+    manifest = {}
+    (croot / "lore").mkdir()
+    for xid in (same, diverged, removed):
+        (croot / "lore" / f"{xid}.md").write_text(
+            (wroot / "lore" / f"{xid}.md").read_text(encoding="utf-8"), encoding="utf-8")
+        manifest[f"lore/{xid}"] = entities.entity_hash(wroot, "lore", xid)
+    shutil.copytree(wroot / "characters" / aid, croot / "characters" / aid)
+    manifest[f"characters/{aid}"] = characters.dir_hash(wroot, aid)
     campaigns.write_manifest(cid, manifest)
+    entities.update_entity(croot, "lore", diverged, body="campaign text")
+    (croot / "lore" / f"{removed}.md").unlink()
     mp = campaigns.campaign_meta_path(cid)
     meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
-    del meta["world_copy"]
+    meta["world_copy"] = "full"
     mp.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+    return wroot, cid, same, diverged, removed, aid, vid
 
 
-def test_ensure_campaign_copy_backfills_legacy(monkeypatch, tmp_path):
-    home(monkeypatch, tmp_path)
-    wid = worlds.create_world("W")
-    wroot = worlds.world_root(wid)
-    char_id, _ = characters.create_character(wroot, "Mara")
-    g = greetings.create_greeting(wroot, "Gala", char_id, "default", body="Hi.")
-    greetings.set_edges(wroot, g, leads_to=[])
-    cid = campaigns.create_campaign("Run", wid)
-    _strip_to_legacy(cid)
-    campaigns.ensure_campaign_copy(cid)
+def test_slim_deletes_redundant_keeps_diverged_and_deletions(monkeypatch, tmp_path):
+    wroot, cid, same, diverged, removed, aid, vid = _fat_campaign(monkeypatch, tmp_path)
+    campaigns.ensure_campaign_slim(cid)
     croot = campaigns.campaign_root(cid)
-    assert (croot / "greetings" / f"{g}.md").exists()
-    assert (croot / "plotmap.json").exists()
-    assert (croot / "characters" / char_id / "default.json").exists()
-    assert campaigns.read_campaign(cid)["meta"]["world_copy"] == "full"
-    manifest = campaigns.read_manifest(cid)
-    assert manifest["plotmap"] == greetings.plotmap_hash(wroot)
-    before = campaigns.read_manifest(cid)
-    campaigns.ensure_campaign_copy(cid)  # idempotent: second run changes nothing
-    assert campaigns.read_manifest(cid) == before
+    assert not (croot / "lore" / f"{same}.md").exists()                 # slimmed
+    assert f"lore/{same}" not in campaigns.read_manifest(cid)
+    assert overlay.read_entity(cid, "lore", same)["body"] == "same"     # inherited now
+    assert (croot / "lore" / f"{diverged}.md").exists()                 # kept
+    assert f"lore/{removed}" in overlay.deleted(cid)                    # deletion preserved
+    assert not (croot / "characters" / aid).exists() \
+        or not (croot / "characters" / aid / "character.md").exists()   # actor dematerialized
+    assert overlay.image_root(cid, aid, vid, "avatar") == wroot         # asset dupe pruned
+    assert campaigns.read_campaign(cid)["meta"]["world_copy"] == "overlay"
+    campaigns.ensure_campaign_slim(cid)                                 # second run: no-op
 
 
-def test_ensure_campaign_copy_skips_locked_actors(monkeypatch, tmp_path):
-    home(monkeypatch, tmp_path)
-    wid = worlds.create_world("W")
-    wroot = worlds.world_root(wid)
-    char_id, _ = characters.create_character(wroot, "Mara")
-    characters.create_version(wroot, char_id, "grim", characters.blank_card("Mara"))
-    cid = campaigns.create_campaign("Run", wid)
-    _strip_to_legacy(cid)
-    # legacy lock: the old appear() copied exactly one version
-    croot = campaigns.campaign_root(cid)
-    (croot / "characters" / char_id).mkdir(parents=True)
-    src = wroot / "characters" / char_id
-    for fn in ("character.md", "default.json"):
-        (croot / "characters" / char_id / fn).write_text(
-            (src / fn).read_text(encoding="utf-8"), encoding="utf-8")
-    (croot / "appearances.json").write_text(
-        json.dumps({f"characters/{char_id}": {"version": "default", "base": "h",
-                                              "scenes": ["s1"], "role": "npc"}}),
-        encoding="utf-8")
-    campaigns.ensure_campaign_copy(cid)
-    assert not (croot / "characters" / char_id / "grim.json").exists()  # no version resurrection
-    assert f"characters/{char_id}" not in campaigns.read_manifest(cid)
-
-
-def test_ensure_campaign_copy_never_clobbers_existing_actor_dirs(monkeypatch, tmp_path):
-    home(monkeypatch, tmp_path)
-    wid = worlds.create_world("W")
-    wroot = worlds.world_root(wid)
-    pid, _ = pcs.create_pc(wroot, "Elara", [])
-    cid = campaigns.create_campaign("Run", wid)
-    _strip_to_legacy(cid)
-    croot = campaigns.campaign_root(cid)
-    # legacy campaign-local overlay shadowing the world PC (old CastPanel merge semantics)
-    pcs.create_pc(croot, "Elara", [], persona={**pcs.blank_persona("Elara"), "description": "local"})
-    campaigns.ensure_campaign_copy(cid)
-    assert pcs.read_persona(croot, pid, "default")["description"] == "local"  # not overwritten
-    # base recorded anyway: divergence surfaces through sync instead of a silent clobber
-    assert campaigns.read_manifest(cid)[f"pcs/{pid}"] == pcs.dir_hash(wroot, pid)
+def test_slim_skips_when_world_missing(monkeypatch, tmp_path):
+    wroot, cid, *_ = _fat_campaign(monkeypatch, tmp_path)
+    shutil.rmtree(wroot)
+    campaigns.ensure_campaign_slim(cid)
+    assert campaigns.read_campaign(cid)["meta"]["world_copy"] == "full"  # untouched, retried later

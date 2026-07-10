@@ -1023,7 +1023,7 @@ def _world_root_or_404(wid: str):
 
 def _campaign_root_or_404(cid: str):
     try:
-        store.campaigns.ensure_campaign_copy(cid)  # lazy backfill of legacy campaigns
+        store.campaigns.ensure_campaign_slim(cid)  # lazy slim of pre-overlay campaigns
     except store.campaigns.CampaignNotFound:
         raise HTTPException(status_code=404, detail="campaign not found")
     return store.campaigns.campaign_root(cid)
@@ -1293,7 +1293,7 @@ def post_campaign(body: NewCampaign):
 @router.get("/campaigns/{cid}")
 def get_campaign(cid: str):
     try:
-        store.campaigns.ensure_campaign_copy(cid)
+        store.campaigns.ensure_campaign_slim(cid)
         out = store.campaigns.read_campaign(cid)
     except store.campaigns.CampaignNotFound:
         raise HTTPException(status_code=404, detail="campaign not found")
@@ -1341,7 +1341,7 @@ def delete_campaign(cid: str):
 @router.get("/campaigns/{cid}/incoming")
 def get_incoming(cid: str):
     try:
-        store.campaigns.ensure_campaign_copy(cid)
+        store.campaigns.ensure_campaign_slim(cid)
         return store.sync.incoming(cid)
     except store.campaigns.CampaignNotFound:
         raise HTTPException(status_code=404, detail="campaign not found")
@@ -1350,7 +1350,7 @@ def get_incoming(cid: str):
 @router.post("/campaigns/{cid}/incoming/accept")
 def post_accept(cid: str, body: RefList):
     try:
-        store.campaigns.ensure_campaign_copy(cid)
+        store.campaigns.ensure_campaign_slim(cid)
         store.sync.accept(cid, [_dump(r) for r in body.refs])
     except store.campaigns.CampaignNotFound:
         raise HTTPException(status_code=404, detail="campaign not found")
@@ -1360,7 +1360,7 @@ def post_accept(cid: str, body: RefList):
 @router.post("/campaigns/{cid}/incoming/reject")
 def post_reject(cid: str, body: RefList):
     try:
-        store.campaigns.ensure_campaign_copy(cid)
+        store.campaigns.ensure_campaign_slim(cid)
         store.sync.reject(cid, [_dump(r) for r in body.refs])
     except store.campaigns.CampaignNotFound:
         raise HTTPException(status_code=404, detail="campaign not found")
