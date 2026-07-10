@@ -52,7 +52,8 @@ def test_parse_output_tolerates_garbage():
     assert absorb.parse_output("no json") == {
         "one_line": "", "summary": "", "keywords": [], "timeline_events": [],
         "character_state_edits": [], "lore_edits": [], "authored_edits": [],
-        "relationship_deltas": [], "bond_changes": [], "plot_movements": []}
+        "relationship_deltas": [], "bond_changes": [], "plot_movements": [],
+        "new_characters": [], "new_locations": [], "new_lore": []}
 
 
 def test_parse_output_plot_movements():
@@ -282,6 +283,29 @@ def test_parse_output_relationship_and_bond_lists():
     assert out["relationship_deltas"] == [{"from": "characters:a", "to": "characters:b",
                                            "trust": 5, "affection": 2, "tension": 1, "note": "warm"}]  # 9 clamped
     assert out["bond_changes"] == [{"a": "characters:a", "b": "characters:b", "type": "allies"}]
+
+
+def test_parse_output_new_entities():
+    text = ('{"one_line": "", "summary": "", "keywords": [], "timeline_events": [],'
+            ' "character_state_edits": [], "lore_edits": [], "authored_edits": [],'
+            ' "new_characters": [{"name": "Old Bram", "description": "W++ block", "sd_prompt": "an old man"}],'
+            ' "new_locations": [{"name": "The Crypt", "body": "cold", "keys": "crypt",'
+            '   "sd_prompt": "a dark crypt", "current_setting": true}],'
+            ' "new_lore": [{"name": "Salt Pact", "body": "an old pact", "keys": "pact"}]}')
+    out = absorb.parse_output(text)
+    assert out["new_characters"] == [{"name": "Old Bram", "description": "W++ block", "sd_prompt": "an old man"}]
+    assert out["new_locations"] == [{"name": "The Crypt", "body": "cold", "keys": "crypt",
+                                     "sd_prompt": "a dark crypt", "current_setting": True}]
+    assert out["new_lore"] == [{"name": "Salt Pact", "body": "an old pact", "keys": "pact"}]
+
+
+def test_parse_output_new_locations_current_setting_defaults_false():
+    text = ('{"one_line": "", "summary": "", "keywords": [], "timeline_events": [],'
+            ' "character_state_edits": [], "lore_edits": [], "authored_edits": [],'
+            ' "new_locations": [{"name": "The Crypt", "body": "cold", "keys": ""}]}')
+    out = absorb.parse_output(text)
+    assert out["new_locations"] == [
+        {"name": "The Crypt", "body": "cold", "keys": "", "sd_prompt": "", "current_setting": False}]
 
 
 def test_relationships_snapshot_renders_present(monkeypatch, tmp_path):

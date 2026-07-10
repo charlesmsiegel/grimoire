@@ -21,6 +21,10 @@ def _int05(v) -> int:
         return 0
 
 
+def _truthy(v) -> bool:
+    return v is True or (isinstance(v, str) and v.strip().lower() == "true")
+
+
 def build_prompt(transcript: str, facts: dict, state_snapshot: dict | None = None,
                  rel_snapshot: str | None = None, plot_snapshot: str | None = None) -> list[dict]:
     return [{"role": "system", "content": prompts.render("absorb/system.j2")},
@@ -85,6 +89,19 @@ def parse_output(text: str) -> dict:
                                "status": status if status in plot.STATUSES else "open",
                                "beat": _str(e, "beat")})
 
+    new_characters = _list("new_characters", ("name", "description", "sd_prompt"))
+
+    new_locations = []
+    for e in obj.get("new_locations", []):
+        if not isinstance(e, dict):
+            continue
+        new_locations.append({
+            "name": _str(e, "name"), "body": _str(e, "body"), "keys": _str(e, "keys"),
+            "sd_prompt": _str(e, "sd_prompt"), "current_setting": _truthy(e.get("current_setting")),
+        })
+
+    new_lore = _list("new_lore", ("name", "body", "keys"))
+
     return {
         "one_line": str(obj.get("one_line", "")).strip(),
         "summary": str(obj.get("summary", "")).strip(),
@@ -96,6 +113,9 @@ def parse_output(text: str) -> dict:
         "relationship_deltas": rel_deltas,
         "bond_changes": _list("bond_changes", ("a", "b", "type")),
         "plot_movements": plot_moves,
+        "new_characters": new_characters,
+        "new_locations": new_locations,
+        "new_lore": new_lore,
     }
 
 
