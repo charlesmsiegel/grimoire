@@ -125,6 +125,26 @@ test("detail view shows the character tagline", async () => {
   await screen.findByText("A silent snowleopardgirl.");
 });
 
+test("detail view shows the suggested image prompt when set", async () => {
+  (api.readCharacter as any).mockResolvedValue({
+    ...DETAIL,
+    versions: [{ id: "default", name: "default",
+      card: { ...CARD, data: { ...CARD.data, extensions: { sd_prompt: "an old innkeeper, weathered face" } } },
+      images: ["avatar"] }],
+  });
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  fireEvent.click(await screen.findByText("Seraphine"));
+  await screen.findByText("Image prompt");
+  expect(screen.getByText("an old innkeeper, weathered face")).toBeInTheDocument();
+});
+
+test("detail view omits the image prompt section when unset", async () => {
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />); // DETAIL's CARD has extensions: {}
+  fireEvent.click(await screen.findByText("Seraphine"));
+  await screen.findByText("Images"); // wait for the detail view to settle
+  expect(screen.queryByText("Image prompt")).toBeNull();
+});
+
 test("edit view saves an edited tagline via PUT", async () => {
   (api.getCharacterTagline as any).mockResolvedValue({ tagline: "old" });
   (api.setCharacterTagline as any).mockResolvedValue({ ok: true });
