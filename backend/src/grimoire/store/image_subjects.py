@@ -118,13 +118,17 @@ def appearances(root: Path, cid: str) -> list[dict]:
     return out
 
 
-def copy_to_character(root: Path, gid: str, name: str, cid: str, vid: str, slot: str) -> str:
+def copy_to_character(root: Path, gid: str, name: str, cid: str, vid: str, slot: str,
+                      src_root: Path | None = None) -> str:
     """Copy a greeting image's bytes into a character version's assets.
     slot 'avatar' overwrites the avatar (focus resets, per put_image);
-    slot 'gallery' takes the next free gallery_N. Returns the stored name."""
+    slot 'gallery' takes the next free gallery_N. Returns the stored name.
+    `src_root` defaults to `root`; a campaign caller passes the overlay-resolved
+    root so an inherited (unmaterialized) greeting image can still be copied,
+    while the destination character write always lands under `root`."""
     if slot not in ("avatar", "gallery"):
         raise ValueError(f"unknown slot: {slot}")
-    src = assets.image_path(root, gid, _VID, name, base=_BASE)
+    src = assets.image_path(root if src_root is None else src_root, gid, _VID, name, base=_BASE)
     if src is None:
         raise FileNotFoundError(name)
     raw, ext = src.read_bytes(), src.suffix.lstrip(".")

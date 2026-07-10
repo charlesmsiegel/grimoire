@@ -131,13 +131,16 @@ def _char_name(croot, cid: str) -> str:
         return cid
 
 
-def _actor_exists(croot, token: str) -> bool:
+def _actor_exists(cid: str, token: str) -> bool:
+    """Overlay-aware: a thin campaign's cast is mostly inherited (never
+    materialized croot-side), so existence must be checked across the union,
+    not just the campaign's own copy."""
     kind, _, aid = token.partition(":")
     try:
         if kind == "pcs":
-            pcs.read_pc(croot, aid)
+            pcs.read_pc(overlay.pc_root(cid, aid), aid)
         elif kind == "characters":
-            characters.read_character(croot, aid)
+            characters.read_character(overlay.char_root(cid, aid), aid)
         else:
             return False
         return True
@@ -176,7 +179,10 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
         if kind == "pcs":
             continue
         try:
-            characters.read_character(croot, char_id)
+            # overlay-aware: a thin campaign's NPC is usually still inherited
+            # (never appeared/materialized), and a state edit for it must not
+            # be silently dropped just because croot lacks the character dir
+            characters.read_character(overlay.char_root(cid, char_id), char_id)
         except characters.CharacterNotFound:
             continue
         st = playstate.read_state(croot, char_id)
@@ -231,7 +237,7 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
 
     for e in parsed.get("relationship_deltas", []):
         frm, to = e.get("from", ""), e.get("to", "")
-        if not _actor_exists(croot, frm) or not _actor_exists(croot, to):
+        if not _actor_exists(cid, frm) or not _actor_exists(cid, to):
             continue
         payload = {"from": frm, "to": to, "trust": e.get("trust", 0), "affection": e.get("affection", 0),
                    "tension": e.get("tension", 0), "note": e.get("note", "")}
@@ -248,7 +254,7 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
 
     for e in parsed.get("bond_changes", []):
         a_tok, b_tok, typ = e.get("a", ""), e.get("b", ""), (e.get("type", "") or "").strip()
-        if not typ or not _actor_exists(croot, a_tok) or not _actor_exists(croot, b_tok):
+        if not typ or not _actor_exists(cid, a_tok) or not _actor_exists(cid, b_tok):
             continue
         cur = relationships.get_bond(cid, a_tok, b_tok)
         before = cur["type"] if cur else ""

@@ -4,8 +4,7 @@ from grimoire.store import assets, campaigns, characters, entities, greetings, o
 
 
 def _pair(monkeypatch, tmp_path):
-    """A world with one lore entry + a campaign on it (campaigns are still full
-    copies at this task — tests delete the copy to simulate a thin campaign)."""
+    """A world with one lore entry + a (thin, copy-on-write) campaign on it."""
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("W")
     wroot = worlds.world_root(wid)
@@ -15,7 +14,9 @@ def _pair(monkeypatch, tmp_path):
 
 
 def _thin(cid, kind, eid):
-    (campaigns.campaign_root(cid) / kind / f"{eid}.md").unlink()
+    """No-op on an already-thin campaign; tolerant so callers can still force
+    the un-materialized state after a test has explicitly materialized it."""
+    (campaigns.campaign_root(cid) / kind / f"{eid}.md").unlink(missing_ok=True)
     manifest = campaigns.read_manifest(cid)
     manifest.pop(f"{kind}/{eid}", None)
     campaigns.write_manifest(cid, manifest)
@@ -29,6 +30,7 @@ def test_read_falls_through_to_world_when_not_materialized(monkeypatch, tmp_path
 
 def test_materialized_copy_shadows_world(monkeypatch, tmp_path):
     _wid, wroot, cid, eid = _pair(monkeypatch, tmp_path)
+    overlay.materialize_entity(cid, "lore", eid)   # campaign gets its own copy
     entities.update_entity(wroot, "lore", eid, body="world v2")
     assert overlay.read_entity(cid, "lore", eid)["body"] == "world text"  # copy wins
 
@@ -55,7 +57,7 @@ def test_delete_inherited_does_not_resurrect_on_world_edit(monkeypatch, tmp_path
 
 def test_delete_materialized_tombstones_and_drops_base(monkeypatch, tmp_path):
     _wid, _wroot, cid, eid = _pair(monkeypatch, tmp_path)
-    overlay.delete_entity(cid, "lore", eid)   # copy exists (full-copy campaign)
+    overlay.delete_entity(cid, "lore", eid)   # inherited (never materialized) -> tombstone
     assert f"lore/{eid}" in overlay.deleted(cid)
     assert f"lore/{eid}" not in campaigns.read_manifest(cid)
     with pytest.raises(entities.EntityNotFound):
@@ -94,9 +96,9 @@ def _greeting_pair(monkeypatch, tmp_path):
     gid = greetings.create_greeting(wroot, "Opening", "hero", "default", "hi {{user}}")
     greetings.set_edges(wroot, gid, leads_to=["next"], excludes=[])
     cid = campaigns.create_campaign("C", wid)
-    # thin: strip the copies so fallthrough is exercised before Task 6 lands
-    (campaigns.campaign_root(cid) / "greetings" / f"{gid}.md").unlink()
-    (campaigns.campaign_root(cid) / "plotmap.json").unlink()
+    # already thin from creation; tolerant unlinks in case a test materialized first
+    (campaigns.campaign_root(cid) / "greetings" / f"{gid}.md").unlink(missing_ok=True)
+    (campaigns.campaign_root(cid) / "plotmap.json").unlink(missing_ok=True)
     manifest = campaigns.read_manifest(cid)
     manifest.pop(f"greetings/{gid}", None)
     manifest.pop("plotmap", None)
@@ -145,7 +147,9 @@ def _actor_pair(monkeypatch, tmp_path):
     taglines.write(wroot, aid, "A hero of legend.")
     cid = campaigns.create_campaign("C", wid)
     import shutil
-    shutil.rmtree(campaigns.campaign_root(cid) / "characters" / aid)
+    d = campaigns.campaign_root(cid) / "characters" / aid
+    if d.exists():   # already thin from creation; only needed pre-Task-6
+        shutil.rmtree(d)
     manifest = campaigns.read_manifest(cid)
     manifest.pop(f"characters/{aid}", None)
     campaigns.write_manifest(cid, manifest)

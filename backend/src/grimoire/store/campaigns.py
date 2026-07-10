@@ -78,33 +78,13 @@ def create_campaign(name: str, world_id: str, region: str | None = None,
     now = now_iso()
     campaign_meta_path(cid).write_text(
         dump_frontmatter({"name": name, "world": world_id, "created": now, "updated": now,
-                          "world_copy": "full"}, ""),
+                          "world_copy": "overlay"}, ""),
         encoding="utf-8",
     )
-    # copy-on-create: deep-copy world entities, greetings, plot map, and every
-    # actor version + record base hashes so sync can diff against this snapshot
-    wroot = worlds.world_root(world_id)
-    manifest: dict[str, str] = {}
-    for kind, eid in entities.synced_refs(wroot):
-        src = wroot / kind / f"{eid}.md"
-        dst_dir = root / kind
-        dst_dir.mkdir(parents=True, exist_ok=True)
-        (dst_dir / f"{eid}.md").write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
-        assets_dir = wroot / kind / eid / "assets"
-        if assets_dir.exists():  # entity images (primary/gallery) travel with the copy
-            shutil.copytree(assets_dir, root / kind / eid / "assets", dirs_exist_ok=True)
-        manifest[f"{kind}/{eid}"] = entities.entity_hash(wroot, kind, eid) or ""
-    if (wroot / "plotmap.json").exists():
-        (root / "plotmap.json").write_text((wroot / "plotmap.json").read_text(encoding="utf-8"),
-                                           encoding="utf-8")
-    manifest["plotmap"] = greetings.plotmap_hash(wroot) or ""
-    for kind, refs_of, dir_hash in (("characters", characters.character_refs, characters.dir_hash),
-                                    ("pcs", pcs.pc_refs, pcs.dir_hash)):
-        for aid in refs_of(wroot):
-            shutil.copytree(wroot / kind / aid, root / kind / aid)
-            manifest[f"{kind}/{aid}"] = dir_hash(wroot, aid) or ""
-    write_manifest(cid, manifest)
-    calendars.copy_calendar(wroot, root)
+    # copy-on-write: nothing is copied up front; records materialize on divergence
+    # (store/overlay.py) and sync.md tracks bases for materialized records only
+    write_manifest(cid, {})
+    calendars.copy_calendar(worlds.world_root(world_id), root)
     if region is not None or calendar is not None:
         cfg = calendars.read_calendar(root)
         if calendar is not None:
