@@ -1,6 +1,6 @@
 import pytest
 
-from grimoire.store import campaigns, entities, greetings, overlay, worlds
+from grimoire.store import campaigns, characters, entities, greetings, overlay, pcs, taglines, worlds
 
 
 def _pair(monkeypatch, tmp_path):
@@ -128,3 +128,64 @@ def test_delete_inherited_greeting_tombstones_and_cleans_edges(monkeypatch, tmp_
     assert gid not in [g["id"] for g in overlay.list_greetings(cid)]
     assert gid not in overlay.read_plotmap(cid).get(other, {}).get("leads_to", [])
     assert greetings.read_plotmap(wroot)[other]["leads_to"] == [gid]    # world untouched
+
+
+def _actor_pair(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    aid, _ = characters.create_character(wroot, "Hero")
+    characters.create_version(wroot, aid, "dark", characters.blank_card("Hero"))
+    taglines.write(wroot, aid, "A hero of legend.")
+    cid = campaigns.create_campaign("C", wid)
+    import shutil
+    shutil.rmtree(campaigns.campaign_root(cid) / "characters" / aid)
+    manifest = campaigns.read_manifest(cid)
+    manifest.pop(f"characters/{aid}", None)
+    campaigns.write_manifest(cid, manifest)
+    return wroot, cid, aid
+
+
+def test_actor_root_falls_through_until_materialized(monkeypatch, tmp_path):
+    wroot, cid, aid = _actor_pair(monkeypatch, tmp_path)
+    assert overlay.char_root(cid, aid) == wroot
+    overlay.materialize_actor(cid, "characters", aid)
+    assert overlay.char_root(cid, aid) == campaigns.campaign_root(cid)
+    detail = characters.read_character(overlay.char_root(cid, aid), aid)
+    assert [v["id"] for v in detail["versions"]] == ["dark", "default"]
+    assert f"characters/{aid}" in campaigns.read_manifest(cid)
+    # assets/sidecars are NOT copied
+    assert not (campaigns.campaign_root(cid) / "characters" / aid / "tagline.md").exists()
+
+
+def test_sidecars_do_not_count_as_materialization(monkeypatch, tmp_path):
+    wroot, cid, aid = _actor_pair(monkeypatch, tmp_path)
+    d = campaigns.campaign_root(cid) / "characters" / aid
+    d.mkdir(parents=True)
+    (d / "dossier.md").write_text("seen in scene 1\n", encoding="utf-8")
+    assert overlay.char_root(cid, aid) == wroot          # still inherited
+    assert aid in [c["id"] for c in overlay.list_characters(cid)]   # and not duplicated
+
+
+def test_list_characters_merges_and_hides_tombstoned(monkeypatch, tmp_path):
+    wroot, cid, aid = _actor_pair(monkeypatch, tmp_path)
+    overlay.add_deleted(cid, f"characters/{aid}")
+    assert aid not in [c["id"] for c in overlay.list_characters(cid)]
+
+
+def test_tagline_falls_through(monkeypatch, tmp_path):
+    wroot, cid, aid = _actor_pair(monkeypatch, tmp_path)
+    assert overlay.tagline(cid, aid) == "A hero of legend."
+    taglines.write(campaigns.campaign_root(cid), aid, "Campaign-specific.")
+    assert overlay.tagline(cid, aid) == "Campaign-specific."
+
+
+def test_dematerialize_keeps_sidecars_and_assets(monkeypatch, tmp_path):
+    wroot, cid, aid = _actor_pair(monkeypatch, tmp_path)
+    overlay.materialize_actor(cid, "characters", aid)
+    d = campaigns.campaign_root(cid) / "characters" / aid
+    (d / "dossier.md").write_text("standing paragraph\n", encoding="utf-8")
+    overlay.dematerialize_actor(cid, "characters", aid)
+    assert not (d / "character.md").exists() and not list(d.glob("*.json"))
+    assert (d / "dossier.md").exists()
+    assert overlay.char_root(cid, aid) == wroot

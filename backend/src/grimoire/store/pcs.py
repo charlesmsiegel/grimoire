@@ -83,9 +83,9 @@ def _tags_of(meta: dict) -> list[str]:
 
 
 def create_pc(root: Path, name: str, tags: list[str], version_name: str = "default",
-              persona: dict | None = None) -> tuple[str, str]:
+              persona: dict | None = None, taken=None) -> tuple[str, str]:
     _pcs_dir(root).mkdir(parents=True, exist_ok=True)
-    pid = uniquify(slugify(name), lambda c: _pc_dir(root, c).exists())
+    pid = uniquify(slugify(name), lambda c: _pc_dir(root, c).exists() or (taken and taken(c)))
     _pc_dir(root, pid).mkdir(parents=True)
     vid = slugify(version_name)
     _version_path(root, pid, vid).write_text(_dump_persona(persona or blank_persona(name)), encoding="utf-8")
