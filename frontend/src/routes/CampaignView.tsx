@@ -377,29 +377,53 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
             {editRows.length > 0 && (
               <div className="absorb-edits">
                 <h5>Proposed changes</h5>
-                {editRows.map((e, i) => (
-                  <div className={"absorb-edit" + (e.authored ? " authored" : "")} key={e.id}>
-                    <label>
-                      <input type="checkbox" aria-label={`Approve ${e.label}`} checked={e.approved}
-                             onChange={() => setEditRows((rows) => rows.map((r, j) =>
-                               j === i ? { ...r, approved: !r.approved } : r))} />
-                      {e.label}{e.authored ? " · card edit" : ""}
-                    </label>
-                    {e.kind === "relationship" || e.kind === "bond" ? (
-                      <div className="absorb-diff">
-                        {e.before && <span className="absorb-before">{e.before}</span>}
-                        <span className="absorb-after">{e.after}</span>
-                      </div>
-                    ) : (
-                      <>
-                        {e.before && <div className="absorb-before">{e.before}</div>}
-                        <textarea aria-label={`After ${e.label}`} rows={2} value={e.after}
-                                  onChange={(ev) => setEditRows((rows) => rows.map((r, j) =>
-                                    j === i ? { ...r, after: ev.target.value } : r))} />
-                      </>
-                    )}
-                  </div>
-                ))}
+                {editRows.map((e, i) => {
+                  const isNewRecord = e.kind === "new_character" || e.kind === "new_location" || e.kind === "new_lore";
+                  const setPayload = (patch: Record<string, unknown>) =>
+                    setEditRows((rows) => rows.map((r, j) =>
+                      j === i ? { ...r, payload: { ...r.payload, ...patch } } : r));
+                  return (
+                    <div className={"absorb-edit" + (e.authored ? " authored" : "")} key={e.id}>
+                      <label>
+                        <input type="checkbox" aria-label={`Approve ${e.label}`} checked={e.approved}
+                               onChange={() => setEditRows((rows) => rows.map((r, j) =>
+                                 j === i ? { ...r, approved: !r.approved } : r))} />
+                        {e.label}{e.authored ? " · card edit" : ""}
+                      </label>
+                      {isNewRecord && (
+                        <input aria-label={`Name ${e.label}`} value={(e.payload?.name as string) ?? ""}
+                               onChange={(ev) => setPayload({ name: ev.target.value })} />
+                      )}
+                      {e.kind === "relationship" || e.kind === "bond" ? (
+                        <div className="absorb-diff">
+                          {e.before && <span className="absorb-before">{e.before}</span>}
+                          <span className="absorb-after">{e.after}</span>
+                        </div>
+                      ) : (
+                        <>
+                          {e.before && <div className="absorb-before">{e.before}</div>}
+                          <textarea aria-label={`After ${e.label}`} rows={2} value={e.after}
+                                    onChange={(ev) => setEditRows((rows) => rows.map((r, j) =>
+                                      j === i ? { ...r, after: ev.target.value } : r))} />
+                        </>
+                      )}
+                      {(e.kind === "new_character" || e.kind === "new_location") && (
+                        <input aria-label={`Suggested image prompt ${e.label}`}
+                               placeholder="Suggested image prompt"
+                               value={(e.payload?.sd_prompt as string) ?? ""}
+                               onChange={(ev) => setPayload({ sd_prompt: ev.target.value })} />
+                      )}
+                      {e.kind === "new_location" && !absorb?.location && (
+                        <label>
+                          <input type="checkbox" aria-label={`This is where the scene happened ${e.label}`}
+                                 checked={!!e.payload?.current_setting}
+                                 onChange={(ev) => setPayload({ current_setting: ev.target.checked })} />
+                          This is where the scene happened
+                        </label>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
             <div className="form-actions">
