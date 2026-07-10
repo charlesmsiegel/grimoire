@@ -5,6 +5,15 @@ $PidFile = "$RunDir\pids"
 $Url = "http://127.0.0.1:5173"
 New-Item -ItemType Directory -Force -Path $RunDir | Out-Null
 
+# Kill a process tree, tolerating already-dead PIDs. taskkill's stderr must be
+# swallowed by cmd.exe, not a PowerShell 2>$null redirect: under
+# $ErrorActionPreference = "Stop", PowerShell turns a native command's redirected
+# stderr into a terminating NativeCommandError, killing the whole script the
+# first time a recorded PID is stale.
+function Stop-Tree([int]$Id) {
+    cmd /c "taskkill /PID $Id /T /F >nul 2>&1"
+}
+
 if (Test-Path $PidFile) {
     $existing = Get-Content $PidFile | Select-Object -First 1
     if ($existing -and (Get-Process -Id $existing -ErrorAction SilentlyContinue)) {
@@ -14,7 +23,7 @@ if (Test-Path $PidFile) {
     # Stale pid file: the recorded parents died, but on Windows their children
     # (uvicorn's reload worker, npm's node) survive them. Kill the full trees.
     foreach ($id in Get-Content $PidFile) {
-        if ($id) { taskkill /PID $id /T /F 2>$null | Out-Null }
+        if ($id) { Stop-Tree $id }
     }
 }
 # Orphaned workers can hold the ports even with no pid file on record (a killed
@@ -23,7 +32,7 @@ if (Test-Path $PidFile) {
 foreach ($port in 8173, 5173) {
     $owners = (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).OwningProcess | Select-Object -Unique
     foreach ($o in $owners) {
-        if ($o) { taskkill /PID $o /T /F 2>$null | Out-Null }
+        if ($o) { Stop-Tree $o }
     }
 }
 
@@ -146,12 +155,12 @@ try {
     Wait-Process -Id $back.Id, $front.Id -ErrorAction SilentlyContinue
 } finally {
     foreach ($id in @($back.Id, $front.Id)) {
-        if ($id) { taskkill /PID $id /T /F 2>$null | Out-Null }
+        if ($id) { Stop-Tree $id }
     }
     foreach ($port in 8173, 5173) {
         $owners = (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).OwningProcess | Select-Object -Unique
         foreach ($o in $owners) {
-            if ($o) { taskkill /PID $o /T /F 2>$null | Out-Null }
+            if ($o) { Stop-Tree $o }
         }
     }
     Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
