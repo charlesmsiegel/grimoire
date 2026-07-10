@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import appearances, campaigns, characters, context, greetings, pcs, scenes
+from . import appearances, campaigns, characters, context, greetings, overlay, pcs, scenes
 
 
 class PlayError(Exception):
@@ -49,7 +49,7 @@ def _mark_played(cid: str, gid: str) -> None:
 
 def mark_greeting(cid: str, gid: str, status: str) -> None:
     """Set a greeting's off-screen mark: completed / skipped / none (clear)."""
-    greetings.read_greeting(campaigns.campaign_root(cid), gid)  # raises GreetingNotFound
+    overlay.read_greeting(cid, gid)  # raises GreetingNotFound
     if status not in ("completed", "skipped", "none"):
         raise PlayError(f"unknown mark status: {status}")
     marks = read_marks(cid)
@@ -63,22 +63,21 @@ def mark_greeting(cid: str, gid: str, status: str) -> None:
 
 
 def player_tags(cid: str) -> set[str]:
-    croot = campaigns.campaign_root(cid)
     out: set[str] = set()
     for a in appearances.roster(cid):
         if a["role"] == "player" and a["kind"] == "pcs":
             try:
-                out |= set(pcs.read_pc(croot, a["id"])["meta"]["tags"])
+                out |= set(pcs.read_pc(overlay.pc_root(cid, a["id"]), a["id"])["meta"]["tags"])
             except pcs.PCNotFound:
                 continue
     return out
 
 
 def available_greetings(cid: str, after: str | None = None) -> list[dict]:
-    croot = campaigns.campaign_root(cid)
-    plotmap = greetings.read_plotmap(croot)
+    plotmap = overlay.read_plotmap(cid)
     marks = read_marks(cid)
-    out = greetings.availability(croot, plotmap, marks["played"] | marks["completed"],
+    out = greetings.availability(overlay.list_greetings(cid), plotmap,
+                                 marks["played"] | marks["completed"],
                                  player_tags(cid), skipped=marks["skipped"])
     mark_of = {gid: "played" for gid in marks["played"]}
     mark_of.update({gid: "completed" for gid in marks["completed"]})
@@ -96,8 +95,7 @@ def available_greetings(cid: str, after: str | None = None) -> list[dict]:
 
 
 def start_from_greeting(cid: str, sid: str, gid: str) -> str:
-    croot = campaigns.campaign_root(cid)
-    g = greetings.read_greeting(croot, gid)["meta"]   # raises GreetingNotFound
+    g = overlay.read_greeting(cid, gid)["meta"]   # raises GreetingNotFound
     scene = scenes.read_scene(cid, sid)               # raises SceneNotFound
     if scene["messages"]:
         raise PlayError("scene already has messages")
@@ -114,13 +112,13 @@ def start_from_greeting(cid: str, sid: str, gid: str) -> str:
         version = appearances.locked_version(cid, "characters", actor)
         if version is None:
             version = g["version"] if actor == g["character"] else \
-                characters.read_character(croot, actor)["meta"]["default_version"]
+                characters.read_character(overlay.char_root(cid, actor), actor)["meta"]["default_version"]
         appearances.appear(cid, sid, "characters", actor, version, "npc")
     if g["pcless"] and not scene_pcless:
         scenes.set_pcless(cid, sid)  # before substitution: {{user}} needs the pcless fallback
     _mark_played(cid, gid)
     scenes.stamp_greeting(cid, sid, gid)
-    text = context._substitute(greetings.read_greeting(croot, gid)["body"],
+    text = context._substitute(overlay.read_greeting(cid, gid)["body"],
                                context.scene_substitutions(cid, sid))
     scenes.append_message(cid, sid, "assistant", text)
     # retitle last: any earlier failure leaves the caller's sid valid for cleanup

@@ -133,21 +133,22 @@ def test_availability_gate_join_exclusion_tags(tmp_path):
     greetings.set_edges(root, a, excludes=[excl])
 
     pm = greetings.read_plotmap(root)
+    items = greetings.list_greetings(root)
     # nothing played, no tags
-    avail = {x["id"]: x["available"] for x in greetings.availability(root, pm, set(), set())}
+    avail = {x["id"]: x["available"] for x in greetings.availability(items, pm, set(), set())}
     assert avail[a] is True            # no predecessors
     assert avail[b] is False           # all-join, no preds played
     assert avail[c] is False           # any-join, no preds played
     assert avail[locked] is False      # missing tag
     assert avail[excl] is True         # excluder not played yet
 
-    avail = {x["id"]: x["available"] for x in greetings.availability(root, pm, {a}, {"vip"})}
+    avail = {x["id"]: x["available"] for x in greetings.availability(items, pm, {a}, {"vip"})}
     assert avail[c] is True            # any-join satisfied by a
     assert avail[b] is False           # all-join still needs a2
     assert avail[locked] is True       # tag now present
     assert avail[excl] is False        # a played -> excl excluded (symmetric)
 
-    avail = {x["id"]: x["available"] for x in greetings.availability(root, pm, {a, a2}, set())}
+    avail = {x["id"]: x["available"] for x in greetings.availability(items, pm, {a, a2}, set())}
     assert avail[b] is True            # all preds played
 
 
@@ -169,7 +170,7 @@ def test_availability_skipped_dropped_and_pruned(tmp_path):
     greetings.set_edges(tmp_path, b, leads_to=[c])
     pm = greetings.read_plotmap(tmp_path)
     # skip A: it vanishes from the output, and C's "all" join is satisfied by B alone
-    out = {g["id"]: g for g in greetings.availability(tmp_path, pm, {b}, set(), skipped={a})}
+    out = {g["id"]: g for g in greetings.availability(greetings.list_greetings(tmp_path), pm, {b}, set(), skipped={a})}
     assert a not in out
     assert out[c]["available"] is True
 
@@ -179,7 +180,7 @@ def test_availability_sole_predecessor_skipped_frees_successor(tmp_path):
     c = greetings.create_greeting(tmp_path, "C", "c", "v")
     greetings.set_edges(tmp_path, a, leads_to=[c])
     pm = greetings.read_plotmap(tmp_path)
-    out = {g["id"]: g for g in greetings.availability(tmp_path, pm, set(), set(), skipped={a})}
+    out = {g["id"]: g for g in greetings.availability(greetings.list_greetings(tmp_path), pm, set(), set(), skipped={a})}
     assert out[c]["available"] is True
 
 

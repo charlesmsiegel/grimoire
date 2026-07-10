@@ -1078,6 +1078,58 @@ def _entity_delete(root, kind: str, eid: str):
     return {"ok": True}
 
 
+# ---- campaign entity CRUD: same exception -> HTTP mapping, but reads/writes
+# resolve through the overlay (campaign-over-world) instead of a bare root.
+def _campaign_entity_list(cid: str, kind: str):
+    try:
+        items = store.overlay.list_entities(cid, kind)
+    except store.entities.UnknownKind:
+        raise HTTPException(status_code=404, detail="unknown kind")
+    for it in items:
+        root = store.overlay.image_root(cid, it["id"], "default", store.assets.AVATAR, base=kind)
+        p = store.assets.image_path(root, it["id"], "default", store.assets.AVATAR, base=kind)
+        it["has_image"] = p is not None
+        it["image_v"] = store.assets.image_version(p) if p is not None else None
+    return items
+
+
+def _campaign_entity_create(cid: str, kind: str, body: EntityCreate):
+    try:
+        return {"id": store.overlay.create_entity(cid, kind, body.name, body.body, body.keys, body.owners)}
+    except store.entities.UnknownKind:
+        raise HTTPException(status_code=404, detail="unknown kind")
+
+
+def _campaign_entity_read(cid: str, kind: str, eid: str):
+    try:
+        return store.overlay.read_entity(cid, kind, eid)
+    except store.entities.UnknownKind:
+        raise HTTPException(status_code=404, detail="unknown kind")
+    except store.entities.EntityNotFound:
+        raise HTTPException(status_code=404, detail="entity not found")
+
+
+def _campaign_entity_update(cid: str, kind: str, eid: str, body: EntityUpdate):
+    try:
+        store.overlay.update_entity(cid, kind, eid, name=body.name, body=body.body,
+                                    keys=body.keys, owners=body.owners)
+    except store.entities.UnknownKind:
+        raise HTTPException(status_code=404, detail="unknown kind")
+    except store.entities.EntityNotFound:
+        raise HTTPException(status_code=404, detail="entity not found")
+    return {"ok": True}
+
+
+def _campaign_entity_delete(cid: str, kind: str, eid: str):
+    try:
+        store.overlay.delete_entity(cid, kind, eid)
+    except store.entities.UnknownKind:
+        raise HTTPException(status_code=404, detail="unknown kind")
+    except store.entities.EntityNotFound:
+        raise HTTPException(status_code=404, detail="entity not found")
+    return {"ok": True}
+
+
 @router.get("/worlds/{wid}/calendar/months")
 def get_world_calendar_months(wid: str, year: int):
     if not store.worlds.world_meta_path(wid).exists():
@@ -1382,19 +1434,15 @@ def post_scene(cid: str, body: NewScene):
 
 
 def _resolve_cast(cid: str, tokens: list[str]) -> list[dict]:
-    croot = store.campaigns.campaign_root(cid)
-    wroot = store.worlds.world_root(store.campaigns.read_campaign(cid)["meta"].get("world", ""))
     out = []
     for tok in tokens:
         kind, _, aid = tok.partition(":")
         try:
             if kind == "pcs":
-                name = store.pcs.read_pc(croot, aid)["meta"].get("name", aid)
+                name = store.pcs.read_pc(store.overlay.pc_root(cid, aid), aid)["meta"].get("name", aid)
             else:
-                try:
-                    name = store.characters.read_character(croot, aid)["meta"].get("name", aid)
-                except store.characters.CharacterNotFound:
-                    name = store.characters.read_character(wroot, aid)["meta"].get("name", aid)
+                name = store.characters.read_character(
+                    store.overlay.char_root(cid, aid), aid)["meta"].get("name", aid)
         except (store.characters.CharacterNotFound, store.pcs.PCNotFound):
             name = aid
         out.append({"kind": kind, "id": aid, "name": name})
@@ -1418,8 +1466,7 @@ async def post_scene_suggestions(cid: str, after: str | None = None, offscreen: 
         text = await client.complete(messages, cfg)
     except LLMError as exc:
         raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
-    croot = store.campaigns.campaign_root(cid)
-    loc_names = {e["id"]: e.get("name", e["id"]) for e in store.entities.list_entities(croot, "locations")}
+    loc_names = {e["id"]: e.get("name", e["id"]) for e in store.overlay.list_entities(cid, "locations")}
     out = []
     for s in store.suggest.parse_output(text, cid, offscreen=offscreen):
         loc = {"id": s["location"], "name": loc_names.get(s["location"], s["location"])} if s["location"] else None
@@ -1628,20 +1675,22 @@ def get_appearances(cid: str):
 
 @router.get("/campaigns/{cid}/pcs")
 def get_campaign_pcs(cid: str):
-    return store.pcs.list_pcs(_campaign_root_or_404(cid))
+    _campaign_root_or_404(cid)
+    return store.overlay.list_pcs(cid)
 
 
 @router.post("/campaigns/{cid}/pcs")
 def post_campaign_pc(cid: str, body: PCCreate):
     # Campaign-local PC overlay: tags are free strings (no world-vocabulary check).
-    root = _campaign_root_or_404(cid)
-    pid, vid = store.pcs.create_pc(root, body.name, body.tags, body.version_name, body.persona)
+    _campaign_root_or_404(cid)
+    pid, vid = store.overlay.create_pc(cid, body.name, body.tags, body.version_name, body.persona)
     return {"pc": pid, "version": vid}
 
 
 @router.get("/campaigns/{cid}/characters/{char}/versions/{vid}/images/{name}")
 def get_campaign_image(cid: str, char: str, vid: str, name: str, request: Request):
-    return _serve_image(_campaign_root_or_404(cid), char, vid, name, request=request)
+    _campaign_root_or_404(cid)
+    return _serve_image(store.overlay.image_root(cid, char, vid, name), char, vid, name, request=request)
 
 
 @router.put("/campaigns/{cid}/characters/{char}/versions/{vid}/images/{name}")
@@ -1659,14 +1708,18 @@ async def put_campaign_image(cid: str, char: str, vid: str, name: str, file: Upl
 
 @router.delete("/campaigns/{cid}/characters/{char}/versions/{vid}/images/{name}")
 def delete_campaign_image(cid: str, char: str, vid: str, name: str):
-    store.assets.delete_image(_campaign_root_or_404(cid), char, vid, name)
+    _campaign_root_or_404(cid)
+    # tombstone so a still-materialized world image doesn't show back through
+    # the overlaid read the moment the campaign's own copy is gone (get_campaign_image).
+    store.overlay.delete_image(cid, char, vid, name)
     return {"ok": True}
 
 
 @router.post("/campaigns/{cid}/characters/{char}/versions/{vid}/images/{name}/promote")
 def promote_campaign_image(cid: str, char: str, vid: str, name: str):
+    _campaign_root_or_404(cid)
     try:
-        store.assets.promote_image(_campaign_root_or_404(cid), char, vid, name)
+        store.overlay.promote_image(cid, char, vid, name)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="image not found")
     return {"ok": True}
@@ -1700,21 +1753,25 @@ def _campaign_wroot(cid: str):
 
 @router.get("/campaigns/{cid}/characters")
 def get_campaign_characters(cid: str):
-    return store.characters.list_characters(_campaign_root_or_404(cid))
+    _campaign_root_or_404(cid)
+    return store.overlay.list_characters(cid)
 
 
 @router.get("/campaigns/{cid}/characters/{char}")
 def get_campaign_character(cid: str, char: str):
+    _campaign_root_or_404(cid)
     try:
-        return store.characters.read_character(_campaign_root_or_404(cid), char)
+        return store.overlay.read_character(cid, char)
     except store.characters.CharacterNotFound:
         raise HTTPException(status_code=404, detail="character not found")
 
 
 @router.put("/campaigns/{cid}/characters/{char}")
 def put_campaign_character(cid: str, char: str, body: DefaultVersion):
+    _campaign_root_or_404(cid)
     try:
-        store.characters.set_default_version(_campaign_root_or_404(cid), char, body.default_version)
+        root = store.overlay.ensure_actor_writable(cid, "characters", char)
+        store.characters.set_default_version(root, char, body.default_version)
     except store.characters.CharacterNotFound:
         raise HTTPException(status_code=404, detail="character not found")
     except store.characters.VersionNotFound:
@@ -1724,10 +1781,11 @@ def put_campaign_character(cid: str, char: str, body: DefaultVersion):
 
 @router.post("/campaigns/{cid}/characters/{char}/versions")
 def post_campaign_character_version(cid: str, char: str, body: VersionCreate):
-    root = _campaign_root_or_404(cid)
+    _campaign_root_or_404(cid)
     if store.appearances.locked_version(cid, "characters", char) is not None:
         raise HTTPException(status_code=409, detail="character is locked to one version")
     try:
+        root = store.overlay.ensure_actor_writable(cid, "characters", char)
         vid = store.characters.create_version(root, char, body.name, body.card)
     except store.characters.CharacterNotFound:
         raise HTTPException(status_code=404, detail="character not found")
@@ -1736,8 +1794,10 @@ def post_campaign_character_version(cid: str, char: str, body: VersionCreate):
 
 @router.put("/campaigns/{cid}/characters/{char}/versions/{vid}")
 def put_campaign_character_version(cid: str, char: str, vid: str, body: VersionUpdate):
+    _campaign_root_or_404(cid)
     try:
-        store.characters.update_version(_campaign_root_or_404(cid), char, vid, body.card)
+        root = store.overlay.ensure_actor_writable(cid, "characters", char)
+        store.characters.update_version(root, char, vid, body.card)
     except store.characters.CharacterNotFound:
         raise HTTPException(status_code=404, detail="character not found")
     except store.characters.VersionNotFound:
@@ -1747,8 +1807,10 @@ def put_campaign_character_version(cid: str, char: str, vid: str, body: VersionU
 
 @router.delete("/campaigns/{cid}/characters/{char}/versions/{vid}")
 def delete_campaign_character_version(cid: str, char: str, vid: str):
+    _campaign_root_or_404(cid)
     try:
-        store.characters.delete_version(_campaign_root_or_404(cid), char, vid)
+        root = store.overlay.ensure_actor_writable(cid, "characters", char)
+        store.characters.delete_version(root, char, vid)
     except store.characters.CharacterNotFound:
         raise HTTPException(status_code=404, detail="character not found")
     except store.characters.VersionNotFound:
@@ -1760,8 +1822,9 @@ def delete_campaign_character_version(cid: str, char: str, vid: str):
 
 @router.get("/campaigns/{cid}/pcs/{pid}")
 def get_campaign_pc(cid: str, pid: str):
+    _campaign_root_or_404(cid)
     try:
-        return store.pcs.read_pc(_campaign_root_or_404(cid), pid)
+        return store.pcs.read_pc(store.overlay.pc_root(cid, pid), pid)
     except store.pcs.PCNotFound:
         raise HTTPException(status_code=404, detail="pc not found")
 
@@ -1769,8 +1832,9 @@ def get_campaign_pc(cid: str, pid: str):
 @router.put("/campaigns/{cid}/pcs/{pid}")
 def put_campaign_pc(cid: str, pid: str, body: PCUpdate):
     # Campaign tags are free strings: no world-vocabulary check on this side.
-    root = _campaign_root_or_404(cid)
+    _campaign_root_or_404(cid)
     try:
+        root = store.overlay.ensure_actor_writable(cid, "pcs", pid)
         if body.tags is not None:
             store.pcs.set_tags(root, pid, body.tags)
         if body.default_version is not None:
@@ -1784,10 +1848,11 @@ def put_campaign_pc(cid: str, pid: str, body: PCUpdate):
 
 @router.post("/campaigns/{cid}/pcs/{pid}/versions")
 def post_campaign_pc_version(cid: str, pid: str, body: PersonaVersionCreate):
-    root = _campaign_root_or_404(cid)
+    _campaign_root_or_404(cid)
     if store.appearances.locked_version(cid, "pcs", pid) is not None:
         raise HTTPException(status_code=409, detail="pc is locked to one version")
     try:
+        root = store.overlay.ensure_actor_writable(cid, "pcs", pid)
         vid = store.pcs.create_version(root, pid, body.name, body.persona)
     except store.pcs.PCNotFound:
         raise HTTPException(status_code=404, detail="pc not found")
@@ -1796,8 +1861,10 @@ def post_campaign_pc_version(cid: str, pid: str, body: PersonaVersionCreate):
 
 @router.put("/campaigns/{cid}/pcs/{pid}/versions/{vid}")
 def put_campaign_pc_version(cid: str, pid: str, vid: str, body: PersonaVersionUpdate):
+    _campaign_root_or_404(cid)
     try:
-        store.pcs.update_version(_campaign_root_or_404(cid), pid, vid, body.persona)
+        root = store.overlay.ensure_actor_writable(cid, "pcs", pid)
+        store.pcs.update_version(root, pid, vid, body.persona)
     except store.pcs.PCNotFound:
         raise HTTPException(status_code=404, detail="pc not found")
     except store.pcs.PCVersionNotFound:
@@ -1807,8 +1874,10 @@ def put_campaign_pc_version(cid: str, pid: str, vid: str, body: PersonaVersionUp
 
 @router.delete("/campaigns/{cid}/pcs/{pid}/versions/{vid}")
 def delete_campaign_pc_version(cid: str, pid: str, vid: str):
+    _campaign_root_or_404(cid)
     try:
-        store.pcs.delete_version(_campaign_root_or_404(cid), pid, vid)
+        root = store.overlay.ensure_actor_writable(cid, "pcs", pid)
+        store.pcs.delete_version(root, pid, vid)
     except store.pcs.PCNotFound:
         raise HTTPException(status_code=404, detail="pc not found")
     except store.pcs.PCVersionNotFound:
@@ -1820,13 +1889,13 @@ def delete_campaign_pc_version(cid: str, pid: str, vid: str):
 
 @router.post("/campaigns/{cid}/{kind}/{aid}/pick-version")
 def post_pick_version(cid: str, kind: str, aid: str, body: PickBody):
-    root = _campaign_root_or_404(cid)
+    _campaign_root_or_404(cid)
     if kind not in store.appearances.ACTOR_KINDS:
         raise HTTPException(status_code=404, detail="unknown actor kind")
     if store.appearances.locked_version(cid, kind, aid) is not None:
         # checked before existence: the sibling versions were purged by the pick
         raise HTTPException(status_code=409, detail=f"{kind}/{aid} is already locked")
-    if store.appearances.actor_hash(root, kind, aid, body.version) is None:
+    if store.appearances.actor_hash(store.overlay.actor_root(cid, kind, aid), kind, aid, body.version) is None:
         raise HTTPException(status_code=404, detail="actor or version not found in campaign")
     try:
         store.appearances.pick_version(cid, kind, aid, body.version)
@@ -1855,7 +1924,7 @@ def get_scene_cast(cid: str, sid: str):
     return store.appearances.scene_cast(cid, sid)
 
 
-def _seat_cast_member(cid: str, sid: str, wroot, croot, body: Appear) -> None:
+def _seat_cast_member(cid: str, sid: str, body: Appear) -> None:
     """Validate + resolve one cast addition and record it. Raises HTTPException
     (404 unknown, 400 bad role) or store.appearances.AppearError (already cast)."""
     if body.kind not in store.appearances.ACTOR_KINDS:
@@ -1869,15 +1938,11 @@ def _seat_cast_member(cid: str, sid: str, wroot, croot, body: Appear) -> None:
     try:
         if version is None:
             if body.kind == "characters":
-                try:
-                    version = store.characters.read_character(croot, body.id)["meta"]["default_version"]
-                except store.characters.CharacterNotFound:
-                    version = store.characters.read_character(wroot, body.id)["meta"]["default_version"]
+                version = store.characters.read_character(
+                    store.overlay.char_root(cid, body.id), body.id)["meta"]["default_version"]
             else:
-                try:
-                    version = store.pcs.read_pc(croot, body.id)["meta"]["default_version"]
-                except store.pcs.PCNotFound:
-                    version = store.pcs.read_pc(wroot, body.id)["meta"]["default_version"]
+                version = store.pcs.read_pc(
+                    store.overlay.pc_root(cid, body.id), body.id)["meta"]["default_version"]
     except (store.characters.CharacterNotFound, store.pcs.PCNotFound):
         raise HTTPException(status_code=404, detail="actor not found")
     store.appearances.appear(cid, sid, body.kind, body.id, version, role)
@@ -1886,10 +1951,8 @@ def _seat_cast_member(cid: str, sid: str, wroot, croot, body: Appear) -> None:
 @router.post("/campaigns/{cid}/scenes/{sid}/cast")
 def post_scene_cast(cid: str, sid: str, body: Appear):
     _require_scene(cid, sid)
-    wroot = store.worlds.world_root(store.campaigns.read_campaign(cid)["meta"].get("world", ""))
-    croot = store.campaigns.campaign_root(cid)
     try:
-        _seat_cast_member(cid, sid, wroot, croot, body)
+        _seat_cast_member(cid, sid, body)
     except store.appearances.AppearError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     return {"ok": True}
@@ -1905,12 +1968,10 @@ def post_scene_cast_batch(cid: str, sid: str, body: AppearBatch):
     skipped (the per-member 409), matching what the chooser's serial loop
     tolerated; unknown actors still 404 the request."""
     _require_scene(cid, sid)
-    wroot = store.worlds.world_root(store.campaigns.read_campaign(cid)["meta"].get("world", ""))
-    croot = store.campaigns.campaign_root(cid)
     added, skipped = 0, []
     for ref in body.refs:
         try:
-            _seat_cast_member(cid, sid, wroot, croot, ref)
+            _seat_cast_member(cid, sid, ref)
             added += 1
         except store.appearances.AppearError:
             skipped.append(f"{ref.kind}/{ref.id}")
@@ -1933,12 +1994,11 @@ def post_dismiss(cid: str, sid: str, body: Dismiss):
 @router.get("/campaigns/{cid}/scenes/{sid}/location")
 def get_scene_location(cid: str, sid: str):
     _require_scene(cid, sid)
-    croot = store.campaigns.campaign_root(cid)
     history = store.scenes.get_location_history(cid, sid)
 
     def ref(eid: str) -> dict:
         try:
-            name = store.entities.read_entity(croot, "locations", eid)["meta"].get("name", eid)
+            name = store.overlay.read_entity(cid, "locations", eid)["meta"].get("name", eid)
         except store.entities.EntityNotFound:
             name = eid
         return {"id": eid, "name": name}
@@ -2079,32 +2139,32 @@ def get_available_greetings(cid: str, after: str | None = None):
 
 @router.get("/campaigns/{cid}/greetings")
 def get_campaign_greetings(cid: str):
-    root = _campaign_root_or_404(cid)
+    _campaign_root_or_404(cid)
     marks = store.playing.read_marks(cid)
     mark_of = {g: "played" for g in marks["played"]}
     mark_of.update({g: "completed" for g in marks["completed"]})
     mark_of.update({g: "skipped" for g in marks["skipped"]})
-    return [{**g, "mark": mark_of.get(g["id"])} for g in store.greetings.list_greetings(root)]
+    return [{**g, "mark": mark_of.get(g["id"])} for g in store.overlay.list_greetings(cid)]
 
 
 @router.post("/campaigns/{cid}/greetings")
 def post_campaign_greeting(cid: str, body: GreetingCreate):
-    root = _campaign_root_or_404(cid)
-    gid = store.greetings.create_greeting(root, body.name, body.character, body.version,
-                                          body.body, body.requires_tags,
-                                          body.predecessor_join, present=body.present,
-                                          pcless=body.pcless)
+    _campaign_root_or_404(cid)
+    gid = store.overlay.create_greeting(cid, body.name, body.character, body.version,
+                                       body.body, body.requires_tags,
+                                       body.predecessor_join, present=body.present,
+                                       pcless=body.pcless)
     return {"id": gid}
 
 
 @router.get("/campaigns/{cid}/greetings/{gid}")
 def get_campaign_greeting(cid: str, gid: str):
-    root = _campaign_root_or_404(cid)
+    _campaign_root_or_404(cid)
     try:
-        g = store.greetings.read_greeting(root, gid)
+        g = store.overlay.read_greeting(cid, gid)
     except store.greetings.GreetingNotFound:
         raise HTTPException(status_code=404, detail="greeting not found")
-    plotmap = store.greetings.read_plotmap(root)
+    plotmap = store.overlay.read_plotmap(cid)
     g["edges"] = store.greetings.edges_of(plotmap, gid)
     g["predecessors"] = store.greetings.predecessors_of(plotmap, gid)
     return g
@@ -2112,12 +2172,12 @@ def get_campaign_greeting(cid: str, gid: str):
 
 @router.put("/campaigns/{cid}/greetings/{gid}")
 def put_campaign_greeting(cid: str, gid: str, body: GreetingUpdate):
-    root = _campaign_root_or_404(cid)
+    _campaign_root_or_404(cid)
     try:
-        store.greetings.update_greeting(root, gid, name=body.name, body=body.body,
-                                        requires_tags=body.requires_tags,
-                                        predecessor_join=body.predecessor_join,
-                                        present=body.present, pcless=body.pcless)
+        store.overlay.update_greeting(cid, gid, name=body.name, body=body.body,
+                                     requires_tags=body.requires_tags,
+                                     predecessor_join=body.predecessor_join,
+                                     present=body.present, pcless=body.pcless)
     except store.greetings.GreetingNotFound:
         raise HTTPException(status_code=404, detail="greeting not found")
     return {"ok": True}
@@ -2125,20 +2185,20 @@ def put_campaign_greeting(cid: str, gid: str, body: GreetingUpdate):
 
 @router.put("/campaigns/{cid}/greetings/{gid}/edges")
 def put_campaign_greeting_edges(cid: str, gid: str, body: Edges):
-    root = _campaign_root_or_404(cid)
+    _campaign_root_or_404(cid)
     try:
-        store.greetings.read_greeting(root, gid)
+        store.overlay.read_greeting(cid, gid)
     except store.greetings.GreetingNotFound:
         raise HTTPException(status_code=404, detail="greeting not found")
-    store.greetings.set_edges(root, gid, body.leads_to, body.excludes)
+    store.overlay.set_edges(cid, gid, body.leads_to, body.excludes)
     return {"ok": True}
 
 
 @router.delete("/campaigns/{cid}/greetings/{gid}")
 def delete_campaign_greeting(cid: str, gid: str):
-    root = _campaign_root_or_404(cid)
+    _campaign_root_or_404(cid)
     try:
-        store.greetings.delete_greeting(root, gid)
+        store.overlay.delete_greeting(cid, gid)
     except store.greetings.GreetingNotFound:
         raise HTTPException(status_code=404, detail="greeting not found")
     return {"ok": True}
@@ -2193,38 +2253,47 @@ def post_first_post(cid: str, sid: str, body: FirstPost):
 # ---- campaign entity CRUD (generic; declared last so literal sub-paths win) ----
 @router.get("/campaigns/{cid}/{kind}")
 def get_campaign_entities(cid: str, kind: str):
-    return _entity_list(_campaign_root_or_404(cid), kind)
+    _campaign_root_or_404(cid)
+    return _campaign_entity_list(cid, kind)
 
 
 @router.post("/campaigns/{cid}/{kind}")
 def post_campaign_entity(cid: str, kind: str, body: EntityCreate):
-    return _entity_create(_campaign_root_or_404(cid), kind, body)
+    _campaign_root_or_404(cid)
+    return _campaign_entity_create(cid, kind, body)
 
 
 @router.get("/campaigns/{cid}/{kind}/{eid}")
 def get_campaign_entity(cid: str, kind: str, eid: str):
-    return _entity_read(_campaign_root_or_404(cid), kind, eid)
+    _campaign_root_or_404(cid)
+    return _campaign_entity_read(cid, kind, eid)
 
 
 @router.put("/campaigns/{cid}/{kind}/{eid}")
 def put_campaign_entity(cid: str, kind: str, eid: str, body: EntityUpdate):
-    return _entity_update(_campaign_root_or_404(cid), kind, eid, body)
+    _campaign_root_or_404(cid)
+    return _campaign_entity_update(cid, kind, eid, body)
 
 
 @router.delete("/campaigns/{cid}/{kind}/{eid}")
 def delete_campaign_entity(cid: str, kind: str, eid: str):
-    return _entity_delete(_campaign_root_or_404(cid), kind, eid)
+    _campaign_root_or_404(cid)
+    return _campaign_entity_delete(cid, kind, eid)
 
 
 @router.get("/campaigns/{cid}/{kind}/{eid}/images")
 def list_campaign_entity_images(cid: str, kind: str, eid: str):
-    return _entity_images_list(_campaign_root_or_404(cid), kind, eid)
+    _campaign_root_or_404(cid)
+    _entity_kind_or_404(kind)
+    return store.overlay.list_images(cid, eid, "default", base=kind)
 
 
 @router.get("/campaigns/{cid}/{kind}/{eid}/images/{name}")
 def get_campaign_entity_image(cid: str, kind: str, eid: str, name: str, request: Request):
+    _campaign_root_or_404(cid)
     _image_kind_or_404(kind)
-    return _serve_image(_campaign_root_or_404(cid), eid, "default", name, base=kind, request=request)
+    return _serve_image(store.overlay.image_root(cid, eid, "default", name, base=kind),
+                        eid, "default", name, base=kind, request=request)
 
 
 @router.put("/campaigns/{cid}/{kind}/{eid}/images/{name}")
@@ -2234,11 +2303,18 @@ async def put_campaign_entity_image(cid: str, kind: str, eid: str, name: str, fi
 
 @router.delete("/campaigns/{cid}/{kind}/{eid}/images/{name}")
 def delete_campaign_entity_image(cid: str, kind: str, eid: str, name: str):
-    _entity_kind_or_404(kind)
-    store.assets.delete_image(_campaign_root_or_404(cid), eid, "default", name, base=kind)
+    _campaign_root_or_404(cid)
+    _image_kind_or_404(kind)
+    store.overlay.delete_image(cid, eid, "default", name, base=kind)
     return {"ok": True}
 
 
 @router.post("/campaigns/{cid}/{kind}/{eid}/images/{name}/promote")
 def promote_campaign_entity_image(cid: str, kind: str, eid: str, name: str):
-    return _entity_image_promote(_campaign_root_or_404(cid), kind, eid, name)
+    _campaign_root_or_404(cid)
+    _entity_kind_or_404(kind)
+    try:
+        store.overlay.promote_image(cid, eid, "default", name, base=kind)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="image not found")
+    return {"ok": True}

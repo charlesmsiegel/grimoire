@@ -80,14 +80,14 @@ def append_timeline(cid: str, events: list[dict]) -> None:
 def scene_facts(cid: str, sid: str) -> dict:
     """Deterministic facts the LLM should not have to infer: present cast refs, the
     current location's display name, and the current native datetime."""
-    from . import appearances, entities, scenes
+    from . import appearances, entities, overlay, scenes
     cast = [f"{a['kind']}/{a['id']}" for a in appearances.scene_cast(cid, sid)]
     loc_hist = scenes.get_location_history(cid, sid)
     location = ""
     if loc_hist:
         try:
-            location = entities.read_entity(
-                campaigns.campaign_root(cid), "locations", loc_hist[-1]
+            location = overlay.read_entity(
+                cid, "locations", loc_hist[-1]
             )["meta"].get("name", loc_hist[-1])
         except entities.EntityNotFound:
             location = loc_hist[-1]
