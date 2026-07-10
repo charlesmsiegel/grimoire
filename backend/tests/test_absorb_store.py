@@ -273,6 +273,80 @@ def test_apply_edits_authored_rejects_non_card_field(monkeypatch, tmp_path):
     assert characters.read_card(croot, ch, "main")["data"]["name"] == "Seraphine"
 
 
+def test_apply_edits_new_character_creates_and_casts_npc(monkeypatch, tmp_path):
+    from grimoire.store import appearances, characters, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    sid = scenes.create_scene(cid, "S")
+    applied = absorb.apply_edits(cid, [
+        {"id": "new_character:old-bram", "kind": "new_character",
+         "target": {"kind": "characters", "id": ""}, "field": "description",
+         "after": "[character(\"Old Bram\") { Occupation(\"innkeep\") }]",
+         "payload": {"name": "Old Bram", "sd_prompt": "an old innkeeper"}}], sid)
+    assert applied == ["new_character:old-bram"]
+    new_char = next(c for c in characters.list_characters(croot) if c["name"] == "Old Bram")
+    card = characters.read_card(croot, new_char["id"], "default")
+    assert card["data"]["description"] == "[character(\"Old Bram\") { Occupation(\"innkeep\") }]"
+    assert card["data"]["extensions"]["sd_prompt"] == "an old innkeeper"
+    assert appearances.is_appeared(cid, "characters", new_char["id"])
+
+
+def test_apply_edits_new_character_without_sid_skips_casting(monkeypatch, tmp_path):
+    from grimoire.store import characters
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    applied = absorb.apply_edits(cid, [
+        {"id": "new_character:old-bram", "kind": "new_character",
+         "target": {"kind": "characters", "id": ""}, "field": "description", "after": "x",
+         "payload": {"name": "Old Bram", "sd_prompt": ""}}])  # no sid
+    assert applied == ["new_character:old-bram"]
+    assert any(c["name"] == "Old Bram" for c in characters.list_characters(croot))
+
+
+def test_apply_edits_new_location_auto_links_empty_scene(monkeypatch, tmp_path):
+    from grimoire.store import entities, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    sid = scenes.create_scene(cid, "S")
+    applied = absorb.apply_edits(cid, [
+        {"id": "new_location:the-crypt", "kind": "new_location",
+         "target": {"kind": "locations", "id": ""}, "field": "body", "after": "A cold crypt.",
+         "payload": {"name": "The Crypt", "keys": "crypt", "sd_prompt": "a dark crypt",
+                     "current_setting": True}}], sid)
+    assert applied == ["new_location:the-crypt"]
+    got = entities.read_entity(croot, "locations", "the-crypt")
+    assert got["meta"]["sd_prompt"] == "a dark crypt" and got["meta"]["keys"] == "crypt"
+    assert scenes.get_location_history(cid, sid) == ["the-crypt"]
+
+
+def test_apply_edits_new_location_leaves_existing_location_alone(monkeypatch, tmp_path):
+    from grimoire.store import entities, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    sid = scenes.create_scene(cid, "S")
+    entities.create_entity(croot, "locations", "Old Dock")
+    scenes.set_location(cid, sid, "old-dock")
+    absorb.apply_edits(cid, [
+        {"id": "new_location:the-crypt", "kind": "new_location",
+         "target": {"kind": "locations", "id": ""}, "field": "body", "after": "A cold crypt.",
+         "payload": {"name": "The Crypt", "keys": "", "sd_prompt": "", "current_setting": True}}], sid)
+    assert scenes.get_location_history(cid, sid) == ["old-dock"]  # untouched
+
+
+def test_apply_edits_new_lore_creates_entity(monkeypatch, tmp_path):
+    from grimoire.store import entities, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    sid = scenes.create_scene(cid, "S")
+    applied = absorb.apply_edits(cid, [
+        {"id": "new_lore:salt-pact", "kind": "new_lore",
+         "target": {"kind": "lore", "id": ""}, "field": "body", "after": "An old pact.",
+         "payload": {"name": "Salt Pact", "keys": "pact"}}], sid)
+    assert applied == ["new_lore:salt-pact"]
+    got = entities.read_entity(croot, "lore", "salt-pact")
+    assert got["body"].strip() == "An old pact." and got["meta"]["keys"] == "pact"
+
+
 def test_parse_output_relationship_and_bond_lists():
     text = ('{"one_line": "", "summary": "", "keywords": [], "timeline_events": [],'
             ' "character_state_edits": [], "lore_edits": [], "authored_edits": [],'

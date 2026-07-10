@@ -344,7 +344,7 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
     return out
 
 
-_BROWSABLE_KINDS = ("character_state", "lore", "authored")
+_BROWSABLE_KINDS = ("character_state", "lore", "authored", "new_character", "new_location", "new_lore")
 
 
 def apply_edits(cid: str, edits: list[dict], sid: str | None = None) -> list[str]:
@@ -379,6 +379,26 @@ def apply_edits(cid: str, edits: list[dict], sid: str | None = None) -> list[str
             elif kind == "plot":
                 p = e["payload"]
                 plot.set_movement(cid, p["id"], p["title"], p["status"], after, p["scene"])
+            elif kind == "new_character":
+                p = e["payload"]
+                card = characters.blank_card(p["name"])
+                card["data"]["description"] = after
+                card["data"]["extensions"]["sd_prompt"] = p.get("sd_prompt", "")
+                new_cid, new_vid = characters.create_character(croot, p["name"], "default", card)
+                if sid:
+                    appearances.appear(cid, sid, "characters", new_cid, new_vid, "npc")
+                target = {"kind": "characters", "id": new_cid}
+            elif kind == "new_location":
+                p = e["payload"]
+                new_eid = entities.create_entity(croot, "locations", p["name"], after,
+                                                 p.get("keys", ""), sd_prompt=p.get("sd_prompt", ""))
+                if sid and p.get("current_setting") and not scenes.get_location_history(cid, sid):
+                    scenes.set_location(cid, sid, new_eid)
+                target = {"kind": "locations", "id": new_eid}
+            elif kind == "new_lore":
+                p = e["payload"]
+                new_eid = entities.create_entity(croot, "lore", p["name"], after, p.get("keys", ""))
+                target = {"kind": "lore", "id": new_eid}
             else:
                 continue
             applied.append(e["id"])
