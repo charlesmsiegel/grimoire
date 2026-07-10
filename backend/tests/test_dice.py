@@ -124,3 +124,37 @@ def test_explosion_budget_caps_hostile_notation():
     pool_spec = dice.parse("1d2!t2")
     pool = dice._roll_dice(_MaxRng(), pool_spec)
     assert len(pool) == dice.MAX_EXPLOSIONS + 1
+
+
+def test_format_sum_roll_strikes_dropped_dice():
+    r = dice.roll("4d6kh3+2 vs 15", seed=42)
+    line = dice.format_roll(r)
+    assert line.startswith("\U0001F3B2 `4d6kh3+2 vs 15`")
+    assert f"**{r['total']}**" in line
+    assert "vs 15" in line and f"**{r['outcome']}**" in line
+    dropped = [d for d in r["dice"] if not d["kept"]]
+    assert dropped and f"~~{dropped[0]['value']}~~" in line
+
+
+def test_format_pool_roll_pluralizes():
+    line = dice.format_roll({"notation": "2d10t6", "seed": 1, "modifier": 0,
+                             "pool_target": 6, "vs": None, "total": None,
+                             "successes": 1, "outcome": None,
+                             "dice": [{"value": 7, "rolls": [7], "kept": True},
+                                      {"value": 2, "rolls": [2], "kept": True}]})
+    assert "**1 success**" in line
+    line2 = dice.format_roll({"notation": "2d10t6", "seed": 1, "modifier": 0,
+                              "pool_target": 6, "vs": None, "total": None,
+                              "successes": 2, "outcome": None,
+                              "dice": [{"value": 7, "rolls": [7], "kept": True},
+                                       {"value": 9, "rolls": [9], "kept": True}]})
+    assert "**2 successes**" in line2
+
+
+def test_format_label_and_exploded_marker():
+    r = {"notation": "1d6!", "seed": 1, "modifier": 0, "pool_target": None,
+         "vs": None, "total": 10, "successes": None, "outcome": None,
+         "dice": [{"value": 10, "rolls": [6, 4], "kept": True}]}
+    line = dice.format_roll(r, label="Aveline — Stealth")
+    assert line.startswith("\U0001F3B2 **Aveline — Stealth** · `1d6!`")
+    assert "[10!]" in line
