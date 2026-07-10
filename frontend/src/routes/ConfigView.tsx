@@ -4,6 +4,25 @@ import { themeList } from "../theme/themes";
 import { useTheme } from "../theme/ThemeProvider";
 import ModelCombobox from "./ModelCombobox";
 
+// Aliases resolve to the newest model of each tier at request time (the Agent
+// SDK passes them through to Claude Code); pinned ids freeze a version and
+// need a refresh here when new models ship.
+const CLAUDE_ALIASES = [
+  { id: "fable", label: "Fable (latest)" },
+  { id: "opus", label: "Opus (latest)" },
+  { id: "sonnet", label: "Sonnet (latest)" },
+  { id: "haiku", label: "Haiku (latest)" },
+];
+const CLAUDE_PINNED = [
+  "claude-fable-5",
+  "claude-opus-4-8",
+  "claude-opus-4-7",
+  "claude-opus-4-6",
+  "claude-sonnet-5",
+  "claude-sonnet-4-6",
+  "claude-haiku-4-5",
+];
+
 export default function ConfigView() {
   const { setTheme } = useTheme();
   const [config, setConfig] = useState<Config | null>(null);
@@ -135,12 +154,29 @@ export default function ConfigView() {
       ) : (
         <>
           <div className="section-label">Claude model</div>
-          <input
+          <select
             aria-label="Claude model"
-            placeholder="opus"
             value={claudeModel}
             onChange={(e) => setClaudeModel(e.target.value)}
-          />
+          >
+            <optgroup label="Latest">
+              {CLAUDE_ALIASES.map((m) => (
+                <option key={m.id} value={m.id}>{m.label}</option>
+              ))}
+            </optgroup>
+            <optgroup label="Pinned versions">
+              {CLAUDE_PINNED.map((id) => (
+                <option key={id} value={id}>{id}</option>
+              ))}
+            </optgroup>
+            {claudeModel &&
+              !CLAUDE_ALIASES.some((m) => m.id === claudeModel) &&
+              !CLAUDE_PINNED.includes(claudeModel) && (
+                <optgroup label="Custom">
+                  <option value={claudeModel}>{claudeModel}</option>
+                </optgroup>
+              )}
+          </select>
           <p className="field-hint">
             Uses the local Claude Code login (run <code>claude setup-token</code> on a
             headless machine) and bills your Claude subscription. Requires the backend
