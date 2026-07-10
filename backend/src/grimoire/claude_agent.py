@@ -53,6 +53,7 @@ class ClaudeAgentClient:
             raise ClaudeAgentError("missing_dependency", str(exc)) from exc
         except ProcessError as exc:
             raise ClaudeAgentError("bad_response", str(exc)) from exc
+        # so a future SDK-raised ClaudeAgentError isn't re-tagged as "network" below
         except ClaudeAgentError:
             raise
         except Exception as exc:
