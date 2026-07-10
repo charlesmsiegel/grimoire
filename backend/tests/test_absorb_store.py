@@ -558,6 +558,28 @@ def test_materialize_new_character_drops_existing_name_collision(monkeypatch, tm
     assert absorb.materialize(cid, sid, parsed) == []
 
 
+def test_materialize_new_character_drops_world_inherited_name_collision(monkeypatch, tmp_path):
+    """A character that only exists in the world (not yet materialized into the
+    campaign) must still suppress a duplicate new_character proposal -- dedup
+    has to see the overlay's merged namespace, not just the campaign copy."""
+    import shutil
+    from grimoire.store import scenes
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    aid = _char(wroot, "Seraphine")
+    cid = campaigns.create_campaign("Run", wid)
+    # thin the campaign's copy (campaigns are still full copies at this task) so
+    # Seraphine is world-inherited only, as she will be once campaigns go thin
+    shutil.rmtree(campaigns.campaign_root(cid) / "characters" / aid)
+    manifest = campaigns.read_manifest(cid)
+    manifest.pop(f"characters/{aid}", None)
+    campaigns.write_manifest(cid, manifest)
+    sid = scenes.create_scene(cid, "S")
+    parsed = {"new_characters": [{"name": "Seraphine", "description": "x", "sd_prompt": ""}]}
+    assert absorb.materialize(cid, sid, parsed) == []
+
+
 def test_materialize_new_character_drops_blank_name_or_description(monkeypatch, tmp_path):
     from grimoire.store import scenes
     cid = _campaign(monkeypatch, tmp_path)

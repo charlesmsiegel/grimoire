@@ -75,9 +75,15 @@ def _require_char(root: Path, cid: str) -> Path:
     return d
 
 
-def create_character(root: Path, name: str, version_name: str = "default", card: dict | None = None) -> tuple[str, str]:
+def create_character(root: Path, name: str, version_name: str = "default", card: dict | None = None,
+                     taken=None) -> tuple[str, str]:
     _chars_dir(root).mkdir(parents=True, exist_ok=True)
-    cid = uniquify(slugify(name), lambda c: _char_dir(root, c).exists())
+
+    def exists(c: str) -> bool:
+        # `taken` widens the id namespace (overlay: world dirs + tombstones)
+        return _char_dir(root, c).exists() or (taken is not None and taken(c))
+
+    cid = uniquify(slugify(name), exists)
     _char_dir(root, cid).mkdir(parents=True)
     vid = slugify(version_name)
     _card_path(root, cid, vid).write_text(_dumps(card or blank_card(name)), encoding="utf-8")
