@@ -119,13 +119,16 @@ def appearances(root: Path, cid: str) -> list[dict]:
 
 
 def copy_to_character(root: Path, gid: str, name: str, cid: str, vid: str, slot: str,
-                      src_root: Path | None = None) -> str:
+                      src_root: Path | None = None, taken_names: set[str] | None = None) -> str:
     """Copy a greeting image's bytes into a character version's assets.
     slot 'avatar' overwrites the avatar (focus resets, per put_image);
     slot 'gallery' takes the next free gallery_N. Returns the stored name.
     `src_root` defaults to `root`; a campaign caller passes the overlay-resolved
     root so an inherited (unmaterialized) greeting image can still be copied,
-    while the destination character write always lands under `root`."""
+    while the destination character write always lands under `root`.
+    `taken_names` overrides the free-slot scan: a campaign caller must pass
+    the overlay-resolved union (overlay.list_images) so an inherited world
+    gallery image can't be silently shadowed by a reused gallery_N name."""
     if slot not in ("avatar", "gallery"):
         raise ValueError(f"unknown slot: {slot}")
     src = assets.image_path(root if src_root is None else src_root, gid, _VID, name, base=_BASE)
@@ -135,7 +138,8 @@ def copy_to_character(root: Path, gid: str, name: str, cid: str, vid: str, slot:
     if slot == "avatar":
         assets.put_image(root, cid, vid, assets.AVATAR, raw, ext)
         return assets.AVATAR
-    taken = {i["name"] for i in assets.list_images(root, cid, vid)}
+    taken = ({i["name"] for i in assets.list_images(root, cid, vid)}
+             if taken_names is None else taken_names)
     n = 1
     while f"gallery_{n}" in taken:
         n += 1

@@ -173,7 +173,7 @@ def _prune_duplicate_files(root: Path, wroot: Path) -> None:
     world: asset files and actor sidecars (tagline.md; focus.json lives under
     assets/). The file-level overlay serves them from the world afterwards.
     Campaign-only or diverged files stay; emptied dirs are removed."""
-    for kind in ("characters", "pcs", "locations", "lore"):
+    for kind in ("characters", "pcs", "locations", "lore", "greetings"):
         base = root / kind
         if not base.exists():
             continue

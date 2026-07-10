@@ -313,7 +313,7 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
             continue
         candidate_id = slugify(name)
         try:
-            characters.read_character(croot, candidate_id)
+            characters.read_character(overlay.char_root(cid, candidate_id), candidate_id)
             continue  # id already taken -- treat as the same character
         except characters.CharacterNotFound:
             pass

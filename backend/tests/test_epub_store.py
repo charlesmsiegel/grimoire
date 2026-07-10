@@ -207,6 +207,28 @@ def test_chapter_omits_deleted_location(monkeypatch, tmp_path):
     assert 'class="scene-date"' in ch1           # rest of the header intact
 
 
+def test_chapter_and_appendix_include_inherited_world_location(monkeypatch, tmp_path):
+    """A thin campaign never copies world locations up front; a scene set at
+    one of them must still show its name in the chapter header and get a
+    full appendix entry, not be silently dropped as if deleted."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Saltmarch")
+    wroot = worlds.world_root(wid)
+    harbor = entities.create_entity(wroot, "locations", "The Harbor", body="Gulls and salt air.")
+    cid = campaigns.create_campaign("Run One", wid)
+    sid = scenes.create_scene(cid, "Arrival")
+    scenes.append_message(cid, sid, "assistant", "The gulls cry.")
+    scenes.set_location(cid, sid, harbor)
+
+    blob, _ = epub.build_epub(cid)
+    z = _open(blob)
+    ch1 = z.read("text/chapter-001.xhtml").decode()
+    assert 'class="scene-location"' in ch1 and "The Harbor" in ch1
+    assert "text/location-the-harbor.xhtml" in z.namelist()
+    loc_doc = z.read("text/location-the-harbor.xhtml").decode()
+    assert "Gulls and salt air." in loc_doc
+
+
 def test_appendix_actors_and_visited_locations(monkeypatch, tmp_path):
     _wid, cid, _s1, _s2 = _fixture_campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)

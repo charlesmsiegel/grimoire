@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from . import calendars, campaigns, entities, scene_ids, scene_refs
+from . import calendars, campaigns, overlay, scene_ids, scene_refs
 from .config import read_config
 from .frontmatter import dump_frontmatter, parse_frontmatter, parse_frontmatter_head
 from .paths import now_iso, slugify, uniquify
@@ -391,8 +391,7 @@ def set_location(cid: str, sid: str, eid: str) -> dict:
     p = _scene_path(cid, sid)
     if not _safe_id(sid) or not p.exists():
         raise SceneNotFound(sid)
-    croot = campaigns.campaign_root(cid)
-    name = entities.read_entity(croot, "locations", eid)["meta"].get("name", eid)  # raises EntityNotFound
+    name = overlay.read_entity(cid, "locations", eid)["meta"].get("name", eid)  # raises EntityNotFound
     history = get_location_history(cid, sid)
     if history and history[-1] == eid:
         return {"moved": False, "name": name}
