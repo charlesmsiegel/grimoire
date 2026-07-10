@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
@@ -36,6 +37,8 @@ class ConfigUpdate(BaseModel):
     quote_color: str | None = None
     user_label: str | None = None
     assistant_label: str | None = None
+    provider: Literal["openrouter", "claude"] | None = None
+    claude_model: str | None = None
 
 
 class DataDirUpdate(BaseModel):
@@ -269,7 +272,9 @@ def _public_config(cfg: dict[str, str]) -> dict:
     return {"model": cfg["model"], "theme": cfg["theme"], "key_set": bool(cfg["openrouter_key"]),
             "system_prompt": cfg.get("system_prompt", ""), "quote_color": cfg.get("quote_color", "off"),
             "user_label": cfg.get("user_label", "You"),
-            "assistant_label": cfg.get("assistant_label", "Grimoire")}
+            "assistant_label": cfg.get("assistant_label", "Grimoire"),
+            "provider": cfg.get("provider", "openrouter"),
+            "claude_model": cfg.get("claude_model", "opus")}
 
 
 @router.get("/config")
