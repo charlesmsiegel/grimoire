@@ -68,11 +68,16 @@ def read_entity(root: Path, kind: str, eid: str) -> dict:
 
 
 def create_entity(root: Path, kind: str, name: str, body: str = "", keys: str = "", owners: str = "",
-                  sd_prompt: str = "") -> str:
+                  sd_prompt: str = "", taken=None) -> str:
     _check_kind(kind)
     d = _kind_dir(root, kind)
     d.mkdir(parents=True, exist_ok=True)
-    eid = uniquify(slugify(name), lambda c: _entity_path(root, kind, c).exists())
+
+    def exists(c: str) -> bool:
+        # `taken` widens the id namespace (overlay: world files + tombstones)
+        return _entity_path(root, kind, c).exists() or (taken is not None and taken(c))
+
+    eid = uniquify(slugify(name), exists)
     meta = {"name": name}
     if keys:
         meta["keys"] = keys
