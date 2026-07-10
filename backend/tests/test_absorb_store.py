@@ -291,7 +291,9 @@ def test_apply_edits_new_character_creates_and_casts_npc(monkeypatch, tmp_path):
     assert card["data"]["description"] == ("[character(\"Old Bram\") { Occupation(\"innkeep\") }]"
                                            "\n\nBram kept the inn.")
     assert card["data"]["personality"] == "gruff but kind"
-    assert card["data"]["mes_example"] == "<START>\n{{user}}: A room?\n{{char}}: Aye."
+    # {{char}} is baked to the card's own name ({{user}} stays literal): a stored
+    # {{char}} would expand to the whole present cast in multi-NPC scenes.
+    assert card["data"]["mes_example"] == "<START>\n{{user}}: A room?\nOld Bram: Aye."
     assert card["data"]["extensions"]["sd_prompt"] == "an old innkeeper"
     assert appearances.is_appeared(cid, "characters", new_char["id"])
 

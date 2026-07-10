@@ -407,6 +407,18 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
                                       j === i ? { ...r, after: ev.target.value } : r))} />
                         </>
                       )}
+                      {e.kind === "new_character" && (
+                        <>
+                          <textarea aria-label={`Personality ${e.label}`} rows={2}
+                                    placeholder="Personality"
+                                    value={(e.payload?.personality as string) ?? ""}
+                                    onChange={(ev) => setPayload({ personality: ev.target.value })} />
+                          <textarea aria-label={`Example dialogue ${e.label}`} rows={2}
+                                    placeholder="Example dialogue"
+                                    value={(e.payload?.mes_example as string) ?? ""}
+                                    onChange={(ev) => setPayload({ mes_example: ev.target.value })} />
+                        </>
+                      )}
                       {(e.kind === "new_character" || e.kind === "new_location") && (
                         <input aria-label={`Suggested image prompt ${e.label}`}
                                placeholder="Suggested image prompt"

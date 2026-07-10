@@ -518,7 +518,7 @@ test("plot rows are editable and sent with payload on save", async () => {
         payload: expect.objectContaining({ status: "advanced" }) })]) })));
 });
 
-test("new_character proposal renders editable name/description/sd_prompt and saves them", async () => {
+test("new_character proposal renders editable name/description/personality/dialogue/sd_prompt and saves them", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
   (api.absorbScene as any).mockResolvedValue({
@@ -526,7 +526,8 @@ test("new_character proposal renders editable name/description/sd_prompt and sav
     edits: [{ id: "new_character:old-bram", kind: "new_character",
       target: { kind: "characters", id: "" }, label: "New character — Old Bram",
       field: "description", before: "", after: "[character(\"Old Bram\") {}]", authored: false,
-      payload: { name: "Old Bram", sd_prompt: "an old innkeeper" } }] });
+      payload: { name: "Old Bram", sd_prompt: "an old innkeeper",
+        personality: "gruff but kind", mes_example: "<START>\n{{user}}: A room?\n{{char}}: Aye." } }] });
   renderCampaign();
   await screen.findByText("hi");
   fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
@@ -534,15 +535,22 @@ test("new_character proposal renders editable name/description/sd_prompt and sav
   expect((nameInput as HTMLInputElement).value).toBe("Old Bram");
   const desc = await screen.findByLabelText("After New character — Old Bram");
   expect((desc as HTMLTextAreaElement).value).toBe("[character(\"Old Bram\") {}]");
+  const personality = await screen.findByLabelText("Personality New character — Old Bram");
+  expect((personality as HTMLTextAreaElement).value).toBe("gruff but kind");
+  const dialogue = await screen.findByLabelText("Example dialogue New character — Old Bram");
+  expect((dialogue as HTMLTextAreaElement).value).toBe("<START>\n{{user}}: A room?\n{{char}}: Aye.");
   const prompt = await screen.findByLabelText("Suggested image prompt New character — Old Bram");
   expect((prompt as HTMLInputElement).value).toBe("an old innkeeper");
   fireEvent.change(nameInput, { target: { value: "Old Man Bram" } });
+  fireEvent.change(personality, { target: { value: "gruff, secretly gentle" } });
   fireEvent.change(prompt, { target: { value: "a grizzled innkeeper" } });
   fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
   await waitFor(() => expect(api.saveChronicle).toHaveBeenCalledWith("run", "s1",
     expect.objectContaining({ edits: [expect.objectContaining({
       id: "new_character:old-bram",
-      payload: { name: "Old Man Bram", sd_prompt: "a grizzled innkeeper" } })] })));
+      payload: { name: "Old Man Bram", sd_prompt: "a grizzled innkeeper",
+        personality: "gruff, secretly gentle",
+        mes_example: "<START>\n{{user}}: A room?\n{{char}}: Aye." } })] })));
 });
 
 test("new_location shows the setting checkbox only when the scene has no location", async () => {
