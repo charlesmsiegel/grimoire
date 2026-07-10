@@ -126,3 +126,27 @@ def roll(notation: str, seed: int | None = None) -> dict:
         if spec["vs"] is not None:
             result["outcome"] = "success" if result["total"] >= spec["vs"] else "failure"
     return result
+
+
+def _face(d: dict) -> str:
+    marker = "!" if len(d["rolls"]) > 1 else ""
+    face = f"{d['value']}{marker}"
+    return face if d["kept"] else f"~~{face}~~"
+
+
+def format_roll(result: dict, label: str | None = None) -> str:
+    """One markdown transcript line: dropped dice struck through, sum-exploded
+    dice marked `!`, outcome bolded."""
+    faces = ", ".join(_face(d) for d in result["dice"])
+    head = (f"\U0001F3B2 **{label}** · `{result['notation']}`" if label
+            else f"\U0001F3B2 `{result['notation']}`")
+    if result["successes"] is not None:
+        n = result["successes"]
+        return f"{head} → [{faces}] — **{n} success{'' if n == 1 else 'es'}**"
+    line = f"{head} → [{faces}]"
+    if result["modifier"]:
+        line += f" {'+' if result['modifier'] > 0 else '−'} {abs(result['modifier'])}"
+    line += f" = **{result['total']}**"
+    if result["vs"] is not None:
+        line += f" vs {result['vs']} — **{result['outcome']}**"
+    return line
