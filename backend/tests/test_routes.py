@@ -163,6 +163,76 @@ def test_campaign_image_route_serves_copied_avatar(client):
     assert got.status_code == 200 and got.content == b"PNGBYTES"
 
 
+def test_campaign_character_image_routes_isolated(client):
+    wid, cid = _campaign(client)
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
+    world_base = f"/api/worlds/{wid}/characters/{chid}/versions/default/images"
+    client.put(f"{world_base}/avatar", files={"file": ("a.png", io.BytesIO(b"world-bytes"), "image/png")})
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S1"}).json()["id"]
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                json={"kind": "characters", "id": chid, "version": "default", "role": "npc"})
+
+    camp_base = f"/api/campaigns/{cid}/characters/{chid}/versions/default/images"
+    r = client.put(f"{camp_base}/avatar", files={"file": ("b.png", io.BytesIO(b"campaign-bytes"), "image/png")})
+    assert r.status_code == 200 and r.json() == {"name": "avatar", "ext": "png"}
+
+    # campaign copy changed; world's shared copy untouched
+    assert client.get(f"{camp_base}/avatar").content == b"campaign-bytes"
+    assert client.get(f"{world_base}/avatar").content == b"world-bytes"
+
+    assert client.delete(f"{camp_base}/avatar").status_code == 200
+    assert client.get(f"{camp_base}/avatar").status_code == 404
+    assert client.get(f"{world_base}/avatar").content == b"world-bytes"
+
+
+def test_campaign_character_image_promote_swaps_avatar(client):
+    wid, cid = _campaign(client)
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S1"}).json()["id"]
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                json={"kind": "characters", "id": chid, "version": "default", "role": "npc"})
+    base = f"/api/campaigns/{cid}/characters/{chid}/versions/default/images"
+    client.put(f"{base}/avatar", files={"file": ("a.png", io.BytesIO(b"old"), "image/png")})
+    client.put(f"{base}/gallery_1", files={"file": ("g.png", io.BytesIO(b"new"), "image/png")})
+
+    assert client.post(f"{base}/gallery_1/promote").status_code == 200
+    assert client.get(f"{base}/avatar").content == b"new"
+    assert client.get(f"{base}/gallery_1").content == b"old"
+    assert client.post(f"{base}/gallery_9/promote").status_code == 404
+
+
+def test_campaign_avatar_focus_endpoint_round_trip(client):
+    wid, cid = _campaign(client)
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S1"}).json()["id"]
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                json={"kind": "characters", "id": chid, "version": "default", "role": "npc"})
+    base = f"/api/campaigns/{cid}/characters/{chid}/versions/default/images"
+
+    assert client.put(f"{base}/avatar/focus", json={"focus": 30}).status_code == 404
+    client.put(f"{base}/avatar", files={"file": ("a.png", io.BytesIO(b"img"), "image/png")})
+    assert client.put(f"{base}/avatar/focus", json={"focus": 30}).json() == {"ok": True}
+    detail = client.get(f"/api/campaigns/{cid}/characters/{chid}").json()
+    assert detail["versions"][0]["avatar_focus"] == 30
+
+
+def test_campaign_copy_image_from_greeting(client):
+    wid, cid = _campaign(client)
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mira"}).json()["character"]
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S1"}).json()["id"]
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                json={"kind": "characters", "id": chid, "version": "default", "role": "npc"})
+    gid = client.post(f"/api/campaigns/{cid}/greetings",
+                      json={"name": "Opener", "character": chid, "version": "default"}).json()["id"]
+    root = store.campaigns.campaign_root(cid)
+    store.assets.put_image(root, gid, "default", "embed-abc123def456", b"art", "png", base="greetings")
+
+    copy_url = f"/api/campaigns/{cid}/characters/{chid}/versions/default/images/copy-from-greeting"
+    r = client.post(copy_url, json={"gid": gid, "name": "embed-abc123def456", "slot": "avatar"})
+    assert r.status_code == 200 and r.json() == {"name": "avatar", "ext": "png"}
+    assert client.get(f"/api/campaigns/{cid}/characters/{chid}/versions/default/images/avatar").content == b"art"
+
+
 def test_character_image_promote_swaps_avatar(client):
     wid = _world(client)
     cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
