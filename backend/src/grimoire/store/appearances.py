@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
 from pathlib import Path
 
 from . import campaigns, characters, overlay, pcs, worlds
@@ -88,9 +87,6 @@ def _copy_actor(wroot: Path, croot: Path, kind: str, actor_id: str, vid: str) ->
         meta, _ = parse_frontmatter((src_dir / _meta_name(kind)).read_text(encoding="utf-8"))
         meta["default_version"] = vid
         (dst_dir / _meta_name(kind)).write_text(dump_frontmatter(meta, ""), encoding="utf-8")
-    if kind == "characters":
-        if (src_dir / "assets").exists():
-            shutil.copytree(src_dir / "assets", dst_dir / "assets", dirs_exist_ok=True)
 
 
 def _purge_other_versions(croot: Path, kind: str, actor_id: str, keep: str) -> None:

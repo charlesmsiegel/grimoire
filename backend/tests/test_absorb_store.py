@@ -141,6 +141,26 @@ def test_materialize_character_state_edit_strips_kind_prefix(monkeypatch, tmp_pa
     assert cs["target"] == {"kind": "characters", "id": ch}
 
 
+def test_materialize_character_state_edit_not_dropped_for_inherited_character(monkeypatch, tmp_path):
+    """A thin campaign never copies characters into the campaign root; a state edit
+    for a cast member that's still purely inherited (never appeared/materialized)
+    must not be silently dropped just because campaigns.campaign_root(cid) lacks
+    the character dir."""
+    from grimoire.store import scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    wid = campaigns.read_campaign(cid)["meta"]["world"]
+    wroot = worlds.world_root(wid)
+    ch = _char(wroot, "Seraphine")
+    croot = campaigns.campaign_root(cid)
+    assert not (croot / "characters" / ch).exists()   # never materialized
+    sid = scenes.create_scene(cid, "S")
+    parsed = {"character_state_edits": [{"id": ch, "current_state": "Now travels with them."}]}
+    edits = {e["id"]: e for e in absorb.materialize(cid, sid, parsed)}
+    assert f"character_state:{ch}" in edits
+    cs = edits[f"character_state:{ch}"]
+    assert cs["before"] == "" and cs["after"] == "Now travels with them."
+
+
 def test_materialize_character_state_edit_ignores_pcs_prefix(monkeypatch, tmp_path):
     """playstate.py only tracks NPCs (see its module docstring) — a pcs-prefixed id must
     be dropped, not misfiled under the characters/ tree using the PC's id as if it were
@@ -569,9 +589,11 @@ def test_materialize_new_character_drops_world_inherited_name_collision(monkeypa
     wroot = worlds.world_root(wid)
     aid = _char(wroot, "Seraphine")
     cid = campaigns.create_campaign("Run", wid)
-    # thin the campaign's copy (campaigns are still full copies at this task) so
-    # Seraphine is world-inherited only, as she will be once campaigns go thin
-    shutil.rmtree(campaigns.campaign_root(cid) / "characters" / aid)
+    # already thin from creation (Seraphine is world-inherited only); tolerant
+    # rmtree keeps this test valid regardless of when the campaign was created
+    d = campaigns.campaign_root(cid) / "characters" / aid
+    if d.exists():
+        shutil.rmtree(d)
     manifest = campaigns.read_manifest(cid)
     manifest.pop(f"characters/{aid}", None)
     campaigns.write_manifest(cid, manifest)

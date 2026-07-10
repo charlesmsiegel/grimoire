@@ -14,7 +14,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from grimoire.openrouter import OpenRouterClient  # noqa: E402
-from grimoire.store import absorb, appearances, campaigns, characters, chronicle, entities, read_config, scenes  # noqa: E402
+from grimoire.store import (  # noqa: E402
+    absorb, appearances, campaigns, characters, chronicle, entities, overlay, read_config, scenes,
+)
 from grimoire.store.paths import slugify  # noqa: E402
 
 
@@ -60,11 +62,14 @@ def ensure_location(croot: Path, spec: dict) -> str:
     return entities.create_entity(croot, "locations", spec["name"], body=spec.get("notes", ""))
 
 
-def resolve_version(croot: Path, kind: str, actor_id: str) -> str:
+def resolve_version(cid: str, kind: str, actor_id: str) -> str:
+    """Overlay-aware: a thin campaign's cast is usually still inherited (never
+    appeared/materialized), so this must resolve across the world/campaign
+    union, not just the campaign's own copy."""
     if kind == "pcs":
         from grimoire.store import pcs
-        return pcs.read_pc(croot, actor_id)["meta"]["default_version"]
-    return characters.read_character(croot, actor_id)["meta"]["default_version"]
+        return pcs.read_pc(overlay.pc_root(cid, actor_id), actor_id)["meta"]["default_version"]
+    return characters.read_character(overlay.char_root(cid, actor_id), actor_id)["meta"]["default_version"]
 
 
 def build_scene(cid: str, scene: dict) -> str:
@@ -83,7 +88,7 @@ def build_scene(cid: str, scene: dict) -> str:
         scenes.append_message(cid, sid, turn["role"], turn["content"], speaker=turn.get("speaker"))
     for actor in scene["characters"]:
         kind, aid = actor["kind"], actor["id"]
-        vid = resolve_version(croot, kind, aid)
+        vid = resolve_version(cid, kind, aid)
         appearances.appear(cid, sid, kind, aid, vid, "player" if kind == "pcs" else "npc")
     return sid
 

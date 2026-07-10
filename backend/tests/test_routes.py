@@ -216,6 +216,44 @@ def test_campaign_avatar_focus_endpoint_round_trip(client):
     assert detail["versions"][0]["avatar_focus"] == 30
 
 
+def test_campaign_avatar_focus_on_inherited_world_avatar(client):
+    """A thin campaign never copies the character into the campaign root, so the
+    avatar the campaign sees is still the world's own file. Setting focus must
+    gate on that inherited image (not a croot-only existence check), write
+    campaign-side, and read back as the campaign's authoritative focus."""
+    wid, cid = _campaign(client)
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
+    client.put(f"/api/worlds/{wid}/characters/{chid}/versions/default/images/avatar",
+               files={"file": ("a.png", io.BytesIO(b"world-img"), "image/png")})
+    croot = store.campaigns.campaign_root(cid)
+    assert not (croot / "characters" / chid).exists()   # never materialized
+
+    base = f"/api/campaigns/{cid}/characters/{chid}/versions/default/images"
+    r = client.put(f"{base}/avatar/focus", json={"focus": 40})
+    assert r.status_code == 200 and r.json() == {"ok": True}
+    detail = client.get(f"/api/campaigns/{cid}/characters/{chid}").json()
+    assert detail["versions"][0]["avatar_focus"] == 40
+
+
+def test_campaign_copy_image_from_greeting_inherited_greeting(client):
+    """A thin campaign never copies a greeting's assets either; copying an
+    inherited greeting's image into a character must still find the source
+    through the overlay while writing the character-side copy to the campaign."""
+    wid, cid = _campaign(client)
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mira"}).json()["character"]
+    gid = client.post(f"/api/worlds/{wid}/greetings",
+                      json={"name": "Opener", "character": chid, "version": "default"}).json()["id"]
+    wroot = store.worlds.world_root(wid)
+    store.assets.put_image(wroot, gid, "default", "embed-abc123def456", b"art", "png", base="greetings")
+    croot = store.campaigns.campaign_root(cid)
+    assert not (croot / "greetings" / f"{gid}.md").exists()   # never materialized
+
+    copy_url = f"/api/campaigns/{cid}/characters/{chid}/versions/default/images/copy-from-greeting"
+    r = client.post(copy_url, json={"gid": gid, "name": "embed-abc123def456", "slot": "avatar"})
+    assert r.status_code == 200 and r.json() == {"name": "avatar", "ext": "png"}
+    assert client.get(f"/api/campaigns/{cid}/characters/{chid}/versions/default/images/avatar").content == b"art"
+
+
 def test_campaign_copy_image_from_greeting(client):
     wid, cid = _campaign(client)
     chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mira"}).json()["character"]

@@ -1,7 +1,7 @@
 import pytest
 
 from grimoire.store import appearances as ap
-from grimoire.store import campaigns, characters, dossiers, pcs, scenes, worlds
+from grimoire.store import assets, campaigns, characters, dossiers, overlay, pcs, scenes, worlds
 
 
 def _world_with_char(monkeypatch, tmp_path):
@@ -12,6 +12,21 @@ def _world_with_char(monkeypatch, tmp_path):
     characters.create_character(worlds.world_root(wid), "Seraphine", "Corrupted", card)
     cid = campaigns.create_campaign("Run", wid)
     return wid, cid
+
+
+def test_lock_materializes_card_but_not_assets(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    aid, vid = characters.create_character(wroot, "Hero")
+    assets.put_image(wroot, aid, vid, "avatar", b"\x89PNG\r\n\x1a\nx", "png")
+    cid = campaigns.create_campaign("C", wid)
+    ap.appear(cid, "s1", "characters", aid, vid, "npc")
+    d = campaigns.campaign_root(cid) / "characters" / aid
+    assert (d / f"{vid}.json").exists()
+    assert not (d / "assets").exists()
+    # serving still finds the world file
+    assert overlay.image_root(cid, aid, vid, "avatar") == wroot
 
 
 def test_character_appears_locks_version_and_role(monkeypatch, tmp_path):
@@ -172,7 +187,11 @@ def test_player_names_empty_when_no_players(monkeypatch, tmp_path):
     assert ap.player_names(cid, sid) == []
 
 
-def test_suggestions_candidates_come_from_campaign_copy(monkeypatch, tmp_path):
+def test_suggestions_reflect_live_world_after_character_deleted(monkeypatch, tmp_path):
+    """Rowan is never appeared/materialized in the campaign, so a thin campaign has
+    no snapshot of them to fall back on: deleting Rowan from the world removes them
+    from suggestions too. (Under the old full-copy campaigns, a stale campaign copy
+    of Rowan would have survived the world-side deletion; that no longer applies.)"""
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("W")
     wroot = worlds.world_root(wid)
@@ -185,7 +204,7 @@ def test_suggestions_candidates_come_from_campaign_copy(monkeypatch, tmp_path):
     ap.appear(cid, sid, "characters", "mara", "default", "npc")
     characters.delete_character(wroot, "rowan")  # world diverges after the fork
     got = ap.suggestions(cid, sid)
-    assert [s["character"] for s in got] == ["rowan"]  # campaign copy still has Rowan
+    assert got == []  # Rowan was never materialized; gone from the world means gone
 
 
 def _fork(monkeypatch, tmp_path, versions=("young", "veteran")):
@@ -273,6 +292,7 @@ def test_pick_version_pcs_purges_and_keeps_meta(monkeypatch, tmp_path):
     pcs.create_version(wroot, pid, "older", pcs.blank_persona("Elara"))
     cid = campaigns.create_campaign("Run", wid)
     croot = campaigns.campaign_root(cid)
+    overlay.materialize_actor(cid, "pcs", pid)   # both versions land in the campaign
     pcs.set_tags(croot, pid, ["campaign-tag"])  # campaign-side meta edit survives the pick
     ap.pick_version(cid, "pcs", pid, "older")
     assert ap.locked_version(cid, "pcs", pid) == "older"

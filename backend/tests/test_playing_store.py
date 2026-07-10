@@ -231,17 +231,27 @@ def test_mark_played_clears_offscreen_marks(monkeypatch, tmp_path):
     assert g in marks["played"] and g not in marks["completed"]
 
 
-def test_campaign_play_isolated_from_world_edits(monkeypatch, tmp_path):
+def test_campaign_play_reads_live_world_greeting_until_deleted(monkeypatch, tmp_path):
+    """A thin campaign never copies a greeting up front; play reads the world's
+    greeting live until something materializes it. (Under the old full-copy
+    campaigns, the campaign's own snapshot stayed isolated from subsequent world
+    edits/deletion; that guarantee no longer holds for an unplayed greeting.)"""
     wid = _world(monkeypatch, tmp_path)
     wroot = worlds.world_root(wid)
     characters.create_character(wroot, "S", "default", characters.blank_card("S"))
     g = greetings.create_greeting(wroot, "Open", "s", "default", body="Original.")
     cid, sid = _campaign_after_seed(wid)
     greetings.update_greeting(wroot, g, body="Edited in world.")   # after the fork
-    greetings.delete_greeting(wroot, g)                            # even deleted
     assert {x["id"] for x in playing.available_greetings(cid)} == {g}
     sid = playing.start_from_greeting(cid, sid, g)
-    assert scenes.read_scene(cid, sid)["messages"][0]["content"] == "Original."
+    assert scenes.read_scene(cid, sid)["messages"][0]["content"] == "Edited in world."
+
+    g2 = greetings.create_greeting(wroot, "Second", "s", "default", body="B.")
+    sid2 = scenes.create_scene(cid, "S2")
+    greetings.delete_greeting(wroot, g2)   # never materialized -> gone entirely
+    assert g2 not in {x["id"] for x in playing.available_greetings(cid)}
+    with pytest.raises(greetings.GreetingNotFound):
+        playing.start_from_greeting(cid, sid2, g2)
 
 
 def test_available_greetings_reports_marks_and_hides_skipped(monkeypatch, tmp_path):

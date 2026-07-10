@@ -1728,8 +1728,13 @@ def promote_campaign_image(cid: str, char: str, vid: str, name: str):
 @router.put("/campaigns/{cid}/characters/{char}/versions/{vid}/images/avatar/focus")
 def put_campaign_avatar_focus(cid: str, char: str, vid: str, body: AvatarFocus):
     root = _campaign_root_or_404(cid)
-    if store.assets.image_path(root, char, vid, store.assets.AVATAR) is None:
+    # a thin campaign may only have this avatar through the inherited world
+    # character, so the existence gate must check the overlay union, not croot alone
+    names = {i["name"] for i in store.overlay.list_images(cid, char, vid)}
+    if store.assets.AVATAR not in names:
         raise HTTPException(status_code=404, detail="image not found")
+    # the write always lands campaign-side; overlay.read_focus then finds this
+    # campaign focus.json and treats the campaign as authoritative going forward
     store.assets.write_focus(root, char, vid, body.focus)
     return {"ok": True}
 
@@ -1737,8 +1742,13 @@ def put_campaign_avatar_focus(cid: str, char: str, vid: str, body: AvatarFocus):
 @router.post("/campaigns/{cid}/characters/{char}/versions/{vid}/images/copy-from-greeting")
 def post_copy_campaign_image_from_greeting(cid: str, char: str, vid: str, body: CopyFromGreeting):
     root = _campaign_root_or_404(cid)
+    # the source greeting image may still be inherited (unmaterialized) in a thin
+    # campaign; resolve its root through the overlay so the copy still finds it,
+    # while the destination character write always targets the campaign root
+    src_root = store.overlay.image_root(cid, body.gid, "default", body.name, base="greetings")
     try:
-        stored = store.image_subjects.copy_to_character(root, body.gid, body.name, char, vid, body.slot)
+        stored = store.image_subjects.copy_to_character(root, body.gid, body.name, char, vid, body.slot,
+                                                         src_root=src_root)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="source image not found")
     except ValueError as exc:
