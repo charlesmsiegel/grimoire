@@ -161,6 +161,25 @@ def test_materialize_character_state_edit_not_dropped_for_inherited_character(mo
     assert cs["before"] == "" and cs["after"] == "Now travels with them."
 
 
+def test_materialize_character_state_edit_label_uses_inherited_character_name(monkeypatch, tmp_path):
+    """The staged edit's label must show the character's display NAME, not the raw
+    slug, even when the character is still purely inherited (never materialized
+    campaign-side) — the label helper must resolve through the overlay, not just
+    the campaign's own copy."""
+    from grimoire.store import scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    wid = campaigns.read_campaign(cid)["meta"]["world"]
+    wroot = worlds.world_root(wid)
+    ch = _char(wroot, "Seraphine")
+    croot = campaigns.campaign_root(cid)
+    assert not (croot / "characters" / ch).exists()   # never materialized
+    sid = scenes.create_scene(cid, "S")
+    parsed = {"character_state_edits": [{"id": ch, "current_state": "Now travels with them."}]}
+    edits = {e["id"]: e for e in absorb.materialize(cid, sid, parsed)}
+    cs = edits[f"character_state:{ch}"]
+    assert cs["label"] == "Seraphine — current state"
+
+
 def test_materialize_character_state_edit_ignores_pcs_prefix(monkeypatch, tmp_path):
     """playstate.py only tracks NPCs (see its module docstring) — a pcs-prefixed id must
     be dropped, not misfiled under the characters/ tree using the PC's id as if it were
@@ -476,6 +495,31 @@ def test_materialize_relationship_and_bond(monkeypatch, tmp_path):
     assert not any(k.startswith("feeling:characters:ghost") for k in edits)  # unknown dropped
     bond = edits[f"bond:characters:{a}|characters:{b}"]
     assert bond["kind"] == "bond" and bond["after"] == "allies" and bond["payload"]["type"] == "allies"
+
+
+def test_materialize_relationship_label_uses_inherited_character_names(monkeypatch, tmp_path):
+    """Same overlay-resolution requirement as the character_state label, but for
+    relationship/bond edit labels: an inherited (never-materialized) actor's
+    display name must still show, not the raw slug."""
+    from grimoire.store import scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    wid = campaigns.read_campaign(cid)["meta"]["world"]
+    wroot = worlds.world_root(wid)
+    a = _char(wroot, "Ann")
+    b = _char(wroot, "Bo")
+    croot = campaigns.campaign_root(cid)
+    assert not (croot / "characters" / a).exists() and not (croot / "characters" / b).exists()
+    sid = scenes.create_scene(cid, "S")   # appear() would materialize the actor, so skip it here
+    parsed = {
+        "relationship_deltas": [
+            {"from": f"characters:{a}", "to": f"characters:{b}", "trust": 4, "affection": 3, "tension": 1, "note": "warm"}],
+        "bond_changes": [{"a": f"characters:{a}", "b": f"characters:{b}", "type": "allies"}],
+    }
+    edits = {e["id"]: e for e in absorb.materialize(cid, sid, parsed)}
+    rel = edits[f"feeling:characters:{a}->characters:{b}"]
+    assert rel["label"] == "Ann → Bo"
+    bond = edits[f"bond:characters:{a}|characters:{b}"]
+    assert bond["label"] == "Ann & Bo"
 
 
 def test_materialize_plot_new_and_advance(monkeypatch, tmp_path):

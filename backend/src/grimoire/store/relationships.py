@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import campaigns, characters, pcs
+from . import campaigns, characters, overlay, pcs
 
 
 def _path(cid: str) -> Path:
@@ -60,12 +60,15 @@ def set_bond(cid: str, a: str, b: str, type: str, since_scene: str = "") -> None
     _write(cid, data)
 
 
-def actor_name(croot, token: str) -> str:
+def actor_name(cid: str, token: str) -> str:
+    """Overlay-aware: a thin campaign's cast is mostly inherited (never
+    materialized campaign-side), so the name must resolve across the union,
+    not just the campaign's own copy."""
     kind, _, aid = token.partition(":")
     try:
         if kind == "pcs":
-            return pcs.read_pc(croot, aid)["meta"].get("name", aid)
-        return characters.read_character(croot, aid)["meta"].get("name", aid)
+            return pcs.read_pc(overlay.pc_root(cid, aid), aid)["meta"].get("name", aid)
+        return characters.read_character(overlay.char_root(cid, aid), aid)["meta"].get("name", aid)
     except (characters.CharacterNotFound, pcs.PCNotFound):
         return aid
 

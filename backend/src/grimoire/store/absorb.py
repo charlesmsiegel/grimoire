@@ -124,11 +124,13 @@ def parse_output(text: str) -> dict:
 _CARD_FIELDS = ("description", "personality", "scenario")
 
 
-def _char_name(croot, cid: str) -> str:
+def _char_name(cid: str, char_id: str) -> str:
+    """Overlay-aware: a thin campaign's NPC is usually still inherited (never
+    materialized croot-side), so the display name must resolve across the union."""
     try:
-        return characters.read_character(croot, cid)["meta"].get("name", cid)
+        return characters.read_character(overlay.char_root(cid, char_id), char_id)["meta"].get("name", char_id)
     except characters.CharacterNotFound:
-        return cid
+        return char_id
 
 
 def _actor_exists(cid: str, token: str) -> bool:
@@ -201,7 +203,7 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
             continue
         out.append({"id": f"character_state:{char_id}", "kind": "character_state",
                     "target": {"kind": "characters", "id": char_id},
-                    "label": f"{_char_name(croot, char_id)} — current state",
+                    "label": f"{_char_name(cid, char_id)} — current state",
                     "field": "current_state",
                     "before": before, "after": after, "authored": False})
 
@@ -232,7 +234,7 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
             continue
         out.append({"id": f"authored:{char_id}:{field}", "kind": "authored",
                     "target": {"kind": "characters", "id": char_id},
-                    "label": f"{_char_name(croot, char_id)} — {field} (card edit)",
+                    "label": f"{_char_name(cid, char_id)} — {field} (card edit)",
                     "field": field, "before": before, "after": text, "authored": True})
 
     for e in parsed.get("relationship_deltas", []):
@@ -248,7 +250,7 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
             continue
         out.append({"id": f"feeling:{relationships.feeling_key(frm, to)}", "kind": "relationship",
                     "target": {"kind": "relationships", "id": relationships.feeling_key(frm, to)},
-                    "label": f"{relationships.actor_name(croot, frm)} → {relationships.actor_name(croot, to)}",
+                    "label": f"{relationships.actor_name(cid, frm)} → {relationships.actor_name(cid, to)}",
                     "field": "feeling", "before": before, "after": after, "authored": False,
                     "payload": payload})
 
@@ -262,7 +264,7 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
             continue
         out.append({"id": f"bond:{relationships.bond_key(a_tok, b_tok)}", "kind": "bond",
                     "target": {"kind": "relationships", "id": relationships.bond_key(a_tok, b_tok)},
-                    "label": f"{relationships.actor_name(croot, a_tok)} & {relationships.actor_name(croot, b_tok)}",
+                    "label": f"{relationships.actor_name(cid, a_tok)} & {relationships.actor_name(cid, b_tok)}",
                     "field": "bond", "before": before, "after": typ, "authored": False,
                     "payload": {"a": a_tok, "b": b_tok, "type": typ}})
 
@@ -448,9 +450,8 @@ def relationships_snapshot(cid: str, sid: str) -> str:
     """Rendered present-cast feelings/bonds block (feeds the prompt). Tolerant of a
     garbled relationships.json (returns "" rather than failing the extraction)."""
     try:
-        croot = campaigns.campaign_root(cid)
         tokens = [f"{a['kind']}:{a['id']}" for a in appearances.scene_cast(cid, sid)]
-        return "\n".join(relationships.render_present(cid, tokens, lambda t: relationships.actor_name(croot, t)))
+        return "\n".join(relationships.render_present(cid, tokens, lambda t: relationships.actor_name(cid, t)))
     except Exception:  # noqa: BLE001 — garbled relationships.json: omit, don't crash
         return ""
 
