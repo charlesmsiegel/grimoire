@@ -78,9 +78,14 @@ def present_in(body: str, source: str, roster: dict[str, str]) -> list[str]:
 
 def create_greeting(root: Path, name: str, character: str, version: str, body: str = "",
                     requires_tags: list[str] | None = None, predecessor_join: str = "all",
-                    present: list[str] | None = None, pcless: bool = False) -> str:
+                    present: list[str] | None = None, pcless: bool = False, taken=None) -> str:
     _greetings_dir(root).mkdir(parents=True, exist_ok=True)
-    gid = uniquify(slugify(name), lambda c: _greeting_path(root, c).exists())
+
+    def exists(c: str) -> bool:
+        # `taken` widens the id namespace (overlay: world files + tombstones)
+        return _greeting_path(root, c).exists() or (taken is not None and taken(c))
+
+    gid = uniquify(slugify(name), exists)
     meta = {"name": name, "character": character, "version": version,
             "present": ",".join(present or []),
             "requires_tags": ",".join(requires_tags or []), "predecessor_join": predecessor_join,
@@ -170,11 +175,8 @@ def set_edges(root: Path, gid: str, leads_to: list[str] | None = None,
     _write_plotmap(root, data)
 
 
-def delete_greeting(root: Path, gid: str) -> None:
-    p = _greeting_path(root, gid)
-    if not _safe(gid) or not p.exists():
-        raise GreetingNotFound(gid)
-    p.unlink()
+def remove_from_plotmap(root: Path, gid: str) -> None:
+    """Drop gid's own edges and every reference to it from other greetings' edges."""
     data = read_plotmap(root)
     changed = data.pop(gid, None) is not None
     for e in data.values():
@@ -184,6 +186,14 @@ def delete_greeting(root: Path, gid: str) -> None:
                 changed = True
     if changed:
         _write_plotmap(root, data)
+
+
+def delete_greeting(root: Path, gid: str) -> None:
+    p = _greeting_path(root, gid)
+    if not _safe(gid) or not p.exists():
+        raise GreetingNotFound(gid)
+    p.unlink()
+    remove_from_plotmap(root, gid)
 
 
 def import_from_character(root: Path, char_id: str, vid: str) -> list[str]:

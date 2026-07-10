@@ -20,7 +20,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import campaigns, entities, worlds
+from . import campaigns, entities, greetings, worlds
+from .paths import natural_key
 
 
 def croot_of(cid: str) -> Path:
@@ -144,3 +145,85 @@ def delete_entity(cid: str, kind: str, eid: str) -> None:
             raise
     if in_world:
         add_deleted(cid, ref)   # keep the world's copy from showing through
+
+
+# ---- greetings + plot map ----
+
+def list_greetings(cid: str) -> list[dict]:
+    mine = greetings.list_greetings(croot_of(cid))
+    have = {g["id"] for g in mine}
+    gone = deleted(cid)
+    inherited = [g for g in greetings.list_greetings(wroot_of(cid))
+                 if g["id"] not in have and _flat_ref("greetings", g["id"]) not in gone]
+    out = mine + inherited
+    out.sort(key=lambda m: natural_key(m["name"]))
+    return out
+
+
+def read_greeting(cid: str, gid: str) -> dict:
+    try:
+        return greetings.read_greeting(croot_of(cid), gid)
+    except greetings.GreetingNotFound:
+        if _flat_ref("greetings", gid) in deleted(cid):
+            raise
+        return greetings.read_greeting(wroot_of(cid), gid)
+
+
+def create_greeting(cid: str, name: str, character: str, version: str, body: str = "",
+                    requires_tags=None, predecessor_join: str = "all",
+                    present=None, pcless: bool = False) -> str:
+    wroot, gone = wroot_of(cid), deleted(cid)
+
+    def taken(gid: str) -> bool:
+        return _flat_path(wroot, "greetings", gid).exists() or _flat_ref("greetings", gid) in gone
+
+    return greetings.create_greeting(croot_of(cid), name, character, version, body,
+                                     requires_tags, predecessor_join, present=present,
+                                     pcless=pcless, taken=taken)
+
+
+def update_greeting(cid: str, gid: str, **kwargs) -> None:
+    if not _materialize_flat(cid, "greetings", gid):
+        raise greetings.GreetingNotFound(gid)
+    greetings.update_greeting(croot_of(cid), gid, **kwargs)
+
+
+def delete_greeting(cid: str, gid: str) -> None:
+    ref = _flat_ref("greetings", gid)
+    in_world = _flat_path(wroot_of(cid), "greetings", gid).exists() and ref not in deleted(cid)
+    if in_world:
+        materialize_plotmap(cid)   # edge cleanup must land campaign-side
+    try:
+        greetings.delete_greeting(croot_of(cid), gid)
+        _drop_manifest_ref(cid, ref)
+    except greetings.GreetingNotFound:
+        if not in_world:
+            raise
+        greetings.remove_from_plotmap(croot_of(cid), gid)
+    if in_world:
+        add_deleted(cid, ref)
+
+
+def read_plotmap(cid: str) -> dict:
+    croot = croot_of(cid)
+    if (croot / "plotmap.json").exists() or "plotmap" in deleted(cid):
+        return greetings.read_plotmap(croot)
+    return greetings.read_plotmap(wroot_of(cid))
+
+
+def materialize_plotmap(cid: str) -> None:
+    croot, wroot = croot_of(cid), wroot_of(cid)
+    if (croot / "plotmap.json").exists() or "plotmap" in deleted(cid):
+        return
+    src = wroot / "plotmap.json"
+    if not src.exists():
+        return   # nothing to copy; set_edges will create a fresh campaign map
+    (croot / "plotmap.json").write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+    manifest = campaigns.read_manifest(cid)
+    manifest["plotmap"] = greetings.plotmap_hash(wroot) or ""
+    campaigns.write_manifest(cid, manifest)
+
+
+def set_edges(cid: str, gid: str, leads_to=None, excludes=None) -> None:
+    materialize_plotmap(cid)
+    greetings.set_edges(croot_of(cid), gid, leads_to, excludes)

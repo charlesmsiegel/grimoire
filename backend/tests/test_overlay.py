@@ -1,6 +1,6 @@
 import pytest
 
-from grimoire.store import campaigns, entities, overlay, worlds
+from grimoire.store import campaigns, entities, greetings, overlay, worlds
 
 
 def _pair(monkeypatch, tmp_path):
@@ -79,3 +79,52 @@ def test_create_uniquifies_against_world_and_tombstones(monkeypatch, tmp_path):
     assert overlay.create_entity(cid, "lore", "The Sword") == f"{eid}-2"
     overlay.delete_entity(cid, "lore", eid)  # tombstone the inherited one
     assert overlay.create_entity(cid, "lore", "The Sword") == f"{eid}-3"
+
+
+def _greeting_pair(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    gid = greetings.create_greeting(wroot, "Opening", "hero", "default", "hi {{user}}")
+    greetings.set_edges(wroot, gid, leads_to=["next"], excludes=[])
+    cid = campaigns.create_campaign("C", wid)
+    # thin: strip the copies so fallthrough is exercised before Task 6 lands
+    (campaigns.campaign_root(cid) / "greetings" / f"{gid}.md").unlink()
+    (campaigns.campaign_root(cid) / "plotmap.json").unlink()
+    manifest = campaigns.read_manifest(cid)
+    manifest.pop(f"greetings/{gid}", None)
+    manifest.pop("plotmap", None)
+    campaigns.write_manifest(cid, manifest)
+    return wroot, cid, gid
+
+
+def test_greeting_and_plotmap_fall_through(monkeypatch, tmp_path):
+    wroot, cid, gid = _greeting_pair(monkeypatch, tmp_path)
+    assert overlay.read_greeting(cid, gid)["body"] == "hi {{user}}"
+    assert overlay.read_plotmap(cid)[gid]["leads_to"] == ["next"]
+
+
+def test_greeting_update_materializes(monkeypatch, tmp_path):
+    wroot, cid, gid = _greeting_pair(monkeypatch, tmp_path)
+    overlay.update_greeting(cid, gid, body="campaign body")
+    assert overlay.read_greeting(cid, gid)["body"] == "campaign body"
+    assert greetings.read_greeting(wroot, gid)["body"] == "hi {{user}}"
+    assert f"greetings/{gid}" in campaigns.read_manifest(cid)
+
+
+def test_set_edges_materializes_plotmap(monkeypatch, tmp_path):
+    wroot, cid, gid = _greeting_pair(monkeypatch, tmp_path)
+    overlay.set_edges(cid, gid, leads_to=["other"])
+    assert overlay.read_plotmap(cid)[gid]["leads_to"] == ["other"]
+    assert greetings.read_plotmap(wroot)[gid]["leads_to"] == ["next"]   # world untouched
+    assert "plotmap" in campaigns.read_manifest(cid)
+
+
+def test_delete_inherited_greeting_tombstones_and_cleans_edges(monkeypatch, tmp_path):
+    wroot, cid, gid = _greeting_pair(monkeypatch, tmp_path)
+    other = greetings.create_greeting(wroot, "Second", "hero", "default", "x")
+    greetings.set_edges(wroot, other, leads_to=[gid])
+    overlay.delete_greeting(cid, gid)
+    assert gid not in [g["id"] for g in overlay.list_greetings(cid)]
+    assert gid not in overlay.read_plotmap(cid).get(other, {}).get("leads_to", [])
+    assert greetings.read_plotmap(wroot)[other]["leads_to"] == [gid]    # world untouched
