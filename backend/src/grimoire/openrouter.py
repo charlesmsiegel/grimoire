@@ -10,14 +10,13 @@ from typing import AsyncIterator
 import certifi
 import httpx
 
+from .llm import LLMError
+
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 
-class OpenRouterError(Exception):
-    def __init__(self, kind: str, detail: str = ""):
-        super().__init__(detail or kind)
-        self.kind = kind  # missing_key | auth | rate_limit | network | bad_response
-        self.detail = detail or kind
+class OpenRouterError(LLMError):
+    pass
 
 
 def _status_kind(status: int) -> str:
