@@ -378,7 +378,9 @@ def image_root(cid: str, aid: str, vid: str, name: str, base: str = "characters"
 def read_focus(cid: str, aid: str, vid: str, base: str = "characters") -> int | None:
     croot = croot_of(cid)
     focus_file = croot / base / aid / "assets" / vid / assets.FOCUS_FILE
-    if assets.image_path(croot, aid, vid, assets.AVATAR, base) is not None or focus_file.exists():
+    if (assets.image_path(croot, aid, vid, assets.AVATAR, base) is not None
+            or focus_file.exists()
+            or _asset_ref(base, aid, vid, assets.AVATAR) in deleted(cid)):
         return assets.read_focus(croot, aid, vid, base)
     return assets.read_focus(wroot_of(cid), aid, vid, base)
 
