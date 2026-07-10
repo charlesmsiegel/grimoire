@@ -78,7 +78,10 @@ export type Scene = { meta: { id: string; title: string }; messages: Message[] }
 export type EntityKind = "locations" | "lore";
 export type EntityScope = { kind: "world" | "campaign"; id: string };
 export type EntitySummary = { id: string; name: string; keys?: string; owners?: string; has_image?: boolean; image_v?: string | null };
-export type EntityDetail = { meta: { id: string; name: string; keys?: string; owners?: string }; body: string };
+export type EntityDetail = {
+  meta: { id: string; name: string; keys?: string; owners?: string; sd_prompt?: string };
+  body: string;
+};
 
 // characters (V3 cards)
 export type CardData = {
@@ -95,6 +98,7 @@ export type CardData = {
   creator_notes?: string;
   tags?: string[];
   character_book?: { entries?: unknown[] };
+  extensions?: { sd_prompt?: string; [k: string]: unknown };
   [k: string]: unknown;
 };
 export type Card = { spec: string; spec_version: string; data: CardData };
@@ -189,7 +193,8 @@ export type SceneContext = { model: string; total_tokens: number; sections: Cont
 export type CastDetail = { kind: "characters" | "pcs"; id: string; name: string; version: string; body: string };
 export type TimelineEvent = { date: string; text: string };
 export type StagedEdit = {
-  id: string; kind: "character_state" | "lore" | "authored" | "relationship" | "bond" | "plot";
+  id: string; kind: "character_state" | "lore" | "authored" | "relationship" | "bond" | "plot"
+    | "new_character" | "new_location" | "new_lore";
   target: { kind: string; id: string }; label: string; field: string;
   before: string; after: string; authored: boolean;
   payload?: Record<string, unknown>;
