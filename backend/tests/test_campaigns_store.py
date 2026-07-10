@@ -2,12 +2,20 @@ import shutil
 
 import pytest
 
-from grimoire.store import assets, campaigns, characters, entities, greetings, overlay, pcs, worlds
+from grimoire.store import appearances, assets, campaigns, characters, entities, greetings, overlay, pcs, worlds
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 
 
 def home(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+
+
+def _stamp_full(cid: str) -> None:
+    """Mark a campaign as pre-overlay full-copy, the state ensure_campaign_slim migrates from."""
+    mp = campaigns.campaign_meta_path(cid)
+    meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
+    meta["world_copy"] = "full"
+    mp.write_text(dump_frontmatter(meta, body), encoding="utf-8")
 
 
 def test_create_campaign_is_thin(monkeypatch, tmp_path):
@@ -159,10 +167,7 @@ def _fat_campaign(monkeypatch, tmp_path):
     campaigns.write_manifest(cid, manifest)
     entities.update_entity(croot, "lore", diverged, body="campaign text")
     (croot / "lore" / f"{removed}.md").unlink()
-    mp = campaigns.campaign_meta_path(cid)
-    meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
-    meta["world_copy"] = "full"
-    mp.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+    _stamp_full(cid)
     return wroot, cid, same, diverged, removed, aid, vid
 
 
@@ -187,3 +192,101 @@ def test_slim_skips_when_world_missing(monkeypatch, tmp_path):
     shutil.rmtree(wroot)
     campaigns.ensure_campaign_slim(cid)
     assert campaigns.read_campaign(cid)["meta"]["world_copy"] == "full"  # untouched, retried later
+
+
+def test_slim_tombstones_user_deleted_plotmap(monkeypatch, tmp_path):
+    """A pre-overlay campaign whose user deleted their local plotmap.json copy
+    (world still has one) must come out of slim with the deletion preserved —
+    not resurrected through the overlay."""
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    aid, vid = characters.create_character(wroot, "Hero")
+    g = greetings.create_greeting(wroot, "Gala", aid, vid, body="Hi.")
+    greetings.set_edges(wroot, g, leads_to=[])
+    cid = campaigns.create_campaign("C", wid)
+    croot = campaigns.campaign_root(cid)
+    (croot / "plotmap.json").write_text(
+        (wroot / "plotmap.json").read_text(encoding="utf-8"), encoding="utf-8")
+    campaigns.write_manifest(cid, {"plotmap": greetings.plotmap_hash(wroot)})
+    (croot / "plotmap.json").unlink()   # user deleted their campaign-side copy
+    _stamp_full(cid)
+
+    campaigns.ensure_campaign_slim(cid)
+
+    assert "plotmap" in overlay.deleted(cid)
+    assert overlay.read_plotmap(cid) == {}   # campaign-side (empty) map, not the world's
+    assert "plotmap" not in campaigns.read_manifest(cid)
+
+
+def test_slim_tombstones_user_deleted_actor(monkeypatch, tmp_path):
+    """A pre-overlay campaign whose user deleted their local actor copy (world
+    still has that actor) must come out of slim with the deletion preserved."""
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    aid, vid = characters.create_character(wroot, "Hero")
+    cid = campaigns.create_campaign("C", wid)
+    croot = campaigns.campaign_root(cid)
+    shutil.copytree(wroot / "characters" / aid, croot / "characters" / aid)
+    ref = f"characters/{aid}"
+    campaigns.write_manifest(cid, {ref: characters.dir_hash(wroot, aid)})
+    shutil.rmtree(croot / "characters" / aid)   # user deleted their campaign-side copy
+    _stamp_full(cid)
+
+    campaigns.ensure_campaign_slim(cid)
+
+    assert ref in overlay.deleted(cid)
+    assert ref not in campaigns.read_manifest(cid)
+    assert aid not in [c["id"] for c in overlay.list_characters(cid)]
+
+
+def test_slim_keeps_locked_actor_card_and_drops_ref(monkeypatch, tmp_path):
+    """A pre-overlay campaign can hold both a leftover full-copy sync.md entry
+    for an actor *and* an appearances.json lock for it (the lock was picked
+    during play, under the old code that never cleared the sync entry). Slim
+    must keep the locked card/version on disk and only drop the manifest ref
+    — the lock invariant (appearances.json) owns the base from here on."""
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    aid, vid = characters.create_character(wroot, "Hero")
+    characters.create_version(wroot, aid, "grim", characters.blank_card("Hero"))
+    cid = campaigns.create_campaign("C", wid)
+    croot = campaigns.campaign_root(cid)
+    shutil.copytree(wroot / "characters" / aid, croot / "characters" / aid)
+    ref = f"characters/{aid}"
+    campaigns.write_manifest(cid, {ref: characters.dir_hash(wroot, aid)})
+    appearances.appear(cid, "s1", "characters", aid, vid, "npc")   # locks + purges siblings
+    # appear() already drops the manifest ref via its modern _lock helper;
+    # restore it to look like a legacy campaign whose old sync entry lingered
+    campaigns.write_manifest(cid, {ref: characters.dir_hash(wroot, aid)})
+    _stamp_full(cid)
+
+    campaigns.ensure_campaign_slim(cid)
+
+    assert (croot / "characters" / aid / "character.md").exists()
+    assert (croot / "characters" / aid / f"{vid}.json").exists()
+    assert ref not in campaigns.read_manifest(cid)
+
+
+def test_slim_keeps_diverged_actor_and_ref(monkeypatch, tmp_path):
+    """An actor whose campaign copy has diverged from the world (edited
+    campaign-side) must survive slim untouched: card kept, manifest ref kept."""
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    aid, vid = characters.create_character(wroot, "Hero")
+    cid = campaigns.create_campaign("C", wid)
+    croot = campaigns.campaign_root(cid)
+    shutil.copytree(wroot / "characters" / aid, croot / "characters" / aid)
+    ref = f"characters/{aid}"
+    campaigns.write_manifest(cid, {ref: characters.dir_hash(wroot, aid)})
+    characters.update_version(croot, aid, vid, characters.blank_card("Hero (edited)"))
+    _stamp_full(cid)
+
+    campaigns.ensure_campaign_slim(cid)
+
+    assert (croot / "characters" / aid / "character.md").exists()
+    assert (croot / "characters" / aid / f"{vid}.json").exists()
+    assert ref in campaigns.read_manifest(cid)
