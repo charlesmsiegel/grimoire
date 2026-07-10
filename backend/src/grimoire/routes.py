@@ -1637,6 +1637,56 @@ def get_campaign_image(cid: str, char: str, vid: str, name: str, request: Reques
     return _serve_image(_campaign_root_or_404(cid), char, vid, name, request=request)
 
 
+@router.put("/campaigns/{cid}/characters/{char}/versions/{vid}/images/{name}")
+async def put_campaign_image(cid: str, char: str, vid: str, name: str, file: UploadFile = File(...)):
+    root = _campaign_root_or_404(cid)
+    data = await file.read()
+    fn = file.filename or ""
+    ext = fn.rsplit(".", 1)[-1] if "." in fn else ""
+    try:
+        stored = store.assets.put_image(root, char, vid, name, data, ext)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"name": name, "ext": stored}
+
+
+@router.delete("/campaigns/{cid}/characters/{char}/versions/{vid}/images/{name}")
+def delete_campaign_image(cid: str, char: str, vid: str, name: str):
+    store.assets.delete_image(_campaign_root_or_404(cid), char, vid, name)
+    return {"ok": True}
+
+
+@router.post("/campaigns/{cid}/characters/{char}/versions/{vid}/images/{name}/promote")
+def promote_campaign_image(cid: str, char: str, vid: str, name: str):
+    try:
+        store.assets.promote_image(_campaign_root_or_404(cid), char, vid, name)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="image not found")
+    return {"ok": True}
+
+
+@router.put("/campaigns/{cid}/characters/{char}/versions/{vid}/images/avatar/focus")
+def put_campaign_avatar_focus(cid: str, char: str, vid: str, body: AvatarFocus):
+    root = _campaign_root_or_404(cid)
+    if store.assets.image_path(root, char, vid, store.assets.AVATAR) is None:
+        raise HTTPException(status_code=404, detail="image not found")
+    store.assets.write_focus(root, char, vid, body.focus)
+    return {"ok": True}
+
+
+@router.post("/campaigns/{cid}/characters/{char}/versions/{vid}/images/copy-from-greeting")
+def post_copy_campaign_image_from_greeting(cid: str, char: str, vid: str, body: CopyFromGreeting):
+    root = _campaign_root_or_404(cid)
+    try:
+        stored = store.image_subjects.copy_to_character(root, body.gid, body.name, char, vid, body.slot)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="source image not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    p = store.assets.image_path(root, char, vid, stored)
+    return {"name": stored, "ext": p.suffix.lstrip(".").lower() if p else ""}
+
+
 def _campaign_wroot(cid: str):
     return store.worlds.world_root(store.campaigns.read_campaign(cid)["meta"].get("world", ""))
 
