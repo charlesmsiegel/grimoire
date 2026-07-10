@@ -9,8 +9,8 @@ from __future__ import annotations
 import json
 
 from .. import prompts
-from . import (appearances, campaigns, changes, characters, chronicle, entities, pcs,
-               playstate, plot, relationships, scenes)
+from . import (appearances, campaigns, cards, changes, characters, chronicle, entities,
+               pcs, playstate, plot, relationships, scenes)
 from .paths import slugify
 
 
@@ -394,6 +394,10 @@ def apply_edits(cid: str, edits: list[dict], sid: str | None = None) -> list[str
                 card["data"]["personality"] = p.get("personality", "")
                 card["data"]["mes_example"] = p.get("mes_example", "")
                 card["data"]["extensions"]["sd_prompt"] = p.get("sd_prompt", "")
+                # Generated example dialogue uses the {{char}} macro; scene assembly
+                # expands a stored {{char}} to the whole present cast, so bake the
+                # card's own name in now (same as card import).
+                cards.bake_char_name(card)
                 new_cid, new_vid = characters.create_character(croot, p["name"], "default", card)
                 if sid:
                     appearances.appear(cid, sid, "characters", new_cid, new_vid, "npc")
