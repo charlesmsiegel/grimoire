@@ -53,6 +53,11 @@ class NameBody(BaseModel):
     name: str
 
 
+class RollBody(BaseModel):
+    notation: str
+    label: str | None = None
+
+
 class NewCampaign(BaseModel):
     name: str
     world: str
@@ -1986,6 +1991,38 @@ def put_scene_datetime(cid: str, sid: str, body: SceneDatetime):
     except store.calendars.CalendarError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"ok": True, **result}
+
+
+@router.post("/campaigns/{cid}/scenes/{sid}/roll")
+def post_scene_roll(cid: str, sid: str, body: RollBody):
+    """Manual dice roll: resolve, log to <campaign>/rolls.json, and write the
+    result into the scene transcript as a narrator line."""
+    _require_scene(cid, sid)
+    try:
+        result = store.dice.roll(body.notation)
+    except store.dice.DiceError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    entry = store.rolls.append(cid, sid, body.label or None, result)
+    line = store.dice.format_roll(result, body.label or None)
+    store.scenes.append_message(cid, sid, "assistant", line)
+    return {"ok": True, "roll": entry, "message": line}
+
+
+# registered before the generic /campaigns/{cid}/{kind} entity routes below,
+# which would otherwise swallow /campaigns/x/rolls
+@router.get("/campaigns/{cid}/rolls")
+def get_rolls(cid: str):
+    if not store.campaigns.campaign_meta_path(cid).exists():
+        raise HTTPException(status_code=404, detail="campaign not found")
+    return list(reversed(store.rolls.read(cid)))
+
+
+@router.post("/campaigns/{cid}/rolls/{rid}/replay")
+def post_roll_replay(cid: str, rid: str):
+    try:
+        return {"ok": True, **store.rolls.replay(cid, rid)}
+    except store.rolls.RollNotFound:
+        raise HTTPException(status_code=404, detail="roll not found")
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}/context")

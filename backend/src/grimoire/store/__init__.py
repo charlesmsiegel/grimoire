@@ -4,15 +4,17 @@ from __future__ import annotations
 
 from . import (
     absorb, appearances, assets, campaigns, cards, changes, characters, chronicle,
-    chub, context, dossiers, entities, epub, fetch, greetings, image_subjects, localize,
-    lorebook, migrations, pcs, playing, playstate, plot, relationships, scene_ids,
-    scene_refs, scenes, suggest, sync, tags, taglines, thumbs, worlds,
+    chub, context, dice, dossiers, entities, epub, fetch, greetings, image_subjects,
+    localize, lorebook, migrations, pcs, playing, playstate, plot, relationships, rolls,
+    scene_ids, scene_refs, scenes, suggest, sync, tags, taglines, thumbs, worlds,
 )
 from .appearances import AppearError
 from .campaigns import CampaignNotFound
 from .cards import CardParseError
 from .characters import CharacterNotFound, VersionNotFound
 from .chub import ChubFetchError, ChubParseError
+from .dice import DiceError
+from .rolls import RollNotFound
 from .greetings import GreetingNotFound
 from .lorebook import LorebookError
 from .playing import PlayError
@@ -82,6 +84,10 @@ __all__ = [
     "playstate",
     "plot",
     "relationships",
+    "dice",
+    "DiceError",
+    "rolls",
+    "RollNotFound",
     "suggest",
     "lorebook",
     "LorebookError",

@@ -2575,3 +2575,64 @@ def test_export_epub_route(client):
 
 def test_export_epub_unknown_campaign_404(client):
     assert client.get("/api/campaigns/nope/export.epub").status_code == 404
+
+
+# ---- dice rolls ----
+def _scene(client, cid, title="S"):
+    return client.post(f"/api/campaigns/{cid}/scenes", json={"title": title}).json()["id"]
+
+
+def test_scene_roll_logs_and_posts_to_scene(client):
+    _, cid = _campaign(client)
+    sid = _scene(client, cid)
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll",
+                    json={"notation": "2d6+3", "label": "Perception"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body["roll"]["id"] == "r1" and body["roll"]["scene"] == sid
+    assert "Perception" in body["message"] and "2d6+3" in body["message"]
+    msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    assert len(msgs) == 1 and msgs[0]["role"] == "assistant"
+    assert "\U0001F3B2" in msgs[0]["content"]
+
+
+def test_scene_roll_bad_notation_is_400(client):
+    _, cid = _campaign(client)
+    sid = _scene(client, cid)
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll", json={"notation": "garbage"})
+    assert r.status_code == 400
+    assert "dice notation" in r.json()["detail"]
+
+
+def test_scene_roll_missing_scene_is_404(client):
+    _, cid = _campaign(client)
+    r = client.post(f"/api/campaigns/{cid}/scenes/nope/roll", json={"notation": "2d6"})
+    assert r.status_code == 404
+
+
+def test_rolls_listing_newest_first(client):
+    _, cid = _campaign(client)
+    sid = _scene(client, cid)
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll", json={"notation": "2d6"})
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll", json={"notation": "d20"})
+    listing = client.get(f"/api/campaigns/{cid}/rolls").json()
+    assert [e["id"] for e in listing] == ["r2", "r1"]
+
+
+def test_rolls_listing_missing_campaign_is_404(client):
+    assert client.get("/api/campaigns/nope/rolls").status_code == 404
+
+
+def test_roll_replay_roundtrip(client):
+    _, cid = _campaign(client)
+    sid = _scene(client, cid)
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll", json={"notation": "4d6kh3"})
+    r = client.post(f"/api/campaigns/{cid}/rolls/r1/replay")
+    assert r.status_code == 200
+    assert r.json()["ok"] is True and r.json()["match"] is True
+
+
+def test_roll_replay_missing_is_404(client):
+    _, cid = _campaign(client)
+    assert client.post(f"/api/campaigns/{cid}/rolls/r9/replay").status_code == 404
