@@ -226,7 +226,10 @@ button.plate-avatar, button.plate-name { cursor: pointer; }
 .msg:hover .gutter-icons, .msg:focus-within .gutter-icons { opacity: 1; }
 .msg-body p:first-child { margin-top: 0; }
 .msg-body p:last-child { margin-bottom: 0; }
-.inputbar { display: flex; gap: 0; padding: 0; border-top: var(--rw) solid var(--rule); background: var(--page); flex: none; }
+.inputbar { display: flex; gap: 0; padding: 0; border-top: var(--rw) solid var(--rule); background: var(--page); flex: none; position: relative; }
+.inputbar .roll-btn { border: none; border-right: var(--rw) solid var(--rule); background: none;
+  padding: 0 12px; cursor: pointer; font-size: 15px; }
+.inputbar .roll-btn:disabled { opacity: 0.4; cursor: default; }
 .inputbar textarea {
   flex: 1; background: transparent; color: var(--page-ink); border: none;
   padding: 14px 18px; font-family: var(--fb); font-size: 15.5px; resize: none; outline: none;
@@ -603,6 +606,18 @@ button.primary { background: var(--accent); color: var(--on-accent); border: var
   padding: 7px 10px; font-family: var(--fm); font-size: 12px;
 }
 .reroll-pop .btn-chrome { border: none; border-left: var(--rw) solid var(--rule); padding: 7px 12px; box-shadow: none; font-size: 11px; white-space: nowrap; }
+
+/* ---- manual dice roll popover (anchored to the input bar) ---- */
+.roll-pop { position: absolute; bottom: 100%; left: 0; margin-bottom: 8px; z-index: 5;
+  display: flex; align-items: center; flex-wrap: wrap;
+  background: var(--surface); border: var(--rw) solid var(--rule); box-shadow: var(--sh3); }
+.roll-pop input {
+  width: 170px; background: transparent; color: var(--ink); border: none; outline: none;
+  border-right: var(--rw) solid var(--rule); padding: 7px 10px; font-family: var(--fm); font-size: 12px;
+}
+.roll-pop .btn-chrome { border: none; padding: 7px 12px; box-shadow: none; font-size: 11px; white-space: nowrap; }
+.roll-pop .roll-error { flex-basis: 100%; padding: 5px 10px; font-family: var(--fm); font-size: 11px;
+  color: var(--accent); border-top: var(--rw) solid var(--rule); }
 .msg-edit { background: transparent; border: none; color: var(--page-muted); cursor: pointer; font-size: 13px; padding: 0; }
 .msg-edit:hover { color: var(--accent); }
 .msg-edit-form textarea { width: 100%; background: var(--surface); color: var(--ink); border: var(--rw2) solid var(--accent); padding: 8px; font-family: var(--fb); resize: vertical; }

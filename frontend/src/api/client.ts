@@ -225,6 +225,17 @@ export type RecordChange = {
 // lorebook import
 export type LoreEntryDraft = { name: string; keys: string[]; body: string; category: EntityKind };
 
+// dice rolls
+export type DieDetail = { value: number; rolls: number[]; kept: boolean };
+export type RollResult = {
+  notation: string; seed: number; dice: DieDetail[]; modifier: number;
+  pool_target: number | null; vs: number | null;
+  total: number | null; successes: number | null; outcome: string | null;
+};
+export type RollEntry = {
+  id: string; ts: string; scene: string | null; label: string | null; result: RollResult;
+};
+
 function entityBase(scope: EntityScope): string {
   return scope.kind === "world" ? `/api/worlds/${scope.id}` : `/api/campaigns/${scope.id}`;
 }
@@ -323,6 +334,13 @@ export const api = {
   regenerate: (cid: string, sid: string, onEvent: (e: ChatEvent) => void, guidance?: string) =>
     streamPost(`/api/campaigns/${cid}/scenes/${sid}/regenerate`,
                guidance ? { guidance } : undefined, onEvent),
+
+  // dice rolls
+  roll: (cid: string, sid: string, notation: string, label?: string) =>
+    request<{ ok: boolean; roll: RollEntry; message: string }>(
+      "POST", `/api/campaigns/${cid}/scenes/${sid}/roll`,
+      { notation, ...(label ? { label } : {}) }),
+  listRolls: (cid: string) => request<RollEntry[]>("GET", `/api/campaigns/${cid}/rolls`),
 
   getWorld: (wid: string) =>
     request<{ meta: WorldMeta; body: string; counts: Record<string, number> }>("GET", `/api/worlds/${wid}`),

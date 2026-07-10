@@ -42,6 +42,8 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
   const [ctxKey, setCtxKey] = useState(0);
   const [editing, setEditing] = useState<{ index: number; text: string } | null>(null);
   const [rerollPrompt, setRerollPrompt] = useState<string | null>(null); // null = popover closed
+  // null = closed; open holds the in-progress notation/label/error
+  const [rollForm, setRollForm] = useState<{ notation: string; label: string; error: string | null } | null>(null);
   const [colorQuotes, setColorQuotes] = useState(false);
   const [labels, setLabels] = useState({ user: "You", assistant: "Grimoire" });
   const [cast, setCast] = useState<Actor[]>([]);
@@ -214,6 +216,19 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
     await runStream(activeId, (onEvent) => guidance
       ? api.regenerate(cid, activeId!, onEvent, guidance)
       : api.regenerate(cid, activeId!, onEvent));
+  }
+
+  async function doRoll() {
+    if (!activeId || busy || !rollForm) return;
+    const notation = rollForm.notation.trim();
+    if (!notation) return;
+    try {
+      await api.roll(cid, activeId, notation, rollForm.label.trim() || undefined);
+      setRollForm(null);
+      await selectScene(activeId);
+    } catch (err: any) {
+      setRollForm({ ...rollForm, error: err.detail ?? String(err) });
+    }
   }
 
   async function endScene() {
@@ -575,6 +590,38 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
           )}
         </div>
         <div className="inputbar">
+          <button className="roll-btn" title="Roll dice" aria-label="Roll dice"
+                  disabled={!activeId || busy}
+                  onClick={() => setRollForm((f) => (f ? null : { notation: "", label: "", error: null }))}>
+            🎲
+          </button>
+          {rollForm && (
+            <div className="roll-pop">
+              <input
+                autoFocus
+                placeholder="2d6+3, 4d6kh3, 7d10t6…"
+                aria-label="Dice notation"
+                value={rollForm.notation}
+                onChange={(e) => setRollForm({ ...rollForm, notation: e.target.value })}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") doRoll();
+                  if (e.key === "Escape") setRollForm(null);
+                }}
+              />
+              <input
+                placeholder="Label (optional)"
+                aria-label="Roll label"
+                value={rollForm.label}
+                onChange={(e) => setRollForm({ ...rollForm, label: e.target.value })}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") doRoll();
+                  if (e.key === "Escape") setRollForm(null);
+                }}
+              />
+              <button className="btn-chrome" onClick={doRoll}>Roll ▸</button>
+              {rollForm.error && <span className="roll-error">{rollForm.error}</span>}
+            </div>
+          )}
           <textarea
             rows={3}
             placeholder={activePcless ? "Direct the scene (optional)…" : "Speak your intent…"}

@@ -37,6 +37,7 @@ vi.mock("../api/client", async () => {
       chat: vi.fn(),
       retry: vi.fn(),
       regenerate: vi.fn(),
+      roll: vi.fn(),
       getConfig: vi.fn(),
       editMessage: vi.fn(),
       absorbScene: vi.fn(), saveChronicle: vi.fn(), getChronicle: vi.fn(),
@@ -754,4 +755,29 @@ test("renders an Export EPUB download link", async () => {
   const link = await screen.findByRole("link", { name: /export epub/i });
   expect(link).toHaveAttribute("href", "/api/campaigns/run/export.epub");
   expect(link).toHaveAttribute("download");
+});
+
+test("rolls dice from the input bar popover and refreshes the scene", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.roll as any).mockResolvedValue({ ok: true, roll: { id: "r1" }, message: "🎲" });
+  renderCampaign();
+  fireEvent.click(await screen.findByRole("button", { name: "Roll dice" }));
+  fireEvent.change(screen.getByLabelText("Dice notation"), { target: { value: "2d6+1" } });
+  fireEvent.change(screen.getByLabelText("Roll label"), { target: { value: "Perception" } });
+  fireEvent.click(screen.getByRole("button", { name: "Roll ▸" }));
+  await waitFor(() => expect(api.roll).toHaveBeenCalledWith("run", "s1", "2d6+1", "Perception"));
+  // popover closes and the scene re-fetches to show the roll line
+  await waitFor(() => expect(screen.queryByLabelText("Dice notation")).toBeNull());
+  expect((api.getScene as any).mock.calls.length).toBeGreaterThan(1);
+});
+
+test("shows a roll error and keeps the popover open", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.roll as any).mockRejectedValue({ detail: "can't read dice notation 'garbage'" });
+  renderCampaign();
+  fireEvent.click(await screen.findByRole("button", { name: "Roll dice" }));
+  fireEvent.change(screen.getByLabelText("Dice notation"), { target: { value: "garbage" } });
+  fireEvent.click(screen.getByRole("button", { name: "Roll ▸" }));
+  await screen.findByText(/can't read dice notation/);
+  expect(screen.getByLabelText("Dice notation")).toBeInTheDocument();
 });
