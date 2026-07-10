@@ -14,8 +14,7 @@ import re
 
 from .. import prompts
 from . import (appearances, calendars, campaigns, characters, chronicle,
-               config, dossiers, entities, pcs, playstate, plot, relationships, scenes,
-               taglines)
+               config, dossiers, entities, overlay, pcs, playstate, plot, relationships, scenes)
 
 
 def activate(entries: list[dict], recent_text: str, present: frozenset = frozenset()) -> list[dict]:
@@ -105,15 +104,15 @@ def _campaign_player_refs(cid: str, croot) -> tuple[list[dict], list[str]]:
     return refs, names
 
 
-def _world_info(croot, recent_text: str, exclude: frozenset = frozenset(),
+def _world_info(cid: str, recent_text: str, exclude: frozenset = frozenset(),
                 present: frozenset = frozenset()) -> list[str]:
     """Bodies of the activated lore/location entries (the template joins them)."""
     entries = []
     for kind in ("lore", "locations"):
-        for meta in entities.list_entities(croot, kind):
+        for meta in overlay.list_entities(cid, kind):
             if kind == "locations" and meta["id"] in exclude:
                 continue
-            e = entities.read_entity(croot, kind, meta["id"])
+            e = overlay.read_entity(cid, kind, meta["id"])
             keys = [k.strip() for k in e["meta"].get("keys", "").split(",") if k.strip()]
             owners = [o.strip() for o in e["meta"].get("owners", "").split(",") if o.strip()]
             if kind == "locations" and not keys:
@@ -166,14 +165,15 @@ def _cast_directory_data(croot, cid: str, sid: str) -> tuple[list[dict], list[di
             active.append({"name": _char_name(croot, a["id"]), "dossier": body})
 
     known: list[dict] = []
-    for char_id in characters.character_refs(croot):
+    for char_id in overlay.character_refs(cid):
         if char_id in roster_ids or char_id in present:
             continue
-        tag = taglines.read(croot, char_id)
+        tag = overlay.tagline(cid, char_id)
         if not tag:
             continue
-        versions = [v["id"] for v in characters.read_character(croot, char_id)["versions"]]
-        known.append({"name": _char_name(croot, char_id), "tagline": tag, "versions": versions})
+        versions = [v["id"] for v in characters.read_character(overlay.char_root(cid, char_id), char_id)["versions"]]
+        known.append({"name": _char_name(overlay.char_root(cid, char_id), char_id),
+                     "tagline": tag, "versions": versions})
     return active, known
 
 
@@ -325,7 +325,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0) -> dic
     exclude: frozenset = frozenset()
     if current_loc:
         try:
-            current_setting = entities.read_entity(croot, "locations", current_loc)["body"].strip()
+            current_setting = overlay.read_entity(cid, "locations", current_loc)["body"].strip()
             exclude = frozenset({current_loc})
         except entities.EntityNotFound:
             pass  # referenced location was deleted — omit the setting block
@@ -345,7 +345,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0) -> dic
         "plot_lines": plot.render_open(cid, with_id=False),
         "today": _today_data(cid, sid, croot),
         "current_setting": current_setting,
-        "world_info_bodies": _world_info(croot, recent_text, exclude, frozenset(present)),
+        "world_info_bodies": _world_info(cid, recent_text, exclude, frozenset(present)),
         "offscene_active": offscene_active, "offscene_known": offscene_known,
         "player_names": player_names,
     }

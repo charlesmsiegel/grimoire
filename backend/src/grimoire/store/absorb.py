@@ -10,7 +10,7 @@ import json
 
 from .. import prompts
 from . import (appearances, campaigns, cards, changes, characters, chronicle, entities,
-               pcs, playstate, plot, relationships, scenes)
+               overlay, pcs, playstate, plot, relationships, scenes)
 from .paths import slugify
 
 
@@ -145,10 +145,10 @@ def _actor_exists(croot, token: str) -> bool:
         return False
 
 
-def _entity_kind(croot, eid: str) -> str | None:
+def _entity_kind(cid: str, eid: str) -> str | None:
     for kind in ("lore", "locations"):
         try:
-            entities.read_entity(croot, kind, eid)
+            overlay.read_entity(cid, kind, eid)
             return kind
         except entities.EntityNotFound:
             continue
@@ -203,10 +203,10 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
         eid, append = e.get("id", ""), (e.get("append", "") or "").strip()
         if not eid or not append:
             continue
-        kind = _entity_kind(croot, eid)
+        kind = _entity_kind(cid, eid)
         if not kind:
             continue
-        ent = entities.read_entity(croot, kind, eid)
+        ent = overlay.read_entity(cid, kind, eid)
         before = ent["body"].strip()
         after = (before + "\n\n" + append).strip()
         out.append({"id": f"lore:{eid}", "kind": "lore", "target": {"kind": kind, "id": eid},
@@ -325,7 +325,7 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
         ("locations", "new_locations", "new_location", "location"),
         ("lore", "new_lore", "new_lore", "lore entry"),
     ):
-        existing_names = {ent["name"].strip().lower() for ent in entities.list_entities(croot, kind)}
+        existing_names = {ent["name"].strip().lower() for ent in overlay.list_entities(cid, kind)}
         for e in parsed.get(parsed_key, []):
             name = (e.get("name", "") or "").strip()
             body = (e.get("body", "") or "").strip()
@@ -335,7 +335,7 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
                 continue
             candidate_id = slugify(name)
             try:
-                entities.read_entity(croot, kind, candidate_id)
+                overlay.read_entity(cid, kind, candidate_id)
                 continue
             except entities.EntityNotFound:
                 pass
@@ -370,7 +370,7 @@ def apply_edits(cid: str, edits: list[dict], sid: str | None = None) -> list[str
             if kind == "character_state":
                 playstate.write_state(croot, target["id"], after)
             elif kind == "lore":
-                entities.update_entity(croot, target["kind"], target["id"], body=after)
+                overlay.update_entity(cid, target["kind"], target["id"], body=after)
             elif kind == "authored":
                 if e["field"] not in _CARD_FIELDS:
                     continue  # re-guard: PUT edits are client-supplied, not re-materialized

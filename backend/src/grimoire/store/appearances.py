@@ -14,7 +14,7 @@ import re
 import shutil
 from pathlib import Path
 
-from . import campaigns, characters, pcs, worlds
+from . import campaigns, characters, overlay, pcs, worlds
 from .frontmatter import dump_frontmatter, parse_frontmatter
 
 ACTOR_KINDS = ("characters", "pcs")
@@ -140,8 +140,7 @@ def pick_version(cid: str, kind: str, actor_id: str, version_id: str) -> None:
     data = record(cid)
     if ref in data:
         raise AppearError(f"{ref} is already locked to version {data[ref]['version']}")
-    croot = campaigns.campaign_root(cid)
-    if actor_hash(croot, kind, actor_id, version_id) is None:
+    if actor_hash(overlay.actor_root(cid, kind, actor_id), kind, actor_id, version_id) is None:
         raise AppearError(f"no {ref}/{version_id} in campaign")
     base = _lock(cid, kind, actor_id, version_id)
     data[ref] = {"version": version_id, "base": base, "scenes": [],
@@ -296,16 +295,16 @@ def locked_version(cid: str, kind: str, actor_id: str) -> str | None:
 
 def suggestions(cid: str, scene_id: str) -> list[dict]:
     from . import scenes
-    croot = campaigns.campaign_root(cid)
     appeared_chars = {actor_id for ref in record(cid) for k, actor_id in [_split(ref)] if k == "characters"}
     dismissed = set(scenes.get_dismissed(cid, scene_id))
     in_scene_chars = [a["id"] for a in scene_cast(cid, scene_id) if a["kind"] == "characters"]
-    candidates = [c for c in characters.list_characters(croot)
+    candidates = [c for c in overlay.list_characters(cid)
                   if c["id"] not in appeared_chars and c["id"] not in dismissed and c["id"] not in in_scene_chars]
 
     mentioned_by: dict[str, list[str]] = {}
     for char_id in in_scene_chars:
-        card = characters.read_card(croot, char_id, locked_version(cid, "characters", char_id))
+        card = characters.read_card(overlay.char_root(cid, char_id), char_id,
+                                    locked_version(cid, "characters", char_id))
         d = card.get("data", {})
         text = "\n".join(d.get(f) for f in ("description", "personality", "scenario", "first_mes", "mes_example")
                          if isinstance(d.get(f), str))

@@ -871,7 +871,9 @@ def test_reject_flow(client):
     client.post(f"/api/worlds/{wid}/lore", json={"name": "Pact", "body": "p"})
     client.post(f"/api/campaigns/{cid}/incoming/reject", json={"refs": [{"kind": "lore", "id": "pact"}]})
     assert client.get(f"/api/campaigns/{cid}/incoming").json() == []
-    assert client.get(f"/api/campaigns/{cid}/lore/pact").status_code == 404
+    # reject only clears the pending marker -- it does not tombstone, so the
+    # world's still-live record continues to read through the campaign overlay
+    assert client.get(f"/api/campaigns/{cid}/lore/pact").json()["body"].strip() == "p"
 
 
 def test_world_push_view(client):

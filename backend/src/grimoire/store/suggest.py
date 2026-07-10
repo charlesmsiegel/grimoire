@@ -11,7 +11,7 @@ import json
 
 from .. import prompts
 from . import (appearances, calendars, campaigns, characters, chronicle,
-               entities, greetings, pcs, plot, taglines)
+               greetings, overlay, pcs, plot)
 
 
 def _char_name(croot, aid: str) -> str:
@@ -112,11 +112,11 @@ def build_snapshot(cid: str, offscreen: bool = False) -> dict:
         return "unseen"
 
     cast, seen = [], set()
-    for c in characters.list_characters(croot):
+    for c in overlay.list_characters(cid):
         tok = f"characters:{c['id']}"
         seen.add(tok)
         cast.append({"token": tok, "name": c.get("name", c["id"]),
-                     "tagline": taglines.read(croot, c["id"]),
+                     "tagline": overlay.tagline(cid, c["id"]),
                      "status": _status(tok),
                      "role": "player" if tok in player_tokens else "npc"})
     if not offscreen:  # offscreen scenes never cast the player
@@ -136,7 +136,7 @@ def build_snapshot(cid: str, offscreen: bool = False) -> dict:
                          "status": _status(tok), "role": "player"})
 
     available_locations = [{"id": e["id"], "name": e.get("name", e["id"])}
-                           for e in entities.list_entities(croot, "locations")]
+                           for e in overlay.list_entities(cid, "locations")]
 
     return {"now": now, "friendly": friendly, "holidays_today": holidays_today,
             "upcoming": upcoming, "birthdays": _birthdays(croot, now, roster),
@@ -155,11 +155,10 @@ def greeting_candidates(cid: str, after: str | None = None, pcless: bool = False
              if g["available"] and g.get("pcless", False) == pcless]
     if len(avail) <= 2:
         return []
-    croot = campaigns.campaign_root(cid)
     out: list[dict] = []
     for g in avail:
         try:
-            body = greetings.read_greeting(croot, g["id"])["body"]
+            body = overlay.read_greeting(cid, g["id"])["body"]
         except greetings.GreetingNotFound:
             body = ""
         out.append({"id": g["id"], "name": g["name"],
@@ -176,10 +175,9 @@ def build_prompt(snapshot: dict, greeting_candidates: list[dict] | None = None,
 
 
 def _valid_ids(cid: str):
-    croot = campaigns.campaign_root(cid)
-    char_ids = {c["id"] for c in characters.list_characters(croot)}
+    char_ids = {c["id"] for c in overlay.list_characters(cid)}
     player_tokens = {f"{a['kind']}:{a['id']}" for a in appearances.roster(cid) if a["role"] == "player"}
-    loc_ids = {e["id"] for e in entities.list_entities(croot, "locations")}
+    loc_ids = {e["id"] for e in overlay.list_entities(cid, "locations")}
     return char_ids, player_tokens, loc_ids
 
 
