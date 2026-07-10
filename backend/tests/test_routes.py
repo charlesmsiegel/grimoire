@@ -84,6 +84,17 @@ def test_world_crud(client):
     assert client.get("/api/worlds").json() == []
 
 
+def test_world_delete_blocked_while_campaigns_reference_it(client):
+    """Deleting a world returns 409 if campaigns still reference it."""
+    wid, cid = _campaign(client, "Run")
+    r = client.delete(f"/api/worlds/{wid}")
+    assert r.status_code == 409
+    assert "Run" in r.json()["detail"]
+    # after deleting the campaign, deletion succeeds
+    assert client.delete(f"/api/campaigns/{cid}").status_code == 200
+    assert client.delete(f"/api/worlds/{wid}").status_code == 200
+
+
 def test_world_entity_crud(client):
     wid = _world(client)
     eid = client.post(f"/api/worlds/{wid}/locations", json={"name": "Drowned Library", "body": "Keeper"}).json()["id"]

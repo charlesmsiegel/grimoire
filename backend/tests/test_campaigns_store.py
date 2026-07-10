@@ -94,17 +94,37 @@ def test_list_read_rename_delete(monkeypatch, tmp_path):
         campaigns.read_campaign(cid)
 
 
+def test_delete_world_blocked_while_campaigns_reference_it(monkeypatch, tmp_path):
+    """Deleting a world that campaigns still reference would strand inherited
+    content; the guard blocks the delete and names the offending campaigns."""
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("W")
+    cid = campaigns.create_campaign("C", wid)
+    with pytest.raises(worlds.WorldInUse) as exc_info:
+        worlds.delete_world(wid)
+    assert "C" in exc_info.value.names
+    assert not worlds.world_root(wid).exists() is False  # world still exists
+    campaigns.delete_campaign(cid)
+    worlds.delete_world(wid)  # now allowed
+    assert not worlds.world_root(wid).exists()
+
+
 def test_deleting_world_leaves_campaign_metadata_intact(monkeypatch, tmp_path):
-    """A thin campaign leans on the world for anything never materialized, so
-    deleting the world out from under it strands that inherited content —
-    a gap a later world-deletion guard closes by blocking the delete outright.
-    This only pins what still holds today: the campaign itself survives."""
+    """A thin campaign leans on the world for anything never materialized.
+    With the world-deletion guard, this test now verifies the guard in action:
+    deletion is blocked while campaigns reference the world."""
     home(monkeypatch, tmp_path)
     wid = worlds.create_world("W")
     entities.create_entity(worlds.world_root(wid), "locations", "Seraphine", "Keeper.")
     cid = campaigns.create_campaign("Run", wid)
+    # deletion is blocked
+    with pytest.raises(worlds.WorldInUse):
+        worlds.delete_world(wid)
+    assert worlds.world_root(wid).exists()
+    # after deleting the campaign, deletion is allowed
+    campaigns.delete_campaign(cid)
     worlds.delete_world(wid)
-    assert campaigns.read_campaign(cid)["meta"]["id"] == cid
+    assert not worlds.world_root(wid).exists()
 
 
 def test_manifest_roundtrip_with_slash_keys(monkeypatch, tmp_path):
