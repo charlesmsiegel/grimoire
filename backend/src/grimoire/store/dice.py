@@ -63,3 +63,66 @@ def parse(notation: str) -> dict:
         raise DiceError("pool rolls (tN) don't take a +/- modifier")
     return {"count": count, "sides": sides, "keep": keep, "explode": bool(m["explode"]),
             "modifier": modifier, "pool": pool, "vs": int(m["vs"]) if m["vs"] else None}
+
+
+def _roll_dice(rng, spec: dict) -> list[dict]:
+    """Roll the dice for a parsed spec. Sum explosions chain onto the die that
+    exploded (its value is the chain sum); pool explosions append a new die.
+    A shared per-roll budget bounds explosion count."""
+    sides, explode = spec["sides"], spec["explode"]
+    is_pool = spec["pool"] is not None
+    budget = MAX_EXPLOSIONS
+    dice_out: list[dict] = []
+    to_roll = spec["count"]
+    while to_roll:
+        to_roll -= 1
+        chain = [rng.randint(1, sides)]
+        if is_pool:
+            if explode and chain[-1] == sides and budget:
+                budget -= 1
+                to_roll += 1
+        else:
+            while explode and chain[-1] == sides and budget:
+                budget -= 1
+                chain.append(rng.randint(1, sides))
+        dice_out.append({"value": sum(chain), "rolls": chain, "kept": True})
+    return dice_out
+
+
+def _apply_keep(dice_out: list[dict], keep: tuple[str, int] | None) -> None:
+    if keep is None:
+        return
+    op, n = keep
+    order = sorted(range(len(dice_out)), key=lambda i: dice_out[i]["value"])
+    if op == "kh":
+        dropped = order[:-n]
+    elif op == "kl":
+        dropped = order[n:]
+    elif op == "dh":
+        dropped = order[len(dice_out) - n:]
+    else:  # dl
+        dropped = order[:n]
+    for i in dropped:
+        dice_out[i]["kept"] = False
+
+
+def roll(notation: str, seed: int | None = None) -> dict:
+    """Resolve `notation`. Omitted seed is drawn from the OS CSPRNG (secrets),
+    then all dice come from one random.Random(seed) — reproducible by design."""
+    spec = parse(notation)
+    if seed is None:
+        seed = secrets.randbits(64)
+    rng = random.Random(seed)
+    dice_out = _roll_dice(rng, spec)
+    _apply_keep(dice_out, spec["keep"])
+    result = {"notation": notation.strip(), "seed": seed, "dice": dice_out,
+              "modifier": spec["modifier"], "pool_target": spec["pool"], "vs": spec["vs"],
+              "total": None, "successes": None, "outcome": None}
+    if spec["pool"] is not None:
+        result["successes"] = sum(
+            1 for d in dice_out if d["kept"] and d["value"] >= spec["pool"])
+    else:
+        result["total"] = sum(d["value"] for d in dice_out if d["kept"]) + spec["modifier"]
+        if spec["vs"] is not None:
+            result["outcome"] = "success" if result["total"] >= spec["vs"] else "failure"
+    return result
