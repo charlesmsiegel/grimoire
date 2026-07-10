@@ -826,7 +826,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
                          onSaved={(t) => { setTagline(t); reload(); }}
                          onClose={() => setTaglineQueue((q) => q.slice(1))} />
         )}
-        {worldScope && cropOpen && hasAvatar && (
+        {cropOpen && hasAvatar && (
           <AvatarFocusPicker src={avatarSrc(detail.meta.id, vid, true)}
                              initial={avatarFocus ?? 50}
                              onSave={saveFocus}
@@ -838,15 +838,12 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
           {importMsg && <span className="field-hint">{importMsg}</span>}
           <div className="detail">
             <div className="detail-head">
-              {hasAvatar && worldScope
+              {hasAvatar
                 ? <button className="avatar-crop-btn" type="button" aria-label="Adjust avatar crop"
                           title="Adjust avatar crop" onClick={() => setCropOpen(true)}>
                     <img className="detail-avatar" alt="" style={focusStyle(avatarFocus)}
                          src={avatarSrc(detail.meta.id, vid, true)} />
                   </button>
-                : hasAvatar
-                ? <img className="detail-avatar" alt="" style={focusStyle(avatarFocus)}
-                       src={avatarSrc(detail.meta.id, vid, true)} />
                 : <div className="initials-avatar detail" aria-hidden>
                     {(card.data.name || detail.meta.name).split(/\s+/).slice(0, 2).map((w) => w[0] ?? "").join("")}
                   </div>}
@@ -957,15 +954,13 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
                   return (
                     <div className="shelf-tile" key={name}>
                       <a href={src} target="_blank" rel="noreferrer"><img alt={name} src={src} /></a>
-                      {worldScope && <button className="shelf-promote" onClick={() => promote(name)}>Set as avatar</button>}
+                      <button className="shelf-promote" onClick={() => promote(name)}>Set as avatar</button>
                     </div>
                   );
                 })}
-                {worldScope && <>
-                  <button className="shelf-add" onClick={() => shelfFileRef.current?.click()}>+ add</button>
-                  <input ref={shelfFileRef} type="file" accept="image/*" hidden
-                         aria-label="Add image" onChange={onShelfAdd} />
-                </>}
+                <button className="shelf-add" onClick={() => shelfFileRef.current?.click()}>+ add</button>
+                <input ref={shelfFileRef} type="file" accept="image/*" hidden
+                       aria-label="Add image" onChange={onShelfAdd} />
               </div>
             </div>
 
@@ -1089,14 +1084,14 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
             ) : (
               <div className="avatar avatar-empty" aria-label="no avatar">no avatar</div>
             )}
-            {worldScope && <div className="avatar-actions">
+            <div className="avatar-actions">
               <button className="subtle" type="button" onClick={() => avatarRef.current?.click()}>
                 {hasAvatar ? "Replace" : "Upload"}
               </button>
               {hasAvatar && <button className="subtle" type="button" onClick={removeAvatar}>Remove</button>}
               <input ref={avatarRef} type="file" accept="image/*" hidden
                      aria-label="Upload avatar" onChange={onAvatar} />
-            </div>}
+            </div>
           </div>
 
           {worldScope && localizeControls(dirty, "Save your changes before localizing images")}
