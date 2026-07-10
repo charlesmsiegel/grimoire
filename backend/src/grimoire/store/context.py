@@ -238,10 +238,10 @@ def _character_states(croot, cast) -> list[dict]:
         return []
 
 
-def _relationship_lines(cid: str, croot, cast) -> list[str]:
+def _relationship_lines(cid: str, cast) -> list[str]:
     try:
         tokens = [f"{a['kind']}:{a['id']}" for a in cast]
-        return relationships.render_present(cid, tokens, lambda t: relationships.actor_name(croot, t))
+        return relationships.render_present(cid, tokens, lambda t: relationships.actor_name(cid, t))
     except Exception:  # noqa: BLE001 — garbled relationships.json: omit, don't crash
         return []
 
@@ -339,7 +339,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0) -> dic
         "global_system_prompt": config.read_config().get("system_prompt", ""),
         "npc_cards": npc_cards,
         "states": _character_states(croot, cast),
-        "relationship_lines": _relationship_lines(cid, croot, cast),
+        "relationship_lines": _relationship_lines(cid, cast),
         "players": players, "ref_names": ref_names, "refs": refs,
         "story_entries": _story_entries(cid, depth=full_recap or None, full=bool(full_recap)),
         "plot_lines": plot.render_open(cid, with_id=False),
