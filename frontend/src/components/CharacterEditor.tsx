@@ -932,6 +932,13 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
               )}
             </div>}
 
+            {(card.data.extensions?.sd_prompt) && (
+              <div className="side-section">
+                <h4>Image prompt</h4>
+                <div className="field-hint">{card.data.extensions.sd_prompt}</div>
+              </div>
+            )}
+
             <div className="detail-field">
               <div className="section-label">Images</div>
               <div className="images-shelf">
