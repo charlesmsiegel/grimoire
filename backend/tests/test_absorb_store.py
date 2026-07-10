@@ -423,6 +423,66 @@ def test_materialize_tolerates_garbled_plot(monkeypatch, tmp_path):
     assert edits["plot:the-map"]["before"] == ""  # garbled store treated as empty
 
 
+def test_materialize_new_character_creates_staged_edit(monkeypatch, tmp_path):
+    from grimoire.store import scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    parsed = {"new_characters": [
+        {"name": "Old Bram", "description": "[character(\"Old Bram\") { Occupation(\"innkeep\") }]",
+         "sd_prompt": "an old innkeeper, weathered face"}]}
+    edits = {e["id"]: e for e in absorb.materialize(cid, sid, parsed)}
+    e = edits["new_character:old-bram"]
+    assert e["kind"] == "new_character" and e["target"] == {"kind": "characters", "id": ""}
+    assert e["label"] == "New character — Old Bram" and e["field"] == "description"
+    assert e["before"] == "" and "Old Bram" in e["after"] and e["authored"] is False
+    assert e["payload"] == {"name": "Old Bram", "sd_prompt": "an old innkeeper, weathered face"}
+
+
+def test_materialize_new_character_drops_existing_name_collision(monkeypatch, tmp_path):
+    from grimoire.store import scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    _char(croot, "Seraphine")
+    sid = scenes.create_scene(cid, "S")
+    parsed = {"new_characters": [{"name": "seraphine", "description": "x", "sd_prompt": ""}]}
+    assert absorb.materialize(cid, sid, parsed) == []
+
+
+def test_materialize_new_character_drops_blank_name_or_description(monkeypatch, tmp_path):
+    from grimoire.store import scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    parsed = {"new_characters": [
+        {"name": "", "description": "x", "sd_prompt": ""},
+        {"name": "Nobody", "description": "", "sd_prompt": ""}]}
+    assert absorb.materialize(cid, sid, parsed) == []
+
+
+def test_materialize_new_locations_and_lore(monkeypatch, tmp_path):
+    from grimoire.store import entities, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "locations", "Old Dock")
+    sid = scenes.create_scene(cid, "S")
+    parsed = {
+        "new_locations": [
+            {"name": "Old Dock", "body": "dup", "keys": "", "sd_prompt": "", "current_setting": False},
+            {"name": "The Crypt", "body": "A cold crypt.", "keys": "crypt", "sd_prompt": "a dark crypt",
+             "current_setting": True},
+        ],
+        "new_lore": [{"name": "Salt Pact", "body": "An old pact.", "keys": "pact"}],
+    }
+    edits = {e["id"]: e for e in absorb.materialize(cid, sid, parsed)}
+    assert "new_location:old-dock" not in edits          # dedup: name collides with existing entity
+    loc = edits["new_location:the-crypt"]
+    assert loc["kind"] == "new_location" and loc["target"] == {"kind": "locations", "id": ""}
+    assert loc["field"] == "body" and loc["after"] == "A cold crypt." and loc["authored"] is False
+    assert loc["payload"] == {"name": "The Crypt", "keys": "crypt", "sd_prompt": "a dark crypt",
+                              "current_setting": True}
+    lore = edits["new_lore:salt-pact"]
+    assert lore["kind"] == "new_lore" and lore["payload"] == {"name": "Salt Pact", "keys": "pact"}
+
+
 def test_apply_edits_writes_relationships(monkeypatch, tmp_path):
     from grimoire.store import relationships
     cid = _campaign(monkeypatch, tmp_path)

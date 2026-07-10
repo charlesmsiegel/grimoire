@@ -10,7 +10,7 @@ import json
 
 from .. import prompts
 from . import (appearances, campaigns, changes, characters, chronicle, entities, pcs,
-               playstate, plot, relationships)
+               playstate, plot, relationships, scenes)
 from .paths import slugify
 
 
@@ -292,6 +292,54 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
                     "label": f"{disp_title} — {status}",
                     "field": "beat", "before": before, "after": beat, "authored": False,
                     "payload": {"id": pid, "title": disp_title, "status": status, "scene": sid}})
+
+    existing_char_names = {c["name"].strip().lower() for c in characters.list_characters(croot)}
+    for e in parsed.get("new_characters", []):
+        name = (e.get("name", "") or "").strip()
+        description = (e.get("description", "") or "").strip()
+        if not name or not description:
+            continue
+        if name.lower() in existing_char_names:
+            continue
+        candidate_id = slugify(name)
+        try:
+            characters.read_character(croot, candidate_id)
+            continue  # id already taken -- treat as the same character
+        except characters.CharacterNotFound:
+            pass
+        out.append({"id": f"new_character:{candidate_id}", "kind": "new_character",
+                    "target": {"kind": "characters", "id": ""},
+                    "label": f"New character — {name}", "field": "description",
+                    "before": "", "after": description, "authored": False,
+                    "payload": {"name": name, "sd_prompt": e.get("sd_prompt", "")}})
+
+    for kind, parsed_key, prefix, label_noun in (
+        ("locations", "new_locations", "new_location", "location"),
+        ("lore", "new_lore", "new_lore", "lore entry"),
+    ):
+        existing_names = {ent["name"].strip().lower() for ent in entities.list_entities(croot, kind)}
+        for e in parsed.get(parsed_key, []):
+            name = (e.get("name", "") or "").strip()
+            body = (e.get("body", "") or "").strip()
+            if not name or not body:
+                continue
+            if name.lower() in existing_names:
+                continue
+            candidate_id = slugify(name)
+            try:
+                entities.read_entity(croot, kind, candidate_id)
+                continue
+            except entities.EntityNotFound:
+                pass
+            payload = {"name": name, "keys": e.get("keys", "")}
+            if kind == "locations":
+                payload["sd_prompt"] = e.get("sd_prompt", "")
+                payload["current_setting"] = e.get("current_setting", False)
+            out.append({"id": f"{prefix}:{candidate_id}", "kind": prefix,
+                        "target": {"kind": kind, "id": ""},
+                        "label": f"New {label_noun} — {name}", "field": "body",
+                        "before": "", "after": body, "authored": False,
+                        "payload": payload})
 
     return out
 
