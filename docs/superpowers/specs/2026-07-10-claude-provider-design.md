@@ -1,7 +1,6 @@
 # Claude Agent SDK Provider — Design
 
-**Status:** shelved (plan written 2026-07-05, not started). Per convention, rename
-this file and the matching plan to the current date before starting work.
+**Status:** in progress (started 2026-07-10; plan written 2026-07-05).
 
 ## Motivation
 
