@@ -63,6 +63,29 @@ test("clicking an entity shows a read-only view; Edit reveals the form", async (
   expect(container.querySelector("textarea")).not.toBeNull();    // form revealed
 });
 
+test("detail sidebar shows the suggested image prompt when set", async () => {
+  (api.listEntities as any).mockResolvedValue([{ id: "the-crypt", name: "The Crypt" }]);
+  (api.readEntity as any).mockResolvedValue({
+    meta: { id: "the-crypt", name: "The Crypt", keys: "crypt", sd_prompt: "a dark crypt, torchlight" },
+    body: "cold" });
+  const { container } = render(<EntityEditor wid="w" kind="locations" />);
+  fireEvent.click(await screen.findByText("The Crypt"));
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  const side = container.querySelector(".detail-sidebar") as HTMLElement;
+  expect(within(side).getByText("Image prompt")).toBeInTheDocument();
+  expect(within(side).getByText("a dark crypt, torchlight")).toBeInTheDocument();
+});
+
+test("detail sidebar omits the image prompt section when unset", async () => {
+  (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt" }]);
+  // default readEntity mock (from beforeEach) has no sd_prompt
+  const { container } = render(<EntityEditor wid="w" kind="lore" />);
+  fireEvent.click(await screen.findByText("Salt"));
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  const side = container.querySelector(".detail-sidebar") as HTMLElement;
+  expect(within(side).queryByText("Image prompt")).toBeNull();
+});
+
 test("editing an entity saves with updated keys", async () => {
   (api.listEntities as any).mockResolvedValue([{ id: "salt", name: "Salt", keys: "pact" }]);
   render(<EntityEditor wid="w" kind="lore" />);
