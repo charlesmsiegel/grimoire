@@ -10,10 +10,10 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 from . import prompts, store
-from .openrouter import OpenRouterClient, OpenRouterError
+from .llm import LLMClient, LLMError
 
 router = APIRouter()
-_openrouter = OpenRouterClient()
+_llm = LLMClient()
 
 
 def _dump(model: BaseModel) -> dict:
@@ -24,8 +24,8 @@ def _dump(model: BaseModel) -> dict:
     return dump() if dump is not None else model.dict()
 
 
-def get_openrouter() -> OpenRouterClient:
-    return _openrouter
+def get_llm() -> LLMClient:
+    return _llm
 
 
 # ---- models ----
@@ -636,7 +636,7 @@ def put_character_tagline(wid: str, cid: str, body: TaglineSave):
 
 @router.post("/worlds/{wid}/characters/{cid}/tagline/generate")
 async def post_character_tagline_generate(wid: str, cid: str,
-                                          client: OpenRouterClient = Depends(get_openrouter)):
+                                          client: LLMClient = Depends(get_llm)):
     root = _world_root_or_404(wid)
     cfg = store.read_config()
     _require_key(cfg)
@@ -647,8 +647,8 @@ async def post_character_tagline_generate(wid: str, cid: str,
     card = store.characters.read_card(root, cid, ch["meta"]["default_version"])
     messages = store.taglines.build_prompt(card["data"])
     try:
-        text = await client.complete(messages, cfg["model"], cfg["openrouter_key"])
-    except OpenRouterError as exc:
+        text = await client.complete(messages, cfg)
+    except LLMError as exc:
         raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
     # Preview only — the caller persists via PUT on Save, so Generate-then-cancel
     # (e.g. the import popup's Skip) leaves nothing written.
@@ -1314,7 +1314,7 @@ def post_reject(cid: str, body: RefList):
 # Declared before the generic /campaigns/{cid}/{kind} routes so "scenes" is
 # never captured as an entity kind.
 def _require_key(cfg: dict[str, str]) -> None:
-    if not cfg["openrouter_key"]:
+    if cfg.get("provider", "openrouter") == "openrouter" and not cfg["openrouter_key"]:
         raise HTTPException(
             status_code=409,
             detail={"detail": "OpenRouter key not set", "kind": "missing_key"},
@@ -1328,16 +1328,16 @@ def _persist_reply(cid: str, sid: str, text: str) -> None:
         store.scenes.append_message(cid, sid, "assistant", seg["content"], speaker=seg["speaker"])
 
 
-def _chat_stream(cid: str, sid: str, messages: list[dict], cfg: dict, client: OpenRouterClient):
+def _chat_stream(cid: str, sid: str, messages: list[dict], cfg: dict, client: LLMClient):
     async def event_stream():
         parts: list[str] = []
         try:
-            async for delta in client.stream(messages, cfg["model"], cfg["openrouter_key"]):
+            async for delta in client.stream(messages, cfg):
                 parts.append(delta)
                 yield f"data: {json.dumps({'delta': delta})}\n\n"
             _persist_reply(cid, sid, "".join(parts))
             yield f"data: {json.dumps({'done': True})}\n\n"
-        except OpenRouterError as exc:
+        except LLMError as exc:
             if parts:
                 _persist_reply(cid, sid, "".join(parts))
             yield f"data: {json.dumps({'error': {'detail': exc.detail, 'kind': exc.kind}})}\n\n"
@@ -1345,14 +1345,14 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], cfg: dict, client: Op
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
-def _ephemeral_stream(messages: list[dict], cfg: dict, client: OpenRouterClient):
+def _ephemeral_stream(messages: list[dict], cfg: dict, client: LLMClient):
     """Stream a generation without persisting it to any scene (used by the opener)."""
     async def event_stream():
         try:
-            async for delta in client.stream(messages, cfg["model"], cfg["openrouter_key"]):
+            async for delta in client.stream(messages, cfg):
                 yield f"data: {json.dumps({'delta': delta})}\n\n"
             yield f"data: {json.dumps({'done': True})}\n\n"
-        except OpenRouterError as exc:
+        except LLMError as exc:
             yield f"data: {json.dumps({'error': {'detail': exc.detail, 'kind': exc.kind}})}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
@@ -1398,7 +1398,7 @@ def _resolve_cast(cid: str, tokens: list[str]) -> list[dict]:
 
 @router.post("/campaigns/{cid}/scene-suggestions")
 async def post_scene_suggestions(cid: str, after: str | None = None, offscreen: bool = False,
-                                 client: OpenRouterClient = Depends(get_openrouter)):
+                                 client: LLMClient = Depends(get_llm)):
     try:
         store.campaigns.read_campaign(cid)
     except store.campaigns.CampaignNotFound:
@@ -1410,8 +1410,8 @@ async def post_scene_suggestions(cid: str, after: str | None = None, offscreen: 
     messages = store.suggest.build_prompt(store.suggest.build_snapshot(cid, offscreen=offscreen),
                                           candidates, offscreen=offscreen)
     try:
-        text = await client.complete(messages, cfg["model"], cfg["openrouter_key"])
-    except OpenRouterError as exc:
+        text = await client.complete(messages, cfg)
+    except LLMError as exc:
         raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
     croot = store.campaigns.campaign_root(cid)
     loc_names = {e["id"]: e.get("name", e["id"]) for e in store.entities.list_entities(croot, "locations")}
@@ -1463,7 +1463,7 @@ def _require_scene(cid: str, sid: str) -> dict:
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/chat")
-def post_chat(cid: str, sid: str, turn: ChatTurn, client: OpenRouterClient = Depends(get_openrouter)):
+def post_chat(cid: str, sid: str, turn: ChatTurn, client: LLMClient = Depends(get_llm)):
     _require_scene(cid, sid)
     cfg = store.read_config()
     _require_key(cfg)
@@ -1483,7 +1483,7 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, client: OpenRouterClient = Dep
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/retry")
-def post_retry(cid: str, sid: str, client: OpenRouterClient = Depends(get_openrouter)):
+def post_retry(cid: str, sid: str, client: LLMClient = Depends(get_llm)):
     scene = _require_scene(cid, sid)
     cfg = store.read_config()
     _require_key(cfg)
@@ -1495,7 +1495,7 @@ def post_retry(cid: str, sid: str, client: OpenRouterClient = Depends(get_openro
 
 @router.post("/campaigns/{cid}/scenes/{sid}/regenerate")
 def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
-                    client: OpenRouterClient = Depends(get_openrouter)):
+                    client: LLMClient = Depends(get_llm)):
     """Redo the most recent post: drop a trailing assistant reply, stream a fresh one."""
     scene = _require_scene(cid, sid)
     cfg = store.read_config()
@@ -1525,7 +1525,7 @@ def get_chronicle(cid: str):
 
 @router.post("/campaigns/{cid}/scenes/{sid}/absorb")
 async def post_absorb(cid: str, sid: str,
-                      client: OpenRouterClient = Depends(get_openrouter)):
+                      client: LLMClient = Depends(get_llm)):
     scene = _require_scene(cid, sid)
     cfg = store.read_config()
     _require_key(cfg)
@@ -1538,8 +1538,8 @@ async def post_absorb(cid: str, sid: str,
         store.absorb.state_snapshot(cid, sid), store.absorb.relationships_snapshot(cid, sid),
         store.absorb.plot_snapshot(cid))
     try:
-        text = await client.complete(messages, cfg["model"], cfg["openrouter_key"])
-    except OpenRouterError as exc:
+        text = await client.complete(messages, cfg)
+    except LLMError as exc:
         raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
     parsed = store.absorb.parse_output(text)
     edits = store.absorb.materialize(cid, sid, parsed)
@@ -1551,7 +1551,7 @@ async def post_absorb(cid: str, sid: str,
         try:
             name = store.characters.read_character(croot, a["id"])["meta"].get("name", a["id"])
             msgs = store.dossiers.build_prompt(name, store.dossiers.read(croot, a["id"]), transcript)
-            d_text = await client.complete(msgs, cfg["model"], cfg["openrouter_key"])
+            d_text = await client.complete(msgs, cfg)
             store.dossiers.write(croot, a["id"], store.dossiers.parse_output(d_text))
         except Exception:  # noqa: BLE001 — a dossier failure must not fail absorb
             continue
@@ -2074,7 +2074,7 @@ def post_start_from_greeting(cid: str, sid: str, body: StartFromGreeting):
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/opener")
-def post_opener(cid: str, sid: str, body: Opener, client: OpenRouterClient = Depends(get_openrouter)):
+def post_opener(cid: str, sid: str, body: Opener, client: LLMClient = Depends(get_llm)):
     _require_scene(cid, sid)
     cfg = store.read_config()
     _require_key(cfg)
