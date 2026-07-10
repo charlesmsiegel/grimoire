@@ -924,21 +924,61 @@ test("campaign scope: picking a version calls pickVersion", async () => {
 });
 
 
-test("campaign scope: the avatar crop control is absent (world-side mutation)", async () => {
+test("campaign scope: the avatar crop control mutates the campaign's own copy", async () => {
   (api.listCharacters as any).mockResolvedValue([
     { id: "mara", name: "Mara", default_version: "young", versions: [] },
   ]);
   (api.readCharacter as any).mockResolvedValue({
     meta: { id: "mara", name: "Mara", default_version: "young" },
-    versions: [{ id: "young", name: "Young", images: ["avatar"],
+    versions: [{ id: "young", name: "Young", images: ["avatar"], avatar_focus: null,
                  card: { spec: "chara_card_v3", spec_version: "3.0", data: { name: "Mara" } } }],
   });
   (api.listAppearances as any).mockResolvedValue([]);
-  const { container } = render(<CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+  render(<CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+  fireEvent.click(await screen.findByText("Mara"));
+  fireEvent.click(await screen.findByRole("button", { name: /adjust avatar crop/i }));
+  const slider = await screen.findByLabelText("Crop position");
+  fireEvent.change(slider, { target: { value: "80" } });
+  fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+  await waitFor(() => expect(api.setAvatarFocus).toHaveBeenCalledWith(
+    { kind: "campaign", id: "run" }, "mara", "young", 80));
+});
+
+test("campaign scope: uploading an avatar calls the scope-aware endpoint", async () => {
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "mara", name: "Mara", default_version: "young", versions: [] },
+  ]);
+  (api.readCharacter as any).mockResolvedValue({
+    meta: { id: "mara", name: "Mara", default_version: "young" },
+    versions: [{ id: "young", name: "Young", images: [],
+                 card: { spec: "chara_card_v3", spec_version: "3.0", data: { name: "Mara" } } }],
+  });
+  (api.listAppearances as any).mockResolvedValue([]);
+  render(<CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+  await openEditForm();
+  const input = screen.getByLabelText("Upload avatar");
+  fireEvent.change(input, { target: { files: [new File(["x"], "a.png", { type: "image/png" })] } });
+  await waitFor(() => expect(api.putImage).toHaveBeenCalledWith(
+    { kind: "campaign", id: "run" }, "mara", "young", "avatar", expect.any(File)));
+});
+
+test("campaign scope: gallery shelf allows adding an image and promoting to avatar", async () => {
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "mara", name: "Mara", default_version: "young", versions: [] },
+  ]);
+  (api.readCharacter as any).mockResolvedValue({
+    meta: { id: "mara", name: "Mara", default_version: "young" },
+    versions: [{ id: "young", name: "Young", images: ["avatar", "gallery_1"],
+                 card: { spec: "chara_card_v3", spec_version: "3.0", data: { name: "Mara" } } }],
+  });
+  (api.listAppearances as any).mockResolvedValue([]);
+  render(<CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
   fireEvent.click(await screen.findByText("Mara"));
   await screen.findByText("Images");
-  expect(screen.queryByRole("button", { name: "Adjust avatar crop" })).toBeNull();
-  expect(container.querySelector("img.detail-avatar")).not.toBeNull();  // still displayed read-only
+  fireEvent.click(screen.getByRole("button", { name: /set as avatar/i }));
+  await waitFor(() => expect(api.promoteImage).toHaveBeenCalledWith(
+    { kind: "campaign", id: "run" }, "mara", "young", "gallery_1"));
+  expect(screen.getByRole("button", { name: /\+ add/i })).toBeInTheDocument();
 });
 
 test("appears-in tiles render the thumbnail and link to the full image", async () => {
