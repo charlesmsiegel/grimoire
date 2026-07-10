@@ -116,13 +116,14 @@ def read_entity(cid: str, kind: str, eid: str) -> dict:
 
 
 def create_entity(cid: str, kind: str, name: str, body: str = "", keys: str = "",
-                  owners: str = "") -> str:
+                  owners: str = "", sd_prompt: str = "") -> str:
     wroot, gone = wroot_of(cid), deleted(cid)
 
     def taken(eid: str) -> bool:
         return _flat_path(wroot, kind, eid).exists() or _flat_ref(kind, eid) in gone
 
-    return entities.create_entity(croot_of(cid), kind, name, body, keys, owners, taken=taken)
+    return entities.create_entity(croot_of(cid), kind, name, body, keys, owners,
+                                  sd_prompt=sd_prompt, taken=taken)
 
 
 def update_entity(cid: str, kind: str, eid: str, *, name: str | None = None,
@@ -339,6 +340,16 @@ def list_pcs(cid: str) -> list[dict]:
 
 def character_refs(cid: str) -> list[str]:
     return [c["id"] for c in list_characters(cid)]
+
+
+def create_character(cid: str, name: str, version_name: str = "default",
+                     card: dict | None = None) -> tuple[str, str]:
+    wroot, gone = wroot_of(cid), deleted(cid)
+
+    def taken(aid: str) -> bool:
+        return (wroot / "characters" / aid / "character.md").exists() or _flat_ref("characters", aid) in gone
+
+    return characters.create_character(croot_of(cid), name, version_name, card, taken=taken)
 
 
 def create_pc(cid: str, name: str, tags: list[str], version_name: str = "default",

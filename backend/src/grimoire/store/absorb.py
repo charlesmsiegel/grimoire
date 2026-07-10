@@ -295,7 +295,7 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
                     "field": "beat", "before": before, "after": beat, "authored": False,
                     "payload": {"id": pid, "title": disp_title, "status": status, "scene": sid}})
 
-    existing_char_names = {c["name"].strip().lower() for c in characters.list_characters(croot)}
+    existing_char_names = {c["name"].strip().lower() for c in overlay.list_characters(cid)}
     for e in parsed.get("new_characters", []):
         name = (e.get("name", "") or "").strip()
         description = (e.get("description", "") or "").strip()
@@ -407,20 +407,20 @@ def apply_edits(cid: str, edits: list[dict], sid: str | None = None) -> list[str
                     for f, noun in (("personality", "personality"),
                                     ("mes_example", "example dialogue"))
                     if card["data"][f]]
-                new_cid, new_vid = characters.create_character(croot, p["name"], "default", card)
+                new_cid, new_vid = overlay.create_character(cid, p["name"], "default", card)
                 if sid:
                     appearances.appear(cid, sid, "characters", new_cid, new_vid, "npc")
                 target = {"kind": "characters", "id": new_cid}
             elif kind == "new_location":
                 p = e["payload"]
-                new_eid = entities.create_entity(croot, "locations", p["name"], after,
-                                                 p.get("keys", ""), sd_prompt=p.get("sd_prompt", ""))
+                new_eid = overlay.create_entity(cid, "locations", p["name"], after,
+                                                p.get("keys", ""), sd_prompt=p.get("sd_prompt", ""))
                 if sid and p.get("current_setting") and not scenes.get_location_history(cid, sid):
                     scenes.set_location(cid, sid, new_eid)
                 target = {"kind": "locations", "id": new_eid}
             elif kind == "new_lore":
                 p = e["payload"]
-                new_eid = entities.create_entity(croot, "lore", p["name"], after, p.get("keys", ""))
+                new_eid = overlay.create_entity(cid, "lore", p["name"], after, p.get("keys", ""))
                 target = {"kind": "lore", "id": new_eid}
             else:
                 continue

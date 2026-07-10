@@ -81,6 +81,12 @@ def test_create_uniquifies_against_world_and_tombstones(monkeypatch, tmp_path):
     assert overlay.create_entity(cid, "lore", "The Sword") == f"{eid}-3"
 
 
+def test_create_entity_stores_sd_prompt(monkeypatch, tmp_path):
+    _wid, _wroot, cid, _eid = _pair(monkeypatch, tmp_path)
+    lid = overlay.create_entity(cid, "locations", "A Tower", "tower text", sd_prompt="a tall tower")
+    assert overlay.read_entity(cid, "locations", lid)["meta"]["sd_prompt"] == "a tall tower"
+
+
 def _greeting_pair(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("W")
@@ -171,6 +177,11 @@ def test_list_characters_merges_and_hides_tombstoned(monkeypatch, tmp_path):
     wroot, cid, aid = _actor_pair(monkeypatch, tmp_path)
     overlay.add_deleted(cid, f"characters/{aid}")
     assert aid not in [c["id"] for c in overlay.list_characters(cid)]
+
+
+def test_create_character_uniquifies_against_world(monkeypatch, tmp_path):
+    wroot, cid, aid = _actor_pair(monkeypatch, tmp_path)   # aid == "hero", campaign thinned
+    assert overlay.create_character(cid, "Hero")[0] == f"{aid}-2"
 
 
 def test_tagline_falls_through(monkeypatch, tmp_path):
