@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import campaigns, entities, greetings, worlds
+from . import campaigns, characters, entities, greetings, pcs, taglines, worlds
 from .paths import natural_key
 
 
@@ -227,3 +227,119 @@ def materialize_plotmap(cid: str) -> None:
 def set_edges(cid: str, gid: str, leads_to=None, excludes=None) -> None:
     materialize_plotmap(cid)
     greetings.set_edges(croot_of(cid), gid, leads_to, excludes)
+
+
+# ---- actors (characters / pcs): whole-dir resolution keyed on the container meta ----
+
+def _actor_meta(kind: str) -> str:
+    return "character.md" if kind == "characters" else "pc.md"
+
+
+def _actor_not_found(kind: str, aid: str) -> Exception:
+    return characters.CharacterNotFound(aid) if kind == "characters" else pcs.PCNotFound(aid)
+
+
+def actor_root(cid: str, kind: str, aid: str) -> Path:
+    """Root whose <kind>/<aid> dir is authoritative for meta + version files.
+    Tombstoned actors resolve to the campaign, where the caller's read raises
+    its usual NotFound."""
+    croot = croot_of(cid)
+    if (croot / kind / aid / _actor_meta(kind)).exists():
+        return croot
+    if _flat_ref(kind, aid) in deleted(cid):
+        return croot
+    return wroot_of(cid)
+
+
+def char_root(cid: str, aid: str) -> Path:
+    return actor_root(cid, "characters", aid)
+
+
+def pc_root(cid: str, aid: str) -> Path:
+    return actor_root(cid, "pcs", aid)
+
+
+def materialize_actor(cid: str, kind: str, aid: str) -> None:
+    """Copy meta + every version file (never assets or sidecars) from the world
+    and record the whole-actor sync base. No-op when already materialized."""
+    croot, wroot = croot_of(cid), wroot_of(cid)
+    if (croot / kind / aid / _actor_meta(kind)).exists():
+        return
+    src = wroot / kind / aid
+    if not (src / _actor_meta(kind)).exists() or _flat_ref(kind, aid) in deleted(cid):
+        raise _actor_not_found(kind, aid)
+    dst = croot / kind / aid
+    dst.mkdir(parents=True, exist_ok=True)
+    ext = "json" if kind == "characters" else "md"
+    for p in sorted(src.glob(f"*.{ext}")):
+        (dst / p.name).write_text(p.read_text(encoding="utf-8"), encoding="utf-8")
+    meta_src = src / _actor_meta(kind)
+    (dst / meta_src.name).write_text(meta_src.read_text(encoding="utf-8"), encoding="utf-8")
+    base = (characters.dir_hash if kind == "characters" else pcs.dir_hash)(wroot, aid)
+    manifest = campaigns.read_manifest(cid)
+    manifest[_flat_ref(kind, aid)] = base or ""
+    campaigns.write_manifest(cid, manifest)
+
+
+def ensure_actor_writable(cid: str, kind: str, aid: str) -> Path:
+    """Materialize an inherited actor and return the campaign root writes target."""
+    croot = croot_of(cid)
+    if not (croot / kind / aid / _actor_meta(kind)).exists():
+        materialize_actor(cid, kind, aid)
+    return croot
+
+
+def dematerialize_actor(cid: str, kind: str, aid: str) -> None:
+    """Remove meta + version files so the actor reverts to inherited. Sidecars
+    (tagline/dossier/state) and assets stay — they overlay per file. PCs carry
+    no sidecar .md files, so all *.md go."""
+    d = croot_of(cid) / kind / aid
+    if not d.exists():
+        return
+    if kind == "characters":
+        targets = list(d.glob("*.json")) + [d / "character.md"]
+    else:
+        targets = list(d.glob("*.md"))
+    for p in targets:
+        if p.exists():
+            p.unlink()
+    if not any(d.iterdir()):
+        d.rmdir()
+
+
+def list_characters(cid: str) -> list[dict]:
+    mine = characters.list_characters(croot_of(cid))
+    # dossier/state-only dirs have no character.md and are filtered by
+    # characters.list_characters itself (it requires the meta file)
+    have = {c["id"] for c in mine}
+    gone = deleted(cid)
+    inherited = [c for c in characters.list_characters(wroot_of(cid))
+                 if c["id"] not in have and _flat_ref("characters", c["id"]) not in gone]
+    return sorted(mine + inherited, key=lambda c: c["id"])
+
+
+def list_pcs(cid: str) -> list[dict]:
+    mine = pcs.list_pcs(croot_of(cid))
+    have = {p["id"] for p in mine}
+    gone = deleted(cid)
+    inherited = [p for p in pcs.list_pcs(wroot_of(cid))
+                 if p["id"] not in have and _flat_ref("pcs", p["id"]) not in gone]
+    return sorted(mine + inherited, key=lambda p: p["id"])
+
+
+def character_refs(cid: str) -> list[str]:
+    return [c["id"] for c in list_characters(cid)]
+
+
+def create_pc(cid: str, name: str, tags: list[str], version_name: str = "default",
+              persona: dict | None = None) -> tuple[str, str]:
+    wroot, gone = wroot_of(cid), deleted(cid)
+
+    def taken(pid: str) -> bool:
+        return (wroot / "pcs" / pid / "pc.md").exists() or _flat_ref("pcs", pid) in gone
+
+    return pcs.create_pc(croot_of(cid), name, tags, version_name, persona, taken=taken)
+
+
+def tagline(cid: str, char_id: str) -> str:
+    return taglines.read(croot_of(cid), char_id) or taglines.read(wroot_of(cid), char_id)
