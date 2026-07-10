@@ -2013,55 +2013,9 @@ def test_first_post_splits_speakers(client):
     ]
 
 
-# ---- lazy full-copy backfill (legacy campaigns) ----
-def _strip_campaign_to_legacy(cid):
-    """Rewind a campaign to the pre-full-copy on-disk layout."""
-    import shutil
-    from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
-    croot = store.campaigns.campaign_root(cid)
-    for sub in ("greetings", "characters", "pcs"):
-        if (croot / sub).exists():
-            shutil.rmtree(croot / sub)
-    (croot / "plotmap.json").unlink(missing_ok=True)
-    manifest = {r: h for r, h in store.campaigns.read_manifest(cid).items()
-                if r.split("/")[0] in ("locations", "lore")}
-    store.campaigns.write_manifest(cid, manifest)
-    mp = store.campaigns.campaign_meta_path(cid)
-    meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
-    del meta["world_copy"]
-    mp.write_text(dump_frontmatter(meta, body), encoding="utf-8")
-
-
-def test_get_campaign_backfills_legacy_copy(client):
-    wid = _world(client)
-    client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"})
-    g = client.post(f"/api/worlds/{wid}/greetings",
-                    json={"name": "Gala", "character": "mara", "version": "default",
-                          "body": "Hi."}).json()["id"]
-    cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
-    _strip_campaign_to_legacy(cid)
-    r = client.get(f"/api/campaigns/{cid}")
-    assert r.status_code == 200
-    croot = store.campaigns.campaign_root(cid)
-    assert (croot / "greetings" / f"{g}.md").exists()
-    assert (croot / "characters" / "mara" / "default.json").exists()
-    assert store.campaigns.read_campaign(cid)["meta"]["world_copy"] == "full"
-
-
-def test_campaign_root_routes_backfill_legacy_copy(client):
-    wid = _world(client)
-    client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"})
-    g = client.post(f"/api/worlds/{wid}/greetings",
-                    json={"name": "Gala", "character": "mara", "version": "default",
-                          "body": "Hi."}).json()["id"]
-    cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
-    _strip_campaign_to_legacy(cid)
-    # any route through _campaign_root_or_404 triggers the backfill
-    r = client.get(f"/api/campaigns/{cid}/greetings/available")
-    assert r.status_code == 200
-    assert [x["id"] for x in r.json()] == [g]
-    assert store.campaigns.read_campaign(cid)["meta"]["world_copy"] == "full"
-    # missing campaigns still 404 through the same helper
+# ---- lazy overlay slim (pre-overlay full-copy campaigns) ----
+def test_campaign_root_routes_404_for_unknown_campaign(client):
+    # _campaign_root_or_404 (which also triggers the lazy slim) 404s cleanly
     assert client.get("/api/campaigns/nope/greetings/available").status_code == 404
 
 
@@ -2193,23 +2147,6 @@ def test_campaign_pc_read_and_versions(client):
                     json={"name": "older", "persona": {"name": "Elara", "pronouns": "",
                                                        "summary": "", "description": "x"}})
     assert r.status_code == 200
-
-
-def test_sync_routes_backfill_legacy_campaigns(client):
-    wid = _world(client)
-    client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"})
-    g = client.post(f"/api/worlds/{wid}/greetings",
-                    json={"name": "Gala", "character": "mara", "version": "default",
-                          "body": "Hi."}).json()["id"]
-    cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
-    _strip_campaign_to_legacy(cid)
-    # incoming triggers the backfill first: a never-opened legacy campaign reports
-    # no pending items instead of every greeting/actor as "new"
-    r = client.get(f"/api/campaigns/{cid}/incoming")
-    assert r.status_code == 200 and r.json() == []
-    croot = store.campaigns.campaign_root(cid)
-    assert (croot / "greetings" / f"{g}.md").exists()
-    assert store.campaigns.read_campaign(cid)["meta"]["world_copy"] == "full"
 
 
 # ---- gzip ----
