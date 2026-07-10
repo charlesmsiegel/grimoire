@@ -8,19 +8,33 @@ code — see `docs/android-architecture.md` for the full design.
 
 ## Building
 
-Prerequisites on the build machine:
+From the repo root (GNU make; on Windows run from Git Bash — `winget install
+ezwinports.make` if needed):
 
-- Android Studio (AGP 8.5) with an Android SDK, platform 34
-- JDK 17
-- Node 18+ (`npm run build` for the frontend runs as a Gradle task)
-- Python 3.x on PATH (Chaquopy's build-time `buildPython`; the 3.11 runtime
-  that ships in the APK is downloaded by the plugin)
+```
+make android-bootstrap   # once per machine: JDK 17 + Android SDK + licenses
+make apk                 # debug APK -> build/grimoire-debug.apk
+make apk-release         # unsigned release APK -> build/grimoire-release-unsigned.apk
+make apk-install         # adb install to a connected device
+```
 
-Then:
+APKs are staged into `build/` at the repo root (gitignored); gradle's own
+outputs stay under `android/app/build/`.
+
+`android-bootstrap` is idempotent and needs no admin rights: it downloads a
+portable Temurin JDK 17 and the Android cmdline-tools (platform 34,
+build-tools 34) into a per-user directory, accepts the SDK licenses, and
+writes `android/local.properties` (`sdk.dir` plus `grimoire.buildPython`,
+the build-machine Python 3.8–3.12 that Chaquopy 15 requires — the 3.11
+runtime inside the APK is downloaded by the plugin and unrelated). The only
+other prerequisites are Node 18+ (`npm run build` runs as a Gradle task, so
+`frontend/` must have had `npm install`) and any Python 3.8–3.12.
+
+Without make, the same build is:
 
 ```
 cd android
-./gradlew :app:assembleDebug     # or open android/ in Android Studio
+./gradlew :app:assembleDebug     # or open android/ in Android Studio (AGP 8.5, JDK 17)
 ```
 
 The build runs `npm run build` in `frontend/`, stages `dist/` and the repo's
