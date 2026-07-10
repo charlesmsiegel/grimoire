@@ -5,7 +5,7 @@
 **Goal:** Campaigns stop deep-copying their world; a record is materialized into the
 campaign only when it diverges (edit, version lock, delete, campaign-local create) and
 everything else reads through to the world live. Spec:
-`docs/superpowers/specs/2026-07-05-copy-on-write-campaigns-design.md`.
+`docs/superpowers/specs/2026-07-10-copy-on-write-campaigns-design.md`.
 
 **Architecture:** A new `store/overlay.py` implements campaign-else-world resolution
 (flat records per file, actors per dir keyed on `character.md`/`pc.md`, assets per
