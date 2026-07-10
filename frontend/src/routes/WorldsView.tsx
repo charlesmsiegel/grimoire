@@ -34,8 +34,13 @@ export default function WorldsView() {
   }
 
   async function remove(w: WorldMeta) {
-    if (!window.confirm(`Delete world '${w.name}'? Campaigns already made from it keep their copies.`)) return;
-    await api.deleteWorld(w.id);
+    if (!window.confirm(`Delete world '${w.name}'?`)) return;
+    try {
+      await api.deleteWorld(w.id);
+    } catch (err: any) {
+      window.alert(err?.message ?? "Could not delete the world.");
+      return;
+    }
     setWorlds(await api.listWorlds());
   }
 

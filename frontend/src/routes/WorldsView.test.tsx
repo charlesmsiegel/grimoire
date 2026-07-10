@@ -77,3 +77,17 @@ test("deletes a world after confirm", async () => {
   fireEvent.click(screen.getByRole("button", { name: /delete/i }));
   await waitFor(() => expect(api.deleteWorld).toHaveBeenCalledWith("w1"));
 });
+
+test("a blocked world delete shows the server's message", async () => {
+  (api.listWorlds as any).mockResolvedValue([
+    { id: "w1", name: "W1", created: "", updated: "", counts: {} },
+  ]);
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  (api.deleteWorld as any).mockRejectedValue(new Error("world is used by campaigns: C"));
+  const alert = vi.spyOn(window, "alert").mockImplementation(() => {});
+  renderView();
+  fireEvent.click(await screen.findByLabelText("Delete W1"));
+  await waitFor(() => expect(alert).toHaveBeenCalledWith(
+    expect.stringContaining("world is used by campaigns")));
+  alert.mockRestore();
+});
