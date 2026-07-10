@@ -282,6 +282,26 @@ def test_campaign_copy_image_from_greeting(client):
     assert client.get(f"/api/campaigns/{cid}/characters/{chid}/versions/default/images/avatar").content == b"art"
 
 
+def test_campaign_copy_image_from_greeting_gallery_skips_inherited_slot(client):
+    """The free gallery_N slot must account for the character's inherited
+    world-side gallery images too, or a campaign-side copy can reuse a name
+    that shadows one of them."""
+    wid, cid = _campaign(client)
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mira"}).json()["character"]
+    wroot = store.worlds.world_root(wid)
+    store.assets.put_image(wroot, chid, "default", "gallery_1", b"world-gallery", "png")
+    gid = client.post(f"/api/worlds/{wid}/greetings",
+                      json={"name": "Opener", "character": chid, "version": "default"}).json()["id"]
+    store.assets.put_image(wroot, gid, "default", "embed-abc123def456", b"art", "png", base="greetings")
+
+    copy_url = f"/api/campaigns/{cid}/characters/{chid}/versions/default/images/copy-from-greeting"
+    r = client.post(copy_url, json={"gid": gid, "name": "embed-abc123def456", "slot": "gallery"})
+    assert r.status_code == 200 and r.json()["name"] == "gallery_2"
+    base = f"/api/campaigns/{cid}/characters/{chid}/versions/default/images"
+    assert client.get(f"{base}/gallery_1").content == b"world-gallery"  # inherited slot untouched
+    assert client.get(f"{base}/gallery_2").content == b"art"
+
+
 def test_character_image_promote_swaps_avatar(client):
     wid = _world(client)
     cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
@@ -1891,6 +1911,24 @@ def test_get_changes_returns_name_scene_and_diff(client):
     assert rec["scene"]["id"] == "s1"  # deleted/unknown scene -> title falls back to id
     ops = [d["op"] for d in rec["fields"][0]["diff"]]
     assert "insert" in ops
+
+
+def test_get_changes_resolves_inherited_character_name(client):
+    """A character_state edit can target a world character never materialized
+    into the campaign; its name must still resolve (through the overlay) so
+    the change-history row isn't silently dropped."""
+    wid, cid = _campaign(client)
+    wroot = store.worlds.world_root(wid)
+    ch, _ = store.characters.create_character(wroot, "Seraphine")
+    edit = {"id": f"character_state:{ch}", "kind": "character_state",
+            "target": {"kind": "characters", "id": ch}, "field": "current_state",
+            "label": "Seraphine — state", "before": "", "after": "Wary of the docks.",
+            "authored": False}
+    store.absorb.apply_edits(cid, [edit], "s1")
+    out = client.get(f"/api/campaigns/{cid}/changes").json()
+    assert len(out) == 1
+    assert out[0]["ref"] == {"kind": "characters", "id": ch}
+    assert out[0]["name"] == "Seraphine"
 
 
 def test_get_changes_empty_and_not_shadowed_by_kind_route(client):

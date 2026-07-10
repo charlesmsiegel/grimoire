@@ -83,7 +83,7 @@ test("world-copy mode shows the fork banner, campaign back link, and campaign en
     </MemoryRouter>,
   );
   await screen.findByText(/ashes of the verdigris crown \/ world copy/i);
-  expect(screen.getByText(/campaign copy/i)).toBeInTheDocument();
+  expect(screen.getByText(/campaign view/i)).toBeInTheDocument();
   // entity tabs read from the campaign fork, not the source world
   fireEvent.click(screen.getByRole("button", { name: "Locations" }));
   await waitFor(() =>

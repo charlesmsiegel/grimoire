@@ -34,12 +34,33 @@ def test_ensure_character_creates_once(monkeypatch, tmp_path):
     wid = _world(monkeypatch, tmp_path)
     cid = ingest_scene.ensure_campaign("Silver Oath", wid)
     croot = campaigns_store.campaign_root(cid)
-    aid1 = ingest_scene.ensure_character(croot, {"name": "cassian", "personality": "wary, precise"})
-    aid2 = ingest_scene.ensure_character(croot, {"name": "cassian"})
+    aid1 = ingest_scene.ensure_character(cid, {"name": "cassian", "personality": "wary, precise"})
+    aid2 = ingest_scene.ensure_character(cid, {"name": "cassian"})
     assert aid1 == aid2 == "cassian"
     vid = ingest_scene.resolve_version(cid, "characters", aid1)
     from grimoire.store import characters
     assert characters.read_card(croot, aid1, vid)["data"]["personality"] == "wary, precise"
+
+
+def test_ensure_character_returns_world_character_without_shadow_copy(monkeypatch, tmp_path):
+    """A thin campaign's world may already hold a character of that name (by
+    slug); ensure_character must return the world character's id and must
+    NOT create a blank-card campaign-side shadow of it."""
+    from grimoire.store import campaigns as campaigns_store, characters, overlay, worlds as worlds_store
+    wid = _world(monkeypatch, tmp_path)
+    wroot = worlds_store.world_root(wid)
+    card = characters.blank_card("cassian")
+    card["data"]["personality"] = "wary, precise"
+    characters.create_character(wroot, "cassian", "main", card)
+    cid = ingest_scene.ensure_campaign("Silver Oath", wid)
+    croot = campaigns_store.campaign_root(cid)
+
+    aid = ingest_scene.ensure_character(cid, {"name": "cassian"})
+
+    assert aid == "cassian"
+    assert not (croot / "characters" / "cassian").exists()  # no campaign-side shadow
+    vid = ingest_scene.resolve_version(cid, "characters", aid)
+    assert characters.read_card(overlay.char_root(cid, aid), aid, vid)["data"]["personality"] == "wary, precise"
 
 
 def test_ensure_location_creates_once(monkeypatch, tmp_path):
@@ -47,8 +68,8 @@ def test_ensure_location_creates_once(monkeypatch, tmp_path):
     wid = _world(monkeypatch, tmp_path)
     cid = ingest_scene.ensure_campaign("Silver Oath", wid)
     croot = campaigns_store.campaign_root(cid)
-    eid1 = ingest_scene.ensure_location(croot, {"name": "Thornfield Manor", "notes": "Seat of corvin."})
-    eid2 = ingest_scene.ensure_location(croot, {"name": "Thornfield Manor"})
+    eid1 = ingest_scene.ensure_location(cid, {"name": "Thornfield Manor", "notes": "Seat of corvin."})
+    eid2 = ingest_scene.ensure_location(cid, {"name": "Thornfield Manor"})
     assert eid1 == eid2 == "thornfield-manor"
 
 
@@ -113,7 +134,7 @@ def test_run_absorb_and_apply_scene(monkeypatch, tmp_path):
     wid = worlds_store.create_world("ashgrove")
     cid = ingest_scene.ensure_campaign("Silver Oath", wid)
     croot = campaigns_store.campaign_root(cid)
-    ingest_scene.ensure_character(croot, {"name": "marisol"})
+    ingest_scene.ensure_character(cid, {"name": "marisol"})
 
     scene = {
         "title": "The Reckoning",
@@ -149,7 +170,7 @@ def test_ingest_one_scene_is_resumable(monkeypatch, tmp_path):
     wid = worlds_store.create_world("ashgrove")
     cid = ingest_scene.ensure_campaign("Silver Oath", wid)
     croot = campaigns_store.campaign_root(cid)
-    ingest_scene.ensure_character(croot, {"name": "marisol"})
+    ingest_scene.ensure_character(cid, {"name": "marisol"})
 
     scene = {
         "key": "file1-scene01",
@@ -183,7 +204,7 @@ def test_ingest_one_scene_resumes_after_build_then_crash(monkeypatch, tmp_path):
     wid = worlds_store.create_world("ashgrove")
     cid = ingest_scene.ensure_campaign("Silver Oath", wid)
     croot = campaigns_store.campaign_root(cid)
-    ingest_scene.ensure_character(croot, {"name": "marisol"})
+    ingest_scene.ensure_character(cid, {"name": "marisol"})
 
     scene = {
         "key": "file1-scene01",
@@ -220,7 +241,7 @@ def test_two_scenes_accumulate_state_in_order(monkeypatch, tmp_path):
     wid = worlds_store.create_world("ashgrove")
     cid = ingest_scene.ensure_campaign("Silver Oath", wid)
     croot = campaigns_store.campaign_root(cid)
-    ingest_scene.ensure_character(croot, {"name": "marisol"})
+    ingest_scene.ensure_character(cid, {"name": "marisol"})
     cfg = {"model": "test/model", "openrouter_key": "k"}
 
     scene1 = {

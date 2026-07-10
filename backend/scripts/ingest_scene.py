@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from grimoire.openrouter import OpenRouterClient  # noqa: E402
 from grimoire.store import (  # noqa: E402
-    absorb, appearances, campaigns, characters, chronicle, entities, overlay, read_config, scenes,
+    absorb, appearances, campaigns, characters, chronicle, overlay, read_config, scenes,
 )
 from grimoire.store.paths import slugify  # noqa: E402
 
@@ -43,23 +43,26 @@ def save_manifest(cid: str, data: dict) -> None:
         json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def ensure_character(croot: Path, spec: dict) -> str:
+def ensure_character(campaign_id: str, spec: dict) -> str:
+    """Overlay-aware: a thin campaign's world may already have this character
+    (by slug), so dedupe against the world/campaign union — never blank-card
+    shadow a character that already exists in the world."""
     target = slugify(spec["name"])
-    if target in characters.character_refs(croot):
+    if target in overlay.character_refs(campaign_id):
         return target
     card = characters.blank_card(spec["name"])
     card["data"]["personality"] = spec.get("personality", "")
     card["data"]["description"] = spec.get("description", "")
-    cid, _ = characters.create_character(croot, spec["name"], "main", card)
-    return cid
+    aid, _ = overlay.create_character(campaign_id, spec["name"], "main", card)
+    return aid
 
 
-def ensure_location(croot: Path, spec: dict) -> str:
+def ensure_location(campaign_id: str, spec: dict) -> str:
     target = slugify(spec["name"])
-    existing = {e["id"] for e in entities.list_entities(croot, "locations")}
+    existing = {e["id"] for e in overlay.list_entities(campaign_id, "locations")}
     if target in existing:
         return target
-    return entities.create_entity(croot, "locations", spec["name"], body=spec.get("notes", ""))
+    return overlay.create_entity(campaign_id, "locations", spec["name"], body=spec.get("notes", ""))
 
 
 def resolve_version(cid: str, kind: str, actor_id: str) -> str:
@@ -73,11 +76,10 @@ def resolve_version(cid: str, kind: str, actor_id: str) -> str:
 
 
 def build_scene(cid: str, scene: dict) -> str:
-    croot = campaigns.campaign_root(cid)
     for spec in scene.get("new_characters", []):
-        ensure_character(croot, spec)
+        ensure_character(cid, spec)
     for spec in scene.get("new_locations", []):
-        ensure_location(croot, spec)
+        ensure_location(cid, spec)
 
     sid = scenes.create_scene(cid, scene["title"])
     if scene.get("date"):

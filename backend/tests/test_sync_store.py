@@ -96,13 +96,18 @@ def test_reject_keeps_mine_and_does_not_renag(monkeypatch, tmp_path):
     assert [p["status"] for p in sync.incoming(cid)] == ["conflict"]
 
 
-def test_reject_new_stays_absent_and_quiet(monkeypatch, tmp_path):
+def test_reject_new_entity_is_noop_and_stays_overlay_visible(monkeypatch, tmp_path):
+    """A brand-new world entity was never offered as incoming (see
+    test_world_adds_new_entity_is_not_offered), so rejecting its ref anyway is
+    a no-op on the data: no campaign copy is created, and the record stays
+    visible through the overlay, live from the world."""
     wid, cid = _setup(monkeypatch, tmp_path)
     entities.create_entity(worlds.world_root(wid), "lore", "Salt Pact", "x")
     sync.reject(cid, [{"kind": "lore", "id": "salt-pact"}])
     assert sync.incoming(cid) == []
     with pytest.raises(entities.EntityNotFound):
         entities.read_entity(campaigns.campaign_root(cid), "lore", "salt-pact")
+    assert overlay.read_entity(cid, "lore", "salt-pact")["body"].strip() == "x"
 
 
 def test_accept_nonpending_is_noop(monkeypatch, tmp_path):

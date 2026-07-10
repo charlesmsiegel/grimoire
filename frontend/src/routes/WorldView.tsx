@@ -87,8 +87,8 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
             ‹ {campaignName} / World Copy
           </button>
           <div className="fork-banner">
-            ⌦ Campaign copy — this world was forked when the campaign began.
-            Changes here belong to the campaign; the original world is untouched.
+            ⌦ Campaign view — records follow the world until you change them here;
+            edits belong to this campaign and leave the original world untouched.
           </div>
         </>
       ) : (

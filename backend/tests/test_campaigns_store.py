@@ -103,7 +103,7 @@ def test_delete_world_blocked_while_campaigns_reference_it(monkeypatch, tmp_path
     with pytest.raises(worlds.WorldInUse) as exc_info:
         worlds.delete_world(wid)
     assert "C" in exc_info.value.names
-    assert not worlds.world_root(wid).exists() is False  # world still exists
+    assert worlds.world_root(wid).exists()  # world still exists
     campaigns.delete_campaign(cid)
     worlds.delete_world(wid)  # now allowed
     assert not worlds.world_root(wid).exists()
@@ -204,7 +204,45 @@ def test_slim_deletes_redundant_keeps_diverged_and_deletions(monkeypatch, tmp_pa
         or not (croot / "characters" / aid / "character.md").exists()   # actor dematerialized
     assert overlay.image_root(cid, aid, vid, "avatar") == wroot         # asset dupe pruned
     assert campaigns.read_campaign(cid)["meta"]["world_copy"] == "overlay"
-    campaigns.ensure_campaign_slim(cid)                                 # second run: no-op
+
+    # second run: no-op — the campaign dir tree, manifest, and tombstones are unchanged
+    before_files = sorted(p.relative_to(croot) for p in croot.rglob("*") if p.is_file())
+    before_manifest = campaigns.read_manifest(cid)
+    before_deleted = overlay.deleted(cid)
+    campaigns.ensure_campaign_slim(cid)
+    after_files = sorted(p.relative_to(croot) for p in croot.rglob("*") if p.is_file())
+    assert after_files == before_files
+    assert campaigns.read_manifest(cid) == before_manifest
+    assert overlay.deleted(cid) == before_deleted
+
+
+def test_slim_prunes_duplicate_greeting_asset(monkeypatch, tmp_path):
+    """A pre-overlay full-copy campaign that copied a greeting AND a
+    byte-identical copy of one of its images: slim must prune the redundant
+    greeting asset (like it already does for characters/pcs/locations/lore),
+    so the campaign copy doesn't permanently shadow world-side edits to that
+    image."""
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    aid, vid = characters.create_character(wroot, "Hero")
+    g = greetings.create_greeting(wroot, "Gala", aid, vid, body="Hi.")
+    greetings.set_edges(wroot, g, leads_to=[])
+    assets.put_image(wroot, g, "default", "art_1", b"artbytes", "png", base="greetings")
+    cid = campaigns.create_campaign("C", wid)
+    croot = campaigns.campaign_root(cid)
+    (croot / "greetings").mkdir()
+    (croot / "greetings" / f"{g}.md").write_text(
+        (wroot / "greetings" / f"{g}.md").read_text(encoding="utf-8"), encoding="utf-8")
+    assets.put_image(croot, g, "default", "art_1", b"artbytes", "png", base="greetings")
+    manifest = {f"greetings/{g}": entities.entity_hash(wroot, "greetings", g)}
+    campaigns.write_manifest(cid, manifest)
+    _stamp_full(cid)
+
+    campaigns.ensure_campaign_slim(cid)
+
+    assert assets.image_path(croot, g, "default", "art_1", base="greetings") is None  # pruned
+    assert overlay.image_root(cid, g, "default", "art_1", base="greetings") == wroot   # served from world
 
 
 def test_slim_skips_when_world_missing(monkeypatch, tmp_path):

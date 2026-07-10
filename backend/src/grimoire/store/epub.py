@@ -19,7 +19,7 @@ from pathlib import Path
 import markdown as _md_lib
 from markupsafe import Markup, escape
 
-from . import appearances, assets, calendars, campaigns, characters, entities, pcs, scenes, worlds
+from . import appearances, assets, calendars, campaigns, characters, entities, overlay, pcs, scenes, worlds
 from ..prompts import templates_dir
 from .paths import now_iso
 
@@ -129,7 +129,7 @@ def _chapter(cid: str, croot: Path, wroot: Path | None, provider, sid: str,
     hist = scenes.get_location_history(cid, sid)
     if hist:
         try:
-            location = entities.read_entity(croot, "locations", hist[0])["meta"].get("name")
+            location = overlay.read_entity(cid, "locations", hist[0])["meta"].get("name")
         except entities.EntityNotFound:
             pass  # deleted location: header line silently omitted
     cast = [a["name"] for a in appearances.scene_cast(cid, sid)]
@@ -197,7 +197,7 @@ def _appendix_entries(cid: str, croot: Path, wroot: Path | None, sids: list[str]
     locs = []
     for eid in visited:
         try:
-            ent = entities.read_entity(croot, "locations", eid)
+            ent = overlay.read_entity(cid, "locations", eid)
         except entities.EntityNotFound:
             continue
         locs.append((ent["meta"].get("name", eid), eid, ent["body"]))

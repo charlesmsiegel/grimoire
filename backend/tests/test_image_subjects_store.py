@@ -121,3 +121,16 @@ def test_copy_to_character_gallery_numbers_and_avatar(tmp_path):
         image_subjects.copy_to_character(tmp_path, gid, "missing", cid, vid, "gallery")
     with pytest.raises(ValueError):
         image_subjects.copy_to_character(tmp_path, gid, "art_1", cid, vid, "banner")
+
+
+def test_copy_to_character_honors_taken_names_override(tmp_path):
+    """A campaign-side caller passes the overlay-resolved union of gallery
+    names so an inherited world gallery image can't be shadowed by a reused
+    gallery_N name — even though nothing occupies that slot in `root` itself."""
+    cid, vid = characters.create_character(tmp_path, "Mira", "main")
+    gid = greetings.create_greeting(tmp_path, "Opener", cid, vid, "x")
+    assets.put_image(tmp_path, gid, "default", "art_1", b"artbytes", "png", base="greetings")
+
+    n = image_subjects.copy_to_character(tmp_path, gid, "art_1", cid, vid, "gallery",
+                                         taken_names={"gallery_1"})
+    assert n == "gallery_2"

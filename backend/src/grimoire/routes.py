@@ -1629,13 +1629,14 @@ def put_chronicle(cid: str, sid: str, body: ChronicleSave):
     return {**record, "applied": applied}
 
 
-def _record_name(croot, kind: str, eid: str) -> str | None:
-    """Display name for a campaign record, or None if it no longer exists."""
+def _record_name(cid: str, kind: str, eid: str) -> str | None:
+    """Display name for a campaign record (materialized or still inherited
+    from the world), or None if it no longer exists anywhere."""
     try:
         if kind == "characters":
-            return store.characters.read_character(croot, eid)["meta"].get("name", eid)
+            return store.overlay.read_character(cid, eid)["meta"].get("name", eid)
         if kind in store.entities.ENTITY_KINDS:
-            return store.entities.read_entity(croot, kind, eid)["meta"].get("name", eid)
+            return store.overlay.read_entity(cid, kind, eid)["meta"].get("name", eid)
     except (store.characters.CharacterNotFound, store.entities.EntityNotFound):
         return None
     return None
@@ -1643,7 +1644,7 @@ def _record_name(croot, kind: str, eid: str) -> str | None:
 
 @router.get("/campaigns/{cid}/changes")
 def get_changes(cid: str):
-    croot = _campaign_root_or_404(cid)
+    _campaign_root_or_404(cid)
     data = store.changes.read(cid)
     scenes_by_id = {s["id"]: s for s in store.scenes.list_scenes(cid)}
     try:
@@ -1653,7 +1654,7 @@ def get_changes(cid: str):
     out: list[dict] = []
     for ref, entry in data.items():
         kind, _, eid = ref.partition("/")
-        name = _record_name(croot, kind, eid)
+        name = _record_name(cid, kind, eid)
         if name is None:
             continue  # record deleted since the change was captured
         sid = entry.get("scene", "")
@@ -1748,9 +1749,12 @@ def post_copy_campaign_image_from_greeting(cid: str, char: str, vid: str, body: 
     # campaign; resolve its root through the overlay so the copy still finds it,
     # while the destination character write always targets the campaign root
     src_root = store.overlay.image_root(cid, body.gid, "default", body.name, base="greetings")
+    # the free gallery_N slot must account for inherited world gallery images too,
+    # or a campaign-side copy can reuse a name that shadows one of them
+    taken_names = {i["name"] for i in store.overlay.list_images(cid, char, vid)}
     try:
         stored = store.image_subjects.copy_to_character(root, body.gid, body.name, char, vid, body.slot,
-                                                         src_root=src_root)
+                                                         src_root=src_root, taken_names=taken_names)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="source image not found")
     except ValueError as exc:

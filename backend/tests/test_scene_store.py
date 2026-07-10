@@ -71,6 +71,18 @@ def test_set_location_unknown_id_raises(monkeypatch, tmp_path):
         scenes.set_location(cid, sid, "nowhere")
 
 
+def test_set_location_resolves_inherited_world_location(monkeypatch, tmp_path):
+    """A thin campaign never copies world locations up front; setting one of
+    them as a scene's setting must resolve through the overlay, not 404."""
+    from grimoire.store import entities
+    cid = _campaign(monkeypatch, tmp_path)
+    wroot = worlds.world_root(campaigns.read_campaign(cid)["meta"]["world"])
+    eid = entities.create_entity(wroot, "locations", "Seraphine's Hall", "Never copied to the campaign.")
+    sid = scenes.create_scene(cid, "S")
+    assert scenes.set_location(cid, sid, eid) == {"moved": False, "name": "Seraphine's Hall"}
+    assert scenes.get_location_history(cid, sid) == [eid]
+
+
 def test_get_location_history_missing_scene_is_empty(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     assert scenes.get_location_history(cid, "nope") == []
