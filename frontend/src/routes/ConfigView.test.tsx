@@ -72,6 +72,29 @@ test("switching provider to claude swaps key/model fields for a claude model inp
   expect(screen.getByLabelText("Claude model")).toBeInTheDocument();
 });
 
+test("claude model is a select offering aliases and pinned versions", async () => {
+  render(<ConfigView />);
+  const provider = await screen.findByLabelText("LLM provider");
+  fireEvent.change(provider, { target: { value: "claude" } });
+  const model = screen.getByLabelText("Claude model");
+  expect(model.tagName).toBe("SELECT");
+  const values = Array.from(model.querySelectorAll("option")).map((o) => o.value);
+  expect(values).toContain("fable");
+  expect(values).toContain("opus");
+  expect(values).toContain("sonnet");
+  expect(values).toContain("haiku");
+  expect(values).toContain("claude-fable-5");
+  expect(values).toContain("claude-opus-4-8");
+});
+
+test("a saved claude model outside the list is kept as a custom option", async () => {
+  (api.getConfig as any).mockResolvedValue({ ...cfg, provider: "claude", claude_model: "claude-opus-4-5" });
+  render(<ConfigView />);
+  const model = await screen.findByLabelText("Claude model");
+  expect(model.tagName).toBe("SELECT");
+  expect((model as HTMLSelectElement).value).toBe("claude-opus-4-5");
+});
+
 test("save sends provider and claude_model", async () => {
   render(<ConfigView />);
   const select = await screen.findByLabelText("LLM provider");
