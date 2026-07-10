@@ -905,11 +905,21 @@ def test_incoming_and_accept_flow(client):
     wid = _world(client)
     cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
     client.post(f"/api/worlds/{wid}/lore", json={"name": "Salt Pact", "body": "pact"})
+    # a brand-new world record was never materialized into the campaign: it
+    # reads through live, no incoming item to accept
     pend = client.get(f"/api/campaigns/{cid}/incoming").json()
-    assert [p["status"] for p in pend] == ["new"]
+    assert pend == []
+    assert client.get(f"/api/campaigns/{cid}/lore/salt-pact").json()["body"].strip() == "pact"
+    # once the campaign edits its own copy (materializing it) and the world
+    # changes again, that diverges into a real incoming conflict; accept takes
+    # the world's version by reverting the campaign copy to inherited
+    client.put(f"/api/campaigns/{cid}/lore/salt-pact", json={"body": "campaign edit"})
+    client.put(f"/api/worlds/{wid}/lore/salt-pact", json={"body": "world edit"})
+    pend = client.get(f"/api/campaigns/{cid}/incoming").json()
+    assert [p["status"] for p in pend] == ["conflict"]
     client.post(f"/api/campaigns/{cid}/incoming/accept", json={"refs": [{"kind": "lore", "id": "salt-pact"}]})
     assert client.get(f"/api/campaigns/{cid}/incoming").json() == []
-    assert client.get(f"/api/campaigns/{cid}/lore/salt-pact").json()["body"].strip() == "pact"
+    assert client.get(f"/api/campaigns/{cid}/lore/salt-pact").json()["body"].strip() == "world edit"
 
 
 def test_reject_flow(client):
@@ -927,8 +937,15 @@ def test_world_push_view(client):
     wid = _world(client)
     cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
     client.post(f"/api/worlds/{wid}/locations", json={"name": "A", "body": "a"})
+    # a brand-new world record is inherited (live), so it never shows as pending
     rows = client.get(f"/api/worlds/{wid}/campaigns").json()
-    assert rows == [{"id": cid, "name": "Run", "pending": {"new": 1, "update": 0, "conflict": 0}}]
+    assert rows == [{"id": cid, "name": "Run", "pending": {"new": 0, "update": 0, "conflict": 0}}]
+    # materializing the campaign's own copy (a no-op edit) and then editing the
+    # world again produces a real pending update
+    client.put(f"/api/campaigns/{cid}/locations/a", json={"body": "a"})
+    client.put(f"/api/worlds/{wid}/locations/a", json={"body": "a2"})
+    rows = client.get(f"/api/worlds/{wid}/campaigns").json()
+    assert rows == [{"id": cid, "name": "Run", "pending": {"new": 0, "update": 1, "conflict": 0}}]
 
 
 # ---- cast & suggestions ----

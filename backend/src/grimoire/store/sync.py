@@ -9,10 +9,9 @@ An incoming change exists iff world is not None and world != base.
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
-from . import appearances, campaigns, characters, entities, greetings, pcs, worlds
+from . import appearances, campaigns, characters, entities, greetings, overlay, pcs, worlds
 
 
 def _world_id(cid: str) -> str:
@@ -41,9 +40,6 @@ def incoming(cid: str) -> list[dict]:
     locked = appearances.record(cid)
 
     refs: set[str] = set(manifest)
-    if wroot.exists():
-        refs |= {_ref_str(k, e) for k, e in entities.synced_refs(wroot)}
-    refs |= {_ref_str(k, e) for k, e in entities.synced_refs(croot)}
 
     out: list[dict] = []
     for ref in sorted(refs):
@@ -56,16 +52,11 @@ def incoming(cid: str) -> list[dict]:
             continue  # no incoming change (incl. world-side deletions, skipped)
         mine_h = entities.entity_hash(croot, kind, eid)
         if mine_h is None:
-            status = "new"
-        elif mine_h == base_h:
-            status = "update"
-        else:
-            status = "conflict"
-        item: dict = {"ref": {"kind": kind, "id": eid}, "status": status,
-                      "world": _entity_blob(wroot, kind, eid)}
-        if mine_h is not None:
-            item["mine"] = _entity_blob(croot, kind, eid)
-        out.append(item)
+            continue  # copy gone since materialization: nothing to reconcile
+        status = "update" if mine_h == base_h else "conflict"
+        out.append({"ref": {"kind": kind, "id": eid}, "status": status,
+                    "world": _entity_blob(wroot, kind, eid),
+                    "mine": _entity_blob(croot, kind, eid)})
     return (out + _plotmap_incoming(wroot, croot, manifest)
             + _actor_incoming(wroot, croot, locked)
             + _unpicked_incoming(wroot, croot, manifest, locked))
@@ -77,17 +68,16 @@ def _plotmap_blob(root: Path) -> dict:
 
 
 def _plotmap_incoming(wroot: Path, croot: Path, manifest: dict) -> list[dict]:
+    if "plotmap" not in manifest or not (croot / "plotmap.json").exists():
+        return []
     world_h = greetings.plotmap_hash(wroot) if wroot.exists() else None
     base = manifest.get("plotmap")
     if world_h is None or world_h == base:
         return []
     mine_h = greetings.plotmap_hash(croot)
-    status = "new" if mine_h is None else ("update" if mine_h == base else "conflict")
-    item: dict = {"ref": {"kind": "plotmap", "id": "plotmap"}, "status": status,
-                  "world": _plotmap_blob(wroot)}
-    if mine_h is not None:
-        item["mine"] = _plotmap_blob(croot)
-    return [item]
+    status = "update" if mine_h == base else "conflict"
+    return [{"ref": {"kind": "plotmap", "id": "plotmap"}, "status": status,
+            "world": _plotmap_blob(wroot), "mine": _plotmap_blob(croot)}]
 
 
 def _actor_blob(root: Path, kind: str, actor_id: str, vid: str) -> dict:
@@ -128,12 +118,9 @@ def _actor_summary_blob(root: Path, kind: str, actor_id: str) -> dict:
 
 
 def _unpicked_incoming(wroot: Path, croot: Path, manifest: dict, locked: dict) -> list[dict]:
-    """Whole-actor diffs for actors with no version lock: one item per changed actor;
-    accept re-copies the entire dir (deleted versions go too), reject advances the base."""
+    """Whole-actor diffs for materialized actors with no version lock: one item per
+    changed actor; accept dematerializes (revert to inherited), reject advances the base."""
     refs = {r for r in manifest if r.partition("/")[0] in appearances.ACTOR_KINDS}
-    if wroot.exists():
-        refs |= {f"characters/{a}" for a in characters.character_refs(wroot)}
-        refs |= {f"pcs/{a}" for a in pcs.pc_refs(wroot)}
     out: list[dict] = []
     for ref in sorted(refs):
         if ref in locked:
@@ -143,13 +130,12 @@ def _unpicked_incoming(wroot: Path, croot: Path, manifest: dict, locked: dict) -
         if world_h is None or world_h == manifest.get(ref):
             continue  # no incoming change (incl. world-side deletions, skipped)
         mine_h = _dir_hash(croot, kind, aid)
-        status = ("new" if mine_h is None
-                  else "update" if mine_h == manifest.get(ref) else "conflict")
-        item: dict = {"ref": {"kind": kind, "id": aid}, "status": status,
-                      "world": _actor_summary_blob(wroot, kind, aid)}
-        if mine_h is not None:
-            item["mine"] = _actor_summary_blob(croot, kind, aid)
-        out.append(item)
+        if mine_h is None:
+            continue  # copy gone since materialization: nothing to reconcile
+        status = "update" if mine_h == manifest.get(ref) else "conflict"
+        out.append({"ref": {"kind": kind, "id": aid}, "status": status,
+                    "world": _actor_summary_blob(wroot, kind, aid),
+                    "mine": _actor_summary_blob(croot, kind, aid)})
     return out
 
 
@@ -184,43 +170,41 @@ def _advance(cid: str, refs: list[dict], *, copy: bool) -> None:
         kind, eid = ref["kind"], ref["id"]
         if kind == "plotmap":
             world_h = greetings.plotmap_hash(wroot) if wroot.exists() else None
-            if world_h is None or manifest.get("plotmap") == world_h:
+            pending = ("plotmap" in manifest and world_h is not None
+                       and manifest["plotmap"] != world_h)
+            if not pending:
                 continue
-            if copy:
-                (croot / "plotmap.json").write_text(
-                    (wroot / "plotmap.json").read_text(encoding="utf-8"), encoding="utf-8")
-            manifest["plotmap"] = world_h
-            manifest_changed = True
-            touched = True
+            if copy:   # take world: drop our copy, revert to inherited
+                (croot / "plotmap.json").unlink(missing_ok=True)
+                manifest.pop("plotmap", None)
+            else:
+                manifest["plotmap"] = world_h
+            manifest_changed = touched = True
             continue
         if kind in appearances.ACTOR_KINDS:
             if appearances.record(cid).get(_ref_str(kind, eid)) is not None:
-                if _advance_actor(cid, kind, eid, copy=copy):
+                if _advance_actor(cid, kind, eid, copy=copy):   # locked flow: unchanged
                     touched = True
                 continue
             world_h = _dir_hash(wroot, kind, eid) if wroot.exists() else None
             if world_h is None or manifest.get(_ref_str(kind, eid)) == world_h:
-                continue  # not pending
+                continue
             if copy:
-                dst = croot / kind / eid
-                if dst.exists():
-                    shutil.rmtree(dst)  # replace wholesale so deleted versions go too
-                shutil.copytree(wroot / kind / eid, dst)
-            manifest[_ref_str(kind, eid)] = world_h
-            manifest_changed = True
-            touched = True
+                overlay.dematerialize_actor(cid, kind, eid)
+                manifest.pop(_ref_str(kind, eid), None)
+            else:
+                manifest[_ref_str(kind, eid)] = world_h
+            manifest_changed = touched = True
             continue
         world_h = entities.entity_hash(wroot, kind, eid) if wroot.exists() else None
         if world_h is None or manifest.get(_ref_str(kind, eid)) == world_h:
-            continue  # not pending (no world file, or base already == world): no-op
+            continue
         if copy:
-            src = wroot / kind / f"{eid}.md"
-            dst_dir = croot / kind
-            dst_dir.mkdir(parents=True, exist_ok=True)
-            (dst_dir / f"{eid}.md").write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
-        manifest[_ref_str(kind, eid)] = world_h
-        manifest_changed = True
-        touched = True
+            (croot / kind / f"{eid}.md").unlink(missing_ok=True)
+            manifest.pop(_ref_str(kind, eid), None)
+        else:
+            manifest[_ref_str(kind, eid)] = world_h
+        manifest_changed = touched = True
     if manifest_changed:
         campaigns.write_manifest(cid, manifest)
     if touched:
