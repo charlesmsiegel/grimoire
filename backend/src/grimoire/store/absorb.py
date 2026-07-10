@@ -366,6 +366,7 @@ def apply_edits(cid: str, edits: list[dict], sid: str | None = None) -> list[str
     for e in edits:
         try:
             kind, target, after = e["kind"], e["target"], e.get("after", "")
+            extra_fields: list[dict] = []
             if kind == "character_state":
                 playstate.write_state(croot, target["id"], after)
             elif kind == "lore":
@@ -398,6 +399,14 @@ def apply_edits(cid: str, edits: list[dict], sid: str | None = None) -> list[str
                 # expands a stored {{char}} to the whole present cast, so bake the
                 # card's own name in now (same as card import).
                 cards.bake_char_name(card)
+                # personality/mes_example are card writes too — log them (post-bake) so
+                # the Changes panel shows the whole new card, not just the description.
+                extra_fields = [
+                    {"field": f, "label": f"{e.get('label', '')} — {noun}",
+                     "before": "", "after": card["data"][f]}
+                    for f, noun in (("personality", "personality"),
+                                    ("mes_example", "example dialogue"))
+                    if card["data"][f]]
                 new_cid, new_vid = characters.create_character(croot, p["name"], "default", card)
                 if sid:
                     appearances.appear(cid, sid, "characters", new_cid, new_vid, "npc")
@@ -421,6 +430,7 @@ def apply_edits(cid: str, edits: list[dict], sid: str | None = None) -> list[str
                 recorded.setdefault(ref, []).append(
                     {"field": e.get("field", ""), "label": e.get("label", ""),
                      "before": e.get("before", ""), "after": after})
+                recorded[ref].extend(extra_fields)
         except Exception:  # noqa: BLE001 — best-effort per edit
             continue
     if sid:

@@ -296,6 +296,13 @@ def test_apply_edits_new_character_creates_and_casts_npc(monkeypatch, tmp_path):
     assert card["data"]["mes_example"] == "<START>\n{{user}}: A room?\nOld Bram: Aye."
     assert card["data"]["extensions"]["sd_prompt"] == "an old innkeeper"
     assert appearances.is_appeared(cid, "characters", new_char["id"])
+    # every card field written lands in the change log (baked), not just description
+    from grimoire.store import changes
+    logged = changes.read(cid)[f"characters/{new_char['id']}"]["fields"]
+    assert [(f["field"], f["after"]) for f in logged] == [
+        ("description", "[character(\"Old Bram\") { Occupation(\"innkeep\") }]\n\nBram kept the inn."),
+        ("personality", "gruff but kind"),
+        ("mes_example", "<START>\n{{user}}: A room?\nOld Bram: Aye.")]
 
 
 def test_apply_edits_new_character_without_sid_skips_casting(monkeypatch, tmp_path):
