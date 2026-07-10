@@ -14,7 +14,7 @@ class FakeOpenRouter:
     def __init__(self, deltas):
         self.deltas = deltas
 
-    async def stream(self, messages, model, key):
+    async def stream(self, messages, cfg):
         for d in self.deltas:
             yield d
 
@@ -24,7 +24,7 @@ def client(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     importlib.reload(store)
     app = create_app()
-    app.dependency_overrides[routes.get_openrouter] = lambda: FakeOpenRouter(["Hel", "lo"])
+    app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["Hel", "lo"])
     return TestClient(app)
 
 
@@ -865,7 +865,7 @@ class CapturingOpenRouter:
     def __init__(self):
         self.messages = None
 
-    async def stream(self, messages, model, key):
+    async def stream(self, messages, cfg):
         self.messages = messages
         for d in ["ok"]:
             yield d
@@ -882,7 +882,7 @@ def test_chat_injects_system_message(client):
     client.put("/api/config", json={"openrouter_key": "sk-or-x"})
 
     cap = CapturingOpenRouter()
-    client.app.dependency_overrides[routes.get_openrouter] = lambda: cap
+    client.app.dependency_overrides[routes.get_llm] = lambda: cap
 
     with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "hello"}) as r:
         for _ in r.iter_lines():
@@ -898,6 +898,18 @@ def test_chat_missing_key_returns_409(client):
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
     resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "hi"})
     assert resp.status_code == 409 and resp.json()["kind"] == "missing_key"
+
+
+def test_chat_missing_key_ok_for_claude_provider(client):
+    # No openrouter_key is set, but the claude provider doesn't need one — the
+    # 409 missing_key guard must be skipped. The `client` fixture already
+    # overrides routes.get_llm with a FakeOpenRouter, standing in for whatever
+    # provider is configured.
+    client.put("/api/config", json={"provider": "claude"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "hi"})
+    assert resp.status_code == 200
 
 
 def test_chat_streams_and_persists(client):
@@ -943,7 +955,7 @@ def test_regenerate_excludes_the_dropped_post_from_the_prompt(client):
     store.scenes.append_message(cid, sid, "user", "hi")
     store.scenes.append_message(cid, sid, "assistant", "old reply")
     cap = CapturingOpenRouter()
-    client.app.dependency_overrides[routes.get_openrouter] = lambda: cap
+    client.app.dependency_overrides[routes.get_llm] = lambda: cap
     with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/regenerate") as r:
         for _ in r.iter_lines():
             pass
@@ -957,7 +969,7 @@ def test_regenerate_with_guidance_appends_a_system_steer(client):
     store.scenes.append_message(cid, sid, "user", "hi")
     store.scenes.append_message(cid, sid, "assistant", "old reply")
     cap = CapturingOpenRouter()
-    client.app.dependency_overrides[routes.get_openrouter] = lambda: cap
+    client.app.dependency_overrides[routes.get_llm] = lambda: cap
     with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
                        json={"guidance": "make her angrier"}) as r:
         for _ in r.iter_lines():
@@ -1341,10 +1353,10 @@ class FakeOpenRouterComplete:
     def __init__(self, text):
         self.text = text
 
-    async def stream(self, messages, model, key):
+    async def stream(self, messages, cfg):
         yield self.text
 
-    async def complete(self, messages, model, key):
+    async def complete(self, messages, cfg):
         return self.text
 
 
@@ -1371,7 +1383,7 @@ def test_put_tagline_saves(client):
 def test_post_tagline_generate_from_model(client):
     wid, cid = _world_char(client)
     client.put("/api/config", json={"openrouter_key": "sk-or-x"})
-    client.app.dependency_overrides[routes.get_openrouter] = \
+    client.app.dependency_overrides[routes.get_llm] = \
         lambda: FakeOpenRouterComplete("A silent snowleopardgirl.\nignored second line")
     r = client.post(f"/api/worlds/{wid}/characters/{cid}/tagline/generate")
     assert r.status_code == 200
@@ -1534,7 +1546,7 @@ def test_absorb_returns_preview_without_persisting(client):
     client.put("/api/config", json={"openrouter_key": "sk-or-x"})
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
     store.scenes.append_message(cid, sid, "user", "We entered the crypt.")
-    client.app.dependency_overrides[routes.get_openrouter] = lambda: FakeOpenRouterComplete(
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
         '{"one_line": "They entered.", "summary": "The party entered the crypt.",'
         ' "keywords": ["crypt"], "timeline_events": []}')
     r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
@@ -1552,7 +1564,7 @@ def test_absorb_writes_dossier_for_present_character(client):
                 json={"kind": "characters", "id": "aese", "version": "main", "role": "npc"})
     store.scenes.append_message(cid, sid, "user", "Aese served tea.")
     client.put("/api/config", json={"openrouter_key": "sk-or-x"})
-    client.app.dependency_overrides[routes.get_openrouter] = \
+    client.app.dependency_overrides[routes.get_llm] = \
         lambda: FakeOpenRouterComplete("Aese is a shy snowleopardgirl who now trusts the owner.")
     r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
     assert r.status_code == 200
@@ -1574,16 +1586,16 @@ def test_absorb_survives_dossier_failure(client):
         def __init__(self):
             self.calls = 0
 
-        async def stream(self, m, mo, k):
+        async def stream(self, m, cfg):
             yield "{}"
 
-        async def complete(self, m, mo, k):
+        async def complete(self, m, cfg):
             self.calls += 1
             if self.calls == 1:
                 return '{"one_line": "ok", "summary": "s", "keywords": [], "timeline_events": []}'
             raise RuntimeError("dossier boom")
 
-    client.app.dependency_overrides[routes.get_openrouter] = lambda: Fake()
+    client.app.dependency_overrides[routes.get_llm] = lambda: Fake()
     r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
     assert r.status_code == 200 and r.json()["one_line"] == "ok"
     assert store.dossiers.read(store.campaigns.campaign_root(cid), "aese") == ""  # failed write skipped
@@ -1622,14 +1634,14 @@ def test_absorb_upstream_error_returns_502(client):
     from grimoire.openrouter import OpenRouterError
 
     class FakeRaises:
-        async def complete(self, messages, model, key):
+        async def complete(self, messages, cfg):
             raise OpenRouterError("bad_response", "boom")
 
     _, cid = _campaign(client)
     client.put("/api/config", json={"openrouter_key": "sk-or-x"})
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
     store.scenes.append_message(cid, sid, "user", "We entered.")
-    client.app.dependency_overrides[routes.get_openrouter] = lambda: FakeRaises()
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeRaises()
     resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
     assert resp.status_code == 502 and resp.json()["kind"] == "bad_response"
 
@@ -1642,7 +1654,7 @@ def test_absorb_returns_edits_without_persisting(client):
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
     store.appearances.appear(cid, sid, "characters", ch, "main", "npc")
     store.scenes.append_message(cid, sid, "user", "We fought.")
-    client.app.dependency_overrides[routes.get_openrouter] = lambda: FakeOpenRouterComplete(
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
         '{"one_line": "o", "summary": "s", "keywords": [], "timeline_events": [],'
         f' "character_state_edits": [{{"id": "{ch}", "current_state": "hurt"}}],'
         ' "lore_edits": [], "authored_edits": []}')
@@ -1657,7 +1669,7 @@ def test_scene_suggestions_returns_resolved(client):
     ann = client.post(f"/api/worlds/{wid}/characters",
                       json={"name": "Ann", "version_name": "main"}).json()["character"]
     cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
-    client.app.dependency_overrides[routes.get_openrouter] = lambda: FakeOpenRouterComplete(
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
         '{"suggestions": [{"title": "T", "premise": "P",'
         f' "cast": ["characters:{ann}"], "location": ""}}]}}')
     r = client.post(f"/api/campaigns/{cid}/scene-suggestions")
@@ -1792,7 +1804,7 @@ def test_reply_is_split_into_per_speaker_posts(client):
     reply = ('**Seraphine Vale:** "You dare?"\n\n'
              "**Grimoire:** Thunder rolls.\n\n"
              "**Elara Vane:** forged player line")
-    client.app.dependency_overrides[routes.get_openrouter] = lambda: FakeOpenRouter([reply])
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter([reply])
     with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/chat",
                        json={"content": "hi"}) as r:
         r.read()
@@ -2213,7 +2225,7 @@ def _campaign_with_greetings(client, n):
 def test_scene_suggestions_rank_greetings_when_more_than_two(client):
     client.put("/api/config", json={"openrouter_key": "sk-or-x"})
     cid, gids = _campaign_with_greetings(client, 3)
-    client.app.dependency_overrides[routes.get_openrouter] = lambda: FakeOpenRouterComplete(
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
         '{"suggestions": [], "greeting_picks": ["' + gids[2] + '", "ghost", "' + gids[0] + '"]}')
     r = client.post(f"/api/campaigns/{cid}/scene-suggestions")
     assert r.status_code == 200
@@ -2223,7 +2235,7 @@ def test_scene_suggestions_rank_greetings_when_more_than_two(client):
 def test_scene_suggestions_skip_ranking_at_two_or_fewer(client):
     client.put("/api/config", json={"openrouter_key": "sk-or-x"})
     cid, gids = _campaign_with_greetings(client, 2)
-    client.app.dependency_overrides[routes.get_openrouter] = lambda: FakeOpenRouterComplete(
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
         '{"suggestions": [], "greeting_picks": ["' + gids[0] + '"]}')
     r = client.post(f"/api/campaigns/{cid}/scene-suggestions")
     assert r.status_code == 200
@@ -2262,7 +2274,7 @@ def test_datetime_suggested_is_null_without_signals_and_once_dated(client):
 def test_scene_suggestions_include_dates_and_next_date(client):
     client.put("/api/config", json={"openrouter_key": "sk-or-x"})
     _wid, cid = _campaign(client)
-    client.app.dependency_overrides[routes.get_openrouter] = lambda: FakeOpenRouterComplete(
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
         '{"suggestions": [{"title": "T", "premise": "P", "cast": [], "location": "",'
         ' "date": "2026-07-10"}], "next_date": "2026-07-08"}')
     r = client.post(f"/api/campaigns/{cid}/scene-suggestions")
@@ -2323,7 +2335,7 @@ def test_offscreen_opener_uses_third_person_instruction(client):
                       json={"title": "Cabal", "pcless": True}).json()["id"]
     client.put("/api/config", json={"openrouter_key": "k"})
     cap = CapturingOpenRouter()
-    client.app.dependency_overrides[routes.get_openrouter] = lambda: cap
+    client.app.dependency_overrides[routes.get_llm] = lambda: cap
     with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/opener",
                        json={"prompt": "the cult meets"}) as r:
         r.read()
@@ -2336,7 +2348,7 @@ def test_offscreen_chat_never_persists_the_director_note(client):
     sid = client.post(f"/api/campaigns/{cid}/scenes",
                       json={"title": "Cabal", "pcless": True}).json()["id"]
     client.put("/api/config", json={"openrouter_key": "k"})
-    client.app.dependency_overrides[routes.get_openrouter] = \
+    client.app.dependency_overrides[routes.get_llm] = \
         lambda: FakeOpenRouter(["**Grimoire:** The cult convenes."])
     with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/chat",
                        json={"content": "the guard grows suspicious"}) as r:
@@ -2352,7 +2364,7 @@ def test_offscreen_chat_empty_note_sends_continue(client):
                       json={"title": "Cabal", "pcless": True}).json()["id"]
     client.put("/api/config", json={"openrouter_key": "k"})
     cap = CapturingOpenRouter()
-    client.app.dependency_overrides[routes.get_openrouter] = lambda: cap
+    client.app.dependency_overrides[routes.get_llm] = lambda: cap
     with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/chat",
                        json={"content": ""}) as r:
         r.read()
@@ -2366,7 +2378,7 @@ def test_empty_chat_in_a_normal_scene_is_an_ephemeral_npc_round(client):
     store.scenes.append_message(cid, sid, "assistant", "The tavern hums.")
     client.put("/api/config", json={"openrouter_key": "k"})
     cap = CapturingOpenRouter()
-    client.app.dependency_overrides[routes.get_openrouter] = lambda: cap
+    client.app.dependency_overrides[routes.get_llm] = lambda: cap
     with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/chat",
                        json={"content": " "}) as r:
         r.read()
@@ -2439,7 +2451,7 @@ class FakeCompleter:
     def __init__(self, text):
         self.text = text
 
-    async def complete(self, messages, model, key):
+    async def complete(self, messages, cfg):
         self.messages = messages
         return self.text
 
@@ -2455,7 +2467,7 @@ def test_offscreen_suggestions_filter_player_cast(client):
     fake = FakeCompleter(json.dumps({"suggestions": [{
         "title": "Plot", "premise": "The cult schemes.",
         "cast": ["characters:vex", f"pcs:{pid}"], "location": ""}]}))
-    client.app.dependency_overrides[routes.get_openrouter] = lambda: fake
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
     out = client.post(f"/api/campaigns/{cid}/scene-suggestions?offscreen=true").json()
     assert out["suggestions"][0]["cast"] == [{"kind": "characters", "id": "vex", "name": "Vex"}]
     assert "offscreen" in fake.messages[0]["content"].lower()
@@ -2473,7 +2485,7 @@ def test_offscreen_suggestions_rank_only_offscreen_greetings(client):
         "name": "Normal", "character": "vex", "version": ver, "body": "y"})
     client.put("/api/config", json={"openrouter_key": "k"})
     fake = FakeCompleter(json.dumps({"suggestions": [], "greeting_picks": ["alpha", "beta"]}))
-    client.app.dependency_overrides[routes.get_openrouter] = lambda: fake
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
     out = client.post(f"/api/campaigns/{cid}/scene-suggestions?offscreen=true").json()
     assert "Available greetings" in fake.messages[1]["content"]
     assert "Normal" not in fake.messages[1]["content"]
