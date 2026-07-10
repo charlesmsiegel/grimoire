@@ -144,7 +144,7 @@ export default function ConfigView() {
           <p className="field-hint">
             Uses the local Claude Code login (run <code>claude setup-token</code> on a
             headless machine) and bills your Claude subscription. Requires the backend
-            extra: <code>pip install grimoire[claude]</code>.
+            extra: <code>pip install -e "backend[claude]"</code>.
           </p>
         </>
       )}

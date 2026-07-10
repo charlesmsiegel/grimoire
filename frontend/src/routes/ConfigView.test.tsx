@@ -63,7 +63,7 @@ test("shows the three theme cards", async () => {
   expect(screen.getByText("ASTRAL")).toBeInTheDocument();
 });
 
-it("switching provider to claude swaps key/model fields for a claude model input", async () => {
+test("switching provider to claude swaps key/model fields for a claude model input", async () => {
   render(<ConfigView />);
   const select = await screen.findByLabelText("LLM provider");
   expect(screen.getByLabelText("OpenRouter API key")).toBeInTheDocument();
@@ -72,7 +72,7 @@ it("switching provider to claude swaps key/model fields for a claude model input
   expect(screen.getByLabelText("Claude model")).toBeInTheDocument();
 });
 
-it("save sends provider and claude_model", async () => {
+test("save sends provider and claude_model", async () => {
   render(<ConfigView />);
   const select = await screen.findByLabelText("LLM provider");
   fireEvent.change(select, { target: { value: "claude" } });
