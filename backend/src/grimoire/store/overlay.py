@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import campaigns, characters, entities, greetings, pcs, taglines, worlds
+from . import assets, campaigns, characters, entities, greetings, pcs, taglines, worlds
 from .paths import natural_key
 
 
@@ -307,6 +307,16 @@ def dematerialize_actor(cid: str, kind: str, aid: str) -> None:
         d.rmdir()
 
 
+def _patch_char_item(cid: str, item: dict) -> dict:
+    names = [i["name"] for i in list_images(cid, item["id"], item["default_version"])]
+    return {**item,
+            "has_avatar": assets.AVATAR in names,
+            "avatar_focus": read_focus(cid, item["id"], item["default_version"]),
+            "gallery_count": sum(1 for n in names if n.startswith("gallery_")),
+            "localized_count": sum(1 for n in names if n.startswith("embed-")),
+            "tagline": tagline(cid, item["id"])}
+
+
 def list_characters(cid: str) -> list[dict]:
     mine = characters.list_characters(croot_of(cid))
     # dossier/state-only dirs have no character.md and are filtered by
@@ -315,7 +325,7 @@ def list_characters(cid: str) -> list[dict]:
     gone = deleted(cid)
     inherited = [c for c in characters.list_characters(wroot_of(cid))
                  if c["id"] not in have and _flat_ref("characters", c["id"]) not in gone]
-    return sorted(mine + inherited, key=lambda c: c["id"])
+    return sorted([_patch_char_item(cid, c) for c in mine + inherited], key=lambda c: c["id"])
 
 
 def list_pcs(cid: str) -> list[dict]:
@@ -339,6 +349,67 @@ def create_pc(cid: str, name: str, tags: list[str], version_name: str = "default
         return (wroot / "pcs" / pid / "pc.md").exists() or _flat_ref("pcs", pid) in gone
 
     return pcs.create_pc(croot_of(cid), name, tags, version_name, persona, taken=taken)
+
+
+# ---- assets: per-file union, campaign wins ----
+
+def _asset_ref(base: str, aid: str, vid: str, name: str) -> str:
+    return f"assets/{base}/{aid}/{vid}/{name}"
+
+
+def list_images(cid: str, aid: str, vid: str, base: str = "characters") -> list[dict]:
+    mine = assets.list_images(croot_of(cid), aid, vid, base)
+    have = {i["name"] for i in mine}
+    gone = deleted(cid)
+    inherited = [i for i in assets.list_images(wroot_of(cid), aid, vid, base)
+                 if i["name"] not in have and _asset_ref(base, aid, vid, i["name"]) not in gone]
+    return sorted(mine + inherited, key=lambda i: i["name"])
+
+
+def image_root(cid: str, aid: str, vid: str, name: str, base: str = "characters") -> Path:
+    croot = croot_of(cid)
+    if assets.image_path(croot, aid, vid, name, base) is not None:
+        return croot
+    if _asset_ref(base, aid, vid, name) in deleted(cid):
+        return croot   # absent there -> the serve route 404s, no fallthrough
+    return wroot_of(cid)
+
+
+def read_focus(cid: str, aid: str, vid: str, base: str = "characters") -> int | None:
+    croot = croot_of(cid)
+    focus_file = croot / base / aid / "assets" / vid / assets.FOCUS_FILE
+    if assets.image_path(croot, aid, vid, assets.AVATAR, base) is not None or focus_file.exists():
+        return assets.read_focus(croot, aid, vid, base)
+    return assets.read_focus(wroot_of(cid), aid, vid, base)
+
+
+def delete_image(cid: str, aid: str, vid: str, name: str, base: str = "characters") -> None:
+    assets.delete_image(croot_of(cid), aid, vid, name, base)   # no-op when absent
+    if assets.image_path(wroot_of(cid), aid, vid, name, base) is not None:
+        add_deleted(cid, _asset_ref(base, aid, vid, name))
+
+
+def promote_image(cid: str, aid: str, vid: str, name: str, base: str = "characters") -> None:
+    """Copy-up the named image and the current avatar, then swap campaign-side."""
+    croot, wroot = croot_of(cid), wroot_of(cid)
+    for n in (name, assets.AVATAR):
+        if (assets.image_path(croot, aid, vid, n, base) is None
+                and _asset_ref(base, aid, vid, n) not in deleted(cid)):
+            src = assets.image_path(wroot, aid, vid, n, base)
+            if src is not None:
+                assets.put_image(croot, aid, vid, n, src.read_bytes(),
+                                 src.suffix.lstrip("."), base)
+    assets.promote_image(croot, aid, vid, name, base)
+
+
+# ---- payload patching: asset-derived fields come from the union ----
+
+def read_character(cid: str, char_id: str) -> dict:
+    detail = characters.read_character(char_root(cid, char_id), char_id)
+    for v in detail["versions"]:
+        v["images"] = [i["name"] for i in list_images(cid, char_id, v["id"])]
+        v["avatar_focus"] = read_focus(cid, char_id, v["id"])
+    return detail
 
 
 def tagline(cid: str, char_id: str) -> str:
