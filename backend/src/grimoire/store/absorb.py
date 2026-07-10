@@ -89,7 +89,9 @@ def parse_output(text: str) -> dict:
                                "status": status if status in plot.STATUSES else "open",
                                "beat": _str(e, "beat")})
 
-    new_characters = _list("new_characters", ("name", "description", "sd_prompt"))
+    new_characters = _list("new_characters",
+                           ("name", "description", "history", "personality",
+                            "mes_example", "sd_prompt"))
 
     new_locations = []
     for e in obj.get("new_locations", []):
@@ -307,11 +309,17 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
             continue  # id already taken -- treat as the same character
         except characters.CharacterNotFound:
             pass
+        # The reviewed description is the W++ block plus the generated history, so the
+        # staged diff shows the full text that lands in the card's description field.
+        history = (e.get("history", "") or "").strip()
+        after = f"{description}\n\n{history}" if history else description
         out.append({"id": f"new_character:{candidate_id}", "kind": "new_character",
                     "target": {"kind": "characters", "id": ""},
                     "label": f"New character — {name}", "field": "description",
-                    "before": "", "after": description, "authored": False,
-                    "payload": {"name": name, "sd_prompt": e.get("sd_prompt", "")}})
+                    "before": "", "after": after, "authored": False,
+                    "payload": {"name": name, "sd_prompt": e.get("sd_prompt", ""),
+                                "personality": e.get("personality", ""),
+                                "mes_example": e.get("mes_example", "")}})
 
     for kind, parsed_key, prefix, label_noun in (
         ("locations", "new_locations", "new_location", "location"),
@@ -383,6 +391,8 @@ def apply_edits(cid: str, edits: list[dict], sid: str | None = None) -> list[str
                 p = e["payload"]
                 card = characters.blank_card(p["name"])
                 card["data"]["description"] = after
+                card["data"]["personality"] = p.get("personality", "")
+                card["data"]["mes_example"] = p.get("mes_example", "")
                 card["data"]["extensions"]["sd_prompt"] = p.get("sd_prompt", "")
                 new_cid, new_vid = characters.create_character(croot, p["name"], "default", card)
                 if sid:
