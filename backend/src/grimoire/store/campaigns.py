@@ -133,6 +133,8 @@ def ensure_campaign_slim(cid: str) -> None:
         if ref == "plotmap":
             p = root / "plotmap.json"
             if not p.exists():
+                if (wroot / "plotmap.json").exists():
+                    overlay.add_deleted(cid, "plotmap")   # keep the user's deletion deleted
                 manifest.pop(ref)
             elif greetings.plotmap_hash(root) == base == greetings.plotmap_hash(wroot):
                 p.unlink()
@@ -145,6 +147,8 @@ def ensure_campaign_slim(cid: str) -> None:
             dh = characters.dir_hash if kind == "characters" else pcs.dir_hash
             mine_h = dh(root, eid)
             if mine_h is None:
+                if dh(wroot, eid) is not None:
+                    overlay.add_deleted(cid, ref)   # keep the user's deletion deleted
                 manifest.pop(ref)
             elif mine_h == base == dh(wroot, eid):
                 overlay.dematerialize_actor(cid, kind, eid)
