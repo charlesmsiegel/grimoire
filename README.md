@@ -149,6 +149,25 @@ page.
 
 ---
 
+## Android app
+
+Grimoire also builds as an Android APK — the same app, unchanged: the APK
+embeds the real backend (via [Chaquopy](https://chaquo.com/chaquopy/)) and the
+built frontend in a full-screen WebView, storing its library under the app's
+files directory. Build it from the repo root with GNU make (on Windows, run
+from Git Bash; `winget install ezwinports.make` if you don't have make):
+
+```bash
+make android-bootstrap   # once per machine: JDK 17 + Android SDK + licenses (no admin needed)
+make apk                 # debug APK -> build/grimoire-debug.apk
+make apk-install         # build + adb install to a connected device
+```
+
+See [`android/README.md`](android/README.md) for details (prerequisites,
+release builds, and the runtime layout on the device).
+
+---
+
 ## Development
 
 Grimoire is a **FastAPI** backend (`backend/`, pytest) plus a **Vite/React**
@@ -174,7 +193,9 @@ Repository layout:
 ```
 backend/    FastAPI app, the ~/.grimoire file store, OpenRouter client
 frontend/   Vite/React UI (Campaigns, Worlds, scene play, Config)
+android/    Kotlin/WebView shell that packages backend + frontend as an APK
 templates/  every LLM prompt, as Jinja2
-scripts/    install / run / shutdown for unix and windows
-docs/        design notes and specs
+scripts/    install / run / shutdown / android-bootstrap for unix and windows
+docs/       design notes and specs
+Makefile    APK build targets (make android-bootstrap / apk / apk-install)
 ```
