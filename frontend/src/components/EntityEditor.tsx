@@ -23,6 +23,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
   const [body, setBody] = useState("");
   const [keys, setKeys] = useState("");
   const [owners, setOwners] = useState<string[]>([]);          // selected owner refs (lore only)
+  const [sdPrompt, setSdPrompt] = useState("");                 // suggested SD prompt, absorb-set only
   const [ownerOpts, setOwnerOpts] = useState<LoreOwner[]>([]); // candidates for the picker
   const [mode, setMode] = useState<"view" | "edit">("edit"); // existing entries open read-only
   const [error, setError] = useState<string | null>(null);
@@ -80,6 +81,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
     setBody("");
     setKeys("");
     setOwners([]); // manual "+ New" / post-save: always world-level, never a stale nav owner
+    setSdPrompt("");
     setImages([]);
     setMode("edit"); // a brand-new entry goes straight to the form
   }
@@ -92,6 +94,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
     setBody(e.body);
     setKeys(e.meta.keys ?? "");
     setOwners((e.meta.owners ?? "").split(",").map((o) => o.trim()).filter(Boolean));
+    setSdPrompt(e.meta.sd_prompt ?? "");
     setMode("view");
     reloadImages(id);
   }
@@ -277,6 +280,12 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
                   ? <div className="chips">{keyList.map((k) => <span key={k} className="chip on">{k}</span>)}</div>
                   : <div className="field-hint">always-on</div>}
               </div>
+              {sdPrompt && (
+                <div className="side-section">
+                  <h4>Image prompt</h4>
+                  <div className="field-hint">{sdPrompt}</div>
+                </div>
+              )}
               {kind === "lore" && (
                 <div className="side-section">
                   <h4>Owners</h4>
