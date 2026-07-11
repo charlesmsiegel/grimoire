@@ -192,6 +192,15 @@ def test_get_time_history_missing_scene_is_empty(monkeypatch, tmp_path):
     assert scenes.get_time_history(cid, "nope") == []
 
 
+def test_list_scenes_reports_first_time_history_entry_as_date(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Undated")
+    assert scenes.list_scenes(cid)[0]["date"] == ""
+    new_sid = scenes.set_datetime(cid, sid, "2026-06-29")["id"]
+    scenes.set_datetime(cid, new_sid, "2026-07-04T09:00")  # later advance must not change "date"
+    assert scenes.list_scenes(cid)[0]["date"] == "2026-06-29"
+
+
 def test_delete_removes_scene(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "Doomed")

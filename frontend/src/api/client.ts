@@ -71,7 +71,7 @@ export type CampaignMeta = {
   scenes: number;
   last_scene: string;
 };
-export type SceneMeta = { id: string; title: string; model: string; created: string; updated: string; pcless?: boolean };
+export type SceneMeta = { id: string; title: string; model: string; created: string; updated: string; date: string; pcless?: boolean };
 export type Message = { role: "user" | "assistant"; content: string; speaker?: string };
 export type Scene = { meta: { id: string; title: string }; messages: Message[] };
 

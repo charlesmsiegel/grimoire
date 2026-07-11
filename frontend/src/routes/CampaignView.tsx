@@ -23,6 +23,37 @@ import { quotePlugin } from "../markdown/quotePlugin";
 // unaffected.
 const ROLL_SPEAKER = "⁣Roll";
 
+// The scene rail lists scenes most-recently-edited first, but the displayed
+// number must reflect story order — the id's own leading number (its
+// filename stem is "<NNN>--<date>--<slug>"), never the list position, which
+// drifts out of story order as soon as any earlier scene is re-edited.
+function sceneNumber(id: string, fallback: number): number {
+  const m = /^(\d+)--/.exec(id);
+  return m ? parseInt(m[1], 10) : fallback;
+}
+
+type SceneSort = "updated" | "date" | "order";
+
+// All three sorts put the most-recent thing first, matching "updated" (the
+// API's own order, most-recently-edited first — the existing default):
+// "date" is latest in-story date first, "order" is the highest scene number
+// first. Scenes with no in-story date always sort after every dated scene.
+function sortScenes(scenes: SceneMeta[], sort: SceneSort): SceneMeta[] {
+  if (sort === "updated") return scenes;
+  const arr = [...scenes];
+  if (sort === "order") {
+    arr.sort((a, b) => sceneNumber(b.id, 0) - sceneNumber(a.id, 0));
+  } else {
+    arr.sort((a, b) => {
+      if (!a.date && !b.date) return 0;
+      if (!a.date) return 1;
+      if (!b.date) return -1;
+      return b.date.localeCompare(a.date);
+    });
+  }
+  return arr;
+}
+
 // Memoized so typing in the input bar (which re-renders CampaignView on every
 // keystroke) doesn't re-parse the markdown of every unchanged message.
 const RenderedMarkdown = memo(function RenderedMarkdown({ content }: { content: string }) {
@@ -39,6 +70,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
   const [dt, setDt] = useState<SceneDatetime | null>(null);
   const [showCalendar, setShowCalendar] = useState(false);
   const [scenes, setScenes] = useState<SceneMeta[]>([]);
+  const [sceneSort, setSceneSort] = useState<SceneSort>("updated");
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [streaming, setStreaming] = useState("");
@@ -350,12 +382,18 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
       <aside className="scene-rail">
         <div className="rail-counter">Scenes / {String(scenes.length).padStart(2, "0")}</div>
         <button className="btn-chrome rail-new" onClick={newScene}>+ New Scene</button>
+        <select className="rail-sort" aria-label="Sort scenes by" value={sceneSort}
+                onChange={(e) => setSceneSort(e.target.value as SceneSort)}>
+          <option value="updated">Sort: Last updated</option>
+          <option value="date">Sort: Scene date</option>
+          <option value="order">Sort: Order</option>
+        </select>
         <div className="rail-scenes">
-          {scenes.map((s, i) => (
+          {sortScenes(scenes, sceneSort).map((s, i) => (
             <EditableRow
               key={s.id}
               label={s.title}
-              prefix={String(scenes.length - i).padStart(2, "0")}
+              prefix={String(sceneNumber(s.id, scenes.length - i)).padStart(2, "0")}
               subtitle={s.pcless ? "Offscreen" : undefined}
               active={s.id === activeId}
               onSelect={() => selectScene(s.id)}

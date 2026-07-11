@@ -126,6 +126,44 @@ test("shows the sub-header with world-copy link, scene counter, and rail date", 
   expect(screen.getByRole("button", { name: /campaign world/i })).toBeInTheDocument();
 });
 
+test("scene rail numbers by the id's own number, not list position", async () => {
+  // listScenes is sorted by `updated` descending — an earlier scene edited
+  // most recently sorts first, which must not desync the displayed number
+  // from the scene's actual story position (its id's leading number).
+  (api.listScenes as any).mockResolvedValue([
+    { id: "003--2024-09-10--day-two", title: "Day Two", model: "", created: "", updated: "2026-07-07T00:49:35Z" },
+    { id: "036--2024-09-24--froot-loops", title: "Froot Loops", model: "", created: "", updated: "2026-07-06T23:26:21Z" },
+  ]);
+  renderCampaign();
+  await screen.findByText(/‹ Campaigns/i);
+  expect(screen.getByText("03 · Day Two")).toBeInTheDocument();
+  expect(screen.getByText("36 · Froot Loops")).toBeInTheDocument();
+});
+
+test("scene rail is sortable by last updated, scene date, or order", async () => {
+  (api.listScenes as any).mockResolvedValue([
+    // API order is "updated" desc, deliberately unrelated to date or id order.
+    { id: "003--2024-09-24--day-two", title: "Day Two", model: "", created: "", updated: "3", date: "2024-09-24" },
+    { id: "036--2024-09-10--froot-loops", title: "Froot Loops", model: "", created: "", updated: "2", date: "2024-09-10" },
+    { id: "010--2024-09-15--undated", title: "Undated", model: "", created: "", updated: "1", date: "" },
+  ]);
+  renderCampaign();
+  await screen.findByText(/‹ Campaigns/i);
+
+  const rowOrder = () => Array.from(document.querySelectorAll(".rail-scenes .row-name")).map((el) => el.textContent);
+
+  // default: "updated" — API order preserved (most-recently-edited first).
+  expect(rowOrder()).toEqual(["03 · Day Two", "36 · Froot Loops", "10 · Undated"]);
+
+  // "date" — latest scene date first; undated scenes still sort last.
+  fireEvent.change(screen.getByLabelText(/sort scenes by/i), { target: { value: "date" } });
+  expect(rowOrder()).toEqual(["03 · Day Two", "36 · Froot Loops", "10 · Undated"]);
+
+  // "order" — the scene id's own leading number, descending.
+  fireEvent.change(screen.getByLabelText(/sort scenes by/i), { target: { value: "order" } });
+  expect(rowOrder()).toEqual(["36 · Froot Loops", "10 · Undated", "03 · Day Two"]);
+});
+
 test("groups consecutive posts under one speaker plate", async () => {
   (api.getConfig as any).mockResolvedValue({
     model: "m", theme: "codex", key_set: true, system_prompt: "", quote_color: "off",
