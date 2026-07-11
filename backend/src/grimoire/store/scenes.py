@@ -150,12 +150,14 @@ def list_scenes(cid: str) -> list[dict]:
     if d.exists():
         for p in d.glob("*.md"):
             meta = parse_frontmatter_head(p)  # never reads the transcript body
+            history = [x for x in meta.get("time_history", "").split(",") if x]
             out.append({
                 "id": p.stem,
                 "title": meta.get("title", p.stem),
                 "model": meta.get("model", ""),
                 "created": meta.get("created", ""),
                 "updated": meta.get("updated", ""),
+                "date": history[0] if history else "",
                 "pcless": meta.get("pcless") == "true",
             })
     out.sort(key=lambda m: m["updated"], reverse=True)
