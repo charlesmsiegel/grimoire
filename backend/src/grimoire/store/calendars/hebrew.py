@@ -155,4 +155,4 @@ class HebrewProvider(CalendarProvider):
                 for token, disp, num in ms]
 
 
-register("hebrew", HebrewProvider)
+register("hebrew", HebrewProvider, "Hebrew")

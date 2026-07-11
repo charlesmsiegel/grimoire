@@ -1,20 +1,17 @@
 import { useEffect, useState } from "react";
 import { api, type CalendarConfig as Cfg } from "../api/client";
 
-const PROVIDERS = [
-  { id: "gregorian", name: "Gregorian" },
-  { id: "hebrew", name: "Hebrew" },
-  { id: "harptos", name: "Calendar of Harptos" },
-];
 const REGIONS = ["US", "GB", "CA", "AU", "IL", ""];
 
 export function CalendarConfig({ cid }: { cid: string }) {
   const [cfg, setCfg] = useState<Cfg | null>(null);
+  const [providers, setProviders] = useState<{ id: string; name: string }[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     api.getCalendarConfig(cid).then(setCfg).catch(() => setCfg(null));
+    api.getCalendarProviders().then((r) => setProviders(r.providers)).catch(() => setProviders([]));
   }, [cid]);
 
   if (!cfg) return <div className="field-hint">Loading calendar…</div>;
@@ -41,7 +38,7 @@ export function CalendarConfig({ cid }: { cid: string }) {
         Calendar
         <select aria-label="Calendar" value={cfg.primary.provider}
                 onChange={(e) => setPrimary({ provider: e.target.value, region: e.target.value === "gregorian" ? "US" : "" })}>
-          {PROVIDERS.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          {providers.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
       </label>
       {cfg.primary.provider === "gregorian" && (

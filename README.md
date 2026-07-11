@@ -48,6 +48,14 @@ from an up-to-date world.
 - **Themes** — ships with `codex`, `astral`, and `manuscript`.
 - **Manual dice rolls** — roll dice mid-scene with the 🎲 button; see
   [Dice notation](#dice-notation) for the syntax.
+- **Custom calendars** — the only built-in calendars are Gregorian and Hebrew
+  (real-world, with their real holiday sets); everything else — homebrew
+  fictional calendars, house rules, or a system like the Calendar of Harptos —
+  is a plugin: drop a `.py` file implementing `CalendarProvider` (see
+  `backend/src/grimoire/store/calendars/base.py` and `plugins.py` for the
+  contract) into `<your grimoire home>/calendars/`, and it becomes choosable
+  in the Calendar dropdown. Nothing under your data directory is git-tracked,
+  so homebrew/personal calendars stay private.
 
 ### Dice notation
 

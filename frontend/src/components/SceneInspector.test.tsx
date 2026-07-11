@@ -9,7 +9,7 @@ vi.mock("../api/client", async () => {
       getCast: vi.fn(), getCampaign: vi.fn(), listCharacters: vi.fn(), listPCs: vi.fn(),
       listCampaignPCs: vi.fn(), getSceneLocation: vi.fn(), getSceneContext: vi.fn(),
       getCastDetail: vi.fn(), readEntity: vi.fn(), getChronicle: vi.fn(),
-      getCalendarConfig: vi.fn(), setCalendarConfig: vi.fn(),
+      getCalendarConfig: vi.fn(), setCalendarConfig: vi.fn(), getCalendarProviders: vi.fn(),
       getSceneDatetime: vi.fn(), setSceneDatetime: vi.fn(), getCalendarMonths: vi.fn(),
       listAppearances: vi.fn(), listEntityImages: vi.fn(),
       listEntities: vi.fn(), setSceneLocation: vi.fn(),
@@ -58,6 +58,9 @@ beforeEach(() => {
     primary: { provider: "gregorian", region: "US", custom_holidays: [], anchor: null },
     secondary: null, confirmed: true });
   (api.setCalendarConfig as any).mockResolvedValue({ ok: true });
+  (api.getCalendarProviders as any).mockResolvedValue({ providers: [
+    { id: "gregorian", name: "Gregorian" }, { id: "hebrew", name: "Hebrew" },
+  ] });
   (api.getSceneDatetime as any).mockResolvedValue({ current: null, history: [], suggested: null });
   (api.setSceneDatetime as any).mockResolvedValue({ ok: true, advanced: false, friendly: "", id: "s" });
   (api.getCalendarMonths as any).mockResolvedValue({ months: GREG_MONTHS });

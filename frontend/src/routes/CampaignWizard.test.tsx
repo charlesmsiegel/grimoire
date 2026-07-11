@@ -21,6 +21,7 @@ vi.mock("../api/client", () => ({
     availableGreetings: vi.fn(),
     startFromGreeting: vi.fn(),
     opener: vi.fn(),
+    getCalendarProviders: vi.fn(),
   },
 }));
 import { api } from "../api/client";
@@ -30,6 +31,10 @@ beforeEach(() => {
   (api.listWorlds as any).mockResolvedValue([{ id: "w1", name: "Realm", created: "", updated: "", counts: {} }]);
   (api.listTags as any).mockResolvedValue({ t1: "rebel", t2: "scholar" });
   (api.listPCs as any).mockResolvedValue([]);
+  (api.getCalendarProviders as any).mockResolvedValue({ providers: [
+    { id: "gregorian", name: "Gregorian" }, { id: "hebrew", name: "Hebrew" },
+    { id: "my-custom-calendar", name: "My Custom Calendar" },
+  ] });
   (api.createCampaign as any).mockResolvedValue({ id: "run" });
   (api.createCampaignPC as any).mockResolvedValue({ pc: "mara", version: "default" });
   (api.createScene as any).mockResolvedValue({ id: "s1" });
@@ -103,18 +108,18 @@ test("selecting a holidays region passes it to createCampaign", async () => {
   await waitFor(() => expect(api.createCampaign).toHaveBeenCalledWith("Run One", "w1", "GB", "gregorian"));
 });
 
-test("choosing Calendar of Harptos hides the Holidays select and creates with no region", async () => {
+test("choosing a custom (user-authored) calendar hides the Holidays select and creates with no region", async () => {
   renderWizard();
   await screen.findByText("Realm");
   fireEvent.change(screen.getByLabelText(/campaign name/i), { target: { value: "FR" } });
-  fireEvent.change(screen.getByLabelText(/^calendar$/i), { target: { value: "harptos" } });
+  fireEvent.change(screen.getByLabelText(/^calendar$/i), { target: { value: "my-custom-calendar" } });
   expect(screen.queryByLabelText("Holidays region")).toBeNull();
   expect(screen.queryByLabelText("Observance")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: /next/i }));
   fireEvent.change(screen.getByLabelText(/character name/i), { target: { value: "Mara" } });
   fireEvent.click(screen.getByRole("button", { name: /next/i }));
   fireEvent.click(screen.getByRole("button", { name: /create campaign/i }));
-  await waitFor(() => expect(api.createCampaign).toHaveBeenCalledWith("FR", "w1", undefined, "harptos"));
+  await waitFor(() => expect(api.createCampaign).toHaveBeenCalledWith("FR", "w1", undefined, "my-custom-calendar"));
 });
 
 test("choosing Hebrew and Israel passes the observance region to createCampaign", async () => {

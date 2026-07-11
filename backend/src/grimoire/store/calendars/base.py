@@ -102,17 +102,28 @@ class CalendarProvider(ABC):
 
 
 REGISTRY: dict[str, type[CalendarProvider]] = {}
+NAMES: dict[str, str] = {}
 
 
-def register(provider_id: str, cls: type[CalendarProvider]) -> None:
+def register(provider_id: str, cls: type[CalendarProvider], name: str | None = None) -> None:
     REGISTRY[provider_id] = cls
+    NAMES[provider_id] = name or provider_id.replace("_", " ").title()
 
 
 def get_provider(config: dict) -> CalendarProvider:
+    from .plugins import load_custom_providers
+    load_custom_providers()
     cls = REGISTRY.get(config.get("provider", "gregorian"))
     if cls is None:
         raise CalendarError(f"unknown calendar provider: {config.get('provider')!r}")
     return cls(config)
+
+
+def list_providers() -> list[dict]:
+    """Every registered calendar (built-in + user-authored), for a UI picker."""
+    from .plugins import load_custom_providers
+    load_custom_providers()
+    return [{"id": pid, "name": NAMES.get(pid, pid)} for pid in REGISTRY]
 
 
 # ---- time-of-day-aware, calendar-agnostic helpers ----

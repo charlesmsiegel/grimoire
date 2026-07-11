@@ -1132,6 +1132,11 @@ def _campaign_entity_delete(cid: str, kind: str, eid: str):
     return {"ok": True}
 
 
+@router.get("/calendars/providers")
+def get_calendar_providers():
+    return {"providers": store.calendars.list_providers()}
+
+
 @router.get("/worlds/{wid}/calendar/months")
 def get_world_calendar_months(wid: str, year: int):
     if not store.worlds.world_meta_path(wid).exists():

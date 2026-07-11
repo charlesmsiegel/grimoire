@@ -101,4 +101,4 @@ def _custom_date(rule: dict, year: int):
         return None
 
 
-register("gregorian", GregorianProvider)
+register("gregorian", GregorianProvider, "Gregorian")

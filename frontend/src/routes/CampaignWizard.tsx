@@ -20,6 +20,7 @@ export default function CampaignWizard({ keySet }: { keySet: boolean }) {
   const [world, setWorld] = useState("");
   const [region, setRegion] = useState("US");
   const [calendar, setCalendar] = useState("gregorian");
+  const [calendars, setCalendars] = useState<{ id: string; name: string }[]>([]);
 
   // step 2
   const [persona, setPersona] = useState<Persona>(blankPersona);
@@ -44,6 +45,7 @@ export default function CampaignWizard({ keySet }: { keySet: boolean }) {
       setWorlds(ws);
       if (ws.length) setWorld(ws[0].id);
     });
+    api.getCalendarProviders().then((r) => setCalendars(r.providers)).catch(() => setCalendars([]));
   }, []);
 
   useEffect(() => {
@@ -67,8 +69,9 @@ export default function CampaignWizard({ keySet }: { keySet: boolean }) {
     setError(null);
     setBusy(true);
     try {
+      const usesRegion = calendar === "gregorian" || calendar === "hebrew";
       const { id: cid } = await api.createCampaign(
-        name.trim(), world, calendar === "harptos" ? undefined : region || undefined, calendar);
+        name.trim(), world, usesRegion ? region || undefined : undefined, calendar);
       // an existing world PC is already copied into the new campaign — just seat it
       let cast: { kind: "pcs"; id: string; version?: string };
       if (pickedPC) {
@@ -168,9 +171,7 @@ export default function CampaignWizard({ keySet }: { keySet: boolean }) {
               <select id="wiz-calendar" aria-label="Calendar" value={calendar}
                       onChange={(e) => { setCalendar(e.target.value);
                                          setRegion(e.target.value === "gregorian" ? "US" : ""); }}>
-                <option value="gregorian">Gregorian</option>
-                <option value="hebrew">Hebrew</option>
-                <option value="harptos">Calendar of Harptos</option>
+                {calendars.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
               <div className="field-caption">The campaign's primary calendar</div>
             </div>

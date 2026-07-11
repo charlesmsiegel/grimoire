@@ -8,13 +8,6 @@ import { Portrait } from "./Portrait";
 import { RecordDrawer, type DrawerTarget } from "./RecordDrawer";
 import { CalendarDatePicker } from "./CalendarDatePicker";
 
-// The calendars a campaign can select.
-const CALENDARS = [
-  { id: "gregorian", name: "Gregorian" },
-  { id: "hebrew", name: "Hebrew" },
-  { id: "harptos", name: "Calendar of Harptos" },
-];
-
 export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRenamed, pcless }:
   { cid: string; sid: string; refreshKey: number; onSceneChanged: () => void;
     onSceneRenamed?: (id: string) => void; pcless?: boolean }) {
@@ -30,6 +23,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   const [cfg, setCfg] = useState<CalendarConfig | null>(null);
   const [when, setWhen] = useState<SceneDatetime | null>(null);
   const [provider, setProvider] = useState("gregorian");
+  const [calendars, setCalendars] = useState<{ id: string; name: string }[]>([]);
   const [dateInput, setDateInput] = useState("");
   const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
   const [locPick, setLocPick] = useState("");
@@ -47,6 +41,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
     api.listEntities({ kind: "campaign", id: cid }, "locations")
       .then((ls) => setLocations(ls.map((l) => ({ id: l.id, name: l.name }))))
       .catch(() => setLocations([]));
+    api.getCalendarProviders().then((r) => setCalendars(r.providers)).catch(() => setCalendars([]));
   }, [cid]);
 
   const reloadWhen = useCallback(
@@ -214,7 +209,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
             <div className="field-hint">Select a calendar to track dates.</div>
             <div className="picker">
               <select aria-label="Calendar" value={provider} onChange={(e) => setProvider(e.target.value)}>
-                {CALENDARS.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                {calendars.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
               <button className="primary" onClick={chooseCalendar}>Use this calendar</button>
             </div>
