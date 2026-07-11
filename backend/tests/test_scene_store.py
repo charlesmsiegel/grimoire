@@ -406,6 +406,15 @@ def test_remove_trailing_assistant_run_refuses_when_trailing_message_is_a_roll(m
 
 
 # ---- fuzzy speaker matching (a first name refers to the cast member) ----
+def test_edit_message_refuses_a_manual_roll_line(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    scenes.append_message(cid, sid, "assistant", "\U0001F3B2 2d6 = 7", speaker=scenes.ROLL_SPEAKER)
+    with pytest.raises(scenes.RollMessageImmutable):
+        scenes.edit_message(cid, sid, 0, "9001")
+    assert scenes.read_scene(cid, sid)["messages"][0]["content"] == "\U0001F3B2 2d6 = 7"
+
+
 def test_match_name_prefix_and_ambiguity_rules():
     names = ["winifred winterbourne", "Seraphine Vale"]
     assert scenes.match_name("winifred", names) == "winifred winterbourne"

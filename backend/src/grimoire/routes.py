@@ -2004,8 +2004,12 @@ def post_scene_roll(cid: str, sid: str, body: RollBody):
         result = store.dice.roll(body.notation)
     except store.dice.DiceError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    entry = store.rolls.append(cid, sid, body.label or None, result)
-    line = store.dice.format_roll(result, body.label or None)
+    # Collapse newlines so a hostile label can't fake a blank-line boundary
+    # followed by a marker like "**You:**" and get split into a forged
+    # message by scenes._markers on the next read.
+    label = " ".join((body.label or "").split()) or None
+    entry = store.rolls.append(cid, sid, label, result)
+    line = store.dice.format_roll(result, label)
     store.scenes.append_message(cid, sid, "assistant", line, speaker=store.scenes.ROLL_SPEAKER)
     return {"ok": True, "roll": entry, "message": line}
 
@@ -2058,6 +2062,8 @@ def put_scene_message(cid: str, sid: str, index: int, body: EditMessage):
         store.scenes.edit_message(cid, sid, index, body.content)
     except IndexError:
         raise HTTPException(status_code=400, detail="message index out of range")
+    except store.scenes.RollMessageImmutable:
+        raise HTTPException(status_code=400, detail="a dice roll's transcript line can't be edited")
     return {"ok": True}
 
 

@@ -171,7 +171,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
   }
 
   async function send() {
-    if (busy) return;
+    if (busy || rolling) return;
     const content = input.trim();
     let id = activeId;
     if (!id) {
@@ -204,12 +204,12 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
   }
 
   async function retry() {
-    if (!activeId || busy) return;
+    if (!activeId || busy || rolling) return;
     await runStream(activeId, (onEvent) => api.retry(cid, activeId, onEvent));
   }
 
   async function reroll() {
-    if (!activeId || busy) return;
+    if (!activeId || busy || rolling) return;
     const guidance = (rerollPrompt ?? "").trim();
     setRerollPrompt(null);
     // one turn is a run of assistant posts — drop the whole trailing run
@@ -480,7 +480,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
         {error && (
           <div className="banner error-banner">
             <span>{error}</span>
-            <button className="retry" onClick={retry} disabled={busy}>
+            <button className="retry" onClick={retry} disabled={busy || rolling}>
               Retry
             </button>
           </div>
@@ -532,10 +532,12 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
                       <span className="gutter-icons">
                         {index === messages.length - 1 && canReroll && (
                           <button className="msg-edit" title="Reroll" aria-label="Reroll"
-                                  onClick={() => setRerollPrompt("")}>↻</button>
+                                  disabled={rolling} onClick={() => setRerollPrompt("")}>↻</button>
                         )}
-                        <button className="msg-edit" title="Edit message" aria-label={`Edit message ${index + 1}`}
-                                onClick={() => setEditing({ index, text: m.content })}>✎</button>
+                        {m.speaker !== ROLL_SPEAKER && (
+                          <button className="msg-edit" title="Edit message" aria-label={`Edit message ${index + 1}`}
+                                  onClick={() => setEditing({ index, text: m.content })}>✎</button>
+                        )}
                       </span>
                     )}
                     {rerollPrompt !== null && !busy &&
@@ -552,7 +554,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
                             if (e.key === "Escape") setRerollPrompt(null);
                           }}
                         />
-                        <button className="btn-chrome" onClick={reroll}>Reroll ▸</button>
+                        <button className="btn-chrome" onClick={reroll} disabled={rolling}>Reroll ▸</button>
                       </span>
                     )}
                   </span>
@@ -604,7 +606,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
         </div>
         <div className="inputbar">
           <button className="roll-btn" title="Roll dice" aria-label="Roll dice"
-                  disabled={!activeId || busy}
+                  disabled={!activeId || busy || messages.length === 0}
                   onClick={() => setRollForm((f) => (f ? null : { notation: "", label: "", error: null }))}>
             🎲
           </button>
@@ -644,7 +646,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onKeyDown}
           />
-          <button className="send" onClick={send} disabled={busy}>
+          <button className="send" onClick={send} disabled={busy || rolling}>
             {busy ? "…" : !input.trim() ? "Continue ▶" : "Send ▸"}
           </button>
         </div>

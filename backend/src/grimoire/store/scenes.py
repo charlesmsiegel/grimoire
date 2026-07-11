@@ -339,6 +339,11 @@ def remove_trailing_assistant_run(cid: str, sid: str) -> None:
     p.write_text(dump_frontmatter(meta, _serialize_messages(messages)), encoding="utf-8")
 
 
+class RollMessageImmutable(Exception):
+    """Raised when editing a manual dice-roll transcript line is attempted —
+    its content must stay in lockstep with the immutable rolls.json entry."""
+
+
 def edit_message(cid: str, sid: str, index: int, content: str) -> None:
     p = _scene_path(cid, sid)
     if not _safe_id(sid) or not p.exists():
@@ -347,6 +352,8 @@ def edit_message(cid: str, sid: str, index: int, content: str) -> None:
     messages = read_scene(cid, sid)["messages"]
     if index < 0 or index >= len(messages):
         raise IndexError(index)
+    if messages[index].get("speaker") == ROLL_SPEAKER:
+        raise RollMessageImmutable(index)
     messages[index]["content"] = content.strip()
     meta["updated"] = now_iso()
     p.write_text(dump_frontmatter(meta, _serialize_messages(messages)), encoding="utf-8")

@@ -231,6 +231,16 @@ test("editing a message saves and reloads", async () => {
   await waitFor(() => expect(api.editMessage).toHaveBeenCalledWith("run", "s1", 0, "hello"));
 });
 
+test("a manual dice roll's transcript line has no Edit control", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [
+    { role: "assistant", content: "an ordinary reply" },
+    { role: "assistant", content: "🎲 2d6 = 7", speaker: "⁣Roll" }] });
+  renderCampaign();
+  await screen.findByText(/2d6 = 7/);
+  expect(screen.getAllByTitle("Edit message")).toHaveLength(1);
+});
+
 test("Enter sends a message in the active scene", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   renderCampaign();
@@ -769,6 +779,13 @@ test("normal scene: empty Continue sends an ephemeral round, no user message add
   await waitFor(() => expect(api.chat).toHaveBeenCalledWith("run", "s1", "", expect.any(Function)));
 });
 
+test("Roll dice is disabled on a fresh scene until the opener/cast setup produces a message", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  renderCampaign();
+  const rollBtn = await screen.findByRole("button", { name: "Roll dice" });
+  expect(rollBtn).toBeDisabled();
+});
+
 test("renders an Export EPUB download link", async () => {
   renderCampaign();
   const link = await screen.findByRole("link", { name: /export epub/i });
@@ -778,9 +795,12 @@ test("renders an Export EPUB download link", async () => {
 
 test("rolls dice from the input bar popover and refreshes the scene", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
   (api.roll as any).mockResolvedValue({ ok: true, roll: { id: "r1" }, message: "🎲" });
   renderCampaign();
-  fireEvent.click(await screen.findByRole("button", { name: "Roll dice" }));
+  await screen.findByText("a reply");
+  fireEvent.click(screen.getByRole("button", { name: "Roll dice" }));
   fireEvent.change(screen.getByLabelText("Dice notation"), { target: { value: "2d6+1" } });
   fireEvent.change(screen.getByLabelText("Roll label"), { target: { value: "Perception" } });
   fireEvent.click(screen.getByRole("button", { name: "Roll ▸" }));
@@ -792,10 +812,13 @@ test("rolls dice from the input bar popover and refreshes the scene", async () =
 
 test("disables roll submission while a roll is in flight, so repeated clicks send only one", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
   let resolveRoll: (v: unknown) => void;
   (api.roll as any).mockReturnValue(new Promise((resolve) => { resolveRoll = resolve; }));
   renderCampaign();
-  fireEvent.click(await screen.findByRole("button", { name: "Roll dice" }));
+  await screen.findByText("a reply");
+  fireEvent.click(screen.getByRole("button", { name: "Roll dice" }));
   fireEvent.change(screen.getByLabelText("Dice notation"), { target: { value: "2d6+1" } });
   const rollBtn = screen.getByRole("button", { name: "Roll ▸" });
   fireEvent.click(rollBtn);
@@ -809,9 +832,12 @@ test("disables roll submission while a roll is in flight, so repeated clicks sen
 
 test("shows a roll error and keeps the popover open", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
   (api.roll as any).mockRejectedValue({ detail: "can't read dice notation 'garbage'" });
   renderCampaign();
-  fireEvent.click(await screen.findByRole("button", { name: "Roll dice" }));
+  await screen.findByText("a reply");
+  fireEvent.click(screen.getByRole("button", { name: "Roll dice" }));
   fireEvent.change(screen.getByLabelText("Dice notation"), { target: { value: "garbage" } });
   fireEvent.click(screen.getByRole("button", { name: "Roll ▸" }));
   await screen.findByText(/can't read dice notation/);
