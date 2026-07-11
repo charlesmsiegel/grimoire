@@ -46,6 +46,32 @@ from an up-to-date world.
   Jinja2 template under [`templates/`](templates/README.md). Edit a template
   and the change takes effect immediately; nothing prompt-shaped is hard-coded.
 - **Themes** — ships with `codex`, `astral`, and `manuscript`.
+- **Manual dice rolls** — roll dice mid-scene with the 🎲 button; see
+  [Dice notation](#dice-notation) for the syntax.
+
+### Dice notation
+
+The 🎲 button in a scene's input bar takes a notation string:
+
+```
+[N]dM [khN|klN|dhN|dlN] [!] [+K|-K] [tN | vs N]
+```
+
+- **`NdM`** — roll `N` dice with `M` sides each. `N` defaults to 1, so `d20` is
+  a single d20. Example: `2d6`.
+- **`khN` / `klN`** — keep only the highest/lowest `N` dice. Example:
+  `4d6kh3` (roll 4d6, keep the best 3).
+- **`dhN` / `dlN`** — drop the highest/lowest `N` dice instead of keeping.
+- **`!`** — exploding dice: any die that rolls its max face rolls again and
+  adds on. Example: `5d6!`.
+- **`+K` / `-K`** — a flat modifier added to the total. Example: `2d6+3`.
+- **`tN`** — pool mode: count how many dice roll `N` or higher as successes,
+  instead of summing. Doesn't take a modifier. Example: `7d10t6`.
+- **`vs N`** — grade the summed total as success/failure against a target
+  number. Example: `1d20+5 vs 15`.
+
+`tN` and `vs N` are mutually exclusive with each other. Clauses can be
+combined freely otherwise, e.g. `4d6kh3!+2`.
 
 ---
 

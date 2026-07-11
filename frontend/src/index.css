@@ -619,8 +619,18 @@ button.primary { background: var(--accent); color: var(--on-accent); border: var
   border-right: var(--rw) solid var(--rule); padding: 7px 10px; font-family: var(--fm); font-size: 12px;
 }
 .roll-pop .btn-chrome { border: none; padding: 7px 12px; box-shadow: none; font-size: 11px; white-space: nowrap; }
+.roll-pop .roll-syntax-help {
+  align-self: center; margin: 0 10px; background: none; border: none; cursor: pointer;
+  font-size: 11px; color: var(--muted); white-space: nowrap; padding: 0;
+}
+.roll-pop .roll-syntax-help:hover { color: var(--accent); }
 .roll-pop .roll-error { flex-basis: 100%; padding: 5px 10px; font-family: var(--fm); font-size: 11px;
   color: var(--accent); border-top: var(--rw) solid var(--rule); }
+.roll-pop .roll-syntax {
+  flex-basis: 100%; padding: 8px 10px; font-family: var(--fm); font-size: 11px; color: var(--muted);
+  border-top: var(--rw) solid var(--rule); display: flex; flex-direction: column; gap: 3px;
+}
+.roll-pop .roll-syntax code { color: var(--ink); }
 .msg-edit { background: transparent; border: none; color: var(--page-muted); cursor: pointer; font-size: 13px; padding: 0; }
 .msg-edit:hover { color: var(--accent); }
 .msg-edit-form textarea { width: 100%; background: var(--surface); color: var(--ink); border: var(--rw2) solid var(--accent); padding: 8px; font-family: var(--fb); resize: vertical; }

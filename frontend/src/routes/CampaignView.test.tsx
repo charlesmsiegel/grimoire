@@ -881,3 +881,17 @@ test("shows a roll error and keeps the popover open", async () => {
   await screen.findByText(/can't read dice notation/);
   expect(screen.getByLabelText("Dice notation")).toBeInTheDocument();
 });
+
+test("toggles an in-app dice notation syntax reference from the roll popover", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
+  renderCampaign();
+  await screen.findByText("a reply");
+  fireEvent.click(screen.getByRole("button", { name: "Roll dice" }));
+  expect(screen.queryByText(/exploding dice/i)).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Dice notation syntax" }));
+  expect(screen.getByText(/exploding dice/i)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Dice notation syntax" }));
+  expect(screen.queryByText(/exploding dice/i)).toBeNull();
+});
