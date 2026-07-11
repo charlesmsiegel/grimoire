@@ -374,6 +374,20 @@ def test_remove_trailing_assistant_run(monkeypatch, tmp_path):
         scenes.remove_trailing_assistant_run(cid, sid)
 
 
+def test_remove_trailing_assistant_run_refuses_when_trailing_message_is_a_roll(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    scenes.append_message(cid, sid, "user", "hi")
+    scenes.append_message(cid, sid, "assistant", "one")
+    scenes.append_message(cid, sid, "assistant", "\U0001F3B2 2d6 = 7", speaker=scenes.ROLL_SPEAKER)
+    with pytest.raises(IndexError):
+        scenes.remove_trailing_assistant_run(cid, sid)
+    # the reply and the roll line both survive — reroll must not silently
+    # delete a transcript line whose entry still lives in rolls.json
+    messages = scenes.read_scene(cid, sid)["messages"]
+    assert len(messages) == 3
+
+
 # ---- fuzzy speaker matching (a first name refers to the cast member) ----
 def test_match_name_prefix_and_ambiguity_rules():
     names = ["winifred winterbourne", "Seraphine Vale"]

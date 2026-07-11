@@ -44,6 +44,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
   const [rerollPrompt, setRerollPrompt] = useState<string | null>(null); // null = popover closed
   // null = closed; open holds the in-progress notation/label/error
   const [rollForm, setRollForm] = useState<{ notation: string; label: string; error: string | null } | null>(null);
+  const [rolling, setRolling] = useState(false);
   const [colorQuotes, setColorQuotes] = useState(false);
   const [labels, setLabels] = useState({ user: "You", assistant: "Grimoire" });
   const [cast, setCast] = useState<Actor[]>([]);
@@ -219,15 +220,18 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
   }
 
   async function doRoll() {
-    if (!activeId || busy || !rollForm) return;
+    if (!activeId || busy || rolling || !rollForm) return;
     const notation = rollForm.notation.trim();
     if (!notation) return;
+    setRolling(true);
     try {
       await api.roll(cid, activeId, notation, rollForm.label.trim() || undefined);
       setRollForm(null);
       await selectScene(activeId);
     } catch (err: any) {
       setRollForm({ ...rollForm, error: err.detail ?? String(err) });
+    } finally {
+      setRolling(false);
     }
   }
 
@@ -265,9 +269,12 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
   }
 
   // rerolling regenerates the trailing assistant run; a run that reaches the
-  // first message is the opener and is not rerollable
+  // first message is the opener and is not rerollable. A manual dice roll
+  // (backend tags it speaker "Roll") is never part of that run — its entry
+  // lives on in rolls.json, so reroll must not be offered while one trails.
   const canReroll = messages.length > 0 &&
     messages[messages.length - 1].role === "assistant" &&
+    messages[messages.length - 1].speaker !== "Roll" &&
     messages.some((x) => x.role === "user");
 
   const speakerOf = (m: Message) =>
@@ -602,6 +609,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
                 placeholder="2d6+3, 4d6kh3, 7d10t6…"
                 aria-label="Dice notation"
                 value={rollForm.notation}
+                disabled={rolling}
                 onChange={(e) => setRollForm({ ...rollForm, notation: e.target.value })}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") doRoll();
@@ -612,13 +620,14 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
                 placeholder="Label (optional)"
                 aria-label="Roll label"
                 value={rollForm.label}
+                disabled={rolling}
                 onChange={(e) => setRollForm({ ...rollForm, label: e.target.value })}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") doRoll();
                   if (e.key === "Escape") setRollForm(null);
                 }}
               />
-              <button className="btn-chrome" onClick={doRoll}>Roll ▸</button>
+              <button className="btn-chrome" onClick={doRoll} disabled={rolling}>Roll ▸</button>
               {rollForm.error && <span className="roll-error">{rollForm.error}</span>}
             </div>
           )}

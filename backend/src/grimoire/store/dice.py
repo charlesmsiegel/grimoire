@@ -28,12 +28,17 @@ class DiceError(ValueError):
     """Unparseable or out-of-range dice notation."""
 
 
+# Digit groups are capped at 6 characters: comfortably above the widest
+# legal value (MAX_SIDES = 1000) but short enough that int() never runs into
+# Python's digit-string conversion limit on a hostile/oversized clause — the
+# regex itself rejects those before conversion instead of raising a bare
+# ValueError that would bypass DiceError's 400 handling.
 _GRAMMAR = re.compile(
-    r"^(?P<count>\d*)d(?P<sides>\d+)"
-    r"(?:\s*(?P<keep>kh|kl|dh|dl)(?P<keep_n>\d+))?"
+    r"^(?P<count>\d{0,6})d(?P<sides>\d{1,6})"
+    r"(?:\s*(?P<keep>kh|kl|dh|dl)(?P<keep_n>\d{1,6}))?"
     r"(?:\s*(?P<explode>!))?"
-    r"(?:\s*(?P<mod_sign>[+-])\s*(?P<mod>\d+))?"
-    r"(?:\s*(?:t(?P<pool>\d+)|vs\s*(?P<vs>\d+)))?$"
+    r"(?:\s*(?P<mod_sign>[+-])\s*(?P<mod>\d{1,6}))?"
+    r"(?:\s*(?:t(?P<pool>\d{1,6})|vs\s*(?P<vs>\d{1,6})))?$"
 )
 
 
@@ -108,10 +113,12 @@ def _apply_keep(dice_out: list[dict], keep: tuple[str, int] | None) -> None:
 
 def roll(notation: str, seed: int | None = None) -> dict:
     """Resolve `notation`. Omitted seed is drawn from the OS CSPRNG (secrets),
-    then all dice come from one random.Random(seed) — reproducible by design."""
+    then all dice come from one random.Random(seed) — reproducible by design.
+    Capped at 53 bits (not 64) so the seed survives the JSON/JS boundary as a
+    plain `number` without silently rounding past Number.MAX_SAFE_INTEGER."""
     spec = parse(notation)
     if seed is None:
-        seed = secrets.randbits(64)
+        seed = secrets.randbits(53)
     rng = random.Random(seed)
     dice_out = _roll_dice(rng, spec)
     _apply_keep(dice_out, spec["keep"])
