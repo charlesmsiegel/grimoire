@@ -987,4 +987,4 @@ git commit -m "feat(frontend): cross-tab jump from character page to a focused g
 ## Final verification (after Task 7)
 
 - Full suites green (both stacks).
-- Manual: open ashgrove → a greeting → click "＋ subjects" under an image → assign → chip appears; character page shows "Appears in" + "World greetings" (★ on primary); "Set as avatar" updates the avatar; chip click jumps to the greeting.
+- Manual: open Ashgrove → a greeting → click "＋ subjects" under an image → assign → chip appears; character page shows "Appears in" + "World greetings" (★ on primary); "Set as avatar" updates the avatar; chip click jumps to the greeting.

@@ -125,7 +125,7 @@ def test_offscreen_scene_rejects_player_seating(client):
     pid = client.post(f"/api/worlds/{wid}/pcs", json={"name": "Elara"}).json()["pc"]
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
                        json={"kind": "pcs", "id": pid}).status_code == 400
-    client.post(f"/api/worlds/{wid}/characters", json={"name": "desmond"})
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Desmond"})
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
                        json={"kind": "characters", "id": "desmond", "role": "player"}).status_code == 400
     # NPCs still seat fine

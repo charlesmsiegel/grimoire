@@ -8,7 +8,7 @@ Single LLM call — unchanged shape.
 ## Problem
 
 Scene suggestions for the *hollow-manor* campaign's second scene are unusable.
-Multiple proposals assume marisol winterbourne is present at the manor (she is an
+Multiple proposals assume Marisol Winterbourne is present at the manor (she is an
 **exiled** character who has never appeared), and one refers to her as a man
 (she is a woman). This is not prompt-tuning noise — the grounding the model
 would need simply is not in the prompt.
@@ -22,9 +22,9 @@ would need simply is not in the prompt.
 available_cast.append({"token": tok, "name": c.get("name", c["id"])})
 ```
 
-- **No per-character facts.** marisol appears only in `available_cast` (she has
+- **No per-character facts.** Marisol appears only in `available_cast` (she has
   no appearance record, so the `absent_cast` list — which *does* carry taglines
-  — excludes her). The model sees `characters:marisol = marisol winterbourne` and
+  — excludes her). The model sees `characters:marisol = Marisol Winterbourne` and
   nothing else: no gender, no status, no one-line description. So it places her
   in the room and guesses "he." Every character's one-line tagline already
   exists on disk (`characters/<id>/tagline.md`) and goes unused at the one
@@ -56,7 +56,7 @@ available_cast.append({"token": tok, "name": c.get("name", c["id"])})
   backbone, but it belongs on top of the `factions` entity kind planned in the
   mechanics-dice roadmap (Phase 0, #693). Not built here.
 - **A structured gender/pronoun field.** Cards have no gender field; gender is
-  carried implicitly by the tagline (marisol's says "mother"). Accepted limit: a
+  carried implicitly by the tagline (Marisol's says "mother"). Accepted limit: a
   tagline that omits gender may still be guessed wrong. Rare; deferred.
 - **Relationship state.** `relationships.json` renders feelings *between a known
   present cast*; at suggestion-time there is no fixed cast, so it fits awkwardly.
@@ -84,8 +84,8 @@ New/changed return keys:
   for non-offscreen, role=player actors), each entry now:
 
   ```python
-  {"token": "characters:marisol", "name": "marisol winterbourne",
-   "tagline": "vivienne's exiled mother and the story's patient spider…",
+  {"token": "characters:marisol", "name": "Marisol Winterbourne",
+   "tagline": "Vivienne's exiled mother and the story's patient spider…",
    "status": "unseen", "role": "npc"}
   ```
 
@@ -123,12 +123,12 @@ Unchanged keys: `now`, `friendly`, `holidays_today`, `upcoming`, `birthdays`,
 
   ```
   In the most recent scene (present):
-  - characters:vivienne-winterbourne = vivienne winterbourne — cold countess who set the household rules
-  - pcs:julian = julian (the player character)
+  - characters:vivienne-winterbourne = Vivienne Winterbourne — cold countess who set the household rules
+  - pcs:julian = Julian (the player character)
   Appeared earlier, now offstage:
   - (rendered only if any)
   Not yet appeared — introduce only with an in-world reason:
-  - characters:marisol = marisol winterbourne — vivienne's exiled mother and the story's patient spider…
+  - characters:marisol = Marisol Winterbourne — Vivienne's exiled mother and the story's patient spider…
   ```
 
   Tokens are still explicit (`<kind>:<id> = Name`) so the model reuses the exact
@@ -155,7 +155,7 @@ The `offscreen` variant gets the same presence discipline, minus the player.
 `backend/tests/test_suggest_store.py`:
 
 - `build_snapshot` classifies a most-recent-scene character as `present`, an
-  earlier-only character as `appeared`, and a never-appeared character (marisol)
+  earlier-only character as `appeared`, and a never-appeared character (Marisol)
   as `unseen`, **each carrying its tagline**.
 - `story_so_far` carries the most recent scene's `one_line` (+ location, date),
   newest first, capped at 3.

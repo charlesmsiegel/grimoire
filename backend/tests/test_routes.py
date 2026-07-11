@@ -1002,7 +1002,7 @@ def test_cast_and_suggestions_flow(client):
 
 def test_cast_pc_and_character_as_player(client):
     wid = _world(client)
-    client.post(f"/api/worlds/{wid}/characters", json={"name": "desmond"})
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Desmond"})
     client.post(f"/api/worlds/{wid}/pcs", json={"name": "Elara"})
     cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
@@ -1014,7 +1014,7 @@ def test_cast_pc_and_character_as_player(client):
                        json={"kind": "characters", "id": "desmond", "role": "player"}).status_code == 200
     cast = client.get(f"/api/campaigns/{cid}/scenes/{sid}/cast").json()
     assert {"kind": "pcs", "id": "elara", "role": "player", "name": "Elara"} in cast
-    assert {"kind": "characters", "id": "desmond", "role": "player", "name": "desmond"} in cast
+    assert {"kind": "characters", "id": "desmond", "role": "player", "name": "Desmond"} in cast
     roster = client.get(f"/api/campaigns/{cid}/appearances").json()
     assert {r["kind"] for r in roster} == {"pcs", "characters"}
 
@@ -1626,9 +1626,9 @@ def test_campaign_create_defaults_region_us(client):
 def test_create_campaign_with_calendar_provider(client):
     wid = _world(client, "Faerun")
     cid = client.post("/api/campaigns",
-                      json={"name": "FR", "world": wid, "calendar": "harptos"}).json()["id"]
+                      json={"name": "FR", "world": wid, "calendar": "hebrew"}).json()["id"]
     cfg = client.get(f"/api/campaigns/{cid}/calendar").json()
-    assert cfg["primary"]["provider"] == "harptos"
+    assert cfg["primary"]["provider"] == "hebrew"
     assert cfg["confirmed"] is True
     r = client.post("/api/campaigns", json={"name": "X", "world": wid, "calendar": "bogus"})
     assert r.status_code == 400
@@ -1721,12 +1721,12 @@ def test_calendar_months_campaign_and_world(client):
     r = client.get(f"/api/campaigns/{cid}/calendar/months", params={"year": 2024})
     assert r.status_code == 200
     assert r.json()["months"][1] == {"key": "02", "name": "February", "days": 29}
-    # switch the campaign to harptos and re-read
+    # switch the campaign to hebrew and re-read
     cfg = client.get(f"/api/campaigns/{cid}/calendar").json()
-    cfg["primary"]["provider"] = "harptos"
+    cfg["primary"]["provider"] = "hebrew"
     assert client.put(f"/api/campaigns/{cid}/calendar", json=cfg).status_code == 200
-    months = client.get(f"/api/campaigns/{cid}/calendar/months", params={"year": 1492}).json()["months"]
-    assert len(months) == 18 and months[10]["key"] == "Shieldmeet"
+    months = client.get(f"/api/campaigns/{cid}/calendar/months", params={"year": 5786}).json()["months"]
+    assert len(months) == 12 and months[2]["key"] == "Kislev"
     # world-level (defaults to gregorian)
     r = client.get(f"/api/worlds/{wid}/calendar/months", params={"year": 2026})
     assert r.status_code == 200 and len(r.json()["months"]) == 12
@@ -1735,20 +1735,20 @@ def test_calendar_months_campaign_and_world(client):
     assert client.get(f"/api/campaigns/{cid}/calendar/months", params={"year": "abc"}).status_code == 422
 
 
-def test_scene_datetime_with_harptos_primary(client):
+def test_scene_datetime_with_hebrew_primary(client):
     _wid, cid = _campaign(client)
     cfg = client.get(f"/api/campaigns/{cid}/calendar").json()
-    cfg["primary"]["provider"] = "harptos"
+    cfg["primary"]["provider"] = "hebrew"
     client.put(f"/api/campaigns/{cid}/calendar", json=cfg)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
     r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/datetime",
-                   json={"datetime": "1492-mirtul-05"})
+                   json={"datetime": "5786-kislev-25"})
     assert r.status_code == 200
-    assert r.json()["friendly"].startswith("5 Mirtul, 1492 DR")
+    assert r.json()["friendly"].startswith("25 Kislev 5786")
     sid = r.json()["id"]  # first date set renames the scene
     got = client.get(f"/api/campaigns/{cid}/scenes/{sid}/datetime").json()
-    assert got["current"]["native"] == "1492-Mirtul-05"   # normalized casing
-    assert got["history"] == ["1492-Mirtul-05"]
+    assert got["current"]["native"] == "5786-Kislev-25"   # normalized casing
+    assert got["history"] == ["5786-Kislev-25"]
 
 
 def test_absorb_returns_preview_without_persisting(client):
@@ -2469,7 +2469,7 @@ def test_offscreen_scene_rejects_player_seating(client):
     pid = client.post(f"/api/worlds/{wid}/pcs", json={"name": "Elara"}).json()["pc"]
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
                        json={"kind": "pcs", "id": pid}).status_code == 400
-    client.post(f"/api/worlds/{wid}/characters", json={"name": "desmond"})
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Desmond"})
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
                        json={"kind": "characters", "id": "desmond", "role": "player"}).status_code == 400
     # NPCs still seat fine

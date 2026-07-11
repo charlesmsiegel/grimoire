@@ -1162,7 +1162,7 @@ Add a PC + character-as-player route test:
 ```python
 def test_cast_pc_and_character_as_player(client):
     wid = _world(client)
-    client.post(f"/api/worlds/{wid}/characters", json={"name": "desmond"})
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Desmond"})
     client.post(f"/api/worlds/{wid}/pcs", json={"name": "Elara"})
     cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]

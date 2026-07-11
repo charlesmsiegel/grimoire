@@ -321,7 +321,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
 
   // A speaker label names a cast member if it matches exactly (case-insensitive)
   // or is a word-boundary prefix of exactly one name — "winifred" is winifred
-  // winterbourne; an ambiguous or mid-word label matches no one. Mirrors the
+  // Vance; an ambiguous or mid-word label matches no one. Mirrors the
   // backend's scenes.match_name so role attribution and plates agree.
   function matchActor(speaker: string): Actor | undefined {
     const low = speaker.trim().toLowerCase();

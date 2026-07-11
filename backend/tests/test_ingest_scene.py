@@ -10,7 +10,7 @@ from grimoire.store import campaigns, worlds  # noqa: E402
 
 def _world(monkeypatch, tmp_path) -> str:
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    return worlds.create_world("ashgrove")
+    return worlds.create_world("Ashgrove")
 
 
 def test_ensure_campaign_creates_once(monkeypatch, tmp_path):
@@ -34,8 +34,8 @@ def test_ensure_character_creates_once(monkeypatch, tmp_path):
     wid = _world(monkeypatch, tmp_path)
     cid = ingest_scene.ensure_campaign("Silver Oath", wid)
     croot = campaigns_store.campaign_root(cid)
-    aid1 = ingest_scene.ensure_character(cid, {"name": "cassian", "personality": "wary, precise"})
-    aid2 = ingest_scene.ensure_character(cid, {"name": "cassian"})
+    aid1 = ingest_scene.ensure_character(cid, {"name": "Cassian", "personality": "wary, precise"})
+    aid2 = ingest_scene.ensure_character(cid, {"name": "Cassian"})
     assert aid1 == aid2 == "cassian"
     vid = ingest_scene.resolve_version(cid, "characters", aid1)
     from grimoire.store import characters
@@ -49,13 +49,13 @@ def test_ensure_character_returns_world_character_without_shadow_copy(monkeypatc
     from grimoire.store import campaigns as campaigns_store, characters, overlay, worlds as worlds_store
     wid = _world(monkeypatch, tmp_path)
     wroot = worlds_store.world_root(wid)
-    card = characters.blank_card("cassian")
+    card = characters.blank_card("Cassian")
     card["data"]["personality"] = "wary, precise"
-    characters.create_character(wroot, "cassian", "main", card)
+    characters.create_character(wroot, "Cassian", "main", card)
     cid = ingest_scene.ensure_campaign("Silver Oath", wid)
     croot = campaigns_store.campaign_root(cid)
 
-    aid = ingest_scene.ensure_character(cid, {"name": "cassian"})
+    aid = ingest_scene.ensure_character(cid, {"name": "Cassian"})
 
     assert aid == "cassian"
     assert not (croot / "characters" / "cassian").exists()  # no campaign-side shadow
@@ -68,7 +68,7 @@ def test_ensure_location_creates_once(monkeypatch, tmp_path):
     wid = _world(monkeypatch, tmp_path)
     cid = ingest_scene.ensure_campaign("Silver Oath", wid)
     croot = campaigns_store.campaign_root(cid)
-    eid1 = ingest_scene.ensure_location(cid, {"name": "Thornfield Manor", "notes": "Seat of corvin."})
+    eid1 = ingest_scene.ensure_location(cid, {"name": "Thornfield Manor", "notes": "Seat of Corvin."})
     eid2 = ingest_scene.ensure_location(cid, {"name": "Thornfield Manor"})
     assert eid1 == eid2 == "thornfield-manor"
 
@@ -76,9 +76,9 @@ def test_ensure_location_creates_once(monkeypatch, tmp_path):
 def test_resolve_version_for_pc(monkeypatch, tmp_path):
     from grimoire.store import pcs, worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    wid = worlds_store.create_world("ashgrove")
+    wid = worlds_store.create_world("Ashgrove")
     wroot = worlds_store.world_root(wid)
-    pcs.create_pc(wroot, "julian", [], "default")
+    pcs.create_pc(wroot, "Julian", [], "default")
     cid = ingest_scene.ensure_campaign("Silver Oath", wid)
     vid = ingest_scene.resolve_version(cid, "pcs", "julian")
     assert vid == "default"
@@ -87,23 +87,23 @@ def test_resolve_version_for_pc(monkeypatch, tmp_path):
 def test_build_scene_writes_transcript_cast_location_date(monkeypatch, tmp_path):
     from grimoire.store import appearances, campaigns as campaigns_store, scenes, worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    wid = worlds_store.create_world("ashgrove")
+    wid = worlds_store.create_world("Ashgrove")
     wroot = worlds_store.world_root(wid)
     from grimoire.store import pcs
-    pcs.create_pc(wroot, "julian", [], "default")
+    pcs.create_pc(wroot, "Julian", [], "default")
     cid = ingest_scene.ensure_campaign("Silver Oath", wid)
 
     scene = {
         "title": "The Reckoning",
         "date": "1818-05-15",
-        "new_locations": [{"name": "winterbourne Manor", "notes": "Family seat."}],
+        "new_locations": [{"name": "Winterbourne Manor", "notes": "Family seat."}],
         "location": "winterbourne-manor",
-        "new_characters": [{"name": "marisol", "personality": "cruel, controlled"}],
+        "new_characters": [{"name": "Marisol", "personality": "cruel, controlled"}],
         "characters": [{"kind": "pcs", "id": "julian"}, {"kind": "characters", "id": "marisol"}],
         "turns": [
             {"role": "assistant", "speaker": None, "content": "*The study is silent.*"},
-            {"role": "assistant", "speaker": "marisol", "content": "\"You've grown bold.\""},
-            {"role": "user", "speaker": "julian", "content": "\"I have.\""},
+            {"role": "assistant", "speaker": "Marisol", "content": "\"You've grown bold.\""},
+            {"role": "user", "speaker": "Julian", "content": "\"I have.\""},
         ],
     }
     sid = ingest_scene.build_scene(cid, scene)
@@ -111,7 +111,7 @@ def test_build_scene_writes_transcript_cast_location_date(monkeypatch, tmp_path)
     read = scenes.read_scene(cid, sid)
     assert [m["content"] for m in read["messages"]] == [
         "*The study is silent.*", "\"You've grown bold.\"", "\"I have.\""]
-    assert read["messages"][1]["speaker"] == "marisol"
+    assert read["messages"][1]["speaker"] == "Marisol"
     assert read["messages"][2]["role"] == "user"
     assert "1818-05-15" in sid  # first date-set stamps the filename
     cast = {(a["kind"], a["id"]) for a in appearances.scene_cast(cid, sid)}
@@ -131,55 +131,55 @@ class FakeClient:
 def test_run_absorb_and_apply_scene(monkeypatch, tmp_path):
     from grimoire.store import campaigns as campaigns_store, playstate, worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    wid = worlds_store.create_world("ashgrove")
+    wid = worlds_store.create_world("Ashgrove")
     cid = ingest_scene.ensure_campaign("Silver Oath", wid)
     croot = campaigns_store.campaign_root(cid)
-    ingest_scene.ensure_character(cid, {"name": "marisol"})
+    ingest_scene.ensure_character(cid, {"name": "Marisol"})
 
     scene = {
         "title": "The Reckoning",
         "characters": [{"kind": "characters", "id": "marisol"}],
-        "turns": [{"role": "assistant", "speaker": "marisol", "content": "\"You've grown bold.\""}],
+        "turns": [{"role": "assistant", "speaker": "Marisol", "content": "\"You've grown bold.\""}],
     }
     sid = ingest_scene.build_scene(cid, scene)
 
     fake_text = json_module.dumps({
-        "one_line": "marisol needles julian.",
+        "one_line": "Marisol needles Julian.",
         "summary": "A tense study confrontation.",
         "keywords": ["study", "confrontation"],
-        "timeline_events": [{"date": "1818-05-15", "text": "julian confronts marisol."}],
-        "character_state_edits": [{"id": "marisol", "current_state": "wary of julian"}],
+        "timeline_events": [{"date": "1818-05-15", "text": "Julian confronts Marisol."}],
+        "character_state_edits": [{"id": "marisol", "current_state": "wary of Julian"}],
         "lore_edits": [], "authored_edits": [], "relationship_deltas": [],
         "bond_changes": [], "plot_movements": [],
     })
     client = FakeClient(fake_text)
     result = asyncio.run(ingest_scene.run_absorb(cid, sid, client, {"model": "test/model", "openrouter_key": "k"}))
-    assert result["parsed"]["one_line"] == "marisol needles julian."
+    assert result["parsed"]["one_line"] == "Marisol needles Julian."
     assert any(e["kind"] == "character_state" for e in result["edits"])
 
     applied = ingest_scene.apply_scene(cid, sid, result["parsed"], result["edits"])
     assert applied
     st = playstate.read_state(croot, "marisol")
-    assert "wary of julian" in st["current_state"]
+    assert "wary of Julian" in st["current_state"]
     assert client.calls[0][1] == "test/model" and client.calls[0][2] == "k"
 
 
 def test_ingest_one_scene_is_resumable(monkeypatch, tmp_path):
     from grimoire.store import campaigns as campaigns_store, worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    wid = worlds_store.create_world("ashgrove")
+    wid = worlds_store.create_world("Ashgrove")
     cid = ingest_scene.ensure_campaign("Silver Oath", wid)
     croot = campaigns_store.campaign_root(cid)
-    ingest_scene.ensure_character(cid, {"name": "marisol"})
+    ingest_scene.ensure_character(cid, {"name": "Marisol"})
 
     scene = {
         "key": "file1-scene01",
         "title": "The Reckoning",
         "characters": [{"kind": "characters", "id": "marisol"}],
-        "turns": [{"role": "assistant", "speaker": "marisol", "content": "\"You've grown bold.\""}],
+        "turns": [{"role": "assistant", "speaker": "Marisol", "content": "\"You've grown bold.\""}],
     }
     fake_text = json_module.dumps({
-        "one_line": "marisol needles julian.", "summary": "s", "keywords": [],
+        "one_line": "Marisol needles Julian.", "summary": "s", "keywords": [],
         "timeline_events": [], "character_state_edits": [], "lore_edits": [],
         "authored_edits": [], "relationship_deltas": [], "bond_changes": [], "plot_movements": [],
     })
@@ -201,16 +201,16 @@ def test_ingest_one_scene_resumes_after_build_then_crash(monkeypatch, tmp_path):
     a retry must reuse the recorded sid instead of minting a duplicate scene."""
     from grimoire.store import campaigns as campaigns_store, scenes, worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    wid = worlds_store.create_world("ashgrove")
+    wid = worlds_store.create_world("Ashgrove")
     cid = ingest_scene.ensure_campaign("Silver Oath", wid)
     croot = campaigns_store.campaign_root(cid)
-    ingest_scene.ensure_character(cid, {"name": "marisol"})
+    ingest_scene.ensure_character(cid, {"name": "Marisol"})
 
     scene = {
         "key": "file1-scene01",
         "title": "The Reckoning",
         "characters": [{"kind": "characters", "id": "marisol"}],
-        "turns": [{"role": "assistant", "speaker": "marisol", "content": "\"You've grown bold.\""}],
+        "turns": [{"role": "assistant", "speaker": "Marisol", "content": "\"You've grown bold.\""}],
     }
 
     # Simulate the crash: build_scene ran (creating the real scene on disk) but the
@@ -221,7 +221,7 @@ def test_ingest_one_scene_resumes_after_build_then_crash(monkeypatch, tmp_path):
     ingest_scene.save_manifest(cid, manifest)
 
     fake_text = json_module.dumps({
-        "one_line": "marisol needles julian.", "summary": "s", "keywords": [],
+        "one_line": "Marisol needles Julian.", "summary": "s", "keywords": [],
         "timeline_events": [], "character_state_edits": [], "lore_edits": [],
         "authored_edits": [], "relationship_deltas": [], "bond_changes": [], "plot_movements": [],
     })
@@ -238,20 +238,20 @@ def test_two_scenes_accumulate_state_in_order(monkeypatch, tmp_path):
     """Scene 2's snapshot must see scene 1's applied character-state edit."""
     from grimoire.store import campaigns as campaigns_store, worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    wid = worlds_store.create_world("ashgrove")
+    wid = worlds_store.create_world("Ashgrove")
     cid = ingest_scene.ensure_campaign("Silver Oath", wid)
     croot = campaigns_store.campaign_root(cid)
-    ingest_scene.ensure_character(cid, {"name": "marisol"})
+    ingest_scene.ensure_character(cid, {"name": "Marisol"})
     cfg = {"model": "test/model", "openrouter_key": "k"}
 
     scene1 = {
         "key": "file1-scene01", "title": "Scene One",
         "characters": [{"kind": "characters", "id": "marisol"}],
-        "turns": [{"role": "assistant", "speaker": "marisol", "content": "\"You've grown bold.\""}],
+        "turns": [{"role": "assistant", "speaker": "Marisol", "content": "\"You've grown bold.\""}],
     }
     text1 = json_module.dumps({
         "one_line": "a", "summary": "a", "keywords": [], "timeline_events": [],
-        "character_state_edits": [{"id": "marisol", "current_state": "wary of julian"}],
+        "character_state_edits": [{"id": "marisol", "current_state": "wary of Julian"}],
         "lore_edits": [], "authored_edits": [], "relationship_deltas": [],
         "bond_changes": [], "plot_movements": [],
     })
@@ -270,7 +270,7 @@ def test_two_scenes_accumulate_state_in_order(monkeypatch, tmp_path):
     scene2 = {
         "key": "file1-scene02", "title": "Scene Two",
         "characters": [{"kind": "characters", "id": "marisol"}],
-        "turns": [{"role": "assistant", "speaker": "marisol", "content": "\"Still bold, I see.\""}],
+        "turns": [{"role": "assistant", "speaker": "Marisol", "content": "\"Still bold, I see.\""}],
     }
     text2 = json_module.dumps({
         "one_line": "b", "summary": "b", "keywords": [], "timeline_events": [],
@@ -279,4 +279,4 @@ def test_two_scenes_accumulate_state_in_order(monkeypatch, tmp_path):
     })
     asyncio.run(ingest_scene.ingest_one_scene(cid, scene2, FakeClient(text2), cfg))
 
-    assert any("wary of julian" in v for v in captured.values())
+    assert any("wary of Julian" in v for v in captured.values())

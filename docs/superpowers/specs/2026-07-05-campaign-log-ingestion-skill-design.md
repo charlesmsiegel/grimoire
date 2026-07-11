@@ -12,9 +12,8 @@ threads — by driving grimoire's existing absorb pipeline scene by scene.
 
 Build this as a **reusable project skill** plus a small helper script, not a
 one-off script for a single campaign: there are several other `.skill`
-archives under the user's `OLD/skills/` folder (`another-campaign`,
-`emberport-campaign-*`, `other-campaign-isekai`, etc.) that are candidates for
-the same treatment later.
+archives under the user's `OLD/skills/` folder for other campaigns that are
+candidates for the same treatment later.
 
 First real target: `ashgrove-campaign-silver-oath.skill` +
 `OLD/logs/claude-exports-20260516-064452/Silver Oath/Manor Vows {1..8}.md`,
@@ -29,7 +28,7 @@ imported into a new campaign `silver-oath` under World `ashgrove`.
   own absorb LLM call in order (not seeded directly from the old skill's
   hand-authored `state/` files) — state accumulates scene by scene exactly as
   it would during live play.
-- **Missing characters are campaign-local.** cassian, dorian, tobias (and any
+- **Missing characters are campaign-local.** Cassian, Dorian, Tobias (and any
   others the logs introduce) are created under the campaign root
   (`characters.create_character(campaign_root, ...)`), never written back to
   the shared `ashgrove` World.
@@ -40,15 +39,15 @@ imported into a new campaign `silver-oath` under World `ashgrove`.
   as the existing `manor-vows` scenes.
 - **No canonical dates in the old setting material.** Anchor Day 1 =
   **1818-05-15** (late spring), matching the "late spring, Year 1 of the
-  winterbourne marriage" framing and the same 1818 Regency year `manor-vows`
+  Winterbourne marriage" framing and the same 1818 Regency year `manor-vows`
   already uses for this World. Later in-transcript day counts ("Day 17") are
   computed as offsets from this anchor.
 - **Segmentation and rewriting is agent judgment, not another LLM call.** The
-  raw logs are two-bucket exports (`## User` = julian in first person, `##
+  raw logs are two-bucket exports (`## User` = Julian in first person, `##
   Claude` = narration + every NPC's dialogue mashed into one turn, with only
   sparse/no explicit scene-break markers in the early files). Reformatting
   each Claude turn into grimoire's `**Speaker:**` marker grammar — splitting
-  out `**winifred:**`, `**marisol:**`, etc. where a line is unambiguously one
+  out `**winifred:**`, `**Marisol:**`, etc. where a line is unambiguously one
   character's dialogue/action, leaving true omniscient narration under
   `**Grimoire:**` — and deciding where a scene actually ends, is done by
   whichever agent is running the skill, reading forward through the source
@@ -74,7 +73,7 @@ imported into a new campaign `silver-oath` under World `ashgrove`.
   (prose cross-reference, not a mechanical field diff) and report anything
   that looks meaningfully off before moving to the next log file.
 - **First run scope:** `Manor Vows 1.md` only (the largest file — spans the
-  marisol murder scene through "Day 17" post-wedding, likely dozens of implicit
+  Marisol murder scene through "Day 17" post-wedding, likely dozens of implicit
   scenes). Stop after it for review before touching files 2-8.
 
 ## 1. The skill
@@ -142,7 +141,7 @@ This is glue over existing `grimoire.store` functions and the existing
 ## 4. Out of scope for this pass
 
 - Files 2-8 of "Silver Oath" (pending review of file 1's results).
-- Any other `.skill` archive (another-campaign, emberport, etc.) — the skill is
+- Any other `.skill` archive (for other campaigns) — the skill is
   built generally, but only exercised against this one campaign for now.
 - Image/asset handling from the old logs (none observed in the raw
   transcripts sampled so far; revisit if later files include embedded

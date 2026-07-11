@@ -44,7 +44,7 @@ vi.mock("../api/client", async () => {
       // consumed by the embedded SceneInspector
       getCast: vi.fn(), getSceneLocation: vi.fn(), getSceneContext: vi.fn(),
       getCastDetail: vi.fn(), readEntity: vi.fn(),
-      getCalendarConfig: vi.fn(), setCalendarConfig: vi.fn(),
+      getCalendarConfig: vi.fn(), setCalendarConfig: vi.fn(), getCalendarProviders: vi.fn(),
       getSceneDatetime: vi.fn(), setSceneDatetime: vi.fn(), getCalendarMonths: vi.fn(),
       listCharacters: vi.fn(), listPCs: vi.fn(), listCampaignPCs: vi.fn(),
       campaignChanges: vi.fn(),
@@ -80,6 +80,9 @@ beforeEach(() => {
   (api.getCalendarConfig as any).mockResolvedValue({
     primary: { provider: "gregorian", region: "US", custom_holidays: [], anchor: null },
     secondary: null, confirmed: true });
+  (api.getCalendarProviders as any).mockResolvedValue({ providers: [
+    { id: "gregorian", name: "Gregorian" }, { id: "hebrew", name: "Hebrew" },
+  ] });
   (api.getSceneDatetime as any).mockResolvedValue({ current: null, history: [] });
   (api.listCharacters as any).mockResolvedValue([]);
   (api.listPCs as any).mockResolvedValue([]);
@@ -753,7 +756,7 @@ test("world name comes from the campaign payload, with no world fetch", async ()
 test("a first-name speaker matches its cast member (fuzzy, unique prefix)", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getCast as any).mockResolvedValue([
-    { kind: "characters", id: "winifred", role: "npc", name: "winifred winterbourne" },
+    { kind: "characters", id: "winifred", role: "npc", name: "winifred Vance" },
     { kind: "pcs", id: "yara", role: "player", name: "Yara Vane" },
   ]);
   (api.getScene as any).mockResolvedValue({
