@@ -47,7 +47,7 @@ imported into a new campaign `silver-oath` under World `ashgrove`.
   Claude` = narration + every NPC's dialogue mashed into one turn, with only
   sparse/no explicit scene-break markers in the early files). Reformatting
   each Claude turn into grimoire's `**Speaker:**` marker grammar — splitting
-  out `**winifred:**`, `**Marisol:**`, etc. where a line is unambiguously one
+  out `**Winifred:**`, `**Marisol:**`, etc. where a line is unambiguously one
   character's dialogue/action, leaving true omniscient narration under
   `**Grimoire:**` — and deciding where a scene actually ends, is done by
   whichever agent is running the skill, reading forward through the source

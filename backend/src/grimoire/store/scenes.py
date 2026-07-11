@@ -45,8 +45,8 @@ def _markers(body: str) -> list[re.Match]:
 def match_name(label: str, names) -> str | None:
     """The cast name `label` refers to, if unambiguous: exact match first
     (case-insensitive), else the single name the label is a word-boundary
-    prefix of — "winifred" names "winifred Vance"; "Flo" names no one,
-    and neither does "winifred" with two Florences present."""
+    prefix of — "Winifred" names "Winifred Vance"; "Flo" names no one,
+    and neither does "Winifred" with two Florences present."""
     low = label.strip().lower()
     if not low:
         return None
