@@ -128,6 +128,7 @@ def ensure_campaign_slim(cid: str) -> None:
 
     locked = set(appearances.record(cid))
     manifest = read_manifest(cid)
+    copied = set(manifest)   # every record the full copy tracked, before the loop prunes it
     for ref, base in sorted(list(manifest.items())):
         kind, _, eid = ref.partition("/")
         if ref == "plotmap":
@@ -163,9 +164,39 @@ def ensure_campaign_slim(cid: str) -> None:
             p.unlink()
             manifest.pop(ref)
     write_manifest(cid, manifest)
+    _tombstone_deleted_copied_assets(cid, root, wroot, copied)
     _prune_duplicate_files(root, wroot)
     meta["world_copy"] = "overlay"
     mp.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+
+
+def _tombstone_deleted_copied_assets(cid: str, root: Path, wroot: Path, copied: set[str]) -> None:
+    """A pre-overlay full copy held every world asset, so a world asset now
+    missing from the campaign tree was deleted by the user before migration.
+    Tombstone it, or the overlay would resurface the world copy once world_copy
+    flips to overlay. Runs before _prune_duplicate_files so byte-identical
+    copies are still present and not mistaken for deletions. Only records the
+    full copy tracked (`copied`) are considered — world records/assets added
+    after the fork stay live-inherited; whole-deleted records already carry a
+    <base>/<aid> tombstone and are skipped."""
+    from . import overlay  # campaigns is imported by overlay
+    gone = overlay.deleted(cid)
+    for kind in ("characters", "pcs", "locations", "lore", "greetings"):
+        wbase = wroot / kind
+        if not wbase.exists():
+            continue
+        for wp in sorted(wbase.rglob("*")):
+            if not wp.is_file() or not assets._norm_ext(wp.suffix):
+                continue   # images only: focus.json / non-image sidecars overlay via files
+            rel = wp.relative_to(wroot)
+            parts = rel.parts
+            if len(parts) != 5 or parts[2] != "assets":
+                continue
+            aid, vid, name = parts[1], parts[3], wp.stem
+            if f"{kind}/{aid}" not in copied or f"{kind}/{aid}" in gone:
+                continue
+            if not (root / rel).exists():
+                overlay.add_deleted(cid, f"assets/{kind}/{aid}/{vid}/{name}")
 
 
 def _prune_duplicate_files(root: Path, wroot: Path) -> None:

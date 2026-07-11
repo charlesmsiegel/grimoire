@@ -1961,6 +1961,13 @@ def _seat_cast_member(cid: str, sid: str, body: Appear) -> None:
                     store.overlay.pc_root(cid, body.id), body.id)["meta"]["default_version"]
     except (store.characters.CharacterNotFound, store.pcs.PCNotFound):
         raise HTTPException(status_code=404, detail="actor not found")
+    # A first appearance locks lazily by copying from the world when the campaign
+    # lacks the version; validate a supplied version against the campaign-visible
+    # actor first so a purged/tombstoned one can't be revived. An already-cast
+    # actor skips this — appear() reports the lock conflict (409), no revival.
+    if store.appearances.locked_version(cid, body.kind, body.id) is None and store.appearances.actor_hash(
+            store.overlay.actor_root(cid, body.kind, body.id), body.kind, body.id, version) is None:
+        raise HTTPException(status_code=404, detail="actor or version not found in campaign")
     store.appearances.appear(cid, sid, body.kind, body.id, version, role)
 
 

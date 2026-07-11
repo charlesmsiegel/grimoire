@@ -270,6 +270,48 @@ def test_slim_keeps_focus_when_campaign_avatar_diverges(monkeypatch, tmp_path):
     assert overlay.read_focus(cid, aid, vid) == 80    # crop preserved, not reset to center
 
 
+def test_slim_tombstones_user_deleted_copied_asset(monkeypatch, tmp_path):
+    """A pre-overlay full copy had the world avatar copied in; the user deleted
+    that copy. Slim must tombstone it so the overlay doesn't resurface the world
+    image once world_copy flips to overlay."""
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    aid, vid = characters.create_character(wroot, "Hero")
+    assets.put_image(wroot, aid, vid, "avatar", b"\x89PNG\r\n\x1a\nx", "png")
+    cid = campaigns.create_campaign("C", wid)
+    croot = campaigns.campaign_root(cid)
+    shutil.copytree(wroot / "characters" / aid, croot / "characters" / aid)   # full copy
+    for p in (croot / "characters" / aid / "assets" / vid).glob("avatar.*"):
+        p.unlink()                                                            # user deletes it
+    campaigns.write_manifest(cid, {f"characters/{aid}": characters.dir_hash(wroot, aid)})
+    _stamp_full(cid)
+
+    campaigns.ensure_campaign_slim(cid)
+
+    assert f"assets/characters/{aid}/{vid}/avatar" in overlay.deleted(cid)
+    assert overlay.image_root(cid, aid, vid, "avatar") == croot   # tombstoned, not world
+    assert "avatar" not in {i["name"] for i in overlay.list_images(cid, aid, vid)}
+
+
+def test_slim_keeps_inherited_world_asset_live(monkeypatch, tmp_path):
+    """A world asset the campaign never copied (added to an inherited, never-
+    materialized actor) must stay live-inherited after slim, not be tombstoned:
+    only records the full copy tracked are candidates for deletion tombstones."""
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    aid, vid = characters.create_character(wroot, "Hero")
+    assets.put_image(wroot, aid, vid, "avatar", b"\x89PNG\r\n\x1a\nx", "png")
+    cid = campaigns.create_campaign("C", wid)   # thin: never copied this actor
+    _stamp_full(cid)                            # but stamped legacy full-copy
+
+    campaigns.ensure_campaign_slim(cid)
+
+    assert f"assets/characters/{aid}/{vid}/avatar" not in overlay.deleted(cid)
+    assert overlay.image_root(cid, aid, vid, "avatar") == wroot   # still inherited
+
+
 def test_slim_skips_when_world_missing(monkeypatch, tmp_path):
     wroot, cid, *_ = _fat_campaign(monkeypatch, tmp_path)
     shutil.rmtree(wroot)
