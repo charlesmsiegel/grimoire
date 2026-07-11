@@ -2,7 +2,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { CalendarConfig } from "./CalendarConfig";
 
 vi.mock("../api/client", () => ({
-  api: { getCalendarConfig: vi.fn(), setCalendarConfig: vi.fn() },
+  api: { getCalendarConfig: vi.fn(), setCalendarConfig: vi.fn(), getCalendarProviders: vi.fn() },
 }));
 import { api } from "../api/client";
 
@@ -11,6 +11,10 @@ beforeEach(() => {
   (api.getCalendarConfig as any).mockResolvedValue({
     primary: { provider: "gregorian", region: "US", custom_holidays: [], anchor: null }, secondary: null });
   (api.setCalendarConfig as any).mockResolvedValue({ ok: true });
+  (api.getCalendarProviders as any).mockResolvedValue({ providers: [
+    { id: "gregorian", name: "Gregorian" }, { id: "hebrew", name: "Hebrew" },
+    { id: "my-custom-calendar", name: "My Custom Calendar" },
+  ] });
 });
 
 test("edits the region and saves", async () => {
@@ -34,13 +38,14 @@ test("selecting hebrew shows Observance and saves the Israel setting", async () 
     expect.objectContaining({ primary: expect.objectContaining({ provider: "hebrew", region: "IL" }) })));
 });
 
-test("selecting harptos hides both region and observance and saves", async () => {
+test("selecting a custom (user-authored) calendar hides both region and observance and saves", async () => {
   render(<CalendarConfig cid="run" />);
   const provider = await screen.findByLabelText("Calendar");
-  fireEvent.change(provider, { target: { value: "harptos" } });
+  expect(screen.getByRole("option", { name: "My Custom Calendar" })).toBeInTheDocument();
+  fireEvent.change(provider, { target: { value: "my-custom-calendar" } });
   expect(screen.queryByLabelText("Holidays region")).toBeNull();
   expect(screen.queryByLabelText("Observance")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: /save/i }));
   await waitFor(() => expect(api.setCalendarConfig).toHaveBeenCalledWith("run",
-    expect.objectContaining({ primary: expect.objectContaining({ provider: "harptos" }) })));
+    expect.objectContaining({ primary: expect.objectContaining({ provider: "my-custom-calendar" }) })));
 });

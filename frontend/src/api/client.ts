@@ -534,6 +534,8 @@ export const api = {
       "PUT", `/api/campaigns/${cid}/scenes/${sid}/datetime`, { datetime }),
   getCalendarConfig: (cid: string) =>
     request<CalendarConfig>("GET", `/api/campaigns/${cid}/calendar`),
+  getCalendarProviders: () =>
+    request<{ providers: { id: string; name: string }[] }>("GET", "/api/calendars/providers"),
   getCalendarMonths: (scope: CalendarScope, year: number) =>
     request<{ months: CalendarMonth[] }>(
       "GET",
