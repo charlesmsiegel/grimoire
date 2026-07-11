@@ -1084,6 +1084,21 @@ def test_regenerate_sole_opening_post_returns_400(client):
     assert msgs == [{"role": "assistant", "content": "the greeting"}]
 
 
+def test_regenerate_past_a_trailing_roll_returns_400(client):
+    client.put("/api/config", json={"openrouter_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_message(cid, sid, "assistant", "a reply")
+    store.scenes.append_message(cid, sid, "assistant", "\U0001F3B2 2d6 = 7",
+                                 speaker=store.scenes.ROLL_SPEAKER)
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
+    assert resp.status_code == 400
+    # the reply and the roll line both survive the failed regenerate attempt
+    msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    assert len(msgs) == 3
+
+
 def test_regenerate_missing_key_returns_409(client):
     _wid, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]

@@ -1511,6 +1511,8 @@ def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
     if msgs[-1]["role"] == "assistant":
         if all(m["role"] == "assistant" for m in msgs):
             raise HTTPException(status_code=400, detail="cannot regenerate the opening post")
+        if msgs[-1].get("speaker") == store.scenes.ROLL_SPEAKER:
+            raise HTTPException(status_code=400, detail="cannot regenerate past a manual dice roll")
         store.scenes.remove_trailing_assistant_run(cid, sid)
     messages = store.context.build_messages(cid, sid)
     guidance = (body.guidance or "").strip() if body else ""
