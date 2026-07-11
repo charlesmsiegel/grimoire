@@ -17,6 +17,12 @@ import { RecordDrawer, type DrawerTarget } from "../components/RecordDrawer";
 import { SceneInspector } from "../components/SceneInspector";
 import { quotePlugin } from "../markdown/quotePlugin";
 
+// Marks a manual dice-roll transcript line's speaker (backend: scenes.ROLL_SPEAKER).
+// Prefixed with an invisible separator so it can never collide with a real
+// typed speaker label or cast name — a character actually named "Roll" is
+// unaffected.
+const ROLL_SPEAKER = "⁣Roll";
+
 // Memoized so typing in the input bar (which re-renders CampaignView on every
 // keystroke) doesn't re-parse the markdown of every unchanged message.
 const RenderedMarkdown = memo(function RenderedMarkdown({ content }: { content: string }) {
@@ -274,7 +280,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
   // lives on in rolls.json, so reroll must not be offered while one trails.
   const canReroll = messages.length > 0 &&
     messages[messages.length - 1].role === "assistant" &&
-    messages[messages.length - 1].speaker !== "Roll" &&
+    messages[messages.length - 1].speaker !== ROLL_SPEAKER &&
     messages.some((x) => x.role === "user");
 
   const speakerOf = (m: Message) =>

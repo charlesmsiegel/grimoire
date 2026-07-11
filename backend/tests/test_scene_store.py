@@ -374,6 +374,23 @@ def test_remove_trailing_assistant_run(monkeypatch, tmp_path):
         scenes.remove_trailing_assistant_run(cid, sid)
 
 
+def test_roll_speaker_does_not_collide_with_a_character_actually_named_roll(monkeypatch, tmp_path):
+    # A real speaker literally named "Roll" must round-trip as plain "Roll",
+    # not be swallowed by the (invisible-prefixed) manual-roll sentinel.
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    scenes.append_message(cid, sid, "assistant", "hello", speaker="Roll")
+    scenes.append_message(cid, sid, "assistant", "\U0001F3B2 2d6 = 7", speaker=scenes.ROLL_SPEAKER)
+    messages = scenes.read_scene(cid, sid)["messages"]
+    assert messages[0]["speaker"] == "Roll"
+    assert messages[1]["speaker"] == scenes.ROLL_SPEAKER
+    assert messages[0]["speaker"] != messages[1]["speaker"]
+    # rerolling stops at the roll line but the plain "Roll"-spoken reply
+    # would have been fair game had it trailed instead
+    with pytest.raises(IndexError):
+        scenes.remove_trailing_assistant_run(cid, sid)
+
+
 def test_remove_trailing_assistant_run_refuses_when_trailing_message_is_a_roll(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")

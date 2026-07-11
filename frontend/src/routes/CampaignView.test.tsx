@@ -413,10 +413,19 @@ test("no Reroll when a manual dice roll trails the assistant reply", async () =>
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
     { role: "user", content: "hi" }, { role: "assistant", content: "a reply" },
-    { role: "assistant", content: "🎲 2d6 = 7", speaker: "Roll" }] });
+    { role: "assistant", content: "🎲 2d6 = 7", speaker: "⁣Roll" }] });
   renderCampaign();
   await screen.findByText(/2d6 = 7/);
   expect(screen.queryByRole("button", { name: /reroll/i })).toBeNull();
+});
+
+test("Reroll is offered when the last post is merely spoken by a character actually named Roll", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "hello", speaker: "Roll" }] });
+  renderCampaign();
+  await screen.findByText("hello");
+  expect(screen.getByRole("button", { name: /reroll/i })).toBeInTheDocument();
 });
 
 test("no Reroll when the last post is the user's", async () => {

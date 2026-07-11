@@ -19,8 +19,11 @@ ROLE_TO_LABEL = {"user": "You", "assistant": "Grimoire"}
 # Manual dice rolls are appended as assistant-role messages (so they render
 # like any other transcript line) but tagged with this speaker so reroll
 # logic can tell them apart from an actual LLM reply — rerolling must never
-# silently drop a roll line while its entry lives on in rolls.json.
-ROLL_SPEAKER = "Roll"
+# silently drop a roll line while its entry lives on in rolls.json. Prefixed
+# with U+2063 (invisible separator, no visible glyph) so the marker can never
+# collide with an ordinary typed speaker label or cast name — a real
+# character or NPC named "Roll" round-trips as plain "Roll", not this.
+ROLL_SPEAKER = "⁣Roll"
 _MARKER = re.compile(r"^\*\*([^*\n]{1,64}?)(?: \(([^)\n]+)\))?:\*\*[ ]?", re.MULTILINE)
 _SAFE_LABEL = re.compile(r"^[^*\n]{1,64}$")
 
