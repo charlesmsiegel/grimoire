@@ -6,7 +6,7 @@ import filecmp
 import shutil
 from pathlib import Path
 
-from . import calendars, characters, entities, greetings, pcs, worlds
+from . import assets, calendars, characters, entities, greetings, pcs, worlds
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import ensure_home, home, now_iso, slugify, uniquify
 
@@ -185,6 +185,12 @@ def _prune_duplicate_files(root: Path, wroot: Path) -> None:
                 continue
             w = wroot / rel
             if w.exists() and filecmp.cmp(p, w, shallow=False):
+                # A focus sidecar is not redundant while a divergent campaign
+                # avatar sits beside it: overlay.read_focus treats that avatar
+                # as authoritative and won't fall back to the world focus, so
+                # dropping the sidecar would silently reset the crop to center.
+                if p.name == assets.FOCUS_FILE and any(p.parent.glob(f"{assets.AVATAR}.*")):
+                    continue
                 p.unlink()
         for d in sorted((x for x in base.rglob("*") if x.is_dir()), reverse=True):
             if not any(d.iterdir()):

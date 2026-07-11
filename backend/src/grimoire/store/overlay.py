@@ -417,6 +417,13 @@ def promote_image(cid: str, aid: str, vid: str, name: str, base: str = "characte
                 assets.put_image(croot, aid, vid, n, src.read_bytes(),
                                  src.suffix.lstrip("."), base)
     assets.promote_image(croot, aid, vid, name, base)
+    # When there was no avatar to swap into the promoted slot, the swap leaves
+    # no campaign file at `name`, so the inherited image there would still show
+    # through the overlay next to the new avatar. Tombstone it so promotion
+    # moves the image out of the gallery instead of duplicating it.
+    if (assets.image_path(croot, aid, vid, name, base) is None
+            and assets.image_path(wroot, aid, vid, name, base) is not None):
+        add_deleted(cid, _asset_ref(base, aid, vid, name))
 
 
 # ---- payload patching: asset-derived fields come from the union ----

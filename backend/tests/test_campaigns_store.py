@@ -245,6 +245,31 @@ def test_slim_prunes_duplicate_greeting_asset(monkeypatch, tmp_path):
     assert overlay.image_root(cid, g, "default", "art_1", base="greetings") == wroot   # served from world
 
 
+def test_slim_keeps_focus_when_campaign_avatar_diverges(monkeypatch, tmp_path):
+    """A focus sidecar byte-identical to the world's is still not redundant when
+    the campaign avatar beside it diverges: overlay.read_focus treats that avatar
+    as authoritative, so pruning the sidecar would silently reset the crop to
+    center. Slim must keep it."""
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    aid, vid = characters.create_character(wroot, "Hero")
+    assets.put_image(wroot, aid, vid, "avatar", b"worldavatar", "png")
+    assets.write_focus(wroot, aid, vid, 80)
+    cid = campaigns.create_campaign("C", wid)
+    croot = campaigns.campaign_root(cid)
+    overlay.materialize_actor(cid, "characters", aid)
+    assets.put_image(croot, aid, vid, "avatar", b"campaignavatar", "png")   # divergent
+    assets.write_focus(croot, aid, vid, 80)                                 # same bytes as world
+    campaigns.write_manifest(cid, {f"characters/{aid}": characters.dir_hash(wroot, aid)})
+    _stamp_full(cid)
+
+    campaigns.ensure_campaign_slim(cid)
+
+    assert assets.read_focus(croot, aid, vid) == 80   # sidecar survives
+    assert overlay.read_focus(cid, aid, vid) == 80    # crop preserved, not reset to center
+
+
 def test_slim_skips_when_world_missing(monkeypatch, tmp_path):
     wroot, cid, *_ = _fat_campaign(monkeypatch, tmp_path)
     shutil.rmtree(wroot)

@@ -80,31 +80,27 @@ class _Images:
         return self.by_path[p]
 
 
-def _resolve_image(croot: Path, wroot: Path | None, m: re.Match) -> Path | None:
-    """Map a localized app URL to a disk file: campaign tree first, then the
-    campaign's world (greeting images only live world-side)."""
+def _resolve_image(cid: str, m: re.Match) -> Path | None:
+    """Map a localized app URL to a disk file through the campaign overlay:
+    campaign tree first, then the campaign's world, with a campaign asset
+    tombstone hiding an inherited image (greeting images only live world-side)."""
     if m["char"]:
         rid, vid, base = m["char"], m["vid"], "characters"
     elif m["gid"]:
         rid, vid, base = m["gid"], "default", "greetings"
     else:
         rid, vid, base = m["eid"], "default", m["kind"]
-    for root in (croot, wroot):
-        if root is None:
-            continue
-        p = assets.image_path(root, rid, vid, m["name"], base=base)
-        if p is not None:
-            return p
-    return None
+    root = overlay.image_root(cid, rid, vid, m["name"], base=base)
+    return assets.image_path(root, rid, vid, m["name"], base=base)
 
 
-def _rewrite_images(text: str, croot: Path, wroot: Path | None, images: _Images) -> str:
+def _rewrite_images(text: str, cid: str, images: _Images) -> str:
     """Point every markdown image at its packed copy; remote or missing images
     degrade to their alt text (readers can't fetch, and a broken img is worse)."""
     def sub(m: re.Match) -> str:
         app = _IMG_URL.match(m["url"])
         if app:
-            p = _resolve_image(croot, wroot, app)
+            p = _resolve_image(cid, app)
             if p is not None:
                 return f"![{m['alt']}](../images/{images.add(p)})"
         return m["alt"]
@@ -118,8 +114,7 @@ def _friendly_or_none(provider, native: str) -> str | None:
         return None
 
 
-def _chapter(cid: str, croot: Path, wroot: Path | None, provider, sid: str,
-             number: int, images: _Images) -> dict:
+def _chapter(cid: str, provider, sid: str, number: int, images: _Images) -> dict:
     scene = scenes.read_scene(cid, sid)
     meta = scene["meta"]
     title = meta.get("title", sid)
@@ -134,7 +129,7 @@ def _chapter(cid: str, croot: Path, wroot: Path | None, provider, sid: str,
             pass  # deleted location: header line silently omitted
     cast = [a["name"] for a in appearances.scene_cast(cid, sid)]
     body = "\n".join(
-        _message_html(m.get("speaker"), _rewrite_images(m["content"], croot, wroot, images))
+        _message_html(m.get("speaker"), _rewrite_images(m["content"], cid, images))
         for m in scene["messages"])
     doc = _render("chapter.xhtml", title=title, date=date, location=location,
                   cast=cast, epigraph=meta.get("one_line") or None, body=Markup(body))
@@ -159,18 +154,13 @@ def _actor_sections(croot: Path, kind: str, actor_id: str, vid: str) -> tuple[st
     return name, sections
 
 
-def _avatar(croot: Path, wroot: Path | None, rid: str, vid: str, base: str,
-            images: _Images) -> str | None:
-    for root in (croot, wroot):
-        if root is None:
-            continue
-        p = assets.image_path(root, rid, vid, assets.AVATAR, base=base)
-        if p is not None:
-            return images.add(p)
-    return None
+def _avatar(cid: str, rid: str, vid: str, base: str, images: _Images) -> str | None:
+    root = overlay.image_root(cid, rid, vid, assets.AVATAR, base=base)
+    p = assets.image_path(root, rid, vid, assets.AVATAR, base=base)
+    return images.add(p) if p is not None else None
 
 
-def _appendix_entries(cid: str, croot: Path, wroot: Path | None, sids: list[str],
+def _appendix_entries(cid: str, croot: Path, sids: list[str],
                       images: _Images) -> list[dict]:
     entries: list[dict] = []
     roster = sorted(appearances.roster(cid),
@@ -181,12 +171,12 @@ def _appendix_entries(cid: str, croot: Path, wroot: Path | None, sids: list[str]
         except (json.JSONDecodeError, characters.CharacterNotFound,
                 characters.VersionNotFound, pcs.PCNotFound, pcs.PCVersionNotFound):
             continue  # unreadable actor: skip the entry, never fail the book
-        portrait = (_avatar(croot, wroot, a["id"], a["version"], "characters", images)
+        portrait = (_avatar(cid, a["id"], a["version"], "characters", images)
                     if a["kind"] == "characters" else None)
         doc = _render("appendix.xhtml", name=name, portrait=portrait,
                       role="Player character" if a["role"] == "player" else None,
                       sections=[{"label": s["label"],
-                                 "html": Markup(_md(_rewrite_images(s["text"], croot, wroot, images)))}
+                                 "html": Markup(_md(_rewrite_images(s["text"], cid, images)))}
                                 for s in sections])
         entries.append({"file": f"actor-{a['kind']}-{a['id']}.xhtml", "title": name, "doc": doc})
 
@@ -203,10 +193,10 @@ def _appendix_entries(cid: str, croot: Path, wroot: Path | None, sids: list[str]
         locs.append((ent["meta"].get("name", eid), eid, ent["body"]))
     for name, eid, body in sorted(locs):
         doc = _render("appendix.xhtml", name=name,
-                      portrait=_avatar(croot, wroot, eid, "default", "locations", images),
+                      portrait=_avatar(cid, eid, "default", "locations", images),
                       role=None,
                       sections=[{"label": None,
-                                 "html": Markup(_md(_rewrite_images(body, croot, wroot, images)))}])
+                                 "html": Markup(_md(_rewrite_images(body, cid, images)))}])
         entries.append({"file": f"location-{eid}.xhtml", "title": name, "doc": doc})
     return entries
 
@@ -224,9 +214,9 @@ def build_epub(cid: str) -> tuple[bytes, str]:
     images = _Images()
 
     sids = [s["id"] for s in sorted(scenes.list_scenes(cid), key=lambda s: s["id"])]
-    chapters = [_chapter(cid, croot, wroot, provider, sid, i, images)
+    chapters = [_chapter(cid, provider, sid, i, images)
                 for i, sid in enumerate(sids, start=1)]
-    appendix = _appendix_entries(cid, croot, wroot, sids, images)
+    appendix = _appendix_entries(cid, croot, sids, images)
 
     # in-world date range: first dated scene's start — last dated scene's latest
     histories = [h for sid in sids if (h := scenes.get_time_history(cid, sid))]

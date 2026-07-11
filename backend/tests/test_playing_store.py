@@ -282,3 +282,24 @@ def test_start_from_greeting_locked_version_wins(monkeypatch, tmp_path):
     ap.appear(cid, other, "characters", char_id, "veteran", "npc")  # lock veteran first
     playing.start_from_greeting(cid, sid, g)                        # greeting says young
     assert ap.locked_version(cid, "characters", char_id) == "veteran"
+
+
+def test_start_from_greeting_refuses_campaign_purged_version(monkeypatch, tmp_path):
+    """An inherited greeting names a version the campaign has purged from a
+    materialized (but unlocked) actor: a materialized actor's version set is
+    authoritative, so the start must fail rather than revive it from the world."""
+    from grimoire.store import overlay
+    wid = _world(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    char_id, _ = characters.create_character(wroot, "Mara", "young", characters.blank_card("Mara"))
+    characters.create_version(wroot, char_id, "corrupted", characters.blank_card("Mara"))
+    g = greetings.create_greeting(wroot, "Open", char_id, "corrupted", body="Hi.")
+    cid, sid = _campaign_after_seed(wid)
+    # materialize the actor campaign-side, then delete the greeting's version
+    root = overlay.ensure_actor_writable(cid, "characters", char_id)
+    characters.delete_version(root, char_id, "corrupted")
+    assert not ap.is_appeared(cid, "characters", char_id)   # unlocked
+    with pytest.raises(playing.PlayError):
+        playing.start_from_greeting(cid, sid, g)
+    # the purged version was not resurrected in the campaign copy
+    assert characters.card_hash(root, char_id, "corrupted") is None
