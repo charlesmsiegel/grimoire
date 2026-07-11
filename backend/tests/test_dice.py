@@ -43,6 +43,18 @@ def test_parse_rejects(bad):
         dice.parse(bad)
 
 
+def test_parse_rejects_oversized_numeric_clause_as_dice_error():
+    # A digit run long enough to be a plain notation error must not fall
+    # through to a bare ValueError from int()'s digit-string conversion limit.
+    with pytest.raises(dice.DiceError):
+        dice.parse("1d" + "9" * 5000)
+
+
+def test_roll_seed_stays_js_safe_integer():
+    result = dice.roll("2d6")
+    assert result["seed"] <= 2 ** 53 - 1
+
+
 def test_roll_is_reproducible_from_seed():
     a = dice.roll("4d6kh3+2 vs 15", seed=42)
     b = dice.roll("4d6kh3+2 vs 15", seed=42)

@@ -409,6 +409,16 @@ test("Escape closes the reroll popover without firing", async () => {
   expect(api.regenerate).not.toHaveBeenCalled();
 });
 
+test("no Reroll when a manual dice roll trails the assistant reply", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" },
+    { role: "assistant", content: "🎲 2d6 = 7", speaker: "Roll" }] });
+  renderCampaign();
+  await screen.findByText(/2d6 = 7/);
+  expect(screen.queryByRole("button", { name: /reroll/i })).toBeNull();
+});
+
 test("no Reroll when the last post is the user's", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
@@ -769,6 +779,23 @@ test("rolls dice from the input bar popover and refreshes the scene", async () =
   // popover closes and the scene re-fetches to show the roll line
   await waitFor(() => expect(screen.queryByLabelText("Dice notation")).toBeNull());
   expect((api.getScene as any).mock.calls.length).toBeGreaterThan(1);
+});
+
+test("disables roll submission while a roll is in flight, so repeated clicks send only one", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  let resolveRoll: (v: unknown) => void;
+  (api.roll as any).mockReturnValue(new Promise((resolve) => { resolveRoll = resolve; }));
+  renderCampaign();
+  fireEvent.click(await screen.findByRole("button", { name: "Roll dice" }));
+  fireEvent.change(screen.getByLabelText("Dice notation"), { target: { value: "2d6+1" } });
+  const rollBtn = screen.getByRole("button", { name: "Roll ▸" });
+  fireEvent.click(rollBtn);
+  await waitFor(() => expect(rollBtn).toBeDisabled());
+  fireEvent.click(rollBtn);
+  fireEvent.click(rollBtn);
+  expect(api.roll).toHaveBeenCalledTimes(1);
+  resolveRoll!({ ok: true, roll: { id: "r1" }, message: "🎲" });
+  await waitFor(() => expect(screen.queryByLabelText("Dice notation")).toBeNull());
 });
 
 test("shows a roll error and keeps the popover open", async () => {

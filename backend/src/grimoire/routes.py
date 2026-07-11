@@ -2004,7 +2004,7 @@ def post_scene_roll(cid: str, sid: str, body: RollBody):
         raise HTTPException(status_code=400, detail=str(e))
     entry = store.rolls.append(cid, sid, body.label or None, result)
     line = store.dice.format_roll(result, body.label or None)
-    store.scenes.append_message(cid, sid, "assistant", line)
+    store.scenes.append_message(cid, sid, "assistant", line, speaker=store.scenes.ROLL_SPEAKER)
     return {"ok": True, "roll": entry, "message": line}
 
 

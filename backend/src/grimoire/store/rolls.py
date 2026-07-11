@@ -50,6 +50,18 @@ def get(cid: str, rid: str) -> dict:
     raise RollNotFound(rid)
 
 
+def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
+    """Follow renamed scene ids in each logged roll's scene field."""
+    entries = read(cid)
+    hit = False
+    for entry in entries:
+        if entry.get("scene") in mapping:
+            entry["scene"] = mapping[entry["scene"]]
+            hit = True
+    if hit:
+        _path(cid).write_text(json.dumps(entries, indent=2) + "\n", encoding="utf-8")
+
+
 def replay(cid: str, rid: str) -> dict:
     """Re-run a logged roll from its stored seed; `match` is the replay guarantee."""
     entry = get(cid, rid)

@@ -16,6 +16,11 @@ from .paths import now_iso, slugify, uniquify
 # files working; their parens sub-speaker form is read but never written.
 RESERVED_LABELS = {"You": "user", "Grimoire": "assistant"}
 ROLE_TO_LABEL = {"user": "You", "assistant": "Grimoire"}
+# Manual dice rolls are appended as assistant-role messages (so they render
+# like any other transcript line) but tagged with this speaker so reroll
+# logic can tell them apart from an actual LLM reply — rerolling must never
+# silently drop a roll line while its entry lives on in rolls.json.
+ROLL_SPEAKER = "Roll"
 _MARKER = re.compile(r"^\*\*([^*\n]{1,64}?)(?: \(([^)\n]+)\))?:\*\*[ ]?", re.MULTILINE)
 _SAFE_LABEL = re.compile(r"^[^*\n]{1,64}$")
 
@@ -312,14 +317,19 @@ def split_reply(text: str, players: frozenset[str]) -> list[dict]:
 
 
 def remove_trailing_assistant_run(cid: str, sid: str) -> None:
-    """Drop the trailing run of assistant-side messages (one turn's output)."""
+    """Drop the trailing run of assistant-side messages (one turn's output).
+    Stops at (and refuses to touch) a manual dice-roll line — rerolling must
+    never delete a roll's transcript entry while it still lives in
+    rolls.json."""
     p = _scene_path(cid, sid)
     if not _safe_id(sid) or not p.exists():
         raise SceneNotFound(sid)
     messages = read_scene(cid, sid)["messages"]
-    if not messages or messages[-1]["role"] != "assistant":
+    if (not messages or messages[-1]["role"] != "assistant"
+            or messages[-1].get("speaker") == ROLL_SPEAKER):
         raise IndexError("no trailing assistant reply")
-    while messages and messages[-1]["role"] == "assistant":
+    while (messages and messages[-1]["role"] == "assistant"
+           and messages[-1].get("speaker") != ROLL_SPEAKER):
         messages.pop()
     meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
     meta["updated"] = now_iso()

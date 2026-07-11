@@ -57,3 +57,17 @@ def test_replay_detects_tampering(monkeypatch, tmp_path):
     data[0]["result"]["total"] = 999
     p.write_text(json.dumps(data), encoding="utf-8")
     assert rolls.replay(cid, "r1")["match"] is False
+
+
+def test_repoint_scenes_follows_renamed_scene(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    rolls.append(cid, "old-sid", None, dice.roll("2d6", seed=1))
+    rolls.repoint_scenes(cid, {"old-sid": "new-sid"})
+    assert rolls.read(cid)[0]["scene"] == "new-sid"
+
+
+def test_repoint_scenes_ignores_unrelated_scenes(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    rolls.append(cid, "other-sid", None, dice.roll("2d6", seed=1))
+    rolls.repoint_scenes(cid, {"old-sid": "new-sid"})
+    assert rolls.read(cid)[0]["scene"] == "other-sid"
