@@ -44,36 +44,51 @@ def test_message_html_speaker_label():
 def test_rewrite_images_maps_local_and_drops_remote(monkeypatch, tmp_path):
     wid, cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
-    wroot = worlds.world_root(wid)
     from grimoire.store import entities
     docks = entities.create_entity(croot, "locations", "The Docks", body="piers")
     assets.put_image(croot, docks, "default", "pier", b"pierbytes", "png", base="locations")
     images = epub._Images()
     text = (f"Look: ![The docks](/api/campaigns/{cid}/locations/{docks}/images/pier) "
             "and ![lost](https://example.com/x.png)")
-    out = epub._rewrite_images(text, croot, wroot, images)
+    out = epub._rewrite_images(text, cid, images)
     assert "![The docks](../images/img-000.png)" in out
     assert "lost" in out and "example.com" not in out
     # same file referenced again reuses the entry
     epub._rewrite_images(f"![again](/api/campaigns/{cid}/locations/{docks}/images/pier)",
-                         croot, wroot, images)
+                         cid, images)
     assert len(images.by_path) == 1
 
 
 def test_rewrite_images_world_fallback(monkeypatch, tmp_path):
     wid, cid = _campaign(monkeypatch, tmp_path)
-    croot = campaigns.campaign_root(cid)
     wroot = worlds.world_root(wid)
     # greeting images only ever live world-side
     assets.put_image(wroot, "g1", "default", "vista", b"vistabytes", "jpg", base="greetings")
     images = epub._Images()
     out = epub._rewrite_images(f"![v](/api/worlds/{wid}/greetings/g1/images/vista)",
-                               croot, wroot, images)
+                               cid, images)
     assert "![v](../images/img-000.jpg)" in out
     # missing file degrades to alt text
     out2 = epub._rewrite_images(f"![gone](/api/worlds/{wid}/greetings/g1/images/nope)",
-                                croot, wroot, images)
+                                cid, images)
     assert out2 == "gone"
+
+
+def test_rewrite_images_honors_asset_tombstone(monkeypatch, tmp_path):
+    from grimoire.store import characters, overlay
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Saltmarch")
+    wroot = worlds.world_root(wid)
+    aid, _ = characters.create_character(wroot, "Seraphine")
+    assets.put_image(wroot, aid, "default", "avatar", b"worldbytes", "png")
+    cid = campaigns.create_campaign("Run One", wid)
+    # the campaign deletes the inherited avatar -> only a tombstone, no copy
+    overlay.delete_image(cid, aid, "default", "avatar")
+    images = epub._Images()
+    out = epub._rewrite_images(
+        f"![face](/api/campaigns/{cid}/characters/{aid}/versions/default/images/avatar)", cid, images)
+    assert out == "face"   # tombstoned: the world image must not leak into the book
+    assert images.by_path == {}
 
 
 import io

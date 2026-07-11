@@ -113,6 +113,14 @@ def start_from_greeting(cid: str, sid: str, gid: str) -> str:
         if version is None:
             version = g["version"] if actor == g["character"] else \
                 characters.read_character(overlay.char_root(cid, actor), actor)["meta"]["default_version"]
+            # A materialized actor's version set is authoritative. If the
+            # campaign has purged the version this inherited greeting names,
+            # don't let the first-appearance lock revive it from the world.
+            if actor == g["character"] and appearances.actor_hash(
+                    overlay.char_root(cid, actor), "characters", actor, version) is None:
+                raise PlayError(
+                    f"greeting {gid} needs version '{version}' of {actor}, "
+                    f"which is no longer in this campaign")
         appearances.appear(cid, sid, "characters", actor, version, "npc")
     if g["pcless"] and not scene_pcless:
         scenes.set_pcless(cid, sid)  # before substitution: {{user}} needs the pcless fallback

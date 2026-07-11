@@ -259,6 +259,22 @@ def test_promote_image_copies_up_and_swaps(monkeypatch, tmp_path):
     assert assets.image_path(wroot, aid, "default", "gallery_0").read_bytes() == PNG + b"2"
 
 
+def test_promote_inherited_without_avatar_tombstones_source(monkeypatch, tmp_path):
+    """Promoting an inherited image when there's no avatar to swap into its
+    slot must tombstone the inherited source, or the world image would still
+    show through the overlay next to the promoted avatar (a duplicate)."""
+    wroot, cid, aid = _actor_pair(monkeypatch, tmp_path)
+    assets.put_image(wroot, aid, "default", "gallery_0", PNG, "png")  # world has no avatar here
+    overlay.promote_image(cid, aid, "default", "gallery_0")
+    croot = campaigns.campaign_root(cid)
+    # the promoted content is now the campaign avatar
+    assert overlay.image_root(cid, aid, "default", "avatar") == croot
+    assert assets.image_path(croot, aid, "default", "avatar").read_bytes() == PNG
+    # the inherited gallery slot is tombstoned, not duplicated back in from the world
+    assert {i["name"] for i in overlay.list_images(cid, aid, "default")} == {"avatar"}
+    assert overlay.image_root(cid, aid, "default", "gallery_0") == croot  # 404, no fallthrough
+
+
 def test_read_character_patches_images_from_union(monkeypatch, tmp_path):
     wroot, cid, aid = _actor_pair(monkeypatch, tmp_path)
     assets.put_image(wroot, aid, "default", "avatar", PNG, "png")
