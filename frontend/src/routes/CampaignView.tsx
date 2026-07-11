@@ -320,7 +320,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
     m.speaker ?? (m.role === "user" ? playerName ?? labels.user : labels.assistant);
 
   // A speaker label names a cast member if it matches exactly (case-insensitive)
-  // or is a word-boundary prefix of exactly one name — "winifred" is winifred
+  // or is a word-boundary prefix of exactly one name — "Winifred" is Winifred
   // Vance; an ambiguous or mid-word label matches no one. Mirrors the
   // backend's scenes.match_name so role attribution and plates agree.
   function matchActor(speaker: string): Actor | undefined {

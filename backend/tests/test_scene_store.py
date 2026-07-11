@@ -437,15 +437,15 @@ def test_edit_message_refuses_a_manual_roll_line(monkeypatch, tmp_path):
 
 
 def test_match_name_prefix_and_ambiguity_rules():
-    names = ["winifred Vance", "Seraphine Vale"]
-    assert scenes.match_name("winifred", names) == "winifred Vance"
-    assert scenes.match_name("winifred vance", names) == "winifred Vance"  # case-insensitive
+    names = ["Winifred Vance", "Seraphine Vale"]
+    assert scenes.match_name("Winifred", names) == "Winifred Vance"
+    assert scenes.match_name("winifred vance", names) == "Winifred Vance"  # case-insensitive
     assert scenes.match_name("Flo", names) is None          # mid-word: not a match
     assert scenes.match_name("Vale", names) is None          # not a prefix
     assert scenes.match_name("", names) is None
-    both = ["winifred Vance", "winifred Nightingale"]
-    assert scenes.match_name("winifred", both) is None       # ambiguous: match nothing
-    assert scenes.match_name("winifred Vance", both) == "winifred Vance"
+    both = ["Winifred Vance", "Winifred Nightingale"]
+    assert scenes.match_name("Winifred", both) is None       # ambiguous: match nothing
+    assert scenes.match_name("Winifred Vance", both) == "Winifred Vance"
 
 
 def test_split_reply_guards_player_first_name():
