@@ -8,6 +8,29 @@ overrides) → the user-chosen path recorded in the bootstrap pointer
 page (Storage location); point it at a synced folder to share a library across
 devices.
 
+## Privacy: real data — and references to it — never get committed
+
+This repo is public. `~/.grimoire` (wherever `store.home()` points) holds
+real, private worldbuilding/campaign/character content, kept out of the repo
+structurally. That boundary holds in both directions:
+
+- **Never commit anything under the data store itself.** Worlds, campaigns,
+  and calendars all live outside the repo by design — that's the point of
+  `store.home()`.
+- **Never use a real world/campaign/character name as a "concrete example"**
+  in a design doc, commit message, or test fixture, even in passing —
+  invented names only. This has happened before (real slugs/character names
+  leaked into `docs/superpowers/` and got adopted as recurring test
+  fixtures) and required a full git-history rewrite to fix. Reuse the
+  codebase's existing placeholder names (e.g. Seraphine, Mara, Winifred,
+  Realm, Saltmarch) rather than inventing a new one that might coincidentally
+  match something real.
+- **Personal/homebrew calendars follow the same split as any other private
+  content**: only `gregorian` and `hebrew` (real-world, real holidays) ship
+  in `store/calendars/`; anything else — a fictional calendar, a custom
+  holiday set — is a plugin loaded from `<GRIMOIRE_HOME>/calendars/` (see
+  `store/calendars/plugins.py`), never committed.
+
 ## Frontend: the list/detail page pattern
 
 **Build every record-list page with this pattern.** A page that manages a list of
