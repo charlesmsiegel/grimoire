@@ -42,7 +42,7 @@ vocabulary the greeting system will gate on:
 - **No tags on Characters.** Tags live on PC entities for now. A character cast as a player is
   untagged this iteration (Spec 2 may revisit if tag-gating needs it).
 - **No per-scene role switching.** Role is locked per campaign at first appearance; to use one
-  persona in both roles, author two cards (the intended pattern — see the ashgrove/desmond example).
+  persona in both roles, author two cards (the intended pattern — see the Ashgrove/Desmond example).
 
 ## Decisions & defaults
 

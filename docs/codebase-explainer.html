@@ -642,7 +642,7 @@ def activate(entries, recent_text, present=frozenset()):
       <ul>
         <li>Every message starts <code>**&lt;Speaker&gt;:**</code> at the top of the body or after a blank line (bold text inside a paragraph stays content).</li>
         <li>Reserved labels: <code>**You:**</code> (user) and <code>**Grimoire:**</code> (assistant narration). Anything else is a named speaker.</li>
-        <li>Role is <em>derived</em>: user-side iff the speaker is "You" or matches a role=player cast member. <code>match_name()</code> resolves labels by case-insensitive exact match, else a unique word-boundary prefix ("winifred" names "winifred winterbourne"; ambiguous prefixes name no one).</li>
+        <li>Role is <em>derived</em>: user-side iff the speaker is "You" or matches a role=player cast member. <code>match_name()</code> resolves labels by case-insensitive exact match, else a unique word-boundary prefix ("winifred" names "winifred Vance"; ambiguous prefixes name no one).</li>
         <li>One model reply with several <code>**Name:**</code> blocks is split into per-speaker posts on persist; the trailing assistant run is what <em>reroll</em> replaces.</li>
       </ul>
     </div>

@@ -448,7 +448,7 @@ Run:
 ```bash
 cd backend && ./.venv/Scripts/python.exe -c "import json; from grimoire.store import suggest; s=suggest.build_snapshot('hollow-manor'); print(json.dumps({'story_so_far': s['story_so_far'], 'threads': [(t['title'], t['dormancy']) for t in s['open_threads']], 'marisol': next(c for c in s['cast'] if c['token']=='characters:marisol')}, ensure_ascii=False, indent=2)); print(suggest.build_prompt(s)[1]['content'][:1200])"
 ```
-Expected: marisol shows `status: "unseen"` with her tagline (which names her as a woman); the scene-1 one-liner appears under "Story so far"; threads carry a dormancy count. Confirms the hollow-manor scene-2 failure is grounded away. (Read-only — does not write to the store.)
+Expected: Marisol shows `status: "unseen"` with her tagline (which names her as a woman); the scene-1 one-liner appears under "Story so far"; threads carry a dormancy count. Confirms the hollow-manor scene-2 failure is grounded away. (Read-only — does not write to the store.)
 
 - [ ] **Step 3: No commit** — verification task; nothing to record beyond Tasks 1-3.
 

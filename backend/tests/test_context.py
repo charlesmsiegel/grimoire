@@ -204,14 +204,14 @@ def test_empty_context_is_raw_history(monkeypatch, tmp_path):
 
 def test_character_cast_as_player_uses_persona_not_char(monkeypatch, tmp_path):
     wid, cid, sid = _campaign(monkeypatch, tmp_path)
-    characters.create_character(worlds.world_root(wid), "desmond", "default",
-                                _npc_card("desmond", description="a tall man", personality="gruff"))
+    characters.create_character(worlds.world_root(wid), "Desmond", "default",
+                                _npc_card("Desmond", description="a tall man", personality="gruff"))
     ap.appear(cid, sid, "characters", "desmond", "default", "player")
     scenes.append_message(cid, sid, "user", "I am {{user}}, not {{char}}")
     msgs = context.build_messages(cid, sid)
     assert "a tall man" in msgs[0]["content"]          # injected as persona, not an NPC block
     # {{user}} resolves to the player; {{char}} stays literal (no NPCs in scene)
-    assert msgs[-1]["content"] == "I am desmond, not {{char}}"
+    assert msgs[-1]["content"] == "I am Desmond, not {{char}}"
 
 
 def test_substitution_in_card_and_worldinfo(monkeypatch, tmp_path):

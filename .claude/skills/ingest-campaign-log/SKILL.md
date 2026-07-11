@@ -69,13 +69,13 @@ call while reading — this skill does not delegate that to another LLM call.
         "title": "The Reckoning",
         "date": "1818-05-15",
         "location": "winterbourne-manor",
-        "new_characters": [{"name": "cassian", "personality": "wary, precise"}],
-        "new_locations": [{"name": "Thornfield Manor", "notes": "Seat of corvin."}],
+        "new_characters": [{"name": "Cassian", "personality": "wary, precise"}],
+        "new_locations": [{"name": "Thornfield Manor", "notes": "Seat of Corvin."}],
         "characters": [{"kind": "pcs", "id": "julian"}, {"kind": "characters", "id": "cassian"}],
         "turns": [
           {"role": "assistant", "speaker": null, "content": "*The study is silent.*"},
-          {"role": "assistant", "speaker": "cassian", "content": "\"I didn't ask to come here.\""},
-          {"role": "user", "speaker": "julian", "content": "\"Neither did I, once.\""}
+          {"role": "assistant", "speaker": "Cassian", "content": "\"I didn't ask to come here.\""},
+          {"role": "user", "speaker": "Julian", "content": "\"Neither did I, once.\""}
         ]
       }
       ```
