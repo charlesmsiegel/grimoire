@@ -385,8 +385,12 @@ def image_root(cid: str, aid: str, vid: str, name: str, base: str = "characters"
     croot = croot_of(cid)
     if assets.image_path(croot, aid, vid, name, base) is not None:
         return croot
-    if _asset_ref(base, aid, vid, name) in deleted(cid):
-        return croot   # absent there -> the serve route 404s, no fallthrough
+    gone = deleted(cid)
+    # A per-asset tombstone or a whole-record tombstone (the record was deleted
+    # campaign-side; only its <base>/<aid> ref is written) both hide the image:
+    # return croot so the serve route 404s instead of falling through to the world.
+    if _asset_ref(base, aid, vid, name) in gone or _flat_ref(base, aid) in gone:
+        return croot
     return wroot_of(cid)
 
 

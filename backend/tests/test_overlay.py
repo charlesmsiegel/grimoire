@@ -225,6 +225,17 @@ def test_images_union_campaign_wins_and_tombstones(monkeypatch, tmp_path):
     assert overlay.image_root(cid, aid, "default", "gallery_0") == croot
 
 
+def test_image_root_honors_parent_record_tombstone(monkeypatch, tmp_path):
+    """Deleting an inherited record writes only its <kind>/<id> tombstone; a
+    stale image URL for that record must 404, not fall through to the world."""
+    _wid, wroot, cid, eid = _pair(monkeypatch, tmp_path)   # world lore entry + thin campaign
+    croot = campaigns.campaign_root(cid)
+    assets.put_image(wroot, eid, "default", "art", PNG, "png", base="lore")
+    assert overlay.image_root(cid, eid, "default", "art", base="lore") == wroot   # inherited
+    overlay.delete_entity(cid, "lore", eid)   # writes the lore/<eid> record tombstone
+    assert overlay.image_root(cid, eid, "default", "art", base="lore") == croot   # no fallthrough
+
+
 def test_focus_world_fallback_until_campaign_avatar(monkeypatch, tmp_path):
     wroot, cid, aid = _actor_pair(monkeypatch, tmp_path)
     assets.put_image(wroot, aid, "default", "avatar", PNG, "png")

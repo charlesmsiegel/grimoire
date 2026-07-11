@@ -1038,6 +1038,24 @@ def test_recasting_with_different_role_or_version_409(client):
                        json={"kind": "characters", "id": "seraphine", "version": "alt"}).status_code == 409
 
 
+def test_cast_supplied_version_purged_campaign_side_404(client):
+    """A cast naming a version the campaign has purged from a materialized (but
+    unlocked) actor must 404 rather than revive it from the world via the lock."""
+    wid = _world(client)
+    ch = client.post(f"/api/worlds/{wid}/characters", json={"name": "Seraphine"}).json()["character"]
+    base = client.get(f"/api/worlds/{wid}/characters/{ch}").json()["versions"][0]["card"]
+    client.post(f"/api/worlds/{wid}/characters/{ch}/versions", json={"name": "Alt", "card": base})
+    camp = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
+    sid = client.post(f"/api/campaigns/{camp}/scenes", json={"title": "S"}).json()["id"]
+    # materialize the actor campaign-side and delete the alt version
+    assert client.delete(f"/api/campaigns/{camp}/characters/{ch}/versions/alt").status_code == 200
+    # casting the purged version must 404, not resurrect it
+    assert client.post(f"/api/campaigns/{camp}/scenes/{sid}/cast",
+                       json={"kind": "characters", "id": ch, "version": "alt"}).status_code == 404
+    versions = {v["id"] for v in client.get(f"/api/campaigns/{camp}/characters/{ch}").json()["versions"]}
+    assert "alt" not in versions   # not revived from the world
+
+
 class CapturingOpenRouter:
     def __init__(self):
         self.messages = None
