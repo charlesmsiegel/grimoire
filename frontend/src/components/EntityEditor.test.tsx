@@ -22,6 +22,8 @@ vi.mock("../api/client", () => ({
     imageUrl: (w: string, c: string, v: string, n: string) => `/img/${w}/${c}/${v}/${n}`,
     actorImageUrl: (sc: { kind: string; id: string }, c: string, v: string, n: string) => `/img/${sc.id}/${c}/${v}/${n}`,
     entityImageUrl: (_s: any, k: string, e: string, n: string) => `/img/${k}/${e}/${n}`,
+    getSheet: vi.fn(),
+    putSheet: vi.fn(),
   },
 }));
 import { api } from "../api/client";
@@ -38,6 +40,7 @@ beforeEach(() => {
   (api.listEntityImages as any).mockResolvedValue([]);
   (api.putEntityImage as any).mockResolvedValue({ name: "avatar", ext: "png" });
   (api.promoteEntityImage as any).mockResolvedValue({ ok: true });
+  (api.getSheet as any).mockResolvedValue({ sheet: null });
 });
 
 test("lists entities and creates one with keys", async () => {
@@ -316,4 +319,23 @@ test("typed field values show as chips in the detail sidebar", async () => {
   const side = container.querySelector(".detail-sidebar") as HTMLElement;
   expect(within(side).getByText(/Type: wyrm/)).toBeInTheDocument();
   expect(within(side).getByText(/Threat: apex/)).toBeInTheDocument();
+});
+
+test("campaign scope with a module mounts SheetPanel with a Sheet side-section", async () => {
+  (api.listEntities as any).mockResolvedValue([{ id: "salt-knife", name: "Salt Knife" }]);
+  (api.readEntity as any).mockResolvedValue({ meta: { id: "salt-knife", name: "Salt Knife" }, body: "sharp" });
+  const module = {
+    id: "mod1", source: "user",
+    manifest: { id: "mod1", name: "Mod One" },
+    sheets: { groups: {}, sheet_types: { itemSheet: { label: "Item Sheet", kind: "items", groups: [], fields: [] } } },
+    checks: {}, rules: [], content: [], errors: [],
+  } as any;
+  const { container } = render(
+    <EntityEditor wid="w" kind="items" scope={{ kind: "campaign", id: "run" }} module={module} />,
+  );
+  fireEvent.click(await screen.findByText("Salt Knife"));
+  await waitFor(() => expect(api.getSheet).toHaveBeenCalledWith(
+    { kind: "campaign", id: "run" }, "mod1", "items", "salt-knife"));
+  const side = container.querySelector(".detail-sidebar") as HTMLElement;
+  expect(within(side).getByText("Sheet")).toBeInTheDocument();
 });

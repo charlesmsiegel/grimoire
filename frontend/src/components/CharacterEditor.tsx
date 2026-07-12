@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type Appearance, type Card, type CharacterDetail, type CharacterSummary, type ChubImportResult, type ChubUnlinkedVersion, type EntityScope, type Greeting, type VersionRef } from "../api/client";
+import { api, type Appearance, type Card, type CharacterDetail, type CharacterSummary, type ChubImportResult, type ChubUnlinkedVersion, type EntityScope, type Greeting, type ModuleDetail, type VersionRef } from "../api/client";
 import { AvatarFocusPicker } from "./AvatarFocusPicker";
 import { CalendarDatePicker } from "./CalendarDatePicker";
 import { Field } from "./Field";
 import { GreetingMarkdown } from "./GreetingMarkdown";
 import { HtmlNote } from "./HtmlNote";
 import { OwnedLorePanel } from "./OwnedLorePanel";
+import SheetPanel from "./SheetPanel";
 import { TaglinePrompt } from "./TaglinePrompt";
 import { UrlImportPrompt } from "./UrlImportPrompt";
 
@@ -39,10 +40,11 @@ function focusStyle(f?: number | null): React.CSSProperties | undefined {
   return f == null ? undefined : { objectPosition: `${f}% ${f}%` };
 }
 
-export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, onOpenGreeting }:
+export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, onOpenGreeting, module = null }:
   { scope: EntityScope; wid: string; resetSignal?: number; focus?: { cid: string; vid: string } | null;
     onOpenLore?: (nav: { focusEntry?: string; newOwner?: string }) => void;
-    onOpenGreeting?: (gid: string) => void }) {
+    onOpenGreeting?: (gid: string) => void;
+    module?: ModuleDetail | null }) {
   const worldScope = scope.kind === "world";
   const [chars, setChars] = useState<CharacterSummary[]>([]);
   const [detail, setDetail] = useState<CharacterDetail | null>(null);
@@ -897,6 +899,10 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
                   <span className="field-hint">Single version; it locks when first used in a scene.</span>
                 )}
               </div>
+            )}
+
+            {module && detail && (
+              <SheetPanel scope={scope} module={module} kind="characters" eid={detail.meta.id} />
             )}
 
             {worldScope && <div className="chub-source-block">

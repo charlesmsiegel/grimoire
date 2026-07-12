@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { api, type EntityScope, type PCDetail, type PCSummary, type Persona, type VersionRef } from "../api/client";
+import { api, type EntityScope, type ModuleDetail, type PCDetail, type PCSummary, type Persona, type VersionRef } from "../api/client";
 import { CalendarDatePicker } from "./CalendarDatePicker";
 import { Field } from "./Field";
 import { OwnedLorePanel } from "./OwnedLorePanel";
+import SheetPanel from "./SheetPanel";
 
 const BLANK: Persona = { name: "", pronouns: "", summary: "", birthdate: "", description: "" };
 
-export function PCEditor({ scope, wid, onOpenLore }:
+export function PCEditor({ scope, wid, onOpenLore, module = null }:
   { scope: EntityScope; wid: string;
-    onOpenLore?: (nav: { focusEntry?: string; newOwner?: string }) => void }) {
+    onOpenLore?: (nav: { focusEntry?: string; newOwner?: string }) => void;
+    module?: ModuleDetail | null }) {
   const worldScope = scope.kind === "world";
   const [pcs, setPCs] = useState<PCSummary[]>([]);
   const [tags, setTags] = useState<Record<string, string>>({});
@@ -237,6 +239,9 @@ export function PCEditor({ scope, wid, onOpenLore }:
                   ? <div className="chips">{detail.meta.tags.map((t) => <span key={t} className="chip on">{worldScope ? (tags[t] ?? t) : t}</span>)}</div>
                   : <div className="field-hint">no tags</div>}
               </div>
+              {module && detail && (
+                <SheetPanel scope={scope} module={module} kind="pcs" eid={detail.meta.id} />
+              )}
               {onOpenLore && (
                 <OwnedLorePanel
                   scope={scope}
