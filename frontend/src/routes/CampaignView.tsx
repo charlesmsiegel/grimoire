@@ -13,6 +13,7 @@ import { NewSceneChooser } from "../components/NewSceneChooser";
 import { ChangesPanel } from "../components/ChangesPanel";
 import { CalendarConfig } from "../components/CalendarConfig";
 import MechanicsConfig from "../components/MechanicsConfig";
+import { StyleConfig } from "../components/StyleConfig";
 import { Portrait } from "../components/Portrait";
 import { RecordDrawer, type DrawerTarget } from "../components/RecordDrawer";
 import { SceneInspector } from "../components/SceneInspector";
@@ -71,6 +72,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
   const [dt, setDt] = useState<SceneDatetime | null>(null);
   const [showCalendar, setShowCalendar] = useState(false);
   const [showMechanics, setShowMechanics] = useState(false);
+  const [showStyle, setShowStyle] = useState(false);
   const [scenes, setScenes] = useState<SceneMeta[]>([]);
   const [sceneSort, setSceneSort] = useState<SceneSort>("updated");
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -421,6 +423,10 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
               )}
             </button>
           )}
+          <button className="rail-date" onClick={() => setShowStyle((v) => !v)}
+                  title="Prose style settings">
+            Prose style
+          </button>
         </div>
       </aside>
       <section className="main">
@@ -432,6 +438,11 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
         {showMechanics && (
           <div className="panel-slot">
             <MechanicsConfig cid={cid} />
+          </div>
+        )}
+        {showStyle && (
+          <div className="panel-slot">
+            <StyleConfig cid={cid} />
           </div>
         )}
         {showChanges && <ChangesPanel cid={cid} />}

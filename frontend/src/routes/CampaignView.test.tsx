@@ -21,6 +21,7 @@ vi.mock("../components/NewSceneChooser", () => ({
   ),
 }));
 vi.mock("../components/CalendarConfig", () => ({ CalendarConfig: () => <div data-testid="calendar-config" /> }));
+vi.mock("../components/StyleConfig", () => ({ StyleConfig: () => <div data-testid="style-config" /> }));
 
 vi.mock("../api/client", async () => {
   const actual = await vi.importActual<typeof import("../api/client")>("../api/client");
