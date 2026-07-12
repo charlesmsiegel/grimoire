@@ -250,3 +250,75 @@ def test_pathologically_deep_json_never_raises(tmp_path):
     layout, _theme, errors = load(tmp_path)  # must not raise
     assert layout == {"sheet_types": {}}
     assert errors and errors[0]["source"] == "layout"
+
+
+GOOD_THEME = {
+    "colors": {"bg": "#191521", "ink": "#d8d2c4", "accent": "#8a2a3b"},
+    "fonts": {"display": "display", "body": "serif"},
+    "dots": "diamond",
+    "corners": "sharp",
+}
+
+
+def write_theme(tmp_path, theme):
+    text = theme if isinstance(theme, str) else json.dumps(theme)
+    (tmp_path / "theme.json").write_text(text, encoding="utf-8")
+    return tmp_path
+
+
+def theme_of(tmp_path, theme):
+    _layout, out, errors = load(write_theme(tmp_path, theme))
+    return out, [e for e in errors if e["source"] == "theme"]
+
+
+def test_good_theme(tmp_path):
+    theme, errors = theme_of(tmp_path, GOOD_THEME)
+    assert errors == []
+    assert theme == GOOD_THEME
+
+
+def test_theme_unparseable(tmp_path):
+    theme, errors = theme_of(tmp_path, "{nope")
+    assert theme == {} and errors and errors[0]["sheet_type"] is None
+
+
+def test_theme_not_object(tmp_path):
+    theme, errors = theme_of(tmp_path, ["x"])
+    assert theme == {} and errors
+
+
+def test_theme_unknown_key_dropped(tmp_path):
+    theme, errors = theme_of(tmp_path, dict(GOOD_THEME, sparkle=True))
+    assert "sparkle" not in theme
+    assert any("sparkle" in e["message"] for e in errors)
+
+
+def test_theme_bad_hex(tmp_path):
+    theme, errors = theme_of(tmp_path, {"colors": {"accent": "url(evil)"}})
+    assert theme == {}
+    assert any("hex" in e["message"] for e in errors)
+
+
+def test_theme_bg_without_ink_drops_both(tmp_path):
+    theme, errors = theme_of(tmp_path, {"colors": {"bg": "#fff", "accent": "#8a2a3b"}})
+    assert theme == {"colors": {"accent": "#8a2a3b"}}
+    assert any("together" in e["message"] for e in errors)
+
+
+def test_theme_unknown_font(tmp_path):
+    theme, errors = theme_of(tmp_path, {"fonts": {"body": "comic-sans"}})
+    assert theme == {}
+    assert any("comic-sans" in e["message"] for e in errors)
+
+
+def test_theme_unknown_enum_values(tmp_path):
+    theme, errors = theme_of(tmp_path, {"dots": "star", "corners": "bevelled"})
+    assert theme == {}
+    assert len(errors) == 2
+
+
+def test_theme_css_detected(tmp_path):
+    (tmp_path / "theme.css").write_text(".x{}", encoding="utf-8")
+    _layout, theme, errors = load(tmp_path)
+    assert theme == {}
+    assert any("theme.css" in e["message"] and e["source"] == "theme" for e in errors)

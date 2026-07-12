@@ -228,6 +228,69 @@ class _Expander:
         return out
 
 
+def _load_theme(root: Path, errors: list[dict]) -> dict:
+    raw = _read_json(root, "theme.json", "theme", errors)
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        errors.append(_entry("theme", None, "theme.json: must be an object"))
+        return {}
+    theme: dict = {}
+    for key, value in raw.items():
+        if key == "colors":
+            if not isinstance(value, dict):
+                errors.append(_entry("theme", None, "theme.json: colors must be an object"))
+                continue
+            colors: dict = {}
+            for ck, cv in value.items():
+                if ck not in COLOR_KEYS:
+                    errors.append(_entry("theme", None,
+                                         f"theme.json: unknown color {ck!r}"))
+                elif not isinstance(cv, str) or not _HEX.match(cv):
+                    errors.append(_entry("theme", None,
+                                         f"theme.json: {ck} must be a hex color"))
+                else:
+                    colors[ck] = cv
+            if ("bg" in colors) != ("ink" in colors):
+                errors.append(_entry("theme", None,
+                                     "theme.json: bg and ink must be set together"))
+                colors.pop("bg", None)
+                colors.pop("ink", None)
+            if colors:
+                theme["colors"] = colors
+        elif key == "fonts":
+            if not isinstance(value, dict):
+                errors.append(_entry("theme", None, "theme.json: fonts must be an object"))
+                continue
+            fonts: dict = {}
+            for fk, fv in value.items():
+                if fk not in FONT_KEYS:
+                    errors.append(_entry("theme", None,
+                                         f"theme.json: unknown font slot {fk!r}"))
+                elif fv not in FONT_STACKS:
+                    errors.append(_entry("theme", None,
+                                         f"theme.json: unknown font {fv!r}"))
+                else:
+                    fonts[fk] = fv
+            if fonts:
+                theme["fonts"] = fonts
+        elif key == "dots":
+            if value in DOT_SHAPES:
+                theme["dots"] = value
+            else:
+                errors.append(_entry("theme", None,
+                                     f"theme.json: unknown dots shape {value!r}"))
+        elif key == "corners":
+            if value in CORNER_STYLES:
+                theme["corners"] = value
+            else:
+                errors.append(_entry("theme", None,
+                                     f"theme.json: unknown corners style {value!r}"))
+        else:
+            errors.append(_entry("theme", None, f"theme.json: unknown key {key!r}"))
+    return theme
+
+
 def _load_layout(root: Path, sheets: dict, errors: list[dict]) -> dict:
     layout: dict = {"sheet_types": {}}
     raw = _read_json(root, "layout.json", "layout", errors)
@@ -279,8 +342,18 @@ def _load_layout(root: Path, sheets: dict, errors: list[dict]) -> dict:
 
 
 def load_display(root: Path, sheets: dict) -> tuple[dict, dict, list[dict]]:
-    """(layout, theme, display_errors) for a pack root. Never raises."""
+    """(layout, theme, display_errors) for a pack root. Never raises: display
+    files are cosmetic, so even an unforeseen exception must degrade to
+    "no display files + an error entry", never break load_pack/resolve()."""
     errors: list[dict] = []
-    layout = _load_layout(root, sheets, errors)
-    theme: dict = {}  # Task 2
+    try:
+        layout = _load_layout(root, sheets, errors)
+        theme = _load_theme(root, errors)
+        if (root / "theme.css").exists():
+            errors.append(_entry("theme", None,
+                                 "theme.css is not supported — use theme.json"))
+    except Exception as e:  # containment boundary, deliberately broad
+        errors.append(_entry("layout", None,
+                             f"display files: {e.__class__.__name__}: {e}"))
+        return {"sheet_types": {}}, {}, errors
     return layout, theme, errors
