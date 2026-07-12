@@ -164,3 +164,43 @@ def test_no_seed_without_module_and_no_reseed_on_bind(monkeypatch, tmp_path):
     assert sheets.list_refs(cid) == []
     modules.set_campaign_module(cid, "pool-basic")   # later binding
     assert sheets.list_refs(cid) == []               # never re-seeds
+
+
+def test_campaign_coverage(monkeypatch, tmp_path):
+    from grimoire.store import entities as ent, overlay
+    wid, cid = _campaign(monkeypatch, tmp_path)          # pool-basic
+    ent.create_entity(worlds.world_root(wid), "items", "Moon Disc")
+    ent.create_entity(worlds.world_root(wid), "locations", "Old Chapel")
+    overlay.create_entity(cid, "items", "Salt Knife")
+    sheets.write(cid, "items", "moon-disc", "talisman", None)
+    cov = sheets.coverage(cid)
+    assert cov["items"] == {"total": 2, "sheeted": 1, "invalid": 0}
+    assert cov["locations"]["total"] == 1
+    # pool-basic has no lore/groups/creatures sheet types -> absent rows
+    assert "lore" not in cov and "creatures" not in cov
+    assert "characters" in cov and "pcs" in cov          # separate rows
+
+
+def test_coverage_counts_invalid(monkeypatch, tmp_path):
+    wid, cid = _campaign(monkeypatch, tmp_path)
+    from grimoire.store import overlay
+    overlay.create_entity(cid, "items", "Moon Disc")
+    sheets.write(cid, "items", "moon-disc", "talisman", None)
+    modules.set_campaign_module(cid, "d20-basic")        # talisman now unknown
+    cov = sheets.coverage(cid)
+    assert cov["items"]["invalid"] == 1
+
+
+def test_coverage_empty_without_module(monkeypatch, tmp_path):
+    _, cid = _campaign(monkeypatch, tmp_path, module=None)
+    assert sheets.coverage(cid) == {}
+
+
+def test_world_coverage(monkeypatch, tmp_path):
+    from grimoire.store import entities as ent
+    wid, _ = _campaign(monkeypatch, tmp_path, module=None)
+    ent.create_entity(worlds.world_root(wid), "items", "Moon Disc")
+    sheets.write_world(wid, "pool-basic", "items", "moon-disc", "talisman", None)
+    cov = sheets.world_coverage(wid, "pool-basic")
+    assert cov["items"] == {"total": 1, "sheeted": 1, "invalid": 0}
+    assert sheets.world_coverage(wid, "ghost") == {}
