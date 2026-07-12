@@ -12,11 +12,12 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 from pathlib import Path
 
 from . import dice, expressions
 from .frontmatter import parse_frontmatter
-from .paths import home
+from .paths import home, slugify, uniquify
 
 class ModuleError(Exception):
     """Invalid module operation (e.g. deleting a built-in)."""
@@ -464,3 +465,53 @@ def load_pack(mid: str) -> dict:
         "errors": errors,
     }
     return pack
+
+
+# ---- registry: list, scaffold, delete ----
+
+
+def _scan(d: Path) -> dict[str, dict]:
+    """Scan a directory for module packs and return metadata dict by id."""
+    out: dict[str, dict] = {}
+    if not d.is_dir():
+        return out
+    for p in sorted(q for q in d.iterdir() if (q / "module.md").exists()):
+        pack = load_pack(p.name)
+        m = pack["manifest"]
+        out[p.name] = {
+            "id": p.name,
+            "name": m.get("name", p.name),
+            "description": m.get("description", ""),
+            "version": m.get("version", ""),
+            "source": pack["source"],
+            "valid": not pack["errors"],
+        }
+    return out
+
+
+def list_modules() -> list[dict]:
+    """List all modules (builtin + user), with user shadowing builtin, sorted by name."""
+    merged = _scan(builtin_dir())
+    merged.update(_scan(user_dir()))
+    return sorted(merged.values(), key=lambda m: str(m["name"]).lower())
+
+
+def create_module(name: str) -> str:
+    """Scaffold a minimal valid module pack in user_dir(), return its id."""
+    mid = uniquify(slugify(name), lambda i: (user_dir() / i).exists()
+                   or (builtin_dir() / i / "module.md").exists())
+    d = user_dir() / mid
+    d.mkdir(parents=True)
+    (d / "module.md").write_text(
+        f"---\nname: {name}\ndescription: \nversion: 0.1\n---\n", encoding="utf-8")
+    (d / "sheets.json").write_text(
+        '{\n  "groups": {},\n  "sheet_types": {}\n}\n', encoding="utf-8")
+    return mid
+
+
+def delete_module(mid: str) -> None:
+    """Delete a user module. Raises ModuleError if builtin, ModuleNotFound if absent."""
+    root, source = pack_root(mid)
+    if source != "user":
+        raise ModuleError("built-in modules cannot be deleted")
+    shutil.rmtree(root)
