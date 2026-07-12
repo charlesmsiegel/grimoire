@@ -801,3 +801,13 @@ def test_read_rule(monkeypatch, tmp_path):
     assert modules.read_rule("testmod", "ghost") is None
     with pytest.raises(modules.ModuleNotFound):
         modules.read_rule("ghost", "core")
+
+
+def test_reference_packs_have_defaults_and_reserved_names(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    for mid, diff in (("pool-basic", 6), ("d20-basic", 12)):
+        pack = modules.load_pack(mid)
+        assert pack["errors"] == [], f"{mid}: {pack['errors']}"
+        assert pack["checks"]["_defaults"]["difficulty"] == diff
+        assert any("{difficulty}" in c["roll"]
+                   for k, c in pack["checks"].items() if k != "_defaults")

@@ -1,13 +1,22 @@
 {
+  "_defaults": {
+    "difficulty": 6,
+    "outcomes": [
+      {"label": "botch", "when": "successes == 0 and ones > 0"},
+      {"label": "exceptional success", "when": "successes >= 5"},
+      {"label": "success", "when": "successes >= 1"},
+      {"label": "failure", "when": "successes == 0"}
+    ]
+  },
   "brawl": {
     "label": "Vigor + Brawl",
-    "roll": "{vigor + brawl}d10 t6",
+    "roll": "{vigor + brawl + modifier}d10 t{difficulty}",
     "requires": ["attributes", "abilities"],
     "rules": ["combat"]
   },
   "perception": {
     "label": "Wits + Occult",
-    "roll": "{wits + occult}d10 t6",
+    "roll": "{wits + occult + modifier}d10 t{difficulty}",
     "requires": ["attributes", "abilities"]
   }
 }
