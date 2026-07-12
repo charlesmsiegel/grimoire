@@ -123,6 +123,16 @@ def _compute_derived(sheets_def: dict, type_id: str, fields: dict,
     return out
 
 
+def expression_scope(sheet: dict, sheets_def: dict) -> dict:
+    """Numeric scope + derived for an already-read sheet (#162: checks.py's
+    check-formula and derived-tier evaluation reuse this instead of
+    duplicating the numeric/derived assembly)."""
+    scope = _numeric_scope(sheets_def, sheet["sheet_type"], sheet["fields"])
+    scope.update({k: v for k, v in sheet["derived"].items()
+                  if isinstance(v, (int, float)) and not isinstance(v, bool)})
+    return scope
+
+
 def _validate_instance(sheets_def: dict, file_kind: str, sheet_type,
                        fields: dict) -> list[str]:
     """Errors for a stored sheet against a module's sheets definition."""
