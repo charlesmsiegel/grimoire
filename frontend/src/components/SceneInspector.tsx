@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   api, type Actor, type SceneContext, type SceneLocation, type ChronicleEntry,
-  type CalendarConfig, type RosterEntry, type SceneDatetime,
+  type CalendarConfig, type RosterEntry, type SceneDatetime, type Style,
 } from "../api/client";
 import { getModels, type Model } from "../api/models";
 import { Portrait } from "./Portrait";
@@ -27,6 +27,8 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   const [dateInput, setDateInput] = useState("");
   const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
   const [locPick, setLocPick] = useState("");
+  const [styleId, setStyleId] = useState("");
+  const [styleOptions, setStyleOptions] = useState<Style[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -42,6 +44,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
       .then((ls) => setLocations(ls.map((l) => ({ id: l.id, name: l.name }))))
       .catch(() => setLocations([]));
     api.getCalendarProviders().then((r) => setCalendars(r.providers)).catch(() => setCalendars([]));
+    api.listStyles().then(setStyleOptions).catch(() => setStyleOptions([]));
   }, [cid]);
 
   const reloadWhen = useCallback(
@@ -54,6 +57,9 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   const reloadCfg = useCallback(
     () => api.getCalendarConfig(cid).then(setCfg).catch(() => setCfg(null)),
     [cid]);
+  const reloadStyle = useCallback(
+    () => api.getSceneStyle(cid, sid).then((r) => setStyleId(r.style_id)).catch(() => setStyleId("")),
+    [cid, sid]);
 
   useEffect(() => {
     api.getCast(cid, sid).then(setCast).catch(() => setCast([]));
@@ -63,7 +69,8 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
     api.getChronicle(cid).then(setRecap).catch(() => setRecap([]));
     reloadWhen();
     reloadCfg();
-  }, [cid, sid, refreshKey, reloadWhen, reloadCfg]);
+    reloadStyle();
+  }, [cid, sid, refreshKey, reloadWhen, reloadCfg, reloadStyle]);
 
   // the location section shows the primary image when the store has one
   useEffect(() => {
@@ -81,6 +88,16 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
       await api.setCalendarConfig(cid, {
         ...cfg, primary: { ...cfg.primary, provider }, confirmed: true });
       await reloadCfg();
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
+  }
+
+  async function chooseStyle(value: string) {
+    setStyleId(value);
+    setError(null);
+    try {
+      await api.setSceneStyle(cid, sid, value);
     } catch (err: any) {
       setError(err.detail ?? String(err));
     }
@@ -187,6 +204,14 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
             <button className="primary" onClick={moveTo} disabled={!locPick}>Move to</button>
           </div>
         )}
+      </div>
+
+      <div className="side-section">
+        <h4>Prose style</h4>
+        <select aria-label="Prose style" value={styleId} onChange={(e) => chooseStyle(e.target.value)}>
+          <option value="">— use campaign default —</option>
+          {styleOptions.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
       </div>
 
       <div className="side-section">
