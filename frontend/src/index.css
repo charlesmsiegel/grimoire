@@ -785,3 +785,20 @@ button.primary { background: var(--accent); color: var(--on-accent); border: var
 /* offscreen scenes: transient director note + badge */
 .director-note .msg-body { opacity: 0.65; font-style: italic; }
 .offscreen-badge { margin-left: 0.5em; }
+
+/* mechanics sheet editor: full takeover over the detail area (#161) */
+.sheet-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 39; }
+.sheet-takeover {
+  position: fixed; inset: 6% 14%; overflow-y: auto; z-index: 40;
+  border-radius: 8px; padding: 1rem 1.5rem;
+  background: var(--surface); color: var(--ink); border: var(--rw) solid var(--rule); box-shadow: var(--sh5);
+}
+.sheet-takeover h3 { margin: 4px 0 12px; font-family: var(--fd); }
+.sheet-takeover select {
+  background: var(--surface); color: var(--ink); border: var(--rw2) solid var(--rule);
+  padding: 6px 10px; font-family: var(--fm); font-size: 11px;
+}
+.sheet-view { display: flex; flex-direction: column; gap: 16px; }
+.sheet-row { font-size: 13px; padding: 2px 0; }
+.resource-inputs { display: flex; align-items: center; gap: 6px; }
+.resource-inputs input { width: 70px; }
