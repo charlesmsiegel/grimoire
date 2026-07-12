@@ -113,3 +113,12 @@ def test_bad_kind_and_eid_rejected(monkeypatch, tmp_path):
     with pytest.raises(sheets.SheetError):
         sheets.write(cid, "characters", "../escape", "medium", None)
     assert sheets.read(cid, "vehicles", "cart") is None
+
+
+def test_write_rejects_wrong_typed_arguments(monkeypatch, tmp_path):
+    _, cid = _campaign(monkeypatch, tmp_path)
+    with pytest.raises(sheets.SheetError):
+        sheets.write(cid, "characters", "mara", ["medium"], None)  # type: ignore[arg-type]
+    with pytest.raises(sheets.SheetError):
+        sheets.write(cid, "characters", "mara", "medium", [1, 2])  # type: ignore[arg-type]
+    assert sheets.read(cid, "characters", 7) is None  # type: ignore[arg-type]

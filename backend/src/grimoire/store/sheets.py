@@ -30,6 +30,8 @@ def sheet_kind(kind: str) -> str:
 
 
 def _safe_part(part: str) -> bool:
+    if not isinstance(part, str):
+        return False
     return bool(part) and part not in (".", "..") and "/" not in part and "\\" not in part
 
 
@@ -174,6 +176,8 @@ def _checked_write(path: Path, mid: str, file_kind: str, eid: str,
         raise SheetError(f"unknown sheet kind {file_kind!r}")
     if not _safe_part(eid):
         raise SheetError(f"bad entity id {eid!r}")
+    if not isinstance(sheet_type, str) or not sheet_type:
+        raise SheetError("sheet_type must be a non-empty string")
     sheets_def = modules.load_pack(mid)["sheets"]
     st = sheets_def.get("sheet_types", {}).get(sheet_type)
     if not isinstance(st, dict):
@@ -185,6 +189,8 @@ def _checked_write(path: Path, mid: str, file_kind: str, eid: str,
     if fields is None:
         fields = default_fields(sheets_def, sheet_type)
     else:
+        if not isinstance(fields, dict):
+            raise SheetError("fields must be an object")
         allowed = {f.get("key") for f in modules.assembled_fields(sheets_def, sheet_type)
                    if isinstance(f, dict)}
         fields = {k: v for k, v in fields.items() if k in allowed}
