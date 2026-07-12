@@ -1,0 +1,57 @@
+{
+  "groups": {
+    "attributes": {
+      "label": "Attributes",
+      "fields": [
+        {"key": "strength", "label": "Strength", "type": "number", "default": 10, "min": 1, "max": 20},
+        {"key": "dexterity", "label": "Dexterity", "type": "number", "default": 10, "min": 1, "max": 20},
+        {"key": "mind", "label": "Mind", "type": "number", "default": 10, "min": 1, "max": 20}
+      ],
+      "derived": {
+        "str_mod": "floor((strength - 10) / 2)",
+        "dex_mod": "floor((dexterity - 10) / 2)",
+        "mind_mod": "floor((mind - 10) / 2)"
+      }
+    },
+    "skills": {
+      "label": "Skills",
+      "fields": [
+        {"key": "athletics", "label": "Athletics", "type": "number", "default": 0},
+        {"key": "stealth", "label": "Stealth", "type": "number", "default": 0},
+        {"key": "arcana", "label": "Arcana", "type": "number", "default": 0}
+      ]
+    }
+  },
+  "sheet_types": {
+    "warrior": {
+      "label": "Warrior",
+      "kind": "characters",
+      "groups": ["attributes", "skills"],
+      "fields": [
+        {"key": "hp", "label": "Hit Points", "type": "resource", "max": 12},
+        {"key": "gear", "label": "Gear", "type": "list"}
+      ],
+      "derived": {"melee_bonus": "str_mod + 2"}
+    },
+    "adept": {
+      "label": "Adept",
+      "kind": "characters",
+      "groups": ["attributes", "skills"],
+      "fields": [
+        {"key": "hp", "label": "Hit Points", "type": "resource", "max": 8},
+        {"key": "spell_slots", "label": "Spell Slots", "type": "track", "max": 4}
+      ],
+      "derived": {"spell_bonus": "mind_mod + 2"}
+    },
+    "wondrous-item": {
+      "label": "Wondrous Item",
+      "kind": "items",
+      "groups": [],
+      "fields": [
+        {"key": "charges", "label": "Charges", "type": "resource", "max": 3},
+        {"key": "bonus", "label": "Bonus", "type": "number", "default": 1},
+        {"key": "quirk", "label": "Quirk", "type": "text"}
+      ]
+    }
+  }
+}

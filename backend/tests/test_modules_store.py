@@ -576,3 +576,24 @@ def test_create_module_newline_name_scaffolds_valid(monkeypatch, tmp_path):
     pack = modules.load_pack(mid)
     assert pack["errors"] == []
     assert "dice" not in pack["manifest"] or pack["manifest"].get("dice") != "1dbanana"
+
+
+def test_builtin_reference_modules_validate(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)  # built-ins resolve package-relative
+    for mid in ("d20-basic", "pool-basic"):
+        pack = modules.load_pack(mid)
+        assert pack["errors"] == [], f"{mid}: {pack['errors']}"
+        assert pack["source"] == "builtin"
+        kinds = {t["kind"] for t in pack["sheets"]["sheet_types"].values()}
+        char_types = [t for t in pack["sheets"]["sheet_types"].values()
+                      if t["kind"] == "characters"]
+        assert len(char_types) >= 2
+        assert kinds - {"characters"}          # at least one non-character type
+        assert pack["checks"]
+        flags = {f for r in pack["rules"]
+                 for f in ("always", "on_roll") if r[f]}
+        assert flags == {"always", "on_roll"}
+        assert any(r["keys"] for r in pack["rules"])
+        assert any(r["sheet_types"] for r in pack["rules"])
+        assert any(c["sheet_type"] for c in pack["content"])
+    assert {m["id"] for m in modules.list_modules()} >= {"d20-basic", "pool-basic"}

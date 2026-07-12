@@ -1,0 +1,13 @@
+{
+  "brawl": {
+    "label": "Vigor + Brawl",
+    "roll": "{vigor + brawl}d10 t6",
+    "requires": ["attributes", "abilities"],
+    "rules": ["combat"]
+  },
+  "perception": {
+    "label": "Wits + Occult",
+    "roll": "{wits + occult}d10 t6",
+    "requires": ["attributes", "abilities"]
+  }
+}
