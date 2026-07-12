@@ -235,3 +235,19 @@ def test_non_string_derived_expression(monkeypatch, tmp_path):
         monkeypatch, tmp_path,
         lambda s: s["groups"]["attributes"]["derived"].update(bad=5))
     assert any("must be a string" in e for e in errs)
+
+
+def test_unhashable_field_key_in_group(monkeypatch, tmp_path):
+    errs = _sheets_error(
+        monkeypatch, tmp_path,
+        lambda s: s["groups"]["attributes"]["fields"].append(
+            {"key": ["x"], "type": "number"}))
+    assert any("missing key" in e for e in errs)
+
+
+def test_unhashable_field_key_in_sheet_type(monkeypatch, tmp_path):
+    errs = _sheets_error(
+        monkeypatch, tmp_path,
+        lambda s: s["sheet_types"]["warden"]["fields"].append(
+            {"key": ["x"], "type": "number"}))
+    assert any("missing key" in e for e in errs)
