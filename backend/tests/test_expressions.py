@@ -63,3 +63,24 @@ def test_unknown_name_at_eval():
 def test_parse_error_names_construct():
     with pytest.raises(expressions.ExpressionError, match="Attribute"):
         expressions.parse("a.b")
+
+
+def test_short_circuit_and_or():
+    assert expressions.evaluate("a > 0 and b > 0", {"a": -1, "b": 0}) is False
+    assert expressions.evaluate("a > 0 and b > 0", {"a": -1}) is False  # b never evaluated
+    assert expressions.evaluate("a > 0 or b > 0", {"a": 1}) is True
+
+
+@pytest.mark.parametrize("text,scope", [
+    ("1 / a", {"a": 0}),
+    ("min()", {}),
+])
+def test_runtime_errors_become_expression_errors(text, scope):
+    with pytest.raises(expressions.ExpressionError):
+        expressions.evaluate(text, scope)
+
+
+@pytest.mark.parametrize("text", ["+a", "True", "min(a, b=1)"])
+def test_spec_whitelist_is_exact(text):
+    with pytest.raises(expressions.ExpressionError):
+        expressions.parse(text)

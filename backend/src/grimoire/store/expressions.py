@@ -21,7 +21,7 @@ _FUNCS = {"min": min, "max": max, "floor": math.floor, "ceil": math.ceil, "abs":
 _ALLOWED_NODES = (
     ast.Expression, ast.BinOp, ast.UnaryOp, ast.BoolOp, ast.Compare,
     ast.IfExp, ast.Call, ast.Name, ast.Load, ast.Constant,
-    ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.USub, ast.UAdd,
+    ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.USub,
     ast.And, ast.Or, ast.Not,
     ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE,
 )
@@ -38,7 +38,7 @@ def parse(text: str) -> ast.Expression:
             raise ExpressionError(
                 f"forbidden construct {type(node).__name__} in {text!r}"
             )
-        if isinstance(node, ast.Constant) and not isinstance(node.value, (int, float)):
+        if isinstance(node, ast.Constant) and (not isinstance(node.value, (int, float)) or isinstance(node.value, bool)):
             raise ExpressionError(f"non-numeric literal in {text!r}")
         if isinstance(node, ast.Call):
             if not isinstance(node.func, ast.Name) or node.func.id not in _FUNCS:
@@ -69,7 +69,7 @@ def _eval(node: ast.AST, scope: dict) -> int | float | bool:
         return scope[node.id]
     if isinstance(node, ast.UnaryOp):
         v = _eval(node.operand, scope)
-        return -v if isinstance(node.op, ast.USub) else (not v if isinstance(node.op, ast.Not) else +v)
+        return -v if isinstance(node.op, ast.USub) else (not v if isinstance(node.op, ast.Not) else None)  # type: ignore
     if isinstance(node, ast.BinOp):
         a, b = _eval(node.left, scope), _eval(node.right, scope)
         if isinstance(node.op, ast.Add):
@@ -82,8 +82,14 @@ def _eval(node: ast.AST, scope: dict) -> int | float | bool:
             return a / b
         return a // b  # FloorDiv (only remaining allowed BinOp)
     if isinstance(node, ast.BoolOp):
-        vals = [_eval(v, scope) for v in node.values]
-        return all(vals) if isinstance(node.op, ast.And) else any(vals)
+        result = _eval(node.values[0], scope)
+        for v in node.values[1:]:
+            if isinstance(node.op, ast.And) and not result:
+                return result
+            if isinstance(node.op, ast.Or) and result:
+                return result
+            result = _eval(v, scope)
+        return result
     if isinstance(node, ast.Compare):
         left = _eval(node.left, scope)
         for op, comp in zip(node.ops, node.comparators):
@@ -109,4 +115,9 @@ def _eval(node: ast.AST, scope: dict) -> int | float | bool:
 
 
 def evaluate(text: str, scope: dict[str, int | float]) -> int | float | bool:
-    return _eval(parse(text), scope)
+    try:
+        return _eval(parse(text), scope)
+    except ExpressionError:
+        raise
+    except (ZeroDivisionError, TypeError, ValueError) as e:
+        raise ExpressionError(f"cannot evaluate {text!r}: {e}") from None
