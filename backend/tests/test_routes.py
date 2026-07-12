@@ -2851,3 +2851,48 @@ def test_create_campaign_with_module(client):
     assert client.post(
         "/api/campaigns",
         json={"name": "Broken", "world": "w", "module": "ghost"}).status_code == 404
+
+
+# ---- styles ----
+def test_style_crud_and_builtin_list(client):
+    r = client.get("/api/styles").json()
+    ids = {s["id"] for s in r}
+    assert "gothic-horror" in ids
+    assert all(s["built_in"] for s in r if s["id"] == "gothic-horror")
+
+    r = client.post("/api/styles", json={"name": "Cozy Mystery", "description": "Gentle.",
+                                         "tags": ["cozy"], "body": "Keep it warm."})
+    assert r.status_code == 200
+    sid = r.json()["id"]
+
+    detail = client.get(f"/api/styles/{sid}").json()
+    assert detail["meta"]["name"] == "Cozy Mystery"
+    assert detail["meta"]["built_in"] is False
+    assert detail["body"].strip() == "Keep it warm."
+
+    assert client.put(f"/api/styles/{sid}", json={"body": "Warmer."}).status_code == 200
+    assert client.get(f"/api/styles/{sid}").json()["body"].strip() == "Warmer."
+
+    assert client.delete(f"/api/styles/{sid}").status_code == 200
+    assert client.get(f"/api/styles/{sid}").status_code == 404
+
+
+def test_style_unknown_id_404(client):
+    assert client.get("/api/styles/nope-not-real").status_code == 404
+    assert client.put("/api/styles/nope-not-real", json={"body": "x"}).status_code == 404
+    assert client.delete("/api/styles/nope-not-real").status_code == 404
+
+
+def test_builtin_style_cannot_be_edited_or_deleted(client):
+    assert client.put("/api/styles/gothic-horror", json={"body": "nope"}).status_code == 400
+    assert client.delete("/api/styles/gothic-horror").status_code == 400
+
+
+def test_duplicate_style_creates_an_editable_copy(client):
+    r = client.post("/api/styles/gothic-horror/duplicate")
+    assert r.status_code == 200
+    new_id = r.json()["id"]
+    detail = client.get(f"/api/styles/{new_id}").json()
+    assert detail["meta"]["built_in"] is False
+    assert detail["meta"]["name"] == "Gothic Horror (copy)"
+    assert client.put(f"/api/styles/{new_id}", json={"body": "edited"}).status_code == 200

@@ -45,6 +45,20 @@ class DataDirUpdate(BaseModel):
     data_dir: str | None = None
 
 
+class StyleCreate(BaseModel):
+    name: str
+    description: str = ""
+    tags: list[str] = []
+    body: str = ""
+
+
+class StyleUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    tags: list[str] | None = None
+    body: str | None = None
+
+
 class RegenerateBody(BaseModel):
     guidance: str | None = None
 
@@ -354,6 +368,56 @@ def delete_module(mid: str):
     except store.modules.ModuleError:
         raise HTTPException(status_code=400, detail="built-in modules cannot be deleted")
     return {"ok": True}
+
+
+# ---- styles ----
+@router.get("/styles")
+def get_styles():
+    return store.styles.list_styles()
+
+
+@router.post("/styles")
+def post_style(body: StyleCreate):
+    return {"id": store.styles.create_style(body.name, body.description, body.tags, body.body)}
+
+
+@router.get("/styles/{sid}")
+def get_style(sid: str):
+    try:
+        return store.styles.read_style(sid)
+    except store.styles.StyleNotFound:
+        raise HTTPException(status_code=404, detail="style not found")
+
+
+@router.put("/styles/{sid}")
+def put_style(sid: str, body: StyleUpdate):
+    try:
+        store.styles.update_style(sid, name=body.name, description=body.description,
+                                  tags=body.tags, body=body.body)
+    except store.styles.StyleNotFound:
+        raise HTTPException(status_code=404, detail="style not found")
+    except store.styles.BuiltInStyleImmutable:
+        raise HTTPException(status_code=400, detail="built-in styles can't be edited — duplicate it first")
+    return {"ok": True}
+
+
+@router.delete("/styles/{sid}")
+def delete_style(sid: str):
+    try:
+        store.styles.delete_style(sid)
+    except store.styles.StyleNotFound:
+        raise HTTPException(status_code=404, detail="style not found")
+    except store.styles.BuiltInStyleImmutable:
+        raise HTTPException(status_code=400, detail="built-in styles can't be deleted")
+    return {"ok": True}
+
+
+@router.post("/styles/{sid}/duplicate")
+def post_style_duplicate(sid: str):
+    try:
+        return {"id": store.styles.duplicate_style(sid)}
+    except store.styles.StyleNotFound:
+        raise HTTPException(status_code=404, detail="style not found")
 
 
 # ---- worlds ----
