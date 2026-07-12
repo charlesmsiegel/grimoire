@@ -89,6 +89,8 @@ def create_campaign(name: str, world_id: str, region: str | None = None,
     # (store/overlay.py) and sync.md tracks bases for materialized records only
     write_manifest(cid, {})
     calendars.copy_calendar(worlds.world_root(world_id), root)
+    from . import sheets
+    sheets.seed(cid)
     if region is not None or calendar is not None:
         cfg = calendars.read_calendar(root)
         if calendar is not None:
