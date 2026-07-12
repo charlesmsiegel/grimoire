@@ -130,10 +130,12 @@ dropped.
            "resolution": null}}
 ```
 
-- Ids are **collision-resistant** (`"pr-" + uuid4().hex[:16]`), never a
-  file counter — a corrupted/rebuilt proposals.json can therefore never
-  mint an id that matches an old proposal-tagged roll entry. All writes
-  are **atomic** (write temp file in the same directory, `os.replace`).
+- Ids are **collision-resistant** (`"pr-" + uuid4().hex`, the full 122
+  random bits — probabilistically unique, which is what lets a
+  proposal-tag match on a roll entry be treated as proof), never a file
+  counter — a corrupted/rebuilt proposals.json cannot re-mint an old id.
+  All writes are **atomic** (temp file in the same directory,
+  `os.replace`).
 - `new(cid, sid, payload) -> record` — supersedes any existing
   non-terminal record for the scene (only the latest record per scene is
   kept, with its status).
@@ -267,29 +269,49 @@ rolls.
        (`checks.format_check_roll`, a pure function of the stored
        resolution). Retry appends only when no `ROLL_SPEAKER` message
        with exactly that content exists at index ≥ `line_intent`.
-       Within any retryable state the projection is the scene's only
-       writer (new sends supersede and end retryability), so
-       intent-index + exact content is a sound compound key; the sole
-       residual collision — a *manual* roll landing at that index with
-       byte-identical content after a crash — skips one visually
-       identical line while the roll log keeps both entries, which is
-       acceptable. Exactly one tagged roll entry and (up to that
-       documented corner) exactly one 🎲 line survive any failure point.
+       **The entire projection sequence runs while holding the
+       per-campaign proposals lock** (it is pure file I/O, no LLM):
+       concurrent retries of the same resolved proposal serialize, so
+       find-and-append can never race itself — the second retry sees
+       the first's roll tag and line inside the lock. Within any
+       retryable state the projection is thus the scene's only writer
+       (new sends supersede and end retryability; concurrent retries
+       serialize), making intent-index + exact content a sound compound
+       key; the sole residual collision — a *manual* roll landing at
+       that index with byte-identical content after a crash — skips one
+       visually identical line while the roll log keeps both entries,
+       which is acceptable. Exactly one tagged roll entry and (up to
+       that documented corner) exactly one 🎲 line survive any failure
+       point. Two concurrent retries may both *stream* a continuation
+       (duplicate LLM cost, bounded), but `commit_narration` lets only
+       the first persist — the loser's text is dropped.
     4. Stream the continuation, then commit it atomically — see
        Continuation commit below.
 
     **Continuation commit.** The continuation's `_persist_reply` and the
     `→ narrated` transition happen together under the proposals
     per-campaign lock via `proposals.commit_narration(cid, sid, pid,
-    persist) -> bool`: holding the lock, it re-validates that the record
-    still carries this id with status `resolved`/`declined`, invokes the
-    persist callback, and writes `narrated` before releasing. A
-    supersede that lands while the continuation is still streaming
-    therefore wins cleanly: the commit re-validation fails and the
-    streamed text is **dropped, never persisted** — no stale narration
-    can appear after newer player input. (New sends take the same lock
-    for their supersede, so the two orders serialize; the lock is held
-    only around the persist itself, never during LLM streaming.)
+    persist) -> bool`: holding the lock, it (1) re-validates that the
+    record still carries this id with status `resolved`/`declined`;
+    (2) **crash recovery** — if the record already carries a
+    `narration_intent` (a previous commit attempt crashed mid-persist),
+    trim the scene's messages back to that index, discarding the
+    partial continuation; (3) writes `narration_intent = <current
+    message count>` into the record (atomic file replace); (4) invokes
+    the persist callback (the transcript appends); (5) writes
+    `narrated`. Any crash leaves the record retryable with an intent
+    marker, and the retry's trim step removes whatever partial
+    narration landed — continuation persistence is idempotent across
+    both files without a cross-file transaction. A supersede that lands
+    while the continuation is still streaming wins cleanly: the commit
+    re-validation fails and the streamed text is **dropped, never
+    persisted** — no stale narration can appear after newer player
+    input. (New sends take the same lock for their supersede, so the
+    two orders serialize; the lock is held only around trim + persist,
+    never during LLM streaming. Trimming requires a
+    `scenes.truncate_messages(cid, sid, count)` helper — messages past
+    `count` are removed; safe because the intent marker guarantees
+    everything past it is our own partial continuation.)
   - `resolving` (someone else holds the claim) → 409.
   - `pending` + decline: status `declined` (same CAS discipline); stream
     the declined continuation; then `narrated`.
