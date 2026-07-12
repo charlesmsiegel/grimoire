@@ -223,11 +223,12 @@ Every rolls.json writer — proposal projection, the manual check route,
 and the Phase-2 manual roll route — goes through `rolls.append`, which
 becomes **internally atomic**: a per-campaign lock (module-local, same
 pattern as the proposals lock) around the read-assign-id-rewrite, and
-atomic temp-file+`os.replace` writes. `rolls.find_by_proposal` and a
+atomic temp-file+`os.replace` writes. `rolls.find_by_proposal`, a
 combined `rolls.find_or_append_by_proposal(cid, sid, label, result,
-proposal)` take the same lock, so a manual check racing a proposal
-projection can never mint the same positional id or clobber the other's
-entry. (Route test: concurrent proposal-accept vs manual check → two
+proposal)`, **and the pre-existing `rolls.repoint_scenes` (scene
+reordering's read-modify-write)** take the same lock, so no writer can
+mint a duplicate positional id or clobber another's entry with a stale
+snapshot. `replay` is read-only. (Route test: concurrent proposal-accept vs manual check → two
 distinct entries, both preserved, distinct ids.)
 
 ### Crash-window disclosure (accepted risk)

@@ -745,10 +745,17 @@ around the read-assign-id-rewrite, writing via temp-file+`os.replace`.
 `find_or_append_by_proposal(cid, sid, label, result, proposal)` does the
 find-else-append as one locked operation — the projection uses THIS, not
 a separate find+append. Every existing `rolls.append` caller keeps
-working unchanged (the lock is internal). Tests: concurrent appends from
-8 threads → 8 distinct sequential ids, no lost entries; concurrent
+working unchanged (the lock is internal). **The complete rolls.json
+writer inventory joins the lock: `append`, `find_by_proposal`,
+`find_or_append_by_proposal`, AND the existing `repoint_scenes`** (a
+read-modify-write used by scene reordering — without the lock it can
+overwrite a concurrent append with its stale snapshot). `replay` is
+read-only and needs no lock. Tests: concurrent appends from 8 threads →
+8 distinct sequential ids, no lost entries; concurrent
 `find_or_append_by_proposal` for the same pid → exactly one tagged
-entry.
+entry; concurrent `repoint_scenes` vs `append` (thread each; several
+iterations) → the appended roll survives AND repointed entries carry
+the new scene id.
 
 checks.py core (structure; reuse `sheets._numeric_scope`/`sheets._compute_derived`
 via public wrappers — if they are private, add a public
