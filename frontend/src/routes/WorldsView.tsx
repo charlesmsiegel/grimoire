@@ -5,7 +5,11 @@ import { api, type WorldMeta } from "../api/client";
 function footerLabel(counts: Record<string, number> | undefined): string {
   const c = counts ?? {};
   const chars = (c.characters ?? 0) + (c.pcs ?? 0);
-  return `${c.locations ?? 0} LOCATIONS · ${chars} CHARACTERS · ${c.lore ?? 0} LORE`;
+  const parts = [`${c.locations ?? 0} LOCATIONS`, `${chars} CHARACTERS`, `${c.lore ?? 0} LORE`];
+  for (const [key, label] of [["items", "ITEMS"], ["groups", "GROUPS"], ["creatures", "CREATURES"]] as const) {
+    if (c[key]) parts.push(`${c[key]} ${label}`);
+  }
+  return parts.join(" · ");
 }
 
 export default function WorldsView() {

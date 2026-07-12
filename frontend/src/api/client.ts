@@ -76,7 +76,7 @@ export type Message = { role: "user" | "assistant"; content: string; speaker?: s
 export type Scene = { meta: { id: string; title: string }; messages: Message[] };
 
 // entities (locations | lore)
-export type EntityKind = "locations" | "lore";
+export type EntityKind = "locations" | "lore" | "items" | "groups" | "creatures";
 export type EntityScope = { kind: "world" | "campaign"; id: string };
 export type EntitySummary = { id: string; name: string; keys?: string; owners?: string; has_image?: boolean; image_v?: string | null };
 export type EntityDetail = {
