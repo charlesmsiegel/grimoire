@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import re
 
-from . import appearances, campaigns, dice, entities, expressions, modules, overlay, sheets
+from . import (appearances, campaigns, characters, dice, entities, expressions,
+               modules, overlay, pcs, sheets)
 
 
 class CheckError(Exception):
@@ -89,8 +90,20 @@ def _actor_label(cid: str, kind: str, eid: str) -> str:
     """Display name for an actor/entity reference; falls back to the id."""
     if kind in appearances.ACTOR_KINDS:
         vid = appearances.locked_version(cid, kind, eid)
-        name = appearances._actor_name(campaigns.campaign_root(cid), kind, eid, vid)
-        return name or eid
+        if vid is not None:
+            name = appearances._actor_name(campaigns.campaign_root(cid), kind, eid, vid)
+            return name or eid
+        # Never appeared: no locked version (and possibly no campaign copy).
+        # A None vid must not reach read_card/read_persona (TypeError); the
+        # container meta carries the name without needing any version.
+        try:
+            root = overlay.actor_root(cid, kind, eid)
+            if kind == "pcs":
+                return pcs.read_pc(root, eid)["meta"].get("name") or eid
+            return characters.read_character(root, eid)["meta"].get("name") or eid
+        except (pcs.PCNotFound, pcs.PCVersionNotFound,
+                characters.CharacterNotFound, characters.VersionNotFound):
+            return eid
     try:
         return overlay.read_entity(cid, kind, eid)["meta"].get("name") or eid
     except entities.EntityNotFound:
