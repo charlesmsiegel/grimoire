@@ -14,7 +14,8 @@
     Data vars (see README.md for how each is gathered):
       global_system_prompt, npc_cards, states, relationship_lines, players,
       ref_names, refs, story_entries, plot_lines, today, current_setting,
-      world_info_bodies, offscene_active, offscene_known, player_names
+      world_info_bodies, group_states, offscene_active, offscene_known,
+      player_names
 
     Note: {{user}}/{{char}} token substitution is applied by code to the card
     and history data, not here. -#}
@@ -61,6 +62,9 @@
 {%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
 
 {%- set s -%}{%- include "scene/sections/world_info.j2" -%}{%- endset -%}
+{%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
+
+{%- set s -%}{%- include "scene/sections/group_state.j2" -%}{%- endset -%}
 {%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
 
 {%- set s -%}{%- include "scene/sections/off_scene_cast.j2" -%}{%- endset -%}

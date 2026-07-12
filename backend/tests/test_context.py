@@ -680,3 +680,49 @@ def test_response_format_section_lists_players(monkeypatch, tmp_path):
     sections = {s["label"]: s["text"] for s in context.context_sections(cid, sid)}
     assert "Write your reply as a script" in sections["Response format"]
     assert "Elara Vane" in sections["Response format"]
+
+
+from grimoire.store import groupstate  # noqa: E402
+
+
+def test_group_state_rides_group_activation(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "groups", "Salt Circle", "A quiet cabal.")  # keyless -> always-on
+    groupstate.write_state(croot, "salt-circle", "## Goals\nFind the ledger.")
+    scenes.append_message(cid, sid, "user", "hello")
+    text = context.build_messages(cid, sid)[0]["content"]
+    assert "A quiet cabal." in text
+    assert "Find the ledger." in text
+    assert "# Group state" in text
+
+
+def test_keyed_group_state_absent_when_group_inactive(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "groups", "Salt Circle", "A quiet cabal.", keys="cabal")
+    groupstate.write_state(croot, "salt-circle", "## Goals\nFind the ledger.")
+    scenes.append_message(cid, sid, "user", "nothing relevant")
+    text = context.build_messages(cid, sid)[0]["content"]
+    assert "A quiet cabal." not in text
+    assert "Find the ledger." not in text
+
+
+def test_group_without_state_adds_no_section(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "groups", "Salt Circle", "A quiet cabal.")
+    scenes.append_message(cid, sid, "user", "hello")
+    text = context.build_messages(cid, sid)[0]["content"]
+    assert "A quiet cabal." in text
+    assert "# Group state" not in text
+
+
+def test_group_state_in_context_sections(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "groups", "Salt Circle", "A quiet cabal.")
+    groupstate.write_state(croot, "salt-circle", "## Goals\nFind the ledger.")
+    scenes.append_message(cid, sid, "user", "hello")
+    labels = [s["label"] for s in context.context_sections(cid, sid)]
+    assert "Group state" in labels

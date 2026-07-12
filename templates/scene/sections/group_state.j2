@@ -1,0 +1,17 @@
+{#- Campaign group state for groups activated into world-info: "Name:" then
+    indented "Label: value" lines per non-empty section (multi-line values
+    re-indented). Vars: group_states ([{name, goals, resources, focus,
+    public_perception, secrets}]). -#}
+{%- set lines = [] -%}
+{%- for st in group_states -%}
+{%- set parts = [] -%}
+{%- for label, value in [("Goals", st.goals), ("Resources", st.resources), ("Focus", st.focus), ("Public perception", st.public_perception), ("Secrets", st.secrets)] -%}
+{%- if value.strip() -%}{%- set _ = parts.append("  " ~ label ~ ": " ~ value.strip().replace("\n", "\n    ")) -%}{%- endif -%}
+{%- endfor -%}
+{%- if parts -%}
+{%- set _ = lines.append(st.name ~ ":") -%}
+{%- for p in parts -%}{%- set _ = lines.append(p) -%}{%- endfor -%}
+{%- endif -%}
+{%- endfor -%}
+{%- if lines %}# Group state
+{{ lines | join("\n") }}{% endif -%}

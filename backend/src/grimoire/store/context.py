@@ -14,7 +14,7 @@ import re
 
 from .. import prompts
 from . import (appearances, calendars, campaigns, characters, chronicle,
-               config, dossiers, entities, overlay, pcs, playstate, plot, relationships, scenes)
+               config, dossiers, entities, groupstate, overlay, pcs, playstate, plot, relationships, scenes)
 
 
 def activate(entries: list[dict], recent_text: str, present: frozenset = frozenset()) -> list[dict]:
@@ -105,8 +105,10 @@ def _campaign_player_refs(cid: str, croot) -> tuple[list[dict], list[str]]:
 
 
 def _world_info(cid: str, recent_text: str, exclude: frozenset = frozenset(),
-                present: frozenset = frozenset()) -> list[str]:
-    """Bodies of the activated lore/location entries (the template joins them)."""
+                present: frozenset = frozenset()) -> list[dict]:
+    """Activated lore/location/item/group/creature entries as
+    {"body", "kind", "id"} dicts — _assemble renders the bodies and uses the
+    refs (e.g. activated groups pull their campaign state into context)."""
     entries = []
     for kind in ("lore", "locations", "items", "groups", "creatures"):
         for meta in overlay.list_entities(cid, kind):
@@ -117,8 +119,10 @@ def _world_info(cid: str, recent_text: str, exclude: frozenset = frozenset(),
             owners = [o.strip() for o in e["meta"].get("owners", "").split(",") if o.strip()]
             if kind == "locations" and not keys:
                 continue  # a keyless location surfaces only as the current setting, never always-on
-            entries.append({"body": e["body"].strip(), "keys": keys, "owners": owners})
-    return [e["body"] for e in activate(entries, recent_text, present)]
+            entries.append({"body": e["body"].strip(), "keys": keys, "owners": owners,
+                            "kind": kind, "id": meta["id"],
+                            "name": e["meta"].get("name", meta["id"])})
+    return activate(entries, recent_text, present)
 
 
 OPENER_RECAP_DEPTH = 5  # opener recap: full summaries of the last N scenes
@@ -238,6 +242,22 @@ def _character_states(croot, cast) -> list[dict]:
         return []
 
 
+def _group_states(cid: str, croot, activated: list[dict]) -> list[dict]:
+    """State for each activated group that has a state.md — same failure policy
+    as _character_states: a garbled file omits the block, never crashes."""
+    try:
+        out = []
+        for e in activated:
+            if e["kind"] != "groups":
+                continue
+            st = groupstate.read_state(croot, e["id"])
+            if st and any(st[k] for k in groupstate.FIELDS):
+                out.append({"name": e["name"], **st})
+        return out
+    except Exception:  # noqa: BLE001 — garbled state: omit, don't crash the context build
+        return []
+
+
 def _relationship_lines(cid: str, cast) -> list[str]:
     try:
         tokens = [f"{a['kind']}:{a['id']}" for a in cast]
@@ -334,6 +354,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0) -> dic
         present |= {f"locations:{current_loc}"}
 
     offscene_active, offscene_known = _cast_directory_data(croot, cid, sid)
+    activated_wi = _world_info(cid, recent_text, exclude, frozenset(present))
     data = {
         "opener": False, "pcless": pcless, "story_full": bool(full_recap),
         "global_system_prompt": config.read_config().get("system_prompt", ""),
@@ -345,7 +366,8 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0) -> dic
         "plot_lines": plot.render_open(cid, with_id=False),
         "today": _today_data(cid, sid, croot),
         "current_setting": current_setting,
-        "world_info_bodies": _world_info(cid, recent_text, exclude, frozenset(present)),
+        "world_info_bodies": [e["body"] for e in activated_wi],
+        "group_states": _group_states(cid, croot, activated_wi),
         "offscene_active": offscene_active, "offscene_known": offscene_known,
         "player_names": player_names,
     }
@@ -408,6 +430,7 @@ _SECTIONS = [
     ("Today", "scene/sections/today.j2", False),
     ("Current setting", "scene/sections/current_setting.j2", False),
     ("World info", "scene/sections/world_info.j2", False),
+    ("Group state", "scene/sections/group_state.j2", False),
     ("Off-scene cast", "scene/sections/off_scene_cast.j2", False),
     ("Response format", "scene/sections/response_format.j2", False),
 ]
