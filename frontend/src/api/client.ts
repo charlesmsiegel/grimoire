@@ -1,4 +1,4 @@
-import { parseSSEChunk, type ChatEvent, type LocalizeEvent, type ChubGalleryEvent } from "./stream";
+import { parseSSEChunk, type ChatEvent, type LocalizeEvent, type ChubGalleryEvent, type RollProposalPayload } from "./stream";
 
 export class ApiError extends Error {
   constructor(public status: number, public detail: string, public kind?: string) {
@@ -251,6 +251,9 @@ export type RollResult = {
 export type RollEntry = {
   id: string; ts: string; scene: string | null; label: string | null; result: RollResult;
 };
+export type ProposalRecord = { id: string; status: string; payload: RollProposalPayload; resolution: CheckResolution | null };
+export type CheckResolution = { check: string; check_label: string; actor: string; actor_label: string; notation: string; tier: string | null; difficulty: number | null; modifier: number; roll_id?: string };
+export type SceneCheckActor = { ref: string; label: string; sheet_type: string; checks: [string, string][] };
 
 // campaign group state (#47)
 export type GroupState = {
@@ -400,6 +403,20 @@ export const api = {
       "POST", `/api/campaigns/${cid}/scenes/${sid}/roll`,
       { notation, ...(label ? { label } : {}) }),
   listRolls: (cid: string) => request<RollEntry[]>("GET", `/api/campaigns/${cid}/rolls`),
+  getRollProposal: (cid: string, sid: string) =>
+    request<{ record: ProposalRecord | null }>("GET", `/api/campaigns/${cid}/scenes/${sid}/roll-proposal`),
+  resolveProposal: (cid: string, sid: string,
+                    body: { proposal: string; action: "accept" | "decline";
+                            check?: string; actor?: string;
+                            difficulty?: number; modifier?: number },
+                    onEvent: (e: ChatEvent) => void) =>
+    streamPost(`/api/campaigns/${cid}/scenes/${sid}/roll-proposal`, body, onEvent),
+  getSceneChecks: (cid: string, sid: string) =>
+    request<{ actors: SceneCheckActor[] }>("GET", `/api/campaigns/${cid}/scenes/${sid}/checks`),
+  rollCheck: (cid: string, sid: string,
+              body: { check: string; actor: string; difficulty?: number; modifier?: number }) =>
+    request<{ ok: boolean; resolution: CheckResolution; message: string }>(
+      "POST", `/api/campaigns/${cid}/scenes/${sid}/check`, body),
 
   getWorld: (wid: string) =>
     request<{ meta: WorldMeta; body: string; counts: Record<string, number> }>("GET", `/api/worlds/${wid}`),
