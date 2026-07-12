@@ -1,18 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { api, ENTITY_FIELDS, type EntityKind, type EntityScope, type EntitySummary } from "../api/client";
+import { api, ENTITY_FIELDS, type EntityKind, type EntityScope, type EntitySummary, type ModuleDetail } from "../api/client";
 import { loreOwnerOptions, type LoreOwner } from "../api/loreOwners";
 import { Field } from "./Field";
 import { GroupStatePanel } from "./GroupStatePanel";
 import { OwnedLorePanel } from "./OwnedLorePanel";
 import { Portrait } from "./Portrait";
+import SheetPanel from "./SheetPanel";
 
 export const KIND_LABELS: Record<EntityKind, string> = {
   locations: "location", lore: "lore entry", items: "item", groups: "group", creatures: "creature",
 };
 
-export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, onOpenOwner, onOpenLore }: {
+export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, onOpenOwner, onOpenLore, module = null }: {
   wid: string;
   kind: EntityKind;
   scope?: EntityScope;
@@ -20,6 +21,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
   onNavConsumed?: () => void;
   onOpenOwner?: (ref: string) => void;
   onOpenLore?: (nav: { focusEntry?: string; newOwner?: string }) => void;
+  module?: ModuleDetail | null;
 }) {
   const scope: EntityScope = scopeProp ?? { kind: "world", id: wid };
   const [items, setItems] = useState<EntitySummary[]>([]);
@@ -335,6 +337,9 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
               )}
               {kind === "groups" && scope.kind === "campaign" && editing && (
                 <GroupStatePanel cid={scope.id} gid={editing} />
+              )}
+              {module && editing && (
+                <SheetPanel scope={scope} module={module} kind={kind} eid={editing} />
               )}
             </aside>
           </div>
