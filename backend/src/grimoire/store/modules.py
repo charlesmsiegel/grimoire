@@ -170,16 +170,22 @@ def _validate_checks(checks: dict, sheets: dict, rule_ids: set[str],
                      errors: list[str]) -> None:
     groups = sheets.get("groups", {})
     for cid, check in checks.items():
+        if not isinstance(check, dict):
+            errors.append(f"checks.{cid}: must be an object")
+            continue
         where = f"checks.{cid}"
         if not check.get("label"):
             errors.append(f"{where}: missing label")
         scope: set[str] = set()
         for gid in check.get("requires", []):
-            if gid not in groups:
+            g = groups.get(gid)
+            if not isinstance(g, dict):
                 errors.append(f"{where}: unknown required group {gid!r}")
                 continue
-            scope |= numeric_names(groups[gid].get("fields", []))
-            scope |= set(groups[gid].get("derived", {}))
+            scope |= numeric_names(g.get("fields", []))
+            derived = g.get("derived", {})
+            if isinstance(derived, dict):
+                scope |= set(derived)
         roll = check.get("roll", "")
         exprs = _PLACEHOLDER.findall(roll)
         for expr in exprs:
@@ -213,7 +219,12 @@ def _load_rules(root: Path, sheets: dict, errors: list[str]) -> list[dict]:
         return out
     type_ids = set(sheets.get("sheet_types", {}))
     for p in sorted(rd.glob("*.md")):
-        meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
+        try:
+            text = p.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError) as e:
+            errors.append(f"rules/{p.stem}: {e}")
+            continue
+        meta, _ = parse_frontmatter(text)
         doc = {
             "id": p.stem,
             "keys": _split_csv(meta.get("keys", "")),
@@ -240,7 +251,12 @@ def _load_content(root: Path, sheets: dict, errors: list[str]) -> list[dict]:
             errors.append(f"content/{kind}: unknown kind")
             continue
         for p in sorted(kind_dir.glob("*.md")):
-            meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
+            try:
+                text = p.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError) as e:
+                errors.append(f"content/{kind}/{p.stem}: {e}")
+                continue
+            meta, _ = parse_frontmatter(text)
             entry = {"kind": kind, "id": p.stem,
                      "name": meta.get("name", p.stem), "sheet_type": None}
             sidecar = kind_dir / f"{p.stem}.sheet.json"
@@ -252,12 +268,13 @@ def _load_content(root: Path, sheets: dict, errors: list[str]) -> list[dict]:
                     errors.append(f"{where}: {e}")
                     stat = {}
                 tid = stat.get("sheet_type")
-                if tid not in type_defs:
+                td = type_defs.get(tid)
+                if not isinstance(td, dict):
                     errors.append(f"{where}: unknown sheet type {tid!r}")
-                elif type_defs[tid].get("kind") != kind:
+                elif td.get("kind") != kind:
                     errors.append(
                         f"{where}: sheet type {tid!r} targets kind "
-                        f"{type_defs[tid].get('kind')!r}, not {kind!r}")
+                        f"{td.get('kind')!r}, not {kind!r}")
                 else:
                     entry["sheet_type"] = tid
                     for e in validate_sheet_values(sheets, tid,
@@ -280,11 +297,11 @@ def validate_sheet_values(sheets: dict, type_id: str, values: dict) -> list[str]
         t = f["type"]
         if t == "resource":
             if (not isinstance(value, dict)
-                    or not isinstance(value.get("current"), int)
-                    or not isinstance(value.get("max"), int)):
+                    or not isinstance(value.get("current"), int) or isinstance(value.get("current"), bool)
+                    or not isinstance(value.get("max"), int) or isinstance(value.get("max"), bool)):
                 errors.append(f"{key}: resource needs a current/max pair")
         elif t in ("number", "dots", "track"):
-            if not isinstance(value, int):
+            if not isinstance(value, int) or isinstance(value, bool):
                 errors.append(f"{key}: expected an integer")
             elif t in ("dots", "track") and not 0 <= value <= f["max"]:
                 errors.append(f"{key}: outside 0..max")
@@ -352,7 +369,13 @@ def _validate_sheets(sheets: dict, errors: list[str]) -> None:
 def load_pack(mid: str) -> dict:
     root, source = pack_root(mid)
     errors: list[str] = []
-    meta, _body = parse_frontmatter((root / "module.md").read_text(encoding="utf-8"))
+    try:
+        module_text = (root / "module.md").read_text(encoding="utf-8")
+    except (UnicodeDecodeError, OSError) as e:
+        errors.append(f"module.md: {e}")
+        meta, _body = {}, ""
+    else:
+        meta, _body = parse_frontmatter(module_text)
     _validate_manifest(meta, errors)
     sheets: dict = {"groups": {}, "sheet_types": {}}
     sp = root / "sheets.json"
@@ -381,7 +404,11 @@ def load_pack(mid: str) -> dict:
             errors.append(f"checks.json: {e}")
             checks = {}
         else:
-            _validate_checks(checks, sheets, {r["id"] for r in rules}, errors)
+            if not isinstance(checks, dict):
+                errors.append("checks.json: must be an object of check definitions")
+                checks = {}
+            else:
+                _validate_checks(checks, sheets, {r["id"] for r in rules}, errors)
     content = _load_content(root, sheets, errors)
     pack = {
         "id": mid,
