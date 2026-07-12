@@ -247,6 +247,12 @@ export type RollEntry = {
   id: string; ts: string; scene: string | null; label: string | null; result: RollResult;
 };
 
+// campaign group state (#47)
+export type GroupState = {
+  goals: string; resources: string; focus: string;
+  public_perception: string; secrets: string; updated?: string;
+};
+
 function entityBase(scope: EntityScope): string {
   return scope.kind === "world" ? `/api/worlds/${scope.id}` : `/api/campaigns/${scope.id}`;
 }
@@ -590,4 +596,10 @@ export const api = {
   },
   lorebookImport: (wid: string, entries: LoreEntryDraft[]) =>
     request<{ created: { kind: string; id: string }[] }>("POST", `/api/worlds/${wid}/lorebook/import`, { entries }),
+
+  // campaign group state (#47)
+  getGroupState: (cid: string, gid: string) =>
+    request<GroupState>("GET", `/api/campaigns/${cid}/groups/${gid}/state`),
+  putGroupState: (cid: string, gid: string, state: Omit<GroupState, "updated">) =>
+    request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/groups/${gid}/state`, state),
 };

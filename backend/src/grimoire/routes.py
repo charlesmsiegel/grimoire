@@ -126,6 +126,14 @@ class TaglineSave(BaseModel):
     tagline: str = ""
 
 
+class GroupStateSave(BaseModel):
+    goals: str = ""
+    resources: str = ""
+    focus: str = ""
+    public_perception: str = ""
+    secrets: str = ""
+
+
 class AvatarFocus(BaseModel):
     focus: int
 
@@ -1145,6 +1153,38 @@ def _campaign_entity_delete(cid: str, kind: str, eid: str):
         raise HTTPException(status_code=404, detail="unknown kind")
     except store.entities.EntityNotFound:
         raise HTTPException(status_code=404, detail="entity not found")
+    return {"ok": True}
+
+
+# ---- group state (#47): campaign-local, not covered by generic entity CRUD
+# (path shape groups/{gid}/state cannot collide with /{kind}/{eid} or its
+# /images sub-paths, so order relative to the generic routes doesn't matter)
+@router.get("/campaigns/{cid}/groups/{gid}/state")
+def get_group_state(cid: str, gid: str):
+    if not store.campaigns.campaign_meta_path(cid).exists():
+        raise HTTPException(status_code=404, detail="campaign not found")
+    try:
+        store.overlay.read_entity(cid, "groups", gid)
+    except store.entities.EntityNotFound:
+        raise HTTPException(status_code=404, detail="group not found")
+    st = store.groupstate.read_state(store.campaigns.campaign_root(cid), gid)
+    if st is None:
+        return {**{k: "" for k in store.groupstate.FIELDS}, "updated": ""}
+    return st
+
+
+@router.put("/campaigns/{cid}/groups/{gid}/state")
+def put_group_state(cid: str, gid: str, body: GroupStateSave):
+    if not store.campaigns.campaign_meta_path(cid).exists():
+        raise HTTPException(status_code=404, detail="campaign not found")
+    try:
+        store.overlay.read_entity(cid, "groups", gid)
+    except store.entities.EntityNotFound:
+        raise HTTPException(status_code=404, detail="group not found")
+    values = {"goals": body.goals, "resources": body.resources, "focus": body.focus,
+              "public_perception": body.public_perception, "secrets": body.secrets}
+    store.groupstate.write_state(store.campaigns.campaign_root(cid), gid,
+                                 store.groupstate.compose_body(values))
     return {"ok": True}
 
 

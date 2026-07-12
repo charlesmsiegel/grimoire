@@ -4,6 +4,7 @@ import remarkGfm from "remark-gfm";
 import { api, ENTITY_FIELDS, type EntityKind, type EntityScope, type EntitySummary } from "../api/client";
 import { loreOwnerOptions, type LoreOwner } from "../api/loreOwners";
 import { Field } from "./Field";
+import { GroupStatePanel } from "./GroupStatePanel";
 import { OwnedLorePanel } from "./OwnedLorePanel";
 import { Portrait } from "./Portrait";
 
@@ -331,6 +332,9 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
                   onOpenEntry={(id) => onOpenLore({ focusEntry: id })}
                   onNewEntry={() => onOpenLore({ newOwner: `locations:${editing}` })}
                 />
+              )}
+              {kind === "groups" && scope.kind === "campaign" && editing && (
+                <GroupStatePanel cid={scope.id} gid={editing} />
               )}
             </aside>
           </div>
