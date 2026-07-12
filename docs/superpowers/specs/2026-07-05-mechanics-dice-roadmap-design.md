@@ -1,5 +1,15 @@
 # Mechanics & Dice — roadmap design
 
+> **Amended 2026-07-12**: the Phase-1 data contract is now fully specified in
+> `2026-07-12-mechanics-phase1-modules-design.md`, which supersedes this
+> document where they disagree — notably: modules define **multiple sheet
+> types** per entity kind (`sheets.json` with shared field groups, replacing
+> the single `sheet.json`); the module binds as a **world default with a
+> campaign tri-state override** (not campaign-only); world starting sheets
+> are keyed by module id; all entity kinds (including lore) are sheetable;
+> rules docs gain `always`/`on_roll`/`sheet_types` activation. Draft specs
+> for Phases 3–8 (same date prefix) update each phase sketch accordingly.
+
 Roadmap for milestone 18 (Mechanics & Dice, issues #822–829) plus #693
 (Item/Faction/Monster entity kinds). This document fixes the architecture
 spine and sequences the milestone into phases; each phase gets its own
