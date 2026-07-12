@@ -45,7 +45,7 @@ async function requestForm<T>(path: string, form: FormData, method = "POST"): Pr
 export type Config = {
   model: string; theme: string; key_set: boolean; system_prompt: string;
   quote_color: string; user_label: string; assistant_label: string;
-  provider: string; claude_model: string;
+  provider: string; claude_model: string; default_style_id: string;
 };
 export type DataDirInfo = {
   data_dir: string;
@@ -169,6 +169,9 @@ export type GreetingDraft = {
   predecessor_join?: "all" | "any";
   pcless?: boolean;
 };
+export type Style = { id: string; name: string; description: string; tags: string[]; built_in: boolean };
+export type StyleDetail = { meta: Style; body: string };
+export type StyleDraft = { name: string; description?: string; tags?: string[]; body?: string };
 export type Availability = {
   id: string; name: string; available: boolean; reasons: string[]; unlocked: boolean;
   pcless?: boolean;
@@ -329,7 +332,7 @@ export const api = {
     }
     return configCache;
   },
-  putConfig: (body: Partial<{ model: string; theme: string; openrouter_key: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string; provider: string; claude_model: string }>) =>
+  putConfig: (body: Partial<{ model: string; theme: string; openrouter_key: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string; provider: string; claude_model: string; default_style_id: string }>) =>
     request<Config>("PUT", "/api/config", body).then((cfg) => {
       configCache = Promise.resolve(cfg); // the write's response is the fresh config
       return cfg;
@@ -590,6 +593,20 @@ export const api = {
       `/api/${scope.kind === "campaign" ? "campaigns" : "worlds"}/${scope.id}/calendar/months?year=${year}`),
   setCalendarConfig: (cid: string, cfg: CalendarConfig) =>
     request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/calendar`, cfg),
+  listStyles: () => request<Style[]>("GET", "/api/styles"),
+  createStyle: (draft: StyleDraft) => request<{ id: string }>("POST", "/api/styles", draft),
+  readStyle: (sid: string) => request<StyleDetail>("GET", `/api/styles/${sid}`),
+  updateStyle: (sid: string, patch: Partial<StyleDraft>) =>
+    request<{ ok: boolean }>("PUT", `/api/styles/${sid}`, patch),
+  deleteStyle: (sid: string) => request<{ ok: boolean }>("DELETE", `/api/styles/${sid}`),
+  duplicateStyle: (sid: string) => request<{ id: string }>("POST", `/api/styles/${sid}/duplicate`),
+  getCampaignStyle: (cid: string) => request<{ style_id: string }>("GET", `/api/campaigns/${cid}/style`),
+  setCampaignStyle: (cid: string, style_id: string) =>
+    request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/style`, { style_id }),
+  getSceneStyle: (cid: string, sid: string) =>
+    request<{ style_id: string }>("GET", `/api/campaigns/${cid}/scenes/${sid}/style`),
+  setSceneStyle: (cid: string, sid: string, style_id: string) =>
+    request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/scenes/${sid}/style`, { style_id }),
   getSceneContext: (cid: string, sid: string) =>
     request<SceneContext>("GET", `/api/campaigns/${cid}/scenes/${sid}/context`),
   sceneSuggestions: (cid: string, after?: string, offscreen?: boolean) => {
