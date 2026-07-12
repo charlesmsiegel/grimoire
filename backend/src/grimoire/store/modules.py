@@ -16,7 +16,7 @@ import shutil
 from pathlib import Path
 
 from . import dice, expressions
-from .frontmatter import parse_frontmatter
+from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import home, slugify, uniquify
 
 class ModuleError(Exception):
@@ -498,12 +498,16 @@ def list_modules() -> list[dict]:
 
 def create_module(name: str) -> str:
     """Scaffold a minimal valid module pack in user_dir(), return its id."""
+    # Normalize: collapse newlines/whitespace, then default to "Untitled"
+    name = " ".join(name.split())
+    name = name or "Untitled"
     mid = uniquify(slugify(name), lambda i: (user_dir() / i).exists()
                    or (builtin_dir() / i / "module.md").exists())
     d = user_dir() / mid
     d.mkdir(parents=True)
     (d / "module.md").write_text(
-        f"---\nname: {name}\ndescription: \nversion: 0.1\n---\n", encoding="utf-8")
+        dump_frontmatter({"name": name, "description": "", "version": "0.1"}, ""),
+        encoding="utf-8")
     (d / "sheets.json").write_text(
         '{\n  "groups": {},\n  "sheet_types": {}\n}\n', encoding="utf-8")
     return mid

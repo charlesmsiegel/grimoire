@@ -558,3 +558,21 @@ def test_delete_builtin_refused(monkeypatch, tmp_path):
     assert modules.load_pack("stock")["source"] == "builtin"
     with pytest.raises(modules.ModuleError):
         modules.delete_module("stock")
+
+
+def test_create_module_blank_name_scaffolds_valid(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    for raw in ("", "   "):
+        mid = modules.create_module(raw)
+        pack = modules.load_pack(mid)
+        assert pack["errors"] == []
+        assert pack["manifest"]["name"] == "Untitled"
+        modules.delete_module(mid)
+
+
+def test_create_module_newline_name_scaffolds_valid(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    mid = modules.create_module("Sneaky\ndice: 1dbanana")
+    pack = modules.load_pack(mid)
+    assert pack["errors"] == []
+    assert "dice" not in pack["manifest"] or pack["manifest"].get("dice") != "1dbanana"
