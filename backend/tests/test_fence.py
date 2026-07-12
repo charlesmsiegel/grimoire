@@ -67,6 +67,45 @@ def test_opener_with_spaces_split_never_leaks():
             assert w.complete and w.narration == "go! "
 
 
+def test_chunk_ending_in_roll_is_not_committed_early():
+    # "```roll" at a chunk boundary might continue as "```rollback" — the
+    # \b was satisfied only by end-of-buffer, so the commit must be deferred.
+    w = FenceWatcher()
+    out = w.feed("hi ```roll") + w.feed("back!") + w.finish()
+    assert out == "hi ```rollback!"
+    assert not w.complete and not w.truncated and w.body is None
+    assert w.narration == "hi ```rollback!"
+
+
+def test_chunk_ending_in_roll_still_opens_on_continuation():
+    w = FenceWatcher()
+    out = w.feed("hi ```roll") + w.feed('\n{"check": "x"}\n```')
+    out += w.finish()
+    assert w.complete and w.narration == "hi "
+    assert "`" not in out
+
+
+def test_stream_ending_in_bare_opener_is_truncated():
+    # End of stream is a word boundary: a deferred "```roll" at finish()
+    # is a real (truncated) opener.
+    w = FenceWatcher()
+    out = w.feed("hi ```roll") + w.finish()
+    assert out == "hi "
+    assert w.truncated and not w.complete
+    assert w.narration == "hi " and w.body == ""
+
+
+def test_feed_after_finish_is_noop():
+    w = FenceWatcher()
+    w.feed("text\n```roll\n{}")
+    w.finish()
+    assert w.truncated and not w.complete and w.body == "{}"
+    assert w.feed("\n```\nmore") == ""
+    assert w.truncated and not w.complete and w.body == "{}"
+    assert w.narration == "text\n"
+    assert w.finish() == ""
+
+
 def test_newline_after_backticks_is_not_an_opener():
     w, out = run(["```\ncode\n```", " done"])
     assert w.complete is False and w.body is None

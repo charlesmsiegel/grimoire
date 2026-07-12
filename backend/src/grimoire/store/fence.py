@@ -31,23 +31,25 @@ class FenceWatcher:
         self.truncated = False
         self.body: str | None = None
         self._narration_prefix = ""
+        self._finished = False
 
     def feed(self, chunk: str) -> str:
+        if self._finished:
+            return ""
         if self._open:
             self._after += chunk
             self._try_close()
             return ""
         self._buf += chunk
         m = _OPENER.search(self._buf)
-        if m:
-            self._narration_prefix = self._buf[: m.start()]
-            out = self._narration_prefix[len(self._emitted):]
-            self._emitted = self._narration_prefix
-            self._after = self._buf[m.start():]
-            self._open = True
-            self._buf = ""
-            self._try_close()
-            return out
+        if m and m.end() < len(self._buf):
+            return self._commit(m)
+        # A match ending exactly at the buffer end is deferred: its \b was
+        # satisfied only by end-of-string, and the next chunk could extend
+        # the word ("```rollback" is not an opener). The prefix-state
+        # holdback withholds the trailing "```roll" meanwhile; the next
+        # chunk either lets _OPENER match for real or flushes it.
+        #
         # prefix-state holdback: withhold the longest suffix that could
         # still extend into an opener (backticks + optional spaces/tabs +
         # a prefix of "roll"); a fixed-length tail leaks backticks when
@@ -56,6 +58,16 @@ class FenceWatcher:
                        len(self._buf) - _opener_prefix_len(self._buf))
         out = self._buf[len(self._emitted): safe_len]
         self._emitted = self._buf[:safe_len]
+        return out
+
+    def _commit(self, m: re.Match[str]) -> str:
+        self._narration_prefix = self._buf[: m.start()]
+        out = self._narration_prefix[len(self._emitted):]
+        self._emitted = self._narration_prefix
+        self._after = self._buf[m.start():]
+        self._open = True
+        self._buf = ""
+        self._try_close()
         return out
 
     def _try_close(self) -> None:
@@ -70,12 +82,22 @@ class FenceWatcher:
             self.complete = True
 
     def finish(self) -> str:
+        if self._finished:
+            return ""
+        self._finished = True
+        out = ""
+        if not self._open:
+            # End of stream is a word boundary: a deferred opener held at
+            # the buffer end (see feed) is a real opener after all.
+            m = _OPENER.search(self._buf)
+            if m:
+                out = self._commit(m)
         if self._open:
             if not self.complete:
                 self.truncated = True
                 first_nl = self._after.find("\n")
                 self.body = self._after[first_nl + 1:] if first_nl >= 0 else ""
-            return ""
+            return out
         out = self._buf[len(self._emitted):]
         self._emitted = self._buf
         return out
