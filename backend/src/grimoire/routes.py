@@ -1613,7 +1613,7 @@ async def post_absorb(cid: str, sid: str,
     messages = store.absorb.build_prompt(
         transcript, facts,
         store.absorb.state_snapshot(cid, sid), store.absorb.relationships_snapshot(cid, sid),
-        store.absorb.plot_snapshot(cid))
+        store.absorb.plot_snapshot(cid), store.absorb.group_snapshot(cid))
     try:
         text = await client.complete(messages, cfg)
     except LLMError as exc:

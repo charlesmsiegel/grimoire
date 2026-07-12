@@ -10,7 +10,7 @@ import json
 
 from .. import prompts
 from . import (appearances, campaigns, cards, changes, characters, chronicle, entities,
-               overlay, pcs, playstate, plot, relationships, scenes)
+               groupstate, overlay, pcs, playstate, plot, relationships, scenes)
 from .paths import slugify
 
 
@@ -26,12 +26,13 @@ def _truthy(v) -> bool:
 
 
 def build_prompt(transcript: str, facts: dict, state_snapshot: dict | None = None,
-                 rel_snapshot: str | None = None, plot_snapshot: str | None = None) -> list[dict]:
+                 rel_snapshot: str | None = None, plot_snapshot: str | None = None,
+                 group_snapshot: str | None = None) -> list[dict]:
     return [{"role": "system", "content": prompts.render("absorb/system.j2")},
             {"role": "user", "content": prompts.render(
                 "absorb/user.j2", facts=facts, state_snapshot=state_snapshot,
                 rel_snapshot=rel_snapshot, plot_snapshot=plot_snapshot,
-                transcript=transcript)}]
+                group_snapshot=group_snapshot, transcript=transcript)}]
 
 
 def _obj(text: str) -> dict:
@@ -74,6 +75,17 @@ def parse_output(text: str) -> dict:
                 row[k] = _str(e, k)
         cs_edits.append(row)
 
+    # Same key-presence rule as character_state_edits, for all five sections.
+    gs_edits = []
+    for e in obj.get("group_state_edits", []):
+        if not isinstance(e, dict):
+            continue
+        row = {"id": _str(e, "id")}
+        for k in groupstate.FIELDS:
+            if k in e:
+                row[k] = _str(e, k)
+        gs_edits.append(row)
+
     rel_deltas = []
     for e in obj.get("relationship_deltas", []):
         if isinstance(e, dict):
@@ -110,6 +122,7 @@ def parse_output(text: str) -> dict:
         "keywords": [str(k).strip() for k in obj.get("keywords", []) if str(k).strip()],
         "timeline_events": _list("timeline_events", ("date", "text")),
         "character_state_edits": cs_edits,
+        "group_state_edits": gs_edits,
         "lore_edits": _list("lore_edits", ("id", "append")),
         "authored_edits": _list("authored_edits", ("id", "field", "text")),
         "relationship_deltas": rel_deltas,
@@ -205,6 +218,32 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
                     "target": {"kind": "characters", "id": char_id},
                     "label": f"{_char_name(cid, char_id)} — current state",
                     "field": "current_state",
+                    "before": before, "after": after, "authored": False})
+
+    for e in parsed.get("group_state_edits", []):
+        raw_id = e.get("id", "")
+        if not raw_id:
+            continue
+        kind, sep, rest = raw_id.partition("/")
+        if not sep:
+            kind, _, rest = raw_id.partition(":")
+        gid = rest if kind == "groups" else raw_id
+        try:
+            name = overlay.read_entity(cid, "groups", gid)["meta"].get("name", gid)
+        except entities.EntityNotFound:
+            continue
+        st = groupstate.read_state(croot, gid)
+        cur = {k: (st[k] if st else "") for k in groupstate.FIELDS}
+        new = {k: (e[k] if k in e else cur[k]) for k in groupstate.FIELDS}
+        after = groupstate.compose_body(new)
+        if not after:
+            continue
+        before = groupstate.compose_body(cur) if st else ""
+        if before == after:
+            continue
+        out.append({"id": f"group_state:{gid}", "kind": "group_state",
+                    "target": {"kind": "groups", "id": gid},
+                    "label": f"{name} — group state", "field": "group_state",
                     "before": before, "after": after, "authored": False})
 
     for e in parsed.get("lore_edits", []):
@@ -377,6 +416,8 @@ def apply_edits(cid: str, edits: list[dict], sid: str | None = None) -> list[str
             extra_fields: list[dict] = []
             if kind == "character_state":
                 playstate.write_state(croot, target["id"], after)
+            elif kind == "group_state":
+                groupstate.write_state(croot, target["id"], after)
             elif kind == "lore":
                 overlay.update_entity(cid, target["kind"], target["id"], body=after)
             elif kind == "authored":
@@ -461,6 +502,23 @@ def plot_snapshot(cid: str) -> str:
     prompt so the model advances the right thread. Campaign-wide (not scene-scoped);
     tolerant of a garbled plot.json."""
     return "\n".join(plot.render_open(cid, with_id=True))
+
+
+def group_snapshot(cid: str) -> str:
+    """Every campaign group with its current state — feeds the absorb prompt so
+    the model uses real ids and rewrites from stored values, not from memory."""
+    try:
+        croot = campaigns.campaign_root(cid)
+        lines = []
+        for meta in overlay.list_entities(cid, "groups"):
+            st = groupstate.read_state(croot, meta["id"])
+            parts = [f"{groupstate.LABELS[k]}: {st[k]}" for k in groupstate.FIELDS
+                     if st and st.get(k, "").strip()] if st else []
+            state = " | ".join(parts) if parts else "(no state)"
+            lines.append(f"- groups/{meta['id']} ({meta.get('name', meta['id'])}): {state}")
+        return "\n".join(lines)
+    except Exception:  # noqa: BLE001 — garbled store: omit, don't fail the extraction
+        return ""
 
 
 def state_snapshot(cid: str, sid: str) -> dict:

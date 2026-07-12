@@ -1,3 +1,5 @@
+import json
+
 from grimoire.store import absorb, campaigns, playstate, worlds
 
 
@@ -51,7 +53,7 @@ def test_parse_output_extracts_knowledge_fields():
 def test_parse_output_tolerates_garbage():
     assert absorb.parse_output("no json") == {
         "one_line": "", "summary": "", "keywords": [], "timeline_events": [],
-        "character_state_edits": [], "lore_edits": [], "authored_edits": [],
+        "character_state_edits": [], "group_state_edits": [], "lore_edits": [], "authored_edits": [],
         "relationship_deltas": [], "bond_changes": [], "plot_movements": [],
         "new_characters": [], "new_locations": [], "new_lore": []}
 
@@ -717,3 +719,60 @@ def test_relationships_snapshot_tolerates_garbled(monkeypatch, tmp_path):
     sid = scenes.create_scene(cid, "S")
     (campaigns.campaign_root(cid) / "relationships.json").write_text("{ not json", encoding="utf-8")
     assert absorb.relationships_snapshot(cid, sid) == ""  # must not raise
+
+
+def _campaign_with_group(monkeypatch, tmp_path):
+    from grimoire.store import entities, scenes
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Saltmarch")
+    cid = campaigns.create_campaign("Run", wid)
+    sid = scenes.create_scene(cid, "S")
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "groups", "Salt Circle", "A quiet cabal.")
+    return cid, sid, croot
+
+
+def test_parse_output_group_state_keeps_key_presence():
+    parsed = absorb.parse_output(json.dumps({
+        "group_state_edits": [{"id": "groups/salt-circle", "goals": "New goal.", "secrets": ""}]}))
+    row = parsed["group_state_edits"][0]
+    assert row["id"] == "groups/salt-circle"
+    assert row["goals"] == "New goal."
+    assert row["secrets"] == ""          # explicit "" carried (clears)
+    assert "resources" not in row        # omitted key absent (keep-on-omit)
+
+
+def test_group_state_materialize_merges_and_applies(monkeypatch, tmp_path):
+    from grimoire.store import groupstate
+    cid, sid, croot = _campaign_with_group(monkeypatch, tmp_path)
+    groupstate.write_state(croot, "salt-circle", "## Goals\nOld goal.\n\n## Secrets\nThe abbot.")
+    parsed = absorb.parse_output(json.dumps({
+        "group_state_edits": [{"id": "groups/salt-circle", "goals": "New goal."}]}))
+    edits = absorb.materialize(cid, sid, parsed)
+    gs = [e for e in edits if e["kind"] == "group_state"]
+    assert len(gs) == 1
+    assert gs[0]["id"] == "group_state:salt-circle"
+    assert "New goal." in gs[0]["after"]
+    assert "The abbot." in gs[0]["after"]          # omitted secrets preserved
+    assert "Old goal." in gs[0]["before"]
+    absorb.apply_edits(cid, gs)
+    st = groupstate.read_state(croot, "salt-circle")
+    assert st["goals"] == "New goal."
+    assert st["secrets"] == "The abbot."
+
+
+def test_group_state_edit_for_unknown_group_dropped(monkeypatch, tmp_path):
+    cid, sid, croot = _campaign_with_group(monkeypatch, tmp_path)
+    parsed = absorb.parse_output(json.dumps({
+        "group_state_edits": [{"id": "groups/no-such", "goals": "x"}]}))
+    assert [e for e in absorb.materialize(cid, sid, parsed) if e["kind"] == "group_state"] == []
+
+
+def test_group_snapshot_lists_ids_and_state(monkeypatch, tmp_path):
+    from grimoire.store import groupstate
+    cid, sid, croot = _campaign_with_group(monkeypatch, tmp_path)
+    groupstate.write_state(croot, "salt-circle", "## Goals\nExpand.")
+    snap = absorb.group_snapshot(cid)
+    assert "groups/salt-circle" in snap
+    assert "Salt Circle" in snap
+    assert "Goals: Expand." in snap

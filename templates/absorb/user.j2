@@ -7,6 +7,8 @@
                      snippets/feeling_line.j2, snippets/bond_line.j2) | None
       plot_snapshot — rendered thread lines, "\n"-joined (see
                       snippets/plot_thread_line/absorb.j2) | None
+      group_snapshot — rendered "- groups/<gid> (<Name>): <state>" lines,
+                        "\n"-joined (see absorb.group_snapshot) | None
       transcript — str (see snippets/transcript.j2) -#}
 {%- set head = [] -%}
 {%- if facts.get("location") -%}{%- set _ = head.append("Location: " ~ facts.location) -%}{%- endif -%}
@@ -18,6 +20,7 @@
 {%- set _ = head.append("Current character state:\n" ~ (lines | join("\n"))) -%}
 {%- endif -%}
 {%- if rel_snapshot -%}{%- set _ = head.append("Current relationships:\n" ~ rel_snapshot) -%}{%- endif -%}
+{%- if group_snapshot -%}{%- set _ = head.append("Groups:\n" ~ group_snapshot) -%}{%- endif -%}
 {%- if plot_snapshot -%}{%- set _ = head.append("Current plot threads:\n" ~ plot_snapshot) -%}{%- endif -%}
 {%- if head -%}
 {{ head | join("\n") }}
