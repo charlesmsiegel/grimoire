@@ -114,6 +114,8 @@ def numeric_names(fields: list[dict]) -> set[str]:
     """Expression-addressable names for a field list. resource contributes
     ``key`` (current) and ``key_max``; text/list are not addressable."""
     out: set[str] = set()
+    if not isinstance(fields, list):
+        return out
     for f in fields:
         if not isinstance(f, dict):
             continue
@@ -131,13 +133,26 @@ def numeric_names(fields: list[dict]) -> set[str]:
 
 def assembled_fields(sheets: dict, type_id: str) -> list[dict]:
     """Group fields (in group order) then own fields for a sheet type."""
-    st = sheets.get("sheet_types", {}).get(type_id, {})
+    sheet_types = sheets.get("sheet_types", {})
+    st = sheet_types.get(type_id, {}) if isinstance(sheet_types, dict) else {}
+    if not isinstance(st, dict):
+        st = {}
+    groups = sheets.get("groups", {})
+    if not isinstance(groups, dict):
+        groups = {}
     fields: list[dict] = []
-    for gid in st.get("groups", []):
-        g = sheets.get("groups", {}).get(gid)
+    st_groups = st.get("groups", [])
+    if not isinstance(st_groups, list):
+        st_groups = []
+    for gid in st_groups:
+        g = groups.get(gid) if isinstance(gid, str) else None
         if isinstance(g, dict):
-            fields.extend([f for f in g.get("fields", []) if isinstance(f, dict)])
-    fields.extend([f for f in st.get("fields", []) if isinstance(f, dict)])
+            gfields = g.get("fields", [])
+            if isinstance(gfields, list):
+                fields.extend([f for f in gfields if isinstance(f, dict)])
+    st_fields = st.get("fields", [])
+    if isinstance(st_fields, list):
+        fields.extend([f for f in st_fields if isinstance(f, dict)])
     return fields
 
 
@@ -177,7 +192,11 @@ def _validate_checks(checks: dict, sheets: dict, rule_ids: set[str],
         if not check.get("label"):
             errors.append(f"{where}: missing label")
         scope: set[str] = set()
-        for gid in check.get("requires", []):
+        requires = _as_list(check.get("requires"), where, "requires", errors)
+        for gid in requires:
+            if not isinstance(gid, str):
+                errors.append(f"{where}: requires entries must be strings")
+                continue
             g = groups.get(gid)
             if not isinstance(g, dict):
                 errors.append(f"{where}: unknown required group {gid!r}")
@@ -187,21 +206,28 @@ def _validate_checks(checks: dict, sheets: dict, rule_ids: set[str],
             if isinstance(derived, dict):
                 scope |= set(derived)
         roll = check.get("roll", "")
-        exprs = _PLACEHOLDER.findall(roll)
-        for expr in exprs:
+        if not isinstance(roll, str):
+            errors.append(f"{where}: roll must be a string")
+        else:
+            exprs = _PLACEHOLDER.findall(roll)
+            for expr in exprs:
+                try:
+                    unknown = expressions.names(expr) - scope
+                except expressions.ExpressionError as e:
+                    errors.append(f"{where}: {e}")
+                    continue
+                if unknown:
+                    errors.append(f"{where}: unknown names {sorted(unknown)}")
+            template = _PLACEHOLDER.sub("3", roll)
             try:
-                unknown = expressions.names(expr) - scope
-            except expressions.ExpressionError as e:
-                errors.append(f"{where}: {e}")
+                dice.parse(template)
+            except dice.DiceError as e:
+                errors.append(f"{where}: roll is not dice notation: {e}")
+        rule_refs = _as_list(check.get("rules"), where, "rules", errors)
+        for rid in rule_refs:
+            if not isinstance(rid, str):
+                errors.append(f"{where}: rules entries must be strings")
                 continue
-            if unknown:
-                errors.append(f"{where}: unknown names {sorted(unknown)}")
-        template = _PLACEHOLDER.sub("3", roll)
-        try:
-            dice.parse(template)
-        except dice.DiceError as e:
-            errors.append(f"{where}: roll is not dice notation: {e}")
-        for rid in check.get("rules", []):
             if rid not in rule_ids:
                 errors.append(f"{where}: unknown rules doc {rid!r}")
         if "outcomes" in check and not isinstance(check["outcomes"], list):
@@ -267,8 +293,12 @@ def _load_content(root: Path, sheets: dict, errors: list[str]) -> list[dict]:
                 except (json.JSONDecodeError, UnicodeDecodeError) as e:
                     errors.append(f"{where}: {e}")
                     stat = {}
+                else:
+                    if not isinstance(stat, dict):
+                        errors.append(f"{where}: must be an object")
+                        stat = {}
                 tid = stat.get("sheet_type")
-                td = type_defs.get(tid)
+                td = type_defs.get(tid) if isinstance(tid, str) else None
                 if not isinstance(td, dict):
                     errors.append(f"{where}: unknown sheet type {tid!r}")
                 elif td.get("kind") != kind:
@@ -287,14 +317,20 @@ def _load_content(root: Path, sheets: dict, errors: list[str]) -> list[dict]:
 def validate_sheet_values(sheets: dict, type_id: str, values: dict) -> list[str]:
     """Validate a sheet's field-value map against a sheet type. Reused by
     campaign sheets in Phase 3."""
+    if not isinstance(values, dict):
+        return ["fields must be an object"]
     errors: list[str] = []
-    fields = {f["key"]: f for f in assembled_fields(sheets, type_id)}
+    fields = {
+        f["key"]: f
+        for f in assembled_fields(sheets, type_id)
+        if isinstance(f.get("key"), str)
+    }
     for key, value in values.items():
         f = fields.get(key)
         if f is None:
             errors.append(f"{key}: not a field of sheet type {type_id!r}")
             continue
-        t = f["type"]
+        t = f.get("type")
         if t == "resource":
             if (not isinstance(value, dict)
                     or not isinstance(value.get("current"), int) or isinstance(value.get("current"), bool)
@@ -303,12 +339,17 @@ def validate_sheet_values(sheets: dict, type_id: str, values: dict) -> list[str]
         elif t in ("number", "dots", "track"):
             if not isinstance(value, int) or isinstance(value, bool):
                 errors.append(f"{key}: expected an integer")
-            elif t in ("dots", "track") and not 0 <= value <= f["max"]:
-                errors.append(f"{key}: outside 0..max")
-            elif t == "number" and (
-                    ("min" in f and value < f["min"])
-                    or ("max" in f and value > f["max"])):
-                errors.append(f"{key}: outside min/max")
+            else:
+                fmax, fmin = f.get("max"), f.get("min")
+                fmax_ok = isinstance(fmax, int) and not isinstance(fmax, bool)
+                fmin_ok = isinstance(fmin, int) and not isinstance(fmin, bool)
+                if t in ("dots", "track"):
+                    if not fmax_ok or not 0 <= value <= fmax:
+                        errors.append(f"{key}: outside 0..max")
+                elif t == "number" and (
+                        (fmin_ok and value < fmin)
+                        or (fmax_ok and value > fmax)):
+                    errors.append(f"{key}: outside min/max")
         elif t == "text":
             if not isinstance(value, str):
                 errors.append(f"{key}: expected a string")
@@ -348,7 +389,9 @@ def _validate_sheets(sheets: dict, errors: list[str]) -> None:
             errors.append(f"{where}: unknown kind {st.get('kind')!r}")
         st_groups = _as_list(st.get("groups"), where, "groups", errors)
         for gid in st_groups:
-            if gid not in groups:
+            if not isinstance(gid, str):
+                errors.append(f"{where}: group ref must be a string")
+            elif gid not in groups:
                 errors.append(f"{where}: unknown group ref {gid!r}")
         st_fields = _as_list(st.get("fields"), where, "fields", errors)
         for f in st_fields:
@@ -359,7 +402,7 @@ def _validate_sheets(sheets: dict, errors: list[str]) -> None:
             errors.append(f"{where}.{k}: duplicate field key across groups")
         scope = numeric_names(fields)
         for gid in st_groups:
-            g = groups.get(gid)
+            g = groups.get(gid) if isinstance(gid, str) else None
             if isinstance(g, dict) and isinstance(g.get("derived", {}), dict):
                 scope |= set(g.get("derived", {}))
         st_derived = _as_dict(st.get("derived"), where, "derived", errors)

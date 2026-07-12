@@ -400,3 +400,127 @@ def test_non_utf8_rules_file(monkeypatch, tmp_path):
 def test_sheet_values_reject_bool(monkeypatch, tmp_path):
     errs = modules.validate_sheet_values(GOOD_SHEETS, "warden", {"vigor": True})
     assert any("integer" in e for e in errs)
+
+
+# ---- Fix report 2: structural never-raise guards ----
+
+def test_sidecar_top_level_not_object(monkeypatch, tmp_path):
+    content = {
+        "items/orb.md": "---\nname: Orb\n---\nAn orb.\n",
+        "items/orb.sheet.json": json.dumps([1, 2, 3]),
+    }
+    make_pack(_home(monkeypatch, tmp_path), content=content)
+    errs = modules.load_pack("testmod")["errors"]
+    assert any("orb.sheet.json" in e and "must be an object" in e for e in errs)
+
+
+def test_sidecar_fields_not_object(monkeypatch, tmp_path):
+    import copy
+    sheets = copy.deepcopy(GOOD_SHEETS)
+    sheets["sheet_types"]["widget"] = {"label": "Widget", "kind": "items", "groups": [], "fields": []}
+    content = {
+        "items/orb.md": "---\nname: Orb\n---\nAn orb.\n",
+        "items/orb.sheet.json": json.dumps(
+            {"sheet_type": "widget", "fields": ["not", "a", "dict"]}),
+    }
+    make_pack(_home(monkeypatch, tmp_path), sheets=sheets, content=content)
+    errs = modules.load_pack("testmod")["errors"]
+    assert any("orb.sheet.json" in e and "fields must be an object" in e for e in errs)
+
+
+def test_validate_sheet_values_rejects_non_dict():
+    assert modules.validate_sheet_values(GOOD_SHEETS, "warden", ["nope"]) == [
+        "fields must be an object"
+    ]
+
+
+def test_check_roll_not_a_string(monkeypatch, tmp_path):
+    checks = {"c": {"label": "C", "roll": 5, "requires": ["attributes"]}}
+    make_pack(_home(monkeypatch, tmp_path), checks=checks)
+    errs = modules.load_pack("testmod")["errors"]
+    assert any("checks.c" in e and "roll must be a string" in e for e in errs)
+
+
+def test_check_requires_not_a_list(monkeypatch, tmp_path):
+    checks = {"c": {"label": "C", "roll": "1d20", "requires": "attributes"}}
+    make_pack(_home(monkeypatch, tmp_path), checks=checks)
+    errs = modules.load_pack("testmod")["errors"]
+    assert any("checks.c" in e and "requires must be a list" in e for e in errs)
+
+
+def test_check_rules_not_a_list(monkeypatch, tmp_path):
+    checks = {"c": {"label": "C", "roll": "1d20", "requires": [], "rules": "combat"}}
+    make_pack(_home(monkeypatch, tmp_path), checks=checks, rules=RULES)
+    errs = modules.load_pack("testmod")["errors"]
+    assert any("checks.c" in e and "rules must be a list" in e for e in errs)
+
+
+def test_check_requires_group_with_non_list_fields(monkeypatch, tmp_path):
+    import copy
+    sheets = copy.deepcopy(GOOD_SHEETS)
+    sheets["groups"]["attributes"]["fields"] = 5
+    checks = {"c": {"label": "C", "roll": "1d20", "requires": ["attributes"]}}
+    make_pack(_home(monkeypatch, tmp_path), sheets=sheets, checks=checks)
+    # must not raise; the malformed group fields shape is reported once via
+    # sheets validation, and the check itself resolves an empty scope.
+    errs = modules.load_pack("testmod")["errors"]
+    assert any("groups.attributes" in e and "fields must be a list" in e for e in errs)
+
+
+def test_sidecar_unhashable_sheet_type(monkeypatch, tmp_path):
+    content = {
+        "items/orb.md": "---\nname: Orb\n---\nAn orb.\n",
+        "items/orb.sheet.json": json.dumps({"sheet_type": ["not", "hashable"], "fields": {}}),
+    }
+    make_pack(_home(monkeypatch, tmp_path), content=content)
+    errs = modules.load_pack("testmod")["errors"]
+    assert any("orb.sheet.json" in e and "unknown sheet type" in e for e in errs)
+
+
+def _mutate_variants(doc):
+    """Yield copies of doc with each nested value replaced by wrong-typed junk."""
+    import copy
+
+    def paths(node, prefix=()):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                yield prefix + (k,)
+                yield from paths(v, prefix + (k,))
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                yield prefix + (i,)
+                yield from paths(v, prefix + (i,))
+
+    for path in list(paths(doc)):
+        for junk in (5, ["x"], {"y": 1}, None, True):
+            variant = copy.deepcopy(doc)
+            target = variant
+            for step in path[:-1]:
+                target = target[step]
+            target[path[-1]] = junk
+            yield path, junk, variant
+
+
+def test_load_pack_never_raises_mutation_sweep(monkeypatch, tmp_path):
+    import json as _json
+    import shutil
+
+    base = _home(monkeypatch, tmp_path)
+    count = 0
+    for which, doc in (("sheets", GOOD_SHEETS), ("checks", GOOD_CHECKS)):
+        for path, junk, variant in _mutate_variants(doc):
+            shutil.rmtree(base / "modules", ignore_errors=True)
+            if which == "sheets":
+                make_pack(base, sheets=variant, checks=GOOD_CHECKS, rules=RULES)
+            else:
+                make_pack(base, checks=variant, rules=RULES)
+            try:
+                modules.load_pack("testmod")
+            except modules.ModuleNotFound:
+                raise
+            except Exception as e:  # noqa: BLE001 - the assertion IS "no exception"
+                raise AssertionError(
+                    f"{which}.json mutation at {path} -> {junk!r} raised {type(e).__name__}: {e}"
+                ) from e
+            count += 1
+    assert count > 100  # sanity: the sweep actually generated variants
