@@ -15,7 +15,10 @@ const MOD: ModuleDetail = {
     groups: {
       attributes: {
         label: "Attributes",
-        fields: [{ key: "vigor", label: "Vigor", type: "dots", max: 5 }],
+        fields: [
+          { key: "vigor", label: "Vigor", type: "dots", max: 5 },
+          { key: "strength", label: "Strength", type: "number", min: 1, max: 20, default: 10 },
+        ],
       },
     },
     sheet_types: {
@@ -46,7 +49,7 @@ const MOD: ModuleDetail = {
 
 const SHEET: Sheet = {
   sheet_type: "medium",
-  fields: { vigor: 3, essence: { current: 6, max: 10 }, quirk: "", gear: [] },
+  fields: { vigor: 3, strength: 10, essence: { current: 6, max: 10 }, quirk: "", gear: [] },
   derived: { sight_pool: 6 },
   errors: [],
 };
@@ -164,4 +167,14 @@ test("text and list widgets round-trip through save", async () => {
     { kind: "campaign", id: "run" }, "pool-basic", "characters", "mara",
     { sheet_type: "medium", fields: expect.objectContaining({
       quirk: "Hums in the dark", gear: ["lantern", "rope"] }) }));
+});
+
+test("number widget carries schema min/max bounds", async () => {
+  render(<SheetEditor scope={{ kind: "campaign", id: "run" }} module={MOD}
+                      kind="characters" eid="mara" initial={SHEET}
+                      onClose={() => {}} onSaved={() => {}} />);
+  fireEvent.click(screen.getByText("Edit"));
+  const strength = screen.getByLabelText("Strength") as HTMLInputElement;
+  expect(strength.min).toBe("1");
+  expect(strength.max).toBe("20");
 });
