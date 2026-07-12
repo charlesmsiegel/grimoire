@@ -84,19 +84,26 @@ for prior in ("", "She ran the dock and owed the Guild."):
           render("dossier/user.j2", name="Seraphine Vale", prior=prior, transcript=transcript))
 
 EMPTY_SNAP = {"now": "", "friendly": "", "holidays_today": [], "upcoming": None,
-              "birthdays": [], "open_threads": [], "absent_cast": [],
-              "available_cast": [], "available_locations": []}
+              "birthdays": [], "story_so_far": [], "open_threads": [], "cast": [],
+              "available_locations": []}
 FULL_SNAP = {"now": "2026-07-05", "friendly": "July 5, 2026", "holidays_today": ["Founding Day"],
              "upcoming": {"name": "The Regatta", "in_days": 3},
              "birthdays": [{"name": "Hero", "age": 26, "when": "today"},
                            {"name": "Mora", "age": 51, "when": "in 2 days"}],
+             "story_so_far": [{"one_line": "Hero followed Seraphine into the fog.",
+                               "location": "Night Dock", "date": "2026-07-05"},
+                              {"one_line": "Hero met Kessler.", "location": "", "date": "2026-07-01"}],
              "open_threads": [{"title": "Find the ledger", "status": "open",
-                               "latest_beat": "Hero learned it exists."},
-                              {"title": "The Guild debt", "status": "advanced", "latest_beat": ""}],
-             "absent_cast": [{"name": "Mora", "tagline": "A fortune-teller who deals in secrets."},
-                             {"name": "Silent Jim", "tagline": ""}],
-             "available_cast": [{"token": "characters:mora", "name": "Mora"},
-                                {"token": "pcs:hero", "name": "Hero"}],
+                               "latest_beat": "Hero learned it exists.", "dormancy": 0},
+                              {"title": "The Guild debt", "status": "advanced", "latest_beat": "",
+                               "dormancy": 3}],
+             "cast": [{"token": "characters:mora", "name": "Mora",
+                       "tagline": "A fortune-teller who deals in secrets.",
+                       "status": "appeared", "role": "npc"},
+                      {"token": "characters:silent-jim", "name": "Silent Jim", "tagline": "",
+                       "status": "unseen", "role": "npc"},
+                      {"token": "pcs:hero", "name": "Hero", "tagline": "", "status": "present",
+                       "role": "player"}],
              "available_locations": [{"id": "night-dock", "name": "Night Dock"}]}
 GREETINGS = [{"id": "g1", "name": "Storm greeting", "excerpt": "Rain hammers the piers."},
              {"id": "g2", "name": "Quiet morning", "excerpt": "The dock sleeps."},
@@ -514,10 +521,11 @@ facts = chronicle.scene_facts(cid, sid)
 st_snap = absorb.state_snapshot(cid, sid)
 rel_snap = absorb.relationships_snapshot(cid, sid)
 plot_snap = absorb.plot_snapshot(cid)
-exp = absorb.build_prompt(tr, facts, st_snap, rel_snap, plot_snap)
+grp_snap = absorb.group_snapshot(cid)
+exp = absorb.build_prompt(tr, facts, st_snap, rel_snap, plot_snap, grp_snap)
 check("absorb user (store)", exp[1]["content"],
       render("absorb/user.j2", facts=facts, state_snapshot=st_snap, rel_snapshot=rel_snap,
-             plot_snapshot=plot_snap, transcript=tr))
+             plot_snapshot=plot_snap, group_snapshot=grp_snap, transcript=tr))
 for name, line in st_snap.items():
     st = playstate.read_state(croot, sera)
     check(f"state snapshot line (store, {name})", line,
