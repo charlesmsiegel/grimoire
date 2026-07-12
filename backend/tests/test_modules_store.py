@@ -524,3 +524,37 @@ def test_load_pack_never_raises_mutation_sweep(monkeypatch, tmp_path):
                 ) from e
             count += 1
     assert count > 100  # sanity: the sweep actually generated variants
+
+
+def test_list_create_delete(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    mid = modules.create_module("Homebrew Nights")
+    assert mid == "homebrew-nights"
+    listed = {m["id"]: m for m in modules.list_modules()}
+    assert listed[mid]["source"] == "user"
+    assert listed[mid]["valid"] is True
+    # built-ins present alongside (d20-basic/pool-basic land in Task 5;
+    # here just assert the user module lists)
+    modules.delete_module(mid)
+    assert mid not in {m["id"] for m in modules.list_modules()}
+    with pytest.raises(modules.ModuleNotFound):
+        modules.delete_module(mid)
+
+
+def test_scaffold_is_valid(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    mid = modules.create_module("Fresh")
+    assert modules.load_pack(mid)["errors"] == []
+
+
+def test_delete_builtin_refused(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    # simulate a builtin by pointing GRIMOIRE_MODULES at a temp dir
+    b = tmp_path / "builtins" / "stock"
+    b.mkdir(parents=True)
+    (b / "module.md").write_text("---\nname: Stock\n---\n", encoding="utf-8")
+    (b / "sheets.json").write_text('{"groups": {}, "sheet_types": {}}', encoding="utf-8")
+    monkeypatch.setenv("GRIMOIRE_MODULES", str(tmp_path / "builtins"))
+    assert modules.load_pack("stock")["source"] == "builtin"
+    with pytest.raises(modules.ModuleError):
+        modules.delete_module("stock")
