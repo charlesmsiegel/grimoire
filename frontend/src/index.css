@@ -802,3 +802,14 @@ button.primary { background: var(--accent); color: var(--on-accent); border: var
 .sheet-row { font-size: 13px; padding: 2px 0; }
 .resource-inputs { display: flex; align-items: center; gap: 6px; }
 .resource-inputs input { width: 70px; }
+
+/* roll-proposal chip: pending check offer, inline modify form, or resolved handoff (#162) */
+.roll-proposal { background: var(--panel2); border: var(--rw) solid var(--rule); padding: 10px 14px; margin: 8px 0; }
+.roll-proposal-chip { font-family: var(--fm); font-size: 13px; color: var(--ink); }
+.roll-proposal-form { display: flex; flex-direction: column; gap: 8px; margin: 10px 0; }
+.roll-proposal-form label { display: flex; flex-direction: column; gap: 4px; font-family: var(--fm); font-size: 11px; color: var(--muted); }
+.roll-proposal-form select, .roll-proposal-form input[type="number"] {
+  background: var(--surface); color: var(--ink); border: var(--rw) solid var(--rule);
+  padding: 6px 8px; font-family: var(--fb); font-size: 15px;
+}
+.roll-proposal .form-actions { justify-content: flex-start; margin-top: 10px; }
