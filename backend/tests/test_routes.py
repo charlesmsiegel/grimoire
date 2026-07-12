@@ -2932,3 +2932,51 @@ def test_scene_style_unknown_scene_404(client):
     wid, cid = _campaign(client)
     assert client.get(f"/api/campaigns/{cid}/scenes/nope/style").status_code == 404
     assert client.put(f"/api/campaigns/{cid}/scenes/nope/style", json={"style_id": "pulp-adventure"}).status_code == 404
+
+
+# ---- sheets (#161) ----
+def test_campaign_sheet_routes(client):
+    wid, cid = _campaign(client)
+    client.put(f"/api/campaigns/{cid}/module", json={"module": "pool-basic"})
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"}).json()["character"]
+
+    base = f"/api/campaigns/{cid}/sheets/characters/{chid}"
+    assert client.get(base).json()["sheet"] is None
+    r = client.put(base, json={"sheet_type": "medium", "fields": None})
+    assert r.json()["ok"] is True
+    got = client.get(base).json()["sheet"]
+    assert got["sheet_type"] == "medium" and got["errors"] == []
+    assert "sight_pool" in got["derived"]
+
+    idx = client.get(f"/api/campaigns/{cid}/sheets").json()
+    assert idx["coverage"]["characters"]["sheeted"] == 1
+    assert ["characters", chid] in idx["refs"]
+
+    assert client.put(base, json={"sheet_type": "ghost"}).status_code == 400
+    assert client.delete(base).json()["ok"] is True
+    assert client.get("/api/campaigns/nope/sheets").status_code == 404
+
+
+def test_campaign_sheet_routes_without_module(client):
+    _, cid = _campaign(client)
+    assert client.get(f"/api/campaigns/{cid}/sheets").json()["coverage"] == {}
+    r = client.put(f"/api/campaigns/{cid}/sheets/characters/mara",
+                   json={"sheet_type": "medium"})
+    assert r.status_code == 400
+
+
+def test_world_sheet_routes(client):
+    wid = _world(client)
+    idx = client.get(f"/api/worlds/{wid}/sheets").json()
+    assert idx == {"modules": [], "default": ""}
+    base = f"/api/worlds/{wid}/sheets/pool-basic/characters/mara"
+    assert client.put(base, json={"sheet_type": "medium", "fields": None}).json()["ok"] is True
+    assert client.get(base).json()["sheet"]["sheet_type"] == "medium"
+    idx = client.get(f"/api/worlds/{wid}/sheets").json()
+    assert idx["modules"] == ["pool-basic"]
+    cov = client.get(f"/api/worlds/{wid}/sheets/pool-basic").json()
+    assert ["characters", "mara"] in cov["refs"]
+    assert client.get(f"/api/worlds/{wid}/sheets/ghost").status_code == 404
+    assert client.put(f"/api/worlds/{wid}/sheets/ghost/characters/mara",
+                      json={"sheet_type": "medium"}).status_code == 404
+    assert client.delete(base).json()["ok"] is True
