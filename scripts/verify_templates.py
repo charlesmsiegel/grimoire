@@ -144,7 +144,8 @@ assert 'prompts.render("scene/regenerate_guidance.j2"' in routes_src, \
 
 from grimoire.store import appearances as ap  # noqa: E402
 from grimoire.store import (calendars, campaigns, characters, config, dossiers as dstore,  # noqa: E402
-                            entities, pcs, playstate, plot, scenes, taglines as tstore, worlds)
+                            entities, groupstate, pcs, playstate, plot, scenes,
+                            taglines as tstore, worlds)
 
 config.write_config(system_prompt="Global GM rules: be vivid, be fair.")
 wid = worlds.create_world("W")
@@ -188,6 +189,9 @@ entities.create_entity(croot, "lore", "The Ledger", "The ledger lists a decade o
                        keys="ledger")
 entities.create_entity(croot, "lore", "Sera secret", "She was exiled from the Guild.",
                        owners=f"characters:{sera}")
+circle = entities.create_entity(croot, "groups", "Salt Circle",
+                                "A quiet cabal moving contraband.")  # keyless -> always-on
+groupstate.write_state(croot, circle, "## Goals\nCorner the ledger before the Guild does.")
 scenes.set_location(cid, sid, dock)
 sid = scenes.set_datetime(cid, sid, "2026-07-05")["id"]  # first date set renames the scene
 
@@ -273,7 +277,7 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
     if wi_seed:
         recent_text = (recent_text + "\n" + wi_seed).strip()
     entries = []
-    for kind in ("lore", "locations"):
+    for kind in ("lore", "locations", "items", "groups", "creatures"):
         for meta in entities.list_entities(croot, kind):
             if kind == "locations" and meta["id"] == current_loc:
                 continue
@@ -282,9 +286,19 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
             owners = [o.strip() for o in e["meta"].get("owners", "").split(",") if o.strip()]
             if kind == "locations" and not keys:
                 continue
-            entries.append({"body": e["body"].strip(), "keys": keys, "owners": owners})
+            entries.append({"body": e["body"].strip(), "keys": keys, "owners": owners,
+                            "kind": kind, "id": meta["id"],
+                            "name": e["meta"].get("name", meta["id"])})
     present = set(tokens) | ({f"locations:{current_loc}"} if current_loc else set())
-    world_info_bodies = [e["body"] for e in context.activate(entries, recent_text, frozenset(present))]
+    activated = context.activate(entries, recent_text, frozenset(present))
+    world_info_bodies = [e["body"] for e in activated]
+    group_states = []
+    for e in activated:
+        if e["kind"] != "groups":
+            continue
+        st = groupstate.read_state(croot, e["id"])
+        if st and any(st[k] for k in groupstate.FIELDS):
+            group_states.append({"name": e["name"], **st})
 
     today = None
     time_history = scenes.get_time_history(cid, scene_id)
@@ -322,6 +336,7 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
             "ref_names": ref_names, "refs": refs, "story_entries": story_entries,
             "plot_lines": plot.render_open(cid, with_id=False), "today": today,
             "current_setting": current_setting, "world_info_bodies": world_info_bodies,
+            "group_states": group_states,
             "offscene_active": offscene_active, "offscene_known": offscene_known,
             "player_names": player_names, "pcless": pcless,
             "story_full": bool(full_recap), "opener": False}
