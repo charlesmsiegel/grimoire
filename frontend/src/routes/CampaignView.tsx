@@ -12,6 +12,7 @@ import { CastPanel } from "../components/CastPanel";
 import { NewSceneChooser } from "../components/NewSceneChooser";
 import { ChangesPanel } from "../components/ChangesPanel";
 import { CalendarConfig } from "../components/CalendarConfig";
+import MechanicsConfig from "../components/MechanicsConfig";
 import { Portrait } from "../components/Portrait";
 import { RecordDrawer, type DrawerTarget } from "../components/RecordDrawer";
 import { SceneInspector } from "../components/SceneInspector";
@@ -69,6 +70,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
   const [worldName, setWorldName] = useState("");
   const [dt, setDt] = useState<SceneDatetime | null>(null);
   const [showCalendar, setShowCalendar] = useState(false);
+  const [showMechanics, setShowMechanics] = useState(false);
   const [scenes, setScenes] = useState<SceneMeta[]>([]);
   const [sceneSort, setSceneSort] = useState<SceneSort>("updated");
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -373,6 +375,9 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
           <button className="sub-changes" onClick={() => setShowChanges((v) => !v)}>
             {showChanges ? "Close" : "Changes"}
           </button>
+          <button className="sub-mechanics" onClick={() => setShowMechanics((v) => !v)}>
+            {showMechanics ? "Close" : "Mechanics"}
+          </button>
           <button className="sub-end" onClick={endScene}
                   disabled={!activeId || absorbing || busy}>
             {absorbing ? "Ending…" : "End scene"}
@@ -422,6 +427,11 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
         {showCalendar && (
           <div className="panel-slot">
             <CalendarConfig cid={cid} />
+          </div>
+        )}
+        {showMechanics && (
+          <div className="panel-slot">
+            <MechanicsConfig cid={cid} />
           </div>
         )}
         {showChanges && <ChangesPanel cid={cid} />}
