@@ -2794,3 +2794,54 @@ def test_group_state_routes_round_trip(client):
     # unknown group -> 404 on both verbs
     assert client.get(f"/api/campaigns/{cid}/groups/no-such/state").status_code == 404
     assert client.put(f"/api/campaigns/{cid}/groups/no-such/state", json={}).status_code == 404
+
+
+# ---- modules (#160) ----
+def test_modules_api(client):
+    listed = client.get("/api/modules").json()
+    assert {m["id"] for m in listed} >= {"d20-basic", "pool-basic"}
+    detail = client.get("/api/modules/pool-basic").json()
+    assert detail["manifest"]["name"] == "Basic Pool"
+    assert "medium" in detail["sheets"]["sheet_types"]
+    assert detail["errors"] == []
+    assert client.get("/api/modules/ghost").status_code == 404
+
+    created = client.post("/api/modules", json={"name": "Homebrew"}).json()
+    assert created["id"] == "homebrew"
+    assert client.delete("/api/modules/homebrew").json()["ok"] is True
+    assert client.delete("/api/modules/pool-basic").status_code == 400
+
+
+def test_campaign_module_binding_api(client):
+    wid, cid = _campaign(client)
+    r = client.get(f"/api/campaigns/{cid}/module").json()
+    assert r == {"setting": "", "resolved": None, "source": None}
+
+    assert client.put(f"/api/worlds/{wid}/module",
+                      json={"module": "pool-basic"}).json()["ok"] is True
+    r = client.get(f"/api/campaigns/{cid}/module").json()
+    assert r["resolved"] == "pool-basic" and r["source"] == "world"
+
+    client.put(f"/api/campaigns/{cid}/module", json={"module": "none"})
+    r = client.get(f"/api/campaigns/{cid}/module").json()
+    assert r["resolved"] is None and r["setting"] == "none"
+
+    client.put(f"/api/campaigns/{cid}/module", json={"module": "d20-basic"})
+    r = client.get(f"/api/campaigns/{cid}/module").json()
+    assert r["resolved"] == "d20-basic" and r["source"] == "campaign"
+
+    assert client.put(f"/api/campaigns/{cid}/module",
+                      json={"module": "ghost"}).status_code == 404
+    assert client.put(f"/api/worlds/{wid}/module",
+                      json={"module": "ghost"}).status_code == 404
+
+
+def test_create_campaign_with_module(client):
+    _world(client)
+    r = client.post("/api/campaigns",
+                    json={"name": "Mechanical", "world": "w", "module": "pool-basic"})
+    cid = r.json()["id"]
+    assert client.get(f"/api/campaigns/{cid}/module").json()["resolved"] == "pool-basic"
+    assert client.post(
+        "/api/campaigns",
+        json={"name": "Broken", "world": "w", "module": "ghost"}).status_code == 404
