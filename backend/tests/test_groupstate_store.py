@@ -1,4 +1,4 @@
-from grimoire.store import campaigns, groupstate, worlds
+from grimoire.store import campaigns, groupstate, overlay, worlds
 
 
 def _croot(monkeypatch, tmp_path):
@@ -49,3 +49,17 @@ def test_compose_body_headed_and_ordered():
 
 def test_compose_body_empty_when_all_blank():
     assert groupstate.compose_body({}) == ""
+
+
+def test_delete_group_removes_campaign_state(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Saltmarch")
+    cid = campaigns.create_campaign("Run", wid)
+    croot = campaigns.campaign_root(cid)
+    gid = overlay.create_entity(cid, "groups", "Salt Circle", "A quiet cabal.")
+    groupstate.write_state(croot, gid, "## Secrets\nThe abbot is a member.")
+    overlay.delete_entity(cid, "groups", gid)
+    assert groupstate.read_state(croot, gid) is None
+    # same-name recreate must start with a clean slate
+    gid2 = overlay.create_entity(cid, "groups", "Salt Circle", "New cabal.")
+    assert groupstate.read_state(croot, gid2) is None
