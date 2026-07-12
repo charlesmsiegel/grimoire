@@ -117,7 +117,7 @@ def numeric_names(fields: list[dict]) -> set[str]:
         if not isinstance(f, dict):
             continue
         key = f.get("key")
-        if not key:
+        if not isinstance(key, str) or not key:
             continue
         t = f.get("type")
         if t in ("number", "dots", "track"):
@@ -175,6 +175,8 @@ def _validate_sheets(sheets: dict, errors: list[str]) -> None:
             if not isinstance(f, dict):
                 continue
             k = f.get("key")
+            if not isinstance(k, str):
+                continue
             if k in seen:
                 errors.append(f"groups.{gid}.{k}: duplicate field key")
             seen.add(k)
@@ -196,7 +198,7 @@ def _validate_sheets(sheets: dict, errors: list[str]) -> None:
         for f in st_fields:
             _validate_field(f, where, errors)
         fields = assembled_fields(sheets, tid)
-        keys = [f.get("key") for f in fields]
+        keys = [f.get("key") for f in fields if isinstance(f.get("key"), str)]
         for k in {k for k in keys if keys.count(k) > 1}:
             errors.append(f"{where}.{k}: duplicate field key across groups")
         scope = numeric_names(fields)
