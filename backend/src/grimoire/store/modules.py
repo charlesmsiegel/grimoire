@@ -519,3 +519,58 @@ def delete_module(mid: str) -> None:
     if source != "user":
         raise ModuleError("built-in modules cannot be deleted")
     shutil.rmtree(root)
+
+
+# ---- binding: world/campaign module: keys + resolve() ----
+
+
+def _write_key(meta_path, key: str, value: str) -> None:
+    text = meta_path.read_text(encoding="utf-8")
+    meta, body = parse_frontmatter(text)
+    if value:
+        meta[key] = value
+    else:
+        meta.pop(key, None)
+    meta_path.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+
+
+def set_world_module(wid: str, mid: str) -> None:
+    from . import worlds
+    worlds.read_world(wid)  # raises WorldNotFound
+    if mid:
+        pack_root(mid)  # raises ModuleNotFound
+    _write_key(worlds.world_meta_path(wid), "module", mid)
+
+
+def set_campaign_module(cid: str, value: str) -> None:
+    """value: "" -> inherit world default, "none" -> mechanics off, else mid."""
+    from . import campaigns
+    campaigns.read_campaign(cid)  # raises CampaignNotFound
+    if value and value != "none":
+        pack_root(value)
+    _write_key(campaigns.campaign_meta_path(cid), "module", value)
+
+
+def resolve(cid: str) -> str | None:
+    """The module id governing a campaign, or None (= zero mechanics).
+    Campaign tri-state ("", "none", mid) over world default; a binding to a
+    missing or invalid module falls through to None."""
+    from . import campaigns, worlds
+    meta = campaigns.read_campaign(cid)["meta"]
+    setting = (meta.get("module") or "").strip()
+    if setting == "none":
+        return None
+    mid = setting
+    if not mid:
+        try:
+            wmeta = worlds.read_world(meta.get("world", ""))["meta"]
+        except worlds.WorldNotFound:
+            return None
+        mid = (wmeta.get("module") or "").strip()
+    if not mid:
+        return None
+    try:
+        pack = load_pack(mid)
+    except ModuleNotFound:
+        return None
+    return None if pack["errors"] else mid
