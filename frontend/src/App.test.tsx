@@ -10,6 +10,7 @@ vi.mock("./api/client", () => ({
     }),
     listCampaigns: vi.fn().mockResolvedValue([]),
     listWorlds: vi.fn().mockResolvedValue([]),
+    listModules: vi.fn().mockResolvedValue([]),
   },
 }));
 
@@ -19,6 +20,7 @@ test("renders the chrome top bar with brand, nav, and connection status", async 
   const topbar = within(screen.getByRole("banner"));
   expect(topbar.getByRole("link", { name: /campaigns/i })).toBeInTheDocument();
   expect(topbar.getByRole("link", { name: /worlds/i })).toBeInTheDocument();
+  expect(topbar.getByRole("link", { name: /modules/i })).toBeInTheDocument();
   expect(topbar.getByText(/openrouter · connected/i)).toBeInTheDocument();
   expect(topbar.getByRole("link", { name: /config/i })).toBeInTheDocument();
 });

@@ -8,6 +8,7 @@ import CampaignWizard from "./routes/CampaignWizard";
 import CampaignView from "./routes/CampaignView";
 import WorldsView from "./routes/WorldsView";
 import WorldView from "./routes/WorldView";
+import ModulesView from "./routes/ModulesView";
 import ConfigView from "./routes/ConfigView";
 
 export default function App() {
@@ -40,6 +41,9 @@ export default function App() {
           <NavLink to="/worlds" className={({ isActive }) => "nav-btn" + (isActive ? " active" : "")}>
             Worlds
           </NavLink>
+          <NavLink to="/modules" className={({ isActive }) => "nav-btn" + (isActive ? " active" : "")}>
+            Modules
+          </NavLink>
         </nav>
         <div className="topbar-right">
           <span className="status">
@@ -58,6 +62,7 @@ export default function App() {
         <Route path="/campaigns/:cid/world" element={<WorldView campaign />} />
         <Route path="/worlds" element={<WorldsView />} />
         <Route path="/worlds/:wid" element={<WorldView />} />
+        <Route path="/modules" element={<ModulesView />} />
         <Route path="/config" element={<ConfigView />} />
       </Routes>
     </ThemeProvider>
