@@ -84,6 +84,9 @@ configured `recap_depth`).
 `system.j2` data vars, in section order — all already `{{user}}`/`{{char}}`
 substituted by code:
 - `global_system_prompt` — config `system_prompt`
+- `prose_style_name`, `prose_style_body` — the resolved style guide (scene
+  `style_id` override → campaign default → global `default_style_id`),
+  looked up via `store/styles.py:resolve_style()`; both `""` when none resolves
 - `npc_cards` — locked card `data` dicts of in-scene NPCs (also feeds the
   card-level system prompts, descriptions, message examples, post-history)
 - `states` — `[{name, current_state, knows, suspects}]` from

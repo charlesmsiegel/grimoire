@@ -682,6 +682,35 @@ def test_response_format_section_lists_players(monkeypatch, tmp_path):
     assert "Elara Vane" in sections["Response format"]
 
 
+def test_prose_style_resolves_scene_then_campaign_then_global(monkeypatch, tmp_path):
+    from grimoire.store import config
+
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    scenes.append_message(cid, sid, "user", "hello")
+
+    # nothing set anywhere -> no prose-style block
+    assert "Prose style" not in context.build_messages(cid, sid)[0]["content"]
+
+    config.write_config(default_style_id="gothic-horror")
+    text = context.build_messages(cid, sid)[0]["content"]
+    assert "Prose style: Gothic Horror" in text
+
+    campaigns.set_campaign_style(cid, "noir-detective")
+    text = context.build_messages(cid, sid)[0]["content"]
+    assert "Prose style: Noir Detective" in text
+    assert "Gothic Horror" not in text
+
+    scenes.set_style(cid, sid, "pulp-adventure")
+    text = context.build_messages(cid, sid)[0]["content"]
+    assert "Prose style: Pulp Adventure" in text
+    assert "Noir Detective" not in text
+
+    # a stale/unknown scene override falls back to the campaign default
+    scenes.set_style(cid, sid, "does-not-exist")
+    text = context.build_messages(cid, sid)[0]["content"]
+    assert "Prose style: Noir Detective" in text
+
+
 from grimoire.store import groupstate  # noqa: E402
 
 

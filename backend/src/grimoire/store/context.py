@@ -14,7 +14,7 @@ import re
 
 from .. import prompts
 from . import (appearances, calendars, campaigns, characters, chronicle,
-               config, dossiers, entities, groupstate, overlay, pcs, playstate, plot, relationships, scenes)
+               config, dossiers, entities, groupstate, overlay, pcs, playstate, plot, relationships, scenes, styles)
 
 
 def activate(entries: list[dict], recent_text: str, present: frozenset = frozenset()) -> list[dict]:
@@ -353,11 +353,19 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0) -> dic
     if current_loc:
         present |= {f"locations:{current_loc}"}
 
+    cfg = config.read_config()
+    campaign_meta = campaigns.read_campaign(cid)["meta"]
+    resolved_style = styles.resolve_style(
+        scene_style_id=scene["meta"].get("style_id", ""),
+        campaign_style_id=campaign_meta.get("style_id", ""),
+        default_style_id=cfg.get("default_style_id", ""))
     offscene_active, offscene_known = _cast_directory_data(croot, cid, sid)
     activated_wi = _world_info(cid, recent_text, exclude, frozenset(present))
     data = {
         "opener": False, "pcless": pcless, "story_full": bool(full_recap),
-        "global_system_prompt": config.read_config().get("system_prompt", ""),
+        "global_system_prompt": cfg.get("system_prompt", ""),
+        "prose_style_name": resolved_style["meta"]["name"] if resolved_style else "",
+        "prose_style_body": resolved_style["body"].strip() if resolved_style else "",
         "npc_cards": npc_cards,
         "states": _character_states(croot, cast),
         "relationship_lines": _relationship_lines(cid, cast),
@@ -417,6 +425,7 @@ def build_director_messages(cid: str, sid: str, note: str) -> list[dict]:
 # templates/scene/system.j2. (label, template, pcless-only)
 _SECTIONS = [
     ("Global system prompt", "scene/sections/global_system_prompt.j2", False),
+    ("Prose style", "scene/sections/prose_style.j2", False),
     ("System prompt", "scene/sections/card_system_prompts.j2", False),
     ("Character descriptions", "scene/sections/character_descriptions.j2", False),
     ("Character state", "scene/sections/character_state.j2", False),

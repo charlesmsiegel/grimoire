@@ -147,7 +147,7 @@ assert 'prompts.render("scene/regenerate_guidance.j2"' in routes_src, \
 
 from grimoire.store import appearances as ap  # noqa: E402
 from grimoire.store import (calendars, campaigns, characters, config, dossiers as dstore,  # noqa: E402
-                            entities, groupstate, pcs, playstate, plot, scenes,
+                            entities, groupstate, pcs, playstate, plot, scenes, styles,
                             taglines as tstore, worlds)
 
 config.write_config(system_prompt="Global GM rules: be vivid, be fair.")
@@ -334,7 +334,15 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
         offscene_known.append({"name": ch["meta"]["name"], "tagline": tag,
                                "versions": [v["id"] for v in ch["versions"]]})
 
-    return {"global_system_prompt": cfg.get("system_prompt", ""), "npc_cards": npc_cards,
+    campaign_meta = campaigns.read_campaign(cid)["meta"]
+    resolved_style = styles.resolve_style(
+        scene_style_id=scene["meta"].get("style_id", ""),
+        campaign_style_id=campaign_meta.get("style_id", ""),
+        default_style_id=cfg.get("default_style_id", ""))
+    return {"global_system_prompt": cfg.get("system_prompt", ""),
+            "prose_style_name": resolved_style["meta"]["name"] if resolved_style else "",
+            "prose_style_body": resolved_style["body"].strip() if resolved_style else "",
+            "npc_cards": npc_cards,
             "states": states, "relationship_lines": relationship_lines, "players": players,
             "ref_names": ref_names, "refs": refs, "story_entries": story_entries,
             "plot_lines": plot.render_open(cid, with_id=False), "today": today,
