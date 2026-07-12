@@ -92,6 +92,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
     checkActor: string; checkId: string; difficulty: number; modifier: number;
   } | null>(null);
   const [checkActors, setCheckActors] = useState<SceneCheckActor[]>([]);
+  const checksFetched = useRef(false); // one getSceneChecks per popover session
   const [rolling, setRolling] = useState(false);
   // a pending/resolved roll-proposal record surfaced by the model mid-stream
   // or rehydrated on scene select; RollProposal only renders pending/resolved.
@@ -303,9 +304,18 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
       setRollForm(null);
       return;
     }
+    checksFetched.current = false; // each popover session re-fetches once
     setRollForm({ mode: "dice", notation: "", label: "", error: null,
                   checkActor: "", checkId: "", difficulty: 0, modifier: 0 });
-    if (activeId) {
+  }
+
+  // the actor/check lists load lazily on first entering Check mode — a
+  // dice-only popover session never fires the request
+  function enterCheckMode() {
+    if (!rollForm) return;
+    setRollForm({ ...rollForm, mode: "check" });
+    if (activeId && !checksFetched.current) {
+      checksFetched.current = true;
       api.getSceneChecks(cid, activeId).then((r) => setCheckActors(r.actors)).catch(() => setCheckActors([]));
     }
   }
@@ -743,7 +753,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
                 </button>
                 <button type="button" className={rollForm.mode === "check" ? "active" : ""}
                         disabled={rolling}
-                        onClick={() => setRollForm({ ...rollForm, mode: "check" })}>
+                        onClick={enterCheckMode}>
                   Check
                 </button>
               </div>
