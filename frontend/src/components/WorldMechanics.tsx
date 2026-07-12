@@ -5,6 +5,7 @@ export default function WorldMechanics({ wid }: { wid: string }) {
   const [mods, setMods] = useState<ModuleSummary[]>([]);
   const [value, setValue] = useState("");
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const load = () =>
     api.getWorld(wid).then((w) => setValue(w.meta.module ?? ""));
@@ -15,9 +16,14 @@ export default function WorldMechanics({ wid }: { wid: string }) {
   }, [wid]);
 
   const save = async () => {
-    await api.setWorldModule(wid, value);
-    setSaved(true);
-    await load();
+    setError(null);
+    try {
+      await api.setWorldModule(wid, value);
+      setSaved(true);
+      await load();
+    } catch (e) {
+      setError(String(e));
+    }
   };
 
   const name = (mid: string) => mods.find((m) => m.id === mid)?.name ?? mid;
@@ -42,6 +48,7 @@ export default function WorldMechanics({ wid }: { wid: string }) {
       </div>
       <button className="primary" onClick={save}>Save</button>
       {saved && <span className="field-hint">Saved.</span>}
+      {error && <div className="field-hint">{error}</div>}
     </div>
   );
 }

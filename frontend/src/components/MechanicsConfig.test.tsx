@@ -38,3 +38,21 @@ test("shows the resolved module and its source", async () => {
   // in full rather than a bare substring to avoid an ambiguous query.
   expect(await screen.findByText("Playing with Basic Pool (world default)")).toBeInTheDocument();
 });
+
+test("shows a stale-binding warning when the bound module is missing or invalid", async () => {
+  (api.getCampaignModule as any).mockResolvedValue(
+    { setting: "ghost", resolved: null, source: null });
+  render(<MechanicsConfig cid="run" />);
+  expect(await screen.findByText(
+    'Bound module "ghost" is missing or invalid — resolving to no mechanics.'
+  )).toBeInTheDocument();
+});
+
+test("shows an error hint and does not throw when save fails", async () => {
+  (api.setCampaignModule as any).mockRejectedValue(new Error("boom"));
+  render(<MechanicsConfig cid="run" />);
+  const select = (await screen.findByLabelText("Mechanics")) as HTMLSelectElement;
+  fireEvent.change(select, { target: { value: "pool-basic" } });
+  fireEvent.click(screen.getByText("Save"));
+  expect(await screen.findByText(/boom/)).toBeInTheDocument();
+});

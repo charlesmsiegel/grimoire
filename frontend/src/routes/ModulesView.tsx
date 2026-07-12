@@ -34,25 +34,30 @@ export default function ModulesView() {
             <div className="detail-main">
               <h3>{detail.manifest.name}</h3>
               {detail.manifest.description && <p>{detail.manifest.description}</p>}
-              {Object.entries(detail.sheets.sheet_types).map(([tid, st]) => (
-                <div key={tid} className="side-section">
-                  <h4>
-                    {st.label} <span className="field-hint">({st.kind})</span>
-                  </h4>
-                  <div className="chips">
-                    {st.groups.map((g) => (
-                      <span key={g} className="chip on">
-                        {detail.sheets.groups[g]?.label ?? g}
-                      </span>
-                    ))}
-                    {st.fields.map((f) => (
-                      <span key={f.key} className="chip">
-                        {f.label ?? f.key}
-                      </span>
-                    ))}
+              {Object.entries(detail.sheets.sheet_types).map(([tid, st]) => {
+                if (!st || typeof st !== "object") return null;
+                const groups = Array.isArray(st.groups) ? st.groups : [];
+                const fields = Array.isArray(st.fields) ? st.fields : [];
+                return (
+                  <div key={tid} className="side-section">
+                    <h4>
+                      {st.label} <span className="field-hint">({st.kind})</span>
+                    </h4>
+                    <div className="chips">
+                      {groups.map((g) => (
+                        <span key={g} className="chip on">
+                          {detail.sheets.groups[g]?.label ?? g}
+                        </span>
+                      ))}
+                      {fields.map((f) => (
+                        <span key={f.key} className="chip">
+                          {f.label ?? f.key}
+                        </span>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
             <aside className="detail-sidebar">
               <div className="side-section">
