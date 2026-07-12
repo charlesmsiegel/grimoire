@@ -85,6 +85,9 @@ export function LorebookImport({ wid, onImported }: { wid: string; onImported?: 
                               onChange={(ev) => patch(i, { category: ev.target.value as EntityKind })}>
                         <option value="lore">lore</option>
                         <option value="locations">locations</option>
+                        <option value="items">items</option>
+                        <option value="groups">groups</option>
+                        <option value="creatures">creatures</option>
                       </select>
                     </td>
                     <td>{e.body.length > 80 ? e.body.slice(0, 80) + "…" : e.body}</td>

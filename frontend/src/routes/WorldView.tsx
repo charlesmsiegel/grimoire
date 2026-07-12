@@ -14,6 +14,9 @@ const TABS = [
   { key: "tags", label: "Tags" },
   { key: "locations", label: "Locations" },
   { key: "lore", label: "Lore" },
+  { key: "items", label: "Items" },
+  { key: "groups", label: "Groups" },
+  { key: "creatures", label: "Creatures" },
   { key: "greetings", label: "Greetings" },
 ] as const;
 
@@ -122,6 +125,9 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
                         onNavConsumed={() => setLoreNav(null)} onOpenOwner={openOwner} />
         </>
       )}
+      {tab === "items" && <EntityEditor wid={wid} scope={scope} kind="items" />}
+      {tab === "groups" && <EntityEditor wid={wid} scope={scope} kind="groups" />}
+      {tab === "creatures" && <EntityEditor wid={wid} scope={scope} kind="creatures" />}
       {tab === "greetings" && <GreetingEditor scope={scope} wid={wid} onOpenCharacter={openCharacter} focus={focusGreeting} />}
     </div>
   );

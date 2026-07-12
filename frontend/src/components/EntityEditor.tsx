@@ -7,6 +7,10 @@ import { Field } from "./Field";
 import { OwnedLorePanel } from "./OwnedLorePanel";
 import { Portrait } from "./Portrait";
 
+export const KIND_LABELS: Record<EntityKind, string> = {
+  locations: "location", lore: "lore entry", items: "item", groups: "group", creatures: "creature",
+};
+
 export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, onOpenOwner, onOpenLore }: {
   wid: string;
   kind: EntityKind;
@@ -29,7 +33,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
   const [error, setError] = useState<string | null>(null);
   const [images, setImages] = useState<{ name: string; v: string }[]>([]); // selected location's assets
   const shelfFileRef = useRef<HTMLInputElement>(null);
-  const label = kind === "lore" ? "lore entry" : "location";
+  const label = KIND_LABELS[kind];
 
   const reload = useCallback(() => api.listEntities(scope, kind).then(setItems),
     // eslint-disable-next-line react-hooks/exhaustive-deps

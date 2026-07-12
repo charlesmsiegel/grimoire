@@ -260,3 +260,17 @@ test("image urls carry per-record version tokens for immutable caching", async (
   expect(screen.getByAltText("gallery_1").getAttribute("src"))
     .toBe("/img/locations/warehouse/gallery_1?v=bbb2");
 });
+
+test("new kinds render the list/detail pattern with their own label", async () => {
+  (api.listEntities as any).mockResolvedValue([{ id: "salt-circle", name: "Salt Circle" }]);
+  (api.readEntity as any).mockResolvedValue({
+    meta: { id: "salt-circle", name: "Salt Circle" }, body: "A quiet **cabal**" });
+  const { container } = render(<EntityEditor wid="w" kind="groups" />);
+  expect(await screen.findByRole("button", { name: /\+ new group/i })).toBeInTheDocument();
+  fireEvent.click(screen.getByText("Salt Circle"));
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalledWith({ kind: "world", id: "w" }, "groups", "salt-circle"));
+  expect(screen.getByText("cabal")).toBeInTheDocument();       // markdown rendered, read-only
+  expect(container.querySelector("textarea")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+  expect(container.querySelector("textarea")).not.toBeNull();
+});
