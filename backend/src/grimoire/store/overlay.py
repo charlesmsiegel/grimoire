@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import assets, campaigns, characters, entities, greetings, pcs, taglines, worlds
+from . import assets, campaigns, characters, entities, greetings, groupstate, pcs, taglines, worlds
 from .paths import natural_key
 
 
@@ -150,6 +150,19 @@ def delete_entity(cid: str, kind: str, eid: str) -> None:
             raise
     if in_world:
         add_deleted(cid, ref)   # keep the world's copy from showing through
+    if kind == "groups":
+        _delete_group_state(cid, eid)
+
+
+def _delete_group_state(cid: str, gid: str) -> None:
+    """Campaign-local state.md is never inherited from the world (state is
+    campaign-local by definition), so it must die with the group record —
+    otherwise a same-slug recreate silently reattaches the dead group's
+    Secrets to scene context."""
+    p = groupstate.state_path(croot_of(cid), gid)
+    p.unlink(missing_ok=True)
+    if p.parent.exists() and not any(p.parent.iterdir()):
+        p.parent.rmdir()
 
 
 # ---- greetings + plot map ----
