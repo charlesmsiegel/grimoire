@@ -22,6 +22,7 @@ vi.mock("../api/client", () => ({
     startFromGreeting: vi.fn(),
     opener: vi.fn(),
     getCalendarProviders: vi.fn(),
+    listModules: vi.fn(),
   },
 }));
 import { api } from "../api/client";
@@ -42,6 +43,9 @@ beforeEach(() => {
   (api.createEntity as any).mockResolvedValue({ id: "tavern" });
   (api.availableGreetings as any).mockResolvedValue([]);
   (api.startFromGreeting as any).mockResolvedValue({ ok: true });
+  (api.listModules as any).mockResolvedValue([
+    { id: "pool-basic", name: "Basic Pool", description: "", version: "1", source: "builtin", valid: true },
+  ]);
 });
 
 function renderWizard() {
@@ -76,7 +80,7 @@ test("Create campaign commits the full sequence in order", async () => {
   fireEvent.change(screen.getByLabelText(/location name/i), { target: { value: "The Tavern" } });
   fireEvent.click(screen.getByRole("button", { name: /create campaign/i }));
 
-  await waitFor(() => expect(api.createCampaign).toHaveBeenCalledWith("Run One", "w1", "US", "gregorian"));
+  await waitFor(() => expect(api.createCampaign).toHaveBeenCalledWith("Run One", "w1", "US", "gregorian", undefined));
   expect(api.createCampaignPC).toHaveBeenCalledWith("run", expect.objectContaining({
     name: "Mara", tags: [], persona: expect.objectContaining({ name: "Mara" }),
   }));
@@ -86,6 +90,21 @@ test("Create campaign commits the full sequence in order", async () => {
     { kind: "campaign", id: "run" }, "locations", expect.objectContaining({ name: "The Tavern" }));
   // advanced to the opener step
   await screen.findByRole("heading", { name: /opening/i });
+});
+
+test("module picker defaults to inherit and passes the chosen module", async () => {
+  renderWizard();
+  await screen.findByText("Realm");
+  const select = await screen.findByLabelText("Mechanics module");
+  expect((select as HTMLSelectElement).value).toBe("");
+  fireEvent.change(select, { target: { value: "pool-basic" } });
+  fireEvent.change(screen.getByLabelText(/campaign name/i), { target: { value: "Run One" } });
+  fireEvent.click(screen.getByRole("button", { name: /next/i }));
+  fireEvent.change(screen.getByLabelText(/character name/i), { target: { value: "Mara" } });
+  fireEvent.click(screen.getByRole("button", { name: /next/i }));
+  fireEvent.click(screen.getByRole("button", { name: /create campaign/i }));
+  await waitFor(() => expect(api.createCampaign).toHaveBeenCalledWith(
+    "Run One", "w1", "US", "gregorian", "pool-basic"));
 });
 
 test("step 1 shows the calendar select alongside holidays", async () => {
@@ -105,7 +124,7 @@ test("selecting a holidays region passes it to createCampaign", async () => {
   fireEvent.change(screen.getByLabelText(/character name/i), { target: { value: "Mara" } });
   fireEvent.click(screen.getByRole("button", { name: /next/i }));
   fireEvent.click(screen.getByRole("button", { name: /create campaign/i }));
-  await waitFor(() => expect(api.createCampaign).toHaveBeenCalledWith("Run One", "w1", "GB", "gregorian"));
+  await waitFor(() => expect(api.createCampaign).toHaveBeenCalledWith("Run One", "w1", "GB", "gregorian", undefined));
 });
 
 test("choosing a custom (user-authored) calendar hides the Holidays select and creates with no region", async () => {
@@ -119,7 +138,7 @@ test("choosing a custom (user-authored) calendar hides the Holidays select and c
   fireEvent.change(screen.getByLabelText(/character name/i), { target: { value: "Mara" } });
   fireEvent.click(screen.getByRole("button", { name: /next/i }));
   fireEvent.click(screen.getByRole("button", { name: /create campaign/i }));
-  await waitFor(() => expect(api.createCampaign).toHaveBeenCalledWith("FR", "w1", undefined, "my-custom-calendar"));
+  await waitFor(() => expect(api.createCampaign).toHaveBeenCalledWith("FR", "w1", undefined, "my-custom-calendar", undefined));
 });
 
 test("choosing Hebrew and Israel passes the observance region to createCampaign", async () => {
@@ -133,7 +152,7 @@ test("choosing Hebrew and Israel passes the observance region to createCampaign"
   fireEvent.change(screen.getByLabelText(/character name/i), { target: { value: "Mara" } });
   fireEvent.click(screen.getByRole("button", { name: /next/i }));
   fireEvent.click(screen.getByRole("button", { name: /create campaign/i }));
-  await waitFor(() => expect(api.createCampaign).toHaveBeenCalledWith("H", "w1", "IL", "hebrew"));
+  await waitFor(() => expect(api.createCampaign).toHaveBeenCalledWith("H", "w1", "IL", "hebrew", undefined));
 });
 
 test("Finish on the opener step navigates to the campaign", async () => {
