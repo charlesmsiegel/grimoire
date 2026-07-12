@@ -1,0 +1,3 @@
+{#- mechanics_rules.j2: activated module rules docs. Vars: mechanics_rules ([str]). -#}
+{%- if mechanics_rules %}# Mechanics rules
+{{ mechanics_rules | join("\n\n") }}{% endif -%}

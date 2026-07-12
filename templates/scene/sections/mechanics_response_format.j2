@@ -1,0 +1,18 @@
+{#- mechanics_response_format.j2: the roll protocol + available checks.
+    Vars: mechanics_checks ([{ref, label, sheet_type, checks: [[id, label]]}]). -#}
+{%- if mechanics_checks %}# Dice checks
+When a present character attempts something uncertain and consequential,
+request a check by emitting exactly this fenced block mid-narration, at the
+moment of the attempt, then STOP writing immediately after the closing fence:
+
+```roll
+{"check": "<check id>", "actor": "<kind:id>", "difficulty": <number, optional>, "reason": "<short phrase>"}
+```
+
+Rules: use only the check ids and actor references listed below; never
+invent ids; never write dice results yourself — the engine rolls and you
+will be told the outcome. Do not propose more than one check per reply.
+
+Available checks:
+{% for a in mechanics_checks %}{{ a.ref }} ({{ a.label }}): {% for c in a.checks %}{{ c[0] }} ({{ c[1] }}){% if not loop.last %}, {% endif %}{% endfor %}
+{% endfor %}{% endif -%}

@@ -1,0 +1,8 @@
+{#- mechanics_sheets.j2: compact sheet summaries for present sheeted actors +
+    the current location. Vars: mechanics_sheets ([{ref, label, type_label, lines}]). -#}
+{%- set blocks = [] -%}
+{%- for s in mechanics_sheets -%}
+{%- set _ = blocks.append(s.ref ~ " — " ~ s.type_label ~ " (" ~ s.label ~ ")\n  " ~ s.lines | join("\n  ")) -%}
+{%- endfor -%}
+{%- if blocks %}# Sheets
+{{ blocks | join("\n") }}{% endif -%}
