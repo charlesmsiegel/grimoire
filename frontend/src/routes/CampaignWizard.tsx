@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  api, type Availability, type PCSummary, type Persona, type WorldMeta,
+  api, type Availability, type ModuleSummary, type PCSummary, type Persona, type WorldMeta,
 } from "../api/client";
 import type { ChatEvent } from "../api/stream";
 
@@ -21,6 +21,8 @@ export default function CampaignWizard({ keySet }: { keySet: boolean }) {
   const [region, setRegion] = useState("US");
   const [calendar, setCalendar] = useState("gregorian");
   const [calendars, setCalendars] = useState<{ id: string; name: string }[]>([]);
+  const [modules, setModules] = useState<ModuleSummary[]>([]);
+  const [moduleId, setModuleId] = useState("");
 
   // step 2
   const [persona, setPersona] = useState<Persona>(blankPersona);
@@ -46,6 +48,7 @@ export default function CampaignWizard({ keySet }: { keySet: boolean }) {
       if (ws.length) setWorld(ws[0].id);
     });
     api.getCalendarProviders().then((r) => setCalendars(r.providers)).catch(() => setCalendars([]));
+    api.listModules().then(setModules).catch(() => setModules([]));
   }, []);
 
   useEffect(() => {
@@ -71,7 +74,7 @@ export default function CampaignWizard({ keySet }: { keySet: boolean }) {
     try {
       const usesRegion = calendar === "gregorian" || calendar === "hebrew";
       const { id: cid } = await api.createCampaign(
-        name.trim(), world, usesRegion ? region || undefined : undefined, calendar);
+        name.trim(), world, usesRegion ? region || undefined : undefined, calendar, moduleId || undefined);
       // an existing world PC is already copied into the new campaign — just seat it
       let cast: { kind: "pcs"; id: string; version?: string };
       if (pickedPC) {
@@ -163,6 +166,17 @@ export default function CampaignWizard({ keySet }: { keySet: boolean }) {
             <label htmlFor="wiz-world">World</label>
             <select id="wiz-world" value={world} onChange={(e) => setWorld(e.target.value)}>
               {worlds.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+            </select>
+          </div>
+          <div className="field">
+            <label htmlFor="wiz-module">Mechanics module</label>
+            <select id="wiz-module" value={moduleId}
+                    onChange={(e) => setModuleId(e.target.value)}>
+              <option value="">World default</option>
+              <option value="none">None</option>
+              {modules.map((m) => (
+                <option key={m.id} value={m.id}>{m.name}</option>
+              ))}
             </select>
           </div>
           <div className="field-row">
