@@ -93,6 +93,11 @@ class ModuleSetting(BaseModel):
     module: str = ""
 
 
+class SheetBody(BaseModel):
+    sheet_type: str
+    fields: dict | None = None
+
+
 class PickBody(BaseModel):
     version: str
 
@@ -486,6 +491,51 @@ def put_world_module(wid: str, body: ModuleSetting):
     except store.modules.ModuleError:
         raise HTTPException(status_code=400, detail="'none' is reserved")
     return {"ok": True}
+
+
+# registered before the generic /worlds/{wid}/{kind} entity routes below,
+# same reasoning as /worlds/x/module above
+@router.get("/worlds/{wid}/sheets")
+def get_world_sheets_index(wid: str):
+    _world_root_or_404(wid)
+    meta = store.worlds.read_world(wid)["meta"]
+    return {"modules": store.sheets.world_sheet_modules(wid),
+            "default": (meta.get("module") or "").strip()}
+
+
+@router.get("/worlds/{wid}/sheets/{mid}")
+def get_world_sheets(wid: str, mid: str):
+    _world_root_or_404(wid)
+    try:
+        store.modules.pack_root(mid)
+    except store.modules.ModuleNotFound:
+        raise HTTPException(status_code=404, detail="module not found")
+    return {"coverage": store.sheets.world_coverage(wid, mid),
+            "refs": store.sheets.world_list_refs(wid, mid)}
+
+
+@router.get("/worlds/{wid}/sheets/{mid}/{kind}/{eid}")
+def get_world_sheet(wid: str, mid: str, kind: str, eid: str):
+    _world_root_or_404(wid)
+    return {"sheet": store.sheets.read_world(wid, mid, kind, eid)}
+
+
+@router.put("/worlds/{wid}/sheets/{mid}/{kind}/{eid}")
+def put_world_sheet(wid: str, mid: str, kind: str, eid: str, body: SheetBody):
+    _world_root_or_404(wid)
+    try:
+        store.sheets.write_world(wid, mid, kind, eid, body.sheet_type, body.fields)
+    except store.modules.ModuleNotFound:
+        raise HTTPException(status_code=404, detail="module not found")
+    except store.sheets.SheetError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True}
+
+
+@router.delete("/worlds/{wid}/sheets/{mid}/{kind}/{eid}")
+def delete_world_sheet(wid: str, mid: str, kind: str, eid: str):
+    _world_root_or_404(wid)
+    return {"ok": store.sheets.delete_world(wid, mid, kind, eid)}
 
 
 # ---- world tags (declared before the generic /{kind} routes) ----
@@ -2358,6 +2408,37 @@ def put_campaign_module(cid: str, body: ModuleSetting):
     except store.modules.ModuleNotFound:
         raise HTTPException(status_code=404, detail="module not found")
     return {"ok": True}
+
+
+# also registered before the generic /campaigns/{cid}/{kind} entity routes,
+# same reasoning as /campaigns/x/module above
+@router.get("/campaigns/{cid}/sheets")
+def get_campaign_sheets(cid: str):
+    _campaign_root_or_404(cid)
+    return {"coverage": store.sheets.coverage(cid),
+            "refs": store.sheets.list_refs(cid)}
+
+
+@router.get("/campaigns/{cid}/sheets/{kind}/{eid}")
+def get_campaign_sheet(cid: str, kind: str, eid: str):
+    _campaign_root_or_404(cid)
+    return {"sheet": store.sheets.read(cid, kind, eid)}
+
+
+@router.put("/campaigns/{cid}/sheets/{kind}/{eid}")
+def put_campaign_sheet(cid: str, kind: str, eid: str, body: SheetBody):
+    _campaign_root_or_404(cid)
+    try:
+        store.sheets.write(cid, kind, eid, body.sheet_type, body.fields)
+    except store.sheets.SheetError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True}
+
+
+@router.delete("/campaigns/{cid}/sheets/{kind}/{eid}")
+def delete_campaign_sheet(cid: str, kind: str, eid: str):
+    _campaign_root_or_404(cid)
+    return {"ok": store.sheets.delete(cid, kind, eid)}
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}/context")

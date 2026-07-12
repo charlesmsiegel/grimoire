@@ -6,7 +6,7 @@ from . import (
     absorb, appearances, assets, campaigns, cards, changes, characters, chronicle,
     chub, context, dice, dossiers, entities, entity_schema, epub, fetch, greetings, groupstate, image_subjects,
     localize, lorebook, migrations, modules, overlay, pcs, playing, playstate, plot, relationships,
-    rolls, scene_ids, scene_refs, scenes, styles, suggest, sync, tags, taglines, thumbs, worlds,
+    rolls, scene_ids, scene_refs, scenes, sheets, styles, suggest, sync, tags, taglines, thumbs, worlds,
 )
 from .appearances import AppearError
 from .campaigns import CampaignNotFound
@@ -98,4 +98,5 @@ __all__ = [
     "lorebook",
     "LorebookError",
     "modules",
+    "sheets",
 ]
