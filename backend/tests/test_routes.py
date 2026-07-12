@@ -95,6 +95,12 @@ def test_world_delete_blocked_while_campaigns_reference_it(client):
     assert client.delete(f"/api/worlds/{wid}").status_code == 200
 
 
+def test_world_module_none_rejected(client):
+    wid = _world(client)
+    r = client.put(f"/api/worlds/{wid}/module", json={"module": "none"})
+    assert r.status_code == 400
+
+
 def test_world_entity_crud(client):
     wid = _world(client)
     eid = client.post(f"/api/worlds/{wid}/locations", json={"name": "Drowned Library", "body": "Keeper"}).json()["id"]

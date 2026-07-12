@@ -693,3 +693,13 @@ def test_create_campaign_with_module(monkeypatch, tmp_path):
     assert modules.resolve(cid) == "pool-basic"
     with pytest.raises(modules.ModuleNotFound):
         campaigns.create_campaign("Run2", wid, module="ghost")
+
+
+def test_list_modules_skips_non_slug_dirs(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    d = tmp_path / "modules" / "MyCoolSystem"
+    d.mkdir(parents=True)
+    (d / "module.md").write_text("---\nname: Cool\n---\n", encoding="utf-8")
+    (d / "sheets.json").write_text('{"groups": {}, "sheet_types": {}}', encoding="utf-8")
+    ids = {m["id"] for m in modules.list_modules()}
+    assert "MyCoolSystem" not in ids  # skipped, not crashed

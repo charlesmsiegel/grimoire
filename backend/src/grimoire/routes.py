@@ -413,6 +413,8 @@ def put_world_module(wid: str, body: ModuleSetting):
         raise HTTPException(status_code=404, detail="world not found")
     except store.modules.ModuleNotFound:
         raise HTTPException(status_code=404, detail="module not found")
+    except store.modules.ModuleError:
+        raise HTTPException(status_code=400, detail="'none' is reserved")
     return {"ok": True}
 
 
