@@ -742,3 +742,62 @@ def test_fleshed_reference_packs(monkeypatch, tmp_path):
     assert d20["errors"] == []
     assert any(f["key"] == "spells"
                for f in d20["sheets"]["sheet_types"]["adept"]["fields"])
+
+
+# ---- Task 2: pack format additions — outcome tiers, _defaults, read_rule ----
+
+
+def test_check_templates_accept_reserved_names(monkeypatch, tmp_path):
+    checks = {"c": {"label": "C", "roll": "{vigor + modifier}d10 t{difficulty}",
+                    "requires": ["attributes"]}}
+    make_pack(_home(monkeypatch, tmp_path), checks=checks)
+    assert modules.load_pack("testmod")["errors"] == []
+
+
+def test_check_outcomes_validated(monkeypatch, tmp_path):
+    good = {"c": {"label": "C", "roll": "1d20 vs {difficulty}", "requires": [],
+                  "difficulty": 12,
+                  "outcomes": [{"label": "crit", "when": "natural == 20"},
+                               {"label": "success", "when": "margin >= 0"}]}}
+    make_pack(_home(monkeypatch, tmp_path), checks=good)
+    assert modules.load_pack("testmod")["errors"] == []
+
+
+@pytest.mark.parametrize("outcomes,frag", [
+    ([{"label": "", "when": "total > 1"}], "label"),
+    ([{"label": "x", "when": "a.b"}], "when"),
+    ([{"label": "x", "when": "vigor > 1"}], "vigor"),   # sheet names not in roll scope
+    ("nope", "outcomes"),
+])
+def test_check_outcomes_rejected(monkeypatch, tmp_path, outcomes, frag):
+    checks = {"c": {"label": "C", "roll": "1d20", "requires": [],
+                    "outcomes": outcomes}}
+    make_pack(_home(monkeypatch, tmp_path), checks=checks)
+    assert any(frag in e for e in modules.load_pack("testmod")["errors"])
+
+
+def test_checks_defaults_entry(monkeypatch, tmp_path):
+    checks = {"_defaults": {"difficulty": 6,
+                            "outcomes": [{"label": "botch",
+                                          "when": "successes == 0 and ones > 0"}]},
+              "c": {"label": "C", "roll": "{vigor}d10 t{difficulty}",
+                    "requires": ["attributes"]}}
+    make_pack(_home(monkeypatch, tmp_path), checks=checks)
+    pack = modules.load_pack("testmod")
+    assert pack["errors"] == []
+    assert pack["checks"]["_defaults"]["difficulty"] == 6
+    bad = {"_defaults": {"outcomes": [{"label": "x", "when": "("}]}}
+    import shutil
+    shutil.rmtree(tmp_path / "modules")
+    make_pack(tmp_path, checks=bad)
+    assert any("_defaults" in e for e in modules.load_pack("testmod")["errors"])
+
+
+def test_read_rule(monkeypatch, tmp_path):
+    make_pack(_home(monkeypatch, tmp_path),
+              rules={"core": "---\nalways: true\n---\nCore body.\n"})
+    doc = modules.read_rule("testmod", "core")
+    assert doc["body"].strip() == "Core body." and doc["meta"]["always"] == "true"
+    assert modules.read_rule("testmod", "ghost") is None
+    with pytest.raises(modules.ModuleNotFound):
+        modules.read_rule("ghost", "core")
