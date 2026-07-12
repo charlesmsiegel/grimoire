@@ -111,6 +111,26 @@ substituted by code:
 - `offscene_active` / `offscene_known` — the cast-directory tiers
   (dossiers / taglines + version ids)
 - `player_names` — seated player names (the response-format guard)
+- `mechanics_rules` — `list[str]`, activated rules-doc bodies (frontmatter
+  `always` docs, then docs gated on a present cast member's sheet type, then
+  recent-text keyword matches capped at 6) — `context._mechanics()`
+- `mechanics_sheets` — `list[{ref, label, type_label, lines}]`, compact
+  summaries for sheeted cast + the current location
+- `mechanics_checks` — `list[{ref, label, sheet_type, checks}]` (`checks` is
+  `[[id, label]]`), the available-checks table also served by GET
+  …/scenes/{sid}/checks
+
+All three are `[]` when the campaign has no mechanics module bound
+(`store/modules.py:resolve`).
+
+### Roll continuation — `scene/roll_result.j2` / `scene/roll_declined.j2`
+Ephemeral system messages `routes._continuation_messages` /
+`routes._declined_continuation_messages` append to `build_messages`'s output
+for the POST …/roll-proposal accept/decline call; never persisted.
+- `roll_result.j2` (accept) vars: `resolution` (the resolved-check dict),
+  `on_roll_docs` (`list[str]`, bodies of every `on_roll` rules doc),
+  `check_docs` (`list[str]`, the check's linked rules docs).
+- `roll_declined.j2` (decline): no vars.
 
 ## Keeping templates honest
 
