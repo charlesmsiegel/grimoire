@@ -15,7 +15,7 @@ import json
 import shutil
 from pathlib import Path
 
-from . import campaigns, entities, expressions, modules, worlds
+from . import campaigns, characters, entities, expressions, modules, overlay, pcs, worlds
 
 
 class SheetError(Exception):
@@ -310,3 +310,63 @@ def seed(cid: str) -> int:
         shutil.copy2(p, dst / p.name)
         n += 1
     return n
+
+
+def _type_kinds(sheets_def: dict) -> set[str]:
+    return {st.get("kind") for st in sheets_def.get("sheet_types", {}).values()
+            if isinstance(st, dict)}
+
+
+def _tally(ids: list[str], reader) -> dict:
+    sheeted = invalid = 0
+    for eid in ids:
+        s = reader(eid)
+        if s is None:
+            continue
+        sheeted += 1
+        if s["errors"]:
+            invalid += 1
+    return {"total": len(ids), "sheeted": sheeted, "invalid": invalid}
+
+
+def coverage(cid: str) -> dict:
+    mid = modules.resolve(cid)
+    if mid is None:
+        return {}
+    kinds = _type_kinds(modules.load_pack(mid)["sheets"])
+    out: dict = {}
+    for kind in FILE_KINDS:
+        if sheet_kind(kind) not in kinds:
+            continue
+        if kind == "characters":
+            ids = [c["id"] for c in overlay.list_characters(cid)]
+        elif kind == "pcs":
+            ids = [p["id"] for p in overlay.list_pcs(cid)]
+        else:
+            ids = [e["id"] for e in overlay.list_entities(cid, kind)]
+        out[kind] = _tally(ids, lambda eid, k=kind: read(cid, k, eid))
+    return out
+
+
+def world_coverage(wid: str, mid: str) -> dict:
+    try:
+        modules.pack_root(mid)
+    except modules.ModuleNotFound:
+        return {}
+    pack = modules.load_pack(mid)
+    if pack["errors"]:
+        return {}
+    kinds = _type_kinds(pack["sheets"])
+    root = worlds.world_root(wid)
+    out: dict = {}
+    for kind in FILE_KINDS:
+        if sheet_kind(kind) not in kinds:
+            continue
+        if kind == "characters":
+            ids = [c["id"] for c in characters.list_characters(root)]
+        elif kind == "pcs":
+            ids = [p["id"] for p in pcs.list_pcs(root)]
+        else:
+            ids = [e["id"] for e in entities.list_entities(root, kind)]
+        out[kind] = _tally(ids, lambda eid, k=kind: read_world(wid, mid, k, eid))
+    return out
