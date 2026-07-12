@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from pathlib import Path
 
 from . import dice, expressions
@@ -74,7 +73,28 @@ def _validate_manifest(meta: dict, errors: list[str]) -> None:
             errors.append(f"module.md: bad dice default: {e}")
 
 
+def _as_list(value, where, what, errors) -> list:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        errors.append(f"{where}: {what} must be a list")
+        return []
+    return value
+
+
+def _as_dict(value, where, what, errors) -> dict:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        errors.append(f"{where}: {what} must be an object")
+        return {}
+    return value
+
+
 def _validate_field(field: dict, where: str, errors: list[str]) -> None:
+    if not isinstance(field, dict):
+        errors.append(f"{where}: field must be an object")
+        return
     key = field.get("key")
     if not key or not isinstance(key, str):
         errors.append(f"{where}: field missing key")
@@ -83,8 +103,10 @@ def _validate_field(field: dict, where: str, errors: list[str]) -> None:
     if ftype not in FIELD_TYPES:
         errors.append(f"{where}.{key}: unknown field type {ftype!r}")
         return
-    if ftype in ("dots", "track", "resource") and not isinstance(field.get("max"), int):
-        errors.append(f"{where}.{key}: {ftype} requires an integer max")
+    if ftype in ("dots", "track", "resource"):
+        m = field.get("max")
+        if not isinstance(m, int) or isinstance(m, bool):
+            errors.append(f"{where}.{key}: {ftype} requires an integer max")
 
 
 def numeric_names(fields: list[dict]) -> set[str]:
@@ -92,6 +114,8 @@ def numeric_names(fields: list[dict]) -> set[str]:
     ``key`` (current) and ``key_max``; text/list are not addressable."""
     out: set[str] = set()
     for f in fields:
+        if not isinstance(f, dict):
+            continue
         t = f.get("type")
         if t in ("number", "dots", "track"):
             out.add(f["key"])
@@ -106,8 +130,9 @@ def assembled_fields(sheets: dict, type_id: str) -> list[dict]:
     st = sheets.get("sheet_types", {}).get(type_id, {})
     fields: list[dict] = []
     for gid in st.get("groups", []):
-        fields.extend(sheets.get("groups", {}).get(gid, {}).get("fields", []))
-    fields.extend(st.get("fields", []))
+        fields.extend([f for f in sheets.get("groups", {}).get(gid, {}).get("fields", [])
+                       if isinstance(f, dict)])
+    fields.extend([f for f in st.get("fields", []) if isinstance(f, dict)])
     return fields
 
 
@@ -133,32 +158,43 @@ def _validate_derived(derived: dict, scope: set[str], where: str,
 def _validate_sheets(sheets: dict, errors: list[str]) -> None:
     groups = sheets.get("groups", {})
     for gid, group in groups.items():
+        if not isinstance(group, dict):
+            errors.append(f"groups.{gid}: must be an object")
+            continue
         seen: set[str] = set()
-        for f in group.get("fields", []):
+        fields = _as_list(group.get("fields"), f"groups.{gid}", "fields", errors)
+        for f in fields:
             _validate_field(f, f"groups.{gid}", errors)
             k = f.get("key")
             if k in seen:
                 errors.append(f"groups.{gid}.{k}: duplicate field key")
             seen.add(k)
-        gscope = numeric_names(group.get("fields", []))
-        _validate_derived(group.get("derived", {}), gscope, f"groups.{gid}", errors)
+        gscope = numeric_names(fields)
+        derived = _as_dict(group.get("derived"), f"groups.{gid}", "derived", errors)
+        _validate_derived(derived, gscope, f"groups.{gid}", errors)
     for tid, st in sheets.get("sheet_types", {}).items():
         where = f"sheet_types.{tid}"
+        if not isinstance(st, dict):
+            errors.append(f"{where}: must be an object")
+            continue
         if st.get("kind") not in SHEET_KINDS:
             errors.append(f"{where}: unknown kind {st.get('kind')!r}")
-        for gid in st.get("groups", []):
+        st_groups = _as_list(st.get("groups"), where, "groups", errors)
+        for gid in st_groups:
             if gid not in groups:
                 errors.append(f"{where}: unknown group ref {gid!r}")
-        for f in st.get("fields", []):
+        st_fields = _as_list(st.get("fields"), where, "fields", errors)
+        for f in st_fields:
             _validate_field(f, where, errors)
         fields = assembled_fields(sheets, tid)
         keys = [f.get("key") for f in fields]
         for k in {k for k in keys if keys.count(k) > 1}:
             errors.append(f"{where}.{k}: duplicate field key across groups")
         scope = numeric_names(fields)
-        for gid in st.get("groups", []):
+        for gid in st_groups:
             scope |= set(groups.get(gid, {}).get("derived", {}))
-        _validate_derived(st.get("derived", {}), scope, where, errors)
+        st_derived = _as_dict(st.get("derived"), where, "derived", errors)
+        _validate_derived(st_derived, scope, where, errors)
 
 
 def load_pack(mid: str) -> dict:
@@ -177,7 +213,12 @@ def load_pack(mid: str) -> dict:
             errors.append(f"sheets.json: {e}")
             sheets = {"groups": {}, "sheet_types": {}}
         else:
-            _validate_sheets(sheets, errors)
+            if not isinstance(sheets, dict) or not isinstance(sheets.get("groups", {}), dict) \
+                    or not isinstance(sheets.get("sheet_types", {}), dict):
+                errors.append("sheets.json: must be an object with 'groups' and 'sheet_types' maps")
+                sheets = {"groups": {}, "sheet_types": {}}
+            else:
+                _validate_sheets(sheets, errors)
     pack = {
         "id": mid,
         "source": source,
