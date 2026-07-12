@@ -89,7 +89,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
   // the popover's mode (dice notation vs. a module check) and check fields.
   const [rollForm, setRollForm] = useState<{
     mode: "dice" | "check"; notation: string; label: string; error: string | null;
-    checkActor: string; checkId: string; difficulty: number; modifier: number;
+    checkActor: string; checkId: string; difficulty: number | ""; modifier: number;
   } | null>(null);
   const [checkActors, setCheckActors] = useState<SceneCheckActor[]>([]);
   const checksFetched = useRef(false); // one getSceneChecks per popover session
@@ -306,7 +306,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
     }
     checksFetched.current = false; // each popover session re-fetches once
     setRollForm({ mode: "dice", notation: "", label: "", error: null,
-                  checkActor: "", checkId: "", difficulty: 0, modifier: 0 });
+                  checkActor: "", checkId: "", difficulty: "", modifier: 0 });
   }
 
   // the actor/check lists load lazily on first entering Check mode — a
@@ -325,10 +325,11 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
     if (!rollForm.checkActor || !rollForm.checkId) return;
     setRolling(true);
     try {
-      await api.rollCheck(cid, activeId, {
-        check: rollForm.checkId, actor: rollForm.checkActor,
-        difficulty: rollForm.difficulty, modifier: rollForm.modifier,
-      });
+      const body: { check: string; actor: string; difficulty?: number; modifier: number } = {
+        check: rollForm.checkId, actor: rollForm.checkActor, modifier: rollForm.modifier,
+      };
+      if (rollForm.difficulty !== "") body.difficulty = rollForm.difficulty;
+      await api.rollCheck(cid, activeId, body);
       setRollForm(null);
       await selectScene(activeId);
     } catch (err: any) {
@@ -771,7 +772,9 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
                       .map(([key, label]) => <option key={key} value={key}>{label}</option>)}
                   </select>
                   <input type="number" aria-label="Difficulty" value={rollForm.difficulty} disabled={rolling}
-                         onChange={(e) => setRollForm({ ...rollForm, difficulty: Number(e.target.value) })} />
+                         placeholder="default"
+                         onChange={(e) => setRollForm({ ...rollForm,
+                           difficulty: e.target.value === "" ? "" : Number(e.target.value) })} />
                   <input type="number" aria-label="Modifier" value={rollForm.modifier} disabled={rolling}
                          onChange={(e) => setRollForm({ ...rollForm, modifier: Number(e.target.value) })} />
                   <button className="btn-chrome" onClick={doCheck}

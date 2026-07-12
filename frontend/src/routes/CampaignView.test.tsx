@@ -984,7 +984,7 @@ test("selecting a scene re-hydrates a pending roll-proposal record", async () =>
   expect(await screen.findByRole("button", { name: "Roll it" })).toBeInTheDocument();
 });
 
-test("popover Check mode lists actors/checks and posts rollCheck", async () => {
+test("popover Check mode with difficulty left empty posts rollCheck without difficulty", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
     { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
@@ -1001,6 +1001,30 @@ test("popover Check mode lists actors/checks and posts rollCheck", async () => {
   fireEvent.change(screen.getByLabelText("Check"), { target: { value: "brawl" } });
   fireEvent.click(screen.getByRole("button", { name: "Roll ▸" }));
   await waitFor(() => expect(api.rollCheck).toHaveBeenCalledWith("run", "s1",
-    { check: "brawl", actor: "characters:mara", difficulty: 0, modifier: 0 }));
+    { check: "brawl", actor: "characters:mara", modifier: 0 }));
+  const [, , rollBody] = (api.rollCheck as any).mock.calls[0];
+  expect(rollBody).not.toHaveProperty("difficulty");
+  await waitFor(() => expect(screen.queryByLabelText("Check actor")).toBeNull());
+});
+
+test("popover Check mode with a typed difficulty posts it", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
+  (api.getSceneChecks as any).mockResolvedValue({ actors: [
+    { ref: "characters:mara", label: "Mara", sheet_type: "vampire",
+      checks: [["brawl", "Vigor + Brawl"], ["stealth", "Wits + Stealth"]] },
+  ] });
+  renderCampaign();
+  await screen.findByText("a reply");
+  fireEvent.click(screen.getByRole("button", { name: "Roll dice" }));
+  fireEvent.click(screen.getByRole("button", { name: "Check" }));
+  await waitFor(() => expect(api.getSceneChecks).toHaveBeenCalledWith("run", "s1"));
+  fireEvent.change(await screen.findByLabelText("Check actor"), { target: { value: "characters:mara" } });
+  fireEvent.change(screen.getByLabelText("Check"), { target: { value: "brawl" } });
+  fireEvent.change(screen.getByLabelText("Difficulty"), { target: { value: "7" } });
+  fireEvent.click(screen.getByRole("button", { name: "Roll ▸" }));
+  await waitFor(() => expect(api.rollCheck).toHaveBeenCalledWith("run", "s1",
+    { check: "brawl", actor: "characters:mara", difficulty: 7, modifier: 0 }));
   await waitFor(() => expect(screen.queryByLabelText("Check actor")).toBeNull());
 });

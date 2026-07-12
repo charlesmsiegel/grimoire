@@ -69,3 +69,27 @@ test("decline and resolved-continue", () => {
   fireEvent.click(screen.getByText("Continue narration"));
   expect(onResolve2).toHaveBeenCalledWith({ proposal: "pr-000001", action: "accept" });
 });
+
+// backend sends difficulty: null (not omitted) when the LLM's roll fence
+// leaves difficulty out — resolve_check falls back to the module default,
+// so the frontend must not coerce that to 0 and must not render a diff chip.
+const REC_NULL_DIFFICULTY: ProposalRecord = {
+  id: "pr-000003", status: "pending",
+  payload: { id: "pr-000003", check: "brawl", check_label: "Vigor + Brawl",
+             actor: "characters:mara", actor_label: "Mara", difficulty: null,
+             available: { "characters:mara": [["brawl", "Vigor + Brawl"], ["perception", "Wits + Occult"]] },
+             problems: [] },
+  resolution: null,
+};
+
+test("null difficulty: no diff chip, and accept omits difficulty", () => {
+  const onResolve = vi.fn();
+  render(<RollProposal record={REC_NULL_DIFFICULTY} busy={false} onResolve={onResolve} />);
+  expect(screen.queryByText(/diff/)).toBeNull();
+  fireEvent.click(screen.getByText("Roll it"));
+  expect(onResolve).toHaveBeenCalledWith(
+    { proposal: "pr-000003", action: "accept", check: "brawl",
+      actor: "characters:mara", modifier: 0 });
+  const body = onResolve.mock.calls[0][0];
+  expect(body).not.toHaveProperty("difficulty");
+});
