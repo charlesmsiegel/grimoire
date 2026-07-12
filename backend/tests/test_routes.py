@@ -2772,3 +2772,25 @@ def test_entity_fields_unknown_kind_stays_404(client):
     r = client.post(f"/api/worlds/{wid}/weapons",
                     json={"name": "X", "fields": {"rarity": "r"}})
     assert r.status_code == 404
+
+
+def test_group_state_routes_round_trip(client):
+    _wid, cid = _campaign(client)
+    gid = client.post(f"/api/campaigns/{cid}/groups",
+                      json={"name": "Salt Circle", "body": "A quiet cabal."}).json()["id"]
+    # no state file yet -> all fields empty
+    r = client.get(f"/api/campaigns/{cid}/groups/{gid}/state")
+    assert r.status_code == 200
+    assert r.json()["goals"] == "" and r.json()["secrets"] == ""
+    # write, then read back
+    r = client.put(f"/api/campaigns/{cid}/groups/{gid}/state",
+                   json={"goals": "Expand.", "secrets": "The abbot."})
+    assert r.json() == {"ok": True}
+    st = client.get(f"/api/campaigns/{cid}/groups/{gid}/state").json()
+    assert st["goals"] == "Expand." and st["secrets"] == "The abbot." and st["updated"]
+    # PUT is a full snapshot: an omitted field defaults to "" and clears
+    client.put(f"/api/campaigns/{cid}/groups/{gid}/state", json={"goals": "Expand."})
+    assert client.get(f"/api/campaigns/{cid}/groups/{gid}/state").json()["secrets"] == ""
+    # unknown group -> 404 on both verbs
+    assert client.get(f"/api/campaigns/{cid}/groups/no-such/state").status_code == 404
+    assert client.put(f"/api/campaigns/{cid}/groups/no-such/state", json={}).status_code == 404
