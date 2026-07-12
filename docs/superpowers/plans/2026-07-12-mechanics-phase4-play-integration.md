@@ -736,10 +736,19 @@ def test_rolls_proposal_tag(monkeypatch, tmp_path):
 
 - [ ] **Step 3: Implement**
 
-rolls.py: `def append(cid, scene, label, result, proposal=None)` — add
-`**({"proposal": proposal} if proposal else {})` into the entry dict;
-`find_by_proposal` scans `read(cid)` for `e.get("proposal") == pid`
-(last match wins).
+rolls.py: `append(cid, scene, label, result, proposal=None)` — adds
+`**({"proposal": proposal} if proposal else {})` into the entry dict AND
+becomes **internally atomic**: a module-local per-campaign
+`threading.Lock` (same `_LOCKS`/`_LOCKS_GUARD` pattern as proposals.py)
+around the read-assign-id-rewrite, writing via temp-file+`os.replace`.
+`find_by_proposal(cid, pid)` takes the same lock;
+`find_or_append_by_proposal(cid, sid, label, result, proposal)` does the
+find-else-append as one locked operation — the projection uses THIS, not
+a separate find+append. Every existing `rolls.append` caller keeps
+working unchanged (the lock is internal). Tests: concurrent appends from
+8 threads → 8 distinct sequential ids, no lost entries; concurrent
+`find_or_append_by_proposal` for the same pid → exactly one tagged
+entry.
 
 checks.py core (structure; reuse `sheets._numeric_scope`/`sheets._compute_derived`
 via public wrappers — if they are private, add a public
@@ -1228,9 +1237,8 @@ git commit -m "feat(context): mechanics rules/sheets/roll-protocol sections (#16
 
     ```python
     res = dict(rec["resolution"])
-    entry = rolls.find_by_proposal(cid, pid)      # uuid tag match is proof
-    if entry is None:
-        entry = rolls.append(cid, sid, label, res["result"], proposal=pid)
+    entry = rolls.find_or_append_by_proposal(     # one locked find-else-append
+        cid, sid, label, res["result"], proposal=pid)
     res = {**res, "roll_id": entry["id"]}
     proposals.transition(cid, sid, pid, ("resolved",), "resolved", res)
     if "line_intent" not in res:
@@ -1360,7 +1368,20 @@ line survive:
 - **crash mid-continuation-persist**: monkeypatch `_persist_reply` to
   append one message then raise → record keeps `narration_intent`,
   status stays `resolved`; retry → the partial message is trimmed, the
-  full continuation persists once, `narrated`.
+  full continuation persists once, `narrated`;
+- **interleaved manual roll in the crash window**: after the injected
+  mid-persist crash, POST a manual roll, then retry the accept → the 🎲
+  manual line survives the trim, the partial continuation segment does
+  not, the continuation persists once;
+- **concurrent proposal-accept vs manual check**: thread A accepts a
+  resolved proposal while thread B POSTs `/check` → two distinct roll
+  entries with distinct ids, both preserved.
+
+The two cross-file crash windows in the fence handoffs (pending-before-
+narration on the initial fence; narrated-before-new-pending on the
+follow-up) are **documented accepted risk** per the spec's
+"Crash-window disclosure" section — do not add journaling; do add the
+disclosure to the route module docstring.
 
 Steps: failing tests → implement (rewrite `_chat_stream` with an optional
 fence watcher; helper functions `_make_proposal`, `_project_resolution`,
