@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
+import WorldMechanics from "./WorldMechanics";
 
 const TILES = [
   { key: "characters", label: "Characters", tab: "characters" },
@@ -69,6 +70,7 @@ export function WorldOverview({ wid, onNavigate }: { wid: string; onNavigate: (t
           ))}
         </ul>
       </div>
+      <WorldMechanics wid={wid} />
     </div>
   );
 }
