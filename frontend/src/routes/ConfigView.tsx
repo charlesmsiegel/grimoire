@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ApiError, api, type Config, type DataDirInfo } from "../api/client";
+import { ApiError, api, type Config, type DataDirInfo, type Style } from "../api/client";
 import { themeList } from "../theme/themes";
 import { useTheme } from "../theme/ThemeProvider";
 import ModelCombobox from "./ModelCombobox";
@@ -31,6 +31,8 @@ export default function ConfigView() {
   const [provider, setProvider] = useState("openrouter");
   const [claudeModel, setClaudeModel] = useState("");
   const [systemPrompt, setSystemPrompt] = useState("");
+  const [defaultStyleId, setDefaultStyleId] = useState("");
+  const [styleOptions, setStyleOptions] = useState<Style[]>([]);
   const [userLabel, setUserLabel] = useState("");
   const [assistantLabel, setAssistantLabel] = useState("");
   const [saved, setSaved] = useState(false);
@@ -48,11 +50,13 @@ export default function ConfigView() {
       setSystemPrompt(c.system_prompt);
       setUserLabel(c.user_label);
       setAssistantLabel(c.assistant_label);
+      setDefaultStyleId(c.default_style_id);
     });
     api.getDataDir().then((d) => {
       setDataDir(d);
       setDataDirInput(d.data_dir);
     });
+    api.listStyles().then(setStyleOptions).catch(() => setStyleOptions([]));
   }, []);
 
   async function saveDataDir(value: string | null) {
@@ -70,7 +74,7 @@ export default function ConfigView() {
 
   if (!config) return <div className="page page-narrow config">Loading…</div>;
 
-  async function save(fields: Partial<{ model: string; theme: string; openrouter_key: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string; provider: string; claude_model: string }>) {
+  async function save(fields: Partial<{ model: string; theme: string; openrouter_key: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string; provider: string; claude_model: string; default_style_id: string }>) {
     const next = await api.putConfig(fields);
     setConfig(next);
     setKey("");
@@ -197,6 +201,16 @@ export default function ConfigView() {
         onChange={(e) => setSystemPrompt(e.target.value)}
       />
 
+      <div className="section-label">Default prose style</div>
+      <select
+        aria-label="Default prose style"
+        value={defaultStyleId}
+        onChange={(e) => setDefaultStyleId(e.target.value)}
+      >
+        <option value="">— none —</option>
+        {styleOptions.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+      </select>
+
       <div className="section-label">Transcript</div>
       <label className="checkbox-row">
         <input
@@ -240,6 +254,7 @@ export default function ConfigView() {
             model, provider, claude_model: claudeModel,
             system_prompt: systemPrompt,
             user_label: userLabel, assistant_label: assistantLabel,
+            default_style_id: defaultStyleId,
             ...(key ? { openrouter_key: key } : {}),
           })}
         >

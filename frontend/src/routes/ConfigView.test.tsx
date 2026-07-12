@@ -3,13 +3,13 @@ import ConfigView from "./ConfigView";
 
 vi.mock("../api/client", () => ({
   ApiError: class ApiError extends Error {},
-  api: { getConfig: vi.fn(), putConfig: vi.fn(), getDataDir: vi.fn(), putDataDir: vi.fn() },
+  api: { getConfig: vi.fn(), putConfig: vi.fn(), getDataDir: vi.fn(), putDataDir: vi.fn(), listStyles: vi.fn() },
 }));
 vi.mock("../theme/ThemeProvider", () => ({ useTheme: () => ({ setTheme: vi.fn() }) }));
 vi.mock("./ModelCombobox", () => ({ default: () => <div /> }));
 import { api } from "../api/client";
 
-const cfg = { model: "m", theme: "codex", key_set: false, system_prompt: "", quote_color: "off", user_label: "You", assistant_label: "Grimoire", provider: "openrouter", claude_model: "opus" };
+const cfg = { model: "m", theme: "codex", key_set: false, system_prompt: "", quote_color: "off", user_label: "You", assistant_label: "Grimoire", provider: "openrouter", claude_model: "opus", default_style_id: "" };
 const dataDir = {
   data_dir: "/home/u/.grimoire", default: "/home/u/.grimoire",
   is_default: true, source: "default" as const, exists: true,
@@ -20,6 +20,10 @@ beforeEach(() => {
   (api.putConfig as any).mockResolvedValue(cfg);
   (api.getDataDir as any).mockResolvedValue(dataDir);
   (api.putDataDir as any).mockResolvedValue(dataDir);
+  (api.listStyles as any).mockResolvedValue([
+    { id: "gothic-horror", name: "Gothic Horror", description: "", tags: [], built_in: true },
+    { id: "noir-detective", name: "Noir Detective", description: "", tags: [], built_in: true },
+  ]);
 });
 
 test("saves the system prompt", async () => {
@@ -29,6 +33,15 @@ test("saves the system prompt", async () => {
   fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
   await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith(
     expect.objectContaining({ system_prompt: "Never speak for the PC." })));
+});
+
+test("saves the default prose style", async () => {
+  render(<ConfigView />);
+  const sel = await screen.findByLabelText(/default prose style/i);
+  fireEvent.change(sel, { target: { value: "noir-detective" } });
+  fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+  await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith(
+    expect.objectContaining({ default_style_id: "noir-detective" })));
 });
 
 test("toggling quote color saves immediately", async () => {
