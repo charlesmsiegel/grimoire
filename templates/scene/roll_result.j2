@@ -1,0 +1,12 @@
+{#- Ephemeral system message appended to the continuation call after an
+    ACCEPTED check (routes._continuation_messages). Never persisted. Vars:
+    resolution (the resolved-check dict), on_roll_docs (list[str], bodies of
+    every on_roll rules doc), check_docs (list[str], the check's linked rules
+    docs). -#}
+A check just resolved. {{ resolution.actor_label }} — {{ resolution.check_label }}{% if resolution.difficulty is not none %} (difficulty {{ resolution.difficulty }}){% endif %}: rolled {{ resolution.result.notation }}{% if resolution.result.successes is not none %} → {{ resolution.result.successes }} success{{ '' if resolution.result.successes == 1 else 'es' }}{% else %} → {{ resolution.result.total }}{% if resolution.result.vs is not none %} vs {{ resolution.result.vs }}{% endif %}{% endif %}{% if resolution.tier %} · {{ resolution.tier }}{% endif %}.
+{% if on_roll_docs or check_docs %}
+Rules in play:
+{% for doc in on_roll_docs %}- {{ doc }}
+{% endfor %}{% for doc in check_docs %}- {{ doc }}
+{% endfor %}{% endif %}
+Continue the narration from where it stopped, incorporating this result. Do not roll again for this action.

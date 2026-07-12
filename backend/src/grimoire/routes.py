@@ -77,6 +77,22 @@ class RollBody(BaseModel):
     label: str | None = None
 
 
+class ProposalAction(BaseModel):
+    proposal: str
+    action: str
+    check: str | None = None
+    actor: str | None = None
+    difficulty: int | None = None
+    modifier: int | None = None
+
+
+class CheckBody(BaseModel):
+    check: str
+    actor: str
+    difficulty: int | None = None
+    modifier: int | None = None
+
+
 class NewCampaign(BaseModel):
     name: str
     world: str
@@ -1643,21 +1659,104 @@ def _persist_reply(cid: str, sid: str, text: str) -> None:
         store.scenes.append_message(cid, sid, "assistant", seg["content"], speaker=seg["speaker"])
 
 
-def _chat_stream(cid: str, sid: str, messages: list[dict], cfg: dict, client: LLMClient):
+def _sse(data: dict) -> str:
+    return f"data: {json.dumps(data)}\n\n"
+
+
+def _sse_response(frames: list[str]):
+    """A StreamingResponse that just replays already-computed SSE frames (used
+    for the immediate-done / error-frame branches of the proposal route)."""
     async def event_stream():
-        parts: list[str] = []
+        for f in frames:
+            yield f
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+def _fence_stream(cid: str, sid: str, messages: list[dict], cfg: dict,
+                  client: LLMClient, finalize, on_error=None):
+    """Stream one persisted turn while watching for a ```roll fence.
+
+    Deltas are routed through a FenceWatcher, so an opener (even split across
+    chunks) is never emitted and streaming stops once a fence closes. When the
+    stream ends, `finalize(watcher)` (called with the lock/persist strategy of
+    the caller — initial turn vs continuation) returns the trailing SSE frames
+    (proposal / done). `on_error(watcher)` decides what to persist on an
+    upstream LLM failure. Fence watching runs on persisted turns only;
+    `_ephemeral_stream` is deliberately untouched.
+    """
+    async def event_stream():
+        watcher = store.fence.FenceWatcher()
         try:
             async for delta in client.stream(messages, cfg):
-                parts.append(delta)
-                yield f"data: {json.dumps({'delta': delta})}\n\n"
-            _persist_reply(cid, sid, "".join(parts))
-            yield f"data: {json.dumps({'done': True})}\n\n"
+                out = watcher.feed(delta)
+                if out:
+                    yield _sse({"delta": out})
+                if watcher.complete:
+                    break  # stop-after-fence: ignore anything past the close
+            tail = watcher.finish()
+            if tail:
+                yield _sse({"delta": tail})
         except LLMError as exc:
-            if parts:
-                _persist_reply(cid, sid, "".join(parts))
-            yield f"data: {json.dumps({'error': {'detail': exc.detail, 'kind': exc.kind}})}\n\n"
+            watcher.finish()
+            if on_error is not None:
+                on_error(watcher)
+            yield _sse({"error": {"detail": exc.detail, "kind": exc.kind}})
+            return
+        for frame in finalize(watcher):
+            yield frame
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+def _chat_stream(cid: str, sid: str, messages: list[dict], cfg: dict, client: LLMClient):
+    """A normal persisted turn. A ```roll fence cuts the stream: the pending
+    proposal record is written *before* the pre-fence narration persists, so a
+    transcript that ends at a mechanical decision point always has a
+    recoverable proposal (see the crash-window disclosure above)."""
+    def finalize(watcher) -> list[str]:
+        frames: list[str] = []
+        if watcher.complete or watcher.truncated:
+            payload = _make_proposal(cid, sid, watcher)
+            rec = store.proposals.new(cid, sid, payload)
+            _persist_reply(cid, sid, watcher.narration)
+            frames.append(_sse({"proposal": {**payload, "id": rec["id"]}}))
+        elif watcher.narration.strip():
+            _persist_reply(cid, sid, watcher.narration)
+        frames.append(_sse({"done": True}))
+        return frames
+
+    def on_error(watcher) -> None:
+        if watcher.narration.strip():  # a normal turn keeps its partial reply
+            _persist_reply(cid, sid, watcher.narration)
+
+    return _fence_stream(cid, sid, messages, cfg, client, finalize, on_error)
+
+
+def _continuation_stream(cid: str, sid: str, pid: str, messages: list[dict],
+                         cfg: dict, client: LLMClient):
+    """Stream a proposal's continuation and commit it atomically. A supersede
+    that lands mid-stream makes ``commit_narration`` return False and the
+    streamed text is dropped. A follow-up fence in the continuation hands off
+    under one lock: commit the old record's narration, then mint the new
+    pending record, then emit its proposal event."""
+    def finalize(watcher) -> list[str]:
+        frames: list[str] = []
+        persist = lambda: _persist_reply(cid, sid, watcher.narration)  # noqa: E731
+        if watcher.complete or watcher.truncated:
+            with store.proposals.locked(cid):
+                if store.proposals.commit_narration(cid, sid, pid, persist):
+                    payload = _make_proposal(cid, sid, watcher)
+                    rec = store.proposals.new(cid, sid, payload)
+                    frames.append(_sse({"proposal": {**payload, "id": rec["id"]}}))
+        else:
+            store.proposals.commit_narration(cid, sid, pid, persist)
+        frames.append(_sse({"done": True}))
+        return frames
+
+    # No on_error: an upstream failure mid-continuation drops the partial
+    # (nothing persisted) and leaves the record resolved/declined, so a retry
+    # re-streams a fresh continuation cleanly.
+    return _fence_stream(cid, sid, messages, cfg, client, finalize)
 
 
 def _ephemeral_stream(messages: list[dict], cfg: dict, client: LLMClient):
@@ -1775,6 +1874,7 @@ def _require_scene(cid: str, sid: str) -> dict:
 @router.post("/campaigns/{cid}/scenes/{sid}/chat")
 def post_chat(cid: str, sid: str, turn: ChatTurn, client: LLMClient = Depends(get_llm)):
     _require_scene(cid, sid)
+    store.proposals.supersede(cid, sid)  # a new send retires any pending decision
     cfg = store.read_config()
     _require_key(cfg)
     if store.scenes.is_pcless(cid, sid) or not turn.content.strip():
@@ -1795,6 +1895,7 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, client: LLMClient = Depends(ge
 @router.post("/campaigns/{cid}/scenes/{sid}/retry")
 def post_retry(cid: str, sid: str, client: LLMClient = Depends(get_llm)):
     scene = _require_scene(cid, sid)
+    store.proposals.supersede(cid, sid)  # a fresh generation retires the old decision
     cfg = store.read_config()
     _require_key(cfg)
     if not scene["messages"]:
@@ -1808,6 +1909,7 @@ def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
                     client: LLMClient = Depends(get_llm)):
     """Redo the most recent post: drop a trailing assistant reply, stream a fresh one."""
     scene = _require_scene(cid, sid)
+    store.proposals.supersede(cid, sid)  # regenerating retires the old decision
     cfg = store.read_config()
     _require_key(cfg)
     msgs = scene["messages"]
@@ -2364,6 +2466,232 @@ def post_scene_roll(cid: str, sid: str, body: RollBody):
     line = store.dice.format_roll(result, label)
     store.scenes.append_message(cid, sid, "assistant", line, speaker=store.scenes.ROLL_SPEAKER)
     return {"ok": True, "roll": entry, "message": line}
+
+
+# ---- mechanics roll proposals & manual checks (#162, Phase 4) --------------
+# Declared before the generic /campaigns/{cid}/{kind} entity routes below.
+#
+# Crash-window disclosure (accepted risk, per the phase-4 spec). The fence
+# handoffs are serialized against concurrent writers by the per-campaign
+# proposals lock, but are NOT crash-atomic across files (proposals.json and
+# the scene transcript are separate writes; grimoire is a local single-process
+# app with no cross-file journal). Two microsecond-wide windows exist, both
+# bounded and non-corrupting:
+#   - initial fence: a crash between writing the pending record and persisting
+#     the pre-fence narration leaves a recoverable chip whose last narration
+#     beat is missing — the player can still adjudicate or decline;
+#   - follow-up fence: a crash between the old record's `narrated` write and
+#     the new pending record leaves the continuation fully persisted and the
+#     follow-up check simply lost; play continues on the next send.
+# The guaranteed invariant: no roll is ever duplicated or lost once logged, no
+# narration is attributed to a superseded decision, and no crash leaves an
+# unrecoverable or corrupted state. Full journaling was rejected as
+# disproportionate for a local single-user store.
+
+
+def _scene_messages(cid: str, sid: str) -> list[dict]:
+    return store.scenes.read_scene(cid, sid)["messages"]
+
+
+def _roll_label(res: dict) -> str:
+    return f"{res['actor_label']} — {res['check_label']}"
+
+
+def _make_proposal(cid: str, sid: str, watcher) -> dict:
+    """Build the proposal payload from a closed/truncated fence: parse the
+    body, resolve the actor against the scene's available checks (exact
+    kind:id, then case-insensitive label), and collect `problems`. A proposal
+    is never silently dropped — a bad one just opens the chip in Modify."""
+    fields, problems = store.fence.parse_roll_body(watcher.body or "")
+    if watcher.truncated:
+        problems = [*problems, "roll fence truncated"]
+
+    actors = store.checks.available_checks(cid, sid)
+    available = {a["ref"]: a["checks"] for a in actors}
+
+    actor_raw = fields.get("actor")
+    actor, actor_label = None, actor_raw
+    if actor_raw:
+        for a in actors:
+            if a["ref"] == actor_raw:
+                actor, actor_label = a["ref"], a["label"]
+                break
+        if actor is None:
+            for a in actors:
+                if a["label"].lower() == str(actor_raw).strip().lower():
+                    actor, actor_label = a["ref"], a["label"]
+                    break
+    if actor is None:
+        problems = [*problems, "actor could not be resolved"]
+
+    mid = store.modules.resolve(cid)
+    check_labels: dict[str, str] = {}
+    if mid is not None:
+        pack = store.modules.load_pack(mid)
+        cd = pack["checks"] if isinstance(pack["checks"], dict) else {}
+        check_labels = {k: (v.get("label", k) if isinstance(v, dict) else k)
+                        for k, v in cd.items() if k != "_defaults"}
+
+    check = fields.get("check")
+    if check is not None:
+        if check not in check_labels:
+            problems = [*problems, "unknown check id"]
+        elif actor is not None and check not in dict(available.get(actor, [])):
+            problems = [*problems, "check unavailable to this actor"]
+
+    return {"check": check, "check_label": check_labels.get(check, check),
+            "actor": actor, "actor_label": actor_label,
+            "difficulty": fields.get("difficulty"), "modifier": fields.get("modifier", 0),
+            "reason": fields.get("reason", ""), "available": available,
+            "problems": problems}
+
+
+def _project_resolution(cid: str, sid: str, pid: str) -> dict:
+    """Idempotent, crash-recoverable projection of a resolved proposal into the
+    roll log and transcript. Runs entirely under the proposals per-campaign
+    lock (pure file I/O, no LLM), so concurrent retries serialize. The updated
+    resolution is carried forward across each CAS — never rebuilt from a stale
+    local — so the roll_id survives the line_intent write."""
+    with store.proposals.locked(cid):
+        rec = store.proposals.get(cid, sid)
+        res = dict(rec["resolution"])
+        entry = store.rolls.find_or_append_by_proposal(
+            cid, sid, _roll_label(res), res["result"], proposal=pid)
+        res = {**res, "roll_id": entry["id"]}
+        store.proposals.transition(cid, sid, pid, ("resolved",), "resolved", res)
+        if "line_intent" not in res:
+            res = {**res, "line_intent": len(_scene_messages(cid, sid))}
+            store.proposals.transition(cid, sid, pid, ("resolved",), "resolved", res)
+        line = store.checks.format_check_roll(res)
+        if not any(m.get("speaker") == store.scenes.ROLL_SPEAKER and m["content"] == line
+                   for m in _scene_messages(cid, sid)[res["line_intent"]:]):
+            store.scenes.append_message(cid, sid, "assistant", line,
+                                        speaker=store.scenes.ROLL_SPEAKER)
+        return res
+
+
+def _continuation_rule_bodies(cid: str, resolution: dict) -> tuple[list[str], list[str]]:
+    """Bodies of every `on_roll` rules doc plus the check's linked `rules:`
+    docs (the continuation's mechanical grounding)."""
+    on_roll_docs: list[str] = []
+    check_docs: list[str] = []
+    mid = store.modules.resolve(cid)
+    if mid is None:
+        return on_roll_docs, check_docs
+    pack = store.modules.load_pack(mid)
+    for doc in pack.get("rules", []):
+        if doc.get("on_roll"):
+            rule = store.modules.read_rule(mid, doc["id"])
+            if rule is not None:
+                on_roll_docs.append(rule["body"].strip())
+    cd = pack["checks"] if isinstance(pack["checks"], dict) else {}
+    check = cd.get(resolution.get("check"))
+    if isinstance(check, dict):
+        for rid in (check.get("rules") or []):
+            rule = store.modules.read_rule(mid, rid)
+            if rule is not None:
+                check_docs.append(rule["body"].strip())
+    return on_roll_docs, check_docs
+
+
+def _continuation_messages(cid: str, sid: str, resolution: dict) -> list[dict]:
+    messages = store.context.build_messages(cid, sid)
+    on_roll_docs, check_docs = _continuation_rule_bodies(cid, resolution)
+    messages.append({"role": "system", "content": prompts.render(
+        "scene/roll_result.j2", resolution=resolution,
+        on_roll_docs=on_roll_docs, check_docs=check_docs)})
+    return messages
+
+
+def _declined_continuation_messages(cid: str, sid: str) -> list[dict]:
+    messages = store.context.build_messages(cid, sid)
+    messages.append({"role": "system", "content": prompts.render("scene/roll_declined.j2")})
+    return messages
+
+
+@router.get("/campaigns/{cid}/scenes/{sid}/roll-proposal")
+def get_roll_proposal(cid: str, sid: str):
+    """Recovery endpoint: the scene's current proposal record (or null)."""
+    _require_scene(cid, sid)
+    return {"record": store.proposals.get(cid, sid)}
+
+
+@router.post("/campaigns/{cid}/scenes/{sid}/roll-proposal")
+def post_roll_proposal(cid: str, sid: str, body: ProposalAction,
+                       client: LLMClient = Depends(get_llm)):
+    """Adjudicate a roll proposal (accept / decline). Idempotent by proposal
+    id, keyed to the scene's current record. Every state change is a CAS; a
+    lost transition means someone else moved the record (a new send
+    superseded it, another accept won the claim) — we stop dead: no
+    projection, no continuation, 409."""
+    _require_scene(cid, sid)
+    cfg = store.read_config()
+    _require_key(cfg)
+    pid = body.proposal
+    rec = store.proposals.get(cid, sid)
+    if rec is None or rec.get("id") != pid or rec.get("status") == "superseded":
+        raise HTTPException(status_code=409, detail="proposal is stale")
+    status = rec["status"]
+
+    if status == "narrated":
+        return _sse_response([_sse({"done": True})])
+    if status == "resolving":
+        raise HTTPException(status_code=409, detail="adjudication in progress")
+
+    if status == "pending":
+        if body.action == "decline":
+            if not store.proposals.transition(cid, sid, pid, ("pending",), "declined"):
+                raise HTTPException(status_code=409, detail="proposal is stale")
+        else:  # accept
+            if not store.proposals.claim(cid, sid, pid):
+                raise HTTPException(status_code=409, detail="adjudication in progress")
+            p = rec["payload"]
+            try:
+                resolution = store.checks.resolve_check(
+                    cid, body.check or p.get("check"), body.actor or p.get("actor"),
+                    body.difficulty if body.difficulty is not None else p.get("difficulty"),
+                    body.modifier if body.modifier is not None else (p.get("modifier") or 0))
+            except Exception as exc:  # noqa: BLE001 — any failure reverts cleanly
+                store.proposals.transition(cid, sid, pid, ("resolving",), "pending")
+                detail = (str(exc) if isinstance(exc, store.checks.CheckError)
+                          else "the check could not be resolved")
+                return _sse_response([_sse({"error": {"detail": detail, "kind": "check_error"}})])
+            if not store.proposals.transition(cid, sid, pid, ("resolving",), "resolved", resolution):
+                # superseded mid-resolve: the pure roll result is discarded unlogged
+                raise HTTPException(status_code=409, detail="proposal was superseded")
+        status = store.proposals.get(cid, sid)["status"]
+
+    if status == "resolved":
+        resolution = _project_resolution(cid, sid, pid)
+        messages = _continuation_messages(cid, sid, resolution)
+    elif status == "declined":
+        messages = _declined_continuation_messages(cid, sid)
+    else:  # defensive: a race moved the record out from under us
+        raise HTTPException(status_code=409, detail="proposal is stale")
+    return _continuation_stream(cid, sid, pid, messages, cfg, client)
+
+
+@router.get("/campaigns/{cid}/scenes/{sid}/checks")
+def get_scene_checks(cid: str, sid: str):
+    _require_scene(cid, sid)
+    return {"actors": store.checks.available_checks(cid, sid)}
+
+
+@router.post("/campaigns/{cid}/scenes/{sid}/check")
+def post_scene_check(cid: str, sid: str, body: CheckBody):
+    """Manual check: run the pure resolver, log the roll (no proposal tag), and
+    append the 🎲 line — the same resolution path an accepted proposal takes."""
+    _require_scene(cid, sid)
+    try:
+        resolution = store.checks.resolve_check(
+            cid, body.check, body.actor, body.difficulty, body.modifier or 0)
+    except store.checks.CheckError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    entry = store.rolls.append(cid, sid, _roll_label(resolution), resolution["result"])
+    resolution = {**resolution, "roll_id": entry["id"]}
+    line = store.checks.format_check_roll(resolution)
+    store.scenes.append_message(cid, sid, "assistant", line, speaker=store.scenes.ROLL_SPEAKER)
+    return {"ok": True, "resolution": resolution, "roll": entry, "message": line}
 
 
 # registered before the generic /campaigns/{cid}/{kind} entity routes below,
