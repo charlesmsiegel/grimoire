@@ -102,6 +102,9 @@ substituted by code:
 - `current_setting` — the current location's body ("" if none)
 - `world_info_bodies` — bodies selected by `context.activate()` (the
   current location is excluded here and shown as `current_setting` instead)
+- `group_states` — `[{name, goals, resources, focus, public_perception,
+  secrets}]` from `groupstate.read_state()` for activated `groups` entries
+  that have a state.md
 - `offscene_active` / `offscene_known` — the cast-directory tiers
   (dossiers / taglines + version ids)
 - `player_names` — seated player names (the response-format guard)
