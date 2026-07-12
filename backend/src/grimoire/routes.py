@@ -1046,6 +1046,8 @@ def _entity_list(root, kind: str):
 
 
 def _check_fields(kind: str, fields: dict | None) -> None:
+    if kind not in store.entities.ENTITY_KINDS:
+        return  # let the store's unknown-kind handling produce the 404
     bad = store.entity_schema.invalid_keys(kind, fields or {})
     if bad:
         raise HTTPException(status_code=400, detail=f"unknown fields for {kind}: {', '.join(bad)}")
