@@ -274,3 +274,14 @@ test("new kinds render the list/detail pattern with their own label", async () =
   fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
   expect(container.querySelector("textarea")).not.toBeNull();
 });
+
+test("image shelf renders for non-location kinds", async () => {
+  (api.listEntities as any).mockResolvedValue([{ id: "salt-knife", name: "Salt Knife", has_image: true }]);
+  (api.readEntity as any).mockResolvedValue({ meta: { id: "salt-knife", name: "Salt Knife" }, body: "sharp" });
+  (api.listEntityImages as any).mockResolvedValue([{ name: "avatar", v: "1" }]);
+  const { container } = render(<EntityEditor wid="w" kind="items" />);
+  fireEvent.click(await screen.findByText("Salt Knife"));
+  await waitFor(() => expect(api.listEntityImages).toHaveBeenCalledWith({ kind: "world", id: "w" }, "items", "salt-knife"));
+  expect(screen.getByText("Images")).toBeInTheDocument();            // shelf present
+  expect(container.querySelector(".loc-row-img")).not.toBeNull();    // rail thumbnail
+});

@@ -72,7 +72,6 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
   }, [nav]);
 
   const reloadImages = useCallback((id: string) => {
-    if (kind !== "locations") { setImages([]); return; }
     api.listEntityImages(scope, kind, id)
       .then((imgs) => setImages(imgs.map((i) => ({ name: i.name, v: i.v }))))
       .catch(() => setImages([]));
@@ -193,9 +192,9 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
 
   const row = (e: EntitySummary) => (
     <button key={e.id}
-            className={"row" + (kind === "locations" ? " loc-row" : "") + (editing === e.id ? " active" : "")}
+            className={"row" + (e.has_image ? " loc-row" : "") + (editing === e.id ? " active" : "")}
             onClick={() => select(e.id)}>
-      {kind === "locations" && e.has_image && (
+      {e.has_image && (
         <img className="loc-row-img" alt=""
              src={`${api.entityImageUrl(scope, kind, e.id, "avatar")}${e.image_v ? `?v=${e.image_v}` : ""}`}
              onError={(ev) => { (ev.currentTarget as HTMLImageElement).style.display = "none"; }} />
@@ -235,7 +234,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
         {mode === "view" && editing ? (
           <div className="detail-view">
             <div className="detail-main">
-              {kind === "locations" && editing && hasPrimary ? (
+              {editing && hasPrimary ? (
                 <div className="loc-head">
                   <img className="loc-head-img" alt={`${name} primary`} src={imgSrc("avatar")}
                        onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
@@ -244,7 +243,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
               ) : (
                 <h3>{name}</h3>
               )}
-              {kind === "locations" && editing && (
+              {editing && (
                 <>
                   <div className="section-label">Images</div>
                   <div className="images-shelf wide">
