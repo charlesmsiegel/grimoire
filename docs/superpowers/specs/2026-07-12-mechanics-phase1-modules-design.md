@@ -41,7 +41,8 @@ A module is a folder; the directory name is its id (`mid`, a slug).
   content/<kind>/*.md  # module-shipped entities, optionally statted
 ```
 
-Later phases add `layout.json` + `theme.css` (Phase 6, per sheet type). All
+Later phases add `layout.json` (per sheet type) + `theme.css` (per module),
+both Phase 6. All
 files except `module.md` and `sheets.json` are optional.
 
 ### `module.md` — manifest
@@ -111,15 +112,19 @@ sees its full assembled field set plus group-derived names).
 {
   "guard_reflexes": {
     "label": "Guard + Reflexes",
-    "roll": "pool(guard_pool) t6",
+    "roll": "{guard_pool}d10 t6",
     "requires": ["attributes", "abilities"],
     "rules": ["combat-basics"]
   }
 }
 ```
 
-- `roll` — `store/dice.py` notation with embedded expressions, resolved
-  against the acting entity's sheet at roll time.
+- `roll` — `store/dice.py` notation with `{expression}` placeholders (e.g.
+  `1d20 + {str_mod}`, `{dexterity + melee}d10 t6`). At roll time each
+  placeholder is evaluated against the acting entity's sheet and substituted
+  as an integer; the substituted string must parse as plain dice notation.
+  Validation parses each placeholder as an expression and checks the
+  template with placeholders replaced by a sample value.
 - `requires` — group refs the formula needs; a check is offered only for
   actors whose sheet type includes all of them. Validation confirms every
   name in `roll` is reachable given `requires` (plus sheet-type-level names
@@ -196,6 +201,8 @@ creation); the world editor gets the default-module setting.
 ## Sheet storage (contract here, implementation Phase 3)
 
 - Campaign sheets (live, mutable): `<campaign>/sheets/<kind>--<id>.json`.
+  PCs use their own store's kind prefix (`pcs--<id>.json`) but validate
+  against `characters`-targeting sheet types.
 - World starting sheets: `<world>/sheets/<mid>/<kind>--<id>.json`.
 - File shape: `{"sheet_type": "warden", "fields": {...}}`. Derived values
   computed on read. Writes validate against the resolved module.
