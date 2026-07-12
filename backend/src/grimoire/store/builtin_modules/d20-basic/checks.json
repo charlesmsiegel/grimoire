@@ -1,0 +1,13 @@
+{
+  "athletics": {
+    "label": "Athletics",
+    "roll": "1d20 + {athletics + str_mod}",
+    "requires": ["attributes", "skills"],
+    "rules": ["skill-checks"]
+  },
+  "stealth": {
+    "label": "Stealth",
+    "roll": "1d20 + {stealth + dex_mod}",
+    "requires": ["attributes", "skills"]
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "sheet_type": "wondrous-item",
+  "fields": {
+    "charges": {"current": 3, "max": 3},
+    "bonus": 1,
+    "quirk": "hums faintly near falsehoods"
+  }
+}

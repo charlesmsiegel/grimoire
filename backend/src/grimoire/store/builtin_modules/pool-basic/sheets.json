@@ -1,0 +1,60 @@
+{
+  "groups": {
+    "attributes": {
+      "label": "Attributes",
+      "fields": [
+        {"key": "vigor", "label": "Vigor", "type": "dots", "max": 5, "default": 1},
+        {"key": "grace", "label": "Grace", "type": "dots", "max": 5, "default": 1},
+        {"key": "wits", "label": "Wits", "type": "dots", "max": 5, "default": 1}
+      ]
+    },
+    "abilities": {
+      "label": "Abilities",
+      "fields": [
+        {"key": "brawl", "label": "Brawl", "type": "dots", "max": 5, "default": 0},
+        {"key": "shadowing", "label": "Shadowing", "type": "dots", "max": 5, "default": 0},
+        {"key": "occult", "label": "Occult", "type": "dots", "max": 5, "default": 0}
+      ]
+    }
+  },
+  "sheet_types": {
+    "medium": {
+      "label": "Medium",
+      "kind": "characters",
+      "groups": ["attributes", "abilities"],
+      "fields": [
+        {"key": "essence", "label": "Essence", "type": "resource", "max": 10},
+        {"key": "health", "label": "Health", "type": "track", "max": 7}
+      ],
+      "derived": {"sight_pool": "wits + occult"}
+    },
+    "shifter": {
+      "label": "Shifter",
+      "kind": "characters",
+      "groups": ["attributes", "abilities"],
+      "fields": [
+        {"key": "fury", "label": "Fury", "type": "resource", "max": 5},
+        {"key": "health", "label": "Health", "type": "track", "max": 7}
+      ],
+      "derived": {"claw_pool": "vigor + brawl"}
+    },
+    "talisman": {
+      "label": "Talisman",
+      "kind": "items",
+      "groups": [],
+      "fields": [
+        {"key": "power", "label": "Power", "type": "dots", "max": 5, "default": 1},
+        {"key": "charges", "label": "Charges", "type": "resource", "max": 10}
+      ]
+    },
+    "haven": {
+      "label": "Haven",
+      "kind": "locations",
+      "groups": [],
+      "fields": [
+        {"key": "ward", "label": "Ward", "type": "dots", "max": 5, "default": 0},
+        {"key": "size", "label": "Size", "type": "number", "default": 1}
+      ]
+    }
+  }
+}
