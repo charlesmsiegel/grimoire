@@ -266,6 +266,15 @@ def test_node_cap(tmp_path):
     layout, errors = layout_errors(tmp_path, lay)
     assert "adept" not in layout["sheet_types"]
     assert any("node cap" in e["message"] for e in errors)
+
+
+def test_pathologically_deep_json_never_raises(tmp_path):
+    # deep enough to blow the JSON parser's recursion limit before our caps
+    (tmp_path / "layout.json").write_text("[" * 100000 + "]" * 100000,
+                                          encoding="utf-8")
+    layout, _theme, errors = load(tmp_path)  # must not raise
+    assert layout == {"sheet_types": {}}
+    assert errors and errors[0]["source"] == "layout"
 ```
 
 Note `test_duplicate_placement`'s second case: an empty `derived` list is fine, but placing `reflex` twice is not; and `{"derived": []}` nodes in `test_node_cap` are individually valid so only the cap trips.
@@ -323,8 +332,10 @@ def _read_json(root: Path, name: str, source: str, errors: list[dict]):
         return None
     try:
         return json.loads(p.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, UnicodeDecodeError, OSError) as e:
-        errors.append(_entry(source, None, f"{name}: {e}"))
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError, RecursionError) as e:
+        # RecursionError: pathologically deep JSON blows the parser stack
+        # before our own depth cap can see the tree.
+        errors.append(_entry(source, None, f"{name}: {e.__class__.__name__}: {e}"))
         return None
 
 
@@ -698,13 +709,20 @@ and replace the `load_display` body:
 
 ```python
 def load_display(root: Path, sheets: dict) -> tuple[dict, dict, list[dict]]:
-    """(layout, theme, display_errors) for a pack root. Never raises."""
+    """(layout, theme, display_errors) for a pack root. Never raises: display
+    files are cosmetic, so even an unforeseen exception must degrade to
+    "no display files + an error entry", never break load_pack/resolve()."""
     errors: list[dict] = []
-    layout = _load_layout(root, sheets, errors)
-    theme = _load_theme(root, errors)
-    if (root / "theme.css").exists():
-        errors.append(_entry("theme", None,
-                             "theme.css is not supported — use theme.json"))
+    try:
+        layout = _load_layout(root, sheets, errors)
+        theme = _load_theme(root, errors)
+        if (root / "theme.css").exists():
+            errors.append(_entry("theme", None,
+                                 "theme.css is not supported — use theme.json"))
+    except Exception as e:  # containment boundary, deliberately broad
+        errors.append(_entry("layout", None,
+                             f"display files: {e.__class__.__name__}: {e}"))
+        return {"sheet_types": {}}, {}, errors
     return layout, theme, errors
 ```
 
@@ -757,6 +775,15 @@ def test_display_ok_true_for_clean_pack(monkeypatch, tmp_path):
     make_pack(_home(monkeypatch, tmp_path))
     rows = {m["id"]: m for m in modules.list_modules()}
     assert rows["testmod"]["display_ok"] is True
+
+
+def test_load_pack_survives_pathological_display_files(monkeypatch, tmp_path):
+    d = make_pack(_home(monkeypatch, tmp_path))
+    (d / "layout.json").write_text("[" * 100000 + "]" * 100000, encoding="utf-8")
+    pack = modules.load_pack("testmod")  # must not raise
+    assert pack["errors"] == []
+    assert pack["layout"] == {"sheet_types": {}}
+    assert pack["display_errors"]
 
 
 def test_resolve_ignores_display_errors(monkeypatch, tmp_path):
@@ -1279,7 +1306,7 @@ button.pip { cursor: pointer; }
 .resource-bar {
   flex: 1; max-width: 220px; height: 10px; display: inline-block;
   border: 1.5px solid var(--sheet-rule, var(--sheet-ink, var(--rule)));
-  background: var(--track);
+  background: transparent; /* never an app token — must sit on any themed bg */
 }
 .resource-fill { display: block; height: 100%; background: var(--sheet-accent, var(--accent)); }
 .resource-text { font-family: var(--fm); font-size: 12px; }
@@ -1748,6 +1775,24 @@ import { isResource } from "./SheetWidgets";
 
 and change `.sheet-takeover h3`'s `font-family: var(--fd);` to `font-family: var(--sheet-fd, var(--fd));`.
 
+Then retheme the takeover's form controls so no descendant is left on raw app tokens under a themed module — change the `.sheet-takeover select` rule's `background: var(--surface); color: var(--ink); border: var(--rw2) solid var(--rule);` to
+
+```css
+  background: var(--sheet-bg, var(--surface)); color: var(--sheet-ink, var(--ink));
+  border: var(--rw2) solid var(--sheet-rule, var(--rule));
+```
+
+and add alongside it:
+
+```css
+.sheet-takeover input, .sheet-takeover textarea {
+  background: var(--sheet-bg, var(--surface)); color: var(--sheet-ink, var(--ink));
+  border: var(--rw2) solid var(--sheet-rule, var(--rule));
+}
+```
+
+(These are stylesheet rules; jsdom does not apply stylesheets, so vitest asserts the inline `--sheet-*` vars and data attributes on the container — the cascade itself is verified by eye in the end-state check.)
+
 7. In `index.css`, delete the now-dead rules `.sheet-view { ... }` and `.sheet-row { ... }` (the `.resource-inputs` rules stay — the resource widget reuses them).
 
 - [ ] **Step 4: Run the full frontend suite + typecheck**
@@ -1773,7 +1818,7 @@ git commit -m "feat(frontend): SheetEditor renders layouts + themes; dropped-lay
 **Interfaces:**
 - Consumes: `ModuleSummary.display_ok`, `ModuleDetail.layout/theme/display_errors` (Task 5 types).
 
-- [ ] **Step 1: Write the failing tests** (append to `ModulesView.test.tsx`, following its existing mock pattern for `api.listModules`/`api.readModule`)
+- [ ] **Step 1: Write the failing tests** (append to `ModulesView.test.tsx`, following its existing mock pattern for `api.listModules`/`api.readModule`; the file's testing-library import does **not** currently include `screen` — extend it to `import { render, screen, fireEvent, ... } from "@testing-library/react"` or rewrite the queries in the file's existing `container`/`within` style)
 
 ```tsx
 test("list row flags display issues; detail shows Display section", async () => {
