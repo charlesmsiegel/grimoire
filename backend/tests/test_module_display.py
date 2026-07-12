@@ -188,11 +188,42 @@ def test_unused_broken_fragment_reported_but_drops_nothing(tmp_path):
 
 
 def test_used_broken_fragment_drops_user(tmp_path):
+    # warden's tree is self-contained so it must SURVIVE the bad fragment
     lay = {"fragments": {"bad": {"row": "x"}},
-           "sheet_types": {"adept": {"use": "bad"}, "warden": GOOD_LAYOUT["sheet_types"]["warden"]}}
+           "sheet_types": {"adept": {"use": "bad"}, "warden": {"fields": ["essence"]}}}
     layout, errors = layout_errors(tmp_path, lay)
     assert "adept" not in layout["sheet_types"]
+    assert "warden" in layout["sheet_types"]
     assert any(e["sheet_type"] == "adept" and "invalid" in e["message"] for e in errors)
+
+
+def test_unused_fragment_with_dangling_ref_reported(tmp_path):
+    # Names that exist for NO sheet type must error even in unused fragments.
+    lay = dict(GOOD_LAYOUT, fragments=dict(
+        GOOD_LAYOUT["fragments"],
+        dangling_group={"group": "ghost-group"},
+        dangling_fields={"fields": ["ghost-field"]},
+        dangling_derived={"derived": ["ghost-derived"]},
+    ))
+    layout, errors = layout_errors(tmp_path, lay)
+    assert set(layout["sheet_types"]) == {"warden", "adept"}  # drops nothing
+    for needle in ("ghost-group", "ghost-field", "ghost-derived"):
+        assert any(needle in e["message"] and e["sheet_type"] is None
+                   for e in errors), needle
+
+
+def test_unused_fragment_valid_for_some_type_not_flagged(tmp_path):
+    # essence/surge are warden-only, abilities is a warden-only group: valid
+    # for SOME type, so the standalone (union-scope) fragment pass must pass.
+    lay = dict(GOOD_LAYOUT, fragments=dict(
+        GOOD_LAYOUT["fragments"],
+        essence_bar={"fields": ["essence"]},
+        surge_note={"derived": ["surge"]},
+        ability_block={"group": "abilities"},
+    ))
+    layout, errors = layout_errors(tmp_path, lay)
+    assert errors == []
+    assert set(layout["sheet_types"]) == {"warden", "adept"}
 
 
 def test_depth_cap(tmp_path):

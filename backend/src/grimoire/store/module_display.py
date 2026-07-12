@@ -77,17 +77,57 @@ def _type_scope(sheets: dict, tid: str) -> dict:
         derived |= set(st["derived"])
     fields = {f["key"] for f in assembled_fields(sheets, tid)
               if isinstance(f.get("key"), str)}
-    return {"group_fields": group_fields, "fields": fields, "derived": derived}
+    return {"group_fields": group_fields, "fields": fields,
+            "derived": derived, "group_desc": "this sheet type's groups"}
+
+
+def _union_scope(sheets: dict) -> dict:
+    """Best-effort scope for standalone fragment checks: every group defined
+    in sheets.json, the union of all sheet types' assembled field keys, and
+    every group-/type-level derived name. Any name valid for at least one
+    sheet type passes; a name that exists nowhere errors."""
+    from .modules import assembled_fields  # deferred: modules imports us
+
+    groups = sheets.get("groups", {})
+    if not isinstance(groups, dict):
+        groups = {}
+    group_fields: dict[str, list[str]] = {}
+    derived: set[str] = set()
+    for gid, g in groups.items():
+        if not isinstance(g, dict):
+            continue
+        gf = g.get("fields") if isinstance(g.get("fields"), list) else []
+        group_fields[gid] = [f["key"] for f in gf
+                             if isinstance(f, dict) and isinstance(f.get("key"), str)]
+        if isinstance(g.get("derived"), dict):
+            derived |= set(g["derived"])
+    fields: set[str] = set()
+    sheet_types = sheets.get("sheet_types", {})
+    if not isinstance(sheet_types, dict):
+        sheet_types = {}
+    for tid, st in sheet_types.items():
+        if isinstance(st, dict) and isinstance(st.get("derived"), dict):
+            derived |= set(st["derived"])
+        fields |= {f["key"] for f in assembled_fields(sheets, tid)
+                   if isinstance(f.get("key"), str)}
+    return {"group_fields": group_fields, "fields": fields,
+            "derived": derived, "group_desc": "the groups defined in sheets.json"}
 
 
 class _Expander:
-    """Validates and splices one tree. ``scope=None`` = structural pass only
-    (used for standalone fragment checks; no ref/duplicate checks)."""
+    """Validates and splices one tree. The standalone fragment pass uses the
+    union scope with ``check_placement=False``: refs are best-effort checked
+    against every sheet type at once, but duplicate-placement is a per-type
+    property (groups sharing a field key across types would false-positive),
+    so it is only enforced during per-type expansion. ``scope=None`` still
+    means a purely structural pass (no ref/duplicate checks)."""
 
     def __init__(self, fragments: dict, scope: dict | None,
-                 bad_fragments: set[str] | None = None):
+                 bad_fragments: set[str] | None = None,
+                 check_placement: bool = True):
         self.fragments = fragments
         self.scope = scope
+        self.check_placement = check_placement
         self.bad_fragments = bad_fragments or set()
         self.placed_fields: set[str] = set()
         self.placed_derived: set[str] = set()
@@ -101,6 +141,8 @@ class _Expander:
         return value
 
     def _place_fields(self, keys: list[str], where: str) -> None:
+        if not self.check_placement:
+            return
         for k in keys:
             if k in self.placed_fields:
                 raise _LayoutError(f"{where}: field {k!r} placed more than once")
@@ -154,7 +196,8 @@ class _Expander:
             if self.scope is not None:
                 if value not in self.scope["group_fields"]:
                     raise _LayoutError(
-                        f"{path}.group: {value!r} is not one of this sheet type's groups")
+                        f"{path}.group: {value!r} is not one of "
+                        f"{self.scope['group_desc']}")
                 self._place_fields(self.scope["group_fields"][value], f"{path}.group")
             out = {form: value}
         elif form == "fields":
@@ -171,11 +214,12 @@ class _Expander:
                 unknown = [n for n in names if n not in self.scope["derived"]]
                 if unknown:
                     raise _LayoutError(f"{path}.derived: unknown names {unknown}")
-                for n in names:
-                    if n in self.placed_derived:
-                        raise _LayoutError(
-                            f"{path}.derived: {n!r} placed more than once")
-                    self.placed_derived.add(n)
+                if self.check_placement:
+                    for n in names:
+                        if n in self.placed_derived:
+                            raise _LayoutError(
+                                f"{path}.derived: {n!r} placed more than once")
+                        self.placed_derived.add(n)
             out = {form: names}
         if "title" in node:
             out["title"] = node["title"]
@@ -204,11 +248,14 @@ def _load_layout(root: Path, sheets: dict, errors: list[dict]) -> dict:
     if not isinstance(trees, dict):
         errors.append(_entry("layout", None, "layout.json: sheet_types must be an object"))
         trees = {}
-    # Structural pass over every fragment: an unused-but-broken fragment is
-    # reported once (sheet_type None) and drops nothing by itself.
+    # Standalone pass over every fragment: an unused-but-broken fragment is
+    # reported once (sheet_type None) and drops nothing by itself. Refs are
+    # checked against the union scope (any name valid for at least one sheet
+    # type passes); per-type expansion re-validates against the actual scope.
     bad_fragments: set[str] = set()
+    union = _union_scope(sheets) if fragments else None
     for fid, frag in fragments.items():
-        ex = _Expander(fragments, None)
+        ex = _Expander(fragments, union, check_placement=False)
         ex.stack.append(str(fid))
         try:
             ex.expand(frag, f"fragments.{fid}", 0)
