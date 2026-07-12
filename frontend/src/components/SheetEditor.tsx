@@ -68,7 +68,7 @@ function widget(f: ModuleField, value: unknown, onChange: (v: unknown) => void) 
       const n = typeof value === "number" ? value : 0;
       return (
         <Field key={f.key} label={label}>
-          <input type="number" min={0} max={f.max} value={n}
+          <input type="number" min={f.min ?? 0} max={f.max} value={n}
                  onChange={(e) => onChange(Number(e.target.value))} />
         </Field>
       );
