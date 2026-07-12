@@ -60,6 +60,7 @@ export type WorldMeta = {
   created: string;
   updated: string;
   counts: Record<string, number>;
+  module?: string;
 };
 export type CampaignMeta = {
   id: string;
@@ -70,6 +71,7 @@ export type CampaignMeta = {
   updated: string;
   scenes: number;
   last_scene: string;
+  module?: string;
 };
 export type SceneMeta = { id: string; title: string; model: string; created: string; updated: string; date: string; pcless?: boolean };
 export type Message = { role: "user" | "assistant"; content: string; speaker?: string };
@@ -253,6 +255,34 @@ export type GroupState = {
   public_perception: string; secrets: string; updated?: string;
 };
 
+// modules
+export type ModuleSummary = {
+  id: string; name: string; description: string;
+  version: string; source: "builtin" | "user"; valid: boolean;
+};
+export type ModuleField = {
+  key: string; label?: string; type: string;
+  max?: number; min?: number; default?: number;
+};
+export type ModuleSheetType = {
+  label: string; kind: string; groups: string[];
+  fields: ModuleField[]; derived?: Record<string, string>;
+};
+export type ModuleDetail = {
+  id: string;
+  source: "builtin" | "user";
+  manifest: { id: string; name: string; description?: string; version?: string; dice?: string };
+  sheets: { groups: Record<string, { label?: string; fields: ModuleField[]; derived?: Record<string, string> }>;
+            sheet_types: Record<string, ModuleSheetType> };
+  checks: Record<string, { label: string; roll: string; requires?: string[]; rules?: string[] }>;
+  rules: { id: string; keys: string[]; always: boolean; on_roll: boolean; sheet_types: string[] }[];
+  content: { kind: string; id: string; name: string; sheet_type: string | null }[];
+  errors: string[];
+};
+export type CampaignModule = {
+  setting: string; resolved: string | null; source: "campaign" | "world" | null;
+};
+
 function entityBase(scope: EntityScope): string {
   return scope.kind === "world" ? `/api/worlds/${scope.id}` : `/api/campaigns/${scope.id}`;
 }
@@ -321,9 +351,9 @@ export const api = {
 
   // campaigns
   listCampaigns: () => request<CampaignMeta[]>("GET", "/api/campaigns"),
-  createCampaign: (name: string, world: string, region?: string, calendar?: string) =>
+  createCampaign: (name: string, world: string, region?: string, calendar?: string, module?: string) =>
     request<{ id: string }>("POST", "/api/campaigns",
-      { name, world, ...(region ? { region } : {}), ...(calendar ? { calendar } : {}) }),
+      { name, world, ...(region ? { region } : {}), ...(calendar ? { calendar } : {}), ...(module ? { module } : {}) }),
   getCampaign: (cid: string) =>
     request<{ meta: CampaignMeta; body: string }>("GET", `/api/campaigns/${cid}`),
   renameCampaign: (cid: string, name: string) =>
@@ -602,4 +632,14 @@ export const api = {
     request<GroupState>("GET", `/api/campaigns/${cid}/groups/${gid}/state`),
   putGroupState: (cid: string, gid: string, state: Omit<GroupState, "updated">) =>
     request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/groups/${gid}/state`, state),
+
+  // modules
+  listModules: () => request<ModuleSummary[]>("GET", "/api/modules"),
+  readModule: (mid: string) => request<ModuleDetail>("GET", `/api/modules/${mid}`),
+  getCampaignModule: (cid: string) =>
+    request<CampaignModule>("GET", `/api/campaigns/${cid}/module`),
+  setCampaignModule: (cid: string, module: string) =>
+    request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/module`, { module }),
+  setWorldModule: (wid: string, module: string) =>
+    request<{ ok: boolean }>("PUT", `/api/worlds/${wid}/module`, { module }),
 };
