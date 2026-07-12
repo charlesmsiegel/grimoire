@@ -2765,3 +2765,10 @@ def test_entity_fields_http_round_trip_and_validation(client):
     r = client.put(f"/api/worlds/{wid}/items/{eid}", json={"fields": {"rarity": ""}})
     assert r.status_code == 200
     assert "rarity" not in client.get(f"/api/worlds/{wid}/items/{eid}").json()["meta"]
+
+
+def test_entity_fields_unknown_kind_stays_404(client):
+    wid = _world(client)
+    r = client.post(f"/api/worlds/{wid}/weapons",
+                    json={"name": "X", "fields": {"rarity": "r"}})
+    assert r.status_code == 404
