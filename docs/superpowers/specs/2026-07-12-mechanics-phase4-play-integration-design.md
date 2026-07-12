@@ -175,9 +175,10 @@ seed=None) -> dict`:
    `_defaults.difficulty` → error if the template references it and no
    value resolved) and `modifier` (proposal, default 0).
 4. Substitute `{expr}` placeholders in the check's `roll` template;
-   `dice.roll(notation, seed)` (seeded, replayable); log via
-   `rolls.append(cid, scene, label, result)` with label
-   `"<Actor> — <Check label> (diff N)"`.
+   `dice.roll(notation, seed)` (seeded, replayable). **`resolve_check` is
+   pure beyond the RNG draw — it performs no writes** (no roll log, no
+   transcript). Durable side effects belong to the caller's commit step,
+   so a post-claim failure can always revert cleanly.
 5. Evaluate outcome tiers against the roll scope: `total`, `natural`
    (first die's first raw roll), `margin` (`total - vs` when `vs`
    present, else absent), `successes`, `ones` (count of raw 1s), `dice`
@@ -188,8 +189,8 @@ seed=None) -> dict`:
    simply doesn't match (evaluation error → skip, recorded in the
    returned `tier_warnings`).
 6. Return `{"check", "check_label", "actor", "actor_label", "notation",
-   "result", "tier", "difficulty", "modifier", "roll_id",
-   "tier_warnings"}`.
+   "result", "tier", "difficulty", "modifier", "tier_warnings"}`
+   (`roll_id` is assigned later, by the commit step's log projection).
 
 `CheckError(Exception)` carries a user-facing message; routes map it to
 400.
@@ -228,26 +229,41 @@ rolls.
     stale; frontend re-fetches the record).
   - `pending` + accept: `claim()` first (atomic `pending → resolving`;
     a lost claim → 409 "adjudication in progress", the chip re-fetches).
-    After a won claim: `resolve_check`; record `resolution` and status
-    `resolved` in proposals.json **before** appending the 🎲 line; then
-    stream the continuation; on continuation persist, status
-    `narrated`. A `CheckError` after a won claim reverts `resolving →
-    pending`.
+    After a won claim:
+    1. `resolve_check` (pure — see Resolution). **Any exception here —
+       CheckError or otherwise — reverts `resolving → pending`**
+       (catch-all), returns an error frame, and nothing durable
+       happened.
+    2. Commit: one CAS write (requires `resolving`, same id) sets status
+       `resolved` with the full `resolution` (result incl. seed).
+    3. Projection (idempotent): append the rolls.json entry — its label
+       carries the proposal id — and the 🎲 transcript line, then write
+       `roll_id` back into the resolution. A retry that finds
+       `resolved` re-runs this step, skipping the roll append when an
+       entry tagged with this proposal id already exists (and the 🎲
+       line with it); a crash between commit and projection therefore
+       heals on retry with no duplicate roll and no orphaned log entry
+       (the log is written only after the resolved state exists).
+    4. Stream the continuation; on continuation persist, status
+       `narrated`.
   - `resolving` (someone else holds the claim) → 409.
   - `pending` + decline: status `declined` (same CAS discipline); stream
     the declined continuation; then `narrated`.
   - `resolved`/`declined` (a retry after a dropped continuation): **never
-    re-roll** — reuse the stored resolution, stream a fresh continuation
-    (nothing was persisted by the dropped one; `_persist_reply` runs only
-    at stream completion), then `narrated`.
+    re-roll** — re-run the projection step if incomplete (see above),
+    reuse the stored resolution, stream a fresh continuation (nothing
+    was persisted by the dropped one; `_persist_reply` runs only at
+    stream completion), then `narrated`.
   - `narrated`: no-op — emit `{"done": true}` immediately.
   - `CheckError` → an `{"error": {...}}` frame; status stays `pending`
     (the chip stays up for another attempt).
 - `GET /api/campaigns/{cid}/scenes/{sid}/roll-proposal` — the scene's
   proposal record or null (recovery; see Proposal store).
 - `POST /api/campaigns/{cid}/scenes/{sid}/check` — body
-  `{check, actor, difficulty?, modifier?}`; non-streaming; resolves +
-  appends the 🎲 line; returns the resolution dict. (Manual checks.)
+  `{check, actor, difficulty?, modifier?}`; non-streaming; runs the pure
+  `resolve_check`, then itself appends the roll-log entry and 🎲 line
+  (no proposal record involved); returns the resolution dict with
+  `roll_id`. (Manual checks.)
 - `GET /api/campaigns/{cid}/scenes/{sid}/checks` — the availability map
   for this scene: `{"actors": [{"ref", "label", "sheet_type",
   "checks": [["athletics", "Athletics"], ...]}]}` over present sheeted
@@ -323,13 +339,18 @@ allowed and surfaces a new chip).
   the same pending id yield exactly one winner and exactly one roll-log
   entry (threaded test through the route or the store lock).
 - **Routes**: roll-proposal accept (roll logged + 🎲 line + streamed
-  continuation + status walk pending→resolved→narrated), decline (no
-  roll, streamed continuation), **idempotency** (second accept with the
-  same id after `resolved` reuses the stored roll — the roll log gains
-  no new entry — and re-streams a continuation; accept after `narrated`
-  → immediate done; mismatched/superseded id → 409), recovery GET,
-  CheckError → error frame + status stays pending; manual check
-  round-trip; module-less campaign → 404/400 on both routes.
+  continuation + status walk pending→resolving→resolved→narrated),
+  decline (no roll, streamed continuation), **idempotency** (second
+  accept with the same id after `resolved` reuses the stored roll — the
+  roll log gains no new entry — and re-streams a continuation; accept
+  after `narrated` → immediate done; mismatched/superseded id → 409),
+  **post-claim failure injection at every side-effect boundary**: an
+  exception in `resolve_check` (any type) reverts to `pending`
+  retryable; a crash between the resolved-commit and the projection
+  heals on retry (exactly one roll-log entry, tagged with the proposal
+  id; exactly one 🎲 line); recovery GET; CheckError → error frame +
+  status back to pending; manual check round-trip; module-less
+  campaign → 404/400 on both routes.
 - **Context**: module-bound campaign renders all three sections
   (activation: always/sheet_types/keys with the cap; summaries incl.
   location; available-checks listing); unbound campaign renders none;
