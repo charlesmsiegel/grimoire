@@ -1,95 +1,12 @@
 import { useState, type ChangeEvent } from "react";
 import { api, type EntityScope, type ModuleDetail, type ModuleField, type Sheet } from "../api/client";
-import { Field } from "./Field";
+import SheetLayout, { assembledDefs, themeStyle } from "./SheetLayout";
 
 /** Module sheet-type kind for a file kind (pcs share characters types) — mirrors backend sheets.sheet_kind. */
 export const typeKind = (k: string) => (k === "pcs" ? "characters" : k);
 
-type ResourceValue = { current: number; max: number };
-
-function isResource(v: unknown): v is ResourceValue {
-  return !!v && typeof v === "object" && "current" in (v as object) && "max" in (v as object);
-}
-
-function fieldLabel(f: ModuleField): string {
-  return f.label ?? f.key;
-}
-
-function displayValue(f: ModuleField, v: unknown): string {
-  switch (f.type) {
-    case "resource": {
-      const rv = isResource(v) ? v : { current: 0, max: f.max ?? 0 };
-      return `${rv.current} / ${rv.max}`;
-    }
-    case "list":
-      return Array.isArray(v) && v.length > 0 ? (v as string[]).join(", ") : "—";
-    case "text":
-      return typeof v === "string" && v ? v : "—";
-    default:
-      return typeof v === "number" ? String(v) : "0";
-  }
-}
-
-function widget(f: ModuleField, value: unknown, onChange: (v: unknown) => void) {
-  const label = fieldLabel(f);
-  switch (f.type) {
-    case "resource": {
-      const rv = isResource(value) ? value : { current: 0, max: f.max ?? 0 };
-      return (
-        <div className="field" key={f.key}>
-          <label>{label}</label>
-          <div className="resource-inputs">
-            <input type="number" aria-label={`${label} current`} min={0} value={rv.current}
-                   onChange={(e) => onChange({ ...rv, current: Number(e.target.value) })} />
-            <span>/</span>
-            <input type="number" aria-label={`${label} max`} min={0} value={rv.max}
-                   onChange={(e) => onChange({ ...rv, max: Number(e.target.value) })} />
-          </div>
-        </div>
-      );
-    }
-    case "text":
-      return (
-        <Field key={f.key} label={label}>
-          <input type="text" value={typeof value === "string" ? value : ""}
-                 onChange={(e) => onChange(e.target.value)} />
-        </Field>
-      );
-    case "list": {
-      // Draft holds the raw textarea string while editing (see toEditDraft); normalization to an
-      // array happens once at commit time (see normalizeForSave). Fall back to joining an array
-      // here in case a caller ever passes one in directly (e.g. right after a type change).
-      const s = typeof value === "string" ? value : Array.isArray(value) ? (value as string[]).join("\n") : "";
-      return (
-        <Field key={f.key} label={label} hint="one per line">
-          <textarea rows={3} value={s} onChange={(e) => onChange(e.target.value)} />
-        </Field>
-      );
-    }
-    default: { // number | dots | track
-      const n = typeof value === "number" ? value : 0;
-      return (
-        <Field key={f.key} label={label}>
-          <input type="number" min={f.min ?? 0} max={f.max} value={n}
-                 onChange={(e) => onChange(Number(e.target.value))} />
-        </Field>
-      );
-    }
-  }
-}
-
-/** Full field-def set (group fields + own fields) for a sheet type. */
-function fieldDefsOf(module: ModuleDetail, t: string | null): ModuleField[] {
-  if (!t) return [];
-  const st = module.sheets.sheet_types[t];
-  if (!st) return [];
-  return st.groups.flatMap((g) => module.sheets.groups[g]?.fields ?? []).concat(st.fields);
-}
-
 /** Full field-key set (group fields + own fields) for a sheet type — used to diff a type change. */
-function keysOf(module: ModuleDetail, t: string): string[] {
-  return fieldDefsOf(module, t).map((f) => f.key);
-}
+const keysOf = (module: ModuleDetail, t: string) => assembledDefs(module, t).map((f) => f.key);
 
 /** Converts stored list-field arrays into raw newline-joined strings for the textarea draft. Call
  *  once on entering edit mode (or after a type change) — never on every keystroke, or the trailing
@@ -126,14 +43,16 @@ export default function SheetEditor({ scope, module, kind, eid, initial, onClose
   const [error, setError] = useState<string | null>(null);
 
   const typeDef = sheetType ? module.sheets.sheet_types[sheetType] : undefined;
-  const groupIds = typeDef?.groups ?? [];
-  const ownFields = typeDef?.fields ?? [];
 
   const otherTypes = Object.entries(module.sheets.sheet_types)
     .filter(([tid, st]) => st.kind === typeKind(kind) && tid !== sheetType);
 
+  const layoutTree = sheetType ? module.layout?.sheet_types?.[sheetType] : undefined;
+  const layoutDropped = !!sheetType && !layoutTree && (module.display_errors ?? []).some(
+    (e) => e.source === "layout" && (e.sheet_type === sheetType || e.sheet_type === null));
+
   function startEdit() {
-    setDraft(toEditDraft(fields, fieldDefsOf(module, sheetType)));
+    setDraft(toEditDraft(fields, assembledDefs(module, sheetType)));
     setError(null);
     setMode("edit");
   }
@@ -151,7 +70,7 @@ export default function SheetEditor({ scope, module, kind, eid, initial, onClose
     if (!sheetType) return;
     setError(null);
     try {
-      const payload = normalizeForSave(draft, fieldDefsOf(module, sheetType));
+      const payload = normalizeForSave(draft, assembledDefs(module, sheetType));
       await api.putSheet(scope, module.id, kind, eid, { sheet_type: sheetType, fields: payload });
       setFields(payload);
       setMode("view");
@@ -176,7 +95,7 @@ export default function SheetEditor({ scope, module, kind, eid, initial, onClose
       ? `Change type to ${label}? This drops: ${dropped.join(", ")}`
       : `Change type to ${label}?`;
     if (!window.confirm(msg)) return;
-    const normalized = normalizeForSave(draft, fieldDefsOf(module, sheetType));
+    const normalized = normalizeForSave(draft, assembledDefs(module, sheetType));
     const survivors: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(normalized)) {
       if (newKeys.has(k)) survivors[k] = v;
@@ -219,7 +138,10 @@ export default function SheetEditor({ scope, module, kind, eid, initial, onClose
   return (
     <>
       <div className="sheet-backdrop" onClick={onClose} />
-      <div className="sheet-takeover" role="dialog" aria-label={typeDef?.label ?? "Sheet"}>
+      <div className="sheet-takeover" role="dialog" aria-label={typeDef?.label ?? "Sheet"}
+           style={themeStyle(module.theme)}
+           data-dots={module.theme?.dots ?? "circle"}
+           data-corners={module.theme?.corners ?? "sharp"}>
         <div className="form-actions">
           {mode === "view" && <button className="subtle" onClick={startEdit} disabled={!typeDef}>Edit</button>}
           {mode === "edit" && <button className="primary" onClick={save}>Save</button>}
@@ -234,56 +156,22 @@ export default function SheetEditor({ scope, module, kind, eid, initial, onClose
 
         {initial.errors.length > 0 && <div className="banner">{initial.errors.join("; ")}</div>}
         {error && <div className="banner">{error}</div>}
+        {layoutDropped && (
+          <div className="field-hint">
+            This module's layout for this sheet type is invalid — using the default arrangement.
+          </div>
+        )}
 
         <h3>{typeDef?.label ?? "No sheet type"}</h3>
 
         {!typeDef ? (
           <div className="field-hint">This entity has no sheet type yet — pick one above to begin.</div>
         ) : mode === "view" ? (
-          <div className="sheet-view">
-            {groupIds.map((gid) => {
-              const g = module.sheets.groups[gid];
-              if (!g) return null;
-              return (
-                <div className="side-section" key={gid}>
-                  <h4>{g.label ?? gid}</h4>
-                  {g.fields.map((f) => (
-                    <div className="sheet-row" key={f.key}>{fieldLabel(f)}: {displayValue(f, fields[f.key])}</div>
-                  ))}
-                </div>
-              );
-            })}
-            {ownFields.length > 0 && (
-              <div className="side-section">
-                <h4>Details</h4>
-                {ownFields.map((f) => (
-                  <div className="sheet-row" key={f.key}>{fieldLabel(f)}: {displayValue(f, fields[f.key])}</div>
-                ))}
-              </div>
-            )}
-            {Object.entries(initial.derived).length > 0 && (
-              <div className="side-section">
-                <h4>Derived</h4>
-                {Object.entries(initial.derived).map(([k, v]) => (
-                  <div className="field-hint" key={k}>{k}: {String(v)}</div>
-                ))}
-              </div>
-            )}
-          </div>
+          <SheetLayout module={module} sheetType={sheetType!} mode="view"
+                       values={fields} derived={initial.derived} />
         ) : (
-          <div className="form">
-            {groupIds.map((gid) => {
-              const g = module.sheets.groups[gid];
-              if (!g) return null;
-              return (
-                <div key={gid}>
-                  <h4>{g.label ?? gid}</h4>
-                  {g.fields.map((f) => widget(f, draft[f.key], (v) => setField(f.key, v)))}
-                </div>
-              );
-            })}
-            {ownFields.map((f) => widget(f, draft[f.key], (v) => setField(f.key, v)))}
-          </div>
+          <SheetLayout module={module} sheetType={sheetType!} mode="edit"
+                       values={draft} derived={initial.derived} onChange={setField} />
         )}
       </div>
     </>
