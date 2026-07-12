@@ -350,6 +350,24 @@ def remove_trailing_assistant_run(cid: str, sid: str) -> None:
     p.write_text(dump_frontmatter(meta, _serialize_messages(messages)), encoding="utf-8")
 
 
+def trim_continuation(cid: str, sid: str, from_index: int) -> None:
+    """Roll a scene back to `from_index`, discarding a crashed or
+    superseded continuation attempt (proposals.commit_narration's crash
+    recovery) — except `ROLL_SPEAKER` messages at or past that index,
+    which are preserved in order. The trim-safety rule: manual dice-roll
+    lines are the only non-superseding writer active during the crash
+    window; our own continuation segments never carry ROLL_SPEAKER."""
+    p = _scene_path(cid, sid)
+    if not _safe_id(sid) or not p.exists():
+        raise SceneNotFound(sid)
+    messages = read_scene(cid, sid)["messages"]
+    kept = messages[:from_index] + [
+        m for m in messages[from_index:] if m.get("speaker") == ROLL_SPEAKER]
+    meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
+    meta["updated"] = now_iso()
+    p.write_text(dump_frontmatter(meta, _serialize_messages(kept)), encoding="utf-8")
+
+
 class RollMessageImmutable(Exception):
     """Raised when editing a manual dice-roll transcript line is attempted —
     its content must stay in lockstep with the immutable rolls.json entry."""
