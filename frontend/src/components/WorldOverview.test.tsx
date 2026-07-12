@@ -5,6 +5,7 @@ vi.mock("../api/client", () => ({
   api: {
     getWorld: vi.fn(), listGreetings: vi.fn(), readGreeting: vi.fn(),
     listCharacters: vi.fn(), listUntaggedImages: vi.fn(),
+    listModules: vi.fn(), setWorldModule: vi.fn(),
   },
 }));
 import { api } from "../api/client";
@@ -21,6 +22,8 @@ beforeEach(() => {
     { id: "winifred", name: "Winifred", default_version: "default", versions: [] },  // no tagline
   ]);
   (api.listUntaggedImages as any).mockResolvedValue([]);
+  (api.listModules as any).mockResolvedValue([]);
+  (api.setWorldModule as any).mockResolvedValue({ ok: true });
 });
 
 test("renders count tiles that navigate to their tab", async () => {

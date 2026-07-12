@@ -26,6 +26,7 @@ vi.mock("../api/client", () => ({
     imageUrl: (w: string, c: string, v: string, n: string) => `/img/${w}/${c}/${v}/${n}`,
     actorImageUrl: (sc: { id: string }, c: string, v: string, n: string) => `/img/${sc.id}/${c}/${v}/${n}`,
     listAppearances: vi.fn(), markGreeting: vi.fn(), pickVersion: vi.fn(), importVersion: vi.fn(),
+    listModules: vi.fn(), setWorldModule: vi.fn(),
   },
 }));
 import { api } from "../api/client";
@@ -53,6 +54,8 @@ beforeEach(() => {
   });
   (api.getGreetingSubjects as any).mockResolvedValue({});
   (api.listUntaggedImages as any).mockResolvedValue([]);
+  (api.listModules as any).mockResolvedValue([]);
+  (api.setWorldModule as any).mockResolvedValue({ ok: true });
 });
 
 function renderAt() {
