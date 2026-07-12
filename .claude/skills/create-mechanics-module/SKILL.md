@@ -107,7 +107,10 @@ own fields on top of the groups), and optional `derived` (sees the full assemble
 every composed group's derived names).
 
 Field keys must be unique across a sheet type's composed groups + its own fields; derived names
-must not collide with field keys. `store/modules.py`'s validator catches both at load time.
+must not collide with field keys. Two more reserved-key rules (Phase 3): a field key may not be
+an expression function name (`min`, `max`, `floor`, `ceil`, `abs`), and may not equal another
+field's implicit resource-max name (`<key>_max` of a `resource` field in the same assembled
+set). `store/modules.py`'s validator catches all of these at load time.
 
 **Field-type table** (from the spec's "Module data contract" section):
 
@@ -122,6 +125,11 @@ must not collide with field keys. `store/modules.py`'s validator catches both at
 
 `resource` and `track` are the fields play can mutate — flag them for anything that goes up or
 down during a session; everything else is closer to a fixed rating.
+
+Sheet *instances* exist as of Phase 3: campaigns store per-entity sheets (created/edited from
+each entity's detail view via the Sheet section), and worlds can hold per-module starting sheets
+that seed into new campaigns bound to that module — so a module you author here is immediately
+usable end-to-end.
 
 **Expression-addressability** (matters for `derived` and for `checks.json` below, per the spec's
 "Expression language" section): a `resource` field named `essence` contributes **two** names to
