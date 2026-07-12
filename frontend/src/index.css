@@ -803,15 +803,20 @@ button.primary { background: var(--accent); color: var(--on-accent); border: var
 .sheet-takeover {
   position: fixed; inset: 6% 14%; overflow-y: auto; z-index: 40;
   border-radius: 8px; padding: 1rem 1.5rem;
-  background: var(--surface); color: var(--ink); border: var(--rw) solid var(--rule); box-shadow: var(--sh5);
+  background: var(--sheet-bg, var(--surface)); color: var(--sheet-ink, var(--ink));
+  font-family: var(--sheet-fb, var(--fb));
+  border: var(--rw) solid var(--rule); box-shadow: var(--sh5);
 }
-.sheet-takeover h3 { margin: 4px 0 12px; font-family: var(--fd); }
+.sheet-takeover h3 { margin: 4px 0 12px; font-family: var(--sheet-fd, var(--fd)); }
 .sheet-takeover select {
-  background: var(--surface); color: var(--ink); border: var(--rw2) solid var(--rule);
+  background: var(--sheet-bg, var(--surface)); color: var(--sheet-ink, var(--ink));
+  border: var(--rw2) solid var(--sheet-rule, var(--rule));
   padding: 6px 10px; font-family: var(--fm); font-size: 11px;
 }
-.sheet-view { display: flex; flex-direction: column; gap: 16px; }
-.sheet-row { font-size: 13px; padding: 2px 0; }
+.sheet-takeover input, .sheet-takeover textarea {
+  background: var(--sheet-bg, var(--surface)); color: var(--sheet-ink, var(--ink));
+  border: var(--rw2) solid var(--sheet-rule, var(--rule));
+}
 .resource-inputs { display: flex; align-items: center; gap: 6px; }
 .resource-inputs input { width: 70px; }
 

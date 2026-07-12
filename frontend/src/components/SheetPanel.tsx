@@ -1,17 +1,8 @@
 import { useEffect, useState } from "react";
-import { api, type EntityScope, type ModuleDetail, type ModuleField, type Sheet } from "../api/client";
+import { api, type EntityScope, type ModuleDetail, type Sheet } from "../api/client";
 import SheetEditor, { typeKind } from "./SheetEditor";
-
-function isResource(v: unknown): v is { current: number; max: number } {
-  return !!v && typeof v === "object" && "current" in (v as object) && "max" in (v as object);
-}
-
-/** Group fields + own fields for a sheet type — used to find resource fields for the summary. */
-function sheetFields(module: ModuleDetail, typeId: string): ModuleField[] {
-  const st = module.sheets.sheet_types[typeId];
-  if (!st) return [];
-  return st.groups.flatMap((g) => module.sheets.groups[g]?.fields ?? []).concat(st.fields);
-}
+import { assembledDefs } from "./SheetLayout";
+import { isResource } from "./SheetWidgets";
 
 export default function SheetPanel({ scope, module, kind, eid }:
   { scope: EntityScope; module: ModuleDetail | null; kind: string; eid: string }) {
@@ -100,7 +91,7 @@ export default function SheetPanel({ scope, module, kind, eid }:
 
   const typeDef = sheet.sheet_type ? module.sheets.sheet_types[sheet.sheet_type] : undefined;
   const resourceFields = sheet.sheet_type
-    ? sheetFields(module, sheet.sheet_type).filter((f) => f.type === "resource")
+    ? assembledDefs(module, sheet.sheet_type).filter((f) => f.type === "resource")
     : [];
   const derivedEntries = Object.entries(sheet.derived);
 

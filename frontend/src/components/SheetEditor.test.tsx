@@ -74,8 +74,7 @@ test("view shows groups and derived; edit saves fields", async () => {
   expect(screen.getByText("Attributes")).toBeInTheDocument();
   expect(screen.getByText(/sight_pool/)).toBeInTheDocument();
   fireEvent.click(screen.getByText("Edit"));
-  const vigor = screen.getByLabelText("Vigor") as HTMLInputElement;
-  fireEvent.change(vigor, { target: { value: "4" } });
+  fireEvent.click(screen.getByLabelText("Vigor 4"));
   fireEvent.click(screen.getByText("Save"));
   await waitFor(() => expect(api.putSheet).toHaveBeenCalledWith(
     { kind: "campaign", id: "run" }, "pool-basic", "characters", "mara",
@@ -149,9 +148,9 @@ test("cancel discards edits and returns to view", () => {
                       kind="characters" eid="mara" initial={SHEET}
                       onClose={() => {}} onSaved={() => {}} />);
   fireEvent.click(screen.getByText("Edit"));
-  fireEvent.change(screen.getByLabelText("Vigor"), { target: { value: "1" } });
+  fireEvent.click(screen.getByLabelText("Vigor 1"));
   fireEvent.click(screen.getByText("Cancel"));
-  expect(screen.queryByLabelText("Vigor")).toBeNull();
+  expect(screen.queryByLabelText("Vigor 1")).toBeNull();
   expect(screen.getByText("Attributes")).toBeInTheDocument();
 });
 
@@ -201,4 +200,64 @@ test("number widget carries schema min/max bounds", async () => {
   const strength = screen.getByLabelText("Strength") as HTMLInputElement;
   expect(strength.min).toBe("1");
   expect(strength.max).toBe("20");
+});
+
+test("layout applies in view and edit; same panels both modes", () => {
+  const laid: ModuleDetail = { ...MOD, layout: { sheet_types: {
+    medium: { column: [{ group: "attributes", title: "Attributes" },
+                       { fields: ["essence", "quirk", "gear"], title: "Power" }] } } } };
+  render(<SheetEditor scope={{ kind: "campaign", id: "run" }} module={laid}
+                      kind="characters" eid="mara" initial={SHEET}
+                      onClose={() => {}} onSaved={() => {}} />);
+  expect(screen.getByText("Power")).toBeInTheDocument();
+  fireEvent.click(screen.getByText("Edit"));
+  expect(screen.getByText("Power")).toBeInTheDocument(); // same arrangement in edit
+});
+
+test("theme sets vars and data attributes on the takeover", () => {
+  const themed: ModuleDetail = { ...MOD,
+    theme: { colors: { bg: "#191521", ink: "#d8d2c4" }, dots: "diamond", corners: "sharp" } };
+  render(<SheetEditor scope={{ kind: "campaign", id: "run" }} module={themed}
+                      kind="characters" eid="mara" initial={SHEET}
+                      onClose={() => {}} onSaved={() => {}} />);
+  const takeover = screen.getByRole("dialog");
+  expect(takeover.getAttribute("data-dots")).toBe("diamond");
+  expect(takeover.style.getPropertyValue("--sheet-bg")).toBe("#191521");
+});
+
+test("unthemed module sets no sheet vars", () => {
+  render(<SheetEditor scope={{ kind: "campaign", id: "run" }} module={MOD}
+                      kind="characters" eid="mara" initial={SHEET}
+                      onClose={() => {}} onSaved={() => {}} />);
+  expect(screen.getByRole("dialog").style.getPropertyValue("--sheet-bg")).toBe("");
+});
+
+test("dropped-layout hint routing", () => {
+  const base = { scope: { kind: "campaign", id: "run" } as const, kind: "characters",
+                 eid: "mara", initial: SHEET, onClose: () => {}, onSaved: () => {} };
+  const HINT = /layout for this sheet type is invalid/;
+  // names the current type -> fires
+  const dropped: ModuleDetail = { ...MOD, display_errors: [
+    { source: "layout", sheet_type: "medium", message: "sheet_types.medium: bad" }] };
+  const { unmount } = render(<SheetEditor {...base} module={dropped} />);
+  expect(screen.getByText(HINT)).toBeInTheDocument();
+  unmount();
+  // file-level error, no surviving tree -> fires
+  const global: ModuleDetail = { ...MOD, display_errors: [
+    { source: "layout", sheet_type: null, message: "layout.json: must be an object" }] };
+  const r2 = render(<SheetEditor {...base} module={global} />);
+  expect(screen.getByText(HINT)).toBeInTheDocument();
+  r2.unmount();
+  // unused-fragment error but current type's layout survived -> does NOT fire
+  const survived: ModuleDetail = { ...MOD,
+    layout: { sheet_types: { medium: { column: [] } } },
+    display_errors: [{ source: "layout", sheet_type: null, message: "fragments.broken: bad" }] };
+  const r3 = render(<SheetEditor {...base} module={survived} />);
+  expect(r3.queryByText(HINT)).toBeNull();
+  r3.unmount();
+  // another type's tree dropped, current type never had a layout -> does NOT fire
+  const other: ModuleDetail = { ...MOD, display_errors: [
+    { source: "layout", sheet_type: "shifter", message: "sheet_types.shifter: bad" }] };
+  const r4 = render(<SheetEditor {...base} module={other} />);
+  expect(r4.queryByText(HINT)).toBeNull();
 });
