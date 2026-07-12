@@ -1,4 +1,12 @@
-export type ChatEvent = { delta?: string; done?: boolean; error?: { detail: string; kind: string } };
+export type RollProposalPayload = {
+  id: string;
+  check?: string; check_label?: string;
+  actor?: string; actor_label?: string;
+  difficulty?: number; modifier?: number; reason?: string;
+  available?: Record<string, [string, string][]>;
+  problems: string[];
+};
+export type ChatEvent = { delta?: string; done?: boolean; error?: { detail: string; kind: string }; proposal?: RollProposalPayload };
 
 export type LocalizeSummary = {
   total: number;
