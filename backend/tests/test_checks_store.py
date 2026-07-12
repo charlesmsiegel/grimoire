@@ -97,6 +97,30 @@ def test_evaluate_tier_defaults_fallback_and_check_level_shadows(monkeypatch, tm
     assert label == "fallback"
 
 
+def test_resolve_check_never_appeared_actor(monkeypatch, tmp_path):
+    # A real, sheeted character that has never appeared in any scene: no
+    # locked version exists, so the label path must not crash on vid=None
+    # (regression: TypeError via characters.read_card(croot, eid, None)).
+    _, cid, _ = _play(monkeypatch, tmp_path)
+    from grimoire.store import characters
+    wroot = worlds.world_root(campaigns.read_campaign(cid)["meta"]["world"])
+    eid, _vid = characters.create_character(wroot, "Mara")
+    sheets.write(cid, "characters", eid, "medium", {"vigor": 3, "brawl": 2})
+    res = checks.resolve_check(cid, "brawl", f"characters:{eid}", seed=7)
+    assert res["actor_label"] == "Mara"       # container meta name, no version needed
+    # campaign-local copy, still never appeared (the reviewer's TypeError repro:
+    # read_card(croot, eid, None) passes _require_char, then _safe(None) crashes)
+    croot = campaigns.campaign_root(cid)
+    eid2, _ = characters.create_character(croot, "Seraphine")
+    sheets.write(cid, "characters", eid2, "medium", {"vigor": 2, "brawl": 1})
+    res = checks.resolve_check(cid, "brawl", f"characters:{eid2}", seed=7)
+    assert res["actor_label"] == "Seraphine"
+    # and a sheeted id with no character record at all falls back to the id
+    sheets.write(cid, "characters", "winifred", "medium", {"vigor": 1, "brawl": 1})
+    res = checks.resolve_check(cid, "brawl", "characters:winifred", seed=7)
+    assert res["actor_label"] == "winifred"
+
+
 def test_rolls_proposal_tag(monkeypatch, tmp_path):
     _, cid, _ = _play(monkeypatch, tmp_path)
     from grimoire.store import dice
