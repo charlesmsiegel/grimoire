@@ -84,3 +84,8 @@ def test_runtime_errors_become_expression_errors(text, scope):
 def test_spec_whitelist_is_exact(text):
     with pytest.raises(expressions.ExpressionError):
         expressions.parse(text)
+
+
+def test_non_string_input_raises_expression_error():
+    with pytest.raises(expressions.ExpressionError):
+        expressions.parse(5)  # type: ignore[arg-type]

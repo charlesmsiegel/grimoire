@@ -116,12 +116,15 @@ def numeric_names(fields: list[dict]) -> set[str]:
     for f in fields:
         if not isinstance(f, dict):
             continue
+        key = f.get("key")
+        if not key:
+            continue
         t = f.get("type")
         if t in ("number", "dots", "track"):
-            out.add(f["key"])
+            out.add(key)
         elif t == "resource":
-            out.add(f["key"])
-            out.add(f["key"] + "_max")
+            out.add(key)
+            out.add(key + "_max")
     return out
 
 
@@ -130,8 +133,9 @@ def assembled_fields(sheets: dict, type_id: str) -> list[dict]:
     st = sheets.get("sheet_types", {}).get(type_id, {})
     fields: list[dict] = []
     for gid in st.get("groups", []):
-        fields.extend([f for f in sheets.get("groups", {}).get(gid, {}).get("fields", [])
-                       if isinstance(f, dict)])
+        g = sheets.get("groups", {}).get(gid)
+        if isinstance(g, dict):
+            fields.extend([f for f in g.get("fields", []) if isinstance(f, dict)])
     fields.extend([f for f in st.get("fields", []) if isinstance(f, dict)])
     return fields
 
@@ -143,6 +147,9 @@ def _validate_derived(derived: dict, scope: set[str], where: str,
     for name, expr in derived.items():
         if name in scope:
             errors.append(f"{where}.{name}: derived name collides with a field")
+            continue
+        if not isinstance(expr, str):
+            errors.append(f"{where}.{name}: derived expression must be a string")
             continue
         try:
             unknown = expressions.names(expr) - scope
@@ -165,6 +172,8 @@ def _validate_sheets(sheets: dict, errors: list[str]) -> None:
         fields = _as_list(group.get("fields"), f"groups.{gid}", "fields", errors)
         for f in fields:
             _validate_field(f, f"groups.{gid}", errors)
+            if not isinstance(f, dict):
+                continue
             k = f.get("key")
             if k in seen:
                 errors.append(f"groups.{gid}.{k}: duplicate field key")
@@ -192,7 +201,9 @@ def _validate_sheets(sheets: dict, errors: list[str]) -> None:
             errors.append(f"{where}.{k}: duplicate field key across groups")
         scope = numeric_names(fields)
         for gid in st_groups:
-            scope |= set(groups.get(gid, {}).get("derived", {}))
+            g = groups.get(gid)
+            if isinstance(g, dict) and isinstance(g.get("derived", {}), dict):
+                scope |= set(g.get("derived", {}))
         st_derived = _as_dict(st.get("derived"), where, "derived", errors)
         _validate_derived(st_derived, scope, where, errors)
 
