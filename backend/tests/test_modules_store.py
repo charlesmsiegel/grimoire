@@ -161,3 +161,48 @@ def test_assembled_fields_and_numeric_names():
     fields = modules.assembled_fields(GOOD_SHEETS, "warden")
     assert [f["key"] for f in fields] == ["vigor", "wits", "essence"]
     assert modules.numeric_names(fields) == {"vigor", "wits", "essence", "essence_max"}
+
+
+def test_sheets_json_wrong_shape_accumulates_error(monkeypatch, tmp_path):
+    d = make_pack(_home(monkeypatch, tmp_path))
+    (d / "sheets.json").write_text("[1, 2, 3]", encoding="utf-8")
+    errs = modules.load_pack("testmod")["errors"]
+    assert any("sheets.json" in e for e in errs)
+
+
+def test_sheets_json_wrong_typed_entries(monkeypatch, tmp_path):
+    sheets = {"groups": {"attributes": "nope"}, "sheet_types": {"warden": ["x"]}}
+    make_pack(_home(monkeypatch, tmp_path), sheets=sheets)
+    errs = modules.load_pack("testmod")["errors"]
+    assert any("groups.attributes" in e for e in errs)
+    assert any("sheet_types.warden" in e for e in errs)
+
+
+def test_missing_sheets_json(monkeypatch, tmp_path):
+    d = make_pack(_home(monkeypatch, tmp_path))
+    (d / "sheets.json").unlink()
+    assert any("sheets.json" in e for e in modules.load_pack("testmod")["errors"])
+
+
+def test_bool_max_rejected(monkeypatch, tmp_path):
+    errs = _sheets_error(
+        monkeypatch, tmp_path,
+        lambda s: s["groups"]["attributes"]["fields"].append(
+            {"key": "aura", "type": "dots", "max": True}))
+    assert any("max" in e for e in errs)
+
+
+def test_user_module_shadows_builtin(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    b = tmp_path / "builtins" / "testmod"
+    b.mkdir(parents=True)
+    (b / "module.md").write_text("---\nname: Builtin Copy\n---\n", encoding="utf-8")
+    (b / "sheets.json").write_text('{"groups": {}, "sheet_types": {}}', encoding="utf-8")
+    monkeypatch.setenv("GRIMOIRE_MODULES", str(tmp_path / "builtins"))
+    # builtin-only resolution works
+    assert modules.load_pack("testmod")["source"] == "builtin"
+    assert modules.load_pack("testmod")["manifest"]["name"] == "Builtin Copy"
+    # user copy shadows it
+    make_pack(tmp_path)
+    assert modules.load_pack("testmod")["source"] == "user"
+    assert modules.load_pack("testmod")["manifest"]["name"] == "Test Module"
