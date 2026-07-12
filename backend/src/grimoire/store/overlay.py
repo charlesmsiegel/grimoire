@@ -120,23 +120,23 @@ def read_entity(cid: str, kind: str, eid: str) -> dict:
 
 
 def create_entity(cid: str, kind: str, name: str, body: str = "", keys: str = "",
-                  owners: str = "", sd_prompt: str = "") -> str:
+                  owners: str = "", sd_prompt: str = "", fields: dict | None = None) -> str:
     wroot, gone = wroot_of(cid), deleted(cid)
 
     def taken(eid: str) -> bool:
         return _flat_path(wroot, kind, eid).exists() or _flat_ref(kind, eid) in gone
 
     return entities.create_entity(croot_of(cid), kind, name, body, keys, owners,
-                                  sd_prompt=sd_prompt, taken=taken)
+                                  sd_prompt=sd_prompt, taken=taken, fields=fields)
 
 
 def update_entity(cid: str, kind: str, eid: str, *, name: str | None = None,
                   body: str | None = None, keys: str | None = None,
-                  owners: str | None = None) -> None:
+                  owners: str | None = None, fields: dict | None = None) -> None:
     croot = croot_of(cid)
     if not _flat_path(croot, kind, eid).exists():
         materialize_entity(cid, kind, eid)
-    entities.update_entity(croot, kind, eid, name=name, body=body, keys=keys, owners=owners)
+    entities.update_entity(croot, kind, eid, name=name, body=body, keys=keys, owners=owners, fields=fields)
 
 
 def delete_entity(cid: str, kind: str, eid: str) -> None:

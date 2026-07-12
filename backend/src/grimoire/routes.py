@@ -78,6 +78,7 @@ class EntityCreate(BaseModel):
     body: str = ""
     keys: str = ""
     owners: str = ""
+    fields: dict | None = None
 
 
 class EntityUpdate(BaseModel):
@@ -85,6 +86,7 @@ class EntityUpdate(BaseModel):
     body: str | None = None
     keys: str | None = None
     owners: str | None = None
+    fields: dict | None = None
 
 
 class CharacterCreate(BaseModel):
@@ -1043,9 +1045,17 @@ def _entity_list(root, kind: str):
     return items
 
 
+def _check_fields(kind: str, fields: dict | None) -> None:
+    bad = store.entity_schema.invalid_keys(kind, fields or {})
+    if bad:
+        raise HTTPException(status_code=400, detail=f"unknown fields for {kind}: {', '.join(bad)}")
+
+
 def _entity_create(root, kind: str, body: EntityCreate):
+    _check_fields(kind, body.fields)
     try:
-        return {"id": store.entities.create_entity(root, kind, body.name, body.body, body.keys, body.owners)}
+        return {"id": store.entities.create_entity(root, kind, body.name, body.body, body.keys, body.owners,
+                                                    fields=body.fields)}
     except store.entities.UnknownKind:
         raise HTTPException(status_code=404, detail="unknown kind")
 
@@ -1060,9 +1070,10 @@ def _entity_read(root, kind: str, eid: str):
 
 
 def _entity_update(root, kind: str, eid: str, body: EntityUpdate):
+    _check_fields(kind, body.fields)
     try:
         store.entities.update_entity(root, kind, eid, name=body.name, body=body.body,
-                                     keys=body.keys, owners=body.owners)
+                                     keys=body.keys, owners=body.owners, fields=body.fields)
     except store.entities.UnknownKind:
         raise HTTPException(status_code=404, detail="unknown kind")
     except store.entities.EntityNotFound:
@@ -1096,8 +1107,10 @@ def _campaign_entity_list(cid: str, kind: str):
 
 
 def _campaign_entity_create(cid: str, kind: str, body: EntityCreate):
+    _check_fields(kind, body.fields)
     try:
-        return {"id": store.overlay.create_entity(cid, kind, body.name, body.body, body.keys, body.owners)}
+        return {"id": store.overlay.create_entity(cid, kind, body.name, body.body, body.keys, body.owners,
+                                                   fields=body.fields)}
     except store.entities.UnknownKind:
         raise HTTPException(status_code=404, detail="unknown kind")
 
@@ -1112,9 +1125,10 @@ def _campaign_entity_read(cid: str, kind: str, eid: str):
 
 
 def _campaign_entity_update(cid: str, kind: str, eid: str, body: EntityUpdate):
+    _check_fields(kind, body.fields)
     try:
         store.overlay.update_entity(cid, kind, eid, name=body.name, body=body.body,
-                                    keys=body.keys, owners=body.owners)
+                                    keys=body.keys, owners=body.owners, fields=body.fields)
     except store.entities.UnknownKind:
         raise HTTPException(status_code=404, detail="unknown kind")
     except store.entities.EntityNotFound:
