@@ -16,7 +16,7 @@ player adjudicates; the engine does all math; the LLM narrates the result.
 | Roll tag | Fenced ` ```roll ` block, JSON `{check, actor, difficulty?, modifier?, reason?}`; model instructed to stop after it | Works with any streaming text model (no tool-calling assumed); JSON is parseable and cheap; ids are copied from context, not invented. |
 | Modify scope | Difficulty + modifier inline, check swappable; actor fixed (select appears only when actor resolution failed) | Wrong-difficulty and wrong-check are the real table corrections; wrong-actor means the narration went wrong — that's what decline is for. |
 | Decline semantics | Continuation told "check declined; continue without rolling"; no other trace | The scene simply proceeds; nothing mechanical happened. |
-| Proposal persistence | Ephemeral (SSE event + frontend state); pre-fence narration persists normally | A lost chip costs nothing: the narration stands and play continues. |
+| Proposal persistence | **Durable**: one pending-proposal record per scene in `<campaign>/proposals.json` (rolls.json-style), written before the pre-fence narration persists; recoverable on scene reload; adjudication is idempotent by proposal id | Codex adversarial review (2026-07-12): the ephemeral design let a dropped SSE stream strand persisted narration at an unadjudicated decision point, and a retried accept could roll twice. Durability + idempotency close both. |
 | Sheet summaries scope | Present cast + the current location's sheet (if sheeted) | Location stats (wards, hazards) are check-relevant; other sheeted entities wait for a need. |
 | Rules budget | Keyword-activated rules docs capped at 6/turn; `always`/`sheet_types` docs uncapped | Bounded context growth; core digests and splat rules are the load-bearing text. |
 | Manual checks | In scope: 🎲 popover gains a Check mode using the same resolution path | Exercises the engine without LLM involvement; same code path as accept. |
@@ -75,8 +75,12 @@ The accumulation loop gains a fence watcher over the growing buffer:
 
 - When a complete ` ```roll …``` ` block closes: stop consuming the LLM
   stream; split the buffer into pre-fence narration and fence body;
-  persist the narration via the normal `split_reply`/`append_message`
-  path; emit `{"proposal": {...}}` then `{"done": true}`.
+  **first** write the pending-proposal record (see Proposal store below),
+  **then** persist the narration via the normal
+  `split_reply`/`append_message` path, then emit `{"proposal": {...}}`
+  and `{"done": true}`. This ordering guarantees that any transcript
+  which ends at a mechanical decision point has a recoverable proposal
+  record, even if the SSE connection dies before the browser sees it.
 - Delta suppression: once a ` ```roll ` opener appears in the buffer,
   stop emitting deltas (the UI must never render a half-fence); the
   suppressed text is re-examined when the fence closes or the stream
@@ -106,6 +110,39 @@ case-insensitive name match. The proposal payload sent to the UI:
 unparseable, fence truncated, check unavailable to this actor. Non-empty
 `problems` → the chip opens in Modify state. A proposal is never silently
 dropped.
+
+### Proposal store (`store/proposals.py`)
+
+`<campaign>/proposals.json` — one record per scene, rolls.json-style
+(read/mutate/write whole file):
+
+```json
+{"<sid>": {"id": "pr-000042", "status": "pending",
+           "payload": {...the proposal payload above...},
+           "created": "<iso>",
+           "resolution": null}}
+```
+
+- `new(cid, sid, payload) -> record` — assigns a monotonically increasing
+  id (persisted counter in the same file), supersedes any existing
+  pending record for the scene (status → `"superseded"` — only the
+  latest record per scene is kept, with its status).
+- States: `pending` → `resolved` (accept: `resolution` holds the full
+  resolution dict incl. `roll_id`) or `declined` → `narrated` (the
+  continuation reply persisted). `superseded` is terminal.
+- `get(cid, sid)`, `set_status(cid, sid, pid, status, resolution=None)`.
+- A new player send or a new fence in the same scene supersedes a
+  pending proposal.
+- Never raises on malformed file content (rebuilds as empty; house
+  never-raise posture for reads).
+
+**Recovery:** `GET /api/campaigns/{cid}/scenes/{sid}/roll-proposal`
+returns the scene's record (or null). The frontend fetches it on scene
+select and re-renders the chip whenever the status is `pending` — a
+dropped stream, a reload, or a device switch all recover the
+adjudication point. A `resolved`-but-not-`narrated` record re-renders as
+the chip in a "roll made, narration pending" state offering only
+**Continue narration**.
 
 ## Resolution — `store/checks.py`
 
@@ -170,11 +207,26 @@ rolls.
 ## Routes
 
 - `POST /api/campaigns/{cid}/scenes/{sid}/roll-proposal` — body
-  `{action: "accept"|"decline", check?, actor?, difficulty?, modifier?}`;
-  SSE stream (same frame protocol as `/chat`). Accept: `resolve_check`,
-  append the 🎲 line, stream the continuation. Decline: stream the
-  continuation with the declined instruction. `CheckError` → a
-  `{"error": {...}}` frame (the chip stays up for another attempt).
+  `{proposal: "<id>", action: "accept"|"decline", check?, actor?,
+  difficulty?, modifier?}`; SSE stream (same frame protocol as `/chat`).
+  **Idempotent by proposal id**, keyed to the scene's current record:
+  - Unknown/mismatched id, or status `superseded` → 409 (the chip is
+    stale; frontend re-fetches the record).
+  - `pending` + accept: `resolve_check`; record `resolution` and status
+    `resolved` in proposals.json **before** appending the 🎲 line; then
+    stream the continuation; on continuation persist, status
+    `narrated`.
+  - `pending` + decline: status `declined`; stream the declined
+    continuation; then `narrated`.
+  - `resolved`/`declined` (a retry after a dropped continuation): **never
+    re-roll** — reuse the stored resolution, stream a fresh continuation
+    (nothing was persisted by the dropped one; `_persist_reply` runs only
+    at stream completion), then `narrated`.
+  - `narrated`: no-op — emit `{"done": true}` immediately.
+  - `CheckError` → an `{"error": {...}}` frame; status stays `pending`
+    (the chip stays up for another attempt).
+- `GET /api/campaigns/{cid}/scenes/{sid}/roll-proposal` — the scene's
+  proposal record or null (recovery; see Proposal store).
 - `POST /api/campaigns/{cid}/scenes/{sid}/check` — body
   `{check, actor, difficulty?, modifier?}`; non-streaming; resolves +
   appends the 🎲 line; returns the resolution dict. (Manual checks.)
@@ -209,13 +261,18 @@ allowed and surfaces a new chip).
 
 - **`components/RollProposal.tsx`** — chip between the stream area and
   the composer, driven by a new `proposal` field on `ChatEvent` handled
-  in `runStream`. Normal state: `🎲 **Athletics** — Mara · DC 15`, the
+  in `runStream` **and re-hydrated on scene select** via
+  `GET .../roll-proposal` (renders whenever the record's status is
+  `pending`; a `resolved`-but-not-`narrated` record renders the
+  "roll made, narration pending" state offering only **Continue
+  narration**). Normal state: `🎲 **Athletics** — Mara · DC 15`, the
   reason line, **Roll it / Modify / Decline**. Modify state (auto when
   `problems` non-empty): check select (from `available[actor]`),
   difficulty + modifier inputs, actor fixed text (or an actor select when
-  actor resolution failed). Both verdicts POST `roll-proposal` and pipe
-  the SSE response back through `runStream` so the continuation streams
-  live. Chip clears on `done`, scene switch, or a new send.
+  actor resolution failed). Every verdict POSTs `roll-proposal` with the
+  **proposal id** and pipes the SSE response back through `runStream` so
+  the continuation streams live; a 409 (stale chip) re-fetches the
+  record. Chip clears on `done` or when a new send supersedes it.
 - **🎲 popover** gains a Roll/Check mode toggle. Check mode: actor select
   (sheeted present cast), check select (available to that actor),
   difficulty/modifier inputs → `POST .../check` → transcript refresh.
@@ -240,10 +297,16 @@ allowed and surfaces a new chip).
   (bad label, unparseable `when`, unknown scope name); reserved
   `difficulty`/`modifier` in templates accepted; both reference packs
   still load clean.
+- **Proposal store**: new/get/set_status round-trip; supersede on new
+  proposal and on new send; malformed-file tolerance; monotonic ids.
 - **Routes**: roll-proposal accept (roll logged + 🎲 line + streamed
-  continuation), decline (no roll, streamed continuation), CheckError →
-  error frame; manual check round-trip; module-less campaign → 404/400
-  on both routes.
+  continuation + status walk pending→resolved→narrated), decline (no
+  roll, streamed continuation), **idempotency** (second accept with the
+  same id after `resolved` reuses the stored roll — the roll log gains
+  no new entry — and re-streams a continuation; accept after `narrated`
+  → immediate done; mismatched/superseded id → 409), recovery GET,
+  CheckError → error frame + status stays pending; manual check
+  round-trip; module-less campaign → 404/400 on both routes.
 - **Context**: module-bound campaign renders all three sections
   (activation: always/sheet_types/keys with the cap; summaries incl.
   location; available-checks listing); unbound campaign renders none;
