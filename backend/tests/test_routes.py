@@ -3435,3 +3435,62 @@ def test_concurrent_accept_vs_manual_check_distinct_entries(client):
     assert len(entries) == 2 and len(set(ids)) == 2
     assert sum(1 for e in entries if e.get("proposal") == rec["id"]) == 1
     assert sum(1 for e in entries if e.get("proposal") is None) == 1
+
+
+def test_valid_json_fence_missing_check_flags_problem(client):
+    cid, sid, _ = _mech_scene(client)
+    resp = _emit_fence(client, cid, sid, '{"actor": "characters:mara"}')
+    assert resp.status_code == 200
+    rec = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert rec["status"] == "pending"
+    payload = rec["payload"]
+    assert payload["check"] is None
+    assert "roll request had no check id" in payload["problems"]
+
+
+def test_project_resolution_none_when_record_replaced(client):
+    # Reproduces the narrow window in finding #2: the route reads status
+    # "resolved" for pid, then — before _project_resolution acquires its
+    # lock — a supersede + brand-new fence/send replaces the scene's record
+    # with a different id. _project_resolution must stop dead: no roll
+    # append, no transcript line, no TypeError on a None resolution.
+    cid, sid, _ = _mech_scene(client)
+    rec = _pending(client, cid, sid)
+    old_pid = rec["id"]
+    store.proposals.claim(cid, sid, old_pid)
+    resolution = store.checks.resolve_check(cid, "brawl", "characters:mara", 6, 0)
+    assert store.proposals.transition(cid, sid, old_pid, ("resolving",), "resolved", resolution)
+
+    store.proposals.supersede(cid, sid)
+    store.proposals.new(cid, sid, {"check": "brawl", "actor": "characters:mara",
+                                   "problems": []})
+
+    result = routes._project_resolution(cid, sid, old_pid)
+    assert result is None
+    assert [e for e in client.get(f"/api/campaigns/{cid}/rolls").json()
+            if e.get("proposal") == old_pid] == []
+    assert _roll_lines(client, cid, sid) == []
+
+
+def test_superseded_same_id_still_projects(client):
+    # Existing spec-mandated behavior must survive the new guard: a record
+    # that keeps its id but was superseded (status flips resolved ->
+    # superseded with no replacement record) still projects — its roll
+    # stands in the transcript as history per spec; only the automatic
+    # continuation is cancelled elsewhere (commit_narration), not this.
+    cid, sid, _ = _mech_scene(client)
+    rec = _pending(client, cid, sid)
+    pid = rec["id"]
+    store.proposals.claim(cid, sid, pid)
+    resolution = store.checks.resolve_check(cid, "brawl", "characters:mara", 6, 0)
+    assert store.proposals.transition(cid, sid, pid, ("resolving",), "resolved", resolution)
+
+    store.proposals.supersede(cid, sid)  # same id — no new() call follows
+    assert store.proposals.get(cid, sid)["status"] == "superseded"
+
+    result = routes._project_resolution(cid, sid, pid)
+    assert result is not None and "roll_id" in result and "line_intent" in result
+    tagged = [e for e in client.get(f"/api/campaigns/{cid}/rolls").json()
+              if e.get("proposal") == pid]
+    assert len(tagged) == 1 and tagged[0]["id"] == result["roll_id"]
+    assert len(_roll_lines(client, cid, sid)) == 1
