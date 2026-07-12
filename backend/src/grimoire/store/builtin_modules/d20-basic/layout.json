@@ -1,0 +1,33 @@
+{
+  "fragments": {
+    "core-stats": {
+      "column": [
+        {"group": "attributes", "grid": true, "title": "Attributes"},
+        {"derived": ["str_mod", "dex_mod", "mind_mod"], "title": "Modifiers"}
+      ]
+    }
+  },
+  "sheet_types": {
+    "warrior": {
+      "column": [
+        {"use": "core-stats"},
+        {"row": [
+          {"group": "skills", "title": "Skills"},
+          {"column": [{"fields": ["hp", "gear"]}, {"derived": ["melee_bonus"]}], "title": "Combat"}
+        ]}
+      ]
+    },
+    "adept": {
+      "column": [
+        {"use": "core-stats"},
+        {"row": [
+          {"group": "skills", "title": "Skills"},
+          {"column": [{"fields": ["hp", "spell_slots", "spells"]}, {"derived": ["spell_bonus"]}], "title": "Magic"}
+        ]}
+      ]
+    },
+    "wondrous-item": {
+      "column": [{"fields": ["charges", "bonus", "quirk"], "title": "Item"}]
+    }
+  }
+}

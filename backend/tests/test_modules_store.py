@@ -859,3 +859,17 @@ def test_resolve_ignores_display_errors(monkeypatch, tmp_path):
     cid = campaigns.create_campaign("Saltmarch Run", wid)
     modules.set_campaign_module(cid, "testmod")
     assert modules.resolve(cid) == "testmod"
+
+
+# ---- Task 4: Reference-module layouts + themes ----
+
+
+def test_builtin_packs_display_clean(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    for mid in ("d20-basic", "pool-basic"):
+        pack = modules.load_pack(mid)
+        assert pack["errors"] == [], (mid, pack["errors"])
+        assert pack["display_errors"] == [], (mid, pack["display_errors"])
+        assert pack["layout"]["sheet_types"], mid       # every builtin ships layouts
+        assert pack["theme"], mid                        # and a theme
+        assert "use" not in json.dumps(pack["layout"])   # spliced

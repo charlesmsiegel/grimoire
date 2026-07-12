@@ -1,0 +1,32 @@
+{
+  "fragments": {
+    "traits": {
+      "row": [
+        {"group": "attributes", "title": "Attributes"},
+        {"group": "abilities", "title": "Abilities"}
+      ]
+    }
+  },
+  "sheet_types": {
+    "medium": {
+      "column": [
+        {"use": "traits"},
+        {"row": [
+          {"column": [{"fields": ["essence", "health"]}], "title": "Condition"},
+          {"column": [{"derived": ["awareness", "sight_pool"]}, {"fields": ["quirk", "gear"]}], "title": "Gifts"}
+        ]}
+      ]
+    },
+    "shifter": {
+      "column": [
+        {"use": "traits"},
+        {"row": [
+          {"column": [{"fields": ["fury", "health"]}], "title": "Condition"},
+          {"column": [{"derived": ["awareness", "claw_pool"]}, {"fields": ["quirk", "gear"]}], "title": "Gifts"}
+        ]}
+      ]
+    },
+    "talisman": {"column": [{"fields": ["power", "charges"], "title": "Talisman"}]},
+    "haven": {"column": [{"fields": ["ward", "size"], "title": "Haven"}]}
+  }
+}

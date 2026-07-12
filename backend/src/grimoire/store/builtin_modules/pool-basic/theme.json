@@ -1,0 +1,6 @@
+{
+  "colors": {"bg": "#191521", "ink": "#d8d2c4", "muted": "#8d8496", "accent": "#8a2a3b", "rule": "#5a4a66"},
+  "fonts": {"display": "display", "body": "serif"},
+  "dots": "diamond",
+  "corners": "sharp"
+}
