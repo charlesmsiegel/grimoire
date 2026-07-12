@@ -321,3 +321,17 @@ def test_reject_keeps_divergence_and_advances_base(monkeypatch, tmp_path):
     sync.reject(cid, [{"kind": "lore", "id": eid}])
     assert sync.incoming(cid) == []
     assert overlay.read_entity(cid, "lore", eid)["body"] == "campaign v1"
+
+
+def test_new_kind_flows_live_and_syncs_updates(monkeypatch, tmp_path):
+    wid, cid = _setup(monkeypatch, tmp_path)
+    entities.create_entity(worlds.world_root(wid), "items", "Salt Knife", "v1")
+    # brand-new world record: inherited live via the overlay, nothing incoming
+    assert sync.incoming(cid) == []
+    assert overlay.read_entity(cid, "items", "salt-knife")["body"].strip() == "v1"
+    # materialized-then-world-updated: offered as an update, like locations/lore
+    overlay.materialize_entity(cid, "items", "salt-knife")
+    entities.update_entity(worlds.world_root(wid), "items", "salt-knife", body="v2")
+    pend = sync.incoming(cid)
+    assert [p["status"] for p in pend] == ["update"]
+    assert pend[0]["world"]["body"].strip() == "v2"

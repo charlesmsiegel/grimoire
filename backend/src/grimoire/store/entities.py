@@ -14,7 +14,7 @@ from . import statcache
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import slugify, uniquify
 
-ENTITY_KINDS: tuple[str, ...] = ("locations", "lore")
+ENTITY_KINDS: tuple[str, ...] = ("locations", "lore", "items", "groups", "creatures")
 
 # Everything copy-on-create / sync tracks as a flat `<kind>/<id>.md` file:
 # generic entities plus greetings (which keep their own CRUD module).

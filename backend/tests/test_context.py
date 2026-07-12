@@ -121,6 +121,19 @@ def test_pc_owned_lore_activates_when_pc_in_scene(monkeypatch, tmp_path):
     assert "hidden key" in context.build_messages(cid, sid)[0]["content"]
 
 
+def test_new_kinds_activate_like_lore(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "groups", "Salt Circle", "A quiet cabal.")          # keyless -> always-on
+    entities.create_entity(croot, "creatures", "Marsh Wyrm", "Sleeps in brine.", keys="wyrm")
+    entities.create_entity(croot, "items", "Salt Knife", "Cuts anything.", keys="knife")
+    scenes.append_message(cid, sid, "user", "The wyrm stirs.")
+    text = context.build_messages(cid, sid)[0]["content"]
+    assert "A quiet cabal." in text          # keyless group always-on
+    assert "Sleeps in brine." in text        # 'wyrm' key matched
+    assert "Cuts anything." not in text      # 'knife' key absent
+
+
 def test_single_npc_block_order(monkeypatch, tmp_path):
     wid, cid, sid = _campaign(monkeypatch, tmp_path)
     characters.create_character(worlds.world_root(wid), "Seraphine", "default",

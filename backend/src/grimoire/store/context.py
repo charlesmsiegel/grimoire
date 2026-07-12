@@ -108,7 +108,7 @@ def _world_info(cid: str, recent_text: str, exclude: frozenset = frozenset(),
                 present: frozenset = frozenset()) -> list[str]:
     """Bodies of the activated lore/location entries (the template joins them)."""
     entries = []
-    for kind in ("lore", "locations"):
+    for kind in ("lore", "locations", "items", "groups", "creatures"):
         for meta in overlay.list_entities(cid, kind):
             if kind == "locations" and meta["id"] in exclude:
                 continue
