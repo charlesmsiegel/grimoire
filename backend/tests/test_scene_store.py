@@ -480,3 +480,27 @@ def test_set_datetime_clears_the_suggested_date(monkeypatch, tmp_path):
     sid = scenes.create_scene(cid, "S", suggested_date="2026-07-10")
     sid = scenes.set_datetime(cid, sid, "2026-07-12")["id"]
     assert scenes.get_suggested_date(cid, sid) == ""
+
+
+def test_trim_continuation_preserves_roll_speaker(monkeypatch, tmp_path):
+    """A crashed/superseded continuation attempt is rolled back to the
+    narration-intent point, but a manual dice-roll line that landed in the
+    same crash window (the only non-superseding writer) must survive."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    scenes.append_message(cid, sid, "user", "I attack.")                       # 0: intent point
+    scenes.append_message(cid, sid, "assistant", "Steel rings out")            # 1: continuation-partial
+    scenes.append_message(cid, sid, "assistant", "🎲 rolled 14 vs DC 12 — success",
+                          speaker=scenes.ROLL_SPEAKER)                         # 2: manual roll line
+    scenes.trim_continuation(cid, sid, 1)
+    assert scenes.read_scene(cid, sid)["messages"] == [
+        {"role": "user", "content": "I attack."},
+        {"role": "assistant", "content": "🎲 rolled 14 vs DC 12 — success",
+         "speaker": scenes.ROLL_SPEAKER},
+    ]
+
+
+def test_trim_continuation_missing_scene_raises(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    with pytest.raises(scenes.SceneNotFound):
+        scenes.trim_continuation(cid, "nope", 0)
