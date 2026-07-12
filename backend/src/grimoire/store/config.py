@@ -15,7 +15,7 @@ DEFAULT_PROVIDER = "openrouter"
 DEFAULT_CLAUDE_MODEL = "opus"
 _CONFIG_KEYS = ("openrouter_key", "model", "theme", "context_scan_depth", "system_prompt",
                 "quote_color", "recap_depth", "user_label", "assistant_label",
-                "provider", "claude_model")
+                "provider", "claude_model", "default_style_id")
 
 
 def _config_path():
@@ -29,7 +29,8 @@ def read_config() -> dict[str, str]:
                 "context_scan_depth": DEFAULT_SCAN_DEPTH, "system_prompt": "", "quote_color": "off",
                 "recap_depth": DEFAULT_RECAP_DEPTH,
                 "user_label": DEFAULT_USER_LABEL, "assistant_label": DEFAULT_ASSISTANT_LABEL,
-                "provider": DEFAULT_PROVIDER, "claude_model": DEFAULT_CLAUDE_MODEL}
+                "provider": DEFAULT_PROVIDER, "claude_model": DEFAULT_CLAUDE_MODEL,
+                "default_style_id": ""}
     if not path.exists():
         path.write_text(dump_frontmatter(defaults, ""), encoding="utf-8")
         return defaults

@@ -39,6 +39,7 @@ class ConfigUpdate(BaseModel):
     assistant_label: str | None = None
     provider: Literal["openrouter", "claude"] | None = None
     claude_model: str | None = None
+    default_style_id: str | None = None
 
 
 class DataDirUpdate(BaseModel):
@@ -57,6 +58,10 @@ class StyleUpdate(BaseModel):
     description: str | None = None
     tags: list[str] | None = None
     body: str | None = None
+
+
+class StyleSelect(BaseModel):
+    style_id: str = ""
 
 
 class RegenerateBody(BaseModel):
@@ -312,7 +317,8 @@ def _public_config(cfg: dict[str, str]) -> dict:
             "user_label": cfg.get("user_label", "You"),
             "assistant_label": cfg.get("assistant_label", "Grimoire"),
             "provider": cfg.get("provider", "openrouter"),
-            "claude_model": cfg.get("claude_model", "opus")}
+            "claude_model": cfg.get("claude_model", "opus"),
+            "default_style_id": cfg.get("default_style_id", "")}
 
 
 @router.get("/config")
@@ -1519,6 +1525,24 @@ def delete_campaign(cid: str):
     return {"ok": True}
 
 
+@router.get("/campaigns/{cid}/style")
+def get_campaign_style(cid: str):
+    try:
+        meta = store.campaigns.read_campaign(cid)["meta"]
+    except store.campaigns.CampaignNotFound:
+        raise HTTPException(status_code=404, detail="campaign not found")
+    return {"style_id": meta.get("style_id", "")}
+
+
+@router.put("/campaigns/{cid}/style")
+def put_campaign_style(cid: str, body: StyleSelect):
+    try:
+        store.campaigns.set_campaign_style(cid, body.style_id)
+    except store.campaigns.CampaignNotFound:
+        raise HTTPException(status_code=404, detail="campaign not found")
+    return {"ok": True}
+
+
 # ---- campaign sync ----
 # Declared before the generic /campaigns/{cid}/{kind} routes so "incoming" is
 # never captured as an entity kind.
@@ -2258,6 +2282,19 @@ def put_scene_datetime(cid: str, sid: str, body: SceneDatetime):
     except store.calendars.CalendarError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"ok": True, **result}
+
+
+@router.get("/campaigns/{cid}/scenes/{sid}/style")
+def get_scene_style(cid: str, sid: str):
+    scene = _require_scene(cid, sid)
+    return {"style_id": scene["meta"].get("style_id", "")}
+
+
+@router.put("/campaigns/{cid}/scenes/{sid}/style")
+def put_scene_style(cid: str, sid: str, body: StyleSelect):
+    _require_scene(cid, sid)
+    store.scenes.set_style(cid, sid, body.style_id)
+    return {"ok": True}
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/roll")
