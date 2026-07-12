@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 from . import dice, expressions
@@ -162,6 +163,144 @@ def _validate_derived(derived: dict, scope: set[str], where: str,
     return out
 
 
+_PLACEHOLDER = re.compile(r"\{([^{}]+)\}")
+
+
+def _validate_checks(checks: dict, sheets: dict, rule_ids: set[str],
+                     errors: list[str]) -> None:
+    groups = sheets.get("groups", {})
+    for cid, check in checks.items():
+        where = f"checks.{cid}"
+        if not check.get("label"):
+            errors.append(f"{where}: missing label")
+        scope: set[str] = set()
+        for gid in check.get("requires", []):
+            if gid not in groups:
+                errors.append(f"{where}: unknown required group {gid!r}")
+                continue
+            scope |= numeric_names(groups[gid].get("fields", []))
+            scope |= set(groups[gid].get("derived", {}))
+        roll = check.get("roll", "")
+        exprs = _PLACEHOLDER.findall(roll)
+        for expr in exprs:
+            try:
+                unknown = expressions.names(expr) - scope
+            except expressions.ExpressionError as e:
+                errors.append(f"{where}: {e}")
+                continue
+            if unknown:
+                errors.append(f"{where}: unknown names {sorted(unknown)}")
+        template = _PLACEHOLDER.sub("3", roll)
+        try:
+            dice.parse(template)
+        except dice.DiceError as e:
+            errors.append(f"{where}: roll is not dice notation: {e}")
+        for rid in check.get("rules", []):
+            if rid not in rule_ids:
+                errors.append(f"{where}: unknown rules doc {rid!r}")
+        if "outcomes" in check and not isinstance(check["outcomes"], list):
+            errors.append(f"{where}: outcomes must be a list")
+
+
+def _split_csv(value: str) -> list[str]:
+    return [v.strip() for v in (value or "").split(",") if v.strip()]
+
+
+def _load_rules(root: Path, sheets: dict, errors: list[str]) -> list[dict]:
+    out: list[dict] = []
+    rd = root / "rules"
+    if not rd.is_dir():
+        return out
+    type_ids = set(sheets.get("sheet_types", {}))
+    for p in sorted(rd.glob("*.md")):
+        meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
+        doc = {
+            "id": p.stem,
+            "keys": _split_csv(meta.get("keys", "")),
+            "always": meta.get("always", "") == "true",
+            "on_roll": meta.get("on_roll", "") == "true",
+            "sheet_types": _split_csv(meta.get("sheet_types", "")),
+        }
+        for t in doc["sheet_types"]:
+            if t not in type_ids:
+                errors.append(f"rules/{p.stem}: unknown sheet type {t!r}")
+        out.append(doc)
+    return out
+
+
+def _load_content(root: Path, sheets: dict, errors: list[str]) -> list[dict]:
+    out: list[dict] = []
+    cd = root / "content"
+    if not cd.is_dir():
+        return out
+    type_defs = sheets.get("sheet_types", {})
+    for kind_dir in sorted(p for p in cd.iterdir() if p.is_dir()):
+        kind = kind_dir.name
+        if kind not in CONTENT_KINDS:
+            errors.append(f"content/{kind}: unknown kind")
+            continue
+        for p in sorted(kind_dir.glob("*.md")):
+            meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
+            entry = {"kind": kind, "id": p.stem,
+                     "name": meta.get("name", p.stem), "sheet_type": None}
+            sidecar = kind_dir / f"{p.stem}.sheet.json"
+            if sidecar.exists():
+                where = f"content/{kind}/{p.stem}.sheet.json"
+                try:
+                    stat = json.loads(sidecar.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                    errors.append(f"{where}: {e}")
+                    stat = {}
+                tid = stat.get("sheet_type")
+                if tid not in type_defs:
+                    errors.append(f"{where}: unknown sheet type {tid!r}")
+                elif type_defs[tid].get("kind") != kind:
+                    errors.append(
+                        f"{where}: sheet type {tid!r} targets kind "
+                        f"{type_defs[tid].get('kind')!r}, not {kind!r}")
+                else:
+                    entry["sheet_type"] = tid
+                    for e in validate_sheet_values(sheets, tid,
+                                                   stat.get("fields", {})):
+                        errors.append(f"{where}: {e}")
+            out.append(entry)
+    return out
+
+
+def validate_sheet_values(sheets: dict, type_id: str, values: dict) -> list[str]:
+    """Validate a sheet's field-value map against a sheet type. Reused by
+    campaign sheets in Phase 3."""
+    errors: list[str] = []
+    fields = {f["key"]: f for f in assembled_fields(sheets, type_id)}
+    for key, value in values.items():
+        f = fields.get(key)
+        if f is None:
+            errors.append(f"{key}: not a field of sheet type {type_id!r}")
+            continue
+        t = f["type"]
+        if t == "resource":
+            if (not isinstance(value, dict)
+                    or not isinstance(value.get("current"), int)
+                    or not isinstance(value.get("max"), int)):
+                errors.append(f"{key}: resource needs a current/max pair")
+        elif t in ("number", "dots", "track"):
+            if not isinstance(value, int):
+                errors.append(f"{key}: expected an integer")
+            elif t in ("dots", "track") and not 0 <= value <= f["max"]:
+                errors.append(f"{key}: outside 0..max")
+            elif t == "number" and (
+                    ("min" in f and value < f["min"])
+                    or ("max" in f and value > f["max"])):
+                errors.append(f"{key}: outside min/max")
+        elif t == "text":
+            if not isinstance(value, str):
+                errors.append(f"{key}: expected a string")
+        elif t == "list":
+            if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+                errors.append(f"{key}: expected a list of strings")
+    return errors
+
+
 def _validate_sheets(sheets: dict, errors: list[str]) -> None:
     groups = sheets.get("groups", {})
     for gid, group in groups.items():
@@ -232,14 +371,26 @@ def load_pack(mid: str) -> dict:
                 sheets = {"groups": {}, "sheet_types": {}}
             else:
                 _validate_sheets(sheets, errors)
+    rules = _load_rules(root, sheets, errors)
+    checks: dict = {}
+    cp = root / "checks.json"
+    if cp.exists():
+        try:
+            checks = json.loads(cp.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            errors.append(f"checks.json: {e}")
+            checks = {}
+        else:
+            _validate_checks(checks, sheets, {r["id"] for r in rules}, errors)
+    content = _load_content(root, sheets, errors)
     pack = {
         "id": mid,
         "source": source,
         "manifest": {"id": mid, **meta},
         "sheets": sheets,
-        "checks": {},
-        "rules": [],
-        "content": [],
+        "checks": checks,
+        "rules": rules,
+        "content": content,
         "errors": errors,
     }
     return pack
