@@ -351,3 +351,52 @@ def test_validate_sheet_values():
     assert any("max" in e for e in errs)          # dots over max
     errs = modules.validate_sheet_values(GOOD_SHEETS, "warden", {"essence": 4})
     assert any("current/max" in e for e in errs)  # resource needs a pair
+
+
+def test_checks_json_wrong_shape(monkeypatch, tmp_path):
+    make_pack(_home(monkeypatch, tmp_path))
+    d = tmp_path / "modules" / "testmod"
+    (d / "checks.json").write_text("[1, 2]", encoding="utf-8")
+    assert any("checks.json" in e for e in modules.load_pack("testmod")["errors"])
+
+
+def test_check_entry_wrong_type(monkeypatch, tmp_path):
+    make_pack(_home(monkeypatch, tmp_path), checks={"c": "oops"})
+    assert any("checks.c" in e for e in modules.load_pack("testmod")["errors"])
+
+
+def test_check_requiring_malformed_group(monkeypatch, tmp_path):
+    import copy
+    sheets = copy.deepcopy(GOOD_SHEETS)
+    sheets["groups"]["attributes"] = "oops"
+    checks = {"c": {"label": "C", "roll": "1d20", "requires": ["attributes"]}}
+    make_pack(_home(monkeypatch, tmp_path), sheets=sheets, checks=checks)
+    errs = modules.load_pack("testmod")["errors"]
+    assert any("checks.c" in e for e in errs)
+
+
+def test_content_sidecar_against_malformed_sheet_type(monkeypatch, tmp_path):
+    import copy
+    sheets = copy.deepcopy(GOOD_SHEETS)
+    sheets["sheet_types"]["broken"] = "oops"
+    content = {
+        "items/orb.md": "---\nname: Orb\n---\nAn orb.\n",
+        "items/orb.sheet.json": json.dumps({"sheet_type": "broken", "fields": {}}),
+    }
+    make_pack(_home(monkeypatch, tmp_path), sheets=sheets, content=content)
+    errs = modules.load_pack("testmod")["errors"]
+    assert any("orb.sheet.json" in e for e in errs)
+
+
+def test_non_utf8_rules_file(monkeypatch, tmp_path):
+    d = make_pack(_home(monkeypatch, tmp_path))
+    rd = d / "rules"
+    rd.mkdir(exist_ok=True)
+    (rd / "bad.md").write_bytes(b"\xff\xfe\x00garbage")
+    errs = modules.load_pack("testmod")["errors"]
+    assert any("bad" in e for e in errs)
+
+
+def test_sheet_values_reject_bool(monkeypatch, tmp_path):
+    errs = modules.validate_sheet_values(GOOD_SHEETS, "warden", {"vigor": True})
+    assert any("integer" in e for e in errs)
