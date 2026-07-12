@@ -478,7 +478,7 @@ def _scan(d: Path) -> dict[str, dict]:
     out: dict[str, dict] = {}
     if not d.is_dir():
         return out
-    for p in sorted(q for q in d.iterdir() if (q / "module.md").exists()):
+    for p in sorted(q for q in d.iterdir() if (q / "module.md").exists() and _safe_mid(q.name)):
         pack = load_pack(p.name)
         m = pack["manifest"]
         out[p.name] = {
