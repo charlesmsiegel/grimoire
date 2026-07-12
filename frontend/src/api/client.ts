@@ -78,9 +78,20 @@ export type Scene = { meta: { id: string; title: string }; messages: Message[] }
 // entities (locations | lore)
 export type EntityKind = "locations" | "lore" | "items" | "groups" | "creatures";
 export type EntityScope = { kind: "world" | "campaign"; id: string };
-export type EntitySummary = { id: string; name: string; keys?: string; owners?: string; has_image?: boolean; image_v?: string | null };
+
+// Mirrors backend/src/grimoire/store/entity_schema.py — keep in sync.
+export const ENTITY_FIELDS: Record<EntityKind, { key: string; label: string }[]> = {
+  locations: [],
+  lore: [],
+  items: [{ key: "item_type", label: "Type" }, { key: "rarity", label: "Rarity" }],
+  groups: [{ key: "group_type", label: "Type" }],
+  creatures: [{ key: "creature_type", label: "Type" }, { key: "threat", label: "Threat" }],
+};
+
+export type EntitySummary = { id: string; name: string; keys?: string; owners?: string;
+  has_image?: boolean; image_v?: string | null } & Record<string, unknown>;
 export type EntityDetail = {
-  meta: { id: string; name: string; keys?: string; owners?: string; sd_prompt?: string };
+  meta: { id: string; name: string; keys?: string; owners?: string; sd_prompt?: string } & Record<string, unknown>;
   body: string;
 };
 
@@ -348,12 +359,13 @@ export const api = {
   // entities (locations | lore), world or campaign scope
   listEntities: (scope: EntityScope, kind: EntityKind) =>
     request<EntitySummary[]>("GET", `${entityBase(scope)}/${kind}`),
-  createEntity: (scope: EntityScope, kind: EntityKind, body: { name: string; body?: string; keys?: string; owners?: string }) =>
+  createEntity: (scope: EntityScope, kind: EntityKind,
+                 body: { name: string; body?: string; keys?: string; owners?: string; fields?: Record<string, string> }) =>
     request<{ id: string }>("POST", `${entityBase(scope)}/${kind}`, body),
   readEntity: (scope: EntityScope, kind: EntityKind, id: string) =>
     request<EntityDetail>("GET", `${entityBase(scope)}/${kind}/${id}`),
   updateEntity: (scope: EntityScope, kind: EntityKind, id: string,
-                 patch: { name?: string; body?: string; keys?: string; owners?: string }) =>
+                 patch: { name?: string; body?: string; keys?: string; owners?: string; fields?: Record<string, string> }) =>
     request<{ ok: boolean }>("PUT", `${entityBase(scope)}/${kind}/${id}`, patch),
   deleteEntity: (scope: EntityScope, kind: EntityKind, id: string) =>
     request<{ ok: boolean }>("DELETE", `${entityBase(scope)}/${kind}/${id}`),

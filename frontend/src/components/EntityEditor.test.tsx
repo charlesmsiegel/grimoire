@@ -2,6 +2,12 @@ import { render, screen, fireEvent, waitFor, within } from "@testing-library/rea
 import { EntityEditor } from "./EntityEditor";
 
 vi.mock("../api/client", () => ({
+  ENTITY_FIELDS: {
+    locations: [], lore: [],
+    items: [{ key: "item_type", label: "Type" }, { key: "rarity", label: "Rarity" }],
+    groups: [{ key: "group_type", label: "Type" }],
+    creatures: [{ key: "creature_type", label: "Type" }, { key: "threat", label: "Threat" }],
+  },
   api: {
     listEntities: vi.fn(),
     createEntity: vi.fn(),
@@ -284,4 +290,30 @@ test("image shelf renders for non-location kinds", async () => {
   await waitFor(() => expect(api.listEntityImages).toHaveBeenCalledWith({ kind: "world", id: "w" }, "items", "salt-knife"));
   expect(screen.getByText("Images")).toBeInTheDocument();            // shelf present
   expect(container.querySelector(".loc-row-img")).not.toBeNull();    // rail thumbnail
+});
+
+test("typed fields render in the form and are sent on create", async () => {
+  render(<EntityEditor wid="w" kind="items" />);
+  fireEvent.change(await screen.findByLabelText("Name"), { target: { value: "Salt Knife" } });
+  fireEvent.change(screen.getByLabelText("Type"), { target: { value: "weapon" } });
+  fireEvent.change(screen.getByLabelText("Rarity"), { target: { value: "rare" } });
+  fireEvent.click(screen.getByRole("button", { name: /create item/i }));
+  await waitFor(() =>
+    expect(api.createEntity).toHaveBeenCalledWith({ kind: "world", id: "w" }, "items", {
+      name: "Salt Knife", body: "", keys: "", owners: "",
+      fields: { item_type: "weapon", rarity: "rare" },
+    }),
+  );
+});
+
+test("typed field values show as chips in the detail sidebar", async () => {
+  (api.listEntities as any).mockResolvedValue([{ id: "marsh-wyrm", name: "Marsh Wyrm" }]);
+  (api.readEntity as any).mockResolvedValue({
+    meta: { id: "marsh-wyrm", name: "Marsh Wyrm", creature_type: "wyrm", threat: "apex" }, body: "old" });
+  const { container } = render(<EntityEditor wid="w" kind="creatures" />);
+  fireEvent.click(await screen.findByText("Marsh Wyrm"));
+  await waitFor(() => expect(api.readEntity).toHaveBeenCalled());
+  const side = container.querySelector(".detail-sidebar") as HTMLElement;
+  expect(within(side).getByText(/Type: wyrm/)).toBeInTheDocument();
+  expect(within(side).getByText(/Threat: apex/)).toBeInTheDocument();
 });
