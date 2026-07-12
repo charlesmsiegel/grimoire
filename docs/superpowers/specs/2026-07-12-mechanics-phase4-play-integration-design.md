@@ -124,16 +124,19 @@ dropped.
 (read/mutate/write whole file):
 
 ```json
-{"<sid>": {"id": "pr-000042", "status": "pending",
+{"<sid>": {"id": "pr-9f2c81d4a6e04b7f", "status": "pending",
            "payload": {...the proposal payload above...},
            "created": "<iso>",
            "resolution": null}}
 ```
 
-- `new(cid, sid, payload) -> record` — assigns a monotonically increasing
-  id (persisted counter in the same file), supersedes any existing
-  pending record for the scene (status → `"superseded"` — only the
-  latest record per scene is kept, with its status).
+- Ids are **collision-resistant** (`"pr-" + uuid4().hex[:16]`), never a
+  file counter — a corrupted/rebuilt proposals.json can therefore never
+  mint an id that matches an old proposal-tagged roll entry. All writes
+  are **atomic** (write temp file in the same directory, `os.replace`).
+- `new(cid, sid, payload) -> record` — supersedes any existing
+  non-terminal record for the scene (only the latest record per scene is
+  kept, with its status).
 - States: `pending` → `resolving` (claimed by an accept request) →
   `resolved` (accept: `resolution` holds the full resolution dict incl.
   `roll_id`) or `pending` → `declined`; `resolved`/`declined` →
@@ -255,18 +258,38 @@ rolls.
        `resolved` with the full `resolution` (result incl. seed).
     3. Projection (idempotent, **each output independently recoverable**):
        (a) roll log — if no rolls.json entry carries this proposal id
-       (`rolls.find_by_proposal`), append one (entries carry a
-       `proposal` field), then CAS-write `roll_id` into the resolution;
-       (b) transcript — the 🎲 line is a pure function of the stored
-       resolution (`format_check_roll`), so dedup is exact string
-       equality: append it only if no `ROLL_SPEAKER` message with that
-       exact content exists in the scene. A crash after any single
-       write heals on retry: roll dedup by proposal tag, line dedup by
-       content equality, `roll_id` backfill re-runs harmlessly. Exactly
-       one tagged roll entry and exactly one 🎲 line survive any
-       failure point.
-    4. Stream the continuation; on continuation persist, status
-       `narrated`.
+       (`rolls.find_by_proposal`; ids are collision-resistant, so a tag
+       match is proof), append one (entries carry a `proposal` field),
+       then CAS-write `roll_id` into the resolution;
+       (b) transcript — dedup by a **line intent**: before appending,
+       CAS-write `line_intent` (the scene's current message count) into
+       the resolution, then append the 🎲 line
+       (`checks.format_check_roll`, a pure function of the stored
+       resolution). Retry appends only when no `ROLL_SPEAKER` message
+       with exactly that content exists at index ≥ `line_intent`.
+       Within any retryable state the projection is the scene's only
+       writer (new sends supersede and end retryability), so
+       intent-index + exact content is a sound compound key; the sole
+       residual collision — a *manual* roll landing at that index with
+       byte-identical content after a crash — skips one visually
+       identical line while the roll log keeps both entries, which is
+       acceptable. Exactly one tagged roll entry and (up to that
+       documented corner) exactly one 🎲 line survive any failure point.
+    4. Stream the continuation, then commit it atomically — see
+       Continuation commit below.
+
+    **Continuation commit.** The continuation's `_persist_reply` and the
+    `→ narrated` transition happen together under the proposals
+    per-campaign lock via `proposals.commit_narration(cid, sid, pid,
+    persist) -> bool`: holding the lock, it re-validates that the record
+    still carries this id with status `resolved`/`declined`, invokes the
+    persist callback, and writes `narrated` before releasing. A
+    supersede that lands while the continuation is still streaming
+    therefore wins cleanly: the commit re-validation fails and the
+    streamed text is **dropped, never persisted** — no stale narration
+    can appear after newer player input. (New sends take the same lock
+    for their supersede, so the two orders serialize; the lock is held
+    only around the persist itself, never during LLM streaming.)
   - `resolving` (someone else holds the claim) → 409.
   - `pending` + decline: status `declined` (same CAS discipline); stream
     the declined continuation; then `narrated`.
