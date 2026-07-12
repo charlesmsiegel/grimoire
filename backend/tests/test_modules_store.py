@@ -729,3 +729,16 @@ def test_builtin_packs_pass_reserved_key_rules(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
     for mid in ("d20-basic", "pool-basic"):
         assert modules.load_pack(mid)["errors"] == []
+
+
+def test_fleshed_reference_packs(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    pool = modules.load_pack("pool-basic")
+    assert pool["errors"] == []
+    medium = pool["sheets"]["sheet_types"]["medium"]
+    keys = {f["key"] for f in medium["fields"]}
+    assert {"quirk", "gear"} <= keys
+    d20 = modules.load_pack("d20-basic")
+    assert d20["errors"] == []
+    assert any(f["key"] == "spells"
+               for f in d20["sheets"]["sheet_types"]["adept"]["fields"])

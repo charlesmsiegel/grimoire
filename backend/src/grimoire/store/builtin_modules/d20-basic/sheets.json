@@ -39,7 +39,8 @@
       "groups": ["attributes", "skills"],
       "fields": [
         {"key": "hp", "label": "Hit Points", "type": "resource", "max": 8},
-        {"key": "spell_slots", "label": "Spell Slots", "type": "track", "max": 4}
+        {"key": "spell_slots", "label": "Spell Slots", "type": "track", "max": 4},
+        {"key": "spells", "label": "Spells", "type": "list"}
       ],
       "derived": {"spell_bonus": "mind_mod + 2"}
     },

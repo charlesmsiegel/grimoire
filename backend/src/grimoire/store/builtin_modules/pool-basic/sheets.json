@@ -14,7 +14,9 @@
       "fields": [
         {"key": "brawl", "label": "Brawl", "type": "dots", "max": 5, "default": 0},
         {"key": "shadowing", "label": "Shadowing", "type": "dots", "max": 5, "default": 0},
-        {"key": "occult", "label": "Occult", "type": "dots", "max": 5, "default": 0}
+        {"key": "occult", "label": "Occult", "type": "dots", "max": 5, "default": 0},
+        {"key": "empathy", "label": "Empathy", "type": "dots", "max": 5, "default": 0},
+        {"key": "lore", "label": "Lore", "type": "dots", "max": 5, "default": 0}
       ]
     }
   },
@@ -25,7 +27,9 @@
       "groups": ["attributes", "abilities"],
       "fields": [
         {"key": "essence", "label": "Essence", "type": "resource", "max": 10},
-        {"key": "health", "label": "Health", "type": "track", "max": 7}
+        {"key": "health", "label": "Health", "type": "track", "max": 7},
+        {"key": "quirk", "label": "Quirk", "type": "text"},
+        {"key": "gear", "label": "Gear", "type": "list"}
       ],
       "derived": {"sight_pool": "wits + occult"}
     },
@@ -35,7 +39,9 @@
       "groups": ["attributes", "abilities"],
       "fields": [
         {"key": "fury", "label": "Fury", "type": "resource", "max": 5},
-        {"key": "health", "label": "Health", "type": "track", "max": 7}
+        {"key": "health", "label": "Health", "type": "track", "max": 7},
+        {"key": "quirk", "label": "Quirk", "type": "text"},
+        {"key": "gear", "label": "Gear", "type": "list"}
       ],
       "derived": {"claw_pool": "vigor + brawl"}
     },
