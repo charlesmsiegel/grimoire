@@ -1,5 +1,10 @@
 import { useEffect, useState } from "react";
-import { api, type CampaignModule, type ModuleSummary } from "../api/client";
+import { api, type CampaignModule, type ModuleSummary, type SheetCoverage } from "../api/client";
+
+const KIND_LABELS: Record<string, string> = {
+  characters: "Characters", pcs: "PCs", locations: "Locations", lore: "Lore",
+  items: "Items", groups: "Groups", creatures: "Creatures",
+};
 
 export default function MechanicsConfig({ cid }: { cid: string }) {
   const [mods, setMods] = useState<ModuleSummary[]>([]);
@@ -7,11 +12,17 @@ export default function MechanicsConfig({ cid }: { cid: string }) {
   const [value, setValue] = useState("");
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [coverage, setCoverage] = useState<SheetCoverage | null>(null);
 
   const load = () =>
     api.getCampaignModule(cid).then((s) => {
       setState(s);
       setValue(s.setting);
+      if (s.resolved) {
+        api.getCampaignSheets(cid).then((r) => setCoverage(r.coverage)).catch(() => setCoverage(null));
+      } else {
+        setCoverage(null);
+      }
     });
 
   useEffect(() => {
@@ -55,6 +66,17 @@ export default function MechanicsConfig({ cid }: { cid: string }) {
             : state.setting && state.setting !== "none"
             ? `Bound module "${state.setting}" is missing or invalid — resolving to no mechanics.`
             : "No mechanics — freeform play."}
+        </div>
+      )}
+      {coverage && Object.keys(coverage).length > 0 && (
+        <div className="side-section">
+          <h4>Sheets</h4>
+          {Object.entries(coverage).map(([kind, c]) => (
+            <div key={kind} className="field-hint">
+              {KIND_LABELS[kind] ?? kind} {c.sheeted}/{c.total}
+              {c.invalid > 0 ? ` · ${c.invalid} invalid` : ""}
+            </div>
+          ))}
         </div>
       )}
       <button className="primary" onClick={save}>Save</button>

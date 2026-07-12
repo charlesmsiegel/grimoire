@@ -130,7 +130,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
         ))}
       </div>
 
-      {!campaign && tab === "overview" && <WorldOverview wid={wid} onNavigate={(t) => setTab(t as TabKey)} />}
+      {!campaign && tab === "overview" && <WorldOverview wid={wid} onNavigate={(t) => setTab(t as TabKey)} worldMid={worldMid} onPickMid={setWorldMid} />}
       {tab === "characters" && <CharacterEditor scope={scope} wid={wid} resetSignal={charReset} focus={focusChar} onOpenLore={openLore} onOpenGreeting={openGreeting} module={moduleCtx} />}
       {tab === "pcs" && <PCEditor scope={scope} wid={wid} onOpenLore={openLore} module={moduleCtx} />}
       {!campaign && tab === "tags" && <TagEditor wid={wid} />}

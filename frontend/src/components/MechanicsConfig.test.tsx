@@ -5,6 +5,7 @@ vi.mock("../api/client", () => ({
     getCampaignModule: vi.fn(),
     setCampaignModule: vi.fn(),
     listModules: vi.fn(),
+    getCampaignSheets: vi.fn(),
   },
 }));
 import { api } from "../api/client";
@@ -17,6 +18,7 @@ beforeEach(() => {
   ]);
   (api.getCampaignModule as any).mockResolvedValue({ setting: "", resolved: null, source: null });
   (api.setCampaignModule as any).mockResolvedValue({ ok: true });
+  (api.getCampaignSheets as any).mockResolvedValue({ coverage: {}, refs: [] });
 });
 
 test("shows tri-state select and saves the choice", async () => {
@@ -55,4 +57,14 @@ test("shows an error hint and does not throw when save fails", async () => {
   fireEvent.change(select, { target: { value: "pool-basic" } });
   fireEvent.click(screen.getByText("Save"));
   expect(await screen.findByText(/boom/)).toBeInTheDocument();
+});
+
+test("shows sheet coverage below the resolved hint when a module is resolved", async () => {
+  (api.getCampaignModule as any).mockResolvedValue(
+    { setting: "pool-basic", resolved: "pool-basic", source: "campaign" });
+  (api.getCampaignSheets as any).mockResolvedValue({
+    coverage: { characters: { total: 3, sheeted: 1, invalid: 0 } }, refs: [],
+  });
+  render(<MechanicsConfig cid="run" />);
+  expect(await screen.findByText("Characters 1/3")).toBeInTheDocument();
 });
