@@ -46,7 +46,9 @@
 - `get(cid, sid) -> dict | None`
 - `transition(cid, sid, pid, from_states, to, resolution=None) -> bool` — **every state change is this CAS**: writes only when the record has that id AND current status ∈ `from_states`; `resolution`, when given, replaces the stored one in the same write. Returns False otherwise — **a lost transition means another actor moved the record (e.g. supersede mid-resolve); callers must stop dead.**
 - `claim(cid, sid, pid) -> bool` = `transition(cid, sid, pid, ("pending",), "resolving")`
-- `supersede(cid, sid) -> None` (any non-terminal → `superseded`)
+- `supersede(cid, sid) -> None` (any non-terminal → `superseded`; takes the same lock new sends and commits use)
+- `commit_narration(cid, sid, pid, persist) -> bool` — holding the per-campaign lock: re-validate the record carries this id with status `resolved`/`declined`, invoke `persist()` (the continuation `_persist_reply` closure), write `narrated`. Returns False (nothing persisted) when validation fails — a supersede that landed mid-stream wins and the streamed text is dropped.
+- Ids: `"pr-" + uuid.uuid4().hex[:16]` — collision-resistant, no counter (a rebuilt file can never re-mint an old id). `_write` is atomic: temp file in the same directory + `os.replace`.
 - Record: `{"id": "pr-000001", "status", "payload", "created", "resolution"}`; file `<campaign>/proposals.json` maps sid → record plus a reserved `"_counter"` key (scene ids are slugs; the underscore name cannot collide).
 
 - [ ] **Step 1: Write the failing tests**
@@ -67,13 +69,14 @@ def _scene(monkeypatch, tmp_path):
     return cid, "s1"
 
 
-def test_new_get_roundtrip_and_monotonic_ids(monkeypatch, tmp_path):
+def test_new_get_roundtrip_and_unique_ids(monkeypatch, tmp_path):
     cid, sid = _scene(monkeypatch, tmp_path)
     r1 = proposals.new(cid, sid, {"check": "brawl"})
-    assert r1["id"] == "pr-000001" and r1["status"] == "pending"
+    assert r1["id"].startswith("pr-") and len(r1["id"]) == 19
+    assert r1["status"] == "pending"
     assert proposals.get(cid, sid)["payload"] == {"check": "brawl"}
     r2 = proposals.new(cid, "s2", {"check": "stealth"})
-    assert r2["id"] == "pr-000002"
+    assert r2["id"] != r1["id"]
 
 
 def test_new_supersedes_previous_pending(monkeypatch, tmp_path):
@@ -155,11 +158,48 @@ def test_supersede_covers_every_non_terminal_state(monkeypatch, tmp_path):
     assert proposals.get(cid, sid)["status"] == "narrated"
 
 
-def test_malformed_file_tolerated(monkeypatch, tmp_path):
+def test_malformed_file_never_reuses_ids(monkeypatch, tmp_path):
     cid, sid = _scene(monkeypatch, tmp_path)
+    old = proposals.new(cid, sid, {})
     (campaigns.campaign_root(cid) / "proposals.json").write_text("{nope", encoding="utf-8")
     assert proposals.get(cid, sid) is None
-    assert proposals.new(cid, sid, {})["id"] == "pr-000001"
+    fresh = proposals.new(cid, sid, {})
+    assert fresh["id"] != old["id"]          # uuid ids: corruption can't re-mint
+
+
+def test_commit_narration_atomicity(monkeypatch, tmp_path):
+    cid, sid = _scene(monkeypatch, tmp_path)
+    rec = proposals.new(cid, sid, {})
+    proposals.claim(cid, sid, rec["id"])
+    proposals.transition(cid, sid, rec["id"], ("resolving",), "resolved", {"tier": "success"})
+    persisted = []
+    assert proposals.commit_narration(cid, sid, rec["id"],
+                                      lambda: persisted.append(1)) is True
+    assert persisted == [1]
+    assert proposals.get(cid, sid)["status"] == "narrated"
+
+
+def test_commit_narration_drops_after_supersede(monkeypatch, tmp_path):
+    """The continuation-vs-supersede race: text streamed for a proposal that
+    got superseded mid-stream must never persist."""
+    cid, sid = _scene(monkeypatch, tmp_path)
+    rec = proposals.new(cid, sid, {})
+    proposals.claim(cid, sid, rec["id"])
+    proposals.transition(cid, sid, rec["id"], ("resolving",), "resolved", {})
+    proposals.supersede(cid, sid)            # a new send lands mid-stream
+    persisted = []
+    assert proposals.commit_narration(cid, sid, rec["id"],
+                                      lambda: persisted.append(1)) is False
+    assert persisted == []                   # nothing written
+    assert proposals.get(cid, sid)["status"] == "superseded"
+
+
+def test_write_is_atomic_replace(monkeypatch, tmp_path):
+    cid, sid = _scene(monkeypatch, tmp_path)
+    proposals.new(cid, sid, {})
+    # no temp litter and the file parses after every operation
+    root = campaigns.campaign_root(cid)
+    assert [p.name for p in root.glob("proposals.json*")] == ["proposals.json"]
 ```
 
 - [ ] **Step 2: Run to verify failure** (`ImportError: proposals`).
@@ -172,20 +212,23 @@ Run: `PYTHONPATH=backend/src /c/Users/charl/github/grimoire/backend/.venv/Script
 # backend/src/grimoire/store/proposals.py
 """Durable roll proposals (#162, mechanics Phase 4).
 
-One record per scene in ``<campaign>/proposals.json`` (plus a reserved
-``_counter`` key — scene ids are slugs, so the underscore name cannot
-collide). State machine: pending -> resolving (claimed) -> resolved or
-pending -> declined; resolved/declined -> narrated; superseded is terminal.
-``claim`` is an atomic compare-and-set under a per-campaign lock — the
-caller may run the (pure) check resolution only after a won claim. Reads
-never raise on malformed content.
+One record per scene in ``<campaign>/proposals.json``. State machine:
+pending -> resolving (claimed) -> resolved, or pending -> declined;
+resolved/declined -> narrated; superseded is terminal. Every state change
+is a compare-and-set under a per-campaign lock; ``commit_narration``
+persists a continuation and marks narrated atomically so a supersede that
+lands mid-stream drops the stale text. Ids are uuid-based (a rebuilt file
+can never re-mint an old id); writes are atomic via temp-file + replace.
+Reads never raise on malformed content.
 Spec: docs/superpowers/specs/2026-07-12-mechanics-phase4-play-integration-design.md.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import threading
+import uuid
 
 from . import campaigns
 from .paths import now_iso
@@ -217,16 +260,16 @@ def _read(cid: str) -> dict:
 
 
 def _write(cid: str, data: dict) -> None:
-    _path(cid).write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    p = _path(cid)
+    tmp = p.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp, p)
 
 
 def new(cid: str, sid: str, payload: dict) -> dict:
     with _lock(cid):
         data = _read(cid)
-        counter = data.get("_counter")
-        counter = (counter if isinstance(counter, int) else 0) + 1
-        data["_counter"] = counter
-        rec = {"id": f"pr-{counter:06d}", "status": "pending",
+        rec = {"id": f"pr-{uuid.uuid4().hex[:16]}", "status": "pending",
                "payload": payload, "created": now_iso(), "resolution": None}
         data[sid] = rec
         _write(cid, data)
@@ -270,6 +313,28 @@ def supersede(cid: str, sid: str) -> None:
         if isinstance(rec, dict) and rec.get("status") in NON_TERMINAL:
             rec["status"] = "superseded"
             _write(cid, data)
+
+
+def commit_narration(cid: str, sid: str, pid: str, persist) -> bool:
+    """Persist a streamed continuation and mark narrated, atomically.
+
+    Holding the campaign lock: re-validate the record still carries this
+    id in a committable state, run ``persist()`` (the caller's
+    _persist_reply closure), then write narrated. A supersede that landed
+    while the continuation streamed wins here: validation fails, nothing
+    persists, the stale text is dropped. The lock is held only around the
+    persist itself — never while the LLM streams.
+    """
+    with _lock(cid):
+        data = _read(cid)
+        rec = data.get(sid)
+        if (not isinstance(rec, dict) or rec.get("id") != pid
+                or rec.get("status") not in ("resolved", "declined")):
+            return False
+        persist()
+        rec["status"] = "narrated"
+        _write(cid, data)
+        return True
 ```
 
 - [ ] **Step 4: Run tests** — all PASS. **Step 5: Commit**
@@ -1134,10 +1199,10 @@ git commit -m "feat(context): mechanics rules/sheets/roll-protocol sections (#16
 - `post_chat`/`post_retry`/`post_regenerate`: `store.proposals.supersede(cid, sid)` right after `_require_scene`.
 - `GET /campaigns/{cid}/scenes/{sid}/roll-proposal` → `{"record": rec | None}`.
 - `POST /campaigns/{cid}/scenes/{sid}/roll-proposal` (SSE) — body model `ProposalAction(BaseModel): proposal: str; action: str; check: str | None = None; actor: str | None = None; difficulty: int | None = None; modifier: int | None = None`. Flow exactly per the spec's state walk, **every state change via `proposals.transition` and every lost transition = stop dead (no projection, no continuation), 409 when nothing has streamed yet**:
-  - accept = `claim` (lost → 409) → `resolve_check` (catch-all except: `transition(..., ("resolving",), "pending")` + error frame) → commit `transition(..., ("resolving",), "resolved", resolution)` (**lost — e.g. superseded mid-resolve — → discard the roll result unlogged, 409**) → projection → continuation → `transition(..., ("resolved",), "narrated")`.
-  - Projection (idempotent per spec, each output independently recoverable): (a) `rolls.find_by_proposal(cid, pid)` else `rolls.append(..., proposal=pid)`; then `transition(..., ("resolved",), "resolved", {**resolution, "roll_id": entry["id"]})` to backfill; (b) compute `line = checks.format_check_roll(resolution)` and append it **only if** no existing scene message has `speaker == ROLL_SPEAKER and content == line` (exact-string dedup — the line is a pure function of the stored resolution).
-  - decline = `transition(..., ("pending",), "declined")` (lost → 409) → declined continuation → `narrated`.
-  - Retry of `resolved`/`declined` re-runs projection (each step self-deduping) + continuation; `narrated` → immediate done frame.
+  - accept = `claim` (lost → 409) → `resolve_check` (catch-all except: `transition(..., ("resolving",), "pending")` + error frame) → commit `transition(..., ("resolving",), "resolved", resolution)` (**lost — e.g. superseded mid-resolve — → discard the roll result unlogged, 409**) → projection → stream continuation → **`proposals.commit_narration(cid, sid, pid, persist_closure)`** — False means a supersede won mid-stream: drop the streamed text (nothing persisted) and end the stream with `{"done": true}` (the chip refetches and finds `superseded`).
+  - Projection (idempotent per spec, each output independently recoverable): (a) `rolls.find_by_proposal(cid, pid)` (uuid ids: a tag match is proof) else `rolls.append(..., proposal=pid)`; then `transition(..., ("resolved",), "resolved", {**resolution, "roll_id": entry["id"]})` to backfill; (b) **line intent**: `transition(..., ("resolved",), "resolved", {**resolution, "line_intent": len(messages)})` recorded first, then append `line = checks.format_check_roll(resolution)`; on retry, append only when no message at index ≥ `line_intent` has `speaker == ROLL_SPEAKER and content == line` (compound key; sound because the projection is the scene's only writer in a retryable state — new sends supersede and end retryability; the manual-roll corner is documented in the spec).
+  - decline = `transition(..., ("pending",), "declined")` (lost → 409) → declined continuation → `commit_narration` (same drop-on-supersede semantics).
+  - Retry of `resolved`/`declined` re-runs projection (each step self-deduping) + continuation + `commit_narration`; `narrated` → immediate done frame.
 - Continuation messages: `store.context.build_messages(cid, sid)` + one system message rendered from new templates `templates/scene/roll_result.j2` (vars: `resolution`, `on_roll_docs: [str]`, `check_docs: [str]`) and `templates/scene/roll_declined.j2` (no vars) — write both templates (short, following `scene/director_note.j2` style; exact wording per the spec's Continuation section).
 - `GET /campaigns/{cid}/scenes/{sid}/checks` → `{"actors": checks.available_checks(cid, sid)}`.
 - `POST /campaigns/{cid}/scenes/{sid}/check` — body `CheckBody(BaseModel): check: str; actor: str; difficulty: int | None = None; modifier: int | None = None`; runs `resolve_check`, appends roll log (no proposal tag) + 🎲 line, returns `{"ok": True, "resolution": ..., "roll": entry, "message": line}`; `CheckError` → 400.
@@ -1235,8 +1300,17 @@ line survive:
   `store.proposals.transition` to raise once after `rolls.append` ran) →
   retry accept → one tagged entry, backfilled roll_id, one line;
 - crash between line append and `narrated` (monkeypatch the continuation
-  builder to raise) → retry → no duplicate 🎲 line (content-equality
-  dedup), continuation streams, `narrated`.
+  builder to raise) → retry → no duplicate 🎲 line (line_intent +
+  content dedup), continuation streams, `narrated`;
+- **two proposals with byte-identical formatted lines** (same check,
+  actor, difficulty, seed-forced identical result; first fully narrated,
+  second accepted after a fresh fence) → BOTH 🎲 lines present (the
+  intent index of the second is past the first's line);
+- **continuation-vs-supersede race at the route level**: monkeypatch the
+  fake LLM stream to call `POST /chat` (a new send) between the last
+  delta and stream end — the continuation must not persist, the record
+  ends `superseded`, and the transcript's final message is the new
+  send's, never the stale continuation.
 
 Steps: failing tests → implement (rewrite `_chat_stream` with an optional
 fence watcher; helper functions `_make_proposal`, `_project_resolution`,
