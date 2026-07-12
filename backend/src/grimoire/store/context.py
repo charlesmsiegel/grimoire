@@ -13,8 +13,9 @@ import functools
 import re
 
 from .. import prompts
-from . import (appearances, calendars, campaigns, characters, chronicle,
-               config, dossiers, entities, groupstate, overlay, pcs, playstate, plot, relationships, scenes, styles)
+from . import (appearances, calendars, campaigns, characters, checks, chronicle,
+               config, dossiers, entities, groupstate, modules, overlay, pcs, playstate,
+               plot, relationships, scenes, sheets, styles)
 
 
 def activate(entries: list[dict], recent_text: str, present: frozenset = frozenset()) -> list[dict]:
@@ -258,6 +259,94 @@ def _group_states(cid: str, croot, activated: list[dict]) -> list[dict]:
         return []
 
 
+def _sheet_type_label(sheets_def: dict, type_id) -> str:
+    st = sheets_def.get("sheet_types", {}).get(type_id) if isinstance(type_id, str) else None
+    if isinstance(st, dict) and st.get("label"):
+        return st["label"]
+    return type_id if isinstance(type_id, str) else ""
+
+
+def _sheet_summary_lines(sheets_def: dict, sheet: dict) -> list[str]:
+    """key value entries (resources as key cur/max) for a sheet's assembled
+    fields, then its derived values, chunked into ~4-entry lines."""
+    type_id = sheet["sheet_type"]
+    merged = ({**sheets.default_fields(sheets_def, type_id), **sheet["fields"]}
+              if isinstance(type_id, str) else {})
+    entries: list[str] = []
+    for f in (modules.assembled_fields(sheets_def, type_id) if isinstance(type_id, str) else []):
+        key = f.get("key")
+        if not isinstance(key, str) or not key:
+            continue
+        v = merged.get(key)
+        if f.get("type") == "resource" and isinstance(v, dict):
+            entries.append(f"{key} {v.get('current')}/{v.get('max')}")
+        else:
+            entries.append(f"{key} {v}")
+    for name, value in sheet["derived"].items():
+        entries.append(f"{name} {value}")
+    return [" · ".join(entries[i:i + 4]) for i in range(0, len(entries), 4)]
+
+
+def _rule_keys_match(keys: list[str], recent_text: str) -> bool:
+    return any(re.search(rf"\b{re.escape(k)}\b", recent_text, re.IGNORECASE) for k in keys)
+
+
+def _mechanics(cid: str, sid: str, cast, recent_text: str) -> dict:
+    """Module-driven prompt data (#162): activated rules docs (frontmatter
+    always -> sheet_types -> keys, keys capped at 6), compact sheet summaries
+    for sheeted cast + the current location, and the available-checks table.
+    All empty when no module resolves (modules.resolve)."""
+    mid = modules.resolve(cid)
+    if mid is None:
+        return {"mechanics_rules": [], "mechanics_sheets": [], "mechanics_checks": []}
+    pack = modules.load_pack(mid)
+    sheets_def = pack["sheets"] if isinstance(pack["sheets"], dict) else {}
+
+    history_ids = scenes.get_location_history(cid, sid)
+    current_loc = history_ids[-1] if history_ids else None
+    actors = [(a["kind"], a["id"], a["name"]) for a in cast]
+    if current_loc:
+        try:
+            loc_name = overlay.read_entity(cid, "locations", current_loc)["meta"].get("name", current_loc)
+            actors.append(("locations", current_loc, loc_name))
+        except entities.EntityNotFound:
+            pass  # referenced location was deleted — omit from sheet summaries
+
+    mechanics_sheets: list[dict] = []
+    present_types: set[str] = set()
+    for kind, eid, label in actors:
+        sheet = sheets.read(cid, kind, eid)
+        if sheet is None:
+            continue
+        type_id = sheet["sheet_type"]
+        entry = {"ref": f"{kind}:{eid}", "label": label,
+                 "type_label": _sheet_type_label(sheets_def, type_id)}
+        if sheet["errors"]:
+            entry["lines"] = ["(sheet invalid)"]
+        else:
+            if isinstance(type_id, str):
+                present_types.add(type_id)
+            entry["lines"] = _sheet_summary_lines(sheets_def, sheet)
+        mechanics_sheets.append(entry)
+
+    always_docs, type_docs, key_docs = [], [], []
+    for doc in pack["rules"]:
+        if doc["always"]:
+            always_docs.append(doc)
+        elif set(doc["sheet_types"]) & present_types:
+            type_docs.append(doc)
+        elif doc["keys"] and _rule_keys_match(doc["keys"], recent_text):
+            key_docs.append(doc)
+    mechanics_rules: list[str] = []
+    for doc in always_docs + type_docs + key_docs[:6]:
+        rule = modules.read_rule(mid, doc["id"])
+        if rule is not None:
+            mechanics_rules.append(rule["body"].strip())
+
+    return {"mechanics_rules": mechanics_rules, "mechanics_sheets": mechanics_sheets,
+            "mechanics_checks": checks.available_checks(cid, sid)}
+
+
 def _relationship_lines(cid: str, cast) -> list[str]:
     try:
         tokens = [f"{a['kind']}:{a['id']}" for a in cast]
@@ -361,6 +450,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0) -> dic
         default_style_id=cfg.get("default_style_id", ""))
     offscene_active, offscene_known = _cast_directory_data(croot, cid, sid)
     activated_wi = _world_info(cid, recent_text, exclude, frozenset(present))
+    mech = _mechanics(cid, sid, cast, recent_text)
     data = {
         "opener": False, "pcless": pcless, "story_full": bool(full_recap),
         "global_system_prompt": cfg.get("system_prompt", ""),
@@ -378,6 +468,8 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0) -> dic
         "group_states": _group_states(cid, croot, activated_wi),
         "offscene_active": offscene_active, "offscene_known": offscene_known,
         "player_names": player_names,
+        "mechanics_rules": mech["mechanics_rules"], "mechanics_sheets": mech["mechanics_sheets"],
+        "mechanics_checks": mech["mechanics_checks"],
     }
 
     post_history = prompts.render("scene/post_history.j2", npc_cards=npc_cards)
@@ -440,7 +532,10 @@ _SECTIONS = [
     ("Current setting", "scene/sections/current_setting.j2", False),
     ("World info", "scene/sections/world_info.j2", False),
     ("Group state", "scene/sections/group_state.j2", False),
+    ("Mechanics rules", "scene/sections/mechanics_rules.j2", False),
+    ("Mechanics sheets", "scene/sections/mechanics_sheets.j2", False),
     ("Off-scene cast", "scene/sections/off_scene_cast.j2", False),
+    ("Mechanics response format", "scene/sections/mechanics_response_format.j2", False),
     ("Response format", "scene/sections/response_format.j2", False),
 ]
 

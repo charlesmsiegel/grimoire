@@ -15,7 +15,9 @@ side:
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -146,13 +148,33 @@ assert 'prompts.render("scene/regenerate_guidance.j2"' in routes_src, \
 # ------------------------------------------------------------- store fixture
 
 from grimoire.store import appearances as ap  # noqa: E402
-from grimoire.store import (calendars, campaigns, characters, config, dossiers as dstore,  # noqa: E402
-                            entities, groupstate, pcs, playstate, plot, scenes, styles,
-                            taglines as tstore, worlds)
+from grimoire.store import (calendars, campaigns, characters, checks, config,  # noqa: E402
+                            dossiers as dstore, entities, groupstate, modules, pcs, playstate,
+                            plot, scenes, sheets, styles, taglines as tstore, worlds)
 
 config.write_config(system_prompt="Global GM rules: be vivid, be fair.")
+
+# a bound mechanics module (#162 Task 6): one sheet type, one check, one
+# always-on rules doc -- so mechanics_rules/mechanics_sheets/mechanics_checks
+# (and their three system.j2 sections) are all non-empty below.
+mod_dir = Path(os.environ["GRIMOIRE_HOME"]) / "modules" / "keeper-arts"
+(mod_dir / "rules").mkdir(parents=True)
+(mod_dir / "module.md").write_text("---\nname: Keeper Arts\n---\n", encoding="utf-8")
+(mod_dir / "sheets.json").write_text(json.dumps({
+    "groups": {},
+    "sheet_types": {
+        "keeper": {"label": "Keeper", "kind": "characters", "groups": [],
+                  "fields": [{"key": "grit", "label": "Grit", "type": "resource", "max": 5}]},
+    },
+}), encoding="utf-8")
+(mod_dir / "checks.json").write_text(json.dumps({
+    "steady-hand": {"label": "Steady Hand", "requires": [], "roll": "1d20"},
+}), encoding="utf-8")
+(mod_dir / "rules" / "core.md").write_text("---\nalways: true\n---\nKeep every roll honest.\n",
+                                           encoding="utf-8")
+
 wid = worlds.create_world("W")
-cid = campaigns.create_campaign("Run", wid)
+cid = campaigns.create_campaign("Run", wid, module="keeper-arts")
 croot = campaigns.campaign_root(cid)
 sid = scenes.create_scene(cid, "S1")
 
@@ -165,6 +187,7 @@ sera, _ = characters.create_character(croot, "Seraphine Vale", "default", ncard)
 ap.appear(cid, sid, "characters", sera, "default", "npc")
 playstate.write_state(croot, sera, playstate.compose_body(
     "Wounded and hiding.", "The ledger is real.\nIt names the harbormaster.", "The Guild watches her."))
+sheets.write(cid, "characters", sera, "keeper", {"grit": {"current": 2, "max": 5}})
 
 persona = pcs.blank_persona("Hero")
 persona.update({"pronouns": "she/her", "summary": "A debt-ridden courier.",
@@ -303,6 +326,66 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
         if st and any(st[k] for k in groupstate.FIELDS):
             group_states.append({"name": e["name"], **st})
 
+    mid = modules.resolve(cid)
+    mechanics_rules, mechanics_sheets, mechanics_checks = [], [], []
+    if mid is not None:
+        pack = modules.load_pack(mid)
+        sheets_def = pack["sheets"] if isinstance(pack["sheets"], dict) else {}
+        actors = [(a["kind"], a["id"], a["name"]) for a in cast]
+        if current_loc:
+            try:
+                loc = entities.read_entity(croot, "locations", current_loc)
+                actors.append(("locations", current_loc, loc["meta"].get("name", current_loc)))
+            except entities.EntityNotFound:
+                pass
+        present_types = set()
+        for kind, eid, label in actors:
+            sh = sheets.read(cid, kind, eid)
+            if sh is None:
+                continue
+            type_id = sh["sheet_type"]
+            st = sheets_def.get("sheet_types", {}).get(type_id) if isinstance(type_id, str) else None
+            type_label = (st.get("label", type_id) if isinstance(st, dict)
+                          else (type_id if isinstance(type_id, str) else ""))
+            if sh["errors"]:
+                mechanics_sheets.append({"ref": f"{kind}:{eid}", "label": label,
+                                         "type_label": type_label, "lines": ["(sheet invalid)"]})
+                continue
+            if isinstance(type_id, str):
+                present_types.add(type_id)
+            defaults = sheets.default_fields(sheets_def, type_id) if isinstance(type_id, str) else {}
+            merged = {**defaults, **sh["fields"]}
+            line_entries = []
+            for f in (modules.assembled_fields(sheets_def, type_id) if isinstance(type_id, str) else []):
+                key = f.get("key")
+                if not isinstance(key, str) or not key:
+                    continue
+                v = merged.get(key)
+                if f.get("type") == "resource" and isinstance(v, dict):
+                    line_entries.append(f"{key} {v.get('current')}/{v.get('max')}")
+                else:
+                    line_entries.append(f"{key} {v}")
+            for name, value in sh["derived"].items():
+                line_entries.append(f"{name} {value}")
+            lines = [" · ".join(line_entries[i:i + 4]) for i in range(0, len(line_entries), 4)]
+            mechanics_sheets.append({"ref": f"{kind}:{eid}", "label": label,
+                                     "type_label": type_label, "lines": lines})
+
+        always_docs, type_docs, key_docs = [], [], []
+        for doc in pack["rules"]:
+            if doc["always"]:
+                always_docs.append(doc)
+            elif set(doc["sheet_types"]) & present_types:
+                type_docs.append(doc)
+            elif doc["keys"] and any(re.search(rf"\b{re.escape(k)}\b", recent_text, re.IGNORECASE)
+                                     for k in doc["keys"]):
+                key_docs.append(doc)
+        for doc in always_docs + type_docs + key_docs[:6]:
+            rule = modules.read_rule(mid, doc["id"])
+            if rule is not None:
+                mechanics_rules.append(rule["body"].strip())
+        mechanics_checks = checks.available_checks(cid, scene_id)
+
     today = None
     time_history = scenes.get_time_history(cid, scene_id)
     if time_history:
@@ -350,7 +433,9 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
             "group_states": group_states,
             "offscene_active": offscene_active, "offscene_known": offscene_known,
             "player_names": player_names, "pcless": pcless,
-            "story_full": bool(full_recap), "opener": False}
+            "story_full": bool(full_recap), "opener": False,
+            "mechanics_rules": mechanics_rules, "mechanics_sheets": mechanics_sheets,
+            "mechanics_checks": mechanics_checks}
 
 
 def rendered_messages(scene_id: str, data: dict, note: str | None = None,

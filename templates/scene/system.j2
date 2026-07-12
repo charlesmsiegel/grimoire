@@ -15,7 +15,8 @@
       global_system_prompt, prose_style_name, prose_style_body, npc_cards,
       states, relationship_lines, players, ref_names, refs, story_entries,
       plot_lines, today, current_setting, world_info_bodies, group_states,
-      offscene_active, offscene_known, player_names
+      offscene_active, offscene_known, player_names, mechanics_rules,
+      mechanics_sheets, mechanics_checks
 
     Note: {{user}}/{{char}} token substitution is applied by code to the card
     and history data, not here. -#}
@@ -70,7 +71,16 @@
 {%- set s -%}{%- include "scene/sections/group_state.j2" -%}{%- endset -%}
 {%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
 
+{%- set s -%}{%- include "scene/sections/mechanics_rules.j2" -%}{%- endset -%}
+{%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
+
+{%- set s -%}{%- include "scene/sections/mechanics_sheets.j2" -%}{%- endset -%}
+{%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
+
 {%- set s -%}{%- include "scene/sections/off_scene_cast.j2" -%}{%- endset -%}
+{%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
+
+{%- set s -%}{%- include "scene/sections/mechanics_response_format.j2" -%}{%- endset -%}
 {%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
 
 {%- set s -%}{%- include "scene/sections/response_format.j2" -%}{%- endset -%}

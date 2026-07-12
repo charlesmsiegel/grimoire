@@ -755,3 +755,87 @@ def test_group_state_in_context_sections(monkeypatch, tmp_path):
     scenes.append_message(cid, sid, "user", "hello")
     labels = [s["label"] for s in context.context_sections(cid, sid)]
     assert "Group state" in labels
+
+
+# ---- Task 6: mechanics rules / sheets / response-format sections (#162) ----
+
+import json  # noqa: E402
+
+from grimoire.store import sheets as sheets_store  # noqa: E402
+
+
+def _make_module(tmp_path, mid, sheet_types=None, checks=None, rules=None):
+    """A minimal module pack under the campaign's user module library
+    (mirrors test_modules_store.make_pack, kept local since test_context.py
+    doesn't otherwise depend on that module)."""
+    d = tmp_path / "modules" / mid
+    (d / "rules").mkdir(parents=True)
+    (d / "module.md").write_text("---\nname: Test Module\n---\n", encoding="utf-8")
+    (d / "sheets.json").write_text(
+        json.dumps({"groups": {}, "sheet_types": sheet_types or {}}), encoding="utf-8")
+    if checks is not None:
+        (d / "checks.json").write_text(json.dumps(checks), encoding="utf-8")
+    for name, text in (rules or {}).items():
+        (d / "rules" / f"{name}.md").write_text(text, encoding="utf-8")
+    return mid
+
+
+def test_mechanics_sections_for_module_bound_campaign(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    mid = _make_module(
+        tmp_path, "arcana",
+        sheet_types={"adept": {"label": "Adept", "kind": "characters", "groups": [],
+                               "fields": [{"key": "mana", "label": "Mana", "type": "resource", "max": 5},
+                                          {"key": "focus", "label": "Focus", "type": "dots",
+                                           "max": 5, "default": 0}]}},
+        checks={"focus-check": {"label": "Focus Check", "requires": [], "roll": "1d20"}},
+        rules={"core": "---\nalways: true\n---\nCore rule text.\n",
+               "dragon-lore": "---\nkeys: dragon\n---\nDragon lore text.\n"})
+    wid = worlds.create_world("W")
+    cid = campaigns.create_campaign("Run", wid, module=mid)
+    sid = scenes.create_scene(cid, "S")
+    croot = campaigns.campaign_root(cid)
+    char = characters.create_character(croot, "Winifred", "default",
+                                       characters.blank_card("Winifred"))[0]
+    ap.appear(cid, sid, "characters", char, "default", "npc")
+    sheets_store.write(cid, "characters", char, "adept",
+                       {"mana": {"current": 3, "max": 5}, "focus": 2})
+    scenes.append_message(cid, sid, "user", "We cast a spell.")
+
+    sections = {s["label"]: s["text"] for s in context.context_sections(cid, sid)}
+    assert {"Mechanics rules", "Mechanics sheets", "Mechanics response format"} <= sections.keys()
+
+    rules_text = sections["Mechanics rules"]
+    assert "Core rule text." in rules_text          # always -> always included
+    assert "Dragon lore text." not in rules_text     # unmatched 'keys:' doc -> excluded
+
+    sheet_text = sections["Mechanics sheets"]
+    assert f"characters:{char}" in sheet_text        # kind:id ref
+    assert "mana 3/5" in sheet_text                  # resource -> cur/max
+
+    response_text = sections["Mechanics response format"]
+    assert "focus-check" in response_text            # available check id listed
+
+
+def test_mechanics_sections_absent_when_unbound(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)  # no module bound
+    scenes.append_message(cid, sid, "user", "hello")
+    labels = {s["label"] for s in context.context_sections(cid, sid)}
+    assert not labels & {"Mechanics rules", "Mechanics sheets", "Mechanics response format"}
+
+
+def test_mechanics_rules_keyword_cap(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    mid = _make_module(
+        tmp_path, "keyed",
+        rules={f"rule{i}": f"---\nkeys: kw{i}\n---\nBody {i}.\n" for i in range(1, 9)})
+    wid = worlds.create_world("W")
+    cid = campaigns.create_campaign("Run", wid, module=mid)
+    sid = scenes.create_scene(cid, "S")
+    scenes.append_message(cid, sid, "user", "kw1 kw2 kw3 kw4 kw5 kw6 kw7 kw8")
+
+    rules_text = next(s["text"] for s in context.context_sections(cid, sid)
+                      if s["label"] == "Mechanics rules")
+    present = [f"Body {i}." for i in range(1, 9) if f"Body {i}." in rules_text]
+    assert len(present) == 6                        # 8 matches, capped at 6
+    assert present == [f"Body {i}." for i in range(1, 7)]  # first six, in pack order
