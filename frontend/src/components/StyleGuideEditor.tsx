@@ -25,18 +25,13 @@ export function StyleGuideEditor() {
     setMode("edit");
   }
 
-  function select(id: string) {
+  async function select(id: string) {
     setError(null);
+    const s = await api.readStyle(id);
     setSid(id);
+    setForm({ name: s.meta.name, description: s.meta.description, tags: s.meta.tags, body: s.body.trim() });
+    setBuiltIn(s.meta.built_in);
     setMode("view");
-    const style = styles.find(s => s.id === id);
-    if (style) {
-      setBuiltIn(style.built_in);
-    }
-    api.readStyle(id).then(s => {
-      setForm({ name: s.meta.name, description: s.meta.description, tags: s.meta.tags, body: s.body.trim() });
-      setBuiltIn(s.meta.built_in);
-    });
   }
 
   async function save() {

@@ -62,6 +62,7 @@ test("duplicating a built-in style opens the new copy for editing", async () => 
   const { container } = render(<StyleGuideEditor />);
   const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
   fireEvent.click(await within(rail).findByText("Gothic Horror"));
+  await waitFor(() => expect(api.readStyle).toHaveBeenCalledWith("gothic-horror"));
   (api.readStyle as any).mockResolvedValueOnce({
     meta: { id: "gothic-horror-copy", name: "Gothic Horror (copy)", description: "Dread.", tags: ["horror"], built_in: false },
     body: "Atmosphere first.",
@@ -77,6 +78,7 @@ test("deleting a custom style removes it", async () => {
   const { container } = render(<StyleGuideEditor />);
   const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
   fireEvent.click(await within(rail).findByText("Cozy Mystery"));
+  await waitFor(() => expect(api.readStyle).toHaveBeenCalledWith("cozy-mystery"));
   fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
   fireEvent.click(screen.getByRole("button", { name: /^delete$/i }));
   await waitFor(() => expect(api.deleteStyle).toHaveBeenCalledWith("cozy-mystery"));
