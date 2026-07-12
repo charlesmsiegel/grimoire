@@ -206,3 +206,32 @@ def test_user_module_shadows_builtin(monkeypatch, tmp_path):
     make_pack(tmp_path)
     assert modules.load_pack("testmod")["source"] == "user"
     assert modules.load_pack("testmod")["manifest"]["name"] == "Test Module"
+
+
+def test_wrong_typed_field_entry_in_group(monkeypatch, tmp_path):
+    errs = _sheets_error(
+        monkeypatch, tmp_path,
+        lambda s: s["groups"]["attributes"]["fields"].append("oops"))
+    assert any("field must be an object" in e for e in errs)
+
+
+def test_field_missing_key_does_not_crash(monkeypatch, tmp_path):
+    errs = _sheets_error(
+        monkeypatch, tmp_path,
+        lambda s: s["groups"]["attributes"]["fields"].append(
+            {"type": "dots", "max": 3}))
+    assert any("missing key" in e for e in errs)
+
+
+def test_sheet_type_referencing_wrong_typed_group(monkeypatch, tmp_path):
+    def mutate(s):
+        s["groups"]["attributes"] = "nope"
+    errs = _sheets_error(monkeypatch, tmp_path, mutate)
+    assert any("groups.attributes" in e for e in errs)
+
+
+def test_non_string_derived_expression(monkeypatch, tmp_path):
+    errs = _sheets_error(
+        monkeypatch, tmp_path,
+        lambda s: s["groups"]["attributes"]["derived"].update(bad=5))
+    assert any("must be a string" in e for e in errs)

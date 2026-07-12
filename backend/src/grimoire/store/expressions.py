@@ -31,7 +31,7 @@ def parse(text: str) -> ast.Expression:
     """Parse ``text`` into a validated ast.Expression or raise ExpressionError."""
     try:
         tree = ast.parse(text, mode="eval")
-    except (SyntaxError, ValueError) as e:
+    except (SyntaxError, ValueError, TypeError) as e:
         raise ExpressionError(f"unparseable expression {text!r}: {e}") from None
     for node in ast.walk(tree):
         if not isinstance(node, _ALLOWED_NODES):
