@@ -69,6 +69,13 @@ Three new `_SECTIONS` entries with templates under
 `kind:id` as printed in the sheet-summaries section. `difficulty`,
 `modifier` (optional ints). `reason` (optional string, shown on the chip).
 
+Opener grammar: three backticks, then optional spaces/tabs (not
+newlines), then `roll` at a word boundary, case-insensitive. The stream
+watcher's holdback must be **prefix-state based** (hold the longest
+buffer suffix that could still extend into an opener), not a fixed-length
+tail — a fixed tail leaks backticks when the optional whitespace makes
+the opener longer than the tail.
+
 ### Stream detection (`routes.py::_chat_stream`)
 
 The accumulation loop gains a fence watcher over the growing buffer:
@@ -132,13 +139,23 @@ dropped.
   `roll_id`) or `pending` → `declined`; `resolved`/`declined` →
   `narrated` (the continuation reply persisted). `superseded` is
   terminal.
-- `get(cid, sid)`, `set_status(cid, sid, pid, status, resolution=None)`,
-  and `claim(cid, sid, pid) -> bool` — an **atomic compare-and-set**
-  `pending → resolving`, serialized by a per-campaign in-process lock
-  (the app is single-process; the lock guards the read-mutate-write of
-  proposals.json). `claim` returns False if the record is not `pending`
-  with that id. **`resolve_check` runs only after a won claim** — two
-  overlapping accepts (double-click, two devices) can never both roll.
+- `get(cid, sid)` and `transition(cid, sid, pid, from_states, to,
+  resolution=None) -> bool` — **every** state change is an atomic
+  compare-and-set serialized by a per-campaign in-process lock (the app
+  is single-process; the lock guards the read-mutate-write of
+  proposals.json): the write happens only when the record carries that
+  id AND its current status is in `from_states`. `claim(cid, sid, pid)`
+  = `transition(..., ("pending",), "resolving")`. Legal transitions:
+  `pending→resolving` (claim), `resolving→resolved`, `resolving→pending`
+  (post-claim failure revert), `pending→declined`,
+  `resolved|declined→narrated`, and supersede (any non-narrated →
+  `superseded`). **A lost transition means someone else moved the record
+  (e.g. a new send superseded it mid-resolve) — the route stops dead: no
+  projection, no continuation, respond 409.** `resolve_check` runs only
+  after a won claim — two overlapping accepts can never both roll, and a
+  supersede racing a claimed resolve wins: the commit CAS
+  (`resolving→resolved`) loses against `superseded` and the roll result
+  is discarded unlogged (it was pure).
 - **A new player send or a new fence in the same scene supersedes any
   non-`narrated` proposal** (`pending`, `resolving`, `resolved`,
   `declined` alike). A superseded `resolved` proposal's roll stands in
@@ -236,14 +253,18 @@ rolls.
        happened.
     2. Commit: one CAS write (requires `resolving`, same id) sets status
        `resolved` with the full `resolution` (result incl. seed).
-    3. Projection (idempotent): append the rolls.json entry — its label
-       carries the proposal id — and the 🎲 transcript line, then write
-       `roll_id` back into the resolution. A retry that finds
-       `resolved` re-runs this step, skipping the roll append when an
-       entry tagged with this proposal id already exists (and the 🎲
-       line with it); a crash between commit and projection therefore
-       heals on retry with no duplicate roll and no orphaned log entry
-       (the log is written only after the resolved state exists).
+    3. Projection (idempotent, **each output independently recoverable**):
+       (a) roll log — if no rolls.json entry carries this proposal id
+       (`rolls.find_by_proposal`), append one (entries carry a
+       `proposal` field), then CAS-write `roll_id` into the resolution;
+       (b) transcript — the 🎲 line is a pure function of the stored
+       resolution (`format_check_roll`), so dedup is exact string
+       equality: append it only if no `ROLL_SPEAKER` message with that
+       exact content exists in the scene. A crash after any single
+       write heals on retry: roll dedup by proposal tag, line dedup by
+       content equality, `roll_id` backfill re-runs harmlessly. Exactly
+       one tagged roll entry and exactly one 🎲 line survive any
+       failure point.
     4. Stream the continuation; on continuation persist, status
        `narrated`.
   - `resolving` (someone else holds the claim) → 409.

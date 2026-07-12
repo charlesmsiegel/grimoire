@@ -44,8 +44,8 @@
 - `NON_TERMINAL = ("pending", "resolving", "resolved", "declined")`
 - `new(cid, sid, payload: dict) -> dict` (record; supersedes any existing non-terminal record for the scene)
 - `get(cid, sid) -> dict | None`
-- `claim(cid, sid, pid) -> bool` (atomic CAS `pending → resolving`)
-- `set_status(cid, sid, pid, status, resolution=None) -> bool`
+- `transition(cid, sid, pid, from_states, to, resolution=None) -> bool` — **every state change is this CAS**: writes only when the record has that id AND current status ∈ `from_states`; `resolution`, when given, replaces the stored one in the same write. Returns False otherwise — **a lost transition means another actor moved the record (e.g. supersede mid-resolve); callers must stop dead.**
+- `claim(cid, sid, pid) -> bool` = `transition(cid, sid, pid, ("pending",), "resolving")`
 - `supersede(cid, sid) -> None` (any non-terminal → `superseded`)
 - Record: `{"id": "pr-000001", "status", "payload", "created", "resolution"}`; file `<campaign>/proposals.json` maps sid → record plus a reserved `"_counter"` key (scene ids are slugs; the underscore name cannot collide).
 
@@ -105,15 +105,32 @@ def test_claim_concurrent_single_winner(monkeypatch, tmp_path):
     assert len(wins) == 1
 
 
-def test_set_status_and_resolution(monkeypatch, tmp_path):
+def test_transition_cas_and_resolution(monkeypatch, tmp_path):
     cid, sid = _scene(monkeypatch, tmp_path)
     rec = proposals.new(cid, sid, {})
     proposals.claim(cid, sid, rec["id"])
-    assert proposals.set_status(cid, sid, rec["id"], "resolved",
+    assert proposals.transition(cid, sid, rec["id"], ("resolving",), "resolved",
                                 {"tier": "success"}) is True
     got = proposals.get(cid, sid)
     assert got["status"] == "resolved" and got["resolution"]["tier"] == "success"
-    assert proposals.set_status(cid, sid, "pr-999999", "narrated") is False
+    # wrong expected state, wrong id: both lose without writing
+    assert proposals.transition(cid, sid, rec["id"], ("pending",), "declined") is False
+    assert proposals.transition(cid, sid, "pr-999999", ("resolved",), "narrated") is False
+    assert proposals.get(cid, sid)["status"] == "resolved"
+
+
+def test_supersede_during_resolve_wins(monkeypatch, tmp_path):
+    """The critical race: a new send supersedes while an accept holds the
+    claim — the commit CAS must lose and the record must stay superseded."""
+    cid, sid = _scene(monkeypatch, tmp_path)
+    rec = proposals.new(cid, sid, {})
+    assert proposals.claim(cid, sid, rec["id"]) is True
+    proposals.supersede(cid, sid)                      # new send lands mid-resolve
+    assert proposals.get(cid, sid)["status"] == "superseded"
+    assert proposals.transition(cid, sid, rec["id"], ("resolving",), "resolved",
+                                {"tier": "success"}) is False
+    assert proposals.get(cid, sid)["status"] == "superseded"
+    assert proposals.get(cid, sid)["resolution"] is None
 
 
 def test_supersede_covers_every_non_terminal_state(monkeypatch, tmp_path):
@@ -122,15 +139,18 @@ def test_supersede_covers_every_non_terminal_state(monkeypatch, tmp_path):
         rec = proposals.new(cid, sid, {})
         if status != "pending":
             proposals.claim(cid, sid, rec["id"])
-            if status in ("resolved", "declined"):
-                proposals.set_status(cid, sid, rec["id"], status)
+            if status == "resolved":
+                proposals.transition(cid, sid, rec["id"], ("resolving",), "resolved")
+            elif status == "declined":
+                proposals.transition(cid, sid, rec["id"], ("resolving",), "pending")
+                proposals.transition(cid, sid, rec["id"], ("pending",), "declined")
         proposals.supersede(cid, sid)
         assert proposals.get(cid, sid)["status"] == "superseded"
     # narrated is terminal: untouched
     rec = proposals.new(cid, sid, {})
     proposals.claim(cid, sid, rec["id"])
-    proposals.set_status(cid, sid, rec["id"], "resolved")
-    proposals.set_status(cid, sid, rec["id"], "narrated")
+    proposals.transition(cid, sid, rec["id"], ("resolving",), "resolved")
+    proposals.transition(cid, sid, rec["id"], ("resolved",), "narrated")
     proposals.supersede(cid, sid)
     assert proposals.get(cid, sid)["status"] == "narrated"
 
@@ -218,31 +238,28 @@ def get(cid: str, sid: str) -> dict | None:
     return rec if isinstance(rec, dict) else None
 
 
-def claim(cid: str, sid: str, pid: str) -> bool:
-    """Atomic CAS pending -> resolving for exactly this proposal id."""
+def transition(cid: str, sid: str, pid: str, from_states, to: str,
+               resolution: dict | None = None) -> bool:
+    """Atomic CAS: move the scene's proposal to ``to`` only if it carries
+    exactly this id and its status is in ``from_states``. Every state
+    change goes through here; a lost transition means another actor moved
+    the record (e.g. a supersede mid-resolve) and the caller must stop."""
     with _lock(cid):
         data = _read(cid)
         rec = data.get(sid)
         if (not isinstance(rec, dict) or rec.get("id") != pid
-                or rec.get("status") != "pending"):
+                or rec.get("status") not in tuple(from_states)):
             return False
-        rec["status"] = "resolving"
-        _write(cid, data)
-        return True
-
-
-def set_status(cid: str, sid: str, pid: str, status: str,
-               resolution: dict | None = None) -> bool:
-    with _lock(cid):
-        data = _read(cid)
-        rec = data.get(sid)
-        if not isinstance(rec, dict) or rec.get("id") != pid:
-            return False
-        rec["status"] = status
+        rec["status"] = to
         if resolution is not None:
             rec["resolution"] = resolution
         _write(cid, data)
         return True
+
+
+def claim(cid: str, sid: str, pid: str) -> bool:
+    """CAS pending -> resolving; resolve_check may run only after a win."""
+    return transition(cid, sid, pid, ("pending",), "resolving")
 
 
 def supersede(cid: str, sid: str) -> None:
@@ -797,7 +814,7 @@ git commit -m "feat(checks): pure check resolution with outcome tiers + proposal
 **Interfaces (produced):**
 - `class FenceWatcher`: `feed(chunk: str) -> str` (text safe to emit now), `finish() -> str` (any remaining safe text), then read-only properties `complete: bool` (a full fence closed), `truncated: bool` (opener seen, never closed), `narration: str` (all pre-fence text — what should persist), `body: str | None` (fence inner text).
 - `parse_roll_body(text: str) -> tuple[dict, list[str]]` — tolerant parse: strict JSON → permissive normalization (single→double quotes outside strings is NOT attempted; instead: strip trailing commas, then regex key extraction for `check|actor|difficulty|modifier|reason` when JSON fails); returns `(fields, problems)`; never raises.
-- Opener pattern: ```` ```roll ```` (case-insensitive, optional spaces: `re.compile(r"```\s*roll\b", re.I)`); closer: the next ```` ``` ```` at line start after the opener line. Hold-back: when no opener is seen, retain the last 7 characters (`len("```roll")`) unemitted so an opener split across deltas is never leaked; emit the rest.
+- Opener pattern: ```` ```roll ```` — three backticks, optional spaces/tabs (NOT newlines), then `roll` at a word boundary, case-insensitive: `re.compile(r"```[ \t]*roll\b", re.I)`. Closer: the next ```` ``` ```` at line start after the opener line. Hold-back is **prefix-state based**: retain the longest buffer suffix that could still extend into an opener (a suffix matching `` `{1,3}([ \t]*(r(o(l(l)?)?)?)?)? `` case-insensitively), never a fixed-length tail — `` ``` `` + eight spaces + a chunk boundary before `roll` must not leak the backticks.
 
 - [ ] **Step 1: Failing tests**
 
@@ -859,6 +876,25 @@ def test_holdback_eventually_emitted():
     assert out == "end with backticks ``ok``"
 
 
+def test_opener_with_spaces_split_never_leaks():
+    body = '{"check": "brawl", "actor": "characters:mara"}'
+    for gap in ("", " ", "        ", "\t"):
+        for split_at in range(1, 4 + len(gap)):
+            opener = f"```{gap}roll\n"
+            w = FenceWatcher()
+            out = w.feed("go! ") + w.feed(opener[:split_at]) + w.feed(opener[split_at:])
+            out += w.feed(body + "\n```")
+            out += w.finish()
+            assert "`" not in out, f"leaked with gap={gap!r} split={split_at}"
+            assert w.complete and w.narration == "go! "
+
+
+def test_newline_after_backticks_is_not_an_opener():
+    w, out = run(["```\ncode\n```", " done"])
+    assert w.complete is False and w.body is None
+    assert out == "```\ncode\n``` done"
+
+
 def test_parse_roll_body_strict_and_tolerant():
     fields, problems = parse_roll_body('{"check": "brawl", "actor": "characters:mara", "difficulty": 6}')
     assert fields["check"] == "brawl" and problems == []
@@ -886,8 +922,15 @@ from __future__ import annotations
 import json
 import re
 
-_OPENER = re.compile(r"```\s*roll\b", re.IGNORECASE)
-_HOLDBACK = len("```roll")
+_OPENER = re.compile(r"```[ \t]*roll\b", re.IGNORECASE)
+# A buffer suffix that could still grow into an opener: 1-3 backticks,
+# then (only after all 3) optional spaces/tabs and a prefix of "roll".
+_OPENER_PREFIX = re.compile(r"(`{1,2}|`{3}[ \t]*(r(o(l(l)?)?)?)?)$", re.IGNORECASE)
+
+
+def _opener_prefix_len(buf: str) -> int:
+    m = _OPENER_PREFIX.search(buf)
+    return len(m.group(0)) if m else 0
 
 
 class FenceWatcher:
@@ -917,8 +960,12 @@ class FenceWatcher:
             self._buf = ""
             self._try_close()
             return out
-        # emit all but a holdback tail (a potential split opener)
-        safe_len = max(len(self._emitted), len(self._buf) - _HOLDBACK)
+        # prefix-state holdback: withhold the longest suffix that could
+        # still extend into an opener (backticks + optional spaces/tabs +
+        # a prefix of "roll"); a fixed-length tail leaks backticks when
+        # the optional whitespace stretches the opener.
+        safe_len = max(len(self._emitted),
+                       len(self._buf) - _opener_prefix_len(self._buf))
         out = self._buf[len(self._emitted): safe_len]
         self._emitted = self._buf[:safe_len]
         return out
@@ -1086,7 +1133,11 @@ git commit -m "feat(context): mechanics rules/sheets/roll-protocol sections (#16
 - `_chat_stream` watches fences (persisted turns only; `_ephemeral_stream` untouched): on a complete/truncated fence — build the proposal payload (`_make_proposal(cid, sid, watcher)` helper: `parse_roll_body`, actor resolution against `checks.available_checks(cid, sid)` (exact ref then case-insensitive label match), `problems` per spec incl. `check unavailable to this actor` and truncation), then `store.proposals.new` **before** `_persist_reply(watcher.narration)`, then yield `{"proposal": {**payload, "id": rec["id"]}}` and `{"done": True}`.
 - `post_chat`/`post_retry`/`post_regenerate`: `store.proposals.supersede(cid, sid)` right after `_require_scene`.
 - `GET /campaigns/{cid}/scenes/{sid}/roll-proposal` → `{"record": rec | None}`.
-- `POST /campaigns/{cid}/scenes/{sid}/roll-proposal` (SSE) — body model `ProposalAction(BaseModel): proposal: str; action: str; check: str | None = None; actor: str | None = None; difficulty: int | None = None; modifier: int | None = None`. Flow exactly per the spec's state walk: 409s (mismatched id / superseded / resolving) raised as HTTPException *before* streaming begins; accept = claim → resolve (catch-all revert `resolving→pending`, error frame) → CAS commit `resolved`+resolution → projection (`rolls.find_by_proposal` else `rolls.append(..., proposal=pid)` + 🎲 line via `checks.format_check_roll` + `set_status` backfilling `roll_id`) → stream continuation → `narrated`. Decline = `set_status declined` → declined continuation → `narrated`. Retry of `resolved`/`declined` re-runs projection + continuation; `narrated` → immediate done frame.
+- `POST /campaigns/{cid}/scenes/{sid}/roll-proposal` (SSE) — body model `ProposalAction(BaseModel): proposal: str; action: str; check: str | None = None; actor: str | None = None; difficulty: int | None = None; modifier: int | None = None`. Flow exactly per the spec's state walk, **every state change via `proposals.transition` and every lost transition = stop dead (no projection, no continuation), 409 when nothing has streamed yet**:
+  - accept = `claim` (lost → 409) → `resolve_check` (catch-all except: `transition(..., ("resolving",), "pending")` + error frame) → commit `transition(..., ("resolving",), "resolved", resolution)` (**lost — e.g. superseded mid-resolve — → discard the roll result unlogged, 409**) → projection → continuation → `transition(..., ("resolved",), "narrated")`.
+  - Projection (idempotent per spec, each output independently recoverable): (a) `rolls.find_by_proposal(cid, pid)` else `rolls.append(..., proposal=pid)`; then `transition(..., ("resolved",), "resolved", {**resolution, "roll_id": entry["id"]})` to backfill; (b) compute `line = checks.format_check_roll(resolution)` and append it **only if** no existing scene message has `speaker == ROLL_SPEAKER and content == line` (exact-string dedup — the line is a pure function of the stored resolution).
+  - decline = `transition(..., ("pending",), "declined")` (lost → 409) → declined continuation → `narrated`.
+  - Retry of `resolved`/`declined` re-runs projection (each step self-deduping) + continuation; `narrated` → immediate done frame.
 - Continuation messages: `store.context.build_messages(cid, sid)` + one system message rendered from new templates `templates/scene/roll_result.j2` (vars: `resolution`, `on_roll_docs: [str]`, `check_docs: [str]`) and `templates/scene/roll_declined.j2` (no vars) — write both templates (short, following `scene/director_note.j2` style; exact wording per the spec's Continuation section).
 - `GET /campaigns/{cid}/scenes/{sid}/checks` → `{"actors": checks.available_checks(cid, sid)}`.
 - `POST /campaigns/{cid}/scenes/{sid}/check` — body `CheckBody(BaseModel): check: str; actor: str; difficulty: int | None = None; modifier: int | None = None`; runs `resolve_check`, appends roll log (no proposal tag) + 🎲 line, returns `{"ok": True, "resolution": ..., "roll": entry, "message": line}`; `CheckError` → 400.
@@ -1110,7 +1161,13 @@ def test_chat_fence_cuts_and_persists_proposal(client, monkeypatch):
     # re-override get_llm with FakeOpenRouter streaming the fence in pieces
     ...
     resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "go"})
-    assert '"proposal"' in resp.text and '"delta": "She lunges' not in resp.text.split("```")[0] or True
+    frames = [json.loads(l[len("data: "):]) for l in resp.text.splitlines()
+              if l.startswith("data: ")]
+    deltas = "".join(f["delta"] for f in frames if "delta" in f)
+    assert deltas == "She lunges—\n"                      # pre-fence narration only
+    assert "`" not in deltas and "brawl" not in deltas    # no fence chars leaked
+    kinds = [next(iter(f)) for f in frames]
+    assert kinds.index("proposal") < kinds.index("done")  # proposal precedes done
     rec = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
     assert rec["status"] == "pending" and rec["payload"]["check"] == "brawl"
     msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
@@ -1166,9 +1223,20 @@ following the file's established SSE-assertion style
 roll-log entry count and `proposal` tag, message contents, and the
 proposals record status after each step. Every assertion named in the
 sketch comments is required; the spec's Testing section lists the full
-required matrix (post-claim failure injection uses `monkeypatch` on
-`store.checks.resolve_check` to raise `RuntimeError` and asserts status
-back to `pending` and no roll-log entry).
+required matrix. Failure injection is mandatory at EVERY side-effect
+boundary, asserting exactly one tagged roll entry and exactly one 🎲
+line survive:
+- `monkeypatch` `store.checks.resolve_check` → `RuntimeError` → status
+  back to `pending`, no roll entry, no line;
+- supersede between claim and commit (call `store.proposals.supersede`
+  from a monkeypatched `resolve_check` before returning normally) →
+  commit loses, roll unlogged, status stays `superseded`;
+- crash between roll append and roll_id backfill (`monkeypatch`
+  `store.proposals.transition` to raise once after `rolls.append` ran) →
+  retry accept → one tagged entry, backfilled roll_id, one line;
+- crash between line append and `narrated` (monkeypatch the continuation
+  builder to raise) → retry → no duplicate 🎲 line (content-equality
+  dedup), continuation streams, `narrated`.
 
 Steps: failing tests → implement (rewrite `_chat_stream` with an optional
 fence watcher; helper functions `_make_proposal`, `_project_resolution`,
