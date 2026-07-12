@@ -125,10 +125,13 @@ order:
   surfaced through the existing StagedEdit review flow.
 - API: `GET/PUT /campaigns/{cid}/groups/{gid}/state` (deeper than the generic
   `/{kind}/{eid}`; no collision).
-- UI: campaign-scoped group detail view gains a sidebar state panel showing the
-  five sections with an edit affordance, mirroring how NPC play-state is
-  surfaced (pin down the exact component at plan time). World-scoped groups
-  show no state panel; state is campaign-only.
+- UI: campaign-scoped group detail view gains a sidebar state panel
+  (`.side-section` blocks per the list/detail conventions) showing the five
+  sections with an edit affordance. Note this goes one step beyond playstate
+  parity: NPC play-state has no dedicated editor or GET/PUT route today (it is
+  written only via absorb StagedEdits), so the panel + route are new surface,
+  not a mirror. World-scoped groups show no state panel; state is
+  campaign-only.
 
 ## Testing
 
