@@ -65,9 +65,16 @@ function renderAt() {
   );
 }
 
-test("shows the world name and the Characters tab by default", async () => {
+test("shows the world name and defaults to the Overview tab", async () => {
   renderAt();
   await screen.findByText("Drowned Realm");
+  expect(screen.getByRole("button", { name: "Overview" })).toHaveClass("active");
+});
+
+test("switching to the Characters tab renders the character editor", async () => {
+  renderAt();
+  await screen.findByText("Drowned Realm");
+  fireEvent.click(screen.getByRole("button", { name: "Characters" }));
   await waitFor(() => expect(api.listCharacters).toHaveBeenCalledWith({ kind: "world", id: "w" }));
   expect(screen.getByRole("button", { name: /new character/i })).toBeInTheDocument();
 });
@@ -113,6 +120,7 @@ test("openGreeting switches to the greetings tab and focuses the greeting", asyn
   ]);
   renderAt();
   await screen.findByText("Drowned Realm");
+  fireEvent.click(screen.getByRole("button", { name: "Characters" }));
   fireEvent.click(await screen.findByText("Mira"));               // grid -> detail
   const wg = await screen.findByText("World greetings");
   fireEvent.click(within(wg.parentElement as HTMLElement).getByText("SoL 2"));
