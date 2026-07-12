@@ -1,0 +1,271 @@
+# Mechanics Phase 4 — play integration
+
+Full design for Phase 4 of the Mechanics & Dice milestone (issue #162),
+superseding `2026-07-12-mechanics-phase4-play-integration-draft.md`. Depends
+on Phases 1-3 (all landed). This is the payoff phase: after it, a
+module-bound campaign plays with LLM-refereed, engine-resolved, truly random
+checks — the LLM decides *when* a check is warranted and proposes it; the
+player adjudicates; the engine does all math; the LLM narrates the result.
+
+## Decisions (settled 2026-07-12)
+
+| Decision | Choice | Why |
+|---|---|---|
+| Outcome tiers | Named tiers with expression conditions, `[{"label", "when"}]`, first match top-down; check-level → module `_defaults` → engine fallback | System-agnostic: D&D crits (`natural == 20`) and WoD botches (`successes == 0 and ones > 0`) both express naturally; reuses the expression engine; gives Phase 5 a crisp label to validate narration against. |
+| Difficulty | LLM proposes in the tag → check `difficulty` default → module `_defaults.difficulty`; always editable on the chip | "LLM referees, engine computes": situational DCs are refereeing, but the player has the last word before dice hit the table. |
+| Roll tag | Fenced ` ```roll ` block, JSON `{check, actor, difficulty?, modifier?, reason?}`; model instructed to stop after it | Works with any streaming text model (no tool-calling assumed); JSON is parseable and cheap; ids are copied from context, not invented. |
+| Modify scope | Difficulty + modifier inline, check swappable; actor fixed (select appears only when actor resolution failed) | Wrong-difficulty and wrong-check are the real table corrections; wrong-actor means the narration went wrong — that's what decline is for. |
+| Decline semantics | Continuation told "check declined; continue without rolling"; no other trace | The scene simply proceeds; nothing mechanical happened. |
+| Proposal persistence | Ephemeral (SSE event + frontend state); pre-fence narration persists normally | A lost chip costs nothing: the narration stands and play continues. |
+| Sheet summaries scope | Present cast + the current location's sheet (if sheeted) | Location stats (wards, hazards) are check-relevant; other sheeted entities wait for a need. |
+| Rules budget | Keyword-activated rules docs capped at 6/turn; `always`/`sheet_types` docs uncapped | Bounded context growth; core digests and splat rules are the load-bearing text. |
+| Manual checks | In scope: 🎲 popover gains a Check mode using the same resolution path | Exercises the engine without LLM involvement; same code path as accept. |
+| Multi-roll turns | One fence per turn; a second complete fence in one buffer is ignored (logged) | Stop-after-fence is the instructed contract; tolerate violations quietly. |
+
+## Context sections (`store/context.py` + templates)
+
+Three new `_SECTIONS` entries with templates under
+`templates/scene/sections/`, all rendering empty when
+`modules.resolve(cid)` is `None`. `_assemble` gathers their data.
+
+- **`mechanics_rules.j2` — rules digest.** Bodies of: every `always: true`
+  doc; every `sheet_types:` doc whose type matches a present sheeted
+  actor's `sheet_type`; `keys:` docs matched against the same
+  `recent_text` the lorebook scan uses (word-boundary, case-insensitive,
+  last `context_scan_depth` messages). Keyword-activated docs are capped
+  at 6 per turn (activation order: file order; the cap does not apply to
+  `always`/`sheet_types` docs). Bodies come from a new
+  `modules.read_rule(mid, rid) -> {"meta", "body"}` (raises
+  `ModuleNotFound` for unknown mid; returns `None` for unknown rid) —
+  `load_pack` keeps frontmatter only.
+- **`mechanics_sheets.j2` — sheet summaries.** One compact block per
+  present sheeted cast member plus the current location if sheeted. Block
+  header is the exact roll-tag actor reference: `characters:mara — Medium
+  (Mara)`. Body lines: resources as `essence 6/10`, derived values as
+  `sight_pool 6`, dots/numbers of note (all fields, single line each;
+  sheets are small). Invalid sheets (non-empty `errors`) are skipped with
+  a one-line `(sheet invalid)` marker.
+- **`mechanics_response_format.j2` — the roll protocol.** Teaches the
+  fence syntax with one inline example, instructs: propose a check only
+  when an outcome is uncertain and consequential; emit the fence
+  mid-narration at the moment of the attempt; stop immediately after the
+  closing fence; never invent check ids or roll results. Lists available
+  checks per present actor — `characters:mara: athletics (Athletics),
+  stealth (Stealth)` — computed by `requires`-group membership against
+  each actor's sheet type.
+
+## The roll fence
+
+### Grammar
+
+````
+```roll
+{"check": "athletics", "actor": "characters:mara", "difficulty": 15,
+ "modifier": 0, "reason": "leaping the collapsing gap"}
+```
+````
+
+`check` (required): a check id from the module. `actor` (required):
+`kind:id` as printed in the sheet-summaries section. `difficulty`,
+`modifier` (optional ints). `reason` (optional string, shown on the chip).
+
+### Stream detection (`routes.py::_chat_stream`)
+
+The accumulation loop gains a fence watcher over the growing buffer:
+
+- When a complete ` ```roll …``` ` block closes: stop consuming the LLM
+  stream; split the buffer into pre-fence narration and fence body;
+  persist the narration via the normal `split_reply`/`append_message`
+  path; emit `{"proposal": {...}}` then `{"done": true}`.
+- Delta suppression: once a ` ```roll ` opener appears in the buffer,
+  stop emitting deltas (the UI must never render a half-fence); the
+  suppressed text is re-examined when the fence closes or the stream
+  ends.
+- Unclosed opener at stream end: strip the partial fence from the
+  persisted narration; parse what's recoverable; surface the proposal
+  the same way (its `problems` will note the truncation).
+- A second complete fence in the same buffer is ignored with a server
+  log line.
+
+### Parsing tolerance
+
+Strict `json.loads` first; on failure a permissive pass (normalize single
+quotes and trailing commas, then regex key extraction for the five known
+keys). Actor resolution: exact `kind:id` against present cast, then
+case-insensitive name match. The proposal payload sent to the UI:
+
+```json
+{"check": "athletics", "check_label": "Athletics",
+ "actor": "characters:mara", "actor_label": "Mara",
+ "difficulty": 15, "modifier": 0, "reason": "...",
+ "available": {"characters:mara": [["athletics", "Athletics"], ...], ...},
+ "problems": []}
+```
+
+`problems` entries (strings): unknown check id, actor unresolved, body
+unparseable, fence truncated, check unavailable to this actor. Non-empty
+`problems` → the chip opens in Modify state. A proposal is never silently
+dropped.
+
+## Resolution — `store/checks.py`
+
+New pure-stdlib module.
+
+`resolve_check(cid, check_id, actor_ref, difficulty=None, modifier=0,
+seed=None) -> dict`:
+
+1. `modules.resolve(cid)` (None → `CheckError`); load the check def
+   (unknown id → `CheckError`).
+2. Parse `actor_ref` as `kind:id`; `sheets.read` the sheet (missing sheet
+   or sheet errors → `CheckError` naming the problem); the sheet type
+   must include every `requires` group (→ `CheckError`).
+3. Expression scope = the sheet's numeric scope + computed derived values
+   + reserved names `difficulty` (proposal → check default → module
+   `_defaults.difficulty` → error if the template references it and no
+   value resolved) and `modifier` (proposal, default 0).
+4. Substitute `{expr}` placeholders in the check's `roll` template;
+   `dice.roll(notation, seed)` (seeded, replayable); log via
+   `rolls.append(cid, scene, label, result)` with label
+   `"<Actor> — <Check label> (diff N)"`.
+5. Evaluate outcome tiers against the roll scope: `total`, `natural`
+   (first die's first raw roll), `margin` (`total - vs` when `vs`
+   present, else absent), `successes`, `ones` (count of raw 1s), `dice`
+   (die count). Tier source: check `outcomes` → `_defaults.outcomes` →
+   engine fallback (`success`/`failure` from `outcome` in the dice
+   result when `vs`/pool semantics produced one, else no tier). First
+   match top-down; a tier whose `when` references an absent scope name
+   simply doesn't match (evaluation error → skip, recorded in the
+   returned `tier_warnings`).
+6. Return `{"check", "check_label", "actor", "actor_label", "notation",
+   "result", "tier", "difficulty", "modifier", "roll_id",
+   "tier_warnings"}`.
+
+`CheckError(Exception)` carries a user-facing message; routes map it to
+400.
+
+### Transcript line
+
+Extends the Phase-2 formatter:
+`🎲 **Mara — Vigor + Brawl (diff 6):** [7, 9, 2, 10, 3] → **2 successes** · *success*`
+appended with `ROLL_SPEAKER`, so absorb and history treat it like manual
+rolls.
+
+## Pack format additions (validated at load)
+
+- Roll templates may reference reserved names `difficulty` and `modifier`
+  inside `{…}` placeholders (check-validation scope gains both).
+- A check may carry `difficulty` (int) and `outcomes`
+  (`[{"label": str, "when": expr}]` — labels non-empty, expressions parse,
+  names ⊆ roll-scope ∪ nothing else).
+- `checks.json` may carry a reserved `_defaults` entry
+  (`{"difficulty": int, "outcomes": [...]}`), skipped by per-check
+  validation, validated with the same rules.
+- Both reference packs move targets into templates
+  (`"{vigor + brawl + modifier}d10 t{difficulty}"`,
+  `"1d20 + {athletics + str_mod + modifier} vs {difficulty}"`), gain
+  `_defaults` (pool: difficulty 6 + WoD-style ladder incl. botch;
+  d20: difficulty 12 + crit/fumble/success/failure ladder using
+  `natural`/`margin`).
+
+## Routes
+
+- `POST /api/campaigns/{cid}/scenes/{sid}/roll-proposal` — body
+  `{action: "accept"|"decline", check?, actor?, difficulty?, modifier?}`;
+  SSE stream (same frame protocol as `/chat`). Accept: `resolve_check`,
+  append the 🎲 line, stream the continuation. Decline: stream the
+  continuation with the declined instruction. `CheckError` → a
+  `{"error": {...}}` frame (the chip stays up for another attempt).
+- `POST /api/campaigns/{cid}/scenes/{sid}/check` — body
+  `{check, actor, difficulty?, modifier?}`; non-streaming; resolves +
+  appends the 🎲 line; returns the resolution dict. (Manual checks.)
+- `GET /api/campaigns/{cid}/scenes/{sid}/checks` — the availability map
+  for this scene: `{"actors": [{"ref", "label", "sheet_type",
+  "checks": [["athletics", "Athletics"], ...]}]}` over present sheeted
+  cast + sheeted current location. Feeds the 🎲 popover's Check mode and
+  is the same computation the response-format context section and
+  proposal `available` map use (one shared helper in `store/checks.py`:
+  `available_checks(cid, sid)`).
+- Registered before generic `{kind}` catch-alls per house rule.
+
+## Continuation call
+
+Build messages exactly like a normal turn (the persisted narration and 🎲
+line are already in history), then append one ephemeral system message
+(never persisted):
+
+- Accept: the roll restated — check label, actor, dice, total/successes,
+  margin/target, **tier label** — followed by the bodies of every
+  `on_roll: true` rules doc and the check's linked `rules:` docs, then:
+  "Continue the narration from where it stopped, incorporating this
+  result. Do not roll again for this action."
+- Decline: "The proposed check was declined by the player. Continue the
+  narration without rolling; the action proceeds as narrated."
+
+The continuation reply persists as a normal assistant message (normal
+fence watching applies — a follow-up proposal in the continuation is
+allowed and surfaces a new chip).
+
+## Frontend
+
+- **`components/RollProposal.tsx`** — chip between the stream area and
+  the composer, driven by a new `proposal` field on `ChatEvent` handled
+  in `runStream`. Normal state: `🎲 **Athletics** — Mara · DC 15`, the
+  reason line, **Roll it / Modify / Decline**. Modify state (auto when
+  `problems` non-empty): check select (from `available[actor]`),
+  difficulty + modifier inputs, actor fixed text (or an actor select when
+  actor resolution failed). Both verdicts POST `roll-proposal` and pipe
+  the SSE response back through `runStream` so the continuation streams
+  live. Chip clears on `done`, scene switch, or a new send.
+- **🎲 popover** gains a Roll/Check mode toggle. Check mode: actor select
+  (sheeted present cast), check select (available to that actor),
+  difficulty/modifier inputs → `POST .../check` → transcript refresh.
+- `ChatEvent` gains `proposal?: RollProposalPayload`; client gains
+  `resolveProposal` (streaming) and `rollCheck` (plain) functions.
+
+## Testing
+
+- **Fence watcher** (unit, pure function over accumulated chunks): fence
+  mid-stream, at start, unclosed at end, absent, split across delta
+  boundaries (including the opener split mid-token), garbled JSON →
+  `problems`, second fence ignored, delta suppression from opener
+  onward.
+- **`resolve_check`**: scope incl. derived + reserved names; difficulty
+  ladder (proposal > check > `_defaults` > error-when-referenced);
+  requires-gating; unknown check/actor/missing sheet/invalid sheet →
+  `CheckError`; seeded determinism (same seed → same result); tier
+  evaluation for both reference systems (d20 crit/fumble via `natural`,
+  pool botch/exceptional via `successes`/`ones`); tier skip-on-eval-error
+  → `tier_warnings`.
+- **Pack validation**: `outcomes`/`_defaults` acceptance + rejection
+  (bad label, unparseable `when`, unknown scope name); reserved
+  `difficulty`/`modifier` in templates accepted; both reference packs
+  still load clean.
+- **Routes**: roll-proposal accept (roll logged + 🎲 line + streamed
+  continuation), decline (no roll, streamed continuation), CheckError →
+  error frame; manual check round-trip; module-less campaign → 404/400
+  on both routes.
+- **Context**: module-bound campaign renders all three sections
+  (activation: always/sheet_types/keys with the cap; summaries incl.
+  location; available-checks listing); unbound campaign renders none;
+  `scripts/verify_templates.py` data contract updated if it enumerates
+  section variables.
+- **Frontend**: RollProposal normal/modify/problems/decline flows;
+  runStream proposal handling (deltas stop, chip appears); popover Check
+  mode. Existing CampaignView stream tests extended additively.
+- **End state** (milestone verification): under the `verify` skill's
+  mocked OpenRouter scripted to emit a roll fence — accept, confirm
+  roll-log entry + 🎲 line + continuation; repeat with a pool check
+  under `pool-basic`; confirm a module-less campaign shows zero
+  mechanics sections and UI.
+
+## Out of scope
+
+Absorb/narration validation (Phase 5); pretty sheet rendering (Phase 6);
+retry/regenerate special-casing (a retried turn that had emitted a
+proposal simply regenerates; the chip clears); multi-fence turns beyond
+ignore-and-log; per-campaign context budget configuration.
+
+## Privacy note
+
+All names in fixtures, tests, and docs are invented, per the repo privacy
+rule.
