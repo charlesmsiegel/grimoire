@@ -13,6 +13,7 @@ vi.mock("../api/client", async () => {
       getSceneDatetime: vi.fn(), setSceneDatetime: vi.fn(), getCalendarMonths: vi.fn(),
       listAppearances: vi.fn(), listEntityImages: vi.fn(),
       listEntities: vi.fn(), setSceneLocation: vi.fn(),
+      getSceneStyle: vi.fn(), setSceneStyle: vi.fn(), listStyles: vi.fn(),
       campaignImageUrl: () => "/img",
       entityImageUrl: () => "/loc-img",
     },
@@ -68,6 +69,12 @@ beforeEach(() => {
   (api.listEntityImages as any).mockResolvedValue([]);
   (api.listEntities as any).mockResolvedValue([]);
   (api.setSceneLocation as any).mockResolvedValue({ ok: true, moved: true, name: "" });
+  (api.getSceneStyle as any).mockResolvedValue({ style_id: "" });
+  (api.setSceneStyle as any).mockResolvedValue({ ok: true });
+  (api.listStyles as any).mockResolvedValue([
+    { id: "gothic-horror", name: "Gothic Horror", description: "", tags: [], built_in: true },
+    { id: "noir-detective", name: "Noir Detective", description: "", tags: [], built_in: true },
+  ]);
 });
 
 function renderInspector(onSceneChanged: () => void = () => {}) {
@@ -227,4 +234,11 @@ test("offscreen scene shows the offscreen side-section", async () => {
   render(<SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} pcless />);
   await screen.findByText("Offscreen scene");
   expect(screen.getByText(/no player character/i)).toBeInTheDocument();
+});
+
+test("picking a scene prose style saves it immediately", async () => {
+  render(<SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={vi.fn()} />);
+  const sel = await screen.findByLabelText("Prose style");
+  fireEvent.change(sel, { target: { value: "noir-detective" } });
+  await waitFor(() => expect(api.setSceneStyle).toHaveBeenCalledWith("c", "s", "noir-detective"));
 });
