@@ -286,6 +286,15 @@ export type CampaignModule = {
   setting: string; resolved: string | null; source: "campaign" | "world" | null;
 };
 
+// sheets (Phase 3 mechanics)
+export type Sheet = {
+  sheet_type: string | null;
+  fields: Record<string, unknown>;
+  derived: Record<string, number | boolean>;
+  errors: string[];
+};
+export type SheetCoverage = Record<string, { total: number; sheeted: number; invalid: number }>;
+
 function entityBase(scope: EntityScope): string {
   return scope.kind === "world" ? `/api/worlds/${scope.id}` : `/api/campaigns/${scope.id}`;
 }
@@ -659,4 +668,34 @@ export const api = {
     request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/module`, { module }),
   setWorldModule: (wid: string, module: string) =>
     request<{ ok: boolean }>("PUT", `/api/worlds/${wid}/module`, { module }),
+
+  // sheets
+  getCampaignSheets: (cid: string) =>
+    request<{ coverage: SheetCoverage; refs: [string, string][] }>(
+      "GET", `/api/campaigns/${cid}/sheets`),
+  getWorldSheetsIndex: (wid: string) =>
+    request<{ modules: string[]; default: string }>("GET", `/api/worlds/${wid}/sheets`),
+  getWorldSheets: (wid: string, mid: string) =>
+    request<{ coverage: SheetCoverage; refs: [string, string][] }>(
+      "GET", `/api/worlds/${wid}/sheets/${mid}`),
+  getSheet: (scope: EntityScope, mid: string, kind: string, eid: string) =>
+    request<{ sheet: Sheet | null }>(
+      "GET",
+      scope.kind === "campaign"
+        ? `/api/campaigns/${scope.id}/sheets/${kind}/${eid}`
+        : `/api/worlds/${scope.id}/sheets/${mid}/${kind}/${eid}`),
+  putSheet: (scope: EntityScope, mid: string, kind: string, eid: string,
+             body: { sheet_type: string; fields: Record<string, unknown> | null }) =>
+    request<{ ok: boolean }>(
+      "PUT",
+      scope.kind === "campaign"
+        ? `/api/campaigns/${scope.id}/sheets/${kind}/${eid}`
+        : `/api/worlds/${scope.id}/sheets/${mid}/${kind}/${eid}`,
+      body),
+  deleteSheet: (scope: EntityScope, mid: string, kind: string, eid: string) =>
+    request<{ ok: boolean }>(
+      "DELETE",
+      scope.kind === "campaign"
+        ? `/api/campaigns/${scope.id}/sheets/${kind}/${eid}`
+        : `/api/worlds/${scope.id}/sheets/${mid}/${kind}/${eid}`),
 };
