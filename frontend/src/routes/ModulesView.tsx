@@ -24,6 +24,7 @@ export default function ModulesView() {
             onClick={() => select(m.id)}
           >
             {m.name}
+            {m.display_ok === false && <span className="field-hint"> · display issues</span>}
           </button>
         ))}
       </div>
@@ -91,6 +92,24 @@ export default function ModulesView() {
                       {r.keys.length ? ` · keys: ${r.keys.join(", ")}` : ""}
                       {r.sheet_types.length ? ` · types: ${r.sheet_types.join(", ")}` : ""}
                     </div>
+                  ))}
+                </div>
+              )}
+              {(Object.keys(detail.layout?.sheet_types ?? {}).length > 0
+                || Object.keys(detail.theme ?? {}).length > 0
+                || (detail.display_errors ?? []).length > 0) && (
+                <div className="side-section">
+                  <h4>Display</h4>
+                  <div className="chips">
+                    {Object.keys(detail.layout?.sheet_types ?? {}).map((tid) => (
+                      <span key={tid} className="chip on">{tid} layout</span>
+                    ))}
+                    {Object.keys(detail.theme ?? {}).length > 0 && (
+                      <span className="chip on">theme</span>
+                    )}
+                  </div>
+                  {(detail.display_errors ?? []).map((e, i) => (
+                    <div key={i} className="field-hint">{e.message}</div>
                   ))}
                 </div>
               )}

@@ -1,4 +1,4 @@
-import { render, fireEvent, waitFor, within } from "@testing-library/react";
+import { render, fireEvent, waitFor, within, screen } from "@testing-library/react";
 
 vi.mock("../api/client", () => ({
   api: {
@@ -70,4 +70,24 @@ test("renders valid sheet types and the Problems section without throwing on a b
   expect(within(detail).getByText("ghost-group")).toBeInTheDocument(); // falls back to raw id
   expect(within(detail).getByText("Problems")).toBeInTheDocument();
   expect(within(detail).getByText(/unknown group ref/)).toBeInTheDocument();
+});
+
+test("list row flags display issues; detail shows Display section", async () => {
+  (api.listModules as any).mockResolvedValue([
+    { id: "pool-basic", name: "Pool Basic", description: "", version: "1",
+      source: "builtin", valid: true, display_ok: false },
+  ]);
+  (api.readModule as any).mockResolvedValue({
+    ...POOL,
+    layout: { sheet_types: { medium: { column: [] } } },
+    theme: { dots: "diamond" },
+    display_errors: [{ source: "layout", sheet_type: "haven", message: "sheet_types.haven: bad" }],
+  });
+  render(<ModulesView />);
+  expect(await screen.findByText(/display issues/)).toBeInTheDocument();
+  fireEvent.click(screen.getByText("Pool Basic"));
+  expect(await screen.findByText("Display")).toBeInTheDocument();
+  expect(screen.getByText("medium layout")).toBeInTheDocument();
+  expect(screen.getByText("theme")).toBeInTheDocument();
+  expect(screen.getByText("sheet_types.haven: bad")).toBeInTheDocument();
 });
