@@ -118,8 +118,19 @@ def test_update_owners(tmp_path: Path):
     assert entities.read_entity(tmp_path, "lore", eid)["body"].strip() == "x"
 
 
+def test_new_kinds_are_generic_entities(tmp_path: Path):
+    for kind, name in (("items", "Salt Knife"), ("groups", "Salt Circle"), ("creatures", "Marsh Wyrm")):
+        eid = entities.create_entity(tmp_path, kind, name, "body text", keys="salt")
+        got = entities.read_entity(tmp_path, kind, eid)
+        assert got["meta"]["name"] == name
+        assert got["meta"]["keys"] == "salt"
+    assert entities.entity_counts(tmp_path) == {
+        "locations": 0, "lore": 0, "items": 1, "groups": 1, "creatures": 1}
+
+
 def test_all_refs_and_counts(tmp_path: Path):
     entities.create_entity(tmp_path, "lore", "A")
     entities.create_entity(tmp_path, "locations", "B")
     assert set(entities.all_refs(tmp_path)) == {("lore", "a"), ("locations", "b")}
-    assert entities.entity_counts(tmp_path) == {"locations": 1, "lore": 1}
+    assert entities.entity_counts(tmp_path) == {
+        "locations": 1, "lore": 1, "items": 0, "groups": 0, "creatures": 0}
