@@ -24,7 +24,7 @@ picked up.
 | Sheets per entity | Exactly **one sheet per entity per campaign** | Changing a character's sheet type means replacing the sheet, not stacking sheets. |
 | Pack file layout | Few big files: `module.md`, `sheets.json`, `checks.json`, `rules/*.md`, `content/<kind>/*.md` | Groups and the sheet types that reference them validate in one read; JSON is machine-validated, not prose; the Phase-8 authoring UI edits structurally anyway. |
 | Rules activation | Frontmatter flags: `keys` (lorebook-style), `always`, `on_roll`, `sheet_types`; plus check-linked `rules:` | Reuses the existing lorebook keyword mechanism; `sheet_types` puts splat powers/class features in context exactly when such an actor is on stage. |
-| Module sources | Built-ins in-repo at `store/modules/<mid>/`; user modules at `<GRIMOIRE_HOME>/modules/<mid>/` | Same split as calendars — but modules are **data packs, no code plugins**, so sharing a module never runs untrusted code. |
+| Module sources | Built-ins in-repo at `backend/src/grimoire/store/builtin_modules/<mid>/` (package-relative, `GRIMOIRE_MODULES` env override; named to avoid colliding with `store/modules.py`); user modules at `<GRIMOIRE_HOME>/modules/<mid>/` | Same split as calendars — but modules are **data packs, no code plugins**, so sharing a module never runs untrusted code. |
 | Module identity | Directory name = module id (slug); manifest carries a freeform `version` string | Same convention as worlds. No compatibility machinery (YAGNI). |
 | Authoring path (pre-Phase-8) | A repo skill, `create-mechanics-module`, walks through hand-authoring a pack | The module format is intricate enough that setup shouldn't be re-derived each time. |
 
@@ -85,7 +85,7 @@ field set), `label`, `type`, plus type-specific extras:
 | `number` | integer scalar | `default`, optional `min`/`max` |
 | `dots` | small rated scalar (rendered as dots in Phase 6) | `max` (required), `default` |
 | `track` | boxes that check off (damage track) | `max` (required) |
-| `resource` | mutable current/max pair (HP, willpower) | `max` (required), `default` (initial current) |
+| `resource` | mutable current/max pair (HP, willpower) | `max` (required — the *default* maximum; each sheet stores its own current/max pair, since e.g. HP maxima vary per character) |
 | `text` | freeform string | — |
 | `list` | list of strings (merits, gear) | — |
 
@@ -156,9 +156,11 @@ Docs with no flags load only when named by a check's `rules:` list.
 ### `content/<kind>/*.md` — module content
 
 Same shape as world entities (markdown + frontmatter). An entry may
-additionally carry `sheet_type: <type>` and `fields: {...}`, validated like
-a sheet — module content ships pre-statted (a treasure with its powers, a
-monster with its stat block). How content merges into browsing/play is
+additionally ship a stat block in a sidecar `<id>.sheet.json`
+(`{"sheet_type": ..., "fields": {...}}`, same shape as a campaign sheet
+file), validated like a sheet — the store's frontmatter is string-scalar
+only, so typed stat values live in JSON. Module content thus ships
+pre-statted (a treasure with its powers, a monster with its stat block). How content merges into browsing/play is
 Phase 7; Phase 1 just validates it.
 
 ## Expression language
@@ -222,7 +224,7 @@ creation); the world editor gets the default-module setting.
 
 1. **`store/modules.py`** — pack loader + validator (manifest, `sheets.json`
    cross-references, `checks.json`, rules frontmatter, content stat blocks);
-   module list/get merged from built-ins (`store/modules/` in-repo, path via
+   module list/get merged from built-ins (`store/builtin_modules/` in-repo, path via
    `store.paths`/dist-safe resolution) and the user library
    (`<GRIMOIRE_HOME>/modules/`); create/delete for user-library modules
    (create = scaffold a minimal valid pack). `resolve()` per Binding above.
