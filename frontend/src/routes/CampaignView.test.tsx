@@ -39,6 +39,8 @@ vi.mock("../api/client", async () => {
       retry: vi.fn(),
       regenerate: vi.fn(),
       roll: vi.fn(),
+      getRollProposal: vi.fn(), resolveProposal: vi.fn(),
+      getSceneChecks: vi.fn(), rollCheck: vi.fn(),
       getConfig: vi.fn(),
       editMessage: vi.fn(),
       absorbScene: vi.fn(), saveChronicle: vi.fn(), getChronicle: vi.fn(),
@@ -74,6 +76,10 @@ beforeEach(() => {
   (api.chat as any).mockResolvedValue(undefined);
   (api.retry as any).mockResolvedValue(undefined);
   (api.regenerate as any).mockResolvedValue(undefined);
+  (api.getRollProposal as any).mockResolvedValue({ record: null });
+  (api.resolveProposal as any).mockResolvedValue(undefined);
+  (api.getSceneChecks as any).mockResolvedValue({ actors: [] });
+  (api.rollCheck as any).mockResolvedValue({ ok: true, resolution: {}, message: "" });
   (api.getConfig as any).mockResolvedValue({ model: "m", theme: "codex", key_set: true, system_prompt: "", quote_color: "off" });
   (api.editMessage as any).mockResolvedValue({ ok: true });
   (api.getCast as any).mockResolvedValue([]);
@@ -901,4 +907,100 @@ test("toggles an in-app dice notation syntax reference from the roll popover", a
   expect(screen.getByText(/exploding dice/i)).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Dice notation syntax" }));
   expect(screen.queryByText(/exploding dice/i)).toBeNull();
+});
+
+const PROPOSAL_PAYLOAD = {
+  id: "pr-1", check: "brawl", check_label: "Vigor + Brawl",
+  actor: "characters:mara", actor_label: "Mara", difficulty: 6,
+  available: { "characters:mara": [["brawl", "Vigor + Brawl"]] },
+  problems: [],
+};
+
+test("an SSE proposal event mounts the roll-proposal chip", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
+  (api.chat as any).mockImplementation(async (_c: string, _s: string, _t: string, onEvent: any) => {
+    onEvent({ proposal: PROPOSAL_PAYLOAD });
+  });
+  // the SSE event mounts the chip immediately; runStream's finally then
+  // re-fetches via selectScene — mock the backend as having durably
+  // persisted the same pending record by then (its real behavior).
+  (api.getRollProposal as any)
+    .mockResolvedValueOnce({ record: null }) // initial scene load
+    .mockResolvedValue({ record: { id: "pr-1", status: "pending", payload: PROPOSAL_PAYLOAD, resolution: null } });
+  renderCampaign();
+  await screen.findByText("a reply");
+  const ta = screen.getByRole("textbox");
+  fireEvent.change(ta, { target: { value: "I punch him" } });
+  fireEvent.keyDown(ta, { key: "Enter" });
+  expect(await screen.findByRole("button", { name: "Roll it" })).toBeInTheDocument();
+  expect(screen.getByText(/Vigor \+ Brawl — Mara/)).toBeInTheDocument();
+});
+
+test("resolving a roll-proposal chip calls api.resolveProposal and clears the chip", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
+  (api.chat as any).mockImplementation(async (_c: string, _s: string, _t: string, onEvent: any) => {
+    onEvent({ proposal: PROPOSAL_PAYLOAD });
+  });
+  (api.getRollProposal as any)
+    .mockResolvedValueOnce({ record: null }) // initial scene load
+    .mockResolvedValueOnce({ record: { id: "pr-1", status: "pending", payload: PROPOSAL_PAYLOAD, resolution: null } }) // after send()
+    .mockResolvedValue({ record: null }); // after resolve — the backend supersedes it
+  renderCampaign();
+  await screen.findByText("a reply");
+  const ta = screen.getByRole("textbox");
+  fireEvent.change(ta, { target: { value: "I punch him" } });
+  fireEvent.keyDown(ta, { key: "Enter" });
+  const rollIt = await screen.findByRole("button", { name: "Roll it" });
+  fireEvent.click(rollIt);
+  await waitFor(() => expect(api.resolveProposal).toHaveBeenCalledWith(
+    "run", "s1",
+    { proposal: "pr-1", action: "accept", check: "brawl", actor: "characters:mara", difficulty: 6, modifier: 0 },
+    expect.any(Function)));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Roll it" })).toBeNull());
+});
+
+test("selecting a scene re-hydrates a pending roll-proposal record", async () => {
+  (api.listScenes as any).mockResolvedValue([
+    { id: "001--2024-01-01--one", title: "One", model: "", created: "", updated: "" },
+    { id: "002--2024-01-02--two", title: "Two", model: "", created: "", updated: "" },
+  ]);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "assistant", content: "a reply" }] });
+  (api.getRollProposal as any)
+    .mockResolvedValueOnce({ record: null }) // initial select of "one"
+    .mockResolvedValue({ record: {
+      id: "pr-2", status: "pending", payload: {
+        id: "pr-2", check: "stealth", check_label: "Wits + Stealth",
+        actor: "characters:mara", actor_label: "Mara", available: {}, problems: [] },
+      resolution: null,
+    } });
+  renderCampaign();
+  await screen.findByText("a reply");
+  expect(screen.queryByRole("button", { name: "Roll it" })).toBeNull();
+  fireEvent.click(screen.getByText(/Two/));
+  expect(await screen.findByRole("button", { name: "Roll it" })).toBeInTheDocument();
+});
+
+test("popover Check mode lists actors/checks and posts rollCheck", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
+  (api.getSceneChecks as any).mockResolvedValue({ actors: [
+    { ref: "characters:mara", label: "Mara", sheet_type: "vampire",
+      checks: [["brawl", "Vigor + Brawl"], ["stealth", "Wits + Stealth"]] },
+  ] });
+  renderCampaign();
+  await screen.findByText("a reply");
+  fireEvent.click(screen.getByRole("button", { name: "Roll dice" }));
+  fireEvent.click(screen.getByRole("button", { name: "Check" }));
+  await waitFor(() => expect(api.getSceneChecks).toHaveBeenCalledWith("run", "s1"));
+  fireEvent.change(await screen.findByLabelText("Check actor"), { target: { value: "characters:mara" } });
+  fireEvent.change(screen.getByLabelText("Check"), { target: { value: "brawl" } });
+  fireEvent.click(screen.getByRole("button", { name: "Roll ▸" }));
+  await waitFor(() => expect(api.rollCheck).toHaveBeenCalledWith("run", "s1",
+    { check: "brawl", actor: "characters:mara", difficulty: 0, modifier: 0 }));
+  await waitFor(() => expect(screen.queryByLabelText("Check actor")).toBeNull());
 });
