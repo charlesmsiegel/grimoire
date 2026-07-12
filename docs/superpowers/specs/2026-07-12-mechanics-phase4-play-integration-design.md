@@ -127,12 +127,26 @@ dropped.
   id (persisted counter in the same file), supersedes any existing
   pending record for the scene (status → `"superseded"` — only the
   latest record per scene is kept, with its status).
-- States: `pending` → `resolved` (accept: `resolution` holds the full
-  resolution dict incl. `roll_id`) or `declined` → `narrated` (the
-  continuation reply persisted). `superseded` is terminal.
-- `get(cid, sid)`, `set_status(cid, sid, pid, status, resolution=None)`.
-- A new player send or a new fence in the same scene supersedes a
-  pending proposal.
+- States: `pending` → `resolving` (claimed by an accept request) →
+  `resolved` (accept: `resolution` holds the full resolution dict incl.
+  `roll_id`) or `pending` → `declined`; `resolved`/`declined` →
+  `narrated` (the continuation reply persisted). `superseded` is
+  terminal.
+- `get(cid, sid)`, `set_status(cid, sid, pid, status, resolution=None)`,
+  and `claim(cid, sid, pid) -> bool` — an **atomic compare-and-set**
+  `pending → resolving`, serialized by a per-campaign in-process lock
+  (the app is single-process; the lock guards the read-mutate-write of
+  proposals.json). `claim` returns False if the record is not `pending`
+  with that id. **`resolve_check` runs only after a won claim** — two
+  overlapping accepts (double-click, two devices) can never both roll.
+- **A new player send or a new fence in the same scene supersedes any
+  non-`narrated` proposal** (`pending`, `resolving`, `resolved`,
+  `declined` alike). A superseded `resolved` proposal's roll stands in
+  the transcript as history — only its automatic continuation is
+  cancelled; the next turn's narration sees the 🎲 line like any other
+  message. This closes the out-of-order continuation path: Continue
+  narration is only ever offered for the scene's latest, non-superseded
+  record.
 - Never raises on malformed file content (rebuilds as empty; house
   never-raise posture for reads).
 
@@ -212,12 +226,16 @@ rolls.
   **Idempotent by proposal id**, keyed to the scene's current record:
   - Unknown/mismatched id, or status `superseded` → 409 (the chip is
     stale; frontend re-fetches the record).
-  - `pending` + accept: `resolve_check`; record `resolution` and status
+  - `pending` + accept: `claim()` first (atomic `pending → resolving`;
+    a lost claim → 409 "adjudication in progress", the chip re-fetches).
+    After a won claim: `resolve_check`; record `resolution` and status
     `resolved` in proposals.json **before** appending the 🎲 line; then
     stream the continuation; on continuation persist, status
-    `narrated`.
-  - `pending` + decline: status `declined`; stream the declined
-    continuation; then `narrated`.
+    `narrated`. A `CheckError` after a won claim reverts `resolving →
+    pending`.
+  - `resolving` (someone else holds the claim) → 409.
+  - `pending` + decline: status `declined` (same CAS discipline); stream
+    the declined continuation; then `narrated`.
   - `resolved`/`declined` (a retry after a dropped continuation): **never
     re-roll** — reuse the stored resolution, stream a fresh continuation
     (nothing was persisted by the dropped one; `_persist_reply` runs only
@@ -297,8 +315,13 @@ allowed and surfaces a new chip).
   (bad label, unparseable `when`, unknown scope name); reserved
   `difficulty`/`modifier` in templates accepted; both reference packs
   still load clean.
-- **Proposal store**: new/get/set_status round-trip; supersede on new
-  proposal and on new send; malformed-file tolerance; monotonic ids.
+- **Proposal store**: new/get/set_status round-trip; `claim` CAS
+  (winner True, loser False; loser after decline False); supersede on
+  new proposal and on new send **covering every non-narrated state**
+  (pending/resolving/resolved/declined); malformed-file tolerance;
+  monotonic ids; **concurrent accepts** — two threads racing `claim` on
+  the same pending id yield exactly one winner and exactly one roll-log
+  entry (threaded test through the route or the store lock).
 - **Routes**: roll-proposal accept (roll logged + 🎲 line + streamed
   continuation + status walk pending→resolved→narrated), decline (no
   roll, streamed continuation), **idempotency** (second accept with the
