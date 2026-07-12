@@ -122,6 +122,26 @@ def test_commit_narration_atomicity(monkeypatch, tmp_path):
     assert proposals.get(cid, sid)["status"] == "narrated"
 
 
+def test_commit_narration_without_scene_file_uses_intent_zero(monkeypatch, tmp_path):
+    """Commit succeeds for a scene id with no scene file on disk — the
+    atomicity test above already relies on this (sids in this file are pure
+    proposals keys, never created via scenes.create_scene). The contract:
+    a missing scene is an empty transcript, so narration_intent is recorded
+    as 0 — "trim nothing on a retry", which is exactly right when no
+    transcript exists yet."""
+    cid, sid = _scene(monkeypatch, tmp_path)
+    rec = proposals.new(cid, sid, {})
+    proposals.claim(cid, sid, rec["id"])
+    proposals.transition(cid, sid, rec["id"], ("resolving",), "resolved", {})
+    persisted = []
+    assert proposals.commit_narration(cid, sid, rec["id"],
+                                      lambda: persisted.append(1)) is True
+    assert persisted == [1]                  # persist ran exactly once
+    got = proposals.get(cid, sid)
+    assert got["status"] == "narrated"
+    assert got["narration_intent"] == 0
+
+
 def test_commit_narration_drops_after_supersede(monkeypatch, tmp_path):
     """The continuation-vs-supersede race: text streamed for a proposal that
     got superseded mid-stream must never persist."""

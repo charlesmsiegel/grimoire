@@ -142,7 +142,9 @@ def commit_narration(cid: str, sid: str, pid: str, persist) -> bool:
         try:
             rec["narration_intent"] = len(scenes.read_scene(cid, sid)["messages"])
         except scenes.SceneNotFound:
-            rec["narration_intent"] = 0  # scene not yet created: nothing to trim back to
+            # No scene file yet ⇒ empty transcript ⇒ intent 0: a retry
+            # trims nothing, which is right when nothing was ever written.
+            rec["narration_intent"] = 0
         _write(cid, data)
         persist()
         rec["status"] = "narrated"
