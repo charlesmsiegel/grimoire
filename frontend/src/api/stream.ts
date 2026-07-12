@@ -2,7 +2,7 @@ export type RollProposalPayload = {
   id: string;
   check?: string; check_label?: string;
   actor?: string; actor_label?: string;
-  difficulty?: number; modifier?: number; reason?: string;
+  difficulty?: number | null; modifier?: number; reason?: string;
   available?: Record<string, [string, string][]>;
   problems: string[];
 };

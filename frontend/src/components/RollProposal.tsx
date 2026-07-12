@@ -39,7 +39,7 @@ export function RollProposal({ record, busy, onResolve }:
 
   const [actor, setActor] = useState(payload.actor ?? actorOptions[0] ?? "");
   const [check, setCheck] = useState(payload.check ?? "");
-  const [difficulty, setDifficulty] = useState(payload.difficulty ?? 0);
+  const [difficulty, setDifficulty] = useState<number | "">(payload.difficulty ?? "");
   const [modifier, setModifier] = useState(payload.modifier ?? 0);
 
   if (record.status === "resolved") {
@@ -62,7 +62,9 @@ export function RollProposal({ record, busy, onResolve }:
   const open = modifying || hasProblems;
 
   function rollIt() {
-    onResolve({ proposal: record.id, action: "accept", check, actor, difficulty, modifier });
+    const body: ResolveBody = { proposal: record.id, action: "accept", check, actor, modifier };
+    if (difficulty !== "") body.difficulty = difficulty;
+    onResolve(body);
   }
 
   function decline() {
@@ -73,7 +75,7 @@ export function RollProposal({ record, busy, onResolve }:
     <div className="roll-proposal">
       <div className="roll-proposal-chip">
         🎲 {checkLabel} — {actorLabel}
-        {payload.difficulty !== undefined && <span> · diff {payload.difficulty}</span>}
+        {payload.difficulty != null && <span> · diff {payload.difficulty}</span>}
       </div>
       {payload.reason && <div className="field-hint">{payload.reason}</div>}
       {open && (
@@ -97,7 +99,8 @@ export function RollProposal({ record, busy, onResolve }:
           <label>
             Difficulty
             <input type="number" aria-label="Difficulty" value={difficulty} disabled={busy}
-                   onChange={(e) => setDifficulty(Number(e.target.value))} />
+                   placeholder="default"
+                   onChange={(e) => setDifficulty(e.target.value === "" ? "" : Number(e.target.value))} />
           </label>
           <label>
             Modifier
