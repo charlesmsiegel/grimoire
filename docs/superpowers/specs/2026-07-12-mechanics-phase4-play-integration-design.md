@@ -217,6 +217,45 @@ seed=None) -> dict`:
 `CheckError(Exception)` carries a user-facing message; routes map it to
 400.
 
+### Roll-log write discipline
+
+Every rolls.json writer — proposal projection, the manual check route,
+and the Phase-2 manual roll route — goes through `rolls.append`, which
+becomes **internally atomic**: a per-campaign lock (module-local, same
+pattern as the proposals lock) around the read-assign-id-rewrite, and
+atomic temp-file+`os.replace` writes. `rolls.find_by_proposal` and a
+combined `rolls.find_or_append_by_proposal(cid, sid, label, result,
+proposal)` take the same lock, so a manual check racing a proposal
+projection can never mint the same positional id or clobber the other's
+entry. (Route test: concurrent proposal-accept vs manual check → two
+distinct entries, both preserved, distinct ids.)
+
+### Crash-window disclosure (accepted risk)
+
+The fence handoffs are serialized against concurrent writers by the
+per-campaign lock but are **not crash-atomic across files** (proposals.json
+and the scene transcript are separate writes; grimoire is a local
+single-process app and takes no cross-file journal). Two windows exist,
+both microseconds wide, with bounded and non-corrupting consequences:
+
+- Initial fence: crash between writing the `pending` record and
+  persisting the pre-fence narration → a recoverable chip whose last
+  narration beat is missing from the transcript. The player can still
+  adjudicate (the chip carries check/actor/reason) or decline; nothing
+  mechanical is wrong.
+- Follow-up fence: crash between the old record's `narrated` write and
+  creating the new `pending` record → the follow-up check request is
+  lost; the continuation narration is fully persisted and play simply
+  continues on the next send.
+
+The invariant actually guaranteed is: **no roll is ever duplicated or
+lost once logged, no narration is ever attributed to a superseded
+decision, and no crash leaves an unrecoverable or corrupted state** —
+the two windows above degrade to a missing beat or a missing chip, never
+to wrong history. (Full cross-file journaling was considered and
+rejected as disproportionate for a local single-user store; revisit if
+grimoire ever gains multi-process writers.)
+
 ### Transcript line
 
 Extends the Phase-2 formatter:
