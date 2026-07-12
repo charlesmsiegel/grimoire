@@ -6,6 +6,7 @@ export default function MechanicsConfig({ cid }: { cid: string }) {
   const [state, setState] = useState<CampaignModule | null>(null);
   const [value, setValue] = useState("");
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const load = () =>
     api.getCampaignModule(cid).then((s) => {
@@ -19,9 +20,14 @@ export default function MechanicsConfig({ cid }: { cid: string }) {
   }, [cid]);
 
   const save = async () => {
-    await api.setCampaignModule(cid, value);
-    setSaved(true);
-    await load();
+    setError(null);
+    try {
+      await api.setCampaignModule(cid, value);
+      setSaved(true);
+      await load();
+    } catch (e) {
+      setError(String(e));
+    }
   };
 
   const name = (mid: string | null) =>
@@ -46,11 +52,14 @@ export default function MechanicsConfig({ cid }: { cid: string }) {
           {state.resolved
             ? `Playing with ${name(state.resolved)}` +
               (state.source === "world" ? " (world default)" : "")
+            : state.setting && state.setting !== "none"
+            ? `Bound module "${state.setting}" is missing or invalid — resolving to no mechanics.`
             : "No mechanics — freeform play."}
         </div>
       )}
       <button className="primary" onClick={save}>Save</button>
       {saved && <span className="field-hint">Saved.</span>}
+      {error && <div className="field-hint">{error}</div>}
     </div>
   );
 }

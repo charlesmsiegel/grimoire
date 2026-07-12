@@ -47,3 +47,27 @@ test("clicking a row shows the read-only module detail", async () => {
   expect(container.querySelector("textarea")).toBeNull();   // read-only
   expect(within(detail).queryByText("Edit")).toBeNull();    // no edit affordance
 });
+
+test("renders valid sheet types and the Problems section without throwing on a broken pack", async () => {
+  const BROKEN = {
+    ...POOL,
+    sheets: {
+      groups: { attributes: { label: "Attributes", fields: [{ key: "vigor", label: "Vigor", type: "dots", max: 5 }] } },
+      sheet_types: {
+        broken: "oops",
+        medium: { label: "Medium", kind: "characters", groups: ["ghost-group"], fields: [], derived: {} },
+      },
+    },
+    errors: ["sheet_types.broken: must be an object", "sheet_types.medium: unknown group ref 'ghost-group'"],
+  };
+  (api.readModule as any).mockResolvedValue(BROKEN);
+  const { container } = render(<ModulesView />);
+  const rail = await waitFor(() => container.querySelector(".editor-list") as HTMLElement);
+  fireEvent.click(await within(rail).findByText("Basic Pool"));
+  await waitFor(() => expect(api.readModule).toHaveBeenCalledWith("pool-basic"));
+  const detail = await waitFor(() => container.querySelector(".detail-view") as HTMLElement);
+  expect(within(detail).getByText("Medium")).toBeInTheDocument();
+  expect(within(detail).getByText("ghost-group")).toBeInTheDocument(); // falls back to raw id
+  expect(within(detail).getByText("Problems")).toBeInTheDocument();
+  expect(within(detail).getByText(/unknown group ref/)).toBeInTheDocument();
+});

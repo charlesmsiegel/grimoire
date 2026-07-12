@@ -578,6 +578,33 @@ def test_create_module_newline_name_scaffolds_valid(monkeypatch, tmp_path):
     assert "dice" not in pack["manifest"] or pack["manifest"].get("dice") != "1dbanana"
 
 
+def test_create_module_none_reserved(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    mid = modules.create_module("None")
+    assert mid != "none"
+    assert modules.load_pack(mid)["errors"] == []
+
+
+def test_set_world_module_none_rejected(monkeypatch, tmp_path):
+    wid, _cid = _world_campaign(monkeypatch, tmp_path)
+    with pytest.raises(modules.ModuleError):
+        modules.set_world_module(wid, "none")
+
+
+def test_pack_root_rejects_unsafe_mids(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    for bad in ("D:evil", "UPPER", "a/b"):
+        with pytest.raises(modules.ModuleNotFound):
+            modules.pack_root(bad)
+
+
+def test_manifest_id_cannot_be_overridden(monkeypatch, tmp_path):
+    make_pack(_home(monkeypatch, tmp_path),
+              manifest="---\nname: X\nid: impostor\n---\n")
+    pack = modules.load_pack("testmod")
+    assert pack["manifest"]["id"] == "testmod"
+
+
 def test_builtin_reference_modules_validate(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)  # built-ins resolve package-relative
     for mid in ("d20-basic", "pool-basic"):

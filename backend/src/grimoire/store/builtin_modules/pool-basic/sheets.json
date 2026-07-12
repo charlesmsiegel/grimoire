@@ -6,7 +6,8 @@
         {"key": "vigor", "label": "Vigor", "type": "dots", "max": 5, "default": 1},
         {"key": "grace", "label": "Grace", "type": "dots", "max": 5, "default": 1},
         {"key": "wits", "label": "Wits", "type": "dots", "max": 5, "default": 1}
-      ]
+      ],
+      "derived": {"awareness": "wits + grace"}
     },
     "abilities": {
       "label": "Abilities",

@@ -45,8 +45,11 @@ def user_dir() -> Path:
     return home() / "modules"
 
 
+_MID_RE = re.compile(r"[a-z0-9][a-z0-9._-]*")
+
+
 def _safe_mid(mid: str) -> bool:
-    return bool(mid) and mid not in (".", "..") and "/" not in mid and "\\" not in mid
+    return bool(mid) and bool(_MID_RE.fullmatch(mid))
 
 
 def pack_root(mid: str) -> tuple[Path, str]:
@@ -291,7 +294,7 @@ def _load_content(root: Path, sheets: dict, errors: list[str]) -> list[dict]:
                 where = f"content/{kind}/{p.stem}.sheet.json"
                 try:
                     stat = json.loads(sidecar.read_text(encoding="utf-8"))
-                except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                except (json.JSONDecodeError, UnicodeDecodeError, OSError) as e:
                     errors.append(f"{where}: {e}")
                     stat = {}
                 else:
@@ -428,7 +431,7 @@ def load_pack(mid: str) -> dict:
     else:
         try:
             sheets = json.loads(sp.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError) as e:
             errors.append(f"sheets.json: {e}")
             sheets = {"groups": {}, "sheet_types": {}}
         else:
@@ -444,7 +447,7 @@ def load_pack(mid: str) -> dict:
     if cp.exists():
         try:
             checks = json.loads(cp.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError) as e:
             errors.append(f"checks.json: {e}")
             checks = {}
         else:
@@ -457,7 +460,7 @@ def load_pack(mid: str) -> dict:
     pack = {
         "id": mid,
         "source": source,
-        "manifest": {"id": mid, **meta},
+        "manifest": {**meta, "id": mid},
         "sheets": sheets,
         "checks": checks,
         "rules": rules,
@@ -501,7 +504,7 @@ def create_module(name: str) -> str:
     # Normalize: collapse newlines/whitespace, then default to "Untitled"
     name = " ".join(name.split())
     name = name or "Untitled"
-    mid = uniquify(slugify(name), lambda i: (user_dir() / i).exists()
+    mid = uniquify(slugify(name), lambda i: i == "none" or (user_dir() / i).exists()
                    or (builtin_dir() / i / "module.md").exists())
     d = user_dir() / mid
     d.mkdir(parents=True)
@@ -537,6 +540,8 @@ def _write_key(meta_path, key: str, value: str) -> None:
 def set_world_module(wid: str, mid: str) -> None:
     from . import worlds
     worlds.read_world(wid)  # raises WorldNotFound
+    if mid == "none":
+        raise ModuleError("'none' is reserved")
     if mid:
         pack_root(mid)  # raises ModuleNotFound
     _write_key(worlds.world_meta_path(wid), "module", mid)
