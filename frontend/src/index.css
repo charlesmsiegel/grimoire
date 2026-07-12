@@ -879,3 +879,19 @@ button.pip { cursor: pointer; }
   font-size: 10px; text-transform: uppercase; letter-spacing: .08em;
 }
 .widget-list { margin: 0; padding-left: 18px; font-size: 13px; }
+
+.sheet-arranged { display: flex; flex-direction: column; gap: 16px; }
+.sheet-cols { display: flex; flex-wrap: wrap; gap: 16px; }
+.sheet-cols > * { flex: 1 1 240px; min-width: 0; }
+.sheet-stack { display: flex; flex-direction: column; gap: 12px; }
+.sheet-panel {
+  border: 1.5px solid var(--sheet-rule, var(--sheet-ink, var(--rule-soft)));
+  border-radius: var(--sheet-radius, 0);
+  padding: 10px 12px;
+}
+.sheet-panel > h4 {
+  margin: 0 0 8px; font-family: var(--sheet-fd, var(--fd));
+  text-transform: uppercase; font-size: 12px; letter-spacing: .1em;
+  color: var(--sheet-muted, var(--sheet-ink, var(--muted)));
+}
+[data-corners="rounded"] { --sheet-radius: 8px; }
