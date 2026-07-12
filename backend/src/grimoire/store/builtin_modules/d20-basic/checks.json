@@ -1,13 +1,22 @@
 {
+  "_defaults": {
+    "difficulty": 12,
+    "outcomes": [
+      {"label": "critical success", "when": "natural == 20"},
+      {"label": "critical failure", "when": "natural == 1"},
+      {"label": "success", "when": "margin >= 0"},
+      {"label": "failure", "when": "margin < 0"}
+    ]
+  },
   "athletics": {
     "label": "Athletics",
-    "roll": "1d20 + {athletics + str_mod}",
+    "roll": "1d20 + {athletics + str_mod + modifier} vs {difficulty}",
     "requires": ["attributes", "skills"],
     "rules": ["skill-checks"]
   },
   "stealth": {
     "label": "Stealth",
-    "roll": "1d20 + {stealth + dex_mod}",
+    "roll": "1d20 + {stealth + dex_mod + modifier} vs {difficulty}",
     "requires": ["attributes", "skills"]
   }
 }
