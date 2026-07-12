@@ -27,9 +27,25 @@ vi.mock("../api/client", () => ({
     actorImageUrl: (sc: { id: string }, c: string, v: string, n: string) => `/img/${sc.id}/${c}/${v}/${n}`,
     listAppearances: vi.fn(), markGreeting: vi.fn(), pickVersion: vi.fn(), importVersion: vi.fn(),
     listModules: vi.fn(), setWorldModule: vi.fn(),
+    getCampaignModule: vi.fn(), readModule: vi.fn(), getWorldSheetsIndex: vi.fn(), getSheet: vi.fn(),
   },
 }));
 import { api } from "../api/client";
+import type { ModuleDetail } from "../api/client";
+
+const POOL_BASIC: ModuleDetail = {
+  id: "pool-basic",
+  source: "builtin",
+  manifest: { id: "pool-basic", name: "Pool Basic" },
+  sheets: {
+    groups: {},
+    sheet_types: { medium: { label: "Medium", kind: "characters", groups: [], fields: [] } },
+  },
+  checks: {},
+  rules: [],
+  content: [],
+  errors: [],
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -56,6 +72,10 @@ beforeEach(() => {
   (api.listUntaggedImages as any).mockResolvedValue([]);
   (api.listModules as any).mockResolvedValue([]);
   (api.setWorldModule as any).mockResolvedValue({ ok: true });
+  (api.getCampaignModule as any).mockResolvedValue({ setting: "", resolved: null, source: null });
+  (api.readModule as any).mockResolvedValue(POOL_BASIC);
+  (api.getWorldSheetsIndex as any).mockResolvedValue({ modules: [], default: "" });
+  (api.getSheet as any).mockResolvedValue({ sheet: null });
 });
 
 function renderAt() {
@@ -143,4 +163,22 @@ test("campaign mode passes campaign scope and hides the Tags tab", async () => {
   await waitFor(() => expect(api.listCharacters).toHaveBeenCalledWith({ kind: "campaign", id: "c1" }));
   expect(screen.queryByRole("button", { name: "Tags" })).toBeNull();
   expect(screen.getByRole("button", { name: "Greetings" })).toBeInTheDocument();
+});
+
+test("campaign path resolves module context and threads it into the character editor's Sheet section", async () => {
+  (api.getCampaignModule as any).mockResolvedValue({ setting: "pool-basic", resolved: "pool-basic", source: "campaign" });
+  (api.readModule as any).mockResolvedValue(POOL_BASIC);
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "mira", name: "Mira", default_version: "main", versions: [{ id: "main", name: "main" }] },
+  ]);
+  render(
+    <MemoryRouter initialEntries={["/campaigns/c1/world"]}>
+      <Routes><Route path="/campaigns/:cid/world" element={<WorldView campaign />} /></Routes>
+    </MemoryRouter>,
+  );
+  await screen.findByText(/World Copy/);
+  await waitFor(() => expect(api.getCampaignModule).toHaveBeenCalledWith("c1"));
+  await waitFor(() => expect(api.readModule).toHaveBeenCalledWith("pool-basic"));
+  fireEvent.click(await screen.findByText("Mira"));
+  await screen.findByText("Sheet");
 });

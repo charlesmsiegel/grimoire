@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { api, type EntityScope } from "../api/client";
+import { api, type EntityScope, type ModuleDetail } from "../api/client";
 import { CharacterEditor } from "../components/CharacterEditor";
 import { PCEditor } from "../components/PCEditor";
 import { TagEditor } from "../components/TagEditor";
@@ -36,6 +36,8 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   const [focusChar, setFocusChar] = useState<{ cid: string; vid: string } | null>(null);
   const [focusGreeting, setFocusGreeting] = useState<string | null>(null);
   const [loreNav, setLoreNav] = useState<{ focusEntry?: string; newOwner?: string } | null>(null);
+  const [moduleCtx, setModuleCtx] = useState<ModuleDetail | null>(null);
+  const [worldMid, setWorldMid] = useState("");
 
   useEffect(() => {
     if (campaign) {
@@ -44,11 +46,26 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
         setWid(c.meta.world);
         setName(c.meta.world_name ?? c.meta.world); // embedded: no second fetch
       });
+      api.getCampaignModule(cid)
+        .then(({ resolved }) => (resolved ? api.readModule(resolved) : null))
+        .then((m) => setModuleCtx(m))
+        .catch(() => setModuleCtx(null));
     } else {
       setWid(widParam);
       api.getWorld(widParam).then((w) => setName(w.meta.name)).catch(() => setName(widParam));
+      Promise.all([api.getWorldSheetsIndex(widParam), api.listModules()])
+        .then(([index, installed]) =>
+          setWorldMid(index.default || index.modules[0] || installed[0]?.id || ""))
+        .catch(() => setWorldMid(""));
     }
   }, [campaign, cid, widParam]);
+
+  // world path: re-resolve the module context whenever the picked module id changes
+  useEffect(() => {
+    if (campaign) return;
+    if (!worldMid) { setModuleCtx(null); return; }
+    api.readModule(worldMid).then((m) => setModuleCtx(m)).catch(() => setModuleCtx(null));
+  }, [campaign, worldMid]);
 
   const scope: EntityScope = campaign ? { kind: "campaign", id: cid } : { kind: "world", id: wid };
   // tag vocabulary is a world concern; campaign PC tags are free strings
@@ -114,10 +131,10 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
       </div>
 
       {!campaign && tab === "overview" && <WorldOverview wid={wid} onNavigate={(t) => setTab(t as TabKey)} />}
-      {tab === "characters" && <CharacterEditor scope={scope} wid={wid} resetSignal={charReset} focus={focusChar} onOpenLore={openLore} onOpenGreeting={openGreeting} />}
-      {tab === "pcs" && <PCEditor scope={scope} wid={wid} onOpenLore={openLore} />}
+      {tab === "characters" && <CharacterEditor scope={scope} wid={wid} resetSignal={charReset} focus={focusChar} onOpenLore={openLore} onOpenGreeting={openGreeting} module={moduleCtx} />}
+      {tab === "pcs" && <PCEditor scope={scope} wid={wid} onOpenLore={openLore} module={moduleCtx} />}
       {!campaign && tab === "tags" && <TagEditor wid={wid} />}
-      {tab === "locations" && <EntityEditor wid={wid} scope={scope} kind="locations" onOpenLore={openLore} />}
+      {tab === "locations" && <EntityEditor wid={wid} scope={scope} kind="locations" onOpenLore={openLore} module={moduleCtx} />}
       {tab === "lore" && (
         <>
           {!campaign && <details className="import-section">
@@ -125,12 +142,12 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
             <LorebookImport wid={wid} onImported={() => setLoreReset((n) => n + 1)} />
           </details>}
           <EntityEditor key={loreReset} wid={wid} scope={scope} kind="lore" nav={loreNav}
-                        onNavConsumed={() => setLoreNav(null)} onOpenOwner={openOwner} />
+                        onNavConsumed={() => setLoreNav(null)} onOpenOwner={openOwner} module={moduleCtx} />
         </>
       )}
-      {tab === "items" && <EntityEditor wid={wid} scope={scope} kind="items" />}
-      {tab === "groups" && <EntityEditor wid={wid} scope={scope} kind="groups" />}
-      {tab === "creatures" && <EntityEditor wid={wid} scope={scope} kind="creatures" />}
+      {tab === "items" && <EntityEditor wid={wid} scope={scope} kind="items" module={moduleCtx} />}
+      {tab === "groups" && <EntityEditor wid={wid} scope={scope} kind="groups" module={moduleCtx} />}
+      {tab === "creatures" && <EntityEditor wid={wid} scope={scope} kind="creatures" module={moduleCtx} />}
       {tab === "greetings" && <GreetingEditor scope={scope} wid={wid} onOpenCharacter={openCharacter} focus={focusGreeting} />}
     </div>
   );
