@@ -68,7 +68,7 @@ def read_entity(root: Path, kind: str, eid: str) -> dict:
 
 
 def create_entity(root: Path, kind: str, name: str, body: str = "", keys: str = "", owners: str = "",
-                  sd_prompt: str = "", taken=None) -> str:
+                  sd_prompt: str = "", taken=None, fields: dict[str, str] | None = None) -> str:
     _check_kind(kind)
     d = _kind_dir(root, kind)
     d.mkdir(parents=True, exist_ok=True)
@@ -85,6 +85,9 @@ def create_entity(root: Path, kind: str, name: str, body: str = "", keys: str = 
         meta["owners"] = owners
     if sd_prompt:
         meta["sd_prompt"] = sd_prompt
+    for k, v in (fields or {}).items():
+        if v:
+            meta[k] = v
     _entity_path(root, kind, eid).write_text(dump_frontmatter(meta, body), encoding="utf-8")
     return eid
 
@@ -92,7 +95,7 @@ def create_entity(root: Path, kind: str, name: str, body: str = "", keys: str = 
 def update_entity(
     root: Path, kind: str, eid: str, name: str | None = None,
     body: str | None = None, keys: str | None = None, owners: str | None = None,
-    sd_prompt: str | None = None,
+    sd_prompt: str | None = None, fields: dict[str, str] | None = None,
 ) -> None:
     _check_kind(kind)
     p = _entity_path(root, kind, eid)
@@ -107,6 +110,11 @@ def update_entity(
         meta["owners"] = owners
     if sd_prompt is not None:
         meta["sd_prompt"] = sd_prompt
+    for k, v in (fields or {}).items():
+        if v:
+            meta[k] = v
+        else:
+            meta.pop(k, None)
     new_body = cur_body if body is None else body
     p.write_text(dump_frontmatter(meta, new_body), encoding="utf-8")
 

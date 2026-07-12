@@ -2747,3 +2747,21 @@ def test_roll_replay_roundtrip(client):
 def test_roll_replay_missing_is_404(client):
     _, cid = _campaign(client)
     assert client.post(f"/api/campaigns/{cid}/rolls/r9/replay").status_code == 404
+
+
+def test_entity_fields_http_round_trip_and_validation(client):
+    wid = _world(client)
+    r = client.post(f"/api/worlds/{wid}/items",
+                    json={"name": "Salt Knife", "body": "sharp", "fields": {"rarity": "rare"}})
+    assert r.status_code == 200
+    eid = r.json()["id"]
+    assert client.get(f"/api/worlds/{wid}/items/{eid}").json()["meta"]["rarity"] == "rare"
+    # undeclared key -> 400 naming the offender
+    r = client.post(f"/api/worlds/{wid}/items",
+                    json={"name": "Bad", "fields": {"holder": "mara"}})
+    assert r.status_code == 400
+    assert "holder" in r.json()["detail"]
+    # empty value clears the key on update
+    r = client.put(f"/api/worlds/{wid}/items/{eid}", json={"fields": {"rarity": ""}})
+    assert r.status_code == 200
+    assert "rarity" not in client.get(f"/api/worlds/{wid}/items/{eid}").json()["meta"]
