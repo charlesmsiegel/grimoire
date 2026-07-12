@@ -65,12 +65,15 @@ def list_campaigns() -> list[dict]:
 
 
 def create_campaign(name: str, world_id: str, region: str | None = None,
-                     calendar: str | None = None) -> str:
+                     calendar: str | None = None, module: str | None = None) -> str:
     ensure_home()
     if not worlds.world_meta_path(world_id).exists():
         raise worlds.WorldNotFound(world_id)
     if calendar is not None:
         calendars.get_provider({"provider": calendar})  # unknown id -> CalendarError before anything is created
+    if module and module != "none":  # "none" = explicitly mechanics-free, always legal
+        from . import modules
+        modules.pack_root(module)  # raises ModuleNotFound before creating anything
     cid = uniquify(slugify(name), lambda c: campaign_root(c).exists())
     root = campaign_root(cid)
     root.mkdir(parents=True)
@@ -78,7 +81,8 @@ def create_campaign(name: str, world_id: str, region: str | None = None,
     now = now_iso()
     campaign_meta_path(cid).write_text(
         dump_frontmatter({"name": name, "world": world_id, "created": now, "updated": now,
-                          "world_copy": "overlay"}, ""),
+                          "world_copy": "overlay",
+                          **({"module": module} if module else {})}, ""),
         encoding="utf-8",
     )
     # copy-on-write: nothing is copied up front; records materialize on divergence

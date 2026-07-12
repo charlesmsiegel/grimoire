@@ -597,3 +597,72 @@ def test_builtin_reference_modules_validate(monkeypatch, tmp_path):
         assert any(r["sheet_types"] for r in pack["rules"])
         assert any(c["sheet_type"] for c in pack["content"])
     assert {m["id"] for m in modules.list_modules()} >= {"d20-basic", "pool-basic"}
+
+
+# ---- Task 6: binding — world/campaign module: keys + resolve() ----
+
+from grimoire.store import campaigns, worlds
+
+
+def _world_campaign(monkeypatch, tmp_path, **kw):
+    _home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    cid = campaigns.create_campaign("Run", wid, **kw)
+    return wid, cid
+
+
+def test_resolve_default_none(monkeypatch, tmp_path):
+    _, cid = _world_campaign(monkeypatch, tmp_path)
+    assert modules.resolve(cid) is None
+
+
+def test_resolve_inherits_world_default(monkeypatch, tmp_path):
+    wid, cid = _world_campaign(monkeypatch, tmp_path)
+    modules.set_world_module(wid, "pool-basic")
+    assert modules.resolve(cid) == "pool-basic"
+
+
+def test_campaign_none_overrides_world(monkeypatch, tmp_path):
+    wid, cid = _world_campaign(monkeypatch, tmp_path)
+    modules.set_world_module(wid, "pool-basic")
+    modules.set_campaign_module(cid, "none")
+    assert modules.resolve(cid) is None
+
+
+def test_campaign_module_overrides_world(monkeypatch, tmp_path):
+    wid, cid = _world_campaign(monkeypatch, tmp_path)
+    modules.set_campaign_module(cid, "d20-basic")
+    assert modules.resolve(cid) == "d20-basic"
+
+
+def test_clear_campaign_setting_reinherits(monkeypatch, tmp_path):
+    wid, cid = _world_campaign(monkeypatch, tmp_path)
+    modules.set_world_module(wid, "pool-basic")
+    modules.set_campaign_module(cid, "d20-basic")
+    modules.set_campaign_module(cid, "")
+    assert modules.resolve(cid) == "pool-basic"
+
+
+def test_set_unknown_module_rejected(monkeypatch, tmp_path):
+    wid, cid = _world_campaign(monkeypatch, tmp_path)
+    with pytest.raises(modules.ModuleNotFound):
+        modules.set_campaign_module(cid, "ghost")
+    with pytest.raises(modules.ModuleNotFound):
+        modules.set_world_module(wid, "ghost")
+
+
+def test_resolve_missing_module_falls_through(monkeypatch, tmp_path):
+    wid, cid = _world_campaign(monkeypatch, tmp_path)
+    modules.set_campaign_module(cid, "d20-basic")
+    # simulate the module disappearing after binding
+    monkeypatch.setenv("GRIMOIRE_MODULES", str(tmp_path / "empty"))
+    assert modules.resolve(cid) is None
+
+
+def test_create_campaign_with_module(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    cid = campaigns.create_campaign("Run", wid, module="pool-basic")
+    assert modules.resolve(cid) == "pool-basic"
+    with pytest.raises(modules.ModuleNotFound):
+        campaigns.create_campaign("Run2", wid, module="ghost")
