@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from . import (
-    absorb, appearances, assets, campaigns, cards, changes, characters, chronicle,
-    chub, context, dice, dossiers, entities, entity_schema, epub, fetch, greetings, groupstate, image_subjects,
-    localize, lorebook, migrations, modules, overlay, pcs, playing, playstate, plot, relationships,
+    absorb, appearances, assets, campaigns, cards, changes, characters, checks, chronicle,
+    chub, context, dice, dossiers, entities, entity_schema, epub, fence, fetch, greetings, groupstate, image_subjects,
+    localize, lorebook, migrations, modules, overlay, pcs, playing, playstate, plot, proposals, relationships,
     rolls, scene_ids, scene_refs, scenes, sheets, styles, suggest, sync, tags, taglines, thumbs, worlds,
 )
 from .appearances import AppearError
@@ -99,4 +99,7 @@ __all__ = [
     "LorebookError",
     "modules",
     "sheets",
+    "checks",
+    "fence",
+    "proposals",
 ]

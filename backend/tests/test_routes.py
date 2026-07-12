@@ -2980,3 +2980,458 @@ def test_world_sheet_routes(client):
     assert client.put(f"/api/worlds/{wid}/sheets/ghost/characters/mara",
                       json={"sheet_type": "medium"}).status_code == 404
     assert client.delete(base).json()["ok"] is True
+
+
+# ---- mechanics: roll proposals & manual checks (#162, Phase 4) -------------
+def _mech_scene(client, module="pool-basic"):
+    """A module-bound campaign with one sheeted, cast character (Mara)."""
+    client.put("/api/config", json={"openrouter_key": "sk-or-x"})
+    wid, cid = _campaign(client)
+    client.put(f"/api/campaigns/{cid}/module", json={"module": module})
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"}).json()["character"]
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                json={"kind": "characters", "id": chid, "version": "default", "role": "npc"})
+    if module == "d20-basic":
+        store.sheets.write(cid, "characters", chid, "warrior",
+                           {"str": 16, "dex": 12, "athletics": 3})
+    else:
+        store.sheets.write(cid, "characters", chid, "medium",
+                           {"vigor": 3, "brawl": 2, "wits": 2, "occult": 1})
+    return cid, sid, chid
+
+
+def _frames(resp):
+    return [json.loads(l[len("data: "):]) for l in resp.text.splitlines()
+            if l.startswith("data: ")]
+
+
+def _emit_fence(client, cid, sid, body_json, pre="pre-fence beat.\n"):
+    """Re-override get_llm to stream a narration + ```roll fence, then POST a
+    normal chat turn — the server cuts the stream and mints a pending record."""
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: FakeOpenRouter([pre, "```roll\n", body_json, "\n```", "trailing"])
+    return client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "go"})
+
+
+def test_chat_fence_cuts_and_persists_proposal(client):
+    cid, sid, _ = _mech_scene(client)
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(
+        ["She lunges—\n", "```roll\n", '{"check": "brawl", "actor": "characters:mara"}',
+         "\n```", "trailing"])
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "go"})
+    assert resp.status_code == 200
+    frames = _frames(resp)
+    deltas = "".join(f["delta"] for f in frames if "delta" in f)
+    assert deltas == "She lunges—\n"                       # pre-fence narration only
+    assert "`" not in deltas and "brawl" not in deltas     # no fence chars leaked
+    kinds = [next(iter(f)) for f in frames]
+    assert kinds.index("proposal") < kinds.index("done")   # proposal precedes done
+    rec = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert rec["status"] == "pending" and rec["payload"]["check"] == "brawl"
+    assert rec["payload"]["actor"] == "characters:mara" and rec["payload"]["problems"] == []
+    msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    assert msgs[-1]["content"].startswith("She lunges")     # fence stripped from transcript
+    assert not any("`" in m["content"] for m in msgs)
+
+
+def test_proposal_accept_walk_and_idempotency(client):
+    cid, sid, _ = _mech_scene(client)
+    _emit_fence(client, cid, sid,
+                '{"check": "brawl", "actor": "characters:mara", "difficulty": 6}')
+    rec = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert rec["status"] == "pending"
+    body = {"proposal": rec["id"], "action": "accept",
+            "check": "brawl", "actor": "characters:mara", "difficulty": 6, "modifier": 0}
+
+    # mismatched id -> 409, nothing streamed
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal",
+                       json={**body, "proposal": "pr-999999"}).status_code == 409
+
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["The blow ", "lands."])
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal", json=body)
+    assert resp.status_code == 200 and 'data: {"done": true}' in resp.text
+    assert "The blow lands." in "".join(
+        f.get("delta", "") for f in _frames(resp))       # continuation streamed live
+
+    entries = client.get(f"/api/campaigns/{cid}/rolls").json()
+    tagged = [e for e in entries if e.get("proposal") == rec["id"]]
+    assert len(tagged) == 1
+    msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    roll_lines = [m for m in msgs if m["content"].startswith("\U0001F3B2")]
+    assert len(roll_lines) == 1 and "Mara" in roll_lines[0]["content"]
+    assert "Vigor + Brawl" in roll_lines[0]["content"]
+    assert msgs[-1]["content"] == "The blow lands."        # continuation persisted after the roll
+
+    rec2 = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert rec2["status"] == "narrated"
+    assert rec2["resolution"]["roll_id"] == tagged[0]["id"]
+    assert "line_intent" in rec2["resolution"]
+
+    # idempotent retry after narrated: immediate done, no new roll, no new line
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal", json=body)
+    assert 'data: {"done": true}' in resp.text
+    assert len([e for e in client.get(f"/api/campaigns/{cid}/rolls").json()
+                if e.get("proposal") == rec["id"]]) == 1
+    msgs2 = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    assert len([m for m in msgs2 if m["content"].startswith("\U0001F3B2")]) == 1
+
+
+def _accept_body(rec, **over):
+    b = {"proposal": rec["id"], "action": "accept", "check": "brawl",
+         "actor": "characters:mara", "difficulty": 6, "modifier": 0}
+    b.update(over)
+    return b
+
+
+def _pending(client, cid, sid,
+             body_json='{"check": "brawl", "actor": "characters:mara", "difficulty": 6}'):
+    _emit_fence(client, cid, sid, body_json)
+    return client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+
+
+def _roll_lines(client, cid, sid):
+    return [m for m in client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+            if m["content"].startswith("\U0001F3B2")]
+
+
+def test_proposal_decline(client):
+    cid, sid, _ = _mech_scene(client)
+    rec = _pending(client, cid, sid)
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["It never ", "happened."])
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal",
+                       json={"proposal": rec["id"], "action": "decline"})
+    assert resp.status_code == 200 and 'data: {"done": true}' in resp.text
+    assert "It never happened." in "".join(f.get("delta", "") for f in _frames(resp))
+    assert client.get(f"/api/campaigns/{cid}/rolls").json() == []
+    assert _roll_lines(client, cid, sid) == []
+    msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    assert msgs[-1]["content"] == "It never happened."
+    rec2 = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert rec2["status"] == "narrated"
+
+
+def test_new_send_supersedes(client):
+    cid, sid, _ = _mech_scene(client)
+    rec = _pending(client, cid, sid)
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["moving on"])
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "never mind"})
+    rec2 = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert rec2["status"] == "superseded"
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal",
+                       json=_accept_body(rec)).status_code == 409
+    assert client.get(f"/api/campaigns/{cid}/rolls").json() == []
+
+
+def test_manual_check_and_availability(client):
+    cid, sid, _ = _mech_scene(client)
+    actors = client.get(f"/api/campaigns/{cid}/scenes/{sid}/checks").json()["actors"]
+    assert len(actors) == 1 and actors[0]["ref"] == "characters:mara"
+    ids = {c[0] for c in actors[0]["checks"]}
+    assert {"brawl", "perception"} <= ids
+
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/check",
+                       json={"check": "brawl", "actor": "characters:mara", "difficulty": 6})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True and body["resolution"]["roll_id"] == body["roll"]["id"]
+    assert body["roll"].get("proposal") is None
+    assert body["message"].startswith("\U0001F3B2") and "Mara" in body["message"]
+    entries = client.get(f"/api/campaigns/{cid}/rolls").json()
+    assert len(entries) == 1 and entries[0]["id"] == body["roll"]["id"]
+    lines = _roll_lines(client, cid, sid)
+    assert len(lines) == 1 and lines[0]["content"] == body["message"]
+
+
+def test_proposal_routes_without_module(client):
+    client.put("/api/config", json={"openrouter_key": "sk-or-x"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/check",
+                       json={"check": "brawl", "actor": "characters:mara"}).status_code == 400
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal",
+                       json={"proposal": "pr-1", "action": "accept"}).status_code == 409
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"] is None
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/checks").json()["actors"] == []
+
+
+def test_follow_up_fence_handoff(client):
+    cid, sid, _ = _mech_scene(client)
+    rec = _pending(client, cid, sid)
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(
+        ["The blow lands.\n", "```roll\n",
+         '{"check": "perception", "actor": "characters:mara"}', "\n```", "x"])
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal", json=_accept_body(rec))
+    assert resp.status_code == 200
+    kinds = [next(iter(f)) for f in _frames(resp)]
+    assert "proposal" in kinds and kinds.index("proposal") < kinds.index("done")
+    old = rec["id"]
+    msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    assert any(m["content"] == "The blow lands." for m in msgs)
+    new = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert new["status"] == "pending" and new["id"] != old
+    assert new["payload"]["check"] == "perception"
+
+
+def test_recovery_get_after_resolved(client, monkeypatch):
+    cid, sid, _ = _mech_scene(client)
+    rec = _pending(client, cid, sid)
+    monkeypatch.setattr(routes, "_continuation_messages",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no continuation")))
+    with pytest.raises(RuntimeError):
+        client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal", json=_accept_body(rec))
+    got = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert got["status"] == "resolved" and got["resolution"]["roll_id"]
+
+
+# ---- failure injection at every side-effect boundary ----------------------
+def test_accept_resolve_failure_reverts_to_pending(client, monkeypatch):
+    cid, sid, _ = _mech_scene(client)
+    rec = _pending(client, cid, sid)
+    monkeypatch.setattr(store.checks, "resolve_check",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal", json=_accept_body(rec))
+    assert resp.status_code == 200
+    assert any("error" in f for f in _frames(resp))
+    rec2 = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert rec2["status"] == "pending"
+    assert client.get(f"/api/campaigns/{cid}/rolls").json() == []
+    assert _roll_lines(client, cid, sid) == []
+
+
+def test_accept_superseded_mid_resolve_discards_roll(client, monkeypatch):
+    cid, sid, _ = _mech_scene(client)
+    rec = _pending(client, cid, sid)
+    real = store.checks.resolve_check
+    def sneaky(*a, **k):
+        res = real(*a, **k)
+        store.proposals.supersede(cid, sid)
+        return res
+    monkeypatch.setattr(store.checks, "resolve_check", sneaky)
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal", json=_accept_body(rec))
+    assert resp.status_code == 409
+    assert client.get(f"/api/campaigns/{cid}/rolls").json() == []
+    rec2 = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert rec2["status"] == "superseded"
+    assert _roll_lines(client, cid, sid) == []
+
+
+def test_accept_crash_before_roll_id_heals_on_retry(client, monkeypatch):
+    cid, sid, _ = _mech_scene(client)
+    rec = _pending(client, cid, sid)
+    real_append = store.rolls.find_or_append_by_proposal
+    real_transition = store.proposals.transition
+    state = {"appended": False, "raised": False}
+    def tracking_append(*a, **k):
+        state["appended"] = True
+        return real_append(*a, **k)
+    def flaky_transition(*a, **k):
+        if state["appended"] and not state["raised"]:
+            state["raised"] = True
+            raise RuntimeError("crash before roll_id backfill")
+        return real_transition(*a, **k)
+    monkeypatch.setattr(store.rolls, "find_or_append_by_proposal", tracking_append)
+    monkeypatch.setattr(store.proposals, "transition", flaky_transition)
+    with pytest.raises(RuntimeError):
+        client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal", json=_accept_body(rec))
+    assert len(client.get(f"/api/campaigns/{cid}/rolls").json()) == 1
+    # restore only these attrs — never monkeypatch.undo(), which would also
+    # revert the client fixture's GRIMOIRE_HOME (the monkeypatch is shared).
+    monkeypatch.setattr(store.rolls, "find_or_append_by_proposal", real_append)
+    monkeypatch.setattr(store.proposals, "transition", real_transition)
+
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["healed"])
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal", json=_accept_body(rec))
+    assert resp.status_code == 200
+    tagged = [e for e in client.get(f"/api/campaigns/{cid}/rolls").json()
+              if e.get("proposal") == rec["id"]]
+    assert len(tagged) == 1
+    rec2 = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert rec2["status"] == "narrated" and rec2["resolution"]["roll_id"] == tagged[0]["id"]
+    assert len(_roll_lines(client, cid, sid)) == 1
+
+
+def test_accept_crash_before_continuation_heals(client, monkeypatch):
+    cid, sid, _ = _mech_scene(client)
+    rec = _pending(client, cid, sid)
+    real_cont = routes._continuation_messages
+    monkeypatch.setattr(routes, "_continuation_messages",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no continuation")))
+    with pytest.raises(RuntimeError):
+        client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal", json=_accept_body(rec))
+    rec_mid = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert rec_mid["status"] == "resolved"
+    assert len(_roll_lines(client, cid, sid)) == 1
+    monkeypatch.setattr(routes, "_continuation_messages", real_cont)  # not undo(): see above
+
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["Continued."])
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal", json=_accept_body(rec))
+    assert resp.status_code == 200
+    rec2 = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert rec2["status"] == "narrated"
+    assert len(_roll_lines(client, cid, sid)) == 1
+    msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    assert msgs[-1]["content"] == "Continued."
+
+
+def test_two_identical_lines_both_survive(client, monkeypatch):
+    cid, sid, _ = _mech_scene(client)
+    fixed = {"check": "brawl", "check_label": "Vigor + Brawl", "actor": "characters:mara",
+             "actor_label": "Mara", "notation": "5d10 t6",
+             "result": store.dice.roll("5d10 t6", seed=1), "tier": "success",
+             "difficulty": 6, "modifier": 0, "tier_warnings": []}
+    monkeypatch.setattr(store.checks, "resolve_check", lambda *a, **k: dict(fixed))
+
+    rec1 = _pending(client, cid, sid)
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["one"])
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal",
+                       json=_accept_body(rec1)).status_code == 200
+    rec2 = _pending(client, cid, sid)
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["two"])
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal",
+                       json=_accept_body(rec2)).status_code == 200
+
+    lines = _roll_lines(client, cid, sid)
+    assert len(lines) == 2 and lines[0]["content"] == lines[1]["content"]
+    assert len(client.get(f"/api/campaigns/{cid}/rolls").json()) == 2
+
+
+class _SupersedingStream:
+    def __init__(self, cid, sid):
+        self.cid, self.sid = cid, sid
+
+    async def stream(self, messages, cfg):
+        yield "stale continuation "
+        yield "text"
+        store.proposals.supersede(self.cid, self.sid)
+        store.scenes.append_message(self.cid, self.sid, "user", "new send")
+        store.scenes.append_message(self.cid, self.sid, "assistant", "fresh reply")
+
+
+def test_continuation_vs_supersede_race(client):
+    cid, sid, _ = _mech_scene(client)
+    rec = _pending(client, cid, sid)
+    client.app.dependency_overrides[routes.get_llm] = lambda: _SupersedingStream(cid, sid)
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal", json=_accept_body(rec))
+    assert resp.status_code == 200
+    rec2 = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert rec2["status"] == "superseded"
+    msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    assert msgs[-1]["content"] == "fresh reply"
+    assert not any("stale continuation" in m["content"] for m in msgs)
+    assert len(_roll_lines(client, cid, sid)) == 1
+
+
+def test_concurrent_resolved_retries_persist_once(client, monkeypatch):
+    import threading
+    cid, sid, _ = _mech_scene(client)
+    rec = _pending(client, cid, sid)
+    real_cont = routes._continuation_messages
+    monkeypatch.setattr(routes, "_continuation_messages",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")))
+    with pytest.raises(RuntimeError):
+        client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal", json=_accept_body(rec))
+    monkeypatch.setattr(routes, "_continuation_messages", real_cont)  # not undo()
+
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["cont"])
+    codes = []
+    def racer():
+        codes.append(client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal",
+                                 json=_accept_body(rec)).status_code)
+    threads = [threading.Thread(target=racer) for _ in range(2)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert codes == [200, 200]
+
+    tagged = [e for e in client.get(f"/api/campaigns/{cid}/rolls").json()
+              if e.get("proposal") == rec["id"]]
+    assert len(tagged) == 1
+    assert len(_roll_lines(client, cid, sid)) == 1
+    msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    assert [m["content"] for m in msgs].count("cont") == 1
+    rec2 = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert rec2["status"] == "narrated"
+
+
+def test_crash_mid_continuation_persist_heals(client, monkeypatch):
+    cid, sid, _ = _mech_scene(client)
+    rec = _pending(client, cid, sid)
+    real_persist = routes._persist_reply
+    def boom_persist(c, s, text):
+        store.scenes.append_message(c, s, "assistant", "PARTIAL")
+        raise RuntimeError("crash mid persist")
+    monkeypatch.setattr(routes, "_persist_reply", boom_persist)
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["full continuation"])
+    try:
+        client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal", json=_accept_body(rec))
+    except Exception:  # noqa: BLE001
+        pass
+    rec_mid = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert rec_mid["status"] == "resolved" and "narration_intent" in rec_mid
+    assert any(m["content"] == "PARTIAL"
+               for m in client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"])
+    monkeypatch.setattr(routes, "_persist_reply", real_persist)  # not undo()
+
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["full continuation"])
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal", json=_accept_body(rec))
+    assert resp.status_code == 200
+    contents = [m["content"] for m in
+                client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]]
+    assert "PARTIAL" not in contents
+    assert contents[-1] == "full continuation" and contents.count("full continuation") == 1
+    assert len(_roll_lines(client, cid, sid)) == 1
+    rec2 = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert rec2["status"] == "narrated"
+
+
+def test_manual_roll_in_crash_window_survives_trim(client, monkeypatch):
+    cid, sid, _ = _mech_scene(client)
+    rec = _pending(client, cid, sid)
+    real_persist = routes._persist_reply
+    def boom_persist(c, s, text):
+        store.scenes.append_message(c, s, "assistant", "PARTIAL")
+        raise RuntimeError("crash")
+    monkeypatch.setattr(routes, "_persist_reply", boom_persist)
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["cont"])
+    try:
+        client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal", json=_accept_body(rec))
+    except Exception:  # noqa: BLE001
+        pass
+    monkeypatch.setattr(routes, "_persist_reply", real_persist)  # not undo()
+    mr = client.post(f"/api/campaigns/{cid}/scenes/{sid}/check",
+                     json={"check": "perception", "actor": "characters:mara"})
+    assert mr.status_code == 200
+    manual_line = mr.json()["message"]
+
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["real continuation"])
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal", json=_accept_body(rec))
+    assert resp.status_code == 200
+    contents = [m["content"] for m in
+                client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]]
+    assert manual_line in contents
+    assert "PARTIAL" not in contents
+    assert contents[-1] == "real continuation" and contents.count("real continuation") == 1
+
+
+def test_concurrent_accept_vs_manual_check_distinct_entries(client):
+    import threading
+    cid, sid, _ = _mech_scene(client)
+    rec = _pending(client, cid, sid)
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["cont"])
+    barrier = threading.Barrier(2)
+    def accept():
+        barrier.wait()
+        client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal", json=_accept_body(rec))
+    def manual():
+        barrier.wait()
+        client.post(f"/api/campaigns/{cid}/scenes/{sid}/check",
+                    json={"check": "perception", "actor": "characters:mara"})
+    threads = [threading.Thread(target=accept), threading.Thread(target=manual)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+
+    entries = client.get(f"/api/campaigns/{cid}/rolls").json()
+    ids = [e["id"] for e in entries]
+    assert len(entries) == 2 and len(set(ids)) == 2
+    assert sum(1 for e in entries if e.get("proposal") == rec["id"]) == 1
+    assert sum(1 for e in entries if e.get("proposal") is None) == 1
