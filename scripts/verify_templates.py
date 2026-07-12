@@ -109,18 +109,21 @@ for label, snap, cands, off in (("empty", EMPTY_SNAP, None, False),
     check(f"suggestions user ({label})", exp[1]["content"],
           render("scene_suggestions/user.j2", s=snap, offscreen=off, greeting_candidates=cands))
 
-for label, facts, st, rel, plt in (
-        ("bare", {}, None, None, None),
+for label, facts, st, rel, plt, grp in (
+        ("bare", {}, None, None, None, None),
         ("full", {"location": "Night Dock", "date": "2026-07-05",
                   "cast": ["characters/seraphine-vale", "pcs/hero"]},
          {"Seraphine Vale": "Wounded. Knows: The ledger is real."},
          "Seraphine Vale → Hero: trust 2, affection 3, tension 4 (suspects a tail)",
-         "find-the-ledger: Find the ledger (open) — Hero learned it exists.")):
-    exp = absorb.build_prompt(transcript, facts, st, rel, plt)
+         "find-the-ledger: Find the ledger (open) — Hero learned it exists.",
+         "- groups/salt-circle (Salt Circle): Goals: Expand.")):
+    exp = absorb.build_prompt(transcript, facts, st, rel, plt, grp)
     check(f"absorb system ({label})", exp[0]["content"], render("absorb/system.j2"))
     check(f"absorb user ({label})", exp[1]["content"],
           render("absorb/user.j2", facts=facts, state_snapshot=st, rel_snapshot=rel,
-                 plot_snapshot=plt, transcript=transcript))
+                 plot_snapshot=plt, group_snapshot=grp, transcript=transcript))
+    if grp:
+        assert "Groups:" in exp[1]["content"], f"absorb user ({label}) missing Groups: head line"
 
 msgs = [{"role": "user", "content": "hi"},
         {"role": "user", "speaker": "Hero", "content": "yo"},
