@@ -13,7 +13,8 @@ theming — replacing the Phase-3 generic `label: value` rendering.
 |---|---|---|
 | Rendering model | Three independent layers: **widgets** (always on), **arrangement** (`layout.json`, optional), **skin** (`theme.json`, optional) | Every sheet gets widgets even in modules that ship no display files; layout and theme are additive polish, each with a graceful fallback. |
 | Theme format | **`theme.json` token whitelist, not raw `theme.css`** (supersedes the Phase-1 contract line "layout.json + theme.css") | Sanitizing author CSS is a tarpit: `url()` exfiltration beacons, `position:fixed` shell takeover, parser edge cases — and modules are shareable data packs that must never smuggle active content. A validated token set (colors, font choices, shape hints) delivers "a d20 sheet looks like a d20 sheet, a pool sheet looks gothic" with zero attack surface, works identically in the Android WebView, and is Phase-8-authorable. |
-| Display errors | `layout.json`/`theme.json` problems land in a **separate `display_errors`** list, never in pack `errors` | `modules.resolve()` refuses packs with `errors`; a cosmetic typo must not switch off mechanics for every campaign bound to the module. Invalid display files are dropped (per sheet type for layouts, per token for themes) with the reasons surfaced in the module library UI. |
+| Display errors | `layout.json`/`theme.json` problems land in a **separate `display_errors`** list, never in pack `errors` | `modules.resolve()` refuses packs with `errors`; a cosmetic typo must not switch off mechanics for every campaign bound to the module. Invalid display files are dropped (per sheet type for layouts, per token for themes) with the reasons surfaced where they matter (see Display-error surfacing). |
+| `theme.css` handling | A pack containing `theme.css` gets a `display_errors` entry ("not supported — use theme.json"); the file is otherwise ignored | No `theme.css` was ever loadable — Phase 1 documented the intent but nothing implements it, and the authoring skill never scaffolded one — so detection *is* the whole migration path; a converter would convert zero files. |
 | Layout scope | Applies to **both** SheetEditor modes (view and edit); widgets swap read-only ↔ interactive per mode | A sheet that rearranges itself when you hit Edit is disorienting; the layout is the sheet's shape, not a view skin. |
 | Edit interactivity | `dots`/`track` become **click-to-set** widgets in edit mode; `resource`/`number` keep (restyled) number inputs; `text`/`list` unchanged | Number inputs for ratings are the thing dot widgets exist to fix. Resource/number values are genuinely numeric — typing is fine. Play-time quick-adjust from *view* mode is deliberately out (Phases 4/5 own play-time mutation). |
 | Derived placement | Derived values render **only where a `derived` layout node places them**; group nodes render fields only; unplaced derived (and fields) fall into a trailing fallback section | One explicit placement rule instead of automatic-plus-explicit duplication; the fallback section guarantees no stored or computed value is ever invisible. |
@@ -73,9 +74,17 @@ in `fragments` drop only the sheet-type trees that `use` them:
   exist in `sheets.json`.
 - Every node must have exactly one of the six forms; unknown keys beyond
   `title`/`grid` are errors (catch typos early — this is authored JSON).
+- **The schema is total** — every value type is checked, never assumed:
+  `row`/`column` must be arrays of valid nodes, `group`/`use` non-empty
+  strings, `fields`/`derived` arrays of non-empty strings, `title` a
+  string, `grid` a boolean. A wrong-typed value (`"row": "x"`,
+  `"fields": [1]`, `"grid": "yes"`) is an error on that node's path;
+  nothing malformed ever reaches the renderer.
 - `group` refs, `fields` keys, and `derived` names must exist in that sheet
   type's assembled scope; `use` refs must name an existing fragment.
-- Fragment expansion is cycle-checked (visited set, depth cap 32).
+- Fragment expansion is cycle-checked (visited set); the **expanded** tree
+  is capped at depth 32 and 1000 nodes per sheet type (a hand-authored or
+  generated blob past either cap drops that type's layout).
 - A field or derived name may be placed **at most once** per sheet type
   (double-rendering an editable widget would create two competing inputs).
 
@@ -127,8 +136,17 @@ module-authored CSS ever reaches the DOM; nothing escapes the container.
   expanded server-side so the frontend renderer never sees `use` nodes.
 - Parse `theme.json` → `pack["theme"]`: the validated token object (dropped
   entries removed); absent ⇒ `{}`.
-- `pack["display_errors"]`: list of strings (same `file: path: why` style
-  as `errors`). Not consulted by `resolve()` or the registry `valid` flag.
+- `pack["display_errors"]`: a list of **structured** entries
+  `{"source": "layout" | "theme", "sheet_type": "<tid>" | null,
+  "message": "<path>: <why>"}` — structured so the UI can route a dropped
+  layout to the sheet type it affects (`sheet_type` is set for per-type
+  layout errors, `null` for file-level and theme errors). Not consulted by
+  `resolve()` or the registry `valid` flag.
+- A pack containing `theme.css` gets one `display_errors` entry
+  (`source: "theme"`, "theme.css is not supported — use theme.json");
+  the file is otherwise ignored.
+- The registry `_scan` rows gain `display_ok: not display_errors` so
+  lists can flag display problems without loading full packs twice.
 
 No new routes: `GET /api/modules/{mid}` already returns the full pack, so
 `layout`, `theme`, and `display_errors` flow to the client for free. No
@@ -173,12 +191,24 @@ gains the theme vars + data attributes when the module ships a theme.
 The list-field draft rule (raw string while editing, normalize at commit)
 carries over unchanged.
 
-### Modules library page
+### Display-error surfacing
 
-`ModulesView` detail gains a Display section when relevant: which sheet
-types have layouts, whether a theme is present, and any `display_errors`
-(hint-styled warnings). `ModuleDetail` TS type gains `layout`, `theme`,
-`display_errors`.
+Display problems must be visible **where sheets are used**, not only in
+the library:
+
+- **SheetEditor**: when the current sheet's type has a `display_errors`
+  entry (its layout was dropped), a hint line renders under the header —
+  "This module's layout for this sheet type is invalid — using the
+  default arrangement." Non-blocking; the fallback arrangement is fully
+  functional.
+- **Module library list**: rows for packs with `display_errors` get a
+  hint-styled "display issues" marker (distinct from the existing
+  invalid-module treatment — mechanics still work).
+- **`ModulesView` detail**: a Display section when relevant — which sheet
+  types have layouts, whether a theme is present, and every
+  `display_errors` message (hint-styled warnings). `ModuleDetail` TS type
+  gains `layout`, `theme`, `display_errors`; the list-row type gains
+  `display_ok`.
 
 ### CSS
 
@@ -210,21 +240,27 @@ The `create-mechanics-module` skill gains layout/theme authoring steps
 - **Backend** (`test_modules` additions): both reference packs validate
   with zero `errors` *and* zero `display_errors`; a broken-pack fixture
   per layout error (non-object root, unknown node form, unknown key on a
-  node, unknown group/field/derived/fragment ref, fragment cycle,
-  duplicate placement, layout for a nonexistent sheet type) and per theme
-  error (bad hex, `bg` without `ink`, unknown font enum, unknown top-level
-  key); granularity (one bad sheet-type tree drops only itself; one bad
-  token drops only itself); fragment splicing output contains no `use`
-  nodes; `display_errors` never affect `errors`, the registry `valid`
-  flag, or `resolve()`.
+  node, **wrong value type per node form** — `row` non-array, `fields`
+  with non-string entries, `grid` non-boolean, `title` non-string —
+  unknown group/field/derived/fragment ref, fragment cycle, depth cap,
+  node-count cap, duplicate placement, layout for a nonexistent sheet
+  type) and per theme error (bad hex, `bg` without `ink`, unknown font
+  enum, unknown top-level key, `theme.css` present); granularity (one bad
+  sheet-type tree drops only itself; one bad token drops only itself);
+  fragment splicing output contains no `use` nodes; structured entries
+  carry the right `sheet_type`; `display_errors` never affect `errors`,
+  the registry `valid` flag, or `resolve()`; `_scan` rows carry
+  `display_ok`.
 - **Frontend (vitest)**: per-widget render + edit-interaction tests (dot
   click-to-set incl. decrement-at-current, track same, resource inputs,
   stat cell); layout renderer (row/column nesting, titles, grid, unplaced
   → "Other"); SheetEditor with a layouted module (same arrangement in
   view and edit, save round-trip unchanged); SheetEditor with no layout
-  (default arrangement, widgets still used); theme vars + data attributes
-  present when themed, absent when not; ModulesView Display section incl.
-  `display_errors`.
+  (default arrangement, widgets still used); SheetEditor dropped-layout
+  hint when `display_errors` names the current sheet type; theme vars +
+  data attributes present when themed, absent when not; ModulesView
+  Display section incl. `display_errors`; library list "display issues"
+  marker.
 - **End state**: bind `pool-basic`, open a sheeted character — the gothic
   dotted sheet renders and dots are clickable in edit; `d20-basic` shows
   the parchment stat-grid sheet; a scaffolded user module (no display
