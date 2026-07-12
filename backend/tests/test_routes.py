@@ -2896,3 +2896,39 @@ def test_duplicate_style_creates_an_editable_copy(client):
     assert detail["meta"]["built_in"] is False
     assert detail["meta"]["name"] == "Gothic Horror (copy)"
     assert client.put(f"/api/styles/{new_id}", json={"body": "edited"}).status_code == 200
+
+
+def test_config_default_style_roundtrip(client):
+    r = client.put("/api/config", json={"default_style_id": "gothic-horror"})
+    assert r.json()["default_style_id"] == "gothic-horror"
+    assert client.get("/api/config").json()["default_style_id"] == "gothic-horror"
+
+
+def test_campaign_style_roundtrip(client):
+    wid, cid = _campaign(client)
+    assert client.get(f"/api/campaigns/{cid}/style").json() == {"style_id": ""}
+    r = client.put(f"/api/campaigns/{cid}/style", json={"style_id": "noir-detective"})
+    assert r.status_code == 200
+    assert client.get(f"/api/campaigns/{cid}/style").json() == {"style_id": "noir-detective"}
+    # visible on the campaign meta too, for free
+    assert client.get(f"/api/campaigns/{cid}").json()["meta"]["style_id"] == "noir-detective"
+
+
+def test_campaign_style_unknown_campaign_404(client):
+    assert client.get("/api/campaigns/nope/style").status_code == 404
+    assert client.put("/api/campaigns/nope/style", json={"style_id": "noir-detective"}).status_code == 404
+
+
+def test_scene_style_roundtrip(client):
+    wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Opening"}).json()["id"]
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/style").json() == {"style_id": ""}
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/style", json={"style_id": "pulp-adventure"})
+    assert r.status_code == 200
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/style").json() == {"style_id": "pulp-adventure"}
+
+
+def test_scene_style_unknown_scene_404(client):
+    wid, cid = _campaign(client)
+    assert client.get(f"/api/campaigns/{cid}/scenes/nope/style").status_code == 404
+    assert client.put(f"/api/campaigns/{cid}/scenes/nope/style", json={"style_id": "pulp-adventure"}).status_code == 404
