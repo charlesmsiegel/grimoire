@@ -12,16 +12,19 @@
                           (scene/sections/story_so_far/{full|compact}.j2)
 
     Data vars (see README.md for how each is gathered):
-      global_system_prompt, npc_cards, states, relationship_lines, players,
-      ref_names, refs, story_entries, plot_lines, today, current_setting,
-      world_info_bodies, group_states, offscene_active, offscene_known,
-      player_names
+      global_system_prompt, prose_style_name, prose_style_body, npc_cards,
+      states, relationship_lines, players, ref_names, refs, story_entries,
+      plot_lines, today, current_setting, world_info_bodies, group_states,
+      offscene_active, offscene_known, player_names
 
     Note: {{user}}/{{char}} token substitution is applied by code to the card
     and history data, not here. -#}
 {%- set sections = [] -%}
 
 {%- set s -%}{%- include "scene/sections/global_system_prompt.j2" -%}{%- endset -%}
+{%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
+
+{%- set s -%}{%- include "scene/sections/prose_style.j2" -%}{%- endset -%}
 {%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
 
 {%- set s -%}{%- include "scene/sections/card_system_prompts.j2" -%}{%- endset -%}

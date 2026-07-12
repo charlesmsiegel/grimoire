@@ -1,0 +1,5 @@
+{#- The resolved prose-style guide: scene override -> campaign default ->
+    global default -> none. Vars: prose_style_name (str), prose_style_body
+    (str) — both "" when no style resolves. -#}
+{%- if prose_style_body %}# Prose style: {{ prose_style_name }}
+{{ prose_style_body }}{% endif -%}
