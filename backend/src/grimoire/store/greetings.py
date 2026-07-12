@@ -111,6 +111,11 @@ def list_greetings(root: Path) -> list[dict]:
     return metas
 
 
+def greeting_count(root: Path) -> int:
+    d = _greetings_dir(root)
+    return len(list(d.glob("*.md"))) if d.exists() else 0
+
+
 def update_greeting(root: Path, gid: str, *, name: str | None = None, body: str | None = None,
                     requires_tags: list[str] | None = None, predecessor_join: str | None = None,
                     present: list[str] | None = None, pcless: bool | None = None) -> None:
