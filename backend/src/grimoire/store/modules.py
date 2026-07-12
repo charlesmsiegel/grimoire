@@ -187,11 +187,40 @@ def _validate_derived(derived: dict, scope: set[str], where: str,
 
 _PLACEHOLDER = re.compile(r"\{([^{}]+)\}")
 
+ROLL_SCOPE_NAMES = ("total", "natural", "margin", "successes", "ones", "dice")
+
+
+def _validate_outcomes(outcomes, where: str, errors: list[str]) -> None:
+    if not isinstance(outcomes, list):
+        errors.append(f"{where}: outcomes must be a list")
+        return
+    for i, tier in enumerate(outcomes):
+        w = f"{where}.outcomes[{i}]"
+        if not isinstance(tier, dict):
+            errors.append(f"{w}: must be an object")
+            continue
+        label = tier.get("label")
+        if not isinstance(label, str) or not label.strip():
+            errors.append(f"{w}: label must be a non-empty string")
+        when = tier.get("when")
+        if not isinstance(when, str):
+            errors.append(f"{w}: when must be an expression string")
+            continue
+        try:
+            unknown = expressions.names(when) - set(ROLL_SCOPE_NAMES)
+        except expressions.ExpressionError as e:
+            errors.append(f"{w}: when: {e}")
+            continue
+        if unknown:
+            errors.append(f"{w}: when references non-roll-scope names {sorted(unknown)}")
+
 
 def _validate_checks(checks: dict, sheets: dict, rule_ids: set[str],
                      errors: list[str]) -> None:
     groups = sheets.get("groups", {})
     for cid, check in checks.items():
+        if cid == "_defaults":
+            continue
         if not isinstance(check, dict):
             errors.append(f"checks.{cid}: must be an object")
             continue
@@ -212,6 +241,10 @@ def _validate_checks(checks: dict, sheets: dict, rule_ids: set[str],
             derived = g.get("derived", {})
             if isinstance(derived, dict):
                 scope |= set(derived)
+        scope |= {"difficulty", "modifier"}
+        if "difficulty" in check and (
+                not isinstance(check["difficulty"], int) or isinstance(check["difficulty"], bool)):
+            errors.append(f"{where}: difficulty must be an integer")
         roll = check.get("roll", "")
         if not isinstance(roll, str):
             errors.append(f"{where}: roll must be a string")
@@ -237,8 +270,8 @@ def _validate_checks(checks: dict, sheets: dict, rule_ids: set[str],
                 continue
             if rid not in rule_ids:
                 errors.append(f"{where}: unknown rules doc {rid!r}")
-        if "outcomes" in check and not isinstance(check["outcomes"], list):
-            errors.append(f"{where}: outcomes must be a list")
+        if "outcomes" in check:
+            _validate_outcomes(check["outcomes"], where, errors)
 
 
 def _split_csv(value: str) -> list[str]:
@@ -471,6 +504,16 @@ def load_pack(mid: str) -> dict:
                 errors.append("checks.json: must be an object of check definitions")
                 checks = {}
             else:
+                defaults = checks.get("_defaults")
+                if defaults is not None:
+                    if not isinstance(defaults, dict):
+                        errors.append("checks.json: _defaults must be an object")
+                    else:
+                        d = defaults.get("difficulty")
+                        if d is not None and (not isinstance(d, int) or isinstance(d, bool)):
+                            errors.append("checks.json: _defaults.difficulty must be an integer")
+                        if "outcomes" in defaults:
+                            _validate_outcomes(defaults["outcomes"], "checks.json: _defaults", errors)
                 _validate_checks(checks, sheets, {r["id"] for r in rules}, errors)
     content = _load_content(root, sheets, errors)
     pack = {
@@ -484,6 +527,21 @@ def load_pack(mid: str) -> dict:
         "errors": errors,
     }
     return pack
+
+
+def read_rule(mid: str, rid: str) -> dict | None:
+    """Frontmatter + body of one rules doc; load_pack keeps frontmatter only."""
+    root, _source = pack_root(mid)  # raises ModuleNotFound
+    if not isinstance(rid, str) or not _safe_mid(rid):
+        return None
+    p = root / "rules" / f"{rid}.md"
+    if not p.exists():
+        return None
+    try:
+        meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
+    except (UnicodeDecodeError, OSError):
+        return None
+    return {"meta": meta, "body": body}
 
 
 # ---- registry: list, scaffold, delete ----
