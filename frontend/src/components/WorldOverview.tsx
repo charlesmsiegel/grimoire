@@ -15,7 +15,9 @@ const TILES = [
 
 type Check = { label: string; ok: boolean; tab: string };
 
-export function WorldOverview({ wid, onNavigate }: { wid: string; onNavigate: (tab: string) => void }) {
+export function WorldOverview({
+  wid, onNavigate, worldMid = "", onPickMid = () => {},
+}: { wid: string; onNavigate: (tab: string) => void; worldMid?: string; onPickMid?: (mid: string) => void }) {
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [checks, setChecks] = useState<Check[]>([]);
 
@@ -70,7 +72,7 @@ export function WorldOverview({ wid, onNavigate }: { wid: string; onNavigate: (t
           ))}
         </ul>
       </div>
-      <WorldMechanics wid={wid} />
+      <WorldMechanics wid={wid} worldMid={worldMid} onPickMid={onPickMid} />
     </div>
   );
 }
