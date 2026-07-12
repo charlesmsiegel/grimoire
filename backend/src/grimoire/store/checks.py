@@ -92,7 +92,7 @@ def _actor_label(cid: str, kind: str, eid: str) -> str:
         name = appearances._actor_name(campaigns.campaign_root(cid), kind, eid, vid)
         return name or eid
     try:
-        return overlay.read_entity(cid, kind, eid).get("name") or eid
+        return overlay.read_entity(cid, kind, eid)["meta"].get("name") or eid
     except entities.EntityNotFound:
         return eid
 
@@ -202,7 +202,7 @@ def available_checks(cid: str, sid: str) -> list[dict]:
         except entities.EntityNotFound:
             loc = None
         if loc is not None:
-            e = entry("locations", current_loc, loc.get("name", current_loc))
+            e = entry("locations", current_loc, loc["meta"].get("name", current_loc))
             if e is not None:
                 out.append(e)
     return out
