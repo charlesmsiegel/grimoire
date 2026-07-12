@@ -124,6 +124,14 @@ def test_write_rejects_wrong_typed_arguments(monkeypatch, tmp_path):
     assert sheets.read(cid, "characters", 7) is None  # type: ignore[arg-type]
 
 
+def test_world_write_bad_mid_and_colon_eid_rejected(monkeypatch, tmp_path):
+    wid, cid = _campaign(monkeypatch, tmp_path)
+    with pytest.raises(sheets.SheetError):
+        sheets.write_world(wid, "..", "characters", "mara", "medium", None)
+    with pytest.raises(sheets.SheetError):
+        sheets.write(cid, "characters", "c:evil", "medium", None)
+
+
 # World sheet tests
 
 def test_world_sheet_crud_keyed_by_module(monkeypatch, tmp_path):
@@ -204,3 +212,22 @@ def test_world_coverage(monkeypatch, tmp_path):
     cov = sheets.world_coverage(wid, "pool-basic")
     assert cov["items"] == {"total": 1, "sheeted": 1, "invalid": 0}
     assert sheets.world_coverage(wid, "ghost") == {}
+
+
+def test_seed_via_world_default_module(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Realm")
+    modules.set_world_module(wid, "pool-basic")
+    sheets.write_world(wid, "pool-basic", "characters", "mara", "medium", None)
+    cid = campaigns.create_campaign("Run", wid)   # no explicit module: inherits default
+    assert sheets.read(cid, "characters", "mara")["sheet_type"] == "medium"
+
+
+def test_coverage_excludes_tombstoned_entities(monkeypatch, tmp_path):
+    from grimoire.store import overlay
+    wid, cid = _campaign(monkeypatch, tmp_path)
+    from grimoire.store import entities as ent
+    ent.create_entity(worlds.world_root(wid), "items", "Moon Disc")
+    overlay.add_deleted(cid, "items/moon-disc")
+    cov = sheets.coverage(cid)
+    assert cov["items"]["total"] == 0

@@ -33,7 +33,8 @@ def sheet_kind(kind: str) -> str:
 def _safe_part(part: str) -> bool:
     if not isinstance(part, str):
         return False
-    return bool(part) and part not in (".", "..") and "/" not in part and "\\" not in part
+    return (bool(part) and part not in (".", "..") and "/" not in part
+            and "\\" not in part and ":" not in part)
 
 
 def _campaign_dir(cid: str) -> Path:
@@ -164,10 +165,7 @@ def _read_path(path: Path, file_kind: str, mid: str | None) -> dict | None:
 def read(cid: str, kind: str, eid: str) -> dict | None:
     if kind not in FILE_KINDS or not _safe_part(eid):
         return None
-    try:
-        mid = modules.resolve(cid)
-    except campaigns.CampaignNotFound:
-        raise
+    mid = modules.resolve(cid)
     return _read_path(_campaign_path(cid, kind, eid), kind, mid)
 
 
@@ -258,6 +256,8 @@ def read_world(wid: str, mid: str, kind: str, eid: str) -> dict | None:
 
 def write_world(wid: str, mid: str, kind: str, eid: str, sheet_type: str,
                 fields: dict | None = None) -> None:
+    if not _safe_part(mid):
+        raise SheetError(f"bad module id {mid!r}")
     modules.pack_root(mid)  # raises ModuleNotFound
     _checked_write(_world_path(wid, mid, kind, eid), mid, kind, eid,
                    sheet_type, fields)
