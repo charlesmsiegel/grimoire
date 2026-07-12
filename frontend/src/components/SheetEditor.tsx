@@ -56,12 +56,13 @@ function widget(f: ModuleField, value: unknown, onChange: (v: unknown) => void) 
         </Field>
       );
     case "list": {
-      const arr = Array.isArray(value) ? (value as string[]) : [];
+      // Draft holds the raw textarea string while editing (see toEditDraft); normalization to an
+      // array happens once at commit time (see normalizeForSave). Fall back to joining an array
+      // here in case a caller ever passes one in directly (e.g. right after a type change).
+      const s = typeof value === "string" ? value : Array.isArray(value) ? (value as string[]).join("\n") : "";
       return (
         <Field key={f.key} label={label} hint="one per line">
-          <textarea rows={3} value={arr.join("\n")}
-                    onChange={(e) => onChange(
-                      e.target.value.split("\n").map((s) => s.trim()).filter(Boolean))} />
+          <textarea rows={3} value={s} onChange={(e) => onChange(e.target.value)} />
         </Field>
       );
     }
@@ -77,14 +78,42 @@ function widget(f: ModuleField, value: unknown, onChange: (v: unknown) => void) 
   }
 }
 
-/** Full field-key set (group fields + own fields) for a sheet type — used to diff a type change. */
-function keysOf(module: ModuleDetail, t: string): string[] {
+/** Full field-def set (group fields + own fields) for a sheet type. */
+function fieldDefsOf(module: ModuleDetail, t: string | null): ModuleField[] {
+  if (!t) return [];
   const st = module.sheets.sheet_types[t];
   if (!st) return [];
-  return st.groups
-    .flatMap((g) => module.sheets.groups[g]?.fields ?? [])
-    .concat(st.fields)
-    .map((f) => f.key);
+  return st.groups.flatMap((g) => module.sheets.groups[g]?.fields ?? []).concat(st.fields);
+}
+
+/** Full field-key set (group fields + own fields) for a sheet type — used to diff a type change. */
+function keysOf(module: ModuleDetail, t: string): string[] {
+  return fieldDefsOf(module, t).map((f) => f.key);
+}
+
+/** Converts stored list-field arrays into raw newline-joined strings for the textarea draft. Call
+ *  once on entering edit mode (or after a type change) — never on every keystroke, or the trailing
+ *  newline from a fresh Enter press gets stripped before the user can type the next line. */
+function toEditDraft(fields: Record<string, unknown>, defs: ModuleField[]): Record<string, unknown> {
+  const draft = { ...fields };
+  for (const f of defs) {
+    if (f.type === "list" && Array.isArray(draft[f.key])) {
+      draft[f.key] = (draft[f.key] as string[]).join("\n");
+    }
+  }
+  return draft;
+}
+
+/** Normalizes a draft's raw list-field strings into arrays. Call once at each commit point (save,
+ *  type change) — never inside the textarea's onChange. */
+function normalizeForSave(draft: Record<string, unknown>, defs: ModuleField[]): Record<string, unknown> {
+  const out = { ...draft };
+  for (const f of defs) {
+    if (f.type === "list" && typeof out[f.key] === "string") {
+      out[f.key] = (out[f.key] as string).split("\n").map((s) => s.trim()).filter(Boolean);
+    }
+  }
+  return out;
 }
 
 export default function SheetEditor({ scope, module, kind, eid, initial, onClose, onSaved }:
@@ -104,7 +133,7 @@ export default function SheetEditor({ scope, module, kind, eid, initial, onClose
     .filter(([tid, st]) => st.kind === typeKind(kind) && tid !== sheetType);
 
   function startEdit() {
-    setDraft(fields);
+    setDraft(toEditDraft(fields, fieldDefsOf(module, sheetType)));
     setError(null);
     setMode("edit");
   }
@@ -122,8 +151,9 @@ export default function SheetEditor({ scope, module, kind, eid, initial, onClose
     if (!sheetType) return;
     setError(null);
     try {
-      await api.putSheet(scope, module.id, kind, eid, { sheet_type: sheetType, fields: draft });
-      setFields(draft);
+      const payload = normalizeForSave(draft, fieldDefsOf(module, sheetType));
+      await api.putSheet(scope, module.id, kind, eid, { sheet_type: sheetType, fields: payload });
+      setFields(payload);
       setMode("view");
       onSaved();
     } catch (err: any) {
@@ -146,8 +176,9 @@ export default function SheetEditor({ scope, module, kind, eid, initial, onClose
       ? `Change type to ${label}? This drops: ${dropped.join(", ")}`
       : `Change type to ${label}?`;
     if (!window.confirm(msg)) return;
+    const normalized = normalizeForSave(draft, fieldDefsOf(module, sheetType));
     const survivors: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(draft)) {
+    for (const [k, v] of Object.entries(normalized)) {
       if (newKeys.has(k)) survivors[k] = v;
     }
     await commitTypeChange(newType, survivors);

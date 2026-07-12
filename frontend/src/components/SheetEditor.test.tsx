@@ -169,6 +169,18 @@ test("text and list widgets round-trip through save", async () => {
       quirk: "Hums in the dark", gear: ["lantern", "rope"] }) }));
 });
 
+test("list textarea preserves newlines while typing", () => {
+  render(<SheetEditor scope={{ kind: "campaign", id: "run" }} module={MOD}
+                      kind="characters" eid="mara" initial={SHEET}
+                      onClose={() => {}} onSaved={() => {}} />);
+  fireEvent.click(screen.getByText("Edit"));
+  const gear = screen.getByLabelText("Gear") as HTMLTextAreaElement;
+  fireEvent.change(gear, { target: { value: "lantern\n" } });
+  expect(gear.value).toBe("lantern\n");
+  fireEvent.change(gear, { target: { value: "lantern\nrope" } });
+  expect(gear.value).toBe("lantern\nrope");
+});
+
 test("empty list textarea saves an empty array, not a blank line", async () => {
   render(<SheetEditor scope={{ kind: "campaign", id: "run" }} module={MOD}
                       kind="characters" eid="mara" initial={SHEET}
