@@ -15,7 +15,7 @@ import re
 import shutil
 from pathlib import Path
 
-from . import dice, expressions
+from . import dice, expressions, module_display
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import home, slugify, uniquify
 
@@ -516,6 +516,7 @@ def load_pack(mid: str) -> dict:
                             _validate_outcomes(defaults["outcomes"], "checks.json: _defaults", errors)
                 _validate_checks(checks, sheets, {r["id"] for r in rules}, errors)
     content = _load_content(root, sheets, errors)
+    layout, theme, display_errors = module_display.load_display(root, sheets)
     pack = {
         "id": mid,
         "source": source,
@@ -524,6 +525,9 @@ def load_pack(mid: str) -> dict:
         "checks": checks,
         "rules": rules,
         "content": content,
+        "layout": layout,
+        "theme": theme,
+        "display_errors": display_errors,
         "errors": errors,
     }
     return pack
@@ -562,6 +566,7 @@ def _scan(d: Path) -> dict[str, dict]:
             "version": m.get("version", ""),
             "source": pack["source"],
             "valid": not pack["errors"],
+            "display_ok": not pack["display_errors"],
         }
     return out
 

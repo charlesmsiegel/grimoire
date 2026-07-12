@@ -811,3 +811,51 @@ def test_reference_packs_have_defaults_and_reserved_names(monkeypatch, tmp_path)
         assert pack["checks"]["_defaults"]["difficulty"] == diff
         assert any("{difficulty}" in c["roll"]
                    for k, c in pack["checks"].items() if k != "_defaults")
+
+
+# ---- Task 3: Display loading into load_pack + _scan ----
+
+
+def test_pack_display_keys_default_empty(monkeypatch, tmp_path):
+    make_pack(_home(monkeypatch, tmp_path))
+    pack = modules.load_pack("testmod")
+    assert pack["layout"] == {"sheet_types": {}}
+    assert pack["theme"] == {}
+    assert pack["display_errors"] == []
+
+
+def test_display_errors_do_not_invalidate(monkeypatch, tmp_path):
+    d = make_pack(_home(monkeypatch, tmp_path))
+    (d / "layout.json").write_text("{broken", encoding="utf-8")
+    (d / "theme.css").write_text(".x{}", encoding="utf-8")
+    pack = modules.load_pack("testmod")
+    assert pack["errors"] == []          # mechanics untouched
+    assert len(pack["display_errors"]) == 2
+    rows = {m["id"]: m for m in modules.list_modules()}
+    assert rows["testmod"]["valid"] is True
+    assert rows["testmod"]["display_ok"] is False
+
+
+def test_display_ok_true_for_clean_pack(monkeypatch, tmp_path):
+    make_pack(_home(monkeypatch, tmp_path))
+    rows = {m["id"]: m for m in modules.list_modules()}
+    assert rows["testmod"]["display_ok"] is True
+
+
+def test_load_pack_survives_pathological_display_files(monkeypatch, tmp_path):
+    d = make_pack(_home(monkeypatch, tmp_path))
+    (d / "layout.json").write_text("[" * 100000 + "]" * 100000, encoding="utf-8")
+    pack = modules.load_pack("testmod")  # must not raise
+    assert pack["errors"] == []
+    assert pack["layout"] == {"sheet_types": {}}
+    assert pack["display_errors"]
+
+
+def test_resolve_ignores_display_errors(monkeypatch, tmp_path):
+    home = _home(monkeypatch, tmp_path)
+    d = make_pack(home)
+    (d / "layout.json").write_text("{broken", encoding="utf-8")
+    wid = worlds.create_world("Realm")
+    cid = campaigns.create_campaign("Saltmarch Run", wid)
+    modules.set_campaign_module(cid, "testmod")
+    assert modules.resolve(cid) == "testmod"
