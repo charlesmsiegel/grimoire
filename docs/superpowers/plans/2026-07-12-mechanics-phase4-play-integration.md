@@ -50,7 +50,7 @@
 - `commit_narration(cid, sid, pid, persist) -> bool` — holding the per-campaign lock: re-validate id + status ∈ (`resolved`,`declined`); **crash recovery**: if the record already has `narration_intent`, `scenes.truncate_messages(cid, sid, intent)` first (discard a previous attempt's partial continuation); write `narration_intent = <current message count>` (atomic replace); invoke `persist()`; write `narrated`. Returns False (nothing persisted, no trim of foreign text — the intent marker guarantees everything past it is our own) when validation fails — a supersede that landed mid-stream wins and the streamed text is dropped.
 - `locked(cid)` — a reentrant contextmanager over the per-campaign lock (the locks are `threading.RLock`, so `transition`/`commit_narration` may be called inside it). **The route's whole projection sequence runs inside `locked(cid)`** so concurrent resolved-retries serialize.
 - Ids: `"pr-" + uuid.uuid4().hex` (full 122 random bits — probabilistically unique; that is what lets a proposal-tag match on a roll entry be treated as proof; never phrase this as "impossible"). `_write` is atomic: temp file in the same directory + `os.replace`.
-- Also modify: `backend/src/grimoire/store/scenes.py` gains `truncate_messages(cid, sid, count) -> None` (drop messages with index ≥ count, rewrite the transcript; test in test_proposals_store.py or the scenes test file — read scenes.py's serialization round-trip first).
+- Also modify: `backend/src/grimoire/store/scenes.py` gains `trim_continuation(cid, sid, from_index) -> None` — remove messages at index ≥ `from_index` **except `ROLL_SPEAKER` messages, which are preserved in order** (the trim-safety rule: the only non-superseding writers in a crash window are roll/check lines; our own continuation segments never carry `ROLL_SPEAKER`). Rewrite the transcript via the existing serialization round-trip (read scenes.py first). Test: build a scene with [intent-point, continuation-partial, 🎲 manual roll line], trim from the intent → the roll line survives, the partial is gone.
 - Record: `{"id": "pr-000001", "status", "payload", "created", "resolution"}`; file `<campaign>/proposals.json` maps sid → record plus a reserved `"_counter"` key (scene ids are slugs; the underscore name cannot collide).
 
 - [ ] **Step 1: Write the failing tests**
@@ -279,7 +279,7 @@ def _write(cid: str, data: dict) -> None:
 def new(cid: str, sid: str, payload: dict) -> dict:
     with _lock(cid):
         data = _read(cid)
-        rec = {"id": f"pr-{uuid.uuid4().hex[:16]}", "status": "pending",
+        rec = {"id": f"pr-{uuid.uuid4().hex}", "status": "pending",
                "payload": payload, "created": now_iso(), "resolution": None}
         data[sid] = rec
         _write(cid, data)
@@ -347,7 +347,7 @@ def commit_narration(cid: str, sid: str, pid: str, persist) -> bool:
             return False
         intent = rec.get("narration_intent")
         if isinstance(intent, int):
-            scenes.truncate_messages(cid, sid, intent)
+            scenes.trim_continuation(cid, sid, intent)
         rec["narration_intent"] = len(scenes.read_scene(cid, sid)["messages"])
         _write(cid, data)
         persist()
@@ -1223,7 +1223,26 @@ git commit -m "feat(context): mechanics rules/sheets/roll-protocol sections (#16
 - `GET /campaigns/{cid}/scenes/{sid}/roll-proposal` → `{"record": rec | None}`.
 - `POST /campaigns/{cid}/scenes/{sid}/roll-proposal` (SSE) — body model `ProposalAction(BaseModel): proposal: str; action: str; check: str | None = None; actor: str | None = None; difficulty: int | None = None; modifier: int | None = None`. Flow exactly per the spec's state walk, **every state change via `proposals.transition` and every lost transition = stop dead (no projection, no continuation), 409 when nothing has streamed yet**:
   - accept = `claim` (lost → 409) → `resolve_check` (catch-all except: `transition(..., ("resolving",), "pending")` + error frame) → commit `transition(..., ("resolving",), "resolved", resolution)` (**lost — e.g. superseded mid-resolve — → discard the roll result unlogged, 409**) → projection → stream continuation → **`proposals.commit_narration(cid, sid, pid, persist_closure)`** — False means a supersede won mid-stream: drop the streamed text (nothing persisted) and end the stream with `{"done": true}` (the chip refetches and finds `superseded`).
-  - Projection (idempotent per spec, each output independently recoverable) — **the whole sequence runs inside `proposals.locked(cid)`** so concurrent resolved-retries serialize (pure file I/O, no LLM under the lock): (a) `rolls.find_by_proposal(cid, pid)` (uuid ids: a tag match is proof) else `rolls.append(..., proposal=pid)`; then `transition(..., ("resolved",), "resolved", {**resolution, "roll_id": entry["id"]})` to backfill; (b) **line intent**: `transition(..., ("resolved",), "resolved", {**resolution, "line_intent": len(messages)})` recorded first, then append `line = checks.format_check_roll(resolution)`; on retry, append only when no message at index ≥ `line_intent` has `speaker == ROLL_SPEAKER and content == line` (compound key; sound because within a retryable state the serialized projection is the scene's only writer — new sends supersede and end retryability; the manual-roll corner is documented in the spec).
+  - **Follow-up fence in the continuation** (the continuation stream also runs through a `FenceWatcher`): when it completes a fence, the handoff is one atomic `proposals.locked(cid)` block — `commit_narration(old_pid, persist_prefence_narration)` (which trim-recovers, persists the pre-fence text, marks the old record `narrated`), then `proposals.new(...)` for the new fence, then emit the proposal event. The old lifecycle always finishes with its narration persisted before the new pending record exists. Route test: fake LLM's continuation emits a fence → pre-fence text persisted, old record `narrated`, new record `pending` and recoverable via the GET.
+  - Projection (idempotent per spec, each output independently recoverable) — **the whole sequence runs inside `proposals.locked(cid)`** so concurrent resolved-retries serialize (pure file I/O, no LLM under the lock). **Carry the updated resolution forward across CASes — never reuse a stale local** (a `{**resolution, ...}` from before the roll_id write would erase it):
+
+    ```python
+    res = dict(rec["resolution"])
+    entry = rolls.find_by_proposal(cid, pid)      # uuid tag match is proof
+    if entry is None:
+        entry = rolls.append(cid, sid, label, res["result"], proposal=pid)
+    res = {**res, "roll_id": entry["id"]}
+    proposals.transition(cid, sid, pid, ("resolved",), "resolved", res)
+    if "line_intent" not in res:
+        res = {**res, "line_intent": len(scene_messages())}
+        proposals.transition(cid, sid, pid, ("resolved",), "resolved", res)
+    line = checks.format_check_roll(res)
+    if not any(m.get("speaker") == ROLL_SPEAKER and m["content"] == line
+               for m in scene_messages()[res["line_intent"]:]):
+        scenes.append_message(cid, sid, "assistant", line, speaker=ROLL_SPEAKER)
+    ```
+
+    Tests must assert `roll_id` AND `line_intent` both survive on the narrated record (the erase-on-second-CAS bug is exactly what the carried-forward `res` prevents).
   - decline = `transition(..., ("pending",), "declined")` (lost → 409) → declined continuation → `commit_narration` (same drop-on-supersede semantics).
   - Retry of `resolved`/`declined` re-runs projection (each step self-deduping) + continuation + `commit_narration`; `narrated` → immediate done frame.
 - Continuation messages: `store.context.build_messages(cid, sid)` + one system message rendered from new templates `templates/scene/roll_result.j2` (vars: `resolution`, `on_roll_docs: [str]`, `check_docs: [str]`) and `templates/scene/roll_declined.j2` (no vars) — write both templates (short, following `scene/director_note.j2` style; exact wording per the spec's Continuation section).

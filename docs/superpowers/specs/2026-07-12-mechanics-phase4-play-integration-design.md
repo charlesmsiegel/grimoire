@@ -124,7 +124,7 @@ dropped.
 (read/mutate/write whole file):
 
 ```json
-{"<sid>": {"id": "pr-9f2c81d4a6e04b7f", "status": "pending",
+{"<sid>": {"id": "pr-9f2c81d4a6e04b7f0c3a5d2e8b164f70", "status": "pending",
            "payload": {...the proposal payload above...},
            "created": "<iso>",
            "resolution": null}}
@@ -308,10 +308,27 @@ rolls.
     persisted** — no stale narration can appear after newer player
     input. (New sends take the same lock for their supersede, so the
     two orders serialize; the lock is held only around trim + persist,
-    never during LLM streaming. Trimming requires a
-    `scenes.truncate_messages(cid, sid, count)` helper — messages past
-    `count` are removed; safe because the intent marker guarantees
-    everything past it is our own partial continuation.)
+    never during LLM streaming.)
+
+    **Trim safety.** Recovery removes messages at index ≥
+    `narration_intent` **except `ROLL_SPEAKER` messages, which are
+    preserved in order** (`scenes.trim_continuation(cid, sid,
+    from_index)`). Rationale — the only writers that can touch the scene
+    between a crashed commit attempt and its retry are: player
+    sends/retry/regenerate (they supersede first, under the same lock,
+    so the retry fails validation and never trims) and manual roll/check
+    lines (always `ROLL_SPEAKER` — preserved by the trim rule). The
+    partial continuation itself never carries `ROLL_SPEAKER`, so the
+    trim removes exactly our own segments.
+
+    **Follow-up fence handoff.** When the continuation itself emits a
+    fence, the handoff is atomic under the same lock: (1) trim-recover
+    if needed, (2) persist the continuation's pre-fence narration,
+    (3) old record → `narrated`, (4) create the new `pending` record for
+    the new fence, (5) emit the proposal event. The old lifecycle always
+    completes with its narration persisted before the new proposal
+    exists — a durable proposal always corresponds to a persisted
+    decision point.
   - `resolving` (someone else holds the claim) → 409.
   - `pending` + decline: status `declined` (same CAS discipline); stream
     the declined continuation; then `narrated`.
