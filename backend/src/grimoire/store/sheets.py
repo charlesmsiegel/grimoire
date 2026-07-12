@@ -12,6 +12,7 @@ Spec: docs/superpowers/specs/2026-07-12-mechanics-phase3-sheets-design.md.
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 from . import campaigns, entities, expressions, modules, worlds
@@ -235,3 +236,77 @@ def list_refs(cid: str) -> list[tuple[str, str]]:
         if sep and kind in FILE_KINDS and _safe_part(eid):
             out.append((kind, eid))
     return out
+
+
+def _world_dir(wid: str, mid: str) -> Path:
+    return worlds.world_root(wid) / "sheets" / mid
+
+
+def _world_path(wid: str, mid: str, kind: str, eid: str) -> Path:
+    return _world_dir(wid, mid) / f"{kind}--{eid}.json"
+
+
+def read_world(wid: str, mid: str, kind: str, eid: str) -> dict | None:
+    if kind not in FILE_KINDS or not _safe_part(eid) or not _safe_part(mid):
+        return None
+    try:
+        modules.pack_root(mid)
+    except modules.ModuleNotFound:
+        return None
+    return _read_path(_world_path(wid, mid, kind, eid), kind, mid)
+
+
+def write_world(wid: str, mid: str, kind: str, eid: str, sheet_type: str,
+                fields: dict | None = None) -> None:
+    modules.pack_root(mid)  # raises ModuleNotFound
+    _checked_write(_world_path(wid, mid, kind, eid), mid, kind, eid,
+                   sheet_type, fields)
+
+
+def delete_world(wid: str, mid: str, kind: str, eid: str) -> bool:
+    if kind not in FILE_KINDS or not _safe_part(eid) or not _safe_part(mid):
+        return False
+    p = _world_path(wid, mid, kind, eid)
+    if not p.exists():
+        return False
+    p.unlink()
+    return True
+
+
+def world_list_refs(wid: str, mid: str) -> list[tuple[str, str]]:
+    d = _world_dir(wid, mid)
+    out: list[tuple[str, str]] = []
+    if not d.is_dir():
+        return out
+    for p in sorted(d.glob("*.json")):
+        kind, sep, eid = p.stem.partition("--")
+        if sep and kind in FILE_KINDS and _safe_part(eid):
+            out.append((kind, eid))
+    return out
+
+
+def world_sheet_modules(wid: str) -> list[str]:
+    d = worlds.world_root(wid) / "sheets"
+    if not d.is_dir():
+        return []
+    return sorted(p.name for p in d.iterdir() if p.is_dir() and _safe_part(p.name))
+
+
+def seed(cid: str) -> int:
+    """Copy world starting sheets for the campaign's resolved module.
+    Called once from create_campaign; changing the module later never
+    re-seeds (spec)."""
+    mid = modules.resolve(cid)
+    if mid is None:
+        return 0
+    meta = campaigns.read_campaign(cid)["meta"]
+    src = worlds.world_root(meta.get("world", "")) / "sheets" / mid
+    if not src.is_dir():
+        return 0
+    dst = _campaign_dir(cid)
+    dst.mkdir(parents=True, exist_ok=True)
+    n = 0
+    for p in sorted(src.glob("*.json")):
+        shutil.copy2(p, dst / p.name)
+        n += 1
+    return n
