@@ -3123,6 +3123,39 @@ def test_new_send_supersedes(client):
     assert client.get(f"/api/campaigns/{cid}/rolls").json() == []
 
 
+# a send that dies on the missing-key guard must not have durably retired the
+# user's pending chip first — supersede only runs once the send is actually
+# going to happen (routes.py: after _require_scene *and* _require_key).
+def test_chat_missing_key_does_not_supersede_pending_proposal(client):
+    cid, sid, _ = _mech_scene(client)
+    rec = _pending(client, cid, sid)
+    client.put("/api/config", json={"openrouter_key": ""})
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "never mind"})
+    assert resp.status_code == 409 and resp.json()["kind"] == "missing_key"
+    rec2 = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert rec2["id"] == rec["id"] and rec2["status"] == "pending"
+
+
+def test_retry_missing_key_does_not_supersede_pending_proposal(client):
+    cid, sid, _ = _mech_scene(client)
+    rec = _pending(client, cid, sid)
+    client.put("/api/config", json={"openrouter_key": ""})
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/retry")
+    assert resp.status_code == 409 and resp.json()["kind"] == "missing_key"
+    rec2 = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert rec2["id"] == rec["id"] and rec2["status"] == "pending"
+
+
+def test_regenerate_missing_key_does_not_supersede_pending_proposal(client):
+    cid, sid, _ = _mech_scene(client)
+    rec = _pending(client, cid, sid)
+    client.put("/api/config", json={"openrouter_key": ""})
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
+    assert resp.status_code == 409 and resp.json()["kind"] == "missing_key"
+    rec2 = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert rec2["id"] == rec["id"] and rec2["status"] == "pending"
+
+
 def test_manual_check_and_availability(client):
     cid, sid, _ = _mech_scene(client)
     actors = client.get(f"/api/campaigns/{cid}/scenes/{sid}/checks").json()["actors"]

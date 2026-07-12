@@ -1874,9 +1874,9 @@ def _require_scene(cid: str, sid: str) -> dict:
 @router.post("/campaigns/{cid}/scenes/{sid}/chat")
 def post_chat(cid: str, sid: str, turn: ChatTurn, client: LLMClient = Depends(get_llm)):
     _require_scene(cid, sid)
-    store.proposals.supersede(cid, sid)  # a new send retires any pending decision
     cfg = store.read_config()
     _require_key(cfg)
+    store.proposals.supersede(cid, sid)  # a new send retires any pending decision
     if store.scenes.is_pcless(cid, sid) or not turn.content.strip():
         # ephemeral turn, never stored: a director note steering one generation
         # (pcless), or — in any scene — an empty send meaning "next NPC round"
@@ -1895,9 +1895,9 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, client: LLMClient = Depends(ge
 @router.post("/campaigns/{cid}/scenes/{sid}/retry")
 def post_retry(cid: str, sid: str, client: LLMClient = Depends(get_llm)):
     scene = _require_scene(cid, sid)
-    store.proposals.supersede(cid, sid)  # a fresh generation retires the old decision
     cfg = store.read_config()
     _require_key(cfg)
+    store.proposals.supersede(cid, sid)  # a fresh generation retires the old decision
     if not scene["messages"]:
         raise HTTPException(status_code=400, detail="nothing to retry")
     messages = store.context.build_messages(cid, sid)
@@ -1909,9 +1909,9 @@ def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
                     client: LLMClient = Depends(get_llm)):
     """Redo the most recent post: drop a trailing assistant reply, stream a fresh one."""
     scene = _require_scene(cid, sid)
-    store.proposals.supersede(cid, sid)  # regenerating retires the old decision
     cfg = store.read_config()
     _require_key(cfg)
+    store.proposals.supersede(cid, sid)  # regenerating retires the old decision
     msgs = scene["messages"]
     if not msgs:
         raise HTTPException(status_code=400, detail="nothing to regenerate")

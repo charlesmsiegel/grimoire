@@ -1028,3 +1028,42 @@ test("popover Check mode with a typed difficulty posts it", async () => {
     { check: "brawl", actor: "characters:mara", difficulty: 7, modifier: 0 }));
   await waitFor(() => expect(screen.queryByLabelText("Check actor")).toBeNull());
 });
+
+test("switching between two scenes that both have pending proposals shows the new scene's chip and rolls its own check, never the previous scene's", async () => {
+  (api.listScenes as any).mockResolvedValue([
+    { id: "001--2024-01-01--one", title: "One", model: "", created: "", updated: "" },
+    { id: "002--2024-01-02--two", title: "Two", model: "", created: "", updated: "" },
+  ]);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "assistant", content: "a reply" }] });
+  const PROPOSAL_A = {
+    id: "pr-a", check: "brawl", check_label: "Vigor + Brawl",
+    actor: "characters:mara", actor_label: "Mara", difficulty: 6,
+    available: { "characters:mara": [["brawl", "Vigor + Brawl"]] }, problems: [],
+  };
+  const PROPOSAL_B = {
+    id: "pr-b", check: "stealth", check_label: "Wits + Stealth",
+    actor: "characters:borys", actor_label: "Borys", difficulty: 4,
+    available: { "characters:borys": [["stealth", "Wits + Stealth"]] }, problems: [],
+  };
+  // scenes each have their own live pending proposal — keyed by scene id, not call order.
+  (api.getRollProposal as any).mockImplementation((_c: string, sid: string) => {
+    if (sid.endsWith("--one")) return Promise.resolve({ record: { id: "pr-a", status: "pending", payload: PROPOSAL_A, resolution: null } });
+    if (sid.endsWith("--two")) return Promise.resolve({ record: { id: "pr-b", status: "pending", payload: PROPOSAL_B, resolution: null } });
+    return Promise.resolve({ record: null });
+  });
+  renderCampaign();
+  await screen.findByText("a reply");
+  expect(await screen.findByText(/Vigor \+ Brawl — Mara/)).toBeInTheDocument();
+  fireEvent.click(screen.getByText(/Two/));
+  expect(await screen.findByText(/Wits \+ Stealth — Borys/)).toBeInTheDocument();
+  expect(screen.queryByText(/Vigor \+ Brawl — Mara/)).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Roll it" }));
+  await waitFor(() => expect(api.resolveProposal).toHaveBeenCalledWith(
+    "run", "002--2024-01-02--two",
+    { proposal: "pr-b", action: "accept", check: "stealth", actor: "characters:borys", difficulty: 4, modifier: 0 },
+    expect.any(Function)));
+  expect(api.resolveProposal).not.toHaveBeenCalledWith(
+    "run", expect.anything(),
+    expect.objectContaining({ proposal: "pr-a" }),
+    expect.anything());
+});

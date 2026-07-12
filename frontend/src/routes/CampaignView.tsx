@@ -144,7 +144,20 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
   const [directorNote, setDirectorNote] = useState<string | null>(null);
 
   async function selectScene(id: string) {
+    // selectScene also runs to *refresh* the current scene (runStream's
+    // finally, doRoll/doCheck, saveEdit, …) — only an actual scene switch
+    // should clear the chip/popover synchronously below; clearing on every
+    // refresh would tear down and re-mount a live SSE-delivered proposal
+    // for no reason (flicker, and a stale ref by the time the re-fetch lands).
+    const switchingScenes = id !== activeId;
     setActiveId(id);
+    if (switchingScenes) {
+      // clear the previous scene's chip/popover synchronously so scene A's
+      // proposal never renders against scene B while the fetch below is in
+      // flight (and so a stale checkActors list can't leak across scenes).
+      setProposal(null);
+      setRollForm(null);
+    }
     api.getSceneDatetime(cid, id).then(setDt).catch(() => setDt(null));
     api.getCast(cid, id).then(setCast).catch(() => setCast([]));
     api.listAppearances(cid).then(setRoster).catch(() => setRoster([]));
@@ -736,7 +749,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
           )}
         </div>
         {proposal && activeId && (
-          <RollProposal record={proposal} busy={busy} onResolve={resolve} />
+          <RollProposal key={proposal.id} record={proposal} busy={busy} onResolve={resolve} />
         )}
         <div className="inputbar">
           <button className="roll-btn" title="Roll dice" aria-label="Roll dice"
