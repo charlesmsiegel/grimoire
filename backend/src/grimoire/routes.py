@@ -2538,6 +2538,13 @@ def _make_proposal(cid: str, sid: str, watcher) -> dict:
             problems = [*problems, "unknown check id"]
         elif actor is not None and check not in dict(available.get(actor, [])):
             problems = [*problems, "check unavailable to this actor"]
+    elif fields:
+        # fields is non-empty (e.g. valid JSON with an actor but no `check`
+        # key) yet carries no check id — parse_roll_body's own tolerant path
+        # already flags this same case (see fence.py); a wholly unparseable
+        # body (fields == {}) is left alone here since "roll request was
+        # unparseable" already covers it and a second problem would be noise.
+        problems = [*problems, "roll request had no check id"]
 
     return {"check": check, "check_label": check_labels.get(check, check),
             "actor": actor, "actor_label": actor_label,
@@ -2546,14 +2553,27 @@ def _make_proposal(cid: str, sid: str, watcher) -> dict:
             "problems": problems}
 
 
-def _project_resolution(cid: str, sid: str, pid: str) -> dict:
+def _project_resolution(cid: str, sid: str, pid: str) -> dict | None:
     """Idempotent, crash-recoverable projection of a resolved proposal into the
     roll log and transcript. Runs entirely under the proposals per-campaign
     lock (pure file I/O, no LLM), so concurrent retries serialize. The updated
     resolution is carried forward across each CAS — never rebuilt from a stale
-    local — so the roll_id survives the line_intent write."""
+    local — so the roll_id survives the line_intent write.
+
+    Defensive re-validation: the caller checks status *before* acquiring this
+    lock, so a supersede + brand-new record for the scene can land in that
+    narrow window. If the scene's current record no longer carries this
+    proposal id, or has no stored resolution yet, another actor won — return
+    None and do nothing (no roll append, no line). Deliberately NOT a status
+    check: a record that still carries this id but was superseded after
+    resolving (status "superseded") must still project — its roll stands in
+    the transcript as history per spec; only the automatic continuation is
+    cancelled (by commit_narration), not the roll projection itself."""
     with store.proposals.locked(cid):
         rec = store.proposals.get(cid, sid)
+        if (rec is None or rec.get("id") != pid
+                or not isinstance(rec.get("resolution"), dict)):
+            return None
         res = dict(rec["resolution"])
         entry = store.rolls.find_or_append_by_proposal(
             cid, sid, _roll_label(res), res["result"], proposal=pid)
@@ -2663,6 +2683,12 @@ def post_roll_proposal(cid: str, sid: str, body: ProposalAction,
 
     if status == "resolved":
         resolution = _project_resolution(cid, sid, pid)
+        if resolution is None:
+            # Another actor won the scene's record in the window between our
+            # pre-stream status read and the projection lock (a supersede +
+            # brand-new fence/send). Nothing was projected — stop dead, same
+            # as any other lost-race case, with a clean done frame.
+            return _sse_response([_sse({"done": True})])
         messages = _continuation_messages(cid, sid, resolution)
     elif status == "declined":
         messages = _declined_continuation_messages(cid, sid)
