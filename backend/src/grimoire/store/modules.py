@@ -104,6 +104,9 @@ def _validate_field(field: dict, where: str, errors: list[str]) -> None:
     if not key or not isinstance(key, str):
         errors.append(f"{where}: field missing key")
         return
+    if key in expressions._FUNCS:
+        errors.append(f"{where}.{key}: reserved key (expression function name)")
+        return
     ftype = field.get("type")
     if ftype not in FIELD_TYPES:
         errors.append(f"{where}.{key}: unknown field type {ftype!r}")
@@ -401,6 +404,19 @@ def _validate_sheets(sheets: dict, errors: list[str]) -> None:
         for f in st_fields:
             _validate_field(f, where, errors)
         fields = assembled_fields(sheets, tid)
+        resource_max = {
+            f["key"] + "_max"
+            for f in fields
+            if isinstance(f, dict) and isinstance(f.get("key"), str)
+            and f.get("type") == "resource"
+        }
+        for f in fields:
+            if not isinstance(f, dict):
+                continue
+            k = f.get("key")
+            if isinstance(k, str) and k in resource_max:
+                errors.append(
+                    f"{where}.{k}: collides with a resource field's implicit _max name")
         keys = [f.get("key") for f in fields if isinstance(f.get("key"), str)]
         for k in {k for k in keys if keys.count(k) > 1}:
             errors.append(f"{where}.{k}: duplicate field key across groups")

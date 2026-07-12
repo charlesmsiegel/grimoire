@@ -703,3 +703,29 @@ def test_list_modules_skips_non_slug_dirs(monkeypatch, tmp_path):
     (d / "sheets.json").write_text('{"groups": {}, "sheet_types": {}}', encoding="utf-8")
     ids = {m["id"] for m in modules.list_modules()}
     assert "MyCoolSystem" not in ids  # skipped, not crashed
+
+
+# ---- Task 1: Reserved field keys (modules.py) ----
+
+
+def test_reserved_function_name_key_rejected(monkeypatch, tmp_path):
+    errs = _sheets_error(
+        monkeypatch, tmp_path,
+        lambda s: s["groups"]["attributes"]["fields"].append(
+            {"key": "floor", "type": "number"}))
+    assert any("reserved" in e for e in errs)
+
+
+def test_resource_max_name_collision_rejected(monkeypatch, tmp_path):
+    # GOOD_SHEETS' warden has resource "essence" -> implicit "essence_max"
+    errs = _sheets_error(
+        monkeypatch, tmp_path,
+        lambda s: s["sheet_types"]["warden"]["fields"].append(
+            {"key": "essence_max", "type": "number"}))
+    assert any("essence_max" in e and "resource" in e for e in errs)
+
+
+def test_builtin_packs_pass_reserved_key_rules(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    for mid in ("d20-basic", "pool-basic"):
+        assert modules.load_pack(mid)["errors"] == []
