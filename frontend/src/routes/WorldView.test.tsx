@@ -3,6 +3,12 @@ import { MemoryRouter, Routes, Route } from "react-router-dom";
 import WorldView from "./WorldView";
 
 vi.mock("../api/client", () => ({
+  ENTITY_FIELDS: {
+    locations: [], lore: [],
+    items: [{ key: "item_type", label: "Type" }, { key: "rarity", label: "Rarity" }],
+    groups: [{ key: "group_type", label: "Type" }],
+    creatures: [{ key: "creature_type", label: "Type" }, { key: "threat", label: "Threat" }],
+  },
   api: {
     getWorld: vi.fn(),
     getCampaign: vi.fn(),

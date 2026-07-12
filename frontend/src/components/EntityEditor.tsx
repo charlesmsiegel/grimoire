@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { api, type EntityKind, type EntityScope, type EntitySummary } from "../api/client";
+import { api, ENTITY_FIELDS, type EntityKind, type EntityScope, type EntitySummary } from "../api/client";
 import { loreOwnerOptions, type LoreOwner } from "../api/loreOwners";
 import { Field } from "./Field";
 import { OwnedLorePanel } from "./OwnedLorePanel";
@@ -26,6 +26,8 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
   const [name, setName] = useState("");
   const [body, setBody] = useState("");
   const [keys, setKeys] = useState("");
+  const fieldSpecs = ENTITY_FIELDS[kind];
+  const [fields, setFields] = useState<Record<string, string>>({});
   const [owners, setOwners] = useState<string[]>([]);          // selected owner refs (lore only)
   const [sdPrompt, setSdPrompt] = useState("");                 // suggested SD prompt, absorb-set only
   const [ownerOpts, setOwnerOpts] = useState<LoreOwner[]>([]); // candidates for the picker
@@ -64,6 +66,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
       setName("");
       setBody("");
       setKeys("");
+      setFields({});
       setOwners(nav.newOwner ? [nav.newOwner] : []);
       setMode("edit");
     }
@@ -83,6 +86,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
     setName("");
     setBody("");
     setKeys("");
+    setFields({});
     setOwners([]); // manual "+ New" / post-save: always world-level, never a stale nav owner
     setSdPrompt("");
     setImages([]);
@@ -96,6 +100,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
     setName(e.meta.name);
     setBody(e.body);
     setKeys(e.meta.keys ?? "");
+    setFields(Object.fromEntries(fieldSpecs.map((f) => [f.key, String((e.meta as any)[f.key] ?? "")])));
     setOwners((e.meta.owners ?? "").split(",").map((o) => o.trim()).filter(Boolean));
     setSdPrompt(e.meta.sd_prompt ?? "");
     setMode("view");
@@ -108,11 +113,13 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
     const ownerStr = owners.join(", ");
     try {
       if (editing) {
-        await api.updateEntity(scope, kind, editing, { name, body, keys, owners: ownerStr });
+        await api.updateEntity(scope, kind, editing,
+          { name, body, keys, owners: ownerStr, ...(fieldSpecs.length ? { fields } : {}) });
         await reload();
         await select(editing); // back to the read-only view
       } else {
-        await api.createEntity(scope, kind, { name, body, keys, owners: ownerStr });
+        await api.createEntity(scope, kind,
+          { name, body, keys, owners: ownerStr, ...(fieldSpecs.length ? { fields } : {}) });
         await reload();
         resetForm();
       }
@@ -283,6 +290,16 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
                   ? <div className="chips">{keyList.map((k) => <span key={k} className="chip on">{k}</span>)}</div>
                   : <div className="field-hint">always-on</div>}
               </div>
+              {fieldSpecs.some((f) => fields[f.key]) && (
+                <div className="side-section">
+                  <h4>Details</h4>
+                  <div className="chips">
+                    {fieldSpecs.filter((f) => fields[f.key]).map((f) => (
+                      <span key={f.key} className="chip on">{f.label}: {fields[f.key]}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
               {sdPrompt && (
                 <div className="side-section">
                   <h4>Image prompt</h4>
@@ -329,6 +346,12 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
             <Field label="Keys" hint="comma-separated activation triggers; blank = always-on">
               <input type="text" value={keys} onChange={(e) => setKeys(e.target.value)} />
             </Field>
+            {fieldSpecs.map((f) => (
+              <Field key={f.key} label={f.label}>
+                <input type="text" value={fields[f.key] ?? ""}
+                       onChange={(e) => setFields({ ...fields, [f.key]: e.target.value })} />
+              </Field>
+            ))}
             {kind === "lore" && (
               <Field label="Owners" hint="lore activates only when an owner is in the scene; none = world-level">
                 <div className="chips owner-picker">
