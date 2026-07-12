@@ -4,7 +4,7 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   api, type Actor, type SceneMeta, type Message, type RosterEntry, type SceneAbsorb,
-  type SceneDatetime, type StagedEdit,
+  type SceneDatetime, type StagedEdit, type ProposalRecord, type SceneCheckActor,
 } from "../api/client";
 import type { ChatEvent } from "../api/stream";
 import { EditableRow } from "../components/EditableRow";
@@ -17,6 +17,7 @@ import { StyleConfig } from "../components/StyleConfig";
 import { Portrait } from "../components/Portrait";
 import { RecordDrawer, type DrawerTarget } from "../components/RecordDrawer";
 import { SceneInspector } from "../components/SceneInspector";
+import { RollProposal, type ResolveBody } from "../components/RollProposal";
 import { quotePlugin } from "../markdown/quotePlugin";
 
 // Marks a manual dice-roll transcript line's speaker (backend: scenes.ROLL_SPEAKER).
@@ -84,9 +85,17 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
   const [ctxKey, setCtxKey] = useState(0);
   const [editing, setEditing] = useState<{ index: number; text: string } | null>(null);
   const [rerollPrompt, setRerollPrompt] = useState<string | null>(null); // null = popover closed
-  // null = closed; open holds the in-progress notation/label/error
-  const [rollForm, setRollForm] = useState<{ notation: string; label: string; error: string | null } | null>(null);
+  // null = closed; open holds the in-progress notation/label/error, plus
+  // the popover's mode (dice notation vs. a module check) and check fields.
+  const [rollForm, setRollForm] = useState<{
+    mode: "dice" | "check"; notation: string; label: string; error: string | null;
+    checkActor: string; checkId: string; difficulty: number; modifier: number;
+  } | null>(null);
+  const [checkActors, setCheckActors] = useState<SceneCheckActor[]>([]);
   const [rolling, setRolling] = useState(false);
+  // a pending/resolved roll-proposal record surfaced by the model mid-stream
+  // or rehydrated on scene select; RollProposal only renders pending/resolved.
+  const [proposal, setProposal] = useState<ProposalRecord | null>(null);
   const [showRollSyntax, setShowRollSyntax] = useState(false);
   const [colorQuotes, setColorQuotes] = useState(false);
   const [labels, setLabels] = useState({ user: "You", assistant: "Grimoire" });
@@ -138,6 +147,12 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
     api.getSceneDatetime(cid, id).then(setDt).catch(() => setDt(null));
     api.getCast(cid, id).then(setCast).catch(() => setCast([]));
     api.listAppearances(cid).then(setRoster).catch(() => setRoster([]));
+    // a proposal already superseded/narrated/declined is no longer live —
+    // RollProposal only knows how to render pending or resolved records.
+    api.getRollProposal(cid, id).then((r) => setProposal(
+      r.record && r.record.status !== "superseded" && r.record.status !== "narrated"
+        && r.record.status !== "declined" ? r.record : null,
+    )).catch(() => setProposal(null));
     const scene = await api.getScene(cid, id);
     setMessages(scene.messages);
     setStreaming("");
@@ -194,6 +209,8 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
           setStreaming(acc);
         } else if (e.error) {
           setError(e.error.detail);
+        } else if (e.proposal) {
+          setProposal({ id: e.proposal.id, status: "pending", payload: e.proposal, resolution: null });
         }
       });
     } catch (err: any) {
@@ -209,6 +226,9 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
 
   async function send() {
     if (busy || rolling) return;
+    // a new turn supersedes any pending proposal durably on the backend —
+    // clear the chip optimistically rather than wait for the re-fetch.
+    setProposal(null);
     const content = input.trim();
     let id = activeId;
     if (!id) {
@@ -276,6 +296,46 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
     } finally {
       setRolling(false);
     }
+  }
+
+  function toggleRollPop() {
+    if (rollForm) {
+      setRollForm(null);
+      return;
+    }
+    setRollForm({ mode: "dice", notation: "", label: "", error: null,
+                  checkActor: "", checkId: "", difficulty: 0, modifier: 0 });
+    if (activeId) {
+      api.getSceneChecks(cid, activeId).then((r) => setCheckActors(r.actors)).catch(() => setCheckActors([]));
+    }
+  }
+
+  async function doCheck() {
+    if (!activeId || busy || rolling || !rollForm) return;
+    if (!rollForm.checkActor || !rollForm.checkId) return;
+    setRolling(true);
+    try {
+      await api.rollCheck(cid, activeId, {
+        check: rollForm.checkId, actor: rollForm.checkActor,
+        difficulty: rollForm.difficulty, modifier: rollForm.modifier,
+      });
+      setRollForm(null);
+      await selectScene(activeId);
+    } catch (err: any) {
+      setRollForm({ ...rollForm, error: err.detail ?? String(err) });
+    } finally {
+      setRolling(false);
+    }
+  }
+
+  // runStream's finally always re-fetches the scene (selectScene), which
+  // also re-fetches the proposal record — so a stale/lost-CAS 409 from
+  // resolveProposal surfaces the server's current record without extra
+  // plumbing here; clearing eagerly avoids a stale chip lingering mid-stream.
+  async function resolve(body: ResolveBody) {
+    if (!activeId) return;
+    setProposal(null);
+    await runStream(activeId, (onEvent) => api.resolveProposal(cid, activeId!, body, onEvent));
   }
 
   async function endScene() {
@@ -664,14 +724,54 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
             </div>
           )}
         </div>
+        {proposal && activeId && (
+          <RollProposal record={proposal} busy={busy} onResolve={resolve} />
+        )}
         <div className="inputbar">
           <button className="roll-btn" title="Roll dice" aria-label="Roll dice"
                   disabled={!activeId || busy || messages.length === 0}
-                  onClick={() => setRollForm((f) => (f ? null : { notation: "", label: "", error: null }))}>
+                  onClick={toggleRollPop}>
             🎲
           </button>
           {rollForm && (
             <div className="roll-pop">
+              <div className="roll-mode-toggle">
+                <button type="button" className={rollForm.mode === "dice" ? "active" : ""}
+                        disabled={rolling}
+                        onClick={() => setRollForm({ ...rollForm, mode: "dice" })}>
+                  Dice
+                </button>
+                <button type="button" className={rollForm.mode === "check" ? "active" : ""}
+                        disabled={rolling}
+                        onClick={() => setRollForm({ ...rollForm, mode: "check" })}>
+                  Check
+                </button>
+              </div>
+              {rollForm.mode === "check" ? (
+                <div className="check-pop">
+                  <select aria-label="Check actor" value={rollForm.checkActor} disabled={rolling}
+                          onChange={(e) => setRollForm({ ...rollForm, checkActor: e.target.value, checkId: "" })}>
+                    <option value="">Choose an actor…</option>
+                    {checkActors.map((a) => <option key={a.ref} value={a.ref}>{a.label}</option>)}
+                  </select>
+                  <select aria-label="Check" value={rollForm.checkId} disabled={rolling}
+                          onChange={(e) => setRollForm({ ...rollForm, checkId: e.target.value })}>
+                    <option value="">Choose a check…</option>
+                    {(checkActors.find((a) => a.ref === rollForm.checkActor)?.checks ?? [])
+                      .map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+                  </select>
+                  <input type="number" aria-label="Difficulty" value={rollForm.difficulty} disabled={rolling}
+                         onChange={(e) => setRollForm({ ...rollForm, difficulty: Number(e.target.value) })} />
+                  <input type="number" aria-label="Modifier" value={rollForm.modifier} disabled={rolling}
+                         onChange={(e) => setRollForm({ ...rollForm, modifier: Number(e.target.value) })} />
+                  <button className="btn-chrome" onClick={doCheck}
+                          disabled={rolling || !rollForm.checkActor || !rollForm.checkId}>
+                    Roll ▸
+                  </button>
+                  {rollForm.error && <span className="roll-error">{rollForm.error}</span>}
+                </div>
+              ) : (
+              <>
               <input
                 autoFocus
                 placeholder="2d6+3, 4d6kh3, 7d10t6…"
@@ -711,6 +811,8 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
                   <div><code>vs N</code> — grade the total success/failure vs a target, e.g. <code>1d20+5 vs 15</code></div>
                   <div>Clauses combine freely (e.g. <code>4d6kh3!+2</code>); <code>tN</code> and <code>vs N</code> are mutually exclusive.</div>
                 </div>
+              )}
+              </>
               )}
             </div>
           )}

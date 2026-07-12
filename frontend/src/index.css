@@ -650,6 +650,18 @@ button.primary { background: var(--accent); color: var(--on-accent); border: var
   border-top: var(--rw) solid var(--rule); display: flex; flex-direction: column; gap: 3px;
 }
 .roll-pop .roll-syntax code { color: var(--ink); }
+.roll-mode-toggle { display: flex; border-right: var(--rw) solid var(--rule); }
+.roll-mode-toggle button {
+  background: none; border: none; padding: 7px 10px; font-family: var(--fm); font-size: 11px;
+  color: var(--muted); cursor: pointer;
+}
+.roll-mode-toggle button.active { color: var(--ink); background: var(--panel2); }
+.check-pop { display: flex; align-items: center; flex-wrap: wrap; }
+.check-pop select {
+  background: transparent; color: var(--ink); border: none; outline: none;
+  border-right: var(--rw) solid var(--rule); padding: 7px 10px; font-family: var(--fm); font-size: 12px;
+}
+.check-pop input[type="number"] { width: 60px; }
 .msg-edit { background: transparent; border: none; color: var(--page-muted); cursor: pointer; font-size: 13px; padding: 0; }
 .msg-edit:hover { color: var(--accent); }
 .msg-edit-form textarea { width: 100%; background: var(--surface); color: var(--ink); border: var(--rw2) solid var(--accent); padding: 8px; font-family: var(--fb); resize: vertical; }
