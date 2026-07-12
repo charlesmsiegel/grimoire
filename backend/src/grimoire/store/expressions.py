@@ -119,5 +119,5 @@ def evaluate(text: str, scope: dict[str, int | float]) -> int | float | bool:
         return _eval(parse(text), scope)
     except ExpressionError:
         raise
-    except (ZeroDivisionError, TypeError, ValueError) as e:
+    except (ZeroDivisionError, TypeError, ValueError, OverflowError) as e:
         raise ExpressionError(f"cannot evaluate {text!r}: {e}") from None

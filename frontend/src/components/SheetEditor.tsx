@@ -60,7 +60,8 @@ function widget(f: ModuleField, value: unknown, onChange: (v: unknown) => void) 
       return (
         <Field key={f.key} label={label} hint="one per line">
           <textarea rows={3} value={arr.join("\n")}
-                    onChange={(e) => onChange(e.target.value.split("\n"))} />
+                    onChange={(e) => onChange(
+                      e.target.value.split("\n").map((s) => s.trim()).filter(Boolean))} />
         </Field>
       );
     }

@@ -169,6 +169,18 @@ test("text and list widgets round-trip through save", async () => {
       quirk: "Hums in the dark", gear: ["lantern", "rope"] }) }));
 });
 
+test("empty list textarea saves an empty array, not a blank line", async () => {
+  render(<SheetEditor scope={{ kind: "campaign", id: "run" }} module={MOD}
+                      kind="characters" eid="mara" initial={SHEET}
+                      onClose={() => {}} onSaved={() => {}} />);
+  fireEvent.click(screen.getByText("Edit"));
+  fireEvent.change(screen.getByLabelText("Gear"), { target: { value: "" } });
+  fireEvent.click(screen.getByText("Save"));
+  await waitFor(() => expect(api.putSheet).toHaveBeenCalledWith(
+    { kind: "campaign", id: "run" }, "pool-basic", "characters", "mara",
+    { sheet_type: "medium", fields: expect.objectContaining({ gear: [] }) }));
+});
+
 test("number widget carries schema min/max bounds", async () => {
   render(<SheetEditor scope={{ kind: "campaign", id: "run" }} module={MOD}
                       kind="characters" eid="mara" initial={SHEET}

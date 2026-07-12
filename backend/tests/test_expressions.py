@@ -80,6 +80,11 @@ def test_runtime_errors_become_expression_errors(text, scope):
         expressions.evaluate(text, scope)
 
 
+def test_overflow_becomes_expression_error():
+    with pytest.raises(expressions.ExpressionError):
+        expressions.evaluate("a / 2", {"a": 10**400})
+
+
 @pytest.mark.parametrize("text", ["+a", "True", "min(a, b=1)"])
 def test_spec_whitelist_is_exact(text):
     with pytest.raises(expressions.ExpressionError):
