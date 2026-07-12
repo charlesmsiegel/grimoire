@@ -63,6 +63,15 @@ class NewCampaign(BaseModel):
     world: str
     region: str | None = None
     calendar: str | None = None
+    module: str | None = None
+
+
+class ModuleCreate(BaseModel):
+    name: str
+
+
+class ModuleSetting(BaseModel):
+    module: str = ""
 
 
 class PickBody(BaseModel):
@@ -317,6 +326,36 @@ def put_data_dir(update: DataDirUpdate):
     return store.data_dir_info()
 
 
+# ---- modules (#160) ----
+@router.get("/modules")
+def get_modules():
+    return store.modules.list_modules()
+
+
+@router.post("/modules")
+def post_module(body: ModuleCreate):
+    return {"id": store.modules.create_module(body.name)}
+
+
+@router.get("/modules/{mid}")
+def get_module(mid: str):
+    try:
+        return store.modules.load_pack(mid)
+    except store.modules.ModuleNotFound:
+        raise HTTPException(status_code=404, detail="module not found")
+
+
+@router.delete("/modules/{mid}")
+def delete_module(mid: str):
+    try:
+        store.modules.delete_module(mid)
+    except store.modules.ModuleNotFound:
+        raise HTTPException(status_code=404, detail="module not found")
+    except store.modules.ModuleError:
+        raise HTTPException(status_code=400, detail="built-in modules cannot be deleted")
+    return {"ok": True}
+
+
 # ---- worlds ----
 @router.get("/worlds")
 def get_worlds():
@@ -362,6 +401,19 @@ def delete_world(wid: str):
 @router.get("/worlds/{wid}/campaigns")
 def get_world_campaigns(wid: str):
     return store.sync.campaigns_for_world(wid)
+
+
+# registered before the generic /worlds/{wid}/{kind} entity routes below,
+# which would otherwise swallow /worlds/x/module
+@router.put("/worlds/{wid}/module")
+def put_world_module(wid: str, body: ModuleSetting):
+    try:
+        store.modules.set_world_module(wid, body.module.strip())
+    except store.worlds.WorldNotFound:
+        raise HTTPException(status_code=404, detail="world not found")
+    except store.modules.ModuleNotFound:
+        raise HTTPException(status_code=404, detail="module not found")
+    return {"ok": True}
 
 
 # ---- world tags (declared before the generic /{kind} routes) ----
@@ -1346,11 +1398,14 @@ def get_calendar_months(cid: str, year: int):
 def post_campaign(body: NewCampaign):
     try:
         return {"id": store.campaigns.create_campaign(body.name, body.world,
-                                                      body.region, body.calendar)}
+                                                      body.region, body.calendar,
+                                                      body.module)}
     except store.worlds.WorldNotFound:
         raise HTTPException(status_code=400, detail="world not found")
     except store.calendars.CalendarError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except store.modules.ModuleNotFound:
+        raise HTTPException(status_code=404, detail="module not found")
 
 
 @router.get("/campaigns/{cid}")
@@ -2173,6 +2228,33 @@ def post_roll_replay(cid: str, rid: str):
         return {"ok": True, **store.rolls.replay(cid, rid)}
     except store.rolls.RollNotFound:
         raise HTTPException(status_code=404, detail="roll not found")
+
+
+# also registered before the generic /campaigns/{cid}/{kind} entity routes,
+# same reasoning as /campaigns/x/rolls above
+@router.get("/campaigns/{cid}/module")
+def get_campaign_module(cid: str):
+    try:
+        meta = store.campaigns.read_campaign(cid)["meta"]
+    except store.campaigns.CampaignNotFound:
+        raise HTTPException(status_code=404, detail="campaign not found")
+    setting = (meta.get("module") or "").strip()
+    resolved = store.modules.resolve(cid)
+    source = None
+    if resolved is not None:
+        source = "campaign" if setting and setting != "none" else "world"
+    return {"setting": setting, "resolved": resolved, "source": source}
+
+
+@router.put("/campaigns/{cid}/module")
+def put_campaign_module(cid: str, body: ModuleSetting):
+    try:
+        store.modules.set_campaign_module(cid, body.module.strip())
+    except store.campaigns.CampaignNotFound:
+        raise HTTPException(status_code=404, detail="campaign not found")
+    except store.modules.ModuleNotFound:
+        raise HTTPException(status_code=404, detail="module not found")
+    return {"ok": True}
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}/context")
