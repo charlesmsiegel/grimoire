@@ -262,9 +262,21 @@ export type GroupState = {
 };
 
 // modules
+export type LayoutNode = {
+  row?: LayoutNode[]; column?: LayoutNode[]; group?: string;
+  fields?: string[]; derived?: string[]; title?: string; grid?: boolean;
+};
+export type ModuleTheme = {
+  colors?: Partial<Record<"bg" | "ink" | "muted" | "accent" | "rule", string>>;
+  fonts?: Partial<Record<"display" | "body", string>>;
+  dots?: string; corners?: string;
+};
+export type DisplayError = { source: "layout" | "theme"; sheet_type: string | null; message: string };
+
 export type ModuleSummary = {
   id: string; name: string; description: string;
   version: string; source: "builtin" | "user"; valid: boolean;
+  display_ok?: boolean;
 };
 export type ModuleField = {
   key: string; label?: string; type: string;
@@ -284,6 +296,9 @@ export type ModuleDetail = {
   rules: { id: string; keys: string[]; always: boolean; on_roll: boolean; sheet_types: string[] }[];
   content: { kind: string; id: string; name: string; sheet_type: string | null }[];
   errors: string[];
+  layout?: { sheet_types: Record<string, LayoutNode> };
+  theme?: ModuleTheme;
+  display_errors?: DisplayError[];
 };
 export type CampaignModule = {
   setting: string; resolved: string | null; source: "campaign" | "world" | null;

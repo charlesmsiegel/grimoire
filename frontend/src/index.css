@@ -825,3 +825,57 @@ button.primary { background: var(--accent); color: var(--on-accent); border: var
   padding: 6px 8px; font-family: var(--fb); font-size: 15px;
 }
 .roll-proposal .form-actions { justify-content: flex-start; margin-top: 10px; }
+
+/* ---- sheet display: widgets, layout, theme (#165) ----
+   All --sheet-* vars are set inline on .sheet-takeover from the module's
+   validated theme.json; every use falls back to app tokens so unthemed
+   modules render exactly in the active app theme. */
+.widget-row { display: flex; align-items: baseline; gap: 10px; font-size: 13px; padding: 2px 0; }
+.widget-label {
+  min-width: 110px; font-family: var(--fm); font-size: 11px;
+  text-transform: uppercase; letter-spacing: .08em;
+  color: var(--sheet-muted, var(--sheet-ink, var(--muted)));
+}
+.pips { display: inline-flex; gap: 4px; align-items: center; }
+.pip {
+  width: 12px; height: 12px; padding: 0; display: inline-block;
+  border: 1.5px solid var(--sheet-rule, var(--sheet-ink, var(--rule)));
+  background: transparent;
+}
+.pip.on { background: var(--sheet-accent, var(--sheet-ink, var(--accent))); }
+button.pip { cursor: pointer; }
+.pip.dot { border-radius: 50%; }
+[data-dots="square"] .pip.dot { border-radius: 0; }
+[data-dots="diamond"] .pip.dot { border-radius: 0; transform: rotate(45deg); width: 10px; height: 10px; }
+.pip.box { border-radius: 2px; }
+.resource { display: inline-flex; align-items: center; gap: 8px; flex: 1; }
+.resource-bar {
+  flex: 1; max-width: 220px; height: 10px; display: inline-block;
+  border: 1.5px solid var(--sheet-rule, var(--sheet-ink, var(--rule)));
+  background: transparent; /* never an app token — must sit on any themed bg */
+}
+.resource-fill { display: block; height: 100%; background: var(--sheet-accent, var(--accent)); }
+.resource-text { font-family: var(--fm); font-size: 12px; }
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(90px, 1fr)); gap: 8px; }
+.stat-cell {
+  border: 1.5px solid var(--sheet-rule, var(--sheet-ink, var(--rule)));
+  border-radius: var(--sheet-radius, 0);
+  padding: 8px 6px; text-align: center; display: flex; flex-direction: column; gap: 2px;
+}
+.stat-value { font-family: var(--sheet-fd, var(--fd)); font-size: 26px; line-height: 1; }
+.stat-cell input { width: 100%; text-align: center; font-size: 18px; }
+.stat-label {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .08em;
+  color: var(--sheet-muted, var(--sheet-ink, var(--muted)));
+}
+.derived-badges { display: flex; flex-wrap: wrap; gap: 6px; }
+.derived-badge {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; font-size: 12px;
+  border: 1.5px solid var(--sheet-rule, var(--sheet-ink, var(--rule)));
+  border-radius: var(--sheet-radius, 0);
+}
+.derived-name {
+  color: var(--sheet-muted, var(--sheet-ink, var(--muted)));
+  font-size: 10px; text-transform: uppercase; letter-spacing: .08em;
+}
+.widget-list { margin: 0; padding-left: 18px; font-size: 13px; }
