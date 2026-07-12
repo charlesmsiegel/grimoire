@@ -47,6 +47,7 @@ vi.mock("../api/client", async () => {
       getCastDetail: vi.fn(), readEntity: vi.fn(),
       getCalendarConfig: vi.fn(), setCalendarConfig: vi.fn(), getCalendarProviders: vi.fn(),
       getSceneDatetime: vi.fn(), setSceneDatetime: vi.fn(), getCalendarMonths: vi.fn(),
+      listStyles: vi.fn(), getSceneStyle: vi.fn(), setSceneStyle: vi.fn(),
       listCharacters: vi.fn(), listPCs: vi.fn(), listCampaignPCs: vi.fn(),
       campaignChanges: vi.fn(),
       listAppearances: vi.fn(), listEntityImages: vi.fn(), listEntities: vi.fn(),
@@ -85,6 +86,8 @@ beforeEach(() => {
     { id: "gregorian", name: "Gregorian" }, { id: "hebrew", name: "Hebrew" },
   ] });
   (api.getSceneDatetime as any).mockResolvedValue({ current: null, history: [] });
+  (api.listStyles as any).mockResolvedValue([]);
+  (api.getSceneStyle as any).mockResolvedValue({ style_id: "" });
   (api.listCharacters as any).mockResolvedValue([]);
   (api.listPCs as any).mockResolvedValue([]);
   (api.listCampaignPCs as any).mockResolvedValue([]);
