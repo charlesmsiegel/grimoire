@@ -7,8 +7,10 @@ import { TagEditor } from "../components/TagEditor";
 import { EntityEditor } from "../components/EntityEditor";
 import { GreetingEditor } from "../components/GreetingEditor";
 import { LorebookImport } from "../components/LorebookImport";
+import { WorldOverview } from "../components/WorldOverview";
 
 const TABS = [
+  { key: "overview", label: "Overview" },
   { key: "characters", label: "Characters" },
   { key: "pcs", label: "PCs" },
   { key: "tags", label: "Tags" },
@@ -28,7 +30,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   const [wid, setWid] = useState(campaign ? "" : widParam);
   const [campaignName, setCampaignName] = useState("");
   const [name, setName] = useState("");
-  const [tab, setTab] = useState<TabKey>("characters");
+  const [tab, setTab] = useState<TabKey>(campaign ? "characters" : "overview");
   const [charReset, setCharReset] = useState(0);
   const [loreReset, setLoreReset] = useState(0);
   const [focusChar, setFocusChar] = useState<{ cid: string; vid: string } | null>(null);
@@ -50,7 +52,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
 
   const scope: EntityScope = campaign ? { kind: "campaign", id: cid } : { kind: "world", id: wid };
   // tag vocabulary is a world concern; campaign PC tags are free strings
-  const tabs = campaign ? TABS.filter((t) => t.key !== "tags") : TABS;
+  const tabs = campaign ? TABS.filter((t) => t.key !== "tags" && t.key !== "overview") : TABS;
 
   // a present-character link from the greeting view jumps to that character
   function openCharacter(cid: string, vid: string) {
@@ -111,6 +113,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
         ))}
       </div>
 
+      {!campaign && tab === "overview" && <WorldOverview wid={wid} onNavigate={(t) => setTab(t as TabKey)} />}
       {tab === "characters" && <CharacterEditor scope={scope} wid={wid} resetSignal={charReset} focus={focusChar} onOpenLore={openLore} onOpenGreeting={openGreeting} />}
       {tab === "pcs" && <PCEditor scope={scope} wid={wid} onOpenLore={openLore} />}
       {!campaign && tab === "tags" && <TagEditor wid={wid} />}
