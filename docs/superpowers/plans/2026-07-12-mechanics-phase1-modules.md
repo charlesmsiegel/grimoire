@@ -1541,7 +1541,7 @@ In `campaigns.py`, change `create_campaign`'s signature to
 and, next to the existing calendar validation (before any files are created), add:
 
 ```python
-    if module:
+    if module and module != "none":  # "none" = explicitly mechanics-free, always legal
         from . import modules
         modules.pack_root(module)  # raises ModuleNotFound before creating anything
 ```
