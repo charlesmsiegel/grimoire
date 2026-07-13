@@ -799,7 +799,7 @@ def test_mechanics_sections_for_module_bound_campaign(monkeypatch, tmp_path):
                                        characters.blank_card("Winifred"))[0]
     ap.appear(cid, sid, "characters", char, "default", "npc")
     sheets_store.write(cid, "characters", char, "adept",
-                       {"mana": {"current": 3, "max": 5}, "focus": 2})
+                       {"mana": {"current": 3, "max": 5}, "focus": 2}, expected=None)
     scenes.append_message(cid, sid, "user", "We cast a spell.")
 
     sections = {s["label"]: s["text"] for s in context.context_sections(cid, sid)}

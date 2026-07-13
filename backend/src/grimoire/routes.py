@@ -112,11 +112,13 @@ class ModuleSetting(BaseModel):
 class SheetBody(BaseModel):
     sheet_type: str
     fields: dict | None = None
+    expected: dict | None = None  # omitted == null == "assert no sheet exists"
 
 
 class SheetCreationBody(BaseModel):
     sheet_type: str
     spends: dict[str, dict[str, int]] = {}
+    expected: dict | None = None  # omitted == null == "assert no sheet exists"
 
 
 class SheetAdvanceBody(BaseModel):
@@ -2900,7 +2902,9 @@ def get_campaign_sheet(cid: str, kind: str, eid: str):
 def put_campaign_sheet(cid: str, kind: str, eid: str, body: SheetBody):
     _campaign_root_or_404(cid)
     try:
-        store.sheets.write(cid, kind, eid, body.sheet_type, body.fields)
+        store.sheets.write(cid, kind, eid, body.sheet_type, body.fields, expected=body.expected)
+    except store.sheets.SheetConflict as e:
+        raise HTTPException(status_code=409, detail=str(e))
     except store.sheets.SheetError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"ok": True}
@@ -2916,9 +2920,12 @@ def delete_campaign_sheet(cid: str, kind: str, eid: str):
 def put_campaign_sheet_creation(cid: str, kind: str, eid: str, body: SheetCreationBody):
     _campaign_root_or_404(cid)
     try:
-        store.sheets.write_creation(cid, kind, eid, body.sheet_type, body.spends)
+        store.sheets.write_creation(cid, kind, eid, body.sheet_type, body.spends,
+                                    expected=body.expected)
     except (store.characters.CharacterNotFound, store.pcs.PCNotFound, store.entities.EntityNotFound):
         raise HTTPException(status_code=404, detail=f"{kind} not found")
+    except store.sheets.SheetConflict as e:
+        raise HTTPException(status_code=409, detail=str(e))
     except store.sheets.SheetError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"sheet": store.sheets.read(cid, kind, eid)}
@@ -2952,7 +2959,8 @@ def post_campaign_instantiate(cid: str, kind: str, mid: str, content_id: str):
         raise HTTPException(status_code=404, detail="unknown kind")
     if content.get("sheet_type"):
         try:
-            store.sheets.write(cid, kind, eid, content["sheet_type"], content.get("fields"))
+            store.sheets.write(cid, kind, eid, content["sheet_type"], content.get("fields"),
+                              expected=None)
         except (store.modules.ModuleNotFound, store.sheets.SheetError) as e:
             # The entity was just created campaign-side via overlay.create_entity
             # with no world counterpart, so overlay.delete_entity removes the

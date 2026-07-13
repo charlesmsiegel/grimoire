@@ -3090,9 +3090,61 @@ def test_campaign_sheet_routes(client):
     assert idx["coverage"]["characters"]["sheeted"] == 1
     assert ["characters", chid] in idx["refs"]
 
-    assert client.put(base, json={"sheet_type": "ghost"}).status_code == 400
+    # unknown sheet_type -> 400 (matching `expected` clears the CAS gate first)
+    snap = {"sheet_type": got["sheet_type"], "fields": got["fields"], "gen": got["gen"]}
+    assert client.put(base, json={"sheet_type": "ghost", "expected": snap}).status_code == 400
+    # a stale/omitted `expected` on an existing sheet -> 409, not 400
+    assert client.put(base, json={"sheet_type": "medium"}).status_code == 409
     assert client.delete(base).json()["ok"] is True
     assert client.get("/api/campaigns/nope/sheets").status_code == 404
+
+
+# expected -- mandatory whole-sheet CAS on the sheet PUT route (mechanics
+# Phase 5, Task 3). Brief's placeholder sheet_type "adventurer" is adapted to
+# pool-basic's real "medium" characters type, reusing this file's _campaign
+# helper in place of the brief's placeholder `module_campaign` fixture.
+def test_sheet_put_cas(client):
+    wid, cid = _campaign(client)
+    client.put(f"/api/campaigns/{cid}/module", json={"module": "pool-basic"})
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"}).json()["character"]
+
+    base = f"/api/campaigns/{cid}/sheets/characters/{chid}"
+    r = client.put(base, json={"sheet_type": "medium", "fields": None, "expected": None})
+    assert r.status_code == 200
+    sheet = client.get(base).json()["sheet"]
+    snap = {"sheet_type": sheet["sheet_type"], "fields": sheet["fields"], "gen": sheet["gen"]}
+    # stale creation assertion -> 409
+    r = client.put(base, json={"sheet_type": "medium", "fields": None, "expected": None})
+    assert r.status_code == 409
+    # matching snapshot with a real field change -> 200; reusing that now-stale
+    # snapshot afterwards -> 409 (a same-value write wouldn't re-mint gen and
+    # so wouldn't actually invalidate the snapshot -- see sheets._next_gen)
+    new_fields = {**sheet["fields"], "vigor": 3}
+    r = client.put(base, json={"sheet_type": "medium", "fields": new_fields, "expected": snap})
+    assert r.status_code == 200
+    r = client.put(base, json={"sheet_type": "medium", "fields": new_fields, "expected": snap})
+    assert r.status_code == 409
+
+
+def test_instantiate_still_creates_sheeted_content(client, tmp_path):
+    # Regression for the instantiate route's server-side expected=None call
+    # (routes.py post_campaign_instantiate) plus its rollback path: a fresh
+    # entity is created this request, so the internal sheets.write can never
+    # collide with an existing sheet -- both the entity and its sheet must
+    # exist afterwards. Reuses test_instantiate_into_campaign's fixture
+    # content id, but with statted=True (the Phase 7 instantiate scenario
+    # that actually exercises a sheet write).
+    mid = _seed_content_module(client, tmp_path, statted=True)
+    wid, cid = _campaign(client)
+    client.put(f"/api/campaigns/{cid}/module", json={"module": mid})
+    r = client.post(f"/api/campaigns/{cid}/items/instantiate/{mid}/lantern")
+    assert r.status_code == 200
+    eid = r.json()["id"]
+    entity = client.get(f"/api/campaigns/{cid}/items/{eid}").json()
+    assert entity["meta"]["name"] == "Lantern of Winnowing"
+    sheet = client.get(f"/api/campaigns/{cid}/sheets/items/{eid}").json()["sheet"]
+    assert sheet["sheet_type"] == "trinket"
+    assert sheet["fields"]["power"] == 2
 
 
 def test_campaign_sheet_routes_without_module(client):
@@ -3132,10 +3184,10 @@ def _mech_scene(client, module="pool-basic"):
                 json={"kind": "characters", "id": chid, "version": "default", "role": "npc"})
     if module == "d20-basic":
         store.sheets.write(cid, "characters", chid, "warrior",
-                           {"str": 16, "dex": 12, "athletics": 3})
+                           {"str": 16, "dex": 12, "athletics": 3}, expected=None)
     else:
         store.sheets.write(cid, "characters", chid, "medium",
-                           {"vigor": 3, "brawl": 2, "wits": 2, "occult": 1})
+                           {"vigor": 3, "brawl": 2, "wits": 2, "occult": 1}, expected=None)
     return cid, sid, chid
 
 
@@ -3918,9 +3970,15 @@ def test_campaign_sheet_creation_route(client):
     base = f"/api/campaigns/{cid}/sheets/characters/{chid}/creation"
     r = client.put(base, json={"sheet_type": "medium", "spends": {}})
     assert r.status_code == 200
-    assert r.json()["sheet"]["sheet_type"] == "medium"
-    r = client.put(base, json={"sheet_type": "ghost", "spends": {}})
+    sheet = r.json()["sheet"]
+    assert sheet["sheet_type"] == "medium"
+    snap = {"sheet_type": sheet["sheet_type"], "fields": sheet["fields"], "gen": sheet["gen"]}
+    # unknown sheet_type -> 400 (matching `expected` clears the CAS gate first)
+    r = client.put(base, json={"sheet_type": "ghost", "spends": {}, "expected": snap})
     assert r.status_code == 400
+    # a stale/omitted `expected` on an existing sheet -> 409, not 400
+    r = client.put(base, json={"sheet_type": "medium", "spends": {}})
+    assert r.status_code == 409
 
 
 def test_campaign_sheet_creation_route_missing_target_404(client):

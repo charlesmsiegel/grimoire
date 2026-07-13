@@ -16,7 +16,7 @@ def test_write_and_read_with_derived(monkeypatch, tmp_path):
     _, cid = _campaign(monkeypatch, tmp_path)
     sheets.write(cid, "characters", "mara", "medium",
                  {"vigor": 2, "grace": 3, "wits": 4, "occult": 2,
-                  "essence": {"current": 6, "max": 10}})
+                  "essence": {"current": 6, "max": 10}}, expected=None)
     s = sheets.read(cid, "characters", "mara")
     assert s["sheet_type"] == "medium"
     assert s["errors"] == []
@@ -31,7 +31,7 @@ def test_read_missing_returns_none(monkeypatch, tmp_path):
 
 def test_write_defaults_when_fields_none(monkeypatch, tmp_path):
     _, cid = _campaign(monkeypatch, tmp_path)
-    sheets.write(cid, "items", "moon-disc", "talisman", None)
+    sheets.write(cid, "items", "moon-disc", "talisman", None, expected=None)
     s = sheets.read(cid, "items", "moon-disc")
     assert s["fields"]["power"] == 1                       # schema default
     assert s["fields"]["charges"] == {"current": 10, "max": 10}  # default max
@@ -40,36 +40,37 @@ def test_write_defaults_when_fields_none(monkeypatch, tmp_path):
 
 def test_pcs_validate_against_characters(monkeypatch, tmp_path):
     _, cid = _campaign(monkeypatch, tmp_path)
-    sheets.write(cid, "pcs", "seraphine", "medium", None)
+    sheets.write(cid, "pcs", "seraphine", "medium", None, expected=None)
     assert sheets.read(cid, "pcs", "seraphine")["sheet_type"] == "medium"
 
 
 def test_write_rejects_kind_mismatch(monkeypatch, tmp_path):
     _, cid = _campaign(monkeypatch, tmp_path)
     with pytest.raises(sheets.SheetError):
-        sheets.write(cid, "characters", "mara", "talisman", None)  # items type
+        sheets.write(cid, "characters", "mara", "talisman", None, expected=None)  # items type
 
 
 def test_write_rejects_unknown_type_and_bad_values(monkeypatch, tmp_path):
     _, cid = _campaign(monkeypatch, tmp_path)
     with pytest.raises(sheets.SheetError):
-        sheets.write(cid, "characters", "mara", "ghost", None)
+        sheets.write(cid, "characters", "mara", "ghost", None, expected=None)
     with pytest.raises(sheets.SheetError):
-        sheets.write(cid, "characters", "mara", "medium", {"vigor": 99})
+        sheets.write(cid, "characters", "mara", "medium", {"vigor": 99}, expected=None)
 
 
 def test_write_without_module_rejected(monkeypatch, tmp_path):
     _, cid = _campaign(monkeypatch, tmp_path, module=None)
     with pytest.raises(sheets.SheetError):
-        sheets.write(cid, "characters", "mara", "medium", None)
+        sheets.write(cid, "characters", "mara", "medium", None, expected=None)
 
 
 def test_type_change_preserves_shared_drops_orphans(monkeypatch, tmp_path):
     _, cid = _campaign(monkeypatch, tmp_path)
     sheets.write(cid, "characters", "mara", "medium",
-                 {"vigor": 3, "essence": {"current": 5, "max": 10}})
+                 {"vigor": 3, "essence": {"current": 5, "max": 10}}, expected=None)
+    snap = _snapshot(cid, "characters", "mara")
     sheets.write(cid, "characters", "mara", "shifter",
-                 {"vigor": 3, "essence": {"current": 5, "max": 10}})
+                 {"vigor": 3, "essence": {"current": 5, "max": 10}}, expected=snap)
     s = sheets.read(cid, "characters", "mara")
     assert s["sheet_type"] == "shifter"
     assert s["fields"]["vigor"] == 3         # shared via attributes group
@@ -78,7 +79,7 @@ def test_type_change_preserves_shared_drops_orphans(monkeypatch, tmp_path):
 
 def test_invalid_after_module_switch(monkeypatch, tmp_path):
     _, cid = _campaign(monkeypatch, tmp_path)
-    sheets.write(cid, "characters", "mara", "medium", None)
+    sheets.write(cid, "characters", "mara", "medium", None, expected=None)
     modules.set_campaign_module(cid, "d20-basic")
     s = sheets.read(cid, "characters", "mara")
     assert s["errors"]                        # flagged, not deleted
@@ -98,8 +99,8 @@ def test_malformed_sheet_file_tolerated(monkeypatch, tmp_path):
 
 def test_delete_and_list_refs(monkeypatch, tmp_path):
     _, cid = _campaign(monkeypatch, tmp_path)
-    sheets.write(cid, "characters", "mara", "medium", None)
-    sheets.write(cid, "items", "moon-disc", "talisman", None)
+    sheets.write(cid, "characters", "mara", "medium", None, expected=None)
+    sheets.write(cid, "items", "moon-disc", "talisman", None, expected=None)
     assert sheets.list_refs(cid) == [("characters", "mara"), ("items", "moon-disc")]
     assert sheets.delete(cid, "items", "moon-disc") is True
     assert sheets.delete(cid, "items", "moon-disc") is False
@@ -109,18 +110,18 @@ def test_delete_and_list_refs(monkeypatch, tmp_path):
 def test_bad_kind_and_eid_rejected(monkeypatch, tmp_path):
     _, cid = _campaign(monkeypatch, tmp_path)
     with pytest.raises(sheets.SheetError):
-        sheets.write(cid, "vehicles", "cart", "medium", None)
+        sheets.write(cid, "vehicles", "cart", "medium", None, expected=None)
     with pytest.raises(sheets.SheetError):
-        sheets.write(cid, "characters", "../escape", "medium", None)
+        sheets.write(cid, "characters", "../escape", "medium", None, expected=None)
     assert sheets.read(cid, "vehicles", "cart") is None
 
 
 def test_write_rejects_wrong_typed_arguments(monkeypatch, tmp_path):
     _, cid = _campaign(monkeypatch, tmp_path)
     with pytest.raises(sheets.SheetError):
-        sheets.write(cid, "characters", "mara", ["medium"], None)  # type: ignore[arg-type]
+        sheets.write(cid, "characters", "mara", ["medium"], None, expected=None)  # type: ignore[arg-type]
     with pytest.raises(sheets.SheetError):
-        sheets.write(cid, "characters", "mara", "medium", [1, 2])  # type: ignore[arg-type]
+        sheets.write(cid, "characters", "mara", "medium", [1, 2], expected=None)  # type: ignore[arg-type]
     assert sheets.read(cid, "characters", 7) is None  # type: ignore[arg-type]
 
 
@@ -129,7 +130,7 @@ def test_world_write_bad_mid_and_colon_eid_rejected(monkeypatch, tmp_path):
     with pytest.raises(sheets.SheetError):
         sheets.write_world(wid, "..", "characters", "mara", "medium", None)
     with pytest.raises(sheets.SheetError):
-        sheets.write(cid, "characters", "c:evil", "medium", None)
+        sheets.write(cid, "characters", "c:evil", "medium", None, expected=None)
 
 
 # World sheet tests
@@ -180,7 +181,7 @@ def test_campaign_coverage(monkeypatch, tmp_path):
     ent.create_entity(worlds.world_root(wid), "items", "Moon Disc")
     ent.create_entity(worlds.world_root(wid), "locations", "Old Chapel")
     overlay.create_entity(cid, "items", "Salt Knife")
-    sheets.write(cid, "items", "moon-disc", "talisman", None)
+    sheets.write(cid, "items", "moon-disc", "talisman", None, expected=None)
     cov = sheets.coverage(cid)
     assert cov["items"] == {"total": 2, "sheeted": 1, "invalid": 0}
     assert cov["locations"]["total"] == 1
@@ -193,7 +194,7 @@ def test_coverage_counts_invalid(monkeypatch, tmp_path):
     wid, cid = _campaign(monkeypatch, tmp_path)
     from grimoire.store import overlay
     overlay.create_entity(cid, "items", "Moon Disc")
-    sheets.write(cid, "items", "moon-disc", "talisman", None)
+    sheets.write(cid, "items", "moon-disc", "talisman", None, expected=None)
     modules.set_campaign_module(cid, "d20-basic")        # talisman now unknown
     cov = sheets.coverage(cid)
     assert cov["items"]["invalid"] == 1
@@ -293,7 +294,7 @@ def _campaign_with_creation_module(monkeypatch, tmp_path):
 def test_write_creation_happy_path(monkeypatch, tmp_path):
     _, cid = _campaign_with_creation_module(monkeypatch, tmp_path)
     sheets.write_creation(cid, "characters", "mara", "hero",
-                          {"attributes": {"strength": 12, "wits": 3}})
+                          {"attributes": {"strength": 12, "wits": 3}}, expected=None)
     s = sheets.read(cid, "characters", "mara")
     assert s["errors"] == []
     assert s["fields"]["strength"] == 12
@@ -304,21 +305,21 @@ def test_write_creation_over_budget_rejected(monkeypatch, tmp_path):
     _, cid = _campaign_with_creation_module(monkeypatch, tmp_path)
     with pytest.raises(sheets.SheetError):
         sheets.write_creation(cid, "characters", "mara", "hero",
-                              {"attributes": {"strength": 20, "wits": 5}})
+                              {"attributes": {"strength": 20, "wits": 5}}, expected=None)
 
 
 def test_write_creation_field_outside_range_rejected(monkeypatch, tmp_path):
     _, cid = _campaign_with_creation_module(monkeypatch, tmp_path)
     with pytest.raises(sheets.SheetError):
         sheets.write_creation(cid, "characters", "mara", "hero",
-                              {"attributes": {"strength": 999, "wits": 0}})
+                              {"attributes": {"strength": 999, "wits": 0}}, expected=None)
 
 
 def test_write_creation_field_not_in_pool_rejected(monkeypatch, tmp_path):
     _, cid = _campaign_with_creation_module(monkeypatch, tmp_path)
     with pytest.raises(sheets.SheetError):
         sheets.write_creation(cid, "characters", "mara", "hero",
-                              {"attributes": {"hp": 5}})
+                              {"attributes": {"hp": 5}}, expected=None)
 
 
 def test_write_creation_omitted_costed_field_uses_floor_not_default(monkeypatch, tmp_path):
@@ -327,7 +328,7 @@ def test_write_creation_omitted_costed_field_uses_floor_not_default(monkeypatch,
     # schema default (10), or the budget-omission loophole reopens.
     _, cid = _campaign_with_creation_module(monkeypatch, tmp_path)
     sheets.write_creation(cid, "characters", "mara", "hero",
-                          {"attributes": {"wits": 2}})
+                          {"attributes": {"wits": 2}}, expected=None)
     s = sheets.read(cid, "characters", "mara")
     assert s["fields"]["strength"] == 1
     assert s["fields"]["wits"] == 2
@@ -337,12 +338,12 @@ def test_write_creation_unknown_pool_rejected(monkeypatch, tmp_path):
     _, cid = _campaign_with_creation_module(monkeypatch, tmp_path)
     with pytest.raises(sheets.SheetError):
         sheets.write_creation(cid, "characters", "mara", "hero",
-                              {"ghost_pool": {"strength": 12}})
+                              {"ghost_pool": {"strength": 12}}, expected=None)
 
 
 def test_write_creation_empty_spends_falls_through_to_defaults(monkeypatch, tmp_path):
     _, cid = _campaign_with_creation_module(monkeypatch, tmp_path)
-    sheets.write_creation(cid, "characters", "mara", "hero", {})
+    sheets.write_creation(cid, "characters", "mara", "hero", {}, expected=None)
     s = sheets.read(cid, "characters", "mara")
     assert s["fields"]["strength"] == 1   # floor, not schema default 10
     assert s["fields"]["hp"] == {"current": 10, "max": 10}  # non-costed field: schema default
@@ -362,19 +363,19 @@ def test_write_world_creation(monkeypatch, tmp_path):
 def test_write_creation_missing_character_raises_not_found(monkeypatch, tmp_path):
     _, cid = _campaign_with_creation_module(monkeypatch, tmp_path)
     with pytest.raises(characters.CharacterNotFound):
-        sheets.write_creation(cid, "characters", "nobody", "hero", {})
+        sheets.write_creation(cid, "characters", "nobody", "hero", {}, expected=None)
 
 
 def test_write_creation_missing_pc_raises_not_found(monkeypatch, tmp_path):
     _, cid = _campaign_with_creation_module(monkeypatch, tmp_path)
     with pytest.raises(pcs.PCNotFound):
-        sheets.write_creation(cid, "pcs", "nobody", "hero", {})
+        sheets.write_creation(cid, "pcs", "nobody", "hero", {}, expected=None)
 
 
 def test_write_creation_missing_entity_raises_not_found(monkeypatch, tmp_path):
     _, cid = _campaign_with_creation_module(monkeypatch, tmp_path)
     with pytest.raises(entities.EntityNotFound):
-        sheets.write_creation(cid, "items", "nobody", "hero", {})
+        sheets.write_creation(cid, "items", "nobody", "hero", {}, expected=None)
 
 
 def test_write_world_creation_missing_character_raises_not_found(monkeypatch, tmp_path):
@@ -426,7 +427,8 @@ def _campaign_with_advancement_module(monkeypatch, tmp_path, campaign_name="Run"
     wid = worlds.create_world("Realm")
     characters.create_character(worlds.world_root(wid), "Mara")  # id: "mara"
     cid = campaigns.create_campaign(campaign_name, wid, module="advtest")
-    sheets.write(cid, "characters", "mara", "hero", {"wits": 2, "xp": {"current": 20, "max": 999}})
+    sheets.write(cid, "characters", "mara", "hero", {"wits": 2, "xp": {"current": 20, "max": 999}},
+                 expected=None)
     return wid, cid
 
 
@@ -441,7 +443,8 @@ def test_advance_happy_path(monkeypatch, tmp_path):
 def test_advance_insufficient_balance(monkeypatch, tmp_path):
     wid, cid = _campaign_with_advancement_module(monkeypatch, tmp_path)
     characters.create_character(worlds.world_root(wid), "Poor")  # id: "poor"
-    sheets.write(cid, "characters", "poor", "hero", {"wits": 2, "xp": {"current": 1, "max": 999}})
+    sheets.write(cid, "characters", "poor", "hero", {"wits": 2, "xp": {"current": 1, "max": 999}},
+                 expected=None)
     with pytest.raises(sheets.SheetError, match="needs 9"):
         sheets.advance(cid, "characters", "poor", "wits")
 
@@ -449,7 +452,8 @@ def test_advance_insufficient_balance(monkeypatch, tmp_path):
 def test_advance_field_at_max(monkeypatch, tmp_path):
     wid, cid = _campaign_with_advancement_module(monkeypatch, tmp_path)
     characters.create_character(worlds.world_root(wid), "Capped")  # id: "capped"
-    sheets.write(cid, "characters", "capped", "hero", {"wits": 5, "xp": {"current": 999, "max": 999}})
+    sheets.write(cid, "characters", "capped", "hero", {"wits": 5, "xp": {"current": 999, "max": 999}},
+                 expected=None)
     with pytest.raises(sheets.SheetError):
         sheets.advance(cid, "characters", "capped", "wits")
 
@@ -457,7 +461,7 @@ def test_advance_field_at_max(monkeypatch, tmp_path):
 def test_advance_no_advancement_block(monkeypatch, tmp_path):
     wid, cid = _campaign(monkeypatch, tmp_path)  # pool-basic has no advancement block yet
     characters.create_character(worlds.world_root(wid), "Mara")  # id: "mara"
-    sheets.write(cid, "characters", "mara", "medium", None)
+    sheets.write(cid, "characters", "mara", "medium", None, expected=None)
     with pytest.raises(sheets.SheetError):
         sheets.advance(cid, "characters", "mara", "vigor")
 
@@ -501,7 +505,7 @@ def test_advance_orphan_sheet_without_backing_character_raises_not_found(monkeyp
     # all (test_advance_missing_character_raises_not_found above).
     _wid, cid = _campaign_with_advancement_module(monkeypatch, tmp_path)
     sheets.write(cid, "characters", "ghost", "hero",
-                 {"wits": 2, "xp": {"current": 20, "max": 999}})
+                 {"wits": 2, "xp": {"current": 20, "max": 999}}, expected=None)
     assert sheets.read(cid, "characters", "ghost") is not None  # orphan sheet really exists
     with pytest.raises(characters.CharacterNotFound):
         sheets.advance(cid, "characters", "ghost", "wits")
@@ -511,7 +515,8 @@ def test_advance_concurrent_calls_only_one_succeeds(monkeypatch, tmp_path):
     import threading
     wid, cid = _campaign_with_advancement_module(monkeypatch, tmp_path)
     characters.create_character(worlds.world_root(wid), "Duelist")  # id: "duelist"
-    sheets.write(cid, "characters", "duelist", "hero", {"wits": 2, "xp": {"current": 9, "max": 999}})
+    sheets.write(cid, "characters", "duelist", "hero", {"wits": 2, "xp": {"current": 9, "max": 999}},
+                 expected=None)
     results = []
     barrier = threading.Barrier(2)
 
@@ -539,7 +544,8 @@ def test_advance_first_ever_call_cold_registry_race(monkeypatch, tmp_path):
     import threading
     wid, cid = _campaign_with_advancement_module(monkeypatch, tmp_path, campaign_name="Cold Registry Run")
     characters.create_character(worlds.world_root(wid), "First")  # id: "first"
-    sheets.write(cid, "characters", "first", "hero", {"wits": 2, "xp": {"current": 9, "max": 999}})
+    sheets.write(cid, "characters", "first", "hero", {"wits": 2, "xp": {"current": 9, "max": 999}},
+                 expected=None)
     # sheets.write above now also serializes on lock_for(cid) (Task 2), which
     # warms the registry -- pop it back out so this test still exercises the
     # concurrent first-ever-call race through advance()'s own lock_for(cid).
@@ -605,7 +611,7 @@ def test_advance_cost_uses_tentative_post_raise_derived_scope(monkeypatch, tmp_p
     wid, cid = _campaign_with_tentative_scope_module(monkeypatch, tmp_path)
     characters.create_character(worlds.world_root(wid), "Mara")  # id: "mara"
     sheets.write(cid, "characters", "mara", "hero",
-                 {"strength": 2, "dexterity": 3, "xp": {"current": 12, "max": 999}})
+                 {"strength": 2, "dexterity": 3, "xp": {"current": 12, "max": 999}}, expected=None)
     s = sheets.advance(cid, "characters", "mara", "strength")
     assert s["fields"]["strength"] == 3
     # Tripwire: a regression to stale-scope pricing would leave xp.current
@@ -620,7 +626,7 @@ def test_advance_cost_rejection_also_uses_tentative_scope(monkeypatch, tmp_path)
     wid, cid = _campaign_with_tentative_scope_module(monkeypatch, tmp_path)
     characters.create_character(worlds.world_root(wid), "Poor")  # id: "poor"
     sheets.write(cid, "characters", "poor", "hero",
-                 {"strength": 2, "dexterity": 3, "xp": {"current": 11, "max": 999}})
+                 {"strength": 2, "dexterity": 3, "xp": {"current": 11, "max": 999}}, expected=None)
     with pytest.raises(sheets.SheetError, match="needs 12"):
         sheets.advance(cid, "characters", "poor", "strength")
 
@@ -661,7 +667,7 @@ def test_advance_rejects_nonpositive_cost_from_real_values(monkeypatch, tmp_path
     wid, cid = _campaign_with_runtime_positive_check_module(monkeypatch, tmp_path)
     characters.create_character(worlds.world_root(wid), "Mara")  # id: "mara"
     sheets.write(cid, "characters", "mara", "hero",
-                 {"toughness": 4, "xp": {"current": 999, "max": 999}})
+                 {"toughness": 4, "xp": {"current": 999, "max": 999}}, expected=None)
     with pytest.raises(sheets.SheetError, match="must be a positive integer"):
         sheets.advance(cid, "characters", "mara", "toughness")
 
@@ -671,17 +677,17 @@ def test_advance_rejects_nonpositive_cost_from_real_values(monkeypatch, tmp_path
 
 def test_gen_minted_on_create(monkeypatch, tmp_path):
     _, cid = _campaign(monkeypatch, tmp_path)
-    sheets.write(cid, "characters", "mara", "medium", None)
+    sheets.write(cid, "characters", "mara", "medium", None, expected=None)
     s = sheets.read(cid, "characters", "mara")
     assert isinstance(s["gen"], str) and len(s["gen"]) == 32
 
 
 def test_gen_preserved_on_same_type_write(monkeypatch, tmp_path):
     _, cid = _campaign(monkeypatch, tmp_path)
-    sheets.write(cid, "characters", "mara", "medium", None)
+    sheets.write(cid, "characters", "mara", "medium", None, expected=None)
     g1 = sheets.read(cid, "characters", "mara")["gen"]
-    fields = sheets.read(cid, "characters", "mara")["fields"]
-    sheets.write(cid, "characters", "mara", "medium", {**fields, "vigor": 3})
+    snap = _snapshot(cid, "characters", "mara")
+    sheets.write(cid, "characters", "mara", "medium", {**snap["fields"], "vigor": 3}, expected=snap)
     assert sheets.read(cid, "characters", "mara")["gen"] == g1
 
 
@@ -691,22 +697,24 @@ def test_gen_minted_on_type_change(monkeypatch, tmp_path):
     # not a hand-edited fake, is enough to exercise the new-gen path.
     _, cid = _campaign(monkeypatch, tmp_path)
     sheets.write(cid, "characters", "mara", "medium",
-                 {"vigor": 3, "essence": {"current": 5, "max": 10}})
+                 {"vigor": 3, "essence": {"current": 5, "max": 10}}, expected=None)
     g1 = sheets.read(cid, "characters", "mara")["gen"]
+    snap = _snapshot(cid, "characters", "mara")
     sheets.write(cid, "characters", "mara", "shifter",
-                 {"vigor": 3, "essence": {"current": 5, "max": 10}})
+                 {"vigor": 3, "essence": {"current": 5, "max": 10}}, expected=snap)
     assert sheets.read(cid, "characters", "mara")["gen"] != g1
 
 
 def test_legacy_file_without_gen_reads_none_and_gains_one_on_write(monkeypatch, tmp_path):
     _, cid = _campaign(monkeypatch, tmp_path)
-    sheets.write(cid, "characters", "mara", "medium", None)
+    sheets.write(cid, "characters", "mara", "medium", None, expected=None)
     p = sheets._campaign_path(cid, "characters", "mara")
     data = json.loads(p.read_text(encoding="utf-8"))
     del data["gen"]
     p.write_text(json.dumps(data), encoding="utf-8")
     assert sheets.read(cid, "characters", "mara")["gen"] is None
-    sheets.write(cid, "characters", "mara", "medium", data["fields"])
+    snap = _snapshot(cid, "characters", "mara")
+    sheets.write(cid, "characters", "mara", "medium", data["fields"], expected=snap)
     assert isinstance(sheets.read(cid, "characters", "mara")["gen"], str)
 
 
@@ -745,8 +753,65 @@ def test_write_resolves_module_inside_the_lock(monkeypatch, tmp_path):
         return real(c)
 
     monkeypatch.setattr(modules_mod, "resolve", spy)
-    sheets.write(cid, "characters", "mara", "medium", None)
+    sheets.write(cid, "characters", "mara", "medium", None, expected=None)
     assert seen and all(seen)
+
+
+# expected -- mandatory whole-sheet CAS (mechanics Phase 5, Task 3)
+# NOTE: the brief's snippet uses a placeholder sheet type "adventurer" and a
+# placeholder field "athletics" -- adapted here to pool-basic's real
+# "medium" characters type and its "vigor" dots field (see
+# _campaign_with_creation_module etc. above for the pattern of adapting
+# brief placeholders to real fixtures).
+
+
+def _snapshot(cid, kind, eid):
+    s = sheets.read(cid, kind, eid)
+    return {"sheet_type": s["sheet_type"], "fields": s["fields"], "gen": s["gen"]}
+
+
+def test_cas_none_expected_creates_then_conflicts(monkeypatch, tmp_path):
+    _, cid = _campaign(monkeypatch, tmp_path)
+    sheets.write(cid, "characters", "mara", "medium", None, expected=None)
+    with pytest.raises(sheets.SheetConflict):
+        sheets.write(cid, "characters", "mara", "medium", None, expected=None)
+
+
+def test_cas_matching_snapshot_writes(monkeypatch, tmp_path):
+    _, cid = _campaign(monkeypatch, tmp_path)
+    sheets.write(cid, "characters", "mara", "medium", None, expected=None)
+    snap = _snapshot(cid, "characters", "mara")
+    sheets.write(cid, "characters", "mara", "medium",
+                 {**snap["fields"], "vigor": 3}, expected=snap)
+    assert sheets.read(cid, "characters", "mara")["fields"]["vigor"] == 3
+
+
+def test_cas_stale_fields_conflict(monkeypatch, tmp_path):
+    _, cid = _campaign(monkeypatch, tmp_path)
+    sheets.write(cid, "characters", "mara", "medium", None, expected=None)
+    snap = _snapshot(cid, "characters", "mara")
+    sheets.write(cid, "characters", "mara", "medium",
+                 {**snap["fields"], "vigor": 3}, expected=snap)
+    with pytest.raises(sheets.SheetConflict):  # snap is now stale
+        sheets.write(cid, "characters", "mara", "medium",
+                     {**snap["fields"], "vigor": 1}, expected=snap)
+
+
+def test_cas_gen_mismatch_with_identical_content_conflicts(monkeypatch, tmp_path):
+    """ABA: delete + recreate with identical type/default fields must still
+    409 a stale editor whose snapshot matches by value."""
+    _, cid = _campaign(monkeypatch, tmp_path)
+    sheets.write(cid, "characters", "mara", "medium", None, expected=None)
+    snap = _snapshot(cid, "characters", "mara")
+    # Task 4 (delete gains expected_gen) doesn't exist yet on this branch --
+    # call the current delete(cid, kind, eid) signature.
+    sheets.delete(cid, "characters", "mara")
+    sheets.write(cid, "characters", "mara", "medium", None, expected=None)
+    live = _snapshot(cid, "characters", "mara")
+    assert live["sheet_type"] == snap["sheet_type"] and live["fields"] == snap["fields"]
+    with pytest.raises(sheets.SheetConflict):
+        sheets.write(cid, "characters", "mara", "medium",
+                     snap["fields"], expected=snap)
 
 
 def test_editor_write_serializes_with_advance(monkeypatch, tmp_path):
@@ -765,9 +830,9 @@ def test_editor_write_serializes_with_advance(monkeypatch, tmp_path):
 
     def do_write():
         try:
-            sheet_type = sheets.read(cid, "characters", "mara")["sheet_type"]
-            sheets.write(cid, "characters", "mara", sheet_type,
-                         {**base_fields, "wits": 2})
+            snap = _snapshot(cid, "characters", "mara")
+            sheets.write(cid, "characters", "mara", snap["sheet_type"],
+                         {**base_fields, "wits": 2}, expected=snap)
         except Exception as e:  # noqa: BLE001
             errs.append(e)
 
@@ -776,8 +841,11 @@ def test_editor_write_serializes_with_advance(monkeypatch, tmp_path):
     for t in threads: t.join()
     # Serialization guarantee is about atomicity, not order: whichever ran
     # second operated on the first's committed state, so neither raced a torn
-    # read-modify-write. (Same-field last-write-wins between these two writers
-    # is resolved by CAS in Task 3; this test only proves lock coverage --
-    # no exception from a torn file, file parses cleanly.)
+    # read-modify-write. With Task 3's mandatory CAS, do_write's snapshot
+    # (read outside the lock) can go stale if do_advance's in-lock
+    # read-modify-write lands first -- that surfaces as a clean SheetConflict
+    # rejection, not corruption. This test now only proves the lock still
+    # serializes both writers so the file is never torn.
     s = sheets.read(cid, "characters", "mara")
-    assert s["errors"] == [] and not errs
+    assert s["errors"] == []
+    assert all(isinstance(e, sheets.SheetConflict) for e in errs)
