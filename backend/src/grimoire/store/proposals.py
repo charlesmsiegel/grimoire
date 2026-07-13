@@ -105,6 +105,37 @@ def claim(cid: str, sid: str, pid: str) -> bool:
     return transition(cid, sid, pid, ("pending",), "resolving")
 
 
+def update_resolution(cid: str, sid: str, pid: str, resolution: dict) -> bool:
+    """Persist projection metadata onto the scene's record WITHOUT changing
+    status. Writes ``resolution`` only when the record carries exactly this id
+    AND its status is ``resolved`` or ``superseded``; returns False (record
+    replaced or moved to another state — caller stops) otherwise.
+
+    This exists so projection metadata (roll_id, line_intent) persists on a
+    same-id *superseded* record — whose roll stands in the transcript as
+    history per spec — which a plain status CAS (``transition(...,
+    ("resolved",), "resolved", res)``) would silently drop once superseded.
+    It is NOT a state transition: status is left exactly as found either way.
+
+    A still-``resolved`` record is written through that status-preserving CAS
+    (``resolved -> resolved``), so the write lands only while the id and state
+    still hold and refuses cleanly against any concurrent legal transition. A
+    ``superseded`` record is terminal — no CAS can target it — so its metadata
+    is written directly.
+    """
+    with _lock(cid):
+        if transition(cid, sid, pid, ("resolved",), "resolved", resolution):
+            return True
+        data = _read(cid)
+        rec = data.get(sid)
+        if (not isinstance(rec, dict) or rec.get("id") != pid
+                or rec.get("status") != "superseded"):
+            return False
+        rec["resolution"] = resolution
+        _write(cid, data)
+        return True
+
+
 def supersede(cid: str, sid: str) -> None:
     """A new send or a newer fence retires any non-narrated proposal."""
     with _lock(cid):

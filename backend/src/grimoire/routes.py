@@ -2568,20 +2568,24 @@ def _project_resolution(cid: str, sid: str, pid: str) -> dict | None:
     check: a record that still carries this id but was superseded after
     resolving (status "superseded") must still project — its roll stands in
     the transcript as history per spec; only the automatic continuation is
-    cancelled (by commit_narration), not the roll projection itself."""
+    cancelled (by commit_narration), not the roll projection itself. The
+    roll_id/line_intent backfills persist via ``update_resolution``, which
+    writes metadata without touching terminal status, so a same-id superseded
+    record keeps them (a status CAS would silently lose and drop them)."""
     with store.proposals.locked(cid):
         rec = store.proposals.get(cid, sid)
         if (rec is None or rec.get("id") != pid
+                or rec.get("status") not in ("resolved", "superseded")
                 or not isinstance(rec.get("resolution"), dict)):
             return None
         res = dict(rec["resolution"])
         entry = store.rolls.find_or_append_by_proposal(
             cid, sid, _roll_label(res), res["result"], proposal=pid)
         res = {**res, "roll_id": entry["id"]}
-        store.proposals.transition(cid, sid, pid, ("resolved",), "resolved", res)
+        store.proposals.update_resolution(cid, sid, pid, res)
         if "line_intent" not in res:
             res = {**res, "line_intent": len(_scene_messages(cid, sid))}
-            store.proposals.transition(cid, sid, pid, ("resolved",), "resolved", res)
+            store.proposals.update_resolution(cid, sid, pid, res)
         line = store.checks.format_check_roll(res)
         if not any(m.get("speaker") == store.scenes.ROLL_SPEAKER and m["content"] == line
                    for m in _scene_messages(cid, sid)[res["line_intent"]:]):
@@ -2649,7 +2653,19 @@ def post_roll_proposal(cid: str, sid: str, body: ProposalAction,
     _require_key(cfg)
     pid = body.proposal
     rec = store.proposals.get(cid, sid)
-    if rec is None or rec.get("id") != pid or rec.get("status") == "superseded":
+    if rec is None or rec.get("id") != pid:
+        raise HTTPException(status_code=409, detail="proposal is stale")
+    if rec.get("status") == "superseded":
+        # A same-id superseded record that already resolved still owes its roll
+        # + 🎲 line to the transcript (the roll stands as history per spec). If
+        # a crash landed between the roll append and the line write, no other
+        # path heals it, so a stale client's retry becomes the recovery path:
+        # project idempotently (pure file I/O), then still 409 — no
+        # continuation is ever offered for a superseded record. A record
+        # superseded while still pending/resolving has no resolution to
+        # project; it stays a plain 409.
+        if isinstance(rec.get("resolution"), dict):
+            _project_resolution(cid, sid, pid)
         raise HTTPException(status_code=409, detail="proposal is stale")
     status = rec["status"]
 
