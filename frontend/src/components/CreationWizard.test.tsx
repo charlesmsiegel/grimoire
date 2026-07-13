@@ -52,7 +52,7 @@ describe("CreationWizard", () => {
 
     await waitFor(() => expect(createRecord).toHaveBeenCalledWith("Sword"));
     await waitFor(() => expect(api.putSheetCreation).toHaveBeenCalledWith(
-      scope, "testmod", "items", "sword", { sheet_type: "hero", spends: { attributes: { vigor: 3 } } }));
+      scope, "testmod", "items", "sword", { sheet_type: "hero", spends: { attributes: { vigor: 3 } }, expected: null }));
     expect(onDone).toHaveBeenCalledWith("sword");
   });
 
@@ -84,7 +84,7 @@ describe("CreationWizard", () => {
     fireEvent.click(screen.getByText("Create"));
 
     await waitFor(() => expect(api.putSheetCreation).toHaveBeenCalledWith(
-      scope, "testmod", "items", "shield", { sheet_type: "plain", spends: {} }));
+      scope, "testmod", "items", "shield", { sheet_type: "plain", spends: {}, expected: null }));
     expect(onDone).toHaveBeenCalledWith("shield");
   });
 
@@ -148,7 +148,7 @@ describe("CreationWizard", () => {
     fireEvent.click(createButton);
 
     await waitFor(() => expect(api.putSheetCreation).toHaveBeenCalledWith(
-      scope, "testmod", "items", "elara", { sheet_type: "hero", spends: { attributes: { strength: 3 } } }));
+      scope, "testmod", "items", "elara", { sheet_type: "hero", spends: { attributes: { strength: 3 } }, expected: null }));
     expect(onDone).toHaveBeenCalledWith("elara");
   });
 
@@ -172,7 +172,7 @@ describe("CreationWizard", () => {
     fireEvent.change(select, { target: { value: "hero" } });
     fireEvent.click(screen.getByText("Create"));
     await waitFor(() => expect(api.putSheetCreation).toHaveBeenCalledWith(
-      scope, "testmod", "pcs", "elara", { sheet_type: "hero", spends: {} }));
+      scope, "testmod", "pcs", "elara", { sheet_type: "hero", spends: {}, expected: null }));
     expect(onDone).toHaveBeenCalledWith("elara");
   });
 
