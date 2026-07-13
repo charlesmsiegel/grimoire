@@ -16,7 +16,7 @@ deltas through the existing StagedEdit review flow.
 | XP / advancement | No exception to the mutable-only rule. XP *awards* are ordinary resource deltas (advancement pools are structurally `resource` fields — `sheets.advance` requires `{current, max}`); *raises* stay behind the manual Advance button | The rule stays clean with zero special cases; narration-driven stat raises were the questionable half and remain out of scope. |
 | Scene-start baseline | Every scene captures a snapshot of all campaign sheets at creation (`sheet_baselines.json`), stamped with the resolved **module id**, a **schema stamp** (content hash + `sheets.json` mtime) of the pack's sheets definition, and each sheet's **generation nonce** (`gen`) + `sheet_type`. An entity without a *valid* baseline is report-only: warnings allowed, **sheet deltas suppressed at materialize and re-checked inside the write lock at apply** | Codex rounds 1+3+4+6: current-only values are ambiguous ("current 4 + narration spends 2" cannot distinguish already-applied from still-pending); assuming current-as-start can re-propose an already-applied change whose CAS would then succeed; and a baseline captured under a different module, schema revision, sheet type, or a deleted-and-recreated sheet is an unrelated value that must not authorize writes. No sound before-value → no writes. |
 | Sheet identity: generation nonce | Every campaign/world sheet file carries `"gen": "<uuid4 hex>"`, minted on creation and on any type-changing whole-sheet write, preserved by value writes (`write` same-type, `advance`, `set_field`). Baseline validity requires `gen` equality with the live sheet | Codex rounds 4–6: cross-store invalidation hooks (the round-4 design) created a capture-vs-invalidate resurrection race and an authorize-then-lock TOCTOU. An identity carried *in the sheet file itself* is immune to both: delete/recreate or type change mint a new `gen`, so a stale baseline can never match the replacement sheet — checked atomically inside the write lock, no bookkeeping to race. |
-| Sheet write discipline | **Every** campaign-sheet mutator (`write`, `write_creation`, `advance`, `set_field`, `delete`) serializes on the per-campaign sheet lock; every campaign whole-sheet replacement carries a **mandatory** CAS on the full `{sheet_type, fields}` snapshot (`expected=None` asserts "no sheet exists yet"); `set_field` is a strict per-field CAS. All four callers inventoried and updated (see Write discipline) | Codex rounds 2–4: `sheets.write` took no lock and replaced the whole map (a pre-existing `write`-vs-`advance` hole); an *optional* CAS left a stale last-write-wins path open; a fields-only compare could silently revert a concurrent `sheet_type` change; and the content-instantiate route also calls `sheets.write`, so a "required parameter" change must update it or it breaks at runtime. |
+| Sheet write discipline | **Every** campaign-sheet mutator (`write`, `write_creation`, `advance`, `set_field`, `delete`) serializes on the per-campaign sheet lock; every campaign whole-sheet replacement carries a **mandatory** CAS on the full `{sheet_type, fields, gen}` snapshot (`expected=None` asserts "no sheet exists yet"); `set_field` is a strict per-field CAS. All four callers inventoried and updated (see Write discipline) | Codex rounds 2–4+8: `sheets.write` took no lock and replaced the whole map (a pre-existing `write`-vs-`advance` hole); an *optional* CAS left a stale last-write-wins path open; a fields-only compare could silently revert a concurrent `sheet_type` change; and the content-instantiate route also calls `sheets.write`, so a "required parameter" change must update it or it breaks at runtime. Round 8: without `gen` in the snapshot, a delete/recreate or A→B→A type change with identical fields is an ABA a value compare cannot see. |
 | Apply-time authorization | Client-supplied `"sheet"` edits are re-authorized **inside the sheet lock, immediately before the CAS write**: scene scope, baseline validity (module + schema stamp + `gen` + type), and mutability are all recomputed from `cid`/`sid` and the live file within one critical section that **resolves the module once at entry**; module-rebind routes serialize on the same lock | Codex rounds 2+4+6–7: chronicle-PUT edits are client-supplied; a check performed before lock acquisition is a TOCTOU (delete/recreate could pass CAS against an unrelated sheet), and an unserialized rebind could split the section across two modules. One critical section with a single module resolution closes both structurally. Manual editing of arbitrary sheets stays where it belongs — the sheet PUT. |
 | Apply semantics | `set_field` per-field strict CAS: only the approved field is written; live ≠ expect is **always** a visible conflict — including live == proposed-value, which reads "already applied or independently changed". **Every** failed approved sheet edit — CAS conflict, re-authorization failure, or any other `SheetError` — is returned with its id and reason; nothing is silently skipped | Codex rounds 1–2+5: plain absolute overwrite loses concurrent updates; treating `live == value` as a confirmed retry can mask an independent same-value mutation (two XP awards collapsing into one); and a schema-drift or validation `SheetError` swallowed by the generic best-effort skip would let the user close the panel believing an approved XP/damage update landed. Strict CAS + full failure reporting needs no operation ledger. |
 | Audit visibility | The absorb response carries `mechanics: {status: "ok"\|"degraded"\|"failed"\|"skipped", reason, warnings, dropped}`; `failed` and `degraded` render a notice with a **Retry validation** action backed by a standalone audit endpoint. **"ok" means the full scope was audited and every model item survived**: an invalid scoped sheet, a malformed item, or a materialize-rejected delta (other than a benign no-op) makes the status `degraded` with each exclusion listed; a scope whose sheets are *all* invalid is `failed`, never `skipped` | Codex rounds 3+5+6: an empty warnings list must mean "audited clean", never "the audit died", "the audit's findings were quietly thrown away", or "the audit could not see half the cast". Retry re-runs only the audit — not the whole absorb (and its dossier calls). |
@@ -227,14 +227,18 @@ All in `sheets.py`:
   editor) and no engine writers.
 - **Mandatory whole-sheet CAS.** `write` and `write_creation` gain a
   required `expected: dict | None` parameter — the full
-  `{"sheet_type": ..., "fields": {...}}` snapshot the caller last read:
+  `{"sheet_type": ..., "fields": {...}, "gen": ...}` snapshot the caller
+  last read (`read` surfaces `gen` precisely so callers can echo it):
   - `expected=None` asserts **no sheet exists yet** (creation); if a file
     exists → `SheetConflict`.
   - `expected` given: compared (under the lock) against the stored
-    snapshot — `sheet_type` **and** `fields`; any mismatch →
-    `SheetConflict`. Comparing the type too means a concurrent type
-    change can never be silently reverted by a stale save whose field
-    maps happen to match.
+    snapshot — `sheet_type`, `fields`, **and `gen`**; any mismatch →
+    `SheetConflict`. Comparing the type means a concurrent type change
+    can never be silently reverted by a stale save whose field maps
+    happen to match; comparing the identity nonce means a **logically
+    replaced sheet** — deleted and recreated with identical type and
+    default fields, or type-changed A→B→A — can never accept a stale
+    editor's save either (the ABA case a value compare cannot see).
   - **Caller inventory** (every campaign-sheet writer, updated in this
     phase): the sheet PUT (`routes.py` — client sends `expected`, `null`
     when creating; `SheetConflict` → 409); the creation-wizard POST
@@ -427,10 +431,13 @@ phase — see Out of scope.
 - **`sheets.write`/`write_creation` CAS**: `expected` snapshot match →
   write; `fields` mismatch → `SheetConflict`; **`sheet_type` mismatch with
   identical fields → `SheetConflict`** (the silent type-revert case);
-  `expected=None` with an existing file → `SheetConflict`;
-  `expected=None` with no file → creates; **instantiate-route
-  regression** — sheeted content instantiates cleanly and the rollback
-  path (entity deleted on sheet failure) still works.
+  **`gen` mismatch with identical type and fields → `SheetConflict`**
+  (the ABA cases: stale editor vs delete/recreate with default fields,
+  and vs an A→B→A type change) → 409 at the route; `expected=None` with
+  an existing file → `SheetConflict`; `expected=None` with no file →
+  creates; **instantiate-route regression** — sheeted content
+  instantiates cleanly and the rollback path (entity deleted on sheet
+  failure) still works.
 - **Locking races** (threaded): `set_field` vs `advance` — both complete,
   neither write lost; `set_field` vs editor `write` with a **stale
   snapshot** — the stale write 409s and the delta survives; editor
