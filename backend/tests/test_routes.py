@@ -3625,3 +3625,74 @@ def test_superseded_while_pending_same_id_post_is_plain_409(client):
     assert _roll_lines(client, cid, sid) == []
     after = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
     assert after["status"] == "superseded" and after["resolution"] is None
+
+
+def test_new_fence_replacement_heals_crashed_projection(client, monkeypatch):
+    # Tail of the crash-window family: after a projection crash (roll tagged,
+    # 🎲 line missing) the superseded record is the only recovery handle, and
+    # proposals.new() on the next turn's fresh fence ERASES it — a stale retry
+    # then 409s on the id mismatch and nothing would ever heal the line. The
+    # fence path must heal (project) the current record before replacing it.
+    cid, sid, _ = _mech_scene(client)
+    rec, pid = _resolve_then_supersede(client, cid, sid)
+
+    real_append = store.scenes.append_message
+    state = {"raised": False}
+    def flaky_append(*a, **k):
+        if not state["raised"]:
+            state["raised"] = True
+            raise RuntimeError("crash before 🎲 line")
+        return real_append(*a, **k)
+    monkeypatch.setattr(store.scenes, "append_message", flaky_append)
+    with pytest.raises(RuntimeError):
+        routes._project_resolution(cid, sid, pid)
+    # restore only this attr — never monkeypatch.undo() (shared GRIMOIRE_HOME)
+    monkeypatch.setattr(store.scenes, "append_message", real_append)
+    assert _roll_lines(client, cid, sid) == []          # roll tagged, no line
+
+    # the next chat turn's model emits a fresh fence, replacing the record —
+    # the heal must run at replace time, before the handle is erased
+    resp = _emit_fence(client, cid, sid,
+                       '{"check": "brawl", "actor": "characters:mara", "difficulty": 6}')
+    assert resp.status_code == 200
+
+    assert len(_roll_lines(client, cid, sid)) == 1      # old roll's line healed
+    assert len([e for e in client.get(f"/api/campaigns/{cid}/rolls").json()
+                if e.get("proposal") == pid]) == 1      # still exactly one roll
+    fresh = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert fresh["id"] != pid                           # new record minted...
+    assert fresh["status"] == "pending" and fresh["resolution"] is None  # ...untouched
+
+    # a stale retry with the old id is now just a 409 with no side effects
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal", json=_accept_body(rec))
+    assert resp.status_code == 409
+    assert len(_roll_lines(client, cid, sid)) == 1
+    assert len([e for e in client.get(f"/api/campaigns/{cid}/rolls").json()
+                if e.get("proposal") == pid]) == 1
+    after = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert after["id"] == fresh["id"] and after["status"] == "pending"
+
+
+def test_new_fence_replacement_projects_resolved_record(client):
+    # Simpler variant, no crash injection: a resolved-with-resolution record
+    # that never got projected at all (crash before projection started) is
+    # replaced by a new fence — the heal projects roll + line exactly once
+    # before proposals.new() erases the handle.
+    cid, sid, _ = _mech_scene(client)
+    rec = _pending(client, cid, sid)
+    pid = rec["id"]
+    store.proposals.claim(cid, sid, pid)
+    resolution = store.checks.resolve_check(cid, "brawl", "characters:mara", 6, 0)
+    assert store.proposals.transition(cid, sid, pid, ("resolving",), "resolved", resolution)
+    assert client.get(f"/api/campaigns/{cid}/rolls").json() == []   # never projected
+
+    resp = _emit_fence(client, cid, sid,
+                       '{"check": "brawl", "actor": "characters:mara", "difficulty": 6}')
+    assert resp.status_code == 200
+
+    tagged = [e for e in client.get(f"/api/campaigns/{cid}/rolls").json()
+              if e.get("proposal") == pid]
+    assert len(tagged) == 1
+    assert len(_roll_lines(client, cid, sid)) == 1
+    fresh = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert fresh["id"] != pid and fresh["status"] == "pending"
