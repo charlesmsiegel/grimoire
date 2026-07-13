@@ -226,19 +226,34 @@ CAS, gets its now-unknown renamed key silently filtered by
   world sheets — and by migration (Codex adversarial round 2: locking
   only `write_world`/`delete_world` left the creation route and seeding
   free to publish an old-schema sheet after migration passed).
-- **Campaigns created mid-operation** cannot escape: after the campaign
-  migration pass completes, the op **re-enumerates** all campaigns and
-  locks+migrates any campaign not in the original set, repeating until
-  the enumeration is stable (a fixed point — campaign creation is rare,
-  so this converges immediately). A campaign seeded during the op got
-  either pre-migration world sheets (then it's caught by re-enumeration)
-  or post-migration ones (already correct).
+- **One global lock order, acquired up front** (Codex adversarial
+  round 4: acquiring a late-discovered campaign's lock *while already
+  holding* higher-sorted locks deadlocks against any other multi-lock
+  holder, e.g. the world-rebind route). The op acquires every campaign
+  lock in sorted-cid order, then every world lock in sorted-wid order —
+  and any multi-lock holder in the codebase (this op, the world-rebind
+  route) must follow the same campaigns-then-worlds sorted discipline.
+  After acquiring, it **re-enumerates**: if a campaign appeared since
+  enumeration, it releases *everything* and reacquires the full union in
+  sorted order, repeating until the enumeration is stable under the
+  locks (campaign creation is rare — this converges immediately). Locks
+  never grow while held.
+- **Campaigns created after the stable acquisition** cannot escape
+  either: seeding copies world sheets under the world-scope lock, which
+  this op holds until migration completes — so any such campaign blocks
+  and then seeds from already-migrated world sheets.
 - The pending migration (op kind + address + `to`) is recorded in the
   journal before the swap; migration then rewrites every affected file;
   the journal is cleared only after migration completes. A crash
   mid-migration is therefore resumed by recovery (see Swap/Recovery), and
   the rewrite is **idempotent** — rename the key if the old one is
-  present, skip if already renamed — so replaying is safe.
+  present, skip if already renamed — so replaying is safe. A stored
+  sheet holding **both** keys (reachable: removals preserve orphaned
+  values, so an earlier-removed `might` can sit beside `strength` when
+  `strength → might` is requested) is a value collision neither
+  overwrite nor skip resolves losslessly — the pre-swap scan detects it
+  and **rejects the rename**, listing the affected sheet paths so the
+  user resolves the orphaned values first (Codex adversarial round 4).
 - Scope: every `<world>/sheets/<mid>/<kind>--<id>.json` (worlds hold
   starting sheets for a module regardless of binding) and the campaign
   sheets of every campaign that resolved to `mid` under its lock. For
@@ -260,9 +275,13 @@ CAS, gets its now-unknown renamed key silently filtered by
   and **an unknown field key in a submitted sheet payload becomes a
   validation error (`SheetError` → 400) instead of a silent filter** —
   every writer's payload is either schema-correct or visibly rejected,
-  including creates. Migration's own rewrites are built from known keys,
-  and the Phase 5 absorb path submits existing keys under its lock, so
-  neither regresses.
+  including creates. **World sheet deletion requires `expected_gen`
+  too** (Codex adversarial round 4: campaign delete already carries CAS
+  from Phase 5; a pre-rename world DELETE queued on the world lock would
+  otherwise unlink the freshly migrated sheet) — full world/campaign CAS
+  parity: write, create, and delete alike. Migration's own rewrites are
+  built from known keys, and the Phase 5 absorb path submits existing
+  keys under its lock, so neither regresses.
 
 A sheet file that fails to parse is skipped and reported in the op result
 (`{"migrated": N, "skipped": [paths]}`), never blocks the rename. Scene
@@ -521,14 +540,18 @@ unchanged (it edits the same files the UI does).
   migration — field rename rewrites world + campaign sheets with gen
   bumps, group rename migrates zero sheets, sheet-type rename rewrites
   `sheet_type` values, content rename rewrites `kind:module:id` refs,
-  unparseable sheet file skipped and reported; locks acquired for all
-  campaigns in sorted order before the swap, and a campaign that doesn't
-  resolve to the module under its lock is untouched; a campaign created
-  after enumeration is caught by the re-enumeration fixed point; every
+  unparseable sheet file skipped and reported; a stored sheet holding
+  both the old and destination keys rejects the rename with its path
+  listed; locks acquired for all campaigns then all worlds in one sorted
+  order before the swap, a late-appearing campaign triggers
+  release-and-reacquire of the full union (never lock growth while
+  held), and a campaign that doesn't resolve to the module under its
+  lock is untouched; every
   world-sheet mutator (`write_world`, `write_world_creation`, seeding,
   instantiate) serializes on the world-scope lock; **stale-write
   closure**: a queued pre-rename world PUT fails the new world gen CAS
-  after migration, and a pre-rename create-new payload (`expected gen =
+  after migration, a pre-rename world DELETE fails its now-mandatory
+  `expected_gen`, and a pre-rename create-new payload (`expected gen =
   None`) 400s on its unknown key instead of silently dropping it;
   deletion at each staged-swap phase serializes with edits and ends
   deleted (never resurrected by recovery); a nested/diamond fragment
