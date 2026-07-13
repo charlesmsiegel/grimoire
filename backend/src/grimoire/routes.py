@@ -1708,6 +1708,25 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], cfg: dict,
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
+def _heal_current_proposal(cid: str, sid: str) -> None:
+    """Complete the scene's current record's projection (roll + 🎲 line +
+    metadata) before ``proposals.new`` replaces it. The record is the only
+    recovery handle for a projection crash (roll tagged, line missing): the
+    stale-retry heal in the POST roll-proposal route matches on the record's
+    id, so once ``new`` overwrites ``data[sid]`` that retry 409s on the id
+    mismatch and the roll would stand in rolls.json without its transcript
+    line forever. Projection is idempotent pure file I/O, so healing an
+    already-complete record is a cheap no-op. Only records whose resolution
+    carries a roll ``result`` can project — declined records never store a
+    resolution (and would have no roll to project if they somehow did), and
+    pending/resolving records have nothing resolved yet; those are replaced
+    as before."""
+    rec = store.proposals.get(cid, sid)
+    if (isinstance(rec, dict) and isinstance(rec.get("resolution"), dict)
+            and "result" in rec["resolution"]):
+        _project_resolution(cid, sid, rec["id"])
+
+
 def _chat_stream(cid: str, sid: str, messages: list[dict], cfg: dict, client: LLMClient):
     """A normal persisted turn. A ```roll fence cuts the stream: the pending
     proposal record is written *before* the pre-fence narration persists, so a
@@ -1717,6 +1736,7 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], cfg: dict, client: LL
         frames: list[str] = []
         if watcher.complete or watcher.truncated:
             payload = _make_proposal(cid, sid, watcher)
+            _heal_current_proposal(cid, sid)  # new() erases the recovery handle
             rec = store.proposals.new(cid, sid, payload)
             _persist_reply(cid, sid, watcher.narration)
             frames.append(_sse({"proposal": {**payload, "id": rec["id"]}}))
@@ -1746,6 +1766,9 @@ def _continuation_stream(cid: str, sid: str, pid: str, messages: list[dict],
             with store.proposals.locked(cid):
                 if store.proposals.commit_narration(cid, sid, pid, persist):
                     payload = _make_proposal(cid, sid, watcher)
+                    # the lock is reentrant, so healing (projection) is safe
+                    # here; new() below erases the recovery handle
+                    _heal_current_proposal(cid, sid)
                     rec = store.proposals.new(cid, sid, payload)
                     frames.append(_sse({"proposal": {**payload, "id": rec["id"]}}))
         else:
