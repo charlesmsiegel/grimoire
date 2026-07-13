@@ -88,6 +88,36 @@ def test_append_without_proposal_omits_key(monkeypatch, tmp_path):
     assert "proposal" not in entry
 
 
+def test_append_tier_persists_as_sibling_key(monkeypatch, tmp_path):
+    """Tier is a plain string SIBLING of the logged result, not merged into
+    it -- merging into `result` would break replay's exact-match comparison."""
+    cid = _campaign(monkeypatch, tmp_path)
+    entry = rolls.append(cid, "s1", "Brawl", dice.roll("1d20", seed=1), tier="success")
+    assert entry["tier"] == "success"
+    assert "tier" not in entry["result"]
+
+
+def test_append_without_tier_omits_key(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    entry = rolls.append(cid, "s1", "Attack", dice.roll("1d20", seed=1))
+    assert "tier" not in entry
+
+
+def test_find_or_append_by_proposal_tier_persists(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    entry = rolls.find_or_append_by_proposal(
+        cid, "s1", "check", dice.roll("1d6", seed=1), "pr-x", tier="failure")
+    assert entry["tier"] == "failure"
+
+
+def test_replay_matches_stored_result_with_tier_set(monkeypatch, tmp_path):
+    """A tier sibling key must not break replay's exact-result comparison."""
+    cid = _campaign(monkeypatch, tmp_path)
+    rolls.append(cid, "s1", None, dice.roll("2d6", seed=3), tier="ok")
+    out = rolls.replay(cid, "r1")
+    assert out["match"] is True
+
+
 def test_find_or_append_by_proposal_appends_once(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     e1 = rolls.find_or_append_by_proposal(cid, "s1", "check", dice.roll("1d6", seed=1), "pr-x")

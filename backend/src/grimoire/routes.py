@@ -2059,6 +2059,47 @@ def get_chronicle(cid: str):
     return store.chronicle.recent(cid, 50)
 
 
+async def _run_audit(cid: str, sid: str, client: LLMClient, cfg: dict) -> tuple[list[dict], dict]:
+    """(edits, mechanics) for the scene audit. Never raises; every failure is
+    an explicit mechanics status (spec: audit visibility) so absorb stays
+    intact even when the audit pipeline blows up."""
+    mech = {"status": "skipped", "reason": None, "warnings": [], "dropped": []}
+    excluded: list = []
+    try:
+        if store.modules.resolve(cid) is None:
+            mech["reason"] = "no module"
+            return [], mech
+        # ONE failure boundary around the ENTIRE audit pipeline (spec:
+        # never-fail-absorb) — sheet_blocks, read_scene, transcript,
+        # roll_lines, build_prompt, complete, parse AND materialize. Any
+        # exception anywhere here is a failed audit, never a 500 absorb.
+        blocks, excluded = store.audit.sheet_blocks(cid, sid)
+        if not blocks and not excluded:
+            mech["reason"] = "no sheeted scope"
+            return [], mech
+        if not blocks:
+            return [], {**mech, "status": "failed",
+                        "reason": "all scoped sheets invalid", "dropped": excluded}
+        scene = store.scenes.read_scene(cid, sid)
+        transcript = store.chronicle.transcript_text(scene["messages"])
+        messages = store.audit.build_prompt(transcript, blocks,
+                                            store.audit.roll_lines(cid, sid))
+        text = await client.complete(messages, cfg)
+        parsed = store.audit.parse_output(text)
+        edits, dropped = store.audit.materialize(cid, sid, parsed)
+    except store.audit.AuditParseError as exc:
+        return [], {**mech, "status": "failed", "reason": str(exc), "dropped": excluded}
+    except Exception as exc:  # noqa: BLE001 -- LLMError, store errors, anything
+        return [], {**mech, "status": "failed", "reason": f"audit failed: {exc}",
+                    "dropped": excluded}
+    dropped = excluded + dropped
+    status = "degraded" if dropped else "ok"
+    reason = ("some sheets could not be audited" if excluded else
+              "some findings could not be validated") if dropped else None
+    return edits, {"status": status, "reason": reason,
+                   "warnings": parsed["warnings"], "dropped": dropped}
+
+
 @router.post("/campaigns/{cid}/scenes/{sid}/absorb")
 async def post_absorb(cid: str, sid: str,
                       client: LLMClient = Depends(get_llm)):
@@ -2091,9 +2132,25 @@ async def post_absorb(cid: str, sid: str,
             store.dossiers.write(croot, a["id"], store.dossiers.parse_output(d_text))
         except Exception:  # noqa: BLE001 — a dossier failure must not fail absorb
             continue
+    # Phase 5: audit the scene's mechanics against the sheeted cast (never
+    # raises -- see _run_audit's own failure boundary).
+    audit_edits, mechanics = await _run_audit(cid, sid, client, cfg)
     return {"one_line": parsed["one_line"], "summary": parsed["summary"],
             "keywords": parsed["keywords"], "timeline_events": parsed["timeline_events"],
-            **facts, "edits": edits}
+            **facts, "edits": edits + audit_edits, "mechanics": mechanics}
+
+
+@router.post("/campaigns/{cid}/scenes/{sid}/audit")
+async def post_audit(cid: str, sid: str, client: LLMClient = Depends(get_llm)):
+    """Standalone audit retry: re-runs ONLY the audit step (never the prose
+    absorb), returning fresh `expect` values on any resulting sheet edits."""
+    _require_scene(cid, sid)
+    cfg = store.read_config()
+    _require_key(cfg)
+    if store.modules.resolve(cid) is None:
+        raise HTTPException(status_code=400, detail="no module resolved")
+    edits, mechanics = await _run_audit(cid, sid, client, cfg)
+    return {"mechanics": mechanics, "edits": edits}
 
 
 @router.put("/campaigns/{cid}/scenes/{sid}/chronicle")
@@ -2702,7 +2759,7 @@ def _project_resolution(cid: str, sid: str, pid: str) -> dict | None:
             return None
         res = dict(rec["resolution"])
         entry = store.rolls.find_or_append_by_proposal(
-            cid, sid, _roll_label(res), res["result"], proposal=pid)
+            cid, sid, _roll_label(res), res["result"], proposal=pid, tier=res.get("tier"))
         res = {**res, "roll_id": entry["id"]}
         store.proposals.update_resolution(cid, sid, pid, res)
         if "line_intent" not in res:
@@ -2851,7 +2908,8 @@ def post_scene_check(cid: str, sid: str, body: CheckBody):
             cid, body.check, body.actor, body.difficulty, body.modifier or 0)
     except store.checks.CheckError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    entry = store.rolls.append(cid, sid, _roll_label(resolution), resolution["result"])
+    entry = store.rolls.append(cid, sid, _roll_label(resolution), resolution["result"],
+                               tier=resolution.get("tier"))
     resolution = {**resolution, "roll_id": entry["id"]}
     line = store.checks.format_check_roll(resolution)
     store.scenes.append_message(cid, sid, "assistant", line, speaker=store.scenes.ROLL_SPEAKER)

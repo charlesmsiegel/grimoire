@@ -1566,14 +1566,24 @@ def test_localize_endpoint_does_not_persist_when_nothing_localized(client, monke
 
 
 class FakeOpenRouterComplete:
+    """A completer whose reply can be a single string (existing single-call
+    tests) or a list consumed one-per-call, in order (multi-step flows, e.g.
+    absorb's extraction complete() followed by the audit's complete()).
+    `calls` counts total complete()/stream() invocations."""
     def __init__(self, text):
-        self.text = text
+        self._texts = text if isinstance(text, list) else [text]
+        self.calls = 0
+
+    def _next(self) -> str:
+        i = min(self.calls, len(self._texts) - 1)
+        self.calls += 1
+        return self._texts[i]
 
     async def stream(self, messages, cfg):
-        yield self.text
+        yield self._next()
 
     async def complete(self, messages, cfg):
-        return self.text
+        return self._next()
 
 
 def _world_char(client):
@@ -1877,6 +1887,143 @@ def test_absorb_returns_edits_without_persisting(client):
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
     assert body["edits"][0]["kind"] == "character_state" and body["edits"][0]["after"] == "hurt"
     assert store.playstate.read_state(croot, ch) is None  # not persisted
+
+
+# ---- absorb: mechanics audit step (Phase 5, Task 9) ----
+
+ABSORB_JSON = '{"one_line": "o", "summary": "s", "keywords": [], "timeline_events": []}'
+AUDIT_OK = '{"warnings": ["Mara claimed a hit with no roll"], "sheet_deltas": []}'
+
+
+@pytest.fixture
+def module_scene(client):
+    """A pool-basic campaign with one sheeted, PRESENT cast member seated as
+    role="player" -- the dossier loop only fires for role="npc", so the
+    absorb's dossier step makes zero extra LLM calls and the audit's call
+    count stays exact. Its character id is "mara" (slugified from "Mara"),
+    matched by the sheet_delta tests below."""
+    wid, cid = _campaign(client)
+    client.put(f"/api/campaigns/{cid}/module", json={"module": "pool-basic"})
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"}).json()["character"]
+    assert chid == "mara"
+    store.sheets.write(cid, "characters", chid, "medium", {"health": 3}, expected=None)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]  # captures baseline
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+               json={"kind": "characters", "id": chid, "version": "default", "role": "player"})
+    store.scenes.append_message(cid, sid, "user", "Mara took a hit but shrugged it off.")
+    client.put("/api/config", json={"openrouter_key": "sk-or-x"})
+    return cid, sid
+
+
+@pytest.fixture
+def plain_scene(client):
+    """A scene in a moduleless campaign: audit must skip with zero extra calls."""
+    _, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "We walked into town.")
+    client.put("/api/config", json={"openrouter_key": "sk-or-x"})
+    return cid, sid
+
+
+def test_absorb_runs_audit_on_module_campaign(client, module_scene):
+    cid, sid = module_scene
+    fake = FakeOpenRouterComplete([ABSORB_JSON, AUDIT_OK])  # 2 sequential completes
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["mechanics"]["status"] == "ok"
+    assert body["mechanics"]["warnings"] == ["Mara claimed a hit with no roll"]
+    assert fake.calls == 2
+
+
+def test_absorb_moduleless_skips_audit(client, plain_scene):
+    cid, sid = plain_scene
+    fake = FakeOpenRouterComplete([ABSORB_JSON])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    assert body["mechanics"]["status"] == "skipped" and fake.calls == 1
+
+
+def test_absorb_all_invalid_scope_fails_with_no_audit_call(client, module_scene):
+    """Every scoped sheet unreadable -> failed, and the audit never calls the
+    LLM at all (the absorb's own extraction call is the only one)."""
+    cid, sid = module_scene
+    p = store.sheets._campaign_path(cid, "characters", "mara")
+    p.write_text("{not json", encoding="utf-8")
+    fake = FakeOpenRouterComplete([ABSORB_JSON])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    assert body["mechanics"]["status"] == "failed"
+    assert body["mechanics"]["dropped"][0]["id"] == "characters:mara"
+    assert fake.calls == 1                    # no audit LLM call for an all-invalid scope
+
+
+def test_absorb_audit_schema_failure_is_failed_not_clean(client, module_scene):
+    cid, sid = module_scene
+    for bad in ("{}", '{"warnings": null, "sheet_deltas": null}', "utter garbage"):
+        client.app.dependency_overrides[routes.get_llm] = \
+            lambda b=bad: FakeOpenRouterComplete([ABSORB_JSON, b])
+        body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+        assert body["one_line"]                       # prose absorb intact
+        assert body["mechanics"]["status"] == "failed"
+        assert body["mechanics"]["reason"]
+
+
+def test_absorb_dropped_delta_degrades(client, module_scene):
+    cid, sid = module_scene
+    bad_delta = ('{"warnings": [], "sheet_deltas": [{"id": "characters:mara", '
+                 '"field": "athletics", "value": 5, "note": "static tamper"}]}')
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: FakeOpenRouterComplete([ABSORB_JSON, bad_delta])
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    assert body["mechanics"]["status"] == "degraded"
+    assert body["mechanics"]["dropped"]
+
+
+def test_absorb_survives_audit_pipeline_crash(client, module_scene, monkeypatch):
+    """Never-fail-absorb: an exception ANYWHERE in the audit pipeline
+    (here: materialize) yields mechanics failed, absorb 200 + intact prose."""
+    cid, sid = module_scene
+    from grimoire.store import audit as audit_mod
+    monkeypatch.setattr(audit_mod, "materialize",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: FakeOpenRouterComplete([ABSORB_JSON, AUDIT_OK])
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["one_line"] and body["mechanics"]["status"] == "failed"
+    assert "boom" in body["mechanics"]["reason"]
+
+
+def test_audit_retry_endpoint(client, module_scene):
+    cid, sid = module_scene
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: FakeOpenRouterComplete([AUDIT_OK])
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/audit").json()
+    assert body["mechanics"]["status"] == "ok" and body["edits"] == []
+
+
+def test_audit_retry_endpoint_400_without_module(client, plain_scene):
+    cid, sid = plain_scene
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete([AUDIT_OK])
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/audit")
+    assert r.status_code == 400
+
+
+def test_chronicle_put_applies_sheet_edit_and_reports_conflicts(client, module_scene):
+    cid, sid = module_scene   # a materialized sheet StagedEdit, applied then replayed
+    edits, dropped = store.audit.materialize(cid, sid, {"warnings": [], "dropped": [],
+        "sheet_deltas": [{"id": "characters:mara", "field": "health", "value": 5, "note": ""}]})
+    assert dropped == [] and edits
+    sheet_edit = edits[0]
+    save = {"one_line": "x", "summary": "y", "keywords": [], "timeline_events": [],
+            "edits": [sheet_edit]}
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle", json=save).json()
+    assert r["applied"] == [sheet_edit["id"]] and r["sheet_failures"] == []
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle", json=save).json()
+    assert r["applied"] == [] and r["sheet_failures"][0]["kind"] == "conflict"
 
 
 def test_scene_suggestions_returns_resolved(client):

@@ -148,6 +148,20 @@ def test_roll_lines_filters_by_scene(scene_with_sheeted_cast):
     assert len(lines) == 1 and "Attack" in lines[0] and "1d20" in lines[0]
 
 
+def test_roll_lines_renders_tier(scene_with_sheeted_cast):
+    cid, sid = scene_with_sheeted_cast
+    rolls.append(cid, sid, "Brawl", dice.roll("1d20", seed=1), tier="success")
+    lines = audit.roll_lines(cid, sid)
+    assert len(lines) == 1 and "success" in lines[0]
+
+
+def test_roll_lines_omits_tier_when_absent(scene_with_sheeted_cast):
+    cid, sid = scene_with_sheeted_cast
+    rolls.append(cid, sid, "Brawl", dice.roll("1d20", seed=1))
+    lines = audit.roll_lines(cid, sid)
+    assert len(lines) == 1 and "1d20" in lines[0]
+
+
 def test_build_prompt_wires_system_and_user(scene_with_sheeted_cast):
     cid, sid = scene_with_sheeted_cast
     blocks, _ = audit.sheet_blocks(cid, sid)
