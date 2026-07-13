@@ -3244,6 +3244,75 @@ def test_world_module_put_serializes_on_affected_campaign_lock(client):
     assert store.audit.read_baselines(cid) == {}
 
 
+def test_world_module_put_locks_newly_inheriting_campaign(client):
+    """Regression test for the Phase 5 Task 11 audit finding: put_world_module
+    used to enumerate "affected" (non-overridden) campaigns from metadata
+    BEFORE acquiring any campaign sheet lock, then lock only that stale set.
+    A concurrent campaign-module PUT that clears a campaign's override --
+    making it newly-inheriting -- between that enumeration and the world
+    route's rebind would never be locked by the world route at all, so a
+    paused writer on that campaign could let it resolve the old world module
+    and write while/after the new default published, stranding stale
+    baselines. put_world_module now locks EVERY campaign of the world
+    (regardless of override) up front, then re-reads each override under the
+    lock before deciding whether to clear baselines -- so a campaign-module
+    PUT clearing X's override and a world-module PUT both contend on X's
+    sheet lock instead of racing around it.
+
+    X starts with a per-campaign override; Y is already inheriting. With X's
+    sheet lock held by a paused writer, both a campaign PUT (clearing X's
+    override) and a world PUT (changing the world default) must block on
+    X's lock -- proving the world route now enumerates/locks under the
+    lock, not before it. After the lock releases, both PUTs must succeed,
+    and X must end up with clean baselines regardless of which PUT actually
+    performs the clear (whichever wins the race to X's lock first observes
+    X still overridden and leaves it alone; the other -- running after --
+    sees X freshly inheriting and clears it). Y, already inheriting, must
+    also be cleared by the world PUT."""
+    import threading
+    wid = _world(client)
+    cid_x = client.post("/api/campaigns", json={"name": "X", "world": wid}).json()["id"]
+    cid_y = client.post("/api/campaigns", json={"name": "Y", "world": wid}).json()["id"]
+    client.put(f"/api/worlds/{wid}/module", json={"module": "pool-basic"})
+    client.put(f"/api/campaigns/{cid_x}/module", json={"module": "d20-basic"})  # override
+
+    client.post(f"/api/campaigns/{cid_x}/scenes", json={"title": "T"})
+    client.post(f"/api/campaigns/{cid_y}/scenes", json={"title": "T"})
+    assert store.audit.read_baselines(cid_x) != {}
+    assert store.audit.read_baselines(cid_y) != {}
+
+    results: dict = {}
+    with store.sheets.lock_for(cid_x):
+        def clear_override():
+            results["campaign"] = client.put(
+                f"/api/campaigns/{cid_x}/module", json={"module": ""})
+        t_a = threading.Thread(target=clear_override)
+        t_a.start()
+        t_a.join(1.5)
+        assert t_a.is_alive()                             # blocked behind the held lock
+
+        def rebind_world():
+            results["world"] = client.put(
+                f"/api/worlds/{wid}/module", json={"module": "d20-basic"})
+        t_b = threading.Thread(target=rebind_world)
+        t_b.start()
+        t_b.join(1.5)
+        assert t_b.is_alive()                             # also blocked: world PUT now
+                                                            # locks every campaign of wid,
+                                                            # including X, up front
+        assert store.audit.read_baselines(cid_x) != {}     # untouched while X's lock is held
+
+    t_a.join(2)
+    t_b.join(2)
+    assert not t_a.is_alive()
+    assert not t_b.is_alive()
+    assert results["campaign"].status_code == 200
+    assert results["world"].status_code == 200
+
+    assert store.audit.read_baselines(cid_x) == {}
+    assert store.audit.read_baselines(cid_y) == {}
+
+
 def test_create_campaign_with_module(client):
     _world(client)
     r = client.post("/api/campaigns",
