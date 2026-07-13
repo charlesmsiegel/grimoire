@@ -16,6 +16,7 @@ import os
 import shutil
 import tempfile
 import threading
+import uuid
 from pathlib import Path
 
 from . import campaigns, characters, entities, expressions, modules, overlay, pcs, worlds
@@ -26,6 +27,21 @@ class SheetError(Exception):
 
 
 FILE_KINDS: tuple[str, ...] = ("characters", "pcs") + entities.ENTITY_KINDS
+
+
+def _next_gen(path: Path, sheet_type: str) -> str:
+    """Sheet identity nonce: preserved across same-type value writes, minted
+    on creation and on type changes (a type change is logically a new sheet).
+    Legacy files without a gen mint one on their next whole-sheet write."""
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+            data = {}
+        if isinstance(data, dict) and data.get("sheet_type") == sheet_type \
+                and isinstance(data.get("gen"), str) and data["gen"]:
+            return data["gen"]
+    return uuid.uuid4().hex
 
 
 def _atomic_write_json(path: Path, data: dict) -> None:
@@ -173,23 +189,23 @@ def _read_path(path: Path, file_kind: str, mid: str | None) -> dict | None:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError, OSError) as e:
-        return {"sheet_type": None, "fields": {}, "derived": {},
+        return {"sheet_type": None, "fields": {}, "derived": {}, "gen": None,
                 "errors": [f"unreadable sheet file: {e}"]}
     if not isinstance(data, dict):
-        return {"sheet_type": None, "fields": {}, "derived": {},
+        return {"sheet_type": None, "fields": {}, "derived": {}, "gen": None,
                 "errors": ["sheet file must be an object"]}
     sheet_type = data.get("sheet_type")
     fields = data.get("fields") if isinstance(data.get("fields"), dict) else {}
     if mid is None:
         return {"sheet_type": sheet_type, "fields": fields, "derived": {},
-                "errors": ["no module resolved"]}
+                "gen": data.get("gen"), "errors": ["no module resolved"]}
     sheets_def = modules.load_pack(mid)["sheets"]
     errors = _validate_instance(sheets_def, file_kind, sheet_type, fields)
     derived: dict = {}
     if isinstance(sheet_type, str):
         derived = _compute_derived(sheets_def, sheet_type, fields, errors)
     return {"sheet_type": sheet_type, "fields": fields,
-            "derived": derived, "errors": errors}
+            "derived": derived, "gen": data.get("gen"), "errors": errors}
 
 
 def read(cid: str, kind: str, eid: str) -> dict | None:
@@ -233,7 +249,8 @@ def _checked_write(path: Path, mid: str, file_kind: str, eid: str,
         errs = modules.validate_sheet_values(sheets_def, sheet_type, fields)
         if errs:
             raise SheetError("; ".join(errs))
-    _atomic_write_json(path, {"sheet_type": sheet_type, "fields": fields})
+    _atomic_write_json(path, {"sheet_type": sheet_type, "fields": fields,
+                              "gen": _next_gen(path, sheet_type)})
 
 
 def write(cid: str, kind: str, eid: str, sheet_type: str,
@@ -386,7 +403,8 @@ def _checked_creation_write(path: Path, mid: str, file_kind: str, eid: str,
     errs = modules.validate_sheet_values(sheets_def, sheet_type, fields)
     if errs:
         raise SheetError("; ".join(errs))
-    _atomic_write_json(path, {"sheet_type": sheet_type, "fields": fields})
+    _atomic_write_json(path, {"sheet_type": sheet_type, "fields": fields,
+                              "gen": _next_gen(path, sheet_type)})
 
 
 def write_creation(cid: str, kind: str, eid: str, sheet_type: str,
@@ -595,5 +613,6 @@ def advance(cid: str, kind: str, eid: str, field_key: str) -> dict:
         pool_max = pool_val.get("max", balance) if isinstance(pool_val, dict) else 0
         new_fields = {**fields, field_key: new,
                       pool_key: {"current": balance - cost, "max": pool_max}}
-        _atomic_write_json(path, {"sheet_type": sheet_type, "fields": new_fields})
+        _atomic_write_json(path, {"sheet_type": sheet_type, "fields": new_fields,
+                                  "gen": data.get("gen")})
         return _read_path(path, kind, mid)
