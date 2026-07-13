@@ -199,7 +199,8 @@ sera, _ = characters.create_character(croot, "Seraphine Vale", "default", ncard)
 ap.appear(cid, sid, "characters", sera, "default", "npc")
 playstate.write_state(croot, sera, playstate.compose_body(
     "Wounded and hiding.", "The ledger is real.\nIt names the harbormaster.", "The Guild watches her."))
-sheets.write(cid, "characters", sera, "keeper", {"grit": {"current": 2, "max": 5}})
+sheets.write(cid, "characters", sera, "keeper", {"grit": {"current": 2, "max": 5}},
+             expected=None)
 
 persona = pcs.blank_persona("Hero")
 persona.update({"pronouns": "she/her", "summary": "A debt-ridden courier.",
