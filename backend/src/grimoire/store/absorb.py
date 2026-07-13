@@ -10,7 +10,7 @@ import json
 
 from .. import prompts
 from . import (appearances, campaigns, cards, changes, characters, chronicle, entities,
-               groupstate, overlay, pcs, playstate, plot, relationships, scenes)
+               groupstate, overlay, pcs, playstate, plot, relationships, scenes, sheets)
 from .paths import slugify
 
 
@@ -402,15 +402,36 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
 _BROWSABLE_KINDS = ("character_state", "lore", "authored", "new_character", "new_location", "new_lore")
 
 
-def apply_edits(cid: str, edits: list[dict], sid: str | None = None) -> list[str]:
+def apply_edits(cid: str, edits: list[dict],
+                sid: str | None = None) -> tuple[list[str], list[dict]]:
     """Apply each approved StagedEdit to the campaign copies. Best-effort: a missing or
-    broken target is skipped. Returns the ids actually applied. When `sid` is given, the
-    before/after of each applied *browsable* edit (characters/lore/locations) is captured
-    into changes.json (the latest write-back delta per record)."""
+    broken non-sheet target is skipped. Returns (applied ids, sheet_failures) -- sheet
+    edits get their own error contract (never silently skipped): each failure is
+    {"id", "reason", "kind": "conflict"|"error"}. When `sid` is given, the before/after
+    of each applied *browsable* edit (characters/lore/locations) is captured into
+    changes.json (the latest write-back delta per record); sheet edits are never
+    browsable and never land there -- the sheet itself is the record."""
     croot = campaigns.campaign_root(cid)
     applied: list[str] = []
+    sheet_failures: list[dict] = []
     recorded: dict[str, list[dict]] = {}
     for e in edits:
+        if e.get("kind") == "sheet":
+            if not sid:
+                sheet_failures.append({"id": e.get("id", ""), "kind": "error",
+                                       "reason": "sheet edits need a scene id"})
+                continue
+            from . import audit  # lazy: audit imports absorb-adjacent stores
+            try:
+                audit.apply_delta(cid, sid, e)
+                applied.append(e["id"])
+            except sheets.SheetConflict as exc:
+                sheet_failures.append({"id": e.get("id", ""), "kind": "conflict",
+                                       "reason": str(exc)})
+            except sheets.SheetError as exc:
+                sheet_failures.append({"id": e.get("id", ""), "kind": "error",
+                                       "reason": str(exc)})
+            continue
         try:
             kind, target, after = e["kind"], e["target"], e.get("after", "")
             extra_fields: list[dict] = []
@@ -484,7 +505,7 @@ def apply_edits(cid: str, edits: list[dict], sid: str | None = None) -> list[str
             continue
     if sid:
         changes.record(cid, sid, recorded)
-    return applied
+    return applied, sheet_failures
 
 
 def relationships_snapshot(cid: str, sid: str) -> str:

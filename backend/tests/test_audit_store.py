@@ -1,71 +1,11 @@
 """Scene-start sheet baselines (mechanics Phase 5, roadmap #826)."""
 
-import json
 import threading
 
 import pytest
 
 from grimoire.store import (audit, appearances, campaigns, characters, dice,
                             modules, rolls, scenes, sheets, worlds)
-
-SHEETS_DEF = {
-    "groups": {},
-    "sheet_types": {
-        "warrior": {
-            "label": "Warrior",
-            "kind": "characters",
-            "groups": [],
-            "fields": [
-                {"key": "hp", "label": "Hit Points", "type": "resource", "max": 12},
-                {"key": "xp", "label": "Experience", "type": "resource", "max": 999},
-                {"key": "athletics", "label": "Athletics", "type": "number",
-                 "default": 2, "min": 0, "max": 5},
-                {"key": "wounds", "label": "Wounds", "type": "track", "max": 5},
-                {"key": "conditions", "label": "Conditions", "type": "list"},
-                {"key": "notes", "label": "Notes", "type": "text"},
-            ],
-        }
-    },
-}
-
-
-@pytest.fixture
-def user_pack_path(monkeypatch, tmp_path):
-    """A module pack that lives in the user library (GRIMOIRE_HOME/modules),
-    so tests can mutate sheets.json in place (schema_stamp mtime tests)."""
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    mid = modules.create_module("Test Pack")
-    root = modules.user_dir() / mid
-    (root / "sheets.json").write_text(json.dumps(SHEETS_DEF), encoding="utf-8")
-    return root
-
-
-@pytest.fixture
-def cid_with_sheet(user_pack_path):
-    mid = user_pack_path.name
-    wid = worlds.create_world("Realm")
-    cid = campaigns.create_campaign("Run", wid, module=mid)
-    sheets.write(cid, "characters", "mara", "warrior",
-                 {"hp": {"current": 12, "max": 12}}, expected=None)
-    return cid
-
-
-@pytest.fixture
-def scene_with_sheeted_cast(user_pack_path):
-    """A scene with one present, sheeted cast member (mara) whose baseline
-    was captured at scene creation -- the ground every materialize test
-    stands on."""
-    mid = user_pack_path.name
-    wid = worlds.create_world("Realm")
-    wroot = worlds.world_root(wid)
-    characters.create_character(wroot, "Mara", "default", characters.blank_card("Mara"))
-    cid = campaigns.create_campaign("Run", wid, module=mid)
-    sheets.write(cid, "characters", "mara", "warrior",
-                 {"hp": {"current": 12, "max": 12}, "xp": {"current": 0, "max": 999},
-                  "wounds": 0, "conditions": []}, expected=None)
-    sid = scenes.create_scene(cid, "Landing")           # captures baseline
-    appearances.appear(cid, sid, "characters", "mara", "default", "npc")
-    return cid, sid
 
 
 @pytest.fixture
@@ -398,3 +338,56 @@ def test_sheet_blocks_skips_unsheeted_scope_entries(scene_with_sheeted_cast):
     blocks, excluded = audit.sheet_blocks(cid, sid)
     assert all("characters:extra" not in b for b in blocks)
     assert all(e["id"] != "characters:extra" for e in excluded)
+
+
+# ---- apply_delta (Task 8) ----
+
+
+def test_apply_delta_happy_and_conflict(scene_with_sheeted_cast):
+    cid, sid = scene_with_sheeted_cast
+    live = sheets.read(cid, "characters", "mara")["fields"]["hp"]
+    parsed = {"warnings": [], "dropped": [], "sheet_deltas": [
+        {"id": "characters:mara", "field": "hp",
+         "value": {"current": live["current"] - 2}, "note": ""}]}
+    edits, _ = audit.materialize(cid, sid, parsed)
+    audit.apply_delta(cid, sid, edits[0])
+    assert sheets.read(cid, "characters", "mara")["fields"]["hp"]["current"] == live["current"] - 2
+    with pytest.raises(sheets.SheetConflict):      # double-apply reports
+        audit.apply_delta(cid, sid, edits[0])
+
+
+def test_apply_delta_rejects_out_of_scope_and_baseline_less(scene_with_sheeted_cast):
+    cid, sid = scene_with_sheeted_cast
+    wid = campaigns.read_campaign(cid)["meta"]["world"]
+    characters.create_character(worlds.world_root(wid), "Winifred", "default",
+                                characters.blank_card("Winifred"))
+    sheets.write(cid, "characters", "winifred", "warrior",
+                 {"hp": {"current": 12, "max": 12}, "xp": {"current": 0, "max": 999},
+                  "wounds": 0, "conditions": []}, expected=None)
+    # forge an edit for a sheeted entity that is NOT in the scene (winifred
+    # exists + sheeted but never appeared) with a CORRECT expect:
+    live = sheets.read(cid, "characters", "winifred")["fields"]["hp"]
+    forged = {"id": "sheet:characters:winifred:hp", "kind": "sheet",
+              "target": {"kind": "characters", "id": "winifred"}, "field": "hp",
+              "label": "x", "before": "", "after": "", "authored": False,
+              "payload": {"field": "hp", "value": {"current": 1, "max": live["max"]},
+                          "expect": live, "note": ""}}
+    with pytest.raises(sheets.SheetError):
+        audit.apply_delta(cid, sid, forged)
+    assert sheets.read(cid, "characters", "winifred")["fields"]["hp"] == live
+
+
+def test_apply_delta_vs_delete_recreate_race(scene_with_sheeted_cast):
+    """gen re-check inside the lock: recreated sheet is untouched."""
+    cid, sid = scene_with_sheeted_cast
+    live = sheets.read(cid, "characters", "mara")["fields"]["hp"]
+    edits, _ = audit.materialize(cid, sid, {"warnings": [], "dropped": [],
+        "sheet_deltas": [{"id": "characters:mara", "field": "hp",
+                          "value": {"current": live["current"] - 2}, "note": ""}]})
+    g = sheets.read(cid, "characters", "mara")["gen"]
+    sheets.delete(cid, "characters", "mara", expected_gen=g)
+    sheets.write(cid, "characters", "mara", "adventurer", None, expected=None)
+    fresh = sheets.read(cid, "characters", "mara")["fields"]["hp"]
+    with pytest.raises(sheets.SheetError):
+        audit.apply_delta(cid, sid, edits[0])
+    assert sheets.read(cid, "characters", "mara")["fields"]["hp"] == fresh

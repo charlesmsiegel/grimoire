@@ -2105,8 +2105,8 @@ def put_chronicle(cid: str, sid: str, body: ChronicleSave):
         "keywords": body.keywords, **facts})
     store.chronicle.append_timeline(cid, body.timeline_events)
     store.scenes.mark_absorbed(cid, sid, body.one_line, body.summary)
-    applied = store.absorb.apply_edits(cid, body.edits, sid)
-    return {**record, "applied": applied}
+    applied, sheet_failures = store.absorb.apply_edits(cid, body.edits, sid)
+    return {**record, "applied": applied, "sheet_failures": sheet_failures}
 
 
 def _record_name(cid: str, kind: str, eid: str) -> str | None:

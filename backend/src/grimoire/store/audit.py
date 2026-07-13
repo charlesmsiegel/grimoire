@@ -282,6 +282,36 @@ def parse_output(text: str) -> dict:
     return {"warnings": warnings, "sheet_deltas": deltas, "dropped": dropped}
 
 
+def apply_delta(cid: str, sid: str, edit: dict) -> None:
+    """Apply one StagedEdit of kind "sheet". One critical section: authorize
+    (scope + baseline, both re-checked against the in-lock live sheet) then
+    write (set_field's body) -- never two lock acquisitions, so a concurrent
+    write can't land between the check and the write. The module is resolved
+    exactly once, inside the lock (see sheets.write's rebind-serialization
+    note), and that same mid is threaded through to _set_field_locked.
+    Raises sheets.SheetConflict / sheets.SheetError; never returns a failure
+    value -- callers (absorb.apply_edits) catch and report."""
+    payload = edit.get("payload", {})
+    target = edit.get("target", {})
+    kind, eid = target.get("kind"), target.get("id")
+    field_key = payload.get("field")
+    if not (isinstance(kind, str) and isinstance(eid, str) and isinstance(field_key, str)):
+        raise sheets.SheetError("malformed sheet edit")
+    with sheets.lock_for(cid):
+        mid = modules.resolve(cid)                       # once, inside the lock
+        if mid is None:
+            raise sheets.SheetError("no module resolved for this campaign")
+        if (kind, eid) not in {(k, e) for k, e, _ in sheet_scope(cid, sid)}:
+            raise sheets.SheetError("entity not in this scene's sheet scope")
+        sheet = sheets.read(cid, kind, eid)
+        if sheet is None or sheet["errors"]:
+            raise sheets.SheetError("entity has no readable sheet")
+        if not baseline_entry_valid(cid, sid, kind, eid, mid, sheet):
+            raise sheets.SheetError("no valid scene baseline for this entity")
+        sheets._set_field_locked(mid, cid, kind, eid, field_key,
+                                 payload.get("value"), payload.get("expect"))
+
+
 def materialize(cid: str, sid: str, parsed: dict) -> tuple[list[dict], list[dict]]:
     """Deterministic gate over parsed sheet_deltas -> (StagedEdits, dropped).
     Mirrored inside the apply lock by apply_delta; set_field is the boundary."""

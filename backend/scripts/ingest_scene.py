@@ -114,7 +114,11 @@ def apply_scene(cid: str, sid: str, parsed: dict, edits: list[dict]) -> list[str
                            "keywords": parsed["keywords"], **facts})
     chronicle.append_timeline(cid, parsed["timeline_events"])
     scenes.mark_absorbed(cid, sid, parsed["one_line"], parsed["summary"])
-    return absorb.apply_edits(cid, edits, sid)
+    # ingest doesn't surface sheet-edit failures (this pipeline predates sheets);
+    # unpack and drop them rather than silently changing this function's return
+    # shape to a tuple that callers/manifest-writers don't expect.
+    applied, _sheet_failures = absorb.apply_edits(cid, edits, sid)
+    return applied
 
 
 async def ingest_one_scene(cid: str, scene: dict, client, cfg: dict) -> dict:
