@@ -137,11 +137,15 @@ module-authored CSS ever reaches the DOM; nothing escapes the container.
 - Parse `theme.json` → `pack["theme"]`: the validated token object (dropped
   entries removed); absent ⇒ `{}`.
 - `pack["display_errors"]`: a list of **structured** entries
-  `{"source": "layout" | "theme", "sheet_type": "<tid>" | null,
+  `{"source": "layout" | "theme", "sheet_type": "<tid>" | "*" | null,
   "message": "<path>: <why>"}` — structured so the UI can route a dropped
-  layout to the sheet type it affects (`sheet_type` is set for per-type
-  layout errors, `null` for file-level and theme errors). Not consulted by
-  `resolve()` or the registry `valid` flag.
+  layout to exactly the sheets it affects: `sheet_type` is the tid for a
+  per-type drop, the reserved sentinel **`"*"`** for a file-level layout
+  failure that dropped *every* tree (unparseable file, non-object root or
+  `sheet_types`, containment boundary), and `null` for diagnostics that
+  drop nothing (unknown root keys, broken or dangling unused fragments,
+  layout entries for nonexistent sheet types, all theme errors). Not
+  consulted by `resolve()` or the registry `valid` flag.
 - A pack containing `theme.css` gets one `display_errors` entry
   (`source: "theme"`, "theme.css is not supported — use theme.json");
   the file is otherwise ignored.
@@ -199,16 +203,14 @@ the library:
 - **SheetEditor**: a hint line renders under the header — "This module's
   layout for this sheet type is invalid — using the default arrangement."
   — when the current sheet type has **no tree in `pack.layout`** *and* a
-  `source: "layout"` entry either names the current sheet type or is
-  file-level (`sheet_type: null`) **while no sheet-type tree survived at
-  all** (a malformed root dropping every layout). All three conditions
-  matter: an invalid-but-unused fragment (an error that drops nothing)
-  must not raise a false alarm on sheets whose layouts survived, a type
-  that never had a layout must not warn just because some *other* type's
-  tree was dropped, and a file-level entry that coexists with surviving
-  trees (unknown root key, unused broken fragment) must not warn
-  never-layouted types either. Non-blocking; the fallback arrangement is
-  fully functional.
+  `source: "layout"` entry either names the current sheet type or carries
+  the file-level sentinel (`sheet_type: "*"`). The sentinel makes the
+  routing exact: `null` diagnostics (unused broken fragments, unknown
+  root keys, unknown sheet-type entries) never fire the hint — they drop
+  nothing, so warning would falsely mark never-layouted sheets as broken
+  — while a `"*"` entry means every layout was dropped and any layoutless
+  sheet type is legitimately degraded. Non-blocking; the fallback
+  arrangement is fully functional.
 - **Module library list**: rows for packs with `display_errors` get a
   hint-styled "display issues" marker (distinct from the existing
   invalid-module treatment — mechanics still work).
@@ -266,11 +268,10 @@ The `create-mechanics-module` skill gains layout/theme authoring steps
   view and edit, save round-trip unchanged); SheetEditor with no layout
   (default arrangement, widgets still used); SheetEditor dropped-layout
   hint routing (fires when an entry names the current type; fires on a
-  file-level `sheet_type: null` layout error when no tree survived; does
-  NOT fire for an unused-fragment error when the current type's layout
-  survived, nor for a never-layouted type when only another type's tree
-  was dropped, nor for a never-layouted type when a file-level entry
-  coexists with another type's surviving tree); theme vars +
+  `sheet_type: "*"` file-level entry; does NOT fire for a `null`
+  unused-fragment diagnostic — whether or not any tree survived — nor
+  for a never-layouted type when only another type's tree was dropped);
+  theme vars +
   data attributes present when themed, absent when not; ModulesView
   Display section incl. `display_errors`; library list "display issues"
   marker.
