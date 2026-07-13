@@ -7,6 +7,8 @@ const track: ModuleField = { key: "health", label: "Health", type: "track", max:
 const res: ModuleField = { key: "essence", label: "Essence", type: "resource", max: 10 };
 const num: ModuleField = { key: "strength", label: "Strength", type: "number", min: 1, max: 20 };
 const list: ModuleField = { key: "gear", label: "Gear", type: "list" };
+const dotsHuge: ModuleField = { key: "xp", label: "Experience", type: "dots", max: 100 };
+const dotsAtCap: ModuleField = { key: "resolve", label: "Resolve", type: "dots", max: 40 };
 
 test("dots view renders max pips with value filled, no buttons", () => {
   const { container } = render(<FieldWidget def={dots} value={3} mode="view" />);
@@ -68,6 +70,22 @@ test("list view renders bullets; edit emits raw string", () => {
   expect(ta.value).toBe("rope\n");
   fireEvent.change(ta, { target: { value: "rope\nlan" } });
   expect(onChange).toHaveBeenCalledWith("rope\nlan");
+});
+
+test("dots with max beyond the pip cap falls back to the number widget", () => {
+  const { container } = render(<FieldWidget def={dotsHuge} value={42} mode="view" />);
+  expect(container.querySelectorAll(".pip").length).toBe(0);
+  expect(screen.getByText("42")).toBeInTheDocument();
+
+  const onChange = vi.fn();
+  render(<FieldWidget def={dotsHuge} value={42} mode="edit" onChange={onChange} />);
+  fireEvent.change(screen.getByLabelText("Experience"), { target: { value: "50" } });
+  expect(onChange).toHaveBeenCalledWith(50);
+});
+
+test("dots at the pip cap still renders pips", () => {
+  const { container } = render(<FieldWidget def={dotsAtCap} value={10} mode="view" />);
+  expect(container.querySelectorAll(".pip").length).toBe(40);
 });
 
 test("derived badge shows name and value, em-dash when undefined", () => {

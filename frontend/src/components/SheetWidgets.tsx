@@ -14,6 +14,10 @@ export function isResource(v: unknown): v is { current: number; max: number } {
 
 const label = (f: ModuleField) => f.label ?? f.key;
 
+// Pips are for small rated tracks (dots/boxes rendered one-per-point); beyond
+// this cap a numeric control is the only usable rendering anyway.
+const PIP_CAP = 40;
+
 /** dots + track share click-to-set: pip n sets value n; clicking the pip at
  *  the current value decrements to n-1 so 0 stays reachable. */
 function Pips({ def, value, mode, shape, onChange }: WidgetProps & { shape: "dot" | "box" }) {
@@ -142,8 +146,12 @@ export function DerivedBadge({ name, value }: { name: string; value: unknown }) 
 
 export function FieldWidget(props: WidgetProps) {
   switch (props.def.type) {
-    case "dots": return <Pips {...props} shape="dot" />;
-    case "track": return <Pips {...props} shape="box" />;
+    case "dots":
+    case "track": {
+      const oversized = typeof props.def.max === "number" && props.def.max > PIP_CAP;
+      if (oversized) return <NumberW {...props} />;
+      return <Pips {...props} shape={props.def.type === "dots" ? "dot" : "box"} />;
+    }
     case "resource": return <Resource {...props} />;
     case "text": return <TextW {...props} />;
     case "list": return <ListW {...props} />;
