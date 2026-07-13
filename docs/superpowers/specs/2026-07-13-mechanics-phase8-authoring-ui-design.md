@@ -33,11 +33,17 @@ New module (pure stdlib, pydantic-free, filesystem via the same
 
 - raises `ModuleError` when the target resolves to a builtin (only
   user-library packs are editable — same posture as `delete_module`);
-- serializes on a per-module in-process lock via the `_lock_for(mid)`
-  gets-or-creates-under-a-registry-guard pattern already used in
-  `sheets.py` (single-process deployment invariant, same caveats as
-  Phase 7's advance lock);
-- follows the **stage → validate → swap** primitive below.
+- serializes on a **single global module-edit lock** — one
+  `threading.Lock` for the whole store, not per-module (Codex adversarial
+  round 2: per-module locks let edit A's start-of-edit recovery scan
+  classify edit B's in-flight journal as crash debris and reclaim it mid-
+  swap, orphaning B's module; module edits are rare and human-paced, so
+  global serialization costs nothing and makes
+  staging-cleanup/journal/swap/migration/recovery mutually exclusive by
+  construction). Same single-process caveats as Phase 7's advance lock;
+- follows the **stage → validate → swap** primitive below. Create,
+  duplicate, and import also run under the global lock (they claim ids
+  and publish into the same library).
 
 ### Stage → validate → swap
 
@@ -74,18 +80,23 @@ New module (pure stdlib, pydantic-free, filesystem via the same
    delete the journal, trash, and staging remnants. The journal outlives
    the swap exactly until migration completes.
 
-**Recovery**: at app startup and at the start of any `module_edit`
-operation, leftover journals are replayed idempotently. A journal is
-only ever written *after* staging validated, so the cases are exact:
-live dir present and staging present ⇒ the renames never started —
-discard staging, clear the journal (the edit is simply lost; the user
-retries). Live dir missing ⇒ crash between the two renames — rename
-staging into place, delete trash. Live dir present with leftover
-trash ⇒ crash after the swap — delete trash. In every case a
-journaled pending migration then re-runs to completion. Between a
-crash and recovery the module reads as missing (`resolve()` ⇒ `None`
-with the existing missing-module warning) — degraded but self-healing,
-never permanent.
+**Recovery**: at app startup (in the lifespan hook, before requests are
+served) and at the start of any `module_edit` operation — always under
+the global module-edit lock — leftover journals are replayed
+idempotently. A journal is only ever written *after* staging validated,
+so the cases are exact: live dir present and staging present ⇒ the
+renames never started — discard staging **and its pending migration**,
+clear the journal (the edit is simply lost; the user retries; stored
+sheets stay byte-identical — Codex adversarial round 2: replaying a
+migration whose schema was discarded would rename keys under the *old*
+schema and corrupt every affected sheet). Live dir missing ⇒ crash
+between the two renames — rename staging into place, delete trash, run
+the pending migration. Live dir present with leftover trash ⇒ crash
+after the swap — delete trash, run the pending migration. Migration
+replays only when the journal's phase proves the new pack was (or is
+now) published. Between a crash and recovery the module reads as
+missing (`resolve()` ⇒ `None` with the existing missing-module
+warning) — degraded but self-healing, never permanent.
 
 ### Section writers
 
@@ -160,13 +171,27 @@ replacement (see Decisions), after which the staged validation re-parses
 and re-scopes everything — a rewrite that somehow produced garbage
 rejects the whole op.
 
-**Reserved contextual names**: `_validate_field`'s reserved-key set
-extends to the ambient expression names — `difficulty`, `modifier` (check
-scope) and `new` (advancement scope) — alongside the existing
-function-name and `<key>_max` rules, so neither a form save nor a
-rename's `to` can create a field that shadows them (Codex adversarial
-round 1: shadowing turned a reserved-name use into a field use). Neither
-built-in ships such a key, so no existing pack breaks.
+**Shared layout fragments** need one extra rule (Codex adversarial
+round 2): a fragment `use`d by sheet types both inside and outside the
+rename's scope cannot be rewritten globally — two disjoint types can
+each define a same-spelled field, and the shared fragment's
+`fields: ["strength"]` binds to a *different* definition under each
+type. When a rename (or cascade prune) would alter a fragment whose
+users straddle the scope boundary, the op **specializes**: clone the
+fragment under a derived id, rewrite/prune the clone, and repoint only
+the in-scope types' `use` nodes; out-of-scope users keep the original.
+Fragments used only in-scope are rewritten in place.
+
+**Reserved contextual names**: the reserved-key set extends to the
+ambient expression names — `difficulty`, `modifier` (check scope) and
+`new` (advancement scope) — alongside the existing function-name and
+`<key>_max` rules, applied to **field keys and derived names alike**
+(Codex adversarial round 2: a *derived* named `new` is silently
+shadowed at advancement time by the proposed value, and
+`difficulty`/`modifier` are overwritten in check resolution — the
+round-1 fix covered only `_validate_field`, leaving `_validate_derived`
+open to the same collision via ordinary saves, not just renames).
+Neither built-in ships such a name, so no existing pack breaks.
 
 ### Sheet migration
 
@@ -188,9 +213,19 @@ CAS, gets its now-unknown renamed key silently filtered by
   a correct-but-racy subset).
 - **World sheets have no lock today** (`write_world` locks nothing).
   `sheets.py` gains a world-scope lock from the same `_lock_for` registry
-  (keyed `"world:<wid>"`), taken by `write_world`/`delete_world` and by
-  migration — closing the same race for world starting sheets rather
-  than accepting it silently.
+  (keyed `"world:<wid>"`), taken by **every world-sheet mutator** —
+  `write_world`, `write_world_creation`, `delete_world`, the world
+  instantiate path, and campaign-creation **seeding** while it copies
+  world sheets — and by migration (Codex adversarial round 2: locking
+  only `write_world`/`delete_world` left the creation route and seeding
+  free to publish an old-schema sheet after migration passed).
+- **Campaigns created mid-operation** cannot escape: after the campaign
+  migration pass completes, the op **re-enumerates** all campaigns and
+  locks+migrates any campaign not in the original set, repeating until
+  the enumeration is stable (a fixed point — campaign creation is rare,
+  so this converges immediately). A campaign seeded during the op got
+  either pre-migration world sheets (then it's caught by re-enumeration)
+  or post-migration ones (already correct).
 - The pending migration (op kind + address + `to`) is recorded in the
   journal before the swap; migration then rewrites every affected file;
   the journal is cleared only after migration completes. A crash
@@ -239,14 +274,19 @@ that would point at removed content (informational — ref validation is
 shape-only, dangling refs are display-only fallout, per Phase 7).
 
 The newly-invalid scan must judge a sheet **exactly as a read would**
-(Codex adversarial round 1: `validate_sheet_values` alone misses
-sheet-type existence and kind mismatches, so deleting a sheet type or
-changing a type's `kind` would report zero newly-invalid sheets and skip
-the confirm step). `sheets.py`'s per-instance validation
-(`_validate_instance`: sheet type exists, targets the file's kind, then
-value validation) factors into a helper reusable against an arbitrary
-pack dict, and the impact scan calls that against the staged pack — a
-full scan over stored sheets, fine for a local single-user store.
+(Codex adversarial rounds 1–2: `validate_sheet_values` alone misses
+sheet-type existence and kind mismatches, and `_validate_instance`
+alone misses derived-evaluation failures a read reports — e.g. a new
+derived `10 // strength` passes the sample-defaults check but errors on
+a stored sheet whose `strength` is 0). The full read-time judgment —
+sheet type exists, targets the file's kind, value validation, **and
+derived computation against the sheet's stored values** — factors into
+a helper reusable against an arbitrary pack dict, and the impact scan
+calls that against the staged pack — a full scan over stored sheets,
+fine for a local single-user store. The dangling-ref count scans the
+same stored sheets **plus every content stat sidecar** (sidecars carry
+`ref` values too and are named in the rename fan-out; a
+content-to-content ref going dangling must surface in the confirm).
 
 Non-dry-run responses include the same `impact` block, recomputed at
 save. The counts are **advisory**: a sheet written between preview and
@@ -265,9 +305,19 @@ numbers, not just "parses".
 
 ### Duplicate, export, import
 
+All three id-claiming operations (create, duplicate, import) allocate
+through one helper — slugify, reject the empty slug, **reserve `none`**
+(it is the campaign binding's mechanics-off sentinel — a module literally
+id'd `none` could never be bound), dedupe against builtin *and* user ids
+— and publish **via staging + a single `os.rename` into `user_dir()`**
+under the global module-edit lock, so a crash or I/O failure never
+leaves a partial pack occupying a claimed id (Codex adversarial round 2:
+duplicate previously copied file-by-file straight into the library).
+
 - `duplicate_module(mid, name) -> new_mid` — copy the pack dir (builtin
-  or user source) into `user_dir()` under `slugify(name)` deduped against
-  existing ids (the `create_entity` dedup idiom). No binding changes.
+  or user source) to staging, then publish as above. Content is copied
+  as-is, valid or not — duplicating is also how you take a copy of a
+  misbehaving pack to fix it. No binding changes.
 - `export_module(mid) -> bytes` — stdlib `zipfile` of the pack dir, one
   top-level directory named `<mid>/`. Any module, builtins included
   (exporting a builtin is how you share a tweak-base).
@@ -281,10 +331,12 @@ numbers, not just "parses".
   (no absolute paths, no `..`); no two entries whose normalized paths
   collide **case-insensitively** (this store runs on Windows — two
   entries differing only in case would silently overwrite). Extract to
-  staging, take the id from the top-level dir name (deduped like
-  duplicate), validate via `load_pack_at` — non-empty `errors` rejects
-  the import with the messages (an invalid pack never lands, consistent
-  with the save model), then move into `user_dir()`.
+  staging, allocate the id from the top-level dir name through the
+  shared helper above (safe-slug enforced — a raw zip dir name is not
+  trusted as an id; `none` reserved; deduped), validate via
+  `load_pack_at` — non-empty `errors` rejects the import with the
+  messages (an invalid pack never lands, consistent with the save
+  model), then publish via the single-rename path.
 
 ## Routes
 
@@ -431,26 +483,39 @@ unchanged (it edits the same files the UI does).
   `str` must not touch `strength`); **scope-bound rewriting**: two
   disjoint groups defining the same field key — renaming one leaves the
   other group's derived, its composing types' expressions, and checks
-  requiring only the other group untouched; renaming `to` a reserved
-  contextual name (`new`/`difficulty`/`modifier`) rejected, and
-  `_validate_field` rejects such keys on ordinary saves; rename collision
-  rejected; **swap/recovery**: a simulated crash at each journal phase
+  requiring only the other group untouched; a layout fragment shared by
+  in-scope and out-of-scope types is specialized (clone rewritten and
+  repointed, original untouched) while an in-scope-only fragment is
+  rewritten in place; renaming `to` a reserved contextual name
+  (`new`/`difficulty`/`modifier`) rejected for fields *and* derived, and
+  ordinary saves reject such keys/names too; rename collision rejected;
+  **swap/recovery**: a simulated crash at each journal phase
   (before rename 1, between renames, after swap mid-migration) recovers
-  to a complete, valid pack and finishes the journaled migration
-  idempotently (replaying an already-migrated file is a no-op); sheet
+  to a complete, valid pack; the pre-swap case discards the pending
+  migration and leaves stored sheets byte-identical, the post-swap cases
+  finish the journaled migration idempotently (replaying an
+  already-migrated file is a no-op); recovery of one module's journal
+  while another module edit is in flight is impossible by construction
+  (global lock — assert edits serialize); sheet
   migration — field rename rewrites world + campaign sheets with gen
   bumps, group rename migrates zero sheets, sheet-type rename rewrites
   `sheet_type` values, content rename rewrites `kind:module:id` refs,
   unparseable sheet file skipped and reported; locks acquired for all
   campaigns in sorted order before the swap, and a campaign that doesn't
-  resolve to the module under its lock is untouched; `write_world` now
-  serializes on the world-scope lock; dry-run returns impact
-  (migrated / newly-invalid / dangling counts, sample derived values)
-  and writes nothing; **impact parity**: deleting a sheet type and
-  changing a type's `kind` both count their sheets as newly invalid
-  (the full instance-validation path, not values-only); duplicate (new
-  deduped id, builtin source ok); export→import round-trip; import
-  rejections (traversal entry, absolute path, symlink, >1 top-level dir,
+  resolve to the module under its lock is untouched; a campaign created
+  after enumeration is caught by the re-enumeration fixed point; every
+  world-sheet mutator (`write_world`, `write_world_creation`, seeding,
+  instantiate) serializes on the world-scope lock; dry-run returns
+  impact (migrated / newly-invalid / dangling counts, sample derived
+  values) and writes nothing; **impact parity**: deleting a sheet type,
+  changing a type's `kind`, and a derived expression that fails only
+  against a stored sheet's real values all count as newly invalid (the
+  full read-time judgment, not values-only), and a content delete
+  leaving another sidecar's ref dangling counts in `dangling_refs`;
+  duplicate (new deduped id, builtin source ok, staged single-rename
+  publish); id allocation rejects `none` and unsafe slugs across
+  create/duplicate/import; export→import round-trip; import rejections
+  (traversal entry, absolute path, symlink, >1 top-level dir,
   member-count and cumulative-uncompressed caps, case-colliding paths,
   invalid pack with its validation messages); import id dedup.
 - **Routes**: happy path + 400/404 mapping per route; builtin 400s;
