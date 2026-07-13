@@ -311,13 +311,19 @@ def write(cid: str, kind: str, eid: str, sheet_type: str,
         _checked_write(path, mid, kind, eid, sheet_type, fields)
 
 
-def delete(cid: str, kind: str, eid: str) -> bool:
+def delete(cid: str, kind: str, eid: str, *, expected_gen: str | None) -> bool:
+    """Delete a campaign sheet. ``expected_gen`` is mandatory CAS: the
+    caller's last-read gen (None matches a legacy file with no gen minted
+    yet). A missing file is False, never a conflict."""
     if kind not in FILE_KINDS or not _safe_part(eid):
         return False
     with lock_for(cid):
         p = _campaign_path(cid, kind, eid)
-        if not p.exists():
+        stored = _stored_snapshot(p)
+        if stored is None:
             return False
+        if stored["gen"] != expected_gen:
+            raise SheetConflict("the sheet changed since it was loaded")
         p.unlink()
         return True
 
