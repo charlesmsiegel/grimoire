@@ -94,7 +94,7 @@ export default function CreationWizard({ scope, kind, module, createRecord, dele
       return;
     }
     try {
-      await api.putSheetCreation(scope, module.id, kind, id, { sheet_type: tid, spends: finalSpends });
+      await api.putSheetCreation(scope, module.id, kind, id, { sheet_type: tid, spends: finalSpends, expected: null });
       onDone(id);
     } catch (err: any) {
       // The record was already created; the sheet write is what failed. Best-effort

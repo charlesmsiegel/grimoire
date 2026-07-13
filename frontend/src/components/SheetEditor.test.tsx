@@ -2,13 +2,17 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import SheetEditor, { typeKind } from "./SheetEditor";
 import type { ModuleDetail, Sheet } from "../api/client";
 
-vi.mock("../api/client", () => ({
-  api: {
-    putSheet: vi.fn(), deleteSheet: vi.fn(), listEntities: vi.fn(), readModuleContent: vi.fn(),
-    instantiateContent: vi.fn(), advanceSheet: vi.fn(),
-  },
-}));
-import { api } from "../api/client";
+vi.mock("../api/client", async () => {
+  const actual = await vi.importActual<typeof import("../api/client")>("../api/client");
+  return {
+    ...actual,
+    api: {
+      putSheet: vi.fn(), deleteSheet: vi.fn(), listEntities: vi.fn(), readModuleContent: vi.fn(),
+      instantiateContent: vi.fn(), advanceSheet: vi.fn(), getSheet: vi.fn(),
+    },
+  };
+});
+import { ApiError, api } from "../api/client";
 
 const MOD: ModuleDetail = {
   id: "pool-basic",
@@ -55,6 +59,7 @@ const SHEET: Sheet = {
   fields: { vigor: 3, strength: 10, essence: { current: 6, max: 10 }, quirk: "", gear: [] },
   derived: { sight_pool: 6 },
   errors: [],
+  gen: "g1",
 };
 
 const REF_MOD: ModuleDetail = {
@@ -111,7 +116,8 @@ test("view shows groups and derived; edit saves fields", async () => {
   fireEvent.click(screen.getByText("Save"));
   await waitFor(() => expect(api.putSheet).toHaveBeenCalledWith(
     { kind: "campaign", id: "run" }, "pool-basic", "characters", "mara",
-    { sheet_type: "medium", fields: expect.objectContaining({ vigor: 4 }) }));
+    { sheet_type: "medium", fields: expect.objectContaining({ vigor: 4 }),
+      expected: { sheet_type: "medium", fields: SHEET.fields, gen: "g1" } }));
   expect(onSaved).toHaveBeenCalled();
 });
 
@@ -132,6 +138,7 @@ test("change type confirms and filters orphans", async () => {
   expect(body.sheet_type).toBe("shifter");
   expect(body.fields).not.toHaveProperty("essence");
   expect(body.fields).toHaveProperty("vigor", 3);
+  expect(body.expected).toEqual({ sheet_type: "medium", fields: SHEET.fields, gen: "g1" });
   expect(onSaved).toHaveBeenCalled();
 });
 
@@ -162,7 +169,7 @@ test("delete sheet confirms then calls deleteSheet and closes", async () => {
                       onClose={onClose} onSaved={onSaved} />);
   fireEvent.click(screen.getByText("Delete sheet"));
   await waitFor(() => expect(api.deleteSheet).toHaveBeenCalledWith(
-    { kind: "campaign", id: "run" }, "pool-basic", "characters", "mara"));
+    { kind: "campaign", id: "run" }, "pool-basic", "characters", "mara", "g1"));
   expect(onClose).toHaveBeenCalled();
 });
 
@@ -198,7 +205,8 @@ test("text and list widgets round-trip through save", async () => {
   await waitFor(() => expect(api.putSheet).toHaveBeenCalledWith(
     { kind: "campaign", id: "run" }, "pool-basic", "characters", "mara",
     { sheet_type: "medium", fields: expect.objectContaining({
-      quirk: "Hums in the dark", gear: ["lantern", "rope"] }) }));
+      quirk: "Hums in the dark", gear: ["lantern", "rope"] }),
+      expected: { sheet_type: "medium", fields: SHEET.fields, gen: "g1" } }));
 });
 
 test("list textarea preserves newlines while typing", () => {
@@ -222,7 +230,8 @@ test("empty list textarea saves an empty array, not a blank line", async () => {
   fireEvent.click(screen.getByText("Save"));
   await waitFor(() => expect(api.putSheet).toHaveBeenCalledWith(
     { kind: "campaign", id: "run" }, "pool-basic", "characters", "mara",
-    { sheet_type: "medium", fields: expect.objectContaining({ gear: [] }) }));
+    { sheet_type: "medium", fields: expect.objectContaining({ gear: [] }),
+      expected: { sheet_type: "medium", fields: SHEET.fields, gen: "g1" } }));
 });
 
 test("number widget carries schema min/max bounds", async () => {
@@ -313,7 +322,7 @@ test("dropped-layout hint routing", () => {
 
 test("view mode renders entity-form ref chips that call onOpenRef", async () => {
   const onOpenRef = vi.fn();
-  const initial: Sheet = { sheet_type: "warden", fields: { known: ["lore:fireball"] }, derived: {}, errors: [] };
+  const initial: Sheet = { sheet_type: "warden", fields: { known: ["lore:fireball"] }, derived: {}, errors: [], gen: "g2" };
   render(<SheetEditor scope={{ kind: "campaign", id: "run" }} module={REF_MOD}
                       kind="characters" eid="mara" initial={initial}
                       onClose={() => {}} onSaved={() => {}} onOpenRef={onOpenRef} />);
@@ -325,7 +334,7 @@ test("view mode renders module-content ref chips that open a preview instead", a
   (api.readModuleContent as any).mockResolvedValue({
     kind: "lore", id: "icebolt", name: "Icebolt", body: "A shard of ice.", keys: "", sheet_type: null, fields: {},
   });
-  const initial: Sheet = { sheet_type: "warden", fields: { known: ["lore:module:icebolt"] }, derived: {}, errors: [] };
+  const initial: Sheet = { sheet_type: "warden", fields: { known: ["lore:module:icebolt"] }, derived: {}, errors: [], gen: "g2" };
   render(<SheetEditor scope={{ kind: "campaign", id: "run" }} module={REF_MOD}
                       kind="characters" eid="mara" initial={initial}
                       onClose={() => {}} onSaved={() => {}} />);
@@ -338,7 +347,7 @@ test("module-content ref preview's Instantiate button calls the API and closes t
     kind: "lore", id: "icebolt", name: "Icebolt", body: "A shard of ice.", keys: "", sheet_type: null, fields: {},
   });
   (api.instantiateContent as any).mockResolvedValue({ id: "icebolt" });
-  const initial: Sheet = { sheet_type: "warden", fields: { known: ["lore:module:icebolt"] }, derived: {}, errors: [] };
+  const initial: Sheet = { sheet_type: "warden", fields: { known: ["lore:module:icebolt"] }, derived: {}, errors: [], gen: "g2" };
   render(<SheetEditor scope={{ kind: "campaign", id: "run" }} module={REF_MOD}
                       kind="characters" eid="mara" initial={initial}
                       onClose={() => {}} onSaved={() => {}} />);
@@ -355,7 +364,7 @@ test("module-content ref preview shows an error and stays open when Instantiate 
     kind: "lore", id: "icebolt", name: "Icebolt", body: "A shard of ice.", keys: "", sheet_type: null, fields: {},
   });
   (api.instantiateContent as any).mockRejectedValue({ detail: "already instantiated" });
-  const initial: Sheet = { sheet_type: "warden", fields: { known: ["lore:module:icebolt"] }, derived: {}, errors: [] };
+  const initial: Sheet = { sheet_type: "warden", fields: { known: ["lore:module:icebolt"] }, derived: {}, errors: [], gen: "g2" };
   render(<SheetEditor scope={{ kind: "campaign", id: "run" }} module={REF_MOD}
                       kind="characters" eid="mara" initial={initial}
                       onClose={() => {}} onSaved={() => {}} />);
@@ -368,7 +377,7 @@ test("module-content ref preview shows an error and stays open when Instantiate 
 
 test("edit mode offers a two-group checkbox picker for a ref field", async () => {
   (api.listEntities as any).mockResolvedValue([{ id: "fireball", name: "Fireball" }]);
-  const initial: Sheet = { sheet_type: "warden", fields: { known: [] }, derived: {}, errors: [] };
+  const initial: Sheet = { sheet_type: "warden", fields: { known: [] }, derived: {}, errors: [], gen: "g2" };
   render(<SheetEditor scope={{ kind: "campaign", id: "run" }} module={REF_MOD}
                       kind="characters" eid="mara" initial={initial}
                       onClose={() => {}} onSaved={() => {}} />);
@@ -379,15 +388,16 @@ test("edit mode offers a two-group checkbox picker for a ref field", async () =>
   fireEvent.click(screen.getByText("Save"));
   await waitFor(() => expect(api.putSheet).toHaveBeenCalledWith(
     { kind: "campaign", id: "run" }, "pool-basic", "characters", "mara",
-    { sheet_type: "warden", fields: { known: ["lore:fireball"] } }));
+    { sheet_type: "warden", fields: { known: ["lore:fireball"] },
+      expected: { sheet_type: "warden", fields: { known: [] }, gen: "g2" } }));
 });
 
 test("shows an advance button for advancement-eligible fields and calls the API on click", async () => {
   const initial: Sheet = {
-    sheet_type: "warden", fields: { wits: 2, xp: { current: 20, max: 999 } }, derived: {}, errors: [],
+    sheet_type: "warden", fields: { wits: 2, xp: { current: 20, max: 999 } }, derived: {}, errors: [], gen: "g2",
   };
   (api.advanceSheet as any).mockResolvedValue({
-    sheet: { sheet_type: "warden", fields: { wits: 3, xp: { current: 11, max: 999 } }, derived: {}, errors: [] },
+    sheet: { sheet_type: "warden", fields: { wits: 3, xp: { current: 11, max: 999 } }, derived: {}, errors: [], gen: "g3" },
   });
   render(<SheetEditor scope={{ kind: "campaign", id: "run" }} module={ADV_MOD}
                       kind="characters" eid="mara" initial={initial}
@@ -398,7 +408,7 @@ test("shows an advance button for advancement-eligible fields and calls the API 
 
 test("shows the SheetError message on a rejected advance", async () => {
   const initial: Sheet = {
-    sheet_type: "warden", fields: { wits: 2, xp: { current: 1, max: 999 } }, derived: {}, errors: [],
+    sheet_type: "warden", fields: { wits: 2, xp: { current: 1, max: 999 } }, derived: {}, errors: [], gen: "g2",
   };
   (api.advanceSheet as any).mockRejectedValue({ detail: "needs 6 xp, have 1" });
   render(<SheetEditor scope={{ kind: "campaign", id: "run" }} module={ADV_MOD}
@@ -410,10 +420,43 @@ test("shows the SheetError message on a rejected advance", async () => {
 
 test("hides the advance button at world scope (starting sheets have no XP economy)", () => {
   const initial: Sheet = {
-    sheet_type: "warden", fields: { wits: 2, xp: { current: 20, max: 999 } }, derived: {}, errors: [],
+    sheet_type: "warden", fields: { wits: 2, xp: { current: 20, max: 999 } }, derived: {}, errors: [], gen: "g2",
   };
   render(<SheetEditor scope={{ kind: "world", id: "realm" }} module={ADV_MOD}
                       kind="characters" eid="mara" initial={initial}
                       onClose={() => {}} onSaved={() => {}} />);
   expect(screen.queryByLabelText("Advance Wits")).not.toBeInTheDocument();
+});
+
+test("saving a legacy sheet with no gen sends gen: null inside the expected snapshot", async () => {
+  const fresh: Sheet = { sheet_type: "medium", fields: {}, derived: {}, errors: [], gen: null };
+  render(<SheetEditor scope={{ kind: "campaign", id: "run" }} module={MOD}
+                      kind="characters" eid="mara" initial={fresh}
+                      onClose={() => {}} onSaved={() => {}} />);
+  fireEvent.click(screen.getByText("Edit"));
+  fireEvent.click(screen.getByText("Save"));
+  await waitFor(() => expect(api.putSheet).toHaveBeenCalledWith(
+    { kind: "campaign", id: "run" }, "pool-basic", "characters", "mara",
+    { sheet_type: "medium", fields: {}, expected: { sheet_type: "medium", fields: {}, gen: null } }));
+});
+
+test("a 409 on save re-fetches the sheet, replaces the form, and shows a changed-elsewhere notice", async () => {
+  (api.putSheet as any).mockRejectedValue(new ApiError(409, "the sheet changed since it was loaded"));
+  (api.getSheet as any).mockResolvedValue({
+    sheet: { sheet_type: "medium",
+      fields: { vigor: 3, strength: 10, essence: { current: 2, max: 10 }, quirk: "", gear: [] },
+      derived: { sight_pool: 3 }, errors: [], gen: "g9" } });
+  const onSaved = vi.fn();
+  render(<SheetEditor scope={{ kind: "campaign", id: "run" }} module={MOD}
+                      kind="characters" eid="mara" initial={SHEET}
+                      onClose={() => {}} onSaved={onSaved} />);
+  fireEvent.click(screen.getByText("Edit"));
+  fireEvent.click(screen.getByLabelText("Vigor 4"));
+  fireEvent.click(screen.getByText("Save"));
+  await waitFor(() => expect(api.getSheet).toHaveBeenCalledWith(
+    { kind: "campaign", id: "run" }, "pool-basic", "characters", "mara"));
+  await screen.findByText("This sheet changed elsewhere — reloaded.");
+  // reloaded value (essence 2/10), not the discarded local edit or the stale 6/10
+  expect(screen.getByText("2 / 10")).toBeInTheDocument();
+  expect(onSaved).toHaveBeenCalled();
 });

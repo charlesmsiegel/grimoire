@@ -59,6 +59,7 @@ const SHEET: Sheet = {
   fields: { vigor: 3, strength: 10, essence: { current: 6, max: 10 }, quirk: "", gear: [] },
   derived: { sight_pool: 6 },
   errors: [],
+  gen: "g1",
 };
 
 const FRESH_SHEET: Sheet = { ...SHEET };
@@ -84,7 +85,7 @@ test("unsheeted: create with picked type then editor opens", async () => {
   (api.getSheet as any).mockResolvedValue({ sheet: FRESH_SHEET });
   fireEvent.click(screen.getByText("Create"));
   await waitFor(() => expect(api.putSheet).toHaveBeenCalledWith(
-    CAMP, "pool-basic", "characters", "mara", { sheet_type: "medium", fields: null }));
+    CAMP, "pool-basic", "characters", "mara", { sheet_type: "medium", fields: null, expected: null }));
   expect(await screen.findByTestId("sheet-editor")).toBeInTheDocument();
 });
 
