@@ -660,3 +660,55 @@ def test_advance_rejects_nonpositive_cost_from_real_values(monkeypatch, tmp_path
                  {"toughness": 4, "xp": {"current": 999, "max": 999}})
     with pytest.raises(sheets.SheetError, match="must be a positive integer"):
         sheets.advance(cid, "characters", "mara", "toughness")
+
+
+# gen -- sheet generation nonce (mechanics Phase 5, Task 1)
+
+
+def test_gen_minted_on_create(monkeypatch, tmp_path):
+    _, cid = _campaign(monkeypatch, tmp_path)
+    sheets.write(cid, "characters", "mara", "medium", None)
+    s = sheets.read(cid, "characters", "mara")
+    assert isinstance(s["gen"], str) and len(s["gen"]) == 32
+
+
+def test_gen_preserved_on_same_type_write(monkeypatch, tmp_path):
+    _, cid = _campaign(monkeypatch, tmp_path)
+    sheets.write(cid, "characters", "mara", "medium", None)
+    g1 = sheets.read(cid, "characters", "mara")["gen"]
+    fields = sheets.read(cid, "characters", "mara")["fields"]
+    sheets.write(cid, "characters", "mara", "medium", {**fields, "vigor": 3})
+    assert sheets.read(cid, "characters", "mara")["gen"] == g1
+
+
+def test_gen_minted_on_type_change(monkeypatch, tmp_path):
+    # pool-basic has two characters-kind sheet types (medium, shifter; see
+    # test_type_change_preserves_shared_drops_orphans) -- a real type change,
+    # not a hand-edited fake, is enough to exercise the new-gen path.
+    _, cid = _campaign(monkeypatch, tmp_path)
+    sheets.write(cid, "characters", "mara", "medium",
+                 {"vigor": 3, "essence": {"current": 5, "max": 10}})
+    g1 = sheets.read(cid, "characters", "mara")["gen"]
+    sheets.write(cid, "characters", "mara", "shifter",
+                 {"vigor": 3, "essence": {"current": 5, "max": 10}})
+    assert sheets.read(cid, "characters", "mara")["gen"] != g1
+
+
+def test_legacy_file_without_gen_reads_none_and_gains_one_on_write(monkeypatch, tmp_path):
+    _, cid = _campaign(monkeypatch, tmp_path)
+    sheets.write(cid, "characters", "mara", "medium", None)
+    p = sheets._campaign_path(cid, "characters", "mara")
+    data = json.loads(p.read_text(encoding="utf-8"))
+    del data["gen"]
+    p.write_text(json.dumps(data), encoding="utf-8")
+    assert sheets.read(cid, "characters", "mara")["gen"] is None
+    sheets.write(cid, "characters", "mara", "medium", data["fields"])
+    assert isinstance(sheets.read(cid, "characters", "mara")["gen"], str)
+
+
+def test_advance_preserves_gen(monkeypatch, tmp_path):
+    # reuses the existing advancement fixture (Phase 7 tests, above)
+    _wid, cid = _campaign_with_advancement_module(monkeypatch, tmp_path)
+    g1 = sheets.read(cid, "characters", "mara")["gen"]
+    sheets.advance(cid, "characters", "mara", "wits")
+    assert sheets.read(cid, "characters", "mara")["gen"] == g1
