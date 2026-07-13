@@ -1710,17 +1710,26 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], cfg: dict,
 
 def _heal_current_proposal(cid: str, sid: str) -> None:
     """Complete the scene's current record's projection (roll + 🎲 line +
-    metadata) before ``proposals.new`` replaces it. The record is the only
+    metadata) before the record is retired or replaced. The record is the only
     recovery handle for a projection crash (roll tagged, line missing): the
     stale-retry heal in the POST roll-proposal route matches on the record's
-    id, so once ``new`` overwrites ``data[sid]`` that retry 409s on the id
-    mismatch and the roll would stand in rolls.json without its transcript
-    line forever. Projection is idempotent pure file I/O, so healing an
-    already-complete record is a cheap no-op. Only records whose resolution
-    carries a roll ``result`` can project — declined records never store a
-    resolution (and would have no roll to project if they somehow did), and
-    pending/resolving records have nothing resolved yet; those are replaced
-    as before."""
+    id and only projects superseded records that still carry a resolution, so
+    once ``new`` overwrites ``data[sid]`` (or the frontend stops offering the
+    superseded record) the roll would stand in rolls.json without its
+    transcript line forever. Projection is idempotent pure file I/O, so
+    healing an already-complete record is a cheap no-op. Only records whose
+    resolution carries a roll ``result`` can project — declined records never
+    store a resolution (and would have no roll to project if they somehow
+    did), and pending/resolving records have nothing resolved yet; those are
+    retired/replaced as before.
+
+    INVARIANT (keep it when adding call sites): a record with a projectable
+    resolution is never retired (``proposals.supersede``) nor replaced
+    (``proposals.new``) before its projection completes — every retirement or
+    replacement path calls this first. The heal is idempotent, and a crash
+    during the heal leaves the record current, so the next attempt re-heals.
+    The only remaining loss windows are the spec's two accepted fence-handoff
+    ones."""
     rec = store.proposals.get(cid, sid)
     if (isinstance(rec, dict) and isinstance(rec.get("resolution"), dict)
             and "result" in rec["resolution"]):
@@ -1899,6 +1908,7 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, client: LLMClient = Depends(ge
     _require_scene(cid, sid)
     cfg = store.read_config()
     _require_key(cfg)
+    _heal_current_proposal(cid, sid)     # retirement paths heal first (invariant)
     store.proposals.supersede(cid, sid)  # a new send retires any pending decision
     if store.scenes.is_pcless(cid, sid) or not turn.content.strip():
         # ephemeral turn, never stored: a director note steering one generation
@@ -1920,6 +1930,7 @@ def post_retry(cid: str, sid: str, client: LLMClient = Depends(get_llm)):
     scene = _require_scene(cid, sid)
     cfg = store.read_config()
     _require_key(cfg)
+    _heal_current_proposal(cid, sid)     # retirement paths heal first (invariant)
     store.proposals.supersede(cid, sid)  # a fresh generation retires the old decision
     if not scene["messages"]:
         raise HTTPException(status_code=400, detail="nothing to retry")
@@ -1934,6 +1945,7 @@ def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
     scene = _require_scene(cid, sid)
     cfg = store.read_config()
     _require_key(cfg)
+    _heal_current_proposal(cid, sid)     # retirement paths heal first (invariant)
     store.proposals.supersede(cid, sid)  # regenerating retires the old decision
     msgs = scene["messages"]
     if not msgs:
