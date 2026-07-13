@@ -15,7 +15,7 @@ def test_resolve_check_pool(monkeypatch, tmp_path):
     _, cid, _ = _play(monkeypatch, tmp_path)
     sheets.write(cid, "characters", "mara", "medium",
                  {"vigor": 3, "brawl": 2, "wits": 2, "occult": 1,
-                  "essence": {"current": 5, "max": 10}})
+                  "essence": {"current": 5, "max": 10}}, expected=None)
     res = checks.resolve_check(cid, "brawl", "characters:mara", seed=7)
     assert res["notation"] == "5d10 t6"          # (3+2+0)d10, default diff 6
     assert res["difficulty"] == 6 and res["modifier"] == 0
@@ -27,7 +27,7 @@ def test_resolve_check_pool(monkeypatch, tmp_path):
 
 def test_resolve_check_difficulty_ladder_and_modifier(monkeypatch, tmp_path):
     _, cid, _ = _play(monkeypatch, tmp_path)
-    sheets.write(cid, "characters", "mara", "medium", {"vigor": 3, "brawl": 1})
+    sheets.write(cid, "characters", "mara", "medium", {"vigor": 3, "brawl": 1}, expected=None)
     res = checks.resolve_check(cid, "brawl", "characters:mara",
                                difficulty=8, modifier=2, seed=1)
     assert res["notation"] == "6d10 t8"
@@ -36,7 +36,7 @@ def test_resolve_check_difficulty_ladder_and_modifier(monkeypatch, tmp_path):
 def test_resolve_check_d20_tiers(monkeypatch, tmp_path):
     _, cid, _ = _play(monkeypatch, tmp_path, module="d20-basic")
     sheets.write(cid, "characters", "mara", "warrior",
-                 {"strength": 14, "athletics": 3})
+                 {"strength": 14, "athletics": 3}, expected=None)
     # scan seeds for a natural 20 and a natural 1 to prove tier evaluation
     tiers = set()
     for seed in range(200):
@@ -51,7 +51,7 @@ def test_resolve_check_errors(monkeypatch, tmp_path):
         checks.resolve_check(cid, "ghost", "characters:mara")        # unknown check
     with pytest.raises(checks.CheckError):
         checks.resolve_check(cid, "brawl", "characters:mara")        # no sheet
-    sheets.write(cid, "items", "moon-disc", "talisman", None)
+    sheets.write(cid, "items", "moon-disc", "talisman", None, expected=None)
     with pytest.raises(checks.CheckError):
         checks.resolve_check(cid, "brawl", "items:moon-disc")        # requires gating
     cid2 = campaigns.create_campaign("Freeform", worlds.create_world("R2"))
@@ -105,18 +105,18 @@ def test_resolve_check_never_appeared_actor(monkeypatch, tmp_path):
     from grimoire.store import characters
     wroot = worlds.world_root(campaigns.read_campaign(cid)["meta"]["world"])
     eid, _vid = characters.create_character(wroot, "Mara")
-    sheets.write(cid, "characters", eid, "medium", {"vigor": 3, "brawl": 2})
+    sheets.write(cid, "characters", eid, "medium", {"vigor": 3, "brawl": 2}, expected=None)
     res = checks.resolve_check(cid, "brawl", f"characters:{eid}", seed=7)
     assert res["actor_label"] == "Mara"       # container meta name, no version needed
     # campaign-local copy, still never appeared (the reviewer's TypeError repro:
     # read_card(croot, eid, None) passes _require_char, then _safe(None) crashes)
     croot = campaigns.campaign_root(cid)
     eid2, _ = characters.create_character(croot, "Seraphine")
-    sheets.write(cid, "characters", eid2, "medium", {"vigor": 2, "brawl": 1})
+    sheets.write(cid, "characters", eid2, "medium", {"vigor": 2, "brawl": 1}, expected=None)
     res = checks.resolve_check(cid, "brawl", f"characters:{eid2}", seed=7)
     assert res["actor_label"] == "Seraphine"
     # and a sheeted id with no character record at all falls back to the id
-    sheets.write(cid, "characters", "winifred", "medium", {"vigor": 1, "brawl": 1})
+    sheets.write(cid, "characters", "winifred", "medium", {"vigor": 1, "brawl": 1}, expected=None)
     res = checks.resolve_check(cid, "brawl", "characters:winifred", seed=7)
     assert res["actor_label"] == "winifred"
 

@@ -26,6 +26,10 @@ class SheetError(Exception):
     """Rejected sheet write (no module, bad kind/type/values)."""
 
 
+class SheetConflict(SheetError):
+    """CAS rejection: the sheet changed since the caller last read it."""
+
+
 FILE_KINDS: tuple[str, ...] = ("characters", "pcs") + entities.ENTITY_KINDS
 
 
@@ -253,12 +257,48 @@ def _checked_write(path: Path, mid: str, file_kind: str, eid: str,
                               "gen": _next_gen(path, sheet_type)})
 
 
+def _stored_snapshot(path: Path) -> dict | None:
+    """{"sheet_type", "fields", "gen"} as stored, or None when no file. An
+    unreadable file yields an all-None snapshot (matches nothing sane)."""
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    return {"sheet_type": data.get("sheet_type"),
+            "fields": data.get("fields") if isinstance(data.get("fields"), dict) else {},
+            "gen": data.get("gen")}
+
+
+def _check_expected(path: Path, expected: dict | None) -> None:
+    """Mandatory whole-sheet CAS. expected=None asserts creation; otherwise
+    sheet_type AND fields AND gen must all match the stored snapshot."""
+    stored = _stored_snapshot(path)
+    if expected is None:
+        if stored is not None:
+            raise SheetConflict("a sheet already exists for this entity")
+        return
+    if stored is None:
+        raise SheetConflict("no sheet exists for this entity")
+    if not isinstance(expected, dict):
+        raise SheetError("expected must be an object or null")
+    if (stored["sheet_type"] != expected.get("sheet_type")
+            or stored["fields"] != expected.get("fields")
+            or stored["gen"] != expected.get("gen")):
+        raise SheetConflict("the sheet changed since it was loaded")
+
+
 def write(cid: str, kind: str, eid: str, sheet_type: str,
-          fields: dict | None = None) -> None:
+          fields: dict | None = None, *, expected: dict | None) -> None:
     """Create or replace a campaign sheet. A different ``sheet_type`` than
     the stored one is a type change: values whose keys exist in the new
     type's assembled field set are kept (caller passes them), others are
-    filtered out here."""
+    filtered out here. ``expected`` is mandatory whole-sheet CAS: the
+    caller's last-read {"sheet_type", "fields", "gen"} snapshot, or None to
+    assert no sheet exists yet -- raises SheetConflict on mismatch."""
     with lock_for(cid):
         # resolve INSIDE the lock: rebinds publish under this same lock, so a
         # writer can never resolve module A, lose the CPU to a rebind to B,
@@ -266,8 +306,9 @@ def write(cid: str, kind: str, eid: str, sheet_type: str,
         mid = modules.resolve(cid)
         if mid is None:
             raise SheetError("no module resolved for this campaign")
-        _checked_write(_campaign_path(cid, kind, eid), mid, kind, eid,
-                       sheet_type, fields)
+        path = _campaign_path(cid, kind, eid)
+        _check_expected(path, expected)
+        _checked_write(path, mid, kind, eid, sheet_type, fields)
 
 
 def delete(cid: str, kind: str, eid: str) -> bool:
@@ -413,14 +454,17 @@ def _checked_creation_write(path: Path, mid: str, file_kind: str, eid: str,
 
 
 def write_creation(cid: str, kind: str, eid: str, sheet_type: str,
-                   spends: dict[str, dict[str, int]]) -> None:
+                   spends: dict[str, dict[str, int]], *, expected: dict | None) -> None:
+    """``expected`` is mandatory whole-sheet CAS -- see write()."""
     with lock_for(cid):
         # resolve INSIDE the lock -- see write()'s rebind-serialization note.
         mid = modules.resolve(cid)
         if mid is None:
             raise SheetError("no module resolved for this campaign")
         _assert_campaign_entity_exists(cid, kind, eid)
-        _checked_creation_write(_campaign_path(cid, kind, eid), mid, kind, eid, sheet_type, spends)
+        path = _campaign_path(cid, kind, eid)
+        _check_expected(path, expected)
+        _checked_creation_write(path, mid, kind, eid, sheet_type, spends)
 
 
 def write_world_creation(wid: str, mid: str, kind: str, eid: str, sheet_type: str,
