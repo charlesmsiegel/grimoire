@@ -3696,3 +3696,78 @@ def test_new_fence_replacement_projects_resolved_record(client):
     assert len(_roll_lines(client, cid, sid)) == 1
     fresh = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
     assert fresh["id"] != pid and fresh["status"] == "pending"
+
+
+def _resolve_with_crashed_line(client, cid, sid, monkeypatch):
+    """A resolved record whose projection crashed between the roll append and
+    the 🎲 line append: roll tagged with roll_id persisted, no transcript
+    line, record still resolved (recoverable — until something retires it)."""
+    rec = _pending(client, cid, sid)
+    pid = rec["id"]
+    store.proposals.claim(cid, sid, pid)
+    resolution = store.checks.resolve_check(cid, "brawl", "characters:mara", 6, 0)
+    assert store.proposals.transition(cid, sid, pid, ("resolving",), "resolved", resolution)
+    real_append = store.scenes.append_message
+    state = {"raised": False}
+    def flaky_append(*a, **k):
+        if not state["raised"]:
+            state["raised"] = True
+            raise RuntimeError("crash before 🎲 line")
+        return real_append(*a, **k)
+    monkeypatch.setattr(store.scenes, "append_message", flaky_append)
+    with pytest.raises(RuntimeError):
+        routes._project_resolution(cid, sid, pid)
+    # restore only this attr — never monkeypatch.undo() (shared GRIMOIRE_HOME)
+    monkeypatch.setattr(store.scenes, "append_message", real_append)
+    mid = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert mid["status"] == "resolved" and "roll_id" in mid["resolution"]
+    assert _roll_lines(client, cid, sid) == []
+    return rec, pid
+
+
+def test_plain_chat_heals_projection_before_supersede(client, monkeypatch):
+    # Last of the crash-window family: a resolved record whose projection
+    # crashed (roll tagged, 🎲 line missing) is still recoverable — but an
+    # ordinary NON-fence send used to supersede it without healing, and the
+    # frontend never offers superseded records, so no normal user action would
+    # ever write the line. The supersede paths must heal first.
+    cid, sid, _ = _mech_scene(client)
+    rec, pid = _resolve_with_crashed_line(client, cid, sid, monkeypatch)
+
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["plain reply"])
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "onward"})
+    assert resp.status_code == 200
+
+    assert len(_roll_lines(client, cid, sid)) == 1      # healed before supersede
+    assert len([e for e in client.get(f"/api/campaigns/{cid}/rolls").json()
+                if e.get("proposal") == pid]) == 1      # still exactly one roll
+    after = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert after["id"] == pid and after["status"] == "superseded"
+    assert "line_intent" in after["resolution"]         # metadata persisted
+    msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    assert msgs[-1]["content"] == "plain reply"         # new turn persisted normally
+    roll_idx = next(i for i, m in enumerate(msgs) if m["content"].startswith("\U0001F3B2"))
+    assert roll_idx < len(msgs) - 1                     # ...after the healed line
+
+
+def test_retry_heals_projection_before_supersede(client):
+    # Lighter variant on the same heal call path: a resolved-with-resolution
+    # record that was never projected at all is retired by /retry — the heal
+    # projects roll + line exactly once before the supersede.
+    cid, sid, _ = _mech_scene(client)
+    rec = _pending(client, cid, sid)
+    pid = rec["id"]
+    store.proposals.claim(cid, sid, pid)
+    resolution = store.checks.resolve_check(cid, "brawl", "characters:mara", 6, 0)
+    assert store.proposals.transition(cid, sid, pid, ("resolving",), "resolved", resolution)
+    assert client.get(f"/api/campaigns/{cid}/rolls").json() == []   # never projected
+
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["retried reply"])
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/retry")
+    assert resp.status_code == 200
+
+    assert len([e for e in client.get(f"/api/campaigns/{cid}/rolls").json()
+                if e.get("proposal") == pid]) == 1
+    assert len(_roll_lines(client, cid, sid)) == 1
+    after = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert after["id"] == pid and after["status"] == "superseded"
