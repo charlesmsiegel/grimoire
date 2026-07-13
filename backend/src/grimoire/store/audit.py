@@ -66,10 +66,13 @@ def capture_baseline(cid: str, sid: str) -> None:
     """Snapshot every campaign sheet at scene creation. Never raises -- a
     capture failure must not fail scene creation."""
     try:
-        mid = modules.resolve(cid)
-        if mid is None:
-            return
         with sheets.lock_for(cid):          # consistent multi-file snapshot
+            # resolve INSIDE the lock: rebinds publish under this same lock
+            # (see sheets.write), so a concurrent rebind can't interleave
+            # between resolving the module and snapshotting sheets under it.
+            mid = modules.resolve(cid)
+            if mid is None:
+                return
             snap: dict = {}
             croot = campaigns.campaign_root(cid)
             for kind, eid in sheets.list_refs(cid):
@@ -95,34 +98,42 @@ def baseline_entry_valid(cid: str, sid: str, kind: str, eid: str,
                          mid: str, sheet: dict) -> bool:
     """Shared validity predicate: scene entry exists, module + schema stamp
     match, entity entry exists, and its sheet_type AND gen equal the live
-    sheet's. `sheet` is a sheets.read() result (must be non-None)."""
-    scene = read_baselines(cid).get(sid)
-    if not isinstance(scene, dict) or scene.get("module") != mid:
+    sheet's. `sheet` is a sheets.read() result (must be non-None). Never
+    raises -- a module deleted mid-flight (schema_stamp -> load_pack ->
+    pack_root -> ModuleNotFound) makes the baseline invalid, not a 500."""
+    try:
+        scene = read_baselines(cid).get(sid)
+        if not isinstance(scene, dict) or scene.get("module") != mid:
+            return False
+        if scene.get("schema") != schema_stamp(mid):
+            return False
+        entry = scene.get("sheets", {}).get(f"{kind}--{eid}")
+        if not isinstance(entry, dict):
+            return False
+        return (entry.get("sheet_type") == sheet["sheet_type"]
+                and entry.get("gen") == sheet["gen"])
+    except Exception:  # noqa: BLE001 — never raise; see docstring
         return False
-    if scene.get("schema") != schema_stamp(mid):
-        return False
-    entry = scene.get("sheets", {}).get(f"{kind}--{eid}")
-    if not isinstance(entry, dict):
-        return False
-    return (entry.get("sheet_type") == sheet["sheet_type"]
-            and entry.get("gen") == sheet["gen"])
 
 
 def baseline_field(cid: str, sid: str, kind: str, eid: str, field_key: str):
     """The scene-start value for a field, or None when no valid baseline
-    covers it (report-only)."""
-    mid = modules.resolve(cid)
-    if mid is None:
+    covers it (report-only). Never raises -- see baseline_entry_valid."""
+    try:
+        mid = modules.resolve(cid)
+        if mid is None:
+            return None
+        sheet = sheets.read(cid, kind, eid)
+        if sheet is None or sheet["errors"]:
+            return None
+        if not baseline_entry_valid(cid, sid, kind, eid, mid, sheet):
+            return None
+        entry = read_baselines(cid)[sid]["sheets"][f"{kind}--{eid}"]
+        fields = {**sheets.default_fields(modules.load_pack(mid)["sheets"],
+                                          entry["sheet_type"]), **entry["fields"]}
+        return fields.get(field_key)
+    except Exception:  # noqa: BLE001 — never raise; see docstring
         return None
-    sheet = sheets.read(cid, kind, eid)
-    if sheet is None or sheet["errors"]:
-        return None
-    if not baseline_entry_valid(cid, sid, kind, eid, mid, sheet):
-        return None
-    entry = read_baselines(cid)[sid]["sheets"][f"{kind}--{eid}"]
-    fields = {**sheets.default_fields(modules.load_pack(mid)["sheets"],
-                                      entry["sheet_type"]), **entry["fields"]}
-    return fields.get(field_key)
 
 
 def clear_baselines(cid: str) -> None:
