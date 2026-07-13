@@ -884,3 +884,211 @@ def test_editor_write_serializes_with_advance(monkeypatch, tmp_path):
     s = sheets.read(cid, "characters", "mara")
     assert s["errors"] == []
     assert all(isinstance(e, sheets.SheetConflict) for e in errs)
+
+
+# set_field -- per-field strict-CAS apply primitive (mechanics Phase 5, Task 5)
+# NOTE: the brief's snippet uses a placeholder sheet type "adventurer" with
+# placeholder fields "hp"/"athletics" -- adapted here to pool-basic's real
+# "medium" characters type: "essence" (resource), "health" (track), "gear"
+# (list) as the three mutable-type fields, and "vigor" (dots, static) as the
+# rejected-at-the-write-boundary field, matching the CAS tests above.
+
+
+def _setup_medium_sheet(monkeypatch, tmp_path):
+    _, cid = _campaign(monkeypatch, tmp_path)
+    sheets.write(cid, "characters", "mara", "medium", None, expected=None)
+    return cid, sheets.read(cid, "characters", "mara")
+
+
+def test_set_field_resource_happy_path(monkeypatch, tmp_path):
+    cid, s = _setup_medium_sheet(monkeypatch, tmp_path)
+    live = s["fields"]["essence"]                     # {"current": C, "max": M}
+    sheets.set_field(cid, "characters", "mara", "essence",
+                     {"current": live["current"] - 2}, expect=live)
+    got = sheets.read(cid, "characters", "mara")["fields"]["essence"]
+    assert got == {"current": live["current"] - 2, "max": live["max"]}
+
+
+def test_set_field_track_happy_path(monkeypatch, tmp_path):
+    cid, s = _setup_medium_sheet(monkeypatch, tmp_path)
+    live = s["fields"]["health"]                      # plain int, default 0
+    sheets.set_field(cid, "characters", "mara", "health", live + 3, expect=live)
+    assert sheets.read(cid, "characters", "mara")["fields"]["health"] == live + 3
+
+
+def test_set_field_list_happy_path(monkeypatch, tmp_path):
+    cid, s = _setup_medium_sheet(monkeypatch, tmp_path)
+    live = s["fields"]["gear"]                        # []
+    sheets.set_field(cid, "characters", "mara", "gear", ["silver dagger"], expect=live)
+    assert sheets.read(cid, "characters", "mara")["fields"]["gear"] == ["silver dagger"]
+
+
+def test_set_field_max_tamper_ignored(monkeypatch, tmp_path):
+    cid, s = _setup_medium_sheet(monkeypatch, tmp_path)
+    live = s["fields"]["essence"]
+    sheets.set_field(cid, "characters", "mara", "essence",
+                     {"current": 1, "max": 999}, expect=live)
+    assert sheets.read(cid, "characters", "mara")["fields"]["essence"]["max"] == live["max"]
+
+
+def test_set_field_static_field_rejected_at_write_boundary(monkeypatch, tmp_path):
+    cid, s = _setup_medium_sheet(monkeypatch, tmp_path)
+    with pytest.raises(sheets.SheetError):
+        sheets.set_field(cid, "characters", "mara", "vigor",   # dots: static
+                         s["fields"].get("vigor", 0) + 1,
+                         expect=s["fields"].get("vigor", 0))
+
+
+def test_set_field_unknown_field_rejected(monkeypatch, tmp_path):
+    cid, _s = _setup_medium_sheet(monkeypatch, tmp_path)
+    with pytest.raises(sheets.SheetError):
+        sheets.set_field(cid, "characters", "mara", "nonesuch", 1, expect=0)
+
+
+def test_set_field_conflict_on_stale_expect(monkeypatch, tmp_path):
+    cid, s = _setup_medium_sheet(monkeypatch, tmp_path)
+    live = s["fields"]["essence"]
+    sheets.set_field(cid, "characters", "mara", "essence",
+                     {"current": live["current"] - 1}, expect=live)
+    with pytest.raises(sheets.SheetConflict):
+        sheets.set_field(cid, "characters", "mara", "essence",
+                         {"current": live["current"] - 2}, expect=live)
+
+
+def test_set_field_conflict_even_when_live_equals_value(monkeypatch, tmp_path):
+    """Duplicate save / independent same-value mutation must be REPORTED."""
+    cid, s = _setup_medium_sheet(monkeypatch, tmp_path)
+    live = s["fields"]["essence"]
+    target = {"current": live["current"] - 2}
+    sheets.set_field(cid, "characters", "mara", "essence", target, expect=live)
+    with pytest.raises(sheets.SheetConflict) as ei:
+        sheets.set_field(cid, "characters", "mara", "essence", target, expect=live)
+    assert "already applied or independently changed" in str(ei.value)
+
+
+def test_set_field_single_field_isolation(monkeypatch, tmp_path):
+    """An unrelated field changed between materialize and apply survives."""
+    cid, s = _setup_medium_sheet(monkeypatch, tmp_path)
+    live_essence = s["fields"]["essence"]
+    snap = {"sheet_type": s["sheet_type"], "fields": s["fields"], "gen": s["gen"]}
+    sheets.write(cid, "characters", "mara", s["sheet_type"],
+                 {**s["fields"], "vigor": 4}, expected=snap)
+    sheets.set_field(cid, "characters", "mara", "essence",
+                     {"current": live_essence["current"] - 1}, expect=live_essence)
+    got = sheets.read(cid, "characters", "mara")["fields"]
+    assert got["vigor"] == 4 and got["essence"]["current"] == live_essence["current"] - 1
+
+
+def _campaign_with_advancement_and_hp_module(monkeypatch, tmp_path):
+    """Like _campaign_with_advancement_module, plus an extra 'hp' resource
+    field untouched by advancement -- exercises set_field racing advance()
+    on genuinely independent fields of the same sheet."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    d = tmp_path / "modules" / "advhptest"
+    d.mkdir(parents=True)
+    (d / "module.md").write_text("---\nname: Advancement HP Test\n---\n", encoding="utf-8")
+    (d / "sheets.json").write_text(json.dumps({
+        "groups": {
+            "attributes": {
+                "label": "Attributes",
+                "fields": [{"key": "wits", "type": "dots", "max": 5, "default": 1}],
+            },
+        },
+        "sheet_types": {
+            "hero": {
+                "label": "Hero", "kind": "characters", "groups": ["attributes"],
+                "fields": [
+                    {"key": "xp", "type": "resource", "max": 999},
+                    {"key": "hp", "type": "resource", "max": 20},
+                ],
+                "advancement": {"pool": "xp", "costs": {"wits": "new * 3"}},
+            },
+        },
+    }), encoding="utf-8")
+    wid = worlds.create_world("Realm")
+    characters.create_character(worlds.world_root(wid), "Mara")  # id: "mara"
+    cid = campaigns.create_campaign("Advancement HP Run", wid, module="advhptest")
+    sheets.write(cid, "characters", "mara", "hero",
+                 {"wits": 2, "xp": {"current": 20, "max": 999}, "hp": {"current": 10, "max": 20}},
+                 expected=None)
+    return cid
+
+
+def test_set_field_race_vs_advance(monkeypatch, tmp_path):
+    """Threaded: both complete under the lock, neither write lost."""
+    import threading
+    cid = _campaign_with_advancement_and_hp_module(monkeypatch, tmp_path)
+    s = sheets.read(cid, "characters", "mara")
+    results = []
+
+    def _try(fn):
+        try:
+            fn()
+        except Exception as e:  # noqa: BLE001
+            results.append(e)
+
+    t1 = threading.Thread(target=lambda: results.append(
+        sheets.advance(cid, "characters", "mara", "wits")))
+    t2 = threading.Thread(target=lambda: _try(lambda: sheets.set_field(
+        cid, "characters", "mara", "hp", {"current": 1}, expect=s["fields"]["hp"])))
+    t1.start(); t2.start(); t1.join(); t2.join()
+    got = sheets.read(cid, "characters", "mara")["fields"]
+    assert got["hp"]["current"] == 1                          # set_field landed
+    assert got["wits"] == s["fields"]["wits"] + 1              # advance landed
+
+
+def test_set_field_bad_kind_and_eid_rejected(monkeypatch, tmp_path):
+    """Same path-traversal guard as write()/delete() -- see
+    test_bad_kind_and_eid_rejected above."""
+    cid, _s = _setup_medium_sheet(monkeypatch, tmp_path)
+    with pytest.raises(sheets.SheetError):
+        sheets.set_field(cid, "vehicles", "cart", "essence", {"current": 1}, expect=0)
+    with pytest.raises(sheets.SheetError):
+        sheets.set_field(cid, "characters", "../escape", "essence", {"current": 1}, expect=0)
+
+
+def test_set_field_rejects_kind_that_traverses_into_another_campaign(monkeypatch, tmp_path):
+    """A crafted `kind` combined with FILE_KINDS/_safe_part(eid) being
+    unchecked would let a caller in one campaign's set_field reach a sheet
+    file belonging to a different campaign (kind + eid form the raw
+    "<kind>--<eid>.json" filename component). Regression for a real exploit
+    found in self-review: `kind` containing "..\\..\\<other-cid>\\sheets\\
+    characters" plus eid "mara" resolved outside this campaign's sheets dir
+    entirely and overwrote the victim's stored field."""
+    _, cid1 = _campaign(monkeypatch, tmp_path)
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))  # keep same store
+    from grimoire.store import worlds as worlds_mod
+    wid = worlds_mod.create_world("Realm 2")
+    cid2 = campaigns.create_campaign("Attacker", wid, module="pool-basic")
+    sheets.write(cid1, "characters", "mara", "medium", None, expected=None)
+    victim = sheets.read(cid1, "characters", "mara")
+    p1 = sheets._campaign_path(cid1, "characters", "mara")
+    p2dir = sheets._campaign_dir(cid2)
+    import os as _os
+    rel = _os.path.relpath(p1, p2dir)
+    body = rel[:-len(".json")]
+    idx = body.rfind("--")
+    kind, eid = body[:idx], body[idx + 2:]
+    with pytest.raises(sheets.SheetError):
+        sheets.set_field(cid2, kind, eid, "essence", {"current": 1},
+                         expect=victim["fields"]["essence"])
+    assert sheets.read(cid1, "characters", "mara")["fields"]["essence"] == victim["fields"]["essence"]
+
+
+def test_set_field_resolves_module_inside_the_lock(monkeypatch, tmp_path):
+    """Same rebind-serialization invariant as write() -- see
+    test_write_resolves_module_inside_the_lock above."""
+    cid, s = _setup_medium_sheet(monkeypatch, tmp_path)
+    live = s["fields"]["essence"]
+    from grimoire.store import modules as modules_mod
+    real = modules_mod.resolve
+    seen = []
+
+    def spy(c):
+        seen.append(sheets.lock_for(c)._is_owned())  # RLock: owned by us?
+        return real(c)
+
+    monkeypatch.setattr(modules_mod, "resolve", spy)
+    sheets.set_field(cid, "characters", "mara", "essence",
+                     {"current": live["current"] - 1}, expect=live)
+    assert seen and all(seen)
