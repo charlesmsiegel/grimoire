@@ -32,7 +32,8 @@ def _entry(source: str, sheet_type: str | None, message: str) -> dict:
     return {"source": source, "sheet_type": sheet_type, "message": message}
 
 
-def _read_json(root: Path, name: str, source: str, errors: list[dict]):
+def _read_json(root: Path, name: str, source: str, errors: list[dict],
+               sheet_type: str | None = None):
     p = root / name
     if not p.exists():
         return None
@@ -41,7 +42,7 @@ def _read_json(root: Path, name: str, source: str, errors: list[dict]):
     except (json.JSONDecodeError, UnicodeDecodeError, OSError, RecursionError) as e:
         # RecursionError: pathologically deep JSON blows the parser stack
         # before our own depth cap can see the tree.
-        errors.append(_entry(source, None, f"{name}: {e.__class__.__name__}: {e}"))
+        errors.append(_entry(source, sheet_type, f"{name}: {e.__class__.__name__}: {e}"))
         return None
 
 
@@ -293,11 +294,11 @@ def _load_theme(root: Path, errors: list[dict]) -> dict:
 
 def _load_layout(root: Path, sheets: dict, errors: list[dict]) -> dict:
     layout: dict = {"sheet_types": {}}
-    raw = _read_json(root, "layout.json", "layout", errors)
+    raw = _read_json(root, "layout.json", "layout", errors, sheet_type="*")
     if raw is None:
         return layout
     if not isinstance(raw, dict):
-        errors.append(_entry("layout", None, "layout.json: must be an object"))
+        errors.append(_entry("layout", "*", "layout.json: must be an object"))
         return layout
     extras = set(raw) - {"fragments", "sheet_types"}
     if extras:
@@ -309,7 +310,7 @@ def _load_layout(root: Path, sheets: dict, errors: list[dict]) -> dict:
         fragments = {}
     trees = raw.get("sheet_types", {})
     if not isinstance(trees, dict):
-        errors.append(_entry("layout", None, "layout.json: sheet_types must be an object"))
+        errors.append(_entry("layout", "*", "layout.json: sheet_types must be an object"))
         trees = {}
     # Standalone pass over every fragment: an unused-but-broken fragment is
     # reported once (sheet_type None) and drops nothing by itself. Refs are
@@ -353,7 +354,7 @@ def load_display(root: Path, sheets: dict) -> tuple[dict, dict, list[dict]]:
             errors.append(_entry("theme", None,
                                  "theme.css is not supported — use theme.json"))
     except Exception as e:  # containment boundary, deliberately broad
-        errors.append(_entry("layout", None,
+        errors.append(_entry("layout", "*",
                              f"display files: {e.__class__.__name__}: {e}"))
         return {"sheet_types": {}}, {}, errors
     return layout, theme, errors

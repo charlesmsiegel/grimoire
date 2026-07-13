@@ -245,12 +245,18 @@ test("dropped-layout hint routing", () => {
   const { unmount } = render(<SheetEditor {...base} module={dropped} />);
   expect(screen.getByText(HINT)).toBeInTheDocument();
   unmount();
-  // file-level error, no surviving tree -> fires
+  // file-level failure (sentinel "*"), no surviving tree -> fires
   const global: ModuleDetail = { ...MOD, display_errors: [
-    { source: "layout", sheet_type: null, message: "layout.json: must be an object" }] };
+    { source: "layout", sheet_type: "*", message: "layout.json: must be an object" }] };
   const r2 = render(<SheetEditor {...base} module={global} />);
   expect(screen.getByText(HINT)).toBeInTheDocument();
   r2.unmount();
+  // unused-broken-fragment error (sheet_type null, drops nothing), zero surviving trees -> does NOT fire
+  const unusedFragment: ModuleDetail = { ...MOD, display_errors: [
+    { source: "layout", sheet_type: null, message: "fragments.broken: bad" }] };
+  const r2b = render(<SheetEditor {...base} module={unusedFragment} />);
+  expect(r2b.queryByText(HINT)).toBeNull();
+  r2b.unmount();
   // unused-fragment error but current type's layout survived -> does NOT fire
   const survived: ModuleDetail = { ...MOD,
     layout: { sheet_types: { medium: { column: [] } } },

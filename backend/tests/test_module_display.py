@@ -93,12 +93,20 @@ def test_unparseable_layout_is_file_level_error(tmp_path):
     (tmp_path / "layout.json").write_text("{nope", encoding="utf-8")
     layout, _theme, errors = load(tmp_path)
     assert layout == {"sheet_types": {}}
-    assert errors and errors[0]["source"] == "layout" and errors[0]["sheet_type"] is None
+    assert errors and errors[0]["source"] == "layout" and errors[0]["sheet_type"] == "*"
 
 
 def test_non_object_root(tmp_path):
     layout, errors = layout_errors(tmp_path, ["not", "an", "object"])
-    assert layout["sheet_types"] == {} and errors[0]["sheet_type"] is None
+    assert layout["sheet_types"] == {} and errors[0]["sheet_type"] == "*"
+
+
+def test_sheet_types_not_object_is_file_level_error(tmp_path):
+    lay = {"sheet_types": "not a dict"}
+    layout, errors = layout_errors(tmp_path, lay)
+    assert layout["sheet_types"] == {}
+    assert any("sheet_types must be an object" in e["message"] and e["sheet_type"] == "*"
+               for e in errors)
 
 
 def test_unknown_root_key(tmp_path):
@@ -250,6 +258,7 @@ def test_pathologically_deep_json_never_raises(tmp_path):
     layout, _theme, errors = load(tmp_path)  # must not raise
     assert layout == {"sheet_types": {}}
     assert errors and errors[0]["source"] == "layout"
+    assert errors[0]["sheet_type"] == "*"
 
 
 GOOD_THEME = {
@@ -334,5 +343,5 @@ def test_outer_boundary_catches_unforeseen_exceptions(tmp_path, monkeypatch):
     assert theme == {}
     assert len(errors) == 1
     assert errors[0]["source"] == "layout"
-    assert errors[0]["sheet_type"] is None
+    assert errors[0]["sheet_type"] == "*"
     assert "RuntimeError" in errors[0]["message"]

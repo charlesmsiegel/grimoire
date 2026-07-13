@@ -271,7 +271,12 @@ export type ModuleTheme = {
   fonts?: Partial<Record<"display" | "body", string>>;
   dots?: string; corners?: string;
 };
-export type DisplayError = { source: "layout" | "theme"; sheet_type: string | null; message: string };
+export type DisplayError = {
+  source: "layout" | "theme";
+  // "*" = file-level failure that dropped every layout
+  sheet_type: string | null;
+  message: string;
+};
 
 export type ModuleSummary = {
   id: string; name: string; description: string;
