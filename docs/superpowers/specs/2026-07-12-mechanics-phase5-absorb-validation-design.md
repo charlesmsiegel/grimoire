@@ -76,19 +76,23 @@ deltas through the existing StagedEdit review flow.
   answer, and it closes the A→B→A rebind case a module-id compare alone
   would miss.
 
-  **Rebind serialization.** The campaign-module PUT performs its
+  **Rebind serialization.** A binding change is published only while
+  holding the sheet lock of **every campaign it affects**, so no
+  in-flight write can straddle it: the campaign-module PUT performs its
   meta-write **and** `clear_baselines` while holding that campaign's
-  sheet lock — the same lock the apply critical section holds — so a
-  rebind either completes before an apply's authorization (module
-  mismatch → reject) or waits for the in-flight apply to finish. The
-  world default-module PUT writes the world meta first, then takes each
-  affected campaign's sheet lock in turn to clear its baselines (never
-  holding two locks at once — no ordering hazard). The mid-window there
-  is safe because the apply critical section **resolves the module
-  exactly once at entry** (see Apply): an apply entering after the world
-  write resolves B against an A-stamped baseline → module mismatch →
-  reject; an apply that entered before it runs consistently under A and
-  serializes as apply-then-rebind.
+  sheet lock; the world default-module PUT first enumerates the affected
+  campaigns (that world, no per-campaign override), acquires **all** their
+  sheet locks in sorted-cid order, then writes the world meta and clears
+  each campaign's baselines before releasing. An apply (or editor save,
+  or advancement) already inside its critical section therefore finishes
+  entirely under module A before B becomes visible — apply-then-rebind is
+  real ordering, not an argument — and any section entered after
+  publication resolves B against A-stamped baselines → module mismatch →
+  reject. Deadlock safety: this route is the only path that ever holds
+  more than one campaign sheet lock, and it acquires them in sorted
+  order; every other holder takes exactly one, so no cycle can form. The
+  apply critical section still **resolves the module exactly once at
+  entry** (see Apply) so its own reads cannot mix modules.
 - **Reads without a valid baseline** degrade to report-only: the entity's
   block is rendered with current values marked
   `(no scene baseline — report only)`, the model is told it may raise
@@ -251,6 +255,15 @@ All in `sheets.py`:
     the campaign directory has no concurrent writers before the campaign
     exists; seeded files keep the world file's `gen` verbatim, which is
     fine: gens are only ever compared within one campaign).
+  - **Deletion CAS.** `delete` gains a required `expected_gen` parameter:
+    under the lock, a stored `gen` differing from `expected_gen` →
+    `SheetConflict` — locking alone only *orders* a stale DELETE after a
+    newer save, it doesn't stop it from destroying the newer sheet
+    (editor save, advancement, or absorb delta included). The DELETE
+    route takes the last-read `gen` (query parameter), maps
+    `SheetConflict` to 409, and the SheetEditor sends it and reloads on
+    409. A missing file still returns `False` (deleting nothing is not a
+    conflict), and a legacy `gen: null` sheet matches an explicit null.
 - **`set_field(cid, kind, eid, field_key, value, expect) -> None`** — the
   absorb apply primitive, strict per-field CAS under the same lock:
   1. resolve the module and read the live sheet file (missing either →
@@ -402,8 +415,11 @@ phase — see Out of scope.
   captures both land (no lost update); capture racing a sheet write sees
   a consistent snapshot; **apply vs campaign rebind** and **apply vs
   world-default rebind** — the apply either completes under the old
-  module before the rebind or rejects on module mismatch, never a
-  cross-module write.
+  module before the rebind publishes (the rebind blocks on the campaign
+  locks) or rejects on module mismatch, never a cross-module write —
+  including the paused variant: an apply that resolved A and is held
+  mid-section while a world rebind to B is requested; the rebind waits,
+  and no A-authorized write lands after B is visible.
 - **Generation nonce**: minted on create and on type change; preserved by
   same-type `write`, `advance`, `set_field`; legacy file gains one on
   next whole-sheet write; seeded campaign sheets keep the world gen.
@@ -435,9 +451,12 @@ phase — see Out of scope.
   (the ABA cases: stale editor vs delete/recreate with default fields,
   and vs an A→B→A type change) → 409 at the route; `expected=None` with
   an existing file → `SheetConflict`; `expected=None` with no file →
-  creates; **instantiate-route regression** — sheeted content
-  instantiates cleanly and the rollback path (entity deleted on sheet
-  failure) still works.
+  creates; **delete CAS** — matching `expected_gen` deletes, stale
+  `expected_gen` → `SheetConflict`/409 (races: delete vs editor save,
+  vs `advance`, vs absorb apply — the newer sheet survives), missing
+  file → `False`, legacy null gen matches null; **instantiate-route
+  regression** — sheeted content instantiates cleanly and the rollback
+  path (entity deleted on sheet failure) still works.
 - **Locking races** (threaded): `set_field` vs `advance` — both complete,
   neither write lost; `set_field` vs editor `write` with a **stale
   snapshot** — the stale write 409s and the delta survives; editor
