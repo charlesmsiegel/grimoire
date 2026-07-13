@@ -21,7 +21,8 @@ the editor touches is stable.
 | Impact preview | **`dry_run` on every writer; breaking edits confirm with affected counts** | User call. The same staged validation that gates saves also computes "used by 3 sheet types; 12 sheets migrate; 4 become invalid" — one flag powers both live inline validation and the confirm step. |
 | Sharing | **Zip export (any module) + zip import (into the user library), validated-or-rejected** | Modules are pure data packs — sharing never ships code. stdlib `zipfile`, raw-bytes upload (no new multipart dependency, per the Android base-deps rule). An invalid or malicious zip never lands in the library. |
 | Duplicate | `duplicate_module(mid, name) -> new_mid` copies any pack into the user library under a **new** slug | The styles precedent (`duplicate_style` + immutable builtins). Builtins stay read-only; Duplicate is the customize path. Same-id shadow copies (user pack shadowing a builtin id) remain a filesystem-only trick, not offered in the UI — a shadow copy silently retargets every campaign bound to the builtin. |
-| Expression rewriting | Rename ops rewrite expression strings by **word-boundary text replacement**, then the whole-pack validation re-parses everything | The expression language has no strings, attributes, or comments, so `\bold\b` can only match a `Name` (function names and keywords are barred as field keys, and a key that shadows a keyword could never have parsed as a Name). Text replacement preserves the author's formatting; `ast.unparse` would reformat every expression and requires Python ≥ 3.9 (Android runtime not guaranteed). The staged validation gate re-parses and re-scopes every expression afterwards, so a bad rewrite cannot land. |
+| Expression rewriting | Rename ops rewrite **scope-resolved** expressions by **word-boundary text replacement**, then the whole-pack validation re-parses everything | Field keys are unique only within an assembled sheet type (Phase 1), so two disjoint groups may both define `strength` — a blind global rewrite would corrupt the other group's expressions. Each expression's scope is resolved first (see Rename operations); only expressions whose scope binds the name to the renamed definition are rewritten. Within a selected expression, `\bold\b` can only match a `Name` (the language has no strings, attributes, or comments; function names and keywords are barred as field keys). Text replacement preserves the author's formatting; `ast.unparse` would reformat every expression and requires Python ≥ 3.9 (Android runtime not guaranteed). The staged validation gate re-parses and re-scopes every expression afterwards, so a bad rewrite cannot land. (Codex adversarial round 1.) |
+| Transactional model | **Whole-directory swap + journal + idempotent recovery**; sheet-migrating renames take every campaign lock *before* the swap | Per-file `os.replace` can crash mid-swap and leave a cross-file-invalid pack on disk permanently (`resolve()` ⇒ `None`, mechanics off for every bound campaign); publishing the schema before locking lets a stale client write race migration and silently drop the renamed key via `_checked_write`'s unknown-key filter. (Codex adversarial round 1.) |
 
 ## Backend: `store/module_edit.py`
 
@@ -54,13 +55,37 @@ New module (pure stdlib, pydantic-free, filesystem via the same
    `resolve()` trusts. Non-empty `errors` ⇒ the edit is rejected with
    those messages, staging is deleted, the live pack is untouched.
    `display_errors` never reject.
-4. **Swap**: move each changed/added file into the live pack with
-   `os.replace`; delete removed files. The in-process lock serializes
-   writers; concurrent readers (a `GET` mid-swap) can observe a
-   mixed-generation pack for the instant between file moves — accepted,
-   same single-user, single-process posture as every other store write,
-   and both generations are individually valid files.
-5. Delete staging.
+4. **Swap — whole directory, never per file** (Codex adversarial
+   round 1: per-file replacement can crash between two mutually
+   dependent files, e.g. after `sheets.json` but before `checks.json`,
+   leaving a cross-file-invalid pack that `resolve()` permanently
+   refuses). The staged copy is already a complete pack, so the swap is
+   two directory renames: write a **journal** file
+   (`<GRIMOIRE_HOME>/.module-staging/<nonce>.journal.json` — per-nonce,
+   so concurrent edits of *different* modules never share one; contents:
+   mid, nonce, phase, and — for sheet-migrating renames — the pending
+   migration op), then `os.rename(live, trash)` and
+   `os.rename(staging, live)` (trash also lives under
+   `.module-staging/<nonce>/`; same filesystem, both renames atomic).
+   Readers therefore see the complete old pack or the complete new one —
+   never a mix. The only crash window leaves the live dir briefly absent
+   with journal + both complete copies on disk.
+5. Run sheet migration if the op requires it (see Sheet migration), then
+   delete the journal, trash, and staging remnants. The journal outlives
+   the swap exactly until migration completes.
+
+**Recovery**: at app startup and at the start of any `module_edit`
+operation, leftover journals are replayed idempotently. A journal is
+only ever written *after* staging validated, so the cases are exact:
+live dir present and staging present ⇒ the renames never started —
+discard staging, clear the journal (the edit is simply lost; the user
+retries). Live dir missing ⇒ crash between the two renames — rename
+staging into place, delete trash. Live dir present with leftover
+trash ⇒ crash after the swap — delete trash. In every case a
+journaled pending migration then re-runs to completion. Between a
+crash and recovery the module reads as missing (`resolve()` ⇒ `None`
+with the existing missing-module warning) — degraded but self-healing,
+never permanent.
 
 ### Section writers
 
@@ -105,39 +130,85 @@ Address forms:
 | kind | address | pack rewrites | sheet migration |
 |---|---|---|---|
 | `group` | `{from}` | `groups` key; every sheet type's `groups` list; `creation.pools` keys; check `requires`; layout `group` nodes (incl. fragments) | none — sheet files store field keys, not group ids |
-| `field` | `{owner, from}` where `owner` is `{"group": gid}` or `{"sheet_type": tid}` | field `key`; every expression that names it — group/type `derived`, check `roll` placeholders, advancement cost expressions (incl. the implicit `<key>_max` name for `resource` fields); `creation.pools[*].costs` keys; `advancement.costs` keys; layout `fields` entries | rewrite the `fields` key in every stored sheet whose sheet type includes the field |
-| `derived` | `{owner, from}` | the `derived` map key; expressions naming it (type-level derived, advancement costs); layout `derived` entries | none — derived values are computed, never stored |
+| `field` | `{owner, from}` where `owner` is `{"group": gid}` or `{"sheet_type": tid}` | field `key`; **scope-bound** expressions and cost keys (see below), incl. the implicit `<key>_max` name for `resource` fields; layout `fields` entries of composing sheet types; `fields` keys in content stat sidecars of composing sheet types (sidecars are pack files — rewritten in staging, where validation checks them) | rewrite the `fields` key in every stored sheet whose sheet type includes the field |
+| `derived` | `{owner, from}` | the `derived` map key; scope-bound expressions naming it; layout `derived` entries of composing sheet types | none — derived values are computed, never stored |
 | `sheet_type` | `{from}` | `sheet_types` key; rules frontmatter `sheet_types` flags; layout `sheet_types` key; content sidecar `sheet_type` values (checks reference groups, never sheet types — nothing to rewrite there) | rewrite the `sheet_type` value in every stored sheet of that type |
 | `check` | `{from}` | `checks` key | none — check ids are not persisted outside the pack |
 | `rule` | `{from}` | file rename `rules/<from>.md` → `rules/<to>.md`; check `rules` lists | none |
-| `content` | `{kind, from}` | file(+sidecar) rename under `content/<kind>/` | rewrite `<kind>:module:<from>` entries in every stored `ref` field value |
+| `content` | `{kind, from}` | file(+sidecar) rename under `content/<kind>/`; `<kind>:module:<from>` entries in other content entries' stat-sidecar `ref` values (pack files, rewritten in staging) | rewrite `<kind>:module:<from>` entries in every stored `ref` field value |
 
-Expression rewriting is word-boundary text replacement (see Decisions),
-after which the staged validation re-parses and re-scopes every
-expression — a rewrite that somehow produced garbage rejects the whole op.
+**Scope-bound rewriting** (Codex adversarial round 1: field keys are
+unique only within an *assembled sheet type*, so two disjoint groups may
+both define `strength` — a blind global rewrite would corrupt or falsely
+reject expressions belonging to the other group). A rename rewrites an
+expression or cost key only when the renamed definition is what that
+name *binds to* in the expression's own scope:
+
+- a group's `derived` → its own group's fields;
+- a sheet type's `derived`, `advancement.costs` (keys and expressions) →
+  that type's assembled set, so only types composing the renamed
+  definition's owner group (or owning the field directly) are touched;
+- `creation.pools[gid].costs` keys → that pool's group only;
+- a check's `roll` placeholders → the union of its `requires` groups
+  (plus the ambient `difficulty`/`modifier` names) — rewritten only when
+  the renamed field's owner group is in `requires`. (If two `requires`
+  groups define the same key the name was already ambiguous; the rewrite
+  applies and staged validation adjudicates the result.)
+
+Within a selected expression the mechanism is word-boundary text
+replacement (see Decisions), after which the staged validation re-parses
+and re-scopes everything — a rewrite that somehow produced garbage
+rejects the whole op.
+
+**Reserved contextual names**: `_validate_field`'s reserved-key set
+extends to the ambient expression names — `difficulty`, `modifier` (check
+scope) and `new` (advancement scope) — alongside the existing
+function-name and `<key>_max` rules, so neither a form save nor a
+rename's `to` can create a field that shadows them (Codex adversarial
+round 1: shadowing turned a reserved-name use into a field use). Neither
+built-in ships such a key, so no existing pack breaks.
 
 ### Sheet migration
 
-Runs only after the staged pack validates and swaps, for the rename kinds
-above (`field`, `sheet_type`, `content`):
+For the sheet-migrating rename kinds (`field`, `sheet_type`, `content`),
+ordering is **lock → swap → migrate → release** (Codex adversarial
+round 1: swapping the pack *before* excluding sheet writers opens a
+window where a stale client PUT against a not-yet-migrated file passes
+CAS, gets its now-unknown renamed key silently filtered by
+`_checked_write`, and the value is gone before migration arrives):
 
-- **World sheets**: every `<world>/sheets/<mid>/<kind>--<id>.json` —
-  worlds hold starting sheets for a module regardless of binding.
-- **Campaign sheets**: enumerate all campaigns; for each, take
-  `sheets.lock_for(cid)` and *re-check* `modules.resolve(cid) == mid`
-  under the lock before touching its files (the lock-then-recheck
-  discipline from the Phase 5 rebind fix — enumeration outside the lock
-  can go stale).
+- Before the directory swap, the op enumerates all campaigns and acquires
+  `sheets.lock_for(cid)` for **every** campaign, in sorted-cid order (a
+  fixed order so two concurrent multi-lock holders cannot deadlock) —
+  the lock-everything-first discipline from the Phase 5 rebind fix,
+  where locking only a pre-enumerated "bound" subset proved stale.
+  Whether each campaign actually resolves to this module is re-checked
+  under its lock; non-matching campaigns' sheets are left untouched (but
+  their locks are held for the swap's duration — cheap, and simpler than
+  a correct-but-racy subset).
+- **World sheets have no lock today** (`write_world` locks nothing).
+  `sheets.py` gains a world-scope lock from the same `_lock_for` registry
+  (keyed `"world:<wid>"`), taken by `write_world`/`delete_world` and by
+  migration — closing the same race for world starting sheets rather
+  than accepting it silently.
+- The pending migration (op kind + address + `to`) is recorded in the
+  journal before the swap; migration then rewrites every affected file;
+  the journal is cleared only after migration completes. A crash
+  mid-migration is therefore resumed by recovery (see Swap/Recovery), and
+  the rewrite is **idempotent** — rename the key if the old one is
+  present, skip if already renamed — so replaying is safe.
+- Scope: every `<world>/sheets/<mid>/<kind>--<id>.json` (worlds hold
+  starting sheets for a module regardless of binding) and the campaign
+  sheets of every campaign that resolved to `mid` under its lock. For
+  `field` renames only sheets whose `sheet_type` carries the field are
+  touched; `content` renames touch only sheets holding a matching ref
+  value.
 - Each migrated file is rewritten atomically (temp + `os.replace`, the
-  existing `_checked_write` posture) with its `gen` bumped, so any
-  in-flight client CAS write against the pre-rename sheet fails cleanly
-  instead of resurrecting the old key.
-- Only sheets whose `sheet_type` (post-rename) actually carries the
-  renamed field are touched for `field` renames; `content` renames touch
-  only sheets holding a matching ref value.
+  existing `_checked_write` posture) with its `gen` bumped, so any client
+  CAS write built against the pre-rename sheet fails with the existing
+  409 conflict instead of resurrecting the old key.
 
-Migration is deliberately **best-effort per file after the pack swap** —
-a sheet file that fails to parse is skipped and reported in the op result
+A sheet file that fails to parse is skipped and reported in the op result
 (`{"migrated": N, "skipped": [paths]}`), never blocks the rename. Scene
 audit baselines need no explicit clearing: `audit.schema_stamp` hashes
 `sheets.json` content+mtime, so any schema edit already invalidates
@@ -163,14 +234,28 @@ full stage + validate (steps 1–3) and returns without swapping:
 deletes): `sheet_types` = types composing the edited group / containing
 the edited field; `sheets_migrated` = files a rename would rewrite;
 `sheets_newly_invalid` = stored sheets that validate against the live
-schema but fail against the staged one (re-run `validate_sheet_values`
-per sheet file — a full scan, fine for a local single-user store);
-`dangling_refs` = `ref` entries that would point at removed content
-(informational — ref validation is shape-only, dangling refs are
-display-only fallout, per Phase 7). Non-dry-run responses include the
-same `impact` block for the record. The frontend uses dry-run for
-debounced live validation and shows the confirm step when `impact`
-reports migrations or new invalidations.
+schema but fail against the staged one; `dangling_refs` = `ref` entries
+that would point at removed content (informational — ref validation is
+shape-only, dangling refs are display-only fallout, per Phase 7).
+
+The newly-invalid scan must judge a sheet **exactly as a read would**
+(Codex adversarial round 1: `validate_sheet_values` alone misses
+sheet-type existence and kind mismatches, so deleting a sheet type or
+changing a type's `kind` would report zero newly-invalid sheets and skip
+the confirm step). `sheets.py`'s per-instance validation
+(`_validate_instance`: sheet type exists, targets the file's kind, then
+value validation) factors into a helper reusable against an arbitrary
+pack dict, and the impact scan calls that against the staged pack — a
+full scan over stored sheets, fine for a local single-user store.
+
+Non-dry-run responses include the same `impact` block, recomputed at
+save. The counts are **advisory**: a sheet written between preview and
+confirm can shift them, and this design deliberately adds no
+preview-digest/409 machinery — single-user app, same last-write-wins
+posture as every other store surface (noted, Codex adversarial round 1).
+The frontend uses dry-run for debounced live validation and shows the
+confirm step when `impact` reports migrations, new invalidations, or
+dangling refs.
 
 For `sheets.json` dry-runs the response also carries a **sample
 computation**: per sheet type, the assembled field defs with schema
@@ -186,14 +271,20 @@ numbers, not just "parses".
 - `export_module(mid) -> bytes` — stdlib `zipfile` of the pack dir, one
   top-level directory named `<mid>/`. Any module, builtins included
   (exporting a builtin is how you share a tweak-base).
-- `import_module(data: bytes) -> new_mid` — safety checks first: total
-  size cap (16 MB) and per-entry sanity, exactly one top-level directory,
-  every entry a plain file whose normalized path stays inside it (no
-  absolute paths, no `..`, no symlink entries). Extract to staging, take
-  the id from the top-level dir name (deduped like duplicate), validate
-  via `load_pack_at` — non-empty `errors` rejects the import with the
-  messages (an invalid pack never lands, consistent with the save model),
-  then move into `user_dir()`.
+- `import_module(path) -> new_mid` — operates on a zip already streamed
+  to a temp file (see Routes; the store never sees an in-memory blob).
+  Archive checks before any extraction: member count cap (2000) and
+  **cumulative uncompressed** size cap (64 MB, summed over
+  `ZipInfo.file_size` — the compressed transfer cap alone doesn't bound a
+  zip bomb); exactly one top-level directory; every entry a plain file
+  (no symlink external attributes) whose normalized path stays inside it
+  (no absolute paths, no `..`); no two entries whose normalized paths
+  collide **case-insensitively** (this store runs on Windows — two
+  entries differing only in case would silently overwrite). Extract to
+  staging, take the id from the top-level dir name (deduped like
+  duplicate), validate via `load_pack_at` — non-empty `errors` rejects
+  the import with the messages (an invalid pack never lands, consistent
+  with the save model), then move into `user_dir()`.
 
 ## Routes
 
@@ -204,6 +295,14 @@ sheet-types, checks, check-defaults, rules, content, layout, theme,
 rename) accepts `dry_run` (body flag) and returns the dry-run/impact
 shape above; duplicate/export/import have no dry-run (nothing staged to
 preview).
+
+The import route rejects an over-limit `Content-Length` up front (413)
+and reads the body via `request.stream()` chunk-by-chunk into a temp
+file, aborting the moment the running total passes the transfer cap
+(16 MB) — never `await request.body()` into memory (Codex adversarial
+round 1: the repo has no request-size middleware, so a whole-body read
+buffers an arbitrarily large upload before any check runs). No
+multipart, no new dependency, Android-installable base deps unchanged.
 
 ```
 POST   /api/modules/{mid}/duplicate            {name} → {"id": new_mid}
@@ -230,8 +329,6 @@ DELETE routes carry `dry_run` as a query param (DELETE bodies are
 awkward). None of these collide with existing module routes: the
 read-only `GET /modules/{mid}/content/{kind}/{id}` keeps its path and
 gains PUT/DELETE siblings; everything else is a new distinct segment.
-Import reads the raw request body (`await request.body()`) — no
-multipart, no new dependency, Android-installable base deps unchanged.
 
 **Existing-route touch-up**: `GET /modules/{mid}` additionally returns
 `manifest.notes` (the `module.md` body) so the manifest editor can round-
@@ -329,21 +426,36 @@ unchanged (it edits the same files the UI does).
   delete cascade-vs-reject split (fatal referee named in the error;
   layout pruned on field/group/derived delete); rename fan-out per kind
   incl. expression rewrite, `<key>_max` for resource fields, roll-template
-  placeholders, and a key that is a substring of another key (word
-  boundary — renaming `str` must not touch `strength`); rename collision
-  rejected; sheet migration — field rename rewrites world + campaign
-  sheets with gen bumps, group rename migrates zero sheets, sheet-type
-  rename rewrites `sheet_type` values, content rename rewrites
-  `kind:module:id` refs, unparseable sheet file skipped and reported;
-  the campaign lock-then-recheck (a campaign that no longer resolves to
-  the module under its lock is untouched); dry-run returns impact
+  placeholders, content-sidecar field keys and sidecar `ref` values, and
+  a key that is a substring of another key (word boundary — renaming
+  `str` must not touch `strength`); **scope-bound rewriting**: two
+  disjoint groups defining the same field key — renaming one leaves the
+  other group's derived, its composing types' expressions, and checks
+  requiring only the other group untouched; renaming `to` a reserved
+  contextual name (`new`/`difficulty`/`modifier`) rejected, and
+  `_validate_field` rejects such keys on ordinary saves; rename collision
+  rejected; **swap/recovery**: a simulated crash at each journal phase
+  (before rename 1, between renames, after swap mid-migration) recovers
+  to a complete, valid pack and finishes the journaled migration
+  idempotently (replaying an already-migrated file is a no-op); sheet
+  migration — field rename rewrites world + campaign sheets with gen
+  bumps, group rename migrates zero sheets, sheet-type rename rewrites
+  `sheet_type` values, content rename rewrites `kind:module:id` refs,
+  unparseable sheet file skipped and reported; locks acquired for all
+  campaigns in sorted order before the swap, and a campaign that doesn't
+  resolve to the module under its lock is untouched; `write_world` now
+  serializes on the world-scope lock; dry-run returns impact
   (migrated / newly-invalid / dangling counts, sample derived values)
-  and writes nothing; duplicate (new deduped id, builtin source ok);
-  export→import round-trip; import rejections (traversal entry, absolute
-  path, symlink, >1 top-level dir, oversize, invalid pack with its
-  validation messages); import id dedup.
+  and writes nothing; **impact parity**: deleting a sheet type and
+  changing a type's `kind` both count their sheets as newly invalid
+  (the full instance-validation path, not values-only); duplicate (new
+  deduped id, builtin source ok); export→import round-trip; import
+  rejections (traversal entry, absolute path, symlink, >1 top-level dir,
+  member-count and cumulative-uncompressed caps, case-colliding paths,
+  invalid pack with its validation messages); import id dedup.
 - **Routes**: happy path + 400/404 mapping per route; builtin 400s;
-  dry_run plumbed; export content-type/attachment; import raw-bytes body;
+  dry_run plumbed; export content-type/attachment; import streamed body,
+  413 on over-limit Content-Length and abort past the transfer cap;
   `GET /modules/{mid}` carries `manifest.notes`. `GRIMOIRE_HOME`
   isolation via `monkeypatch.setenv` throughout.
 - **Frontend (vitest)**: ModulesView — Import button, Export/Duplicate
