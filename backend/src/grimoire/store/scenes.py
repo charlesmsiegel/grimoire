@@ -140,6 +140,8 @@ def create_scene(cid: str, title: str, suggested_date: str | None = None,
         except (calendars.CalendarError, KeyError):
             pass  # only a hint — a bad one is dropped, never an error
     _scene_path(cid, sid).write_text(dump_frontmatter(meta, ""), encoding="utf-8")
+    from . import audit  # lazy: audit imports campaigns/sheets, scenes must not cycle
+    audit.capture_baseline(cid, sid)
     return sid
 
 
