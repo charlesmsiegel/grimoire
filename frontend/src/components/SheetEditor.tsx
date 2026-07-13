@@ -49,7 +49,8 @@ export default function SheetEditor({ scope, module, kind, eid, initial, onClose
 
   const layoutTree = sheetType ? module.layout?.sheet_types?.[sheetType] : undefined;
   const layoutDropped = !!sheetType && !layoutTree && (module.display_errors ?? []).some(
-    (e) => e.source === "layout" && (e.sheet_type === sheetType || e.sheet_type === null));
+    (e) => e.source === "layout" && (e.sheet_type === sheetType ||
+      (e.sheet_type === null && Object.keys(module.layout?.sheet_types ?? {}).length === 0)));
 
   function startEdit() {
     setDraft(toEditDraft(fields, assembledDefs(module, sheetType)));
@@ -140,8 +141,8 @@ export default function SheetEditor({ scope, module, kind, eid, initial, onClose
       <div className="sheet-backdrop" onClick={onClose} />
       <div className="sheet-takeover" role="dialog" aria-label={typeDef?.label ?? "Sheet"}
            style={themeStyle(module.theme)}
-           data-dots={module.theme?.dots ?? "circle"}
-           data-corners={module.theme?.corners ?? "sharp"}>
+           data-dots={module.theme?.dots}
+           data-corners={module.theme?.corners}>
         <div className="form-actions">
           {mode === "view" && <button className="subtle" onClick={startEdit} disabled={!typeDef}>Edit</button>}
           {mode === "edit" && <button className="primary" onClick={save}>Save</button>}
