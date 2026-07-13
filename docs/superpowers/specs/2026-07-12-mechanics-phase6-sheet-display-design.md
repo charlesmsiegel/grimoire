@@ -168,6 +168,12 @@ def, the value, and (edit mode) an `onChange`:
 |---|---|---|
 | `dots` | filled/empty glyphs up to `max` | glyphs are buttons: click dot *n* ⇒ value *n*; clicking the current value ⇒ *n−1* (reaches 0) |
 | `track` | boxes, first *value* filled | same click-to-set semantics as dots |
+
+Pips are for small rated tracks: a `dots`/`track` field whose `max`
+exceeds a pip cap (40) renders as the plain number widget in both modes
+instead — the backend deliberately puts no upper bound on `max` (bounding
+it would invalidate otherwise-working packs), so the display layer must
+not allocate one DOM element per point of an unbounded value.
 | `resource` | bar (fill = current/max) with `current / max` text | bar plus the existing paired current/max number inputs |
 | `number` | `label: value` row; compact value-over-label **stat cell** inside a `grid` node | number input (stat-cell-styled in grids) |
 | `text` | labeled prose | text input |
