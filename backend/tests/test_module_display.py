@@ -101,6 +101,18 @@ def test_non_object_root(tmp_path):
     assert layout["sheet_types"] == {} and errors[0]["sheet_type"] == "*"
 
 
+def test_layout_json_null_is_file_level_error(tmp_path):
+    # json.loads("null") -> None, which must not be confused with an absent
+    # file: null is malformed content and must be reported, not accepted.
+    (tmp_path / "layout.json").write_text("null", encoding="utf-8")
+    layout, _theme, errors = load(tmp_path)
+    assert layout == {"sheet_types": {}}
+    layout_errs = [e for e in errors if e["source"] == "layout"]
+    assert len(layout_errs) == 1
+    assert layout_errs[0]["sheet_type"] == "*"
+    assert "object" in layout_errs[0]["message"]
+
+
 def test_sheet_types_not_object_is_file_level_error(tmp_path):
     lay = {"sheet_types": "not a dict"}
     layout, errors = layout_errors(tmp_path, lay)
@@ -294,6 +306,15 @@ def test_theme_unparseable(tmp_path):
 def test_theme_not_object(tmp_path):
     theme, errors = theme_of(tmp_path, ["x"])
     assert theme == {} and errors
+
+
+def test_theme_json_null_is_error(tmp_path):
+    # json.loads("null") -> None, which must not be confused with an absent
+    # file: null is malformed content and must be reported, not accepted.
+    theme, errors = theme_of(tmp_path, "null")
+    assert theme == {}
+    assert len(errors) == 1
+    assert "object" in errors[0]["message"]
 
 
 def test_theme_unknown_key_dropped(tmp_path):

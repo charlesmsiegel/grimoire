@@ -32,18 +32,26 @@ def _entry(source: str, sheet_type: str | None, message: str) -> dict:
     return {"source": source, "sheet_type": sheet_type, "message": message}
 
 
+_MISSING = object()
+
+
 def _read_json(root: Path, name: str, source: str, errors: list[dict],
                sheet_type: str | None = None):
+    """Returns ``_MISSING`` when the file is absent or fails to parse (the
+    parse-failure case already appends its own error entry, so callers just
+    need to tell "no file" apart from "file, possibly JSON ``null``"), or the
+    parsed JSON value otherwise -- including ``None`` for a file that
+    literally contains ``null``, which callers must reject as malformed."""
     p = root / name
     if not p.exists():
-        return None
+        return _MISSING
     try:
         return json.loads(p.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError, OSError, RecursionError) as e:
         # RecursionError: pathologically deep JSON blows the parser stack
         # before our own depth cap can see the tree.
         errors.append(_entry(source, sheet_type, f"{name}: {e.__class__.__name__}: {e}"))
-        return None
+        return _MISSING
 
 
 class _LayoutError(Exception):
@@ -231,7 +239,7 @@ class _Expander:
 
 def _load_theme(root: Path, errors: list[dict]) -> dict:
     raw = _read_json(root, "theme.json", "theme", errors)
-    if raw is None:
+    if raw is _MISSING:
         return {}
     if not isinstance(raw, dict):
         errors.append(_entry("theme", None, "theme.json: must be an object"))
@@ -295,7 +303,7 @@ def _load_theme(root: Path, errors: list[dict]) -> dict:
 def _load_layout(root: Path, sheets: dict, errors: list[dict]) -> dict:
     layout: dict = {"sheet_types": {}}
     raw = _read_json(root, "layout.json", "layout", errors, sheet_type="*")
-    if raw is None:
+    if raw is _MISSING:
         return layout
     if not isinstance(raw, dict):
         errors.append(_entry("layout", "*", "layout.json: must be an object"))
