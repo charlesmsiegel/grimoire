@@ -14,10 +14,10 @@ deltas through the existing StagedEdit review flow.
 | Architecture | A second, focused LLM call after the main absorb call; best-effort for the *prose* absorb (an audit failure never fails absorb) but **never silent**: the audit reports an explicit status, and parsing **fails closed** on schema-invalid output | The absorb system prompt is already one dense block with ~13 output keys; numeric bookkeeping against sheets + a roll log is a different cognitive task from narrative summarization. Codex rounds 3–4: a swallowed audit failure — including a reply that parses as JSON but lacks the required shape — must not masquerade as "audited clean". |
 | Warnings | Ephemeral: rendered in the absorb panel, gone when the panel closes; never persisted | Warnings are advisory — the player reads them, maybe fixes something by hand, moves on. No bookkeeping. |
 | XP / advancement | No exception to the mutable-only rule. XP *awards* are ordinary resource deltas (advancement pools are structurally `resource` fields — `sheets.advance` requires `{current, max}`); *raises* stay behind the manual Advance button | The rule stays clean with zero special cases; narration-driven stat raises were the questionable half and remain out of scope. |
-| Scene-start baseline | Every scene captures a snapshot of all campaign sheets at creation (`sheet_baselines.json`), stamped with the resolved **module id**, a **schema hash** of the pack's sheets definition, and each sheet's **generation nonce** (`gen`) + `sheet_type`. An entity without a *valid* baseline is report-only: warnings allowed, **sheet deltas suppressed at materialize and re-checked inside the write lock at apply** | Codex rounds 1+3+4+6: current-only values are ambiguous ("current 4 + narration spends 2" cannot distinguish already-applied from still-pending); assuming current-as-start can re-propose an already-applied change whose CAS would then succeed; and a baseline captured under a different module, schema revision, sheet type, or a deleted-and-recreated sheet is an unrelated value that must not authorize writes. No sound before-value → no writes. |
+| Scene-start baseline | Every scene captures a snapshot of all campaign sheets at creation (`sheet_baselines.json`), stamped with the resolved **module id**, a **schema stamp** (content hash + `sheets.json` mtime) of the pack's sheets definition, and each sheet's **generation nonce** (`gen`) + `sheet_type`. An entity without a *valid* baseline is report-only: warnings allowed, **sheet deltas suppressed at materialize and re-checked inside the write lock at apply** | Codex rounds 1+3+4+6: current-only values are ambiguous ("current 4 + narration spends 2" cannot distinguish already-applied from still-pending); assuming current-as-start can re-propose an already-applied change whose CAS would then succeed; and a baseline captured under a different module, schema revision, sheet type, or a deleted-and-recreated sheet is an unrelated value that must not authorize writes. No sound before-value → no writes. |
 | Sheet identity: generation nonce | Every campaign/world sheet file carries `"gen": "<uuid4 hex>"`, minted on creation and on any type-changing whole-sheet write, preserved by value writes (`write` same-type, `advance`, `set_field`). Baseline validity requires `gen` equality with the live sheet | Codex rounds 4–6: cross-store invalidation hooks (the round-4 design) created a capture-vs-invalidate resurrection race and an authorize-then-lock TOCTOU. An identity carried *in the sheet file itself* is immune to both: delete/recreate or type change mint a new `gen`, so a stale baseline can never match the replacement sheet — checked atomically inside the write lock, no bookkeeping to race. |
 | Sheet write discipline | **Every** campaign-sheet mutator (`write`, `write_creation`, `advance`, `set_field`, `delete`) serializes on the per-campaign sheet lock; every campaign whole-sheet replacement carries a **mandatory** CAS on the full `{sheet_type, fields}` snapshot (`expected=None` asserts "no sheet exists yet"); `set_field` is a strict per-field CAS. All four callers inventoried and updated (see Write discipline) | Codex rounds 2–4: `sheets.write` took no lock and replaced the whole map (a pre-existing `write`-vs-`advance` hole); an *optional* CAS left a stale last-write-wins path open; a fields-only compare could silently revert a concurrent `sheet_type` change; and the content-instantiate route also calls `sheets.write`, so a "required parameter" change must update it or it breaks at runtime. |
-| Apply-time authorization | Client-supplied `"sheet"` edits are re-authorized **inside the sheet lock, immediately before the CAS write**: scene scope, baseline validity (module + schema hash + `gen` + type), and mutability are all recomputed from `cid`/`sid` and the live file within one critical section | Codex rounds 2+4+6: chronicle-PUT edits are client-supplied, and a check performed before lock acquisition is a TOCTOU — a delete/recreate between authorize and write could pass CAS against an unrelated sheet. One critical section closes it structurally. Manual editing of arbitrary sheets stays where it belongs — the sheet PUT. |
+| Apply-time authorization | Client-supplied `"sheet"` edits are re-authorized **inside the sheet lock, immediately before the CAS write**: scene scope, baseline validity (module + schema stamp + `gen` + type), and mutability are all recomputed from `cid`/`sid` and the live file within one critical section that **resolves the module once at entry**; module-rebind routes serialize on the same lock | Codex rounds 2+4+6–7: chronicle-PUT edits are client-supplied; a check performed before lock acquisition is a TOCTOU (delete/recreate could pass CAS against an unrelated sheet), and an unserialized rebind could split the section across two modules. One critical section with a single module resolution closes both structurally. Manual editing of arbitrary sheets stays where it belongs — the sheet PUT. |
 | Apply semantics | `set_field` per-field strict CAS: only the approved field is written; live ≠ expect is **always** a visible conflict — including live == proposed-value, which reads "already applied or independently changed". **Every** failed approved sheet edit — CAS conflict, re-authorization failure, or any other `SheetError` — is returned with its id and reason; nothing is silently skipped | Codex rounds 1–2+5: plain absolute overwrite loses concurrent updates; treating `live == value` as a confirmed retry can mask an independent same-value mutation (two XP awards collapsing into one); and a schema-drift or validation `SheetError` swallowed by the generic best-effort skip would let the user close the panel believing an approved XP/damage update landed. Strict CAS + full failure reporting needs no operation ledger. |
 | Audit visibility | The absorb response carries `mechanics: {status: "ok"\|"degraded"\|"failed"\|"skipped", reason, warnings, dropped}`; `failed` and `degraded` render a notice with a **Retry validation** action backed by a standalone audit endpoint. **"ok" means the full scope was audited and every model item survived**: an invalid scoped sheet, a malformed item, or a materialize-rejected delta (other than a benign no-op) makes the status `degraded` with each exclusion listed; a scope whose sheets are *all* invalid is `failed`, never `skipped` | Codex rounds 3+5+6: an empty warnings list must mean "audited clean", never "the audit died", "the audit's findings were quietly thrown away", or "the audit could not see half the cast". Retry re-runs only the audit — not the whole absorb (and its dossier calls). |
 | Sheet-row review UI | Sheet edit rows are **read-only** (approve/reject only); the displayed before/after strings are rendered from the payload that will be applied | Codex round 1: ordinary absorb rows edit `after` in a textarea, but the sheet apply branch writes `payload.value` — an editable row would let the reviewer approve one value while another lands. Read-only keeps display and payload the same fact. Typed value editing can come later if wanted. |
@@ -31,14 +31,22 @@ deltas through the existing StagedEdit review flow.
   (whole-file IO, atomic write, never-raise reads):
 
   ```json
-  {"<sid>": {"module": "<mid>", "schema": "<sha256 of the pack's sheets definition>",
+  {"<sid>": {"module": "<mid>",
+             "schema": {"hash": "<sha256>", "mtime": <mtime_ns>},
              "sheets": {"<kind>--<eid>": {"sheet_type": ..., "gen": ..., "fields": {...}}}}}
   ```
 
-  The schema hash is `sha256` over the canonical JSON dump
-  (`sort_keys=True`) of `load_pack(mid)["sheets"]`, so an **in-place pack
-  edit** — same module id, changed field semantics — invalidates every
-  baseline captured under the old definition.
+  The schema stamp pairs a `sha256` over the canonical JSON dump
+  (`sort_keys=True`) of `load_pack(mid)["sheets"]` with the
+  **`st_mtime_ns` of the pack's `sheets.json`**, and validity requires
+  both to match. The hash alone catches an **in-place pack edit** — same
+  module id, changed field semantics — but a content *reversion*
+  (schema A → B → back to A) would restore the hash while sheets were
+  edited under B; the mtime moves monotonically forward on every write,
+  so the reverted file still invalidates every baseline captured before
+  the excursion. (Restoring a backup with a preserved old mtime is the
+  residual — that is deliberate file surgery on a local store, on par
+  with hand-editing `sheet_baselines.json` itself.)
 - **Capture**: `scenes.create_scene` lazily calls
   `audit.capture_baseline(cid, sid)` (the existing lazy-import pattern),
   which — when `modules.resolve(cid)` is non-`None` — snapshots every
@@ -67,6 +75,20 @@ deltas through the existing StagedEdit review flow.
   deltas (not warnings) for those scenes is the safe, proportionate
   answer, and it closes the A→B→A rebind case a module-id compare alone
   would miss.
+
+  **Rebind serialization.** The campaign-module PUT performs its
+  meta-write **and** `clear_baselines` while holding that campaign's
+  sheet lock — the same lock the apply critical section holds — so a
+  rebind either completes before an apply's authorization (module
+  mismatch → reject) or waits for the in-flight apply to finish. The
+  world default-module PUT writes the world meta first, then takes each
+  affected campaign's sheet lock in turn to clear its baselines (never
+  holding two locks at once — no ordering hazard). The mid-window there
+  is safe because the apply critical section **resolves the module
+  exactly once at entry** (see Apply): an apply entering after the world
+  write resolves B against an A-stamped baseline → module mismatch →
+  reject; an apply that entered before it runs consistently under A and
+  serializes as apply-then-rebind.
 - **Reads without a valid baseline** degrade to report-only: the entity's
   block is rendered with current values marked
   `(no scene baseline — report only)`, the model is told it may raise
@@ -259,7 +281,10 @@ client-supplied and a check made before the lock is a TOCTOU, the entire
 re-authorize-and-write sequence is **one critical section under the
 campaign sheet lock** (`sheets.lock_for(cid)`; `set_field`'s body runs as
 its tail via a lock-free internal, the public `set_field` wrapping the same
-internal with the lock):
+internal with the lock). The section **resolves the module exactly once at
+entry** and threads that `mid` through every sub-step — validity check,
+schema loads, validation, write — so a concurrent rebind cannot split the
+section across two modules (see Rebind serialization under Baselines):
 
 1. the target must be in the scene's sheet scope, recomputed now (present
    sheeted cast or the sheeted current location for `sid`);
@@ -325,7 +350,8 @@ phase — see Out of scope.
 - `PUT .../chronicle` applies approved `"sheet"` edits through
   `apply_edits` like every other kind and reports `"sheet_failures"`.
 - The campaign-module PUT and world default-module PUT call
-  `audit.clear_baselines` for the affected campaigns (see Baselines).
+  `audit.clear_baselines` for the affected campaigns, under the rebind
+  serialization protocol (see Baselines).
 
 ## Frontend
 
@@ -366,10 +392,14 @@ phase — see Out of scope.
   file tolerated; **regression: an entity without a valid baseline yields
   zero StagedEdits no matter what the model proposes** (the
   already-applied-change double-propose path), including after a
-  mid-scene type change, delete/recreate, pack edit, and A→B→A rebind;
-  **locking races** (threaded) — two concurrent scene captures both land
-  (no lost update); capture racing a sheet write sees a consistent
-  snapshot.
+  mid-scene type change, delete/recreate, pack edit, A→B→A rebind, and
+  an **A→B→A schema content reversion** (hash restored, mtime moved →
+  still invalid); **locking races** (threaded) — two concurrent scene
+  captures both land (no lost update); capture racing a sheet write sees
+  a consistent snapshot; **apply vs campaign rebind** and **apply vs
+  world-default rebind** — the apply either completes under the old
+  module before the rebind or rejects on module mismatch, never a
+  cross-module write.
 - **Generation nonce**: minted on create and on type change; preserved by
   same-type `write`, `advance`, `set_field`; legacy file gains one on
   next whole-sheet write; seeded campaign sheets keep the world gen.
