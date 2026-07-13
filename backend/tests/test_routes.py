@@ -2980,6 +2980,42 @@ def test_campaign_module_binding_api(client):
                       json={"module": "ghost"}).status_code == 404
 
 
+def test_campaign_module_rebind_clears_baselines(client):
+    """Scene-start sheet baselines (audit.py, mechanics Phase 5) are pinned to
+    the module that was live when captured -- a rebind invalidates all of
+    them, so put_campaign_module must clear the campaign's baseline file."""
+    wid, cid = _campaign(client)
+    client.put(f"/api/campaigns/{cid}/module", json={"module": "pool-basic"})
+    client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"})
+    assert store.audit.read_baselines(cid) != {}
+
+    client.put(f"/api/campaigns/{cid}/module", json={"module": "d20-basic"})
+    assert store.audit.read_baselines(cid) == {}
+
+    client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T2"})
+    assert store.audit.read_baselines(cid) != {}
+
+    client.put(f"/api/campaigns/{cid}/module", json={"module": "none"})
+    assert store.audit.read_baselines(cid) == {}
+
+
+def test_world_module_rebind_clears_non_overridden_campaign_baselines(client):
+    wid = _world(client)
+    cid_a = client.post("/api/campaigns", json={"name": "A", "world": wid}).json()["id"]
+    cid_b = client.post("/api/campaigns", json={"name": "B", "world": wid}).json()["id"]
+    client.put(f"/api/worlds/{wid}/module", json={"module": "pool-basic"})
+    client.put(f"/api/campaigns/{cid_b}/module", json={"module": "d20-basic"})  # override
+
+    client.post(f"/api/campaigns/{cid_a}/scenes", json={"title": "T"})
+    client.post(f"/api/campaigns/{cid_b}/scenes", json={"title": "T"})
+    assert store.audit.read_baselines(cid_a) != {}
+    assert store.audit.read_baselines(cid_b) != {}
+
+    client.put(f"/api/worlds/{wid}/module", json={"module": "d20-basic"})
+    assert store.audit.read_baselines(cid_a) == {}   # inherited world default -> cleared
+    assert store.audit.read_baselines(cid_b) != {}   # own override -> untouched
+
+
 def test_create_campaign_with_module(client):
     _world(client)
     r = client.post("/api/campaigns",
