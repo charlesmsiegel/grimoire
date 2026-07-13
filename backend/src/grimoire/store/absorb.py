@@ -416,20 +416,27 @@ def apply_edits(cid: str, edits: list[dict],
     sheet_failures: list[dict] = []
     recorded: dict[str, list[dict]] = {}
     for e in edits:
+        if not isinstance(e, dict):
+            continue  # malformed batch item: skip, best-effort
         if e.get("kind") == "sheet":
+            eid = e.get("id", "")
+            if not isinstance(eid, str) or not eid:
+                sheet_failures.append({"id": "", "kind": "error",
+                                       "reason": "sheet edit missing id"})
+                continue  # rejected before apply_delta runs: a nameless mutation can never land
             if not sid:
-                sheet_failures.append({"id": e.get("id", ""), "kind": "error",
+                sheet_failures.append({"id": eid, "kind": "error",
                                        "reason": "sheet edits need a scene id"})
                 continue
             from . import audit  # lazy: audit imports absorb-adjacent stores
             try:
                 audit.apply_delta(cid, sid, e)
-                applied.append(e["id"])
+                applied.append(eid)
             except sheets.SheetConflict as exc:
-                sheet_failures.append({"id": e.get("id", ""), "kind": "conflict",
+                sheet_failures.append({"id": eid, "kind": "conflict",
                                        "reason": str(exc)})
             except sheets.SheetError as exc:
-                sheet_failures.append({"id": e.get("id", ""), "kind": "error",
+                sheet_failures.append({"id": eid, "kind": "error",
                                        "reason": str(exc)})
             continue
         try:

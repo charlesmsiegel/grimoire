@@ -841,3 +841,38 @@ def test_apply_edits_mixed_batch_still_applies_non_sheet(scene_with_sheeted_cast
     assert set(applied) == {sheet_edits[0]["id"], "lore:salt-cathedral"}
     assert entities.read_entity(croot, "lore", "salt-cathedral")["body"].strip() == "Flooded."
     assert sheets.read(cid, "characters", "mara")["fields"]["hp"]["current"] == live["current"] - 2
+
+
+def test_apply_edits_sheet_missing_id_rejected_before_apply(scene_with_sheeted_cast):
+    from grimoire.store import entities
+    cid, sid = scene_with_sheeted_cast
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "lore", "Salt Cathedral", body="Ruined.")
+    live = sheets.read(cid, "characters", "mara")["fields"]["hp"]
+    sheet_edits, _ = audit.materialize(cid, sid, {"warnings": [], "dropped": [],
+        "sheet_deltas": [{"id": "characters:mara", "field": "hp",
+                          "value": {"current": live["current"] - 2}, "note": ""}]})
+    del sheet_edits[0]["id"]
+    lore_edit = {"id": "lore:salt-cathedral", "kind": "lore",
+                 "target": {"kind": "lore", "id": "salt-cathedral"}, "field": "body",
+                 "after": "Flooded."}
+    applied, failures = absorb.apply_edits(cid, [sheet_edits[0], lore_edit], sid)
+    assert applied == ["lore:salt-cathedral"]
+    assert failures == [{"id": "", "kind": "error", "reason": "sheet edit missing id"}]
+    # sheet mutation never landed -- rejected before apply_delta ran
+    assert sheets.read(cid, "characters", "mara")["fields"]["hp"]["current"] == live["current"]
+    assert entities.read_entity(croot, "lore", "salt-cathedral")["body"].strip() == "Flooded."
+
+
+def test_apply_edits_skips_non_dict_batch_items(scene_with_sheeted_cast):
+    from grimoire.store import entities
+    cid, sid = scene_with_sheeted_cast
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "lore", "Salt Cathedral", body="Ruined.")
+    lore_edit = {"id": "lore:salt-cathedral", "kind": "lore",
+                 "target": {"kind": "lore", "id": "salt-cathedral"}, "field": "body",
+                 "after": "Flooded."}
+    applied, failures = absorb.apply_edits(cid, ["not-a-dict", lore_edit], sid)
+    assert failures == []
+    assert applied == ["lore:salt-cathedral"]
+    assert entities.read_entity(croot, "lore", "salt-cathedral")["body"].strip() == "Flooded."
