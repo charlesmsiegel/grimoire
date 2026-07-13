@@ -1,5 +1,5 @@
 import { useState, type ChangeEvent } from "react";
-import { api, type EntityScope, type ModuleDetail, type ModuleField, type Sheet } from "../api/client";
+import { ApiError, api, type EntityScope, type ModuleDetail, type ModuleField, type Sheet } from "../api/client";
 import SheetLayout, { assembledDefs, themeStyle } from "./SheetLayout";
 
 /** Module sheet-type kind for a file kind (pcs share characters types) — mirrors backend sheets.sheet_kind. */
@@ -40,7 +40,14 @@ export default function SheetEditor({ scope, module, kind, eid, initial, onClose
   const [sheetType, setSheetType] = useState<string | null>(initial.sheet_type);
   const [fields, setFields] = useState<Record<string, unknown>>(initial.fields);
   const [draft, setDraft] = useState<Record<string, unknown>>(initial.fields);
+  // The last-read whole-sheet snapshot -- sent back as `expected` (CAS) on every
+  // write and as `gen` on delete. A sheet already exists by the time this
+  // component mounts (SheetPanel only renders it once `sheet` is non-null), so
+  // this is always an object snapshot here, never the JS `null` that asserts
+  // "no sheet exists" (that's SheetPanel.createSheet's/CreationWizard's job).
+  const [gen, setGen] = useState<string | null>(initial.gen);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const typeDef = sheetType ? module.sheets.sheet_types[sheetType] : undefined;
 
@@ -66,16 +73,43 @@ export default function SheetEditor({ scope, module, kind, eid, initial, onClose
     setDraft({ ...draft, [key]: value });
   }
 
+  // A 409 means someone else (another tab, the audit apply path, …) wrote this
+  // sheet since we last read it -- re-fetch the live sheet, adopt it as the new
+  // form state/snapshot, and tell the user rather than silently discarding
+  // their edit or leaving the form pointed at a stale gen forever.
+  async function reloadAfterConflict() {
+    try {
+      const { sheet: fresh } = await api.getSheet(scope, module.id, kind, eid);
+      if (fresh) {
+        setSheetType(fresh.sheet_type);
+        setFields(fresh.fields);
+        setDraft(fresh.fields);
+        setGen(fresh.gen);
+      }
+      setMode("view");
+      setNotice("This sheet changed elsewhere — reloaded.");
+      onSaved();
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
+  }
+
   async function save() {
     if (!sheetType) return;
     setError(null);
+    setNotice(null);
     try {
       const payload = normalizeForSave(draft, assembledDefs(module, sheetType));
-      await api.putSheet(scope, module.id, kind, eid, { sheet_type: sheetType, fields: payload });
+      await api.putSheet(scope, module.id, kind, eid,
+        { sheet_type: sheetType, fields: payload, expected: { sheet_type: sheetType, fields, gen } });
       setFields(payload);
       setMode("view");
       onSaved();
     } catch (err: any) {
+      if (err instanceof ApiError && err.status === 409) {
+        await reloadAfterConflict();
+        return;
+      }
       setError(err.detail ?? String(err));
     }
   }
@@ -111,14 +145,23 @@ export default function SheetEditor({ scope, module, kind, eid, initial, onClose
 
   async function commitTypeChange(newType: string, survivors: Record<string, unknown>) {
     setError(null);
+    setNotice(null);
     try {
-      await api.putSheet(scope, module.id, kind, eid, { sheet_type: newType, fields: survivors });
+      await api.putSheet(scope, module.id, kind, eid,
+        { sheet_type: newType, fields: survivors, expected: { sheet_type: sheetType, fields, gen } });
       setSheetType(newType);
       setFields(survivors);
       setDraft(survivors);
+      // A type change mints a new gen server-side, but the PUT response carries
+      // no sheet -- leave the local snapshot stale rather than guess; the next
+      // write's CAS check will 409 and self-heal via reloadAfterConflict.
       setMode("view");
       onSaved();
     } catch (err: any) {
+      if (err instanceof ApiError && err.status === 409) {
+        await reloadAfterConflict();
+        return;
+      }
       setError(err.detail ?? String(err));
     }
   }
@@ -129,6 +172,7 @@ export default function SheetEditor({ scope, module, kind, eid, initial, onClose
       const { sheet: fresh } = await api.advanceSheet(scope.id, kind, eid, key);
       setFields(fresh.fields);
       setDraft(fresh.fields);
+      setGen(fresh.gen);
       onSaved();
     } catch (err: any) {
       setError(err.detail ?? String(err));
@@ -138,11 +182,16 @@ export default function SheetEditor({ scope, module, kind, eid, initial, onClose
   async function removeSheet() {
     if (!window.confirm("Delete this sheet? This cannot be undone.")) return;
     setError(null);
+    setNotice(null);
     try {
-      await api.deleteSheet(scope, module.id, kind, eid);
+      await api.deleteSheet(scope, module.id, kind, eid, gen);
       onSaved();
       onClose();
     } catch (err: any) {
+      if (err instanceof ApiError && err.status === 409) {
+        await reloadAfterConflict();
+        return;
+      }
       setError(err.detail ?? String(err));
     }
   }
@@ -168,6 +217,7 @@ export default function SheetEditor({ scope, module, kind, eid, initial, onClose
 
         {initial.errors.length > 0 && <div className="banner">{initial.errors.join("; ")}</div>}
         {error && <div className="banner">{error}</div>}
+        {notice && <div className="field-hint">{notice}</div>}
         {layoutDropped && (
           <div className="field-hint">
             This module's layout for this sheet type is invalid — using the default arrangement.
