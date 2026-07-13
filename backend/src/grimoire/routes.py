@@ -2911,9 +2911,12 @@ def put_campaign_sheet(cid: str, kind: str, eid: str, body: SheetBody):
 
 
 @router.delete("/campaigns/{cid}/sheets/{kind}/{eid}")
-def delete_campaign_sheet(cid: str, kind: str, eid: str):
+def delete_campaign_sheet(cid: str, kind: str, eid: str, gen: str | None = None):
     _campaign_root_or_404(cid)
-    return {"ok": store.sheets.delete(cid, kind, eid)}
+    try:
+        return {"ok": store.sheets.delete(cid, kind, eid, expected_gen=gen)}
+    except store.sheets.SheetConflict as e:
+        raise HTTPException(status_code=409, detail=str(e))
 
 
 @router.put("/campaigns/{cid}/sheets/{kind}/{eid}/creation")

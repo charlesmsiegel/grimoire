@@ -102,8 +102,9 @@ def test_delete_and_list_refs(monkeypatch, tmp_path):
     sheets.write(cid, "characters", "mara", "medium", None, expected=None)
     sheets.write(cid, "items", "moon-disc", "talisman", None, expected=None)
     assert sheets.list_refs(cid) == [("characters", "mara"), ("items", "moon-disc")]
-    assert sheets.delete(cid, "items", "moon-disc") is True
-    assert sheets.delete(cid, "items", "moon-disc") is False
+    g = sheets.read(cid, "items", "moon-disc")["gen"]
+    assert sheets.delete(cid, "items", "moon-disc", expected_gen=g) is True
+    assert sheets.delete(cid, "items", "moon-disc", expected_gen=g) is False
     assert sheets.list_refs(cid) == [("characters", "mara")]
 
 
@@ -803,15 +804,49 @@ def test_cas_gen_mismatch_with_identical_content_conflicts(monkeypatch, tmp_path
     _, cid = _campaign(monkeypatch, tmp_path)
     sheets.write(cid, "characters", "mara", "medium", None, expected=None)
     snap = _snapshot(cid, "characters", "mara")
-    # Task 4 (delete gains expected_gen) doesn't exist yet on this branch --
-    # call the current delete(cid, kind, eid) signature.
-    sheets.delete(cid, "characters", "mara")
+    sheets.delete(cid, "characters", "mara", expected_gen=snap["gen"])
     sheets.write(cid, "characters", "mara", "medium", None, expected=None)
     live = _snapshot(cid, "characters", "mara")
     assert live["sheet_type"] == snap["sheet_type"] and live["fields"] == snap["fields"]
     with pytest.raises(sheets.SheetConflict):
         sheets.write(cid, "characters", "mara", "medium",
                      snap["fields"], expected=snap)
+
+
+# delete CAS -- mandatory expected_gen (mechanics Phase 5, Task 4)
+# NOTE: the brief's snippet uses a placeholder sheet type "adventurer" and a
+# `cid` fixture -- adapted here to pool-basic's real "medium" characters type
+# and this file's `_campaign` helper, matching the CAS tests above.
+
+
+def test_delete_cas(monkeypatch, tmp_path):
+    _, cid = _campaign(monkeypatch, tmp_path)
+    sheets.write(cid, "characters", "mara", "medium", None, expected=None)
+    g = sheets.read(cid, "characters", "mara")["gen"]
+    with pytest.raises(sheets.SheetConflict):
+        sheets.delete(cid, "characters", "mara", expected_gen="stale" + g[:28])
+    assert sheets.read(cid, "characters", "mara") is not None
+    assert sheets.delete(cid, "characters", "mara", expected_gen=g) is True
+    assert sheets.delete(cid, "characters", "mara", expected_gen=g) is False  # nothing left
+
+
+def test_delete_missing_file_never_conflicts(monkeypatch, tmp_path):
+    """A missing sheet returns False regardless of expected_gen -- it is
+    never a conflict, even when the caller passes a bogus gen."""
+    _, cid = _campaign(monkeypatch, tmp_path)
+    assert sheets.delete(cid, "characters", "mara", expected_gen="anything") is False
+    assert sheets.delete(cid, "characters", "mara", expected_gen=None) is False
+
+
+def test_delete_legacy_gen_null_matches_expected_none(monkeypatch, tmp_path):
+    _, cid = _campaign(monkeypatch, tmp_path)
+    sheets.write(cid, "characters", "mara", "medium", None, expected=None)
+    p = sheets._campaign_path(cid, "characters", "mara")
+    data = json.loads(p.read_text(encoding="utf-8"))
+    del data["gen"]
+    p.write_text(json.dumps(data), encoding="utf-8")
+    assert sheets.read(cid, "characters", "mara")["gen"] is None
+    assert sheets.delete(cid, "characters", "mara", expected_gen=None) is True
 
 
 def test_editor_write_serializes_with_advance(monkeypatch, tmp_path):

@@ -3095,7 +3095,9 @@ def test_campaign_sheet_routes(client):
     assert client.put(base, json={"sheet_type": "ghost", "expected": snap}).status_code == 400
     # a stale/omitted `expected` on an existing sheet -> 409, not 400
     assert client.put(base, json={"sheet_type": "medium"}).status_code == 409
-    assert client.delete(base).json()["ok"] is True
+    live = client.get(base).json()["sheet"]
+    r = client.delete(base, params={"gen": live["gen"]})
+    assert r.json()["ok"] is True
     assert client.get("/api/campaigns/nope/sheets").status_code == 404
 
 
@@ -3124,6 +3126,36 @@ def test_sheet_put_cas(client):
     assert r.status_code == 200
     r = client.put(base, json={"sheet_type": "medium", "fields": new_fields, "expected": snap})
     assert r.status_code == 409
+
+
+# gen -- mandatory expected_gen CAS on the sheet DELETE route (mechanics
+# Phase 5, Task 4). Brief's placeholder sheet_type "adventurer" is adapted to
+# pool-basic's real "medium" characters type, reusing this file's _campaign
+# helper (see test_sheet_put_cas above for the pattern).
+def test_sheet_delete_cas(client):
+    wid, cid = _campaign(client)
+    client.put(f"/api/campaigns/{cid}/module", json={"module": "pool-basic"})
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"}).json()["character"]
+
+    base = f"/api/campaigns/{cid}/sheets/characters/{chid}"
+    r = client.put(base, json={"sheet_type": "medium", "fields": None, "expected": None})
+    assert r.status_code == 200
+    g = client.get(base).json()["sheet"]["gen"]
+
+    # missing/stale gen -> 409, sheet still there
+    r = client.delete(base)
+    assert r.status_code == 409
+    assert client.get(base).json()["sheet"] is not None
+
+    r = client.delete(base, params={"gen": g})
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    assert client.get(base).json()["sheet"] is None
+
+    # gone -- deleting again is False, not a conflict
+    r = client.delete(base, params={"gen": g})
+    assert r.status_code == 200
+    assert r.json()["ok"] is False
 
 
 def test_instantiate_still_creates_sheeted_content(client, tmp_path):
