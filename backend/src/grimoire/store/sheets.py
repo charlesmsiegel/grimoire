@@ -679,3 +679,82 @@ def advance(cid: str, kind: str, eid: str, field_key: str) -> dict:
         _atomic_write_json(path, {"sheet_type": sheet_type, "fields": new_fields,
                                   "gen": data.get("gen")})
         return _read_path(path, kind, mid)
+
+
+# ---- set_field (mechanics Phase 5, Task 5): per-field strict-CAS apply ----
+
+_MUTABLE_TYPES = ("resource", "track", "list")
+
+
+def canonical_field_value(fdef: dict, value, live):
+    """Canonical form of a proposed mutable-field value. Resources adopt the
+    LIVE max (absorb/set_field never change max, only ``write`` can); shape
+    mismatches raise SheetError."""
+    t = fdef.get("type")
+    if t == "resource":
+        cur = value.get("current") if isinstance(value, dict) else value
+        if not isinstance(cur, int) or isinstance(cur, bool):
+            raise SheetError(f"{fdef.get('key')!r}: resource value needs an integer 'current'")
+        live_max = live.get("max") if isinstance(live, dict) else None
+        if not isinstance(live_max, int) or isinstance(live_max, bool):
+            live_max = _int_or(fdef.get("max"), 0)
+        return {"current": cur, "max": live_max}
+    if t == "track":
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise SheetError(f"{fdef.get('key')!r}: expected an integer")
+        return value
+    if t == "list":
+        if not isinstance(value, list):
+            raise SheetError(f"{fdef.get('key')!r}: expected a list")
+        return value
+    raise SheetError(f"{fdef.get('key')!r} is not a mutable field")
+
+
+def _set_field_locked(mid: str, cid: str, kind: str, eid: str,
+                      field_key: str, value, expect) -> None:
+    """Body of set_field; caller holds lock_for(cid) and resolved mid once."""
+    if kind not in FILE_KINDS:
+        raise SheetError(f"unknown sheet kind {kind!r}")
+    if not _safe_part(eid):
+        raise SheetError(f"bad entity id {eid!r}")
+    path = _campaign_path(cid, kind, eid)
+    stored = _stored_snapshot(path)
+    if stored is None:
+        raise SheetError("no sheet exists for this entity")
+    sheets_def = modules.load_pack(mid)["sheets"]
+    st = sheets_def.get("sheet_types", {}).get(stored["sheet_type"]) \
+        if isinstance(stored["sheet_type"], str) else None
+    if not isinstance(st, dict):
+        raise SheetError("sheet has no valid sheet type")
+    fdefs = {f["key"]: f for f in modules.assembled_fields(sheets_def, stored["sheet_type"])
+             if isinstance(f, dict) and isinstance(f.get("key"), str)}
+    fdef = fdefs.get(field_key)
+    if fdef is None or fdef.get("type") not in _MUTABLE_TYPES:
+        raise SheetError(f"{field_key!r} is not a mutable field of this sheet")
+    merged = {**default_fields(sheets_def, stored["sheet_type"]), **stored["fields"]}
+    live = merged.get(field_key)
+    new = canonical_field_value(fdef, value, live)
+    want = canonical_field_value(fdef, expect, live) if expect is not None else None
+    if live != want:
+        raise SheetConflict(
+            f"{field_key!r} is {live!r}, expected {want!r} -- "
+            "already applied or independently changed")
+    new_fields = {**stored["fields"], field_key: new}
+    errs = modules.validate_sheet_values(sheets_def, stored["sheet_type"], new_fields)
+    if errs:
+        raise SheetError("; ".join(errs))
+    _atomic_write_json(path, {"sheet_type": stored["sheet_type"],
+                              "fields": new_fields, "gen": stored["gen"]})
+
+
+def set_field(cid: str, kind: str, eid: str, field_key: str, value, expect) -> None:
+    """Per-field strict-CAS apply: raises SheetConflict when the live value
+    doesn't equal the canonicalized ``expect`` -- including when it already
+    equals the canonicalized ``value`` (a duplicate/independent apply must be
+    reported, not silently accepted as a no-op)."""
+    with lock_for(cid):
+        # resolve INSIDE the lock -- see write()'s rebind-serialization note.
+        mid = modules.resolve(cid)
+        if mid is None:
+            raise SheetError("no module resolved for this campaign")
+        _set_field_locked(mid, cid, kind, eid, field_key, value, expect)
