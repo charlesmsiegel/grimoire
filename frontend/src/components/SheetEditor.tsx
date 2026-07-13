@@ -49,8 +49,7 @@ export default function SheetEditor({ scope, module, kind, eid, initial, onClose
 
   const layoutTree = sheetType ? module.layout?.sheet_types?.[sheetType] : undefined;
   const layoutDropped = !!sheetType && !layoutTree && (module.display_errors ?? []).some(
-    (e) => e.source === "layout" && (e.sheet_type === sheetType ||
-      (e.sheet_type === null && Object.keys(module.layout?.sheet_types ?? {}).length === 0)));
+    (e) => e.source === "layout" && (e.sheet_type === sheetType || e.sheet_type === "*"));
 
   function startEdit() {
     setDraft(toEditDraft(fields, assembledDefs(module, sheetType)));
