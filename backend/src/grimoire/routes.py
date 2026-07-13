@@ -511,25 +511,29 @@ def get_world_campaigns(wid: str):
 @router.put("/worlds/{wid}/module")
 def put_world_module(wid: str, body: ModuleSetting):
     try:
-        # affected: non-overridden campaigns of this world -- their resolved
-        # module (and thus every captured baseline) is about to change.
-        affected = []
-        for c in store.campaigns.list_campaigns():
-            if c.get("world") != wid:
-                continue
-            try:
-                meta = store.campaigns.read_campaign(c["id"])["meta"]
-            except store.campaigns.CampaignNotFound:
-                continue                         # deleted between list and read
-            setting = (meta.get("module") or "").strip()
-            if not setting:                      # no per-campaign override
-                affected.append(c["id"])
+        # Lock every campaign of this world -- regardless of current override
+        # -- BEFORE reading any per-campaign setting. Enumerating "affected"
+        # (non-overridden) campaigns from metadata before locking would race
+        # a concurrent campaign-module PUT: a campaign could flip from
+        # overridden to inheriting after enumeration but before this route's
+        # rebind, leaving it unlocked and holding stale baselines against the
+        # new world default. Locking every campaign of the world -- then
+        # re-reading each override under the lock -- closes that window.
+        all_cids = sorted(
+            c["id"] for c in store.campaigns.list_campaigns() if c.get("world") == wid
+        )
         with contextlib.ExitStack() as stack:
-            for c in sorted(affected):           # sole multi-lock holder; sorted order
+            for c in all_cids:                   # sole multi-lock holder; sorted order
                 stack.enter_context(store.sheets.lock_for(c))
             store.modules.set_world_module(wid, body.module.strip())
-            for c in affected:
-                store.audit.clear_baselines(c)
+            for c in all_cids:
+                try:
+                    meta = store.campaigns.read_campaign(c)["meta"]
+                except store.campaigns.CampaignNotFound:
+                    continue                     # deleted while we held the lock
+                setting = (meta.get("module") or "").strip()
+                if not setting:                  # no per-campaign override (fresh read)
+                    store.audit.clear_baselines(c)
     except store.worlds.WorldNotFound:
         raise HTTPException(status_code=404, detail="world not found")
     except store.modules.ModuleNotFound:
