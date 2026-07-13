@@ -440,6 +440,34 @@ test("saving a legacy sheet with no gen sends gen: null inside the expected snap
     { sheet_type: "medium", fields: {}, expected: { sheet_type: "medium", fields: {}, gen: null } }));
 });
 
+test("a type change refreshes the held gen, so the next save uses it instead of 409ing", async () => {
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  (api.getSheet as any).mockResolvedValue({
+    sheet: { sheet_type: "shifter",
+      fields: { vigor: 3, strength: 10, fury: { current: 5, max: 5 } },
+      derived: {}, errors: [], gen: "g2" } });
+  render(<SheetEditor scope={{ kind: "campaign", id: "run" }} module={MOD}
+                      kind="characters" eid="mara" initial={SHEET}
+                      onClose={() => {}} onSaved={() => {}} />);
+  fireEvent.change(screen.getByLabelText("Change type"), { target: { value: "shifter" } });
+  await waitFor(() => expect(api.putSheet).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(api.getSheet).toHaveBeenCalledWith(
+    { kind: "campaign", id: "run" }, "pool-basic", "characters", "mara"));
+
+  fireEvent.click(screen.getByText("Edit"));
+  fireEvent.click(screen.getByLabelText("Vigor 4"));
+  fireEvent.click(screen.getByText("Save"));
+
+  await waitFor(() => expect(api.putSheet).toHaveBeenCalledTimes(2));
+  const secondCall = (api.putSheet as any).mock.calls[1];
+  expect(secondCall[4].expected.gen).toBe("g2");
+  expect(secondCall[4].expected.gen).not.toBe(SHEET.gen);
+  // refreshSnapshot runs after both the type change and the second save --
+  // neither is the reloadAfterConflict path, so putSheet is never re-called.
+  expect(api.getSheet).toHaveBeenCalledTimes(2);
+  expect(screen.queryByText(/changed elsewhere/)).toBeNull();
+});
+
 test("a 409 on save re-fetches the sheet, replaces the form, and shows a changed-elsewhere notice", async () => {
   (api.putSheet as any).mockRejectedValue(new ApiError(409, "the sheet changed since it was loaded"));
   (api.getSheet as any).mockResolvedValue({

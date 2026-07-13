@@ -94,6 +94,28 @@ export default function SheetEditor({ scope, module, kind, eid, initial, onClose
     }
   }
 
+  // After a successful campaign-scope write, refetch and adopt the live
+  // sheet snapshot. A write can mint a new `gen` server-side (a type change
+  // always does; a plain save may under a module's own rules) without
+  // returning the new sheet in its response -- if we kept the pre-write
+  // `gen` in local state, the *next* save's CAS check would 409 against it
+  // and reloadAfterConflict would discard the user's live draft. Campaign
+  // scope only: world-scope writes carry no CAS/gen at all. Best-effort --
+  // on failure, keep the local snapshot; a subsequent CAS mismatch still
+  // self-heals via reloadAfterConflict.
+  async function refreshSnapshot() {
+    try {
+      const { sheet: fresh } = await api.getSheet(scope, module.id, kind, eid);
+      if (fresh) {
+        setSheetType(fresh.sheet_type);
+        setFields(fresh.fields);
+        setGen(fresh.gen);
+      }
+    } catch {
+      // best effort -- see comment above
+    }
+  }
+
   async function save() {
     if (!sheetType) return;
     setError(null);
@@ -103,6 +125,7 @@ export default function SheetEditor({ scope, module, kind, eid, initial, onClose
       await api.putSheet(scope, module.id, kind, eid,
         { sheet_type: sheetType, fields: payload, expected: { sheet_type: sheetType, fields, gen } });
       setFields(payload);
+      if (scope.kind === "campaign") await refreshSnapshot();
       setMode("view");
       onSaved();
     } catch (err: any) {
@@ -153,8 +176,9 @@ export default function SheetEditor({ scope, module, kind, eid, initial, onClose
       setFields(survivors);
       setDraft(survivors);
       // A type change mints a new gen server-side, but the PUT response carries
-      // no sheet -- leave the local snapshot stale rather than guess; the next
-      // write's CAS check will 409 and self-heal via reloadAfterConflict.
+      // no sheet -- refreshSnapshot() re-fetches so the next write's CAS check
+      // uses the live gen instead of 409ing and discarding the user's next edit.
+      if (scope.kind === "campaign") await refreshSnapshot();
       setMode("view");
       onSaved();
     } catch (err: any) {
