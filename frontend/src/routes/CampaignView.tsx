@@ -400,12 +400,16 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
   // exactly as the reviewer had it.
   async function retryAudit() {
     if (!activeId) return;
-    const res = await api.retryAudit(cid, activeId);
-    setAbsorb((a) => (a ? { ...a, mechanics: res.mechanics } : a));
-    setEditRows((rows) => [
-      ...rows.filter((r) => r.kind !== "sheet"),
-      ...res.edits.map((e) => ({ ...e, approved: true })),
-    ]);
+    try {
+      const res = await api.retryAudit(cid, activeId);
+      setAbsorb((a) => (a ? { ...a, mechanics: res.mechanics } : a));
+      setEditRows((rows) => [
+        ...rows.filter((r) => r.kind !== "sheet"),
+        ...res.edits.map((e) => ({ ...e, approved: true })),
+      ]);
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
   }
 
   function onKeyDown(e: React.KeyboardEvent) {

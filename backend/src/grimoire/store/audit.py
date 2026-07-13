@@ -287,8 +287,10 @@ def apply_delta(cid: str, sid: str, edit: dict) -> None:
     (scope + baseline, both re-checked against the in-lock live sheet) then
     write (set_field's body) -- never two lock acquisitions, so a concurrent
     write can't land between the check and the write. The module is resolved
-    exactly once, inside the lock (see sheets.write's rebind-serialization
-    note), and that same mid is threaded through to _set_field_locked.
+    here, inside the lock, and that same mid is threaded through to
+    _set_field_locked; sheets.read still re-resolves it internally too, but
+    rebinds only ever publish under this same lock (see sheets.write's
+    rebind-serialization note), so both resolutions are guaranteed to agree.
     Raises sheets.SheetConflict / sheets.SheetError; never returns a failure
     value -- callers (absorb.apply_edits) catch and report."""
     payload = edit.get("payload", {})
