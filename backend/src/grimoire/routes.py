@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 from typing import Literal
 
@@ -508,7 +509,21 @@ def get_world_campaigns(wid: str):
 @router.put("/worlds/{wid}/module")
 def put_world_module(wid: str, body: ModuleSetting):
     try:
-        store.modules.set_world_module(wid, body.module.strip())
+        # affected: non-overridden campaigns of this world -- their resolved
+        # module (and thus every captured baseline) is about to change.
+        affected = []
+        for c in store.campaigns.list_campaigns():
+            if c.get("world") != wid:
+                continue
+            setting = (store.campaigns.read_campaign(c["id"])["meta"].get("module") or "").strip()
+            if not setting:                      # no per-campaign override
+                affected.append(c["id"])
+        with contextlib.ExitStack() as stack:
+            for c in sorted(affected):           # sole multi-lock holder; sorted order
+                stack.enter_context(store.sheets.lock_for(c))
+            store.modules.set_world_module(wid, body.module.strip())
+            for c in affected:
+                store.audit.clear_baselines(c)
     except store.worlds.WorldNotFound:
         raise HTTPException(status_code=404, detail="world not found")
     except store.modules.ModuleNotFound:
@@ -2873,7 +2888,9 @@ def get_campaign_module(cid: str):
 @router.put("/campaigns/{cid}/module")
 def put_campaign_module(cid: str, body: ModuleSetting):
     try:
-        store.modules.set_campaign_module(cid, body.module.strip())
+        with store.sheets.lock_for(cid):
+            store.modules.set_campaign_module(cid, body.module.strip())
+            store.audit.clear_baselines(cid)
     except store.campaigns.CampaignNotFound:
         raise HTTPException(status_code=404, detail="campaign not found")
     except store.modules.ModuleNotFound:
