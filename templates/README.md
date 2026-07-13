@@ -57,6 +57,14 @@ lines), `rel_snapshot` (`absorb.relationships_snapshot()` — lines per
 (`absorb.plot_snapshot()` — lines per `snippets/plot_thread_line/absorb.j2`),
 `transcript` (`snippets/transcript.j2`).
 
+### `audit/` — the post-absorb mechanics audit inside POST …/absorb
+Mirrors `store/audit.py:build_prompt`. Messages: system, user.
+`user.j2` vars: `sheet_blocks` (`audit.sheet_blocks()[0]` — one rendered block
+per present, sheeted cast member and the scene's current location; each
+mutable line marks "start X -> now Y" against `audit.baseline_field()`, each
+static line is marked `[static]`), `roll_lines` (`audit.roll_lines()` — the
+scene's roll-log entries), `transcript` (`snippets/transcript.j2`).
+
 ### `scene/` — the context builder (`store/context.py`)
 Serves POST …/chat, …/retry, …/regenerate (via `build_messages` /
 `build_director_messages`) and …/opener (via `build_opener_messages`).

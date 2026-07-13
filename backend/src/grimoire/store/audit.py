@@ -16,7 +16,8 @@ import os
 import threading
 from pathlib import Path
 
-from . import campaigns, modules, sheets
+from .. import prompts
+from . import appearances, campaigns, entities, modules, overlay, rolls, scenes, sheets
 
 _LOCKS: dict[str, threading.Lock] = {}
 _LOCKS_GUARD = threading.Lock()
@@ -151,3 +152,184 @@ def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
                 hit = True
         if hit:
             _write(cid, data)
+
+
+# ---- Part 2: audit prompt / parse / materialize (Task 7) ----
+
+
+class AuditParseError(Exception):
+    """The audit reply violated the output schema (fail closed, not clean)."""
+
+
+def sheet_scope(cid: str, sid: str) -> list[tuple[str, str, str]]:
+    """(kind, eid, name) for present cast + the current location -- the same
+    scope Phase 4's mechanics_sheets context section uses (context._mechanics).
+    Unsheeted entries are included; callers decide what to do with them."""
+    out = [(a["kind"], a["id"], a.get("name", a["id"]))
+           for a in appearances.scene_cast(cid, sid)]
+    history = scenes.get_location_history(cid, sid)
+    if history:
+        loc = history[-1]
+        try:
+            name = overlay.read_entity(cid, "locations", loc)["meta"].get("name", loc)
+            out.append(("locations", loc, name))
+        except entities.EntityNotFound:
+            pass
+    return out
+
+
+def _field_label(fdef: dict) -> str:
+    return fdef.get("label") or fdef.get("key", "")
+
+
+def render_value(fdef: dict, value) -> str:
+    key = fdef.get("key", "")
+    if fdef.get("type") == "resource" and isinstance(value, dict):
+        return f"{key} {value.get('current', 0)}/{value.get('max', 0)}"
+    if fdef.get("type") == "list" and isinstance(value, list):
+        return f"{key}:\n" + "\n".join(f"- {v}" for v in value) if value else f"{key}: (empty)"
+    return f"{key} {value}"
+
+
+def sheet_blocks(cid: str, sid: str) -> tuple[list[str], list[dict]]:
+    mid = modules.resolve(cid)
+    if mid is None:
+        return [], []
+    sheets_def = modules.load_pack(mid)["sheets"]
+    blocks, excluded = [], []
+    for kind, eid, name in sheet_scope(cid, sid):
+        sheet = sheets.read(cid, kind, eid)
+        if sheet is None:
+            continue                                   # unsheeted: not in scope
+        ref = f"{kind}:{eid}"
+        if sheet["errors"]:
+            excluded.append({"id": ref,
+                             "reason": "sheet invalid: " + "; ".join(sheet["errors"])})
+            continue
+        type_id = sheet["sheet_type"]
+        merged = {**sheets.default_fields(sheets_def, type_id), **sheet["fields"]}
+        lines = [f"{ref} — {type_id} ({name})"]
+        for f in modules.assembled_fields(sheets_def, type_id):
+            key = f.get("key")
+            if not isinstance(key, str) or key not in merged:
+                continue
+            if f.get("type") in sheets._MUTABLE_TYPES:
+                start = baseline_field(cid, sid, kind, eid, key)
+                if start is None:
+                    lines.append(f"  {render_value(f, merged[key])}  "
+                                 "[mutable — no scene baseline, report only]")
+                else:
+                    lines.append(f"  start {render_value(f, start)} -> now "
+                                 f"{render_value(f, merged[key])}  [mutable]")
+            else:
+                # FULL blocks: text fields included, marked static, so
+                # contradictions involving text-valued mechanics stay visible
+                lines.append(f"  {render_value(f, merged[key])}  [static]")
+        blocks.append("\n".join(lines))
+    return blocks, excluded
+
+
+def roll_lines(cid: str, sid: str) -> list[str]:
+    out = []
+    for entry in rolls.read(cid):
+        if entry.get("scene") != sid:
+            continue
+        r = entry.get("result", {})
+        tier = r.get("tier") or {}
+        bits = [entry.get("label") or r.get("notation", ""), str(r.get("notation", ""))]
+        if "successes" in r:
+            bits.append(f"{r['successes']} successes")
+        elif "total" in r:
+            bits.append(f"total {r['total']}")
+        if isinstance(tier, dict) and tier.get("label"):
+            bits.append(tier["label"])
+        out.append("- " + " · ".join(b for b in bits if b))
+    return out
+
+
+def build_prompt(transcript: str, blocks: list[str], roll_lines_: list[str]) -> list[dict]:
+    return [{"role": "system", "content": prompts.render("audit/system.j2")},
+            {"role": "user", "content": prompts.render(
+                "audit/user.j2", sheet_blocks=blocks, roll_lines=roll_lines_,
+                transcript=transcript)}]
+
+
+def parse_output(text: str) -> dict:
+    start, end = text.find("{"), text.rfind("}")
+    raw = text[start:end + 1] if start != -1 and end > start else ""
+    try:
+        obj = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        raise AuditParseError("no JSON object in the audit reply")
+    if not isinstance(obj, dict):
+        raise AuditParseError("audit reply is not a JSON object")
+    if not isinstance(obj.get("warnings"), list) or not isinstance(obj.get("sheet_deltas"), list):
+        raise AuditParseError(
+            "audit reply must carry 'warnings' and 'sheet_deltas' arrays")
+    warnings, deltas, dropped = [], [], []
+    for w in obj["warnings"]:
+        if isinstance(w, str) and w.strip():
+            warnings.append(w.strip())
+        else:
+            dropped.append({"id": "", "reason": f"malformed warning: {w!r}"})
+    for d in obj["sheet_deltas"]:
+        if isinstance(d, dict) and isinstance(d.get("id"), str) and isinstance(d.get("field"), str):
+            deltas.append({"id": d["id"].strip(), "field": d["field"].strip(),
+                           "value": d.get("value"),
+                           "note": str(d.get("note") or "").strip()})
+        else:
+            dropped.append({"id": "", "reason": f"malformed delta: {d!r}"})
+    return {"warnings": warnings, "sheet_deltas": deltas, "dropped": dropped}
+
+
+def materialize(cid: str, sid: str, parsed: dict) -> tuple[list[dict], list[dict]]:
+    """Deterministic gate over parsed sheet_deltas -> (StagedEdits, dropped).
+    Mirrored inside the apply lock by apply_delta; set_field is the boundary."""
+    mid = modules.resolve(cid)
+    edits: list[dict] = []
+    dropped: list[dict] = list(parsed.get("dropped", []))
+    if mid is None:
+        return edits, dropped
+    sheets_def = modules.load_pack(mid)["sheets"]
+    scope = {(k, e): name for k, e, name in sheet_scope(cid, sid)}
+    for d in parsed.get("sheet_deltas", []):
+        ref, field_key = d["id"], d["field"]
+        kind, sep, eid = ref.partition(":")
+        drop = lambda why: dropped.append({"id": ref, "field": field_key, "reason": why})
+        if not sep or (kind, eid) not in scope:
+            drop("entity not in this scene's sheet scope"); continue
+        sheet = sheets.read(cid, kind, eid)
+        if sheet is None or sheet["errors"]:
+            drop("entity has no readable sheet"); continue
+        if baseline_field(cid, sid, kind, eid, field_key) is None and \
+                not baseline_entry_valid(cid, sid, kind, eid, mid, sheet):
+            drop("no valid scene baseline for this entity"); continue
+        fdefs = {f["key"]: f for f in modules.assembled_fields(sheets_def, sheet["sheet_type"])
+                 if isinstance(f, dict) and isinstance(f.get("key"), str)}
+        fdef = fdefs.get(field_key)
+        if fdef is None or fdef.get("type") not in sheets._MUTABLE_TYPES:
+            drop("not a mutable field of this sheet"); continue
+        merged = {**sheets.default_fields(sheets_def, sheet["sheet_type"]), **sheet["fields"]}
+        live = merged.get(field_key)
+        try:
+            value = sheets.canonical_field_value(fdef, d["value"], live)
+        except sheets.SheetError as e:
+            drop(str(e)); continue
+        errs = modules.validate_sheet_values(
+            sheets_def, sheet["sheet_type"], {**sheet["fields"], field_key: value})
+        if errs:
+            drop("; ".join(errs)); continue
+        expect = sheets.canonical_field_value(fdef, live, live)
+        if value == expect:
+            continue                                     # benign no-op: agreement
+        name = scope[(kind, eid)]
+        edits.append({"id": f"sheet:{kind}:{eid}:{field_key}", "kind": "sheet",
+                      "target": {"kind": kind, "id": eid},
+                      "label": f"{name} — {_field_label(fdef)} (sheet)",
+                      "field": field_key,
+                      "before": render_value(fdef, expect),
+                      "after": render_value(fdef, value),
+                      "authored": False,
+                      "payload": {"field": field_key, "value": value,
+                                  "expect": expect, "note": d.get("note", "")}})
+    return edits, dropped
