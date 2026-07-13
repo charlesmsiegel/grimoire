@@ -43,7 +43,7 @@ vi.mock("../api/client", async () => {
       getSceneChecks: vi.fn(), rollCheck: vi.fn(),
       getConfig: vi.fn(),
       editMessage: vi.fn(),
-      absorbScene: vi.fn(), saveChronicle: vi.fn(), getChronicle: vi.fn(),
+      absorbScene: vi.fn(), saveChronicle: vi.fn(), getChronicle: vi.fn(), retryAudit: vi.fn(),
       // consumed by the embedded SceneInspector
       getCast: vi.fn(), getSceneLocation: vi.fn(), getSceneContext: vi.fn(),
       getCastDetail: vi.fn(), readEntity: vi.fn(),
@@ -104,17 +104,19 @@ beforeEach(() => {
   (api.absorbScene as any).mockResolvedValue({
     one_line: "They met.", summary: "A met B.", keywords: ["salt"],
     timeline_events: [], cast: [], location: "", date: "",
+    mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
     edits: [{ id: "character_state:seraphine", kind: "character_state",
       target: { kind: "characters", id: "seraphine" }, label: "Seraphine — current state",
       field: "current_state", before: "Wary.", after: "Loyal now.", authored: false }] });
   (api.saveChronicle as any).mockResolvedValue({ id: "s1", one_line: "They met.",
-    summary: "A met B.", keywords: ["salt"], cast: [], location: "", date: "", absorbed: "t" });
+    summary: "A met B.", keywords: ["salt"], cast: [], location: "", date: "", absorbed: "t",
+    applied: [], sheet_failures: [] });
   (api.getChronicle as any).mockResolvedValue([]);
   (api.campaignChanges as any).mockResolvedValue([]);
 });
 
 function renderCampaign() {
-  render(
+  return render(
     <MemoryRouter initialEntries={["/campaigns/run"]}>
       <Routes>
         <Route path="/campaigns/:cid" element={<CampaignView keySet={true} />} />
@@ -561,6 +563,7 @@ test("character_state row renders a multi-section knowledge body in its textarea
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
   (api.absorbScene as any).mockResolvedValue({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
+    mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
     edits: [{ id: "character_state:seraphine", kind: "character_state",
       target: { kind: "characters", id: "seraphine" }, label: "Seraphine — current state",
       field: "current_state", authored: false,
@@ -582,6 +585,7 @@ test("plot rows are editable and sent with payload on save", async () => {
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
   (api.absorbScene as any).mockResolvedValue({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
+    mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
     edits: [{ id: "plot:the-map", kind: "plot",
       target: { kind: "plot", id: "the-map" }, label: "The map — advanced",
       field: "beat", before: "open — Elara got it.", after: "It is a forgery.",
@@ -604,6 +608,7 @@ test("new_character proposal renders editable name/description/personality/dialo
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
   (api.absorbScene as any).mockResolvedValue({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
+    mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
     edits: [{ id: "new_character:old-bram", kind: "new_character",
       target: { kind: "characters", id: "" }, label: "New character — Old Bram",
       field: "description", before: "", after: "[character(\"Old Bram\") {}]", authored: false,
@@ -639,6 +644,7 @@ test("new_location shows the setting checkbox only when the scene has no locatio
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
   (api.absorbScene as any).mockResolvedValue({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
+    mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
     edits: [{ id: "new_location:the-crypt", kind: "new_location",
       target: { kind: "locations", id: "" }, label: "New location — The Crypt",
       field: "body", before: "", after: "A cold crypt.", authored: false,
@@ -659,6 +665,7 @@ test("new_location hides the setting checkbox when the scene already has a locat
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
   (api.absorbScene as any).mockResolvedValue({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "Old Dock", date: "",
+    mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
     edits: [{ id: "new_location:the-crypt", kind: "new_location",
       target: { kind: "locations", id: "" }, label: "New location — The Crypt",
       field: "body", before: "", after: "A cold crypt.", authored: false,
@@ -675,6 +682,7 @@ test("relationship rows are read-only and sent with payload on save", async () =
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
   (api.absorbScene as any).mockResolvedValue({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
+    mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
     edits: [{ id: "feeling:characters:a->characters:b", kind: "relationship",
       target: { kind: "relationships", id: "characters:a->characters:b" }, label: "Ann → Bo",
       field: "feeling", before: "trust 1, affection 1, tension 3", after: "trust 4, affection 3, tension 1",
@@ -690,6 +698,112 @@ test("relationship rows are read-only and sent with payload on save", async () =
     expect.objectContaining({ edits: expect.arrayContaining([
       expect.objectContaining({ id: "feeling:characters:a->characters:b",
         payload: expect.objectContaining({ trust: 4 }) })]) })));
+});
+
+const SHEET_EDIT = { id: "sheet:characters:mara:hp", kind: "sheet",
+  target: { kind: "characters", id: "mara" }, label: "Mara — HP", field: "hp",
+  before: "hp 6/10", after: "hp 4/10", authored: false, payload: { note: "took a hit" } };
+
+test("mechanics: warnings render with a ⚠ prefix; a clean run shows the hint instead", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  (api.absorbScene as any).mockResolvedValue({
+    one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
+    mechanics: { status: "ok", reason: null, warnings: ["Mara claimed a hit with no roll"], dropped: [] },
+    edits: [] });
+  const { unmount } = renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await screen.findByText("⚠ Mara claimed a hit with no roll");
+  expect(screen.queryByText("mechanics audited clean")).toBeNull();
+  unmount();
+
+  (api.absorbScene as any).mockResolvedValue({
+    one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
+    mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
+    edits: [] });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await screen.findByText("mechanics audited clean");
+});
+
+test("failed mechanics shows a notice with Retry validation; retry replaces sheet rows and clears the notice", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  (api.absorbScene as any).mockResolvedValue({
+    one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
+    mechanics: { status: "failed", reason: "boom", warnings: [], dropped: [] },
+    edits: [] });
+  (api.retryAudit as any).mockResolvedValue({
+    mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
+    edits: [SHEET_EDIT] });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await screen.findByText("Mechanics validation failed: boom");
+  fireEvent.click(screen.getByRole("button", { name: /Retry validation/ }));
+  await waitFor(() => expect(screen.queryByText(/Mechanics validation failed/)).toBeNull());
+  expect(await screen.findByText("Mara — HP")).toBeInTheDocument();
+  expect(api.retryAudit).toHaveBeenCalledWith("run", "s1");
+});
+
+test("degraded mechanics shows a notice listing dropped findings", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  (api.absorbScene as any).mockResolvedValue({
+    one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
+    mechanics: { status: "degraded", reason: null, warnings: [],
+      dropped: [{ id: "characters:mara", field: "athletics", reason: "static tamper" }] },
+    edits: [] });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await screen.findByText("Some mechanics findings could not be validated");
+  expect(screen.getByText(/characters:mara athletics: static tamper/)).toBeInTheDocument();
+});
+
+test("sheet edits render read-only with the note and survive save", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  (api.absorbScene as any).mockResolvedValue({
+    one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
+    mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
+    edits: [SHEET_EDIT] });
+  (api.saveChronicle as any).mockResolvedValue({ id: "s1", one_line: "o", summary: "s", keywords: [],
+    cast: [], location: "", date: "", absorbed: "t",
+    applied: ["sheet:characters:mara:hp"], sheet_failures: [] });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await screen.findByText("Mara — HP");
+  expect(screen.getByText("hp 6/10")).toBeInTheDocument();
+  expect(screen.getByText("hp 4/10")).toBeInTheDocument();
+  expect(screen.getByText("took a hit")).toBeInTheDocument();
+  expect(screen.queryByLabelText("After Mara — HP")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  await waitFor(() => expect(api.saveChronicle).toHaveBeenCalled());
+  expect(screen.queryByText(/did not apply/)).toBeNull();
+});
+
+test("sheet_failures from save render a notice", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  (api.absorbScene as any).mockResolvedValue({
+    one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
+    mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
+    edits: [SHEET_EDIT] });
+  (api.saveChronicle as any).mockResolvedValue({ id: "s1", one_line: "o", summary: "s", keywords: [],
+    cast: [], location: "", date: "", absorbed: "t", applied: [],
+    sheet_failures: [{ id: "sheet:characters:mara:hp", reason: "changed", kind: "conflict" }] });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await screen.findByText("Mara — HP");
+  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  await screen.findByText("1 sheet change did not apply");
+  expect(screen.getByText(/Mara — HP/)).toBeInTheDocument();
+  expect(screen.getByText(/changed/)).toBeInTheDocument();
 });
 
 test("Changes tab reveals the changes panel", async () => {

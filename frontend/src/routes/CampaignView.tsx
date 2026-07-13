@@ -107,6 +107,8 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
   const [absorb, setAbsorb] = useState<SceneAbsorb | null>(null);
   const [absorbing, setAbsorbing] = useState(false);
   const [editRows, setEditRows] = useState<(StagedEdit & { approved: boolean })[]>([]);
+  const [sheetFailures, setSheetFailures] = useState<
+    { id: string; reason: string; kind: "conflict" | "error"; label: string }[]>([]);
   const [chooserOpen, setChooserOpen] = useState(false);
   const [seedPrompt, setSeedPrompt] = useState<{ sid: string; prompt: string } | null>(null);
   const streamRef = useRef<HTMLDivElement>(null);
@@ -379,13 +381,30 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
 
   async function saveAbsorb() {
     if (!absorb || !activeId) return;
-    await api.saveChronicle(cid, activeId, {
+    // captured before editRows is cleared below -- sheet_failures only carry
+    // id/reason/kind, so the row's label has to come from what was on screen.
+    const labels = new Map(editRows.map((e) => [e.id, e.label]));
+    const res = await api.saveChronicle(cid, activeId, {
       one_line: absorb.one_line, summary: absorb.summary, keywords: absorb.keywords,
       timeline_events: absorb.timeline_events,
       edits: editRows.filter((e) => e.approved).map(({ approved, ...e }) => e) });
+    setSheetFailures(res.sheet_failures.map((f) => ({ ...f, label: labels.get(f.id) ?? f.id })));
     setAbsorb(null);
     setEditRows([]);
     setCtxKey((n) => n + 1);
+  }
+
+  // Replaces absorb.mechanics with a fresh audit and swaps in its sheet
+  // proposals, leaving every other staged edit (prose/relationship/etc.)
+  // exactly as the reviewer had it.
+  async function retryAudit() {
+    if (!activeId) return;
+    const res = await api.retryAudit(cid, activeId);
+    setAbsorb((a) => (a ? { ...a, mechanics: res.mechanics } : a));
+    setEditRows((rows) => [
+      ...rows.filter((r) => r.kind !== "sheet"),
+      ...res.edits.map((e) => ({ ...e, approved: true })),
+    ]);
   }
 
   function onKeyDown(e: React.KeyboardEvent) {
@@ -530,6 +549,15 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
           </div>
         )}
         {showChanges && <ChangesPanel cid={cid} />}
+        {sheetFailures.length > 0 && (
+          <div className="mechanics-notice">
+            <p>{sheetFailures.length} sheet change{sheetFailures.length === 1 ? "" : "s"} did not apply</p>
+            {sheetFailures.map((f, i) => (
+              <p className="field-hint" key={i}>{f.label}: {f.reason}</p>
+            ))}
+            <button className="subtle" onClick={() => setSheetFailures([])}>Dismiss</button>
+          </div>
+        )}
         {absorb && (
           <div className="absorb-panel">
             <h4>Review scene summary</h4>
@@ -546,6 +574,21 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
                 ))}
               </ul>
             )}
+            {absorb.mechanics.status === "ok" && absorb.mechanics.warnings.length === 0 && (
+              <p className="field-hint">mechanics audited clean</p>)}
+            {absorb.mechanics.warnings.length > 0 && (
+              <ul className="mechanics-warnings">
+                {absorb.mechanics.warnings.map((w, i) => <li key={i}>⚠ {w}</li>)}
+              </ul>)}
+            {(absorb.mechanics.status === "failed" || absorb.mechanics.status === "degraded") && (
+              <div className="mechanics-notice">
+                <p>{absorb.mechanics.status === "failed"
+                    ? `Mechanics validation failed: ${absorb.mechanics.reason}`
+                    : "Some mechanics findings could not be validated"}</p>
+                {absorb.mechanics.dropped.map((d, i) => (
+                  <p className="field-hint" key={i}>{d.id} {d.field ?? ""}: {d.reason}</p>))}
+                <button onClick={retryAudit}>Retry validation</button>
+              </div>)}
             {editRows.length > 0 && (
               <div className="absorb-edits">
                 <h5>Proposed changes</h5>
@@ -566,7 +609,15 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
                         <input aria-label={`Name ${e.label}`} value={(e.payload?.name as string) ?? ""}
                                onChange={(ev) => setPayload({ name: ev.target.value })} />
                       )}
-                      {e.kind === "relationship" || e.kind === "bond" ? (
+                      {e.kind === "sheet" ? (
+                        <>
+                          {e.before && <div className="absorb-before">{e.before}</div>}
+                          <div className="absorb-after">{e.after}</div>
+                          {typeof e.payload?.note === "string" && e.payload.note && (
+                            <p className="field-hint">{e.payload.note}</p>
+                          )}
+                        </>
+                      ) : e.kind === "relationship" || e.kind === "bond" ? (
                         <div className="absorb-diff">
                           {e.before && <span className="absorb-before">{e.before}</span>}
                           <span className="absorb-after">{e.after}</span>

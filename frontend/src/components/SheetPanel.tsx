@@ -49,7 +49,7 @@ export default function SheetPanel({ scope, module, kind, eid, onOpenRef }:
     if (!choiceValue) return;
     setError(null);
     try {
-      await api.putSheet(scope, module!.id, kind, eid, { sheet_type: choiceValue, fields: null });
+      await api.putSheet(scope, module!.id, kind, eid, { sheet_type: choiceValue, fields: null, expected: null });
       const fresh = await refetch();
       if (fresh) setEditing(true);
     } catch (err: any) {

@@ -192,7 +192,7 @@ it("wizard trigger opens the wizard, finds the characters sheet type, and create
   fireEvent.change(select, { target: { value: "hero" } });
   fireEvent.click(screen.getByText("Create"));
   await waitFor(() => expect(api.putSheetCreation).toHaveBeenCalledWith(
-    { kind: "world", id: "w1" }, "testmod", "pcs", "elara", { sheet_type: "hero", spends: {} }));
+    { kind: "world", id: "w1" }, "testmod", "pcs", "elara", { sheet_type: "hero", spends: {}, expected: null }));
 });
 
 it("world scope: wires the wizard's deleteRecord to api.deletePC so a failed sheet write rolls back", async () => {

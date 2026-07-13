@@ -211,15 +211,21 @@ export type CastDetail = { kind: "characters" | "pcs"; id: string; name: string;
 export type TimelineEvent = { date: string; text: string };
 export type StagedEdit = {
   id: string; kind: "character_state" | "lore" | "authored" | "relationship" | "bond" | "plot"
-    | "new_character" | "new_location" | "new_lore";
+    | "new_character" | "new_location" | "new_lore" | "sheet";
   target: { kind: string; id: string }; label: string; field: string;
   before: string; after: string; authored: boolean;
   payload?: Record<string, unknown>;
+};
+export type MechanicsDrop = { id: string; field?: string; reason: string };
+export type Mechanics = {
+  status: "ok" | "degraded" | "failed" | "skipped"; reason: string | null;
+  warnings: string[]; dropped: MechanicsDrop[];
 };
 export type SceneAbsorb = {
   one_line: string; summary: string; keywords: string[];
   timeline_events: TimelineEvent[]; cast: string[]; location: string; date: string;
   edits: StagedEdit[];
+  mechanics: Mechanics;
 };
 export type SceneSuggestion = {
   title: string; premise: string; date?: string;
@@ -322,7 +328,9 @@ export type Sheet = {
   fields: Record<string, unknown>;
   derived: Record<string, number | boolean>;
   errors: string[];
+  gen: string | null;
 };
+export type SheetExpected = { sheet_type: string | null; fields: Record<string, unknown>; gen: string | null } | null;
 export type SheetCoverage = Record<string, { total: number; sheeted: number; invalid: number }>;
 
 function entityBase(scope: EntityScope): string {
@@ -679,9 +687,14 @@ export const api = {
   saveChronicle: (cid: string, sid: string,
                   body: { one_line: string; summary: string; keywords: string[];
                           timeline_events: TimelineEvent[]; edits: StagedEdit[] }) =>
-    request<ChronicleEntry & { applied: string[] }>("PUT", `/api/campaigns/${cid}/scenes/${sid}/chronicle`, body),
+    request<ChronicleEntry & { applied: string[];
+      sheet_failures: { id: string; reason: string; kind: "conflict" | "error" }[] }>(
+      "PUT", `/api/campaigns/${cid}/scenes/${sid}/chronicle`, body),
   getChronicle: (cid: string) =>
     request<ChronicleEntry[]>("GET", `/api/campaigns/${cid}/chronicle`),
+  retryAudit: (cid: string, sid: string) =>
+    request<{ mechanics: Mechanics; edits: StagedEdit[] }>(
+      "POST", `/api/campaigns/${cid}/scenes/${sid}/audit`),
   opener: (cid: string, sid: string, prompt: string, onEvent: (e: ChatEvent) => void) =>
     streamPost(`/api/campaigns/${cid}/scenes/${sid}/opener`, { prompt }, onEvent),
   firstPost: (cid: string, sid: string, text: string) =>
@@ -735,7 +748,7 @@ export const api = {
         ? `/api/campaigns/${scope.id}/sheets/${kind}/${eid}`
         : `/api/worlds/${scope.id}/sheets/${mid}/${kind}/${eid}`),
   putSheet: (scope: EntityScope, mid: string, kind: string, eid: string,
-             body: { sheet_type: string; fields: Record<string, unknown> | null }) =>
+             body: { sheet_type: string; fields: Record<string, unknown> | null; expected: SheetExpected }) =>
     request<{ ok: boolean }>(
       "PUT",
       scope.kind === "campaign"
@@ -743,7 +756,7 @@ export const api = {
         : `/api/worlds/${scope.id}/sheets/${mid}/${kind}/${eid}`,
       body),
   putSheetCreation: (scope: EntityScope, mid: string, kind: string, eid: string,
-                     body: { sheet_type: string; spends: Record<string, Record<string, number>> }) =>
+                     body: { sheet_type: string; spends: Record<string, Record<string, number>>; expected: SheetExpected }) =>
     request<{ sheet: Sheet }>(
       "PUT",
       scope.kind === "campaign"
@@ -752,10 +765,10 @@ export const api = {
       body),
   advanceSheet: (cid: string, kind: string, eid: string, field: string) =>
     request<{ sheet: Sheet }>("POST", `/api/campaigns/${cid}/sheets/${kind}/${eid}/advance`, { field }),
-  deleteSheet: (scope: EntityScope, mid: string, kind: string, eid: string) =>
+  deleteSheet: (scope: EntityScope, mid: string, kind: string, eid: string, gen: string | null) =>
     request<{ ok: boolean }>(
       "DELETE",
       scope.kind === "campaign"
-        ? `/api/campaigns/${scope.id}/sheets/${kind}/${eid}`
+        ? `/api/campaigns/${scope.id}/sheets/${kind}/${eid}${gen ? `?gen=${encodeURIComponent(gen)}` : ""}`
         : `/api/worlds/${scope.id}/sheets/${mid}/${kind}/${eid}`),
 };
