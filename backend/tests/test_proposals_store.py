@@ -157,6 +157,55 @@ def test_commit_narration_drops_after_supersede(monkeypatch, tmp_path):
     assert proposals.get(cid, sid)["status"] == "superseded"
 
 
+def test_update_resolution_persists_on_resolved_and_superseded(monkeypatch, tmp_path):
+    """Projection metadata persists on a same-id record whether it is still
+    resolved or already superseded, and never changes the record's status."""
+    cid, sid = _scene(monkeypatch, tmp_path)
+    rec = proposals.new(cid, sid, {})
+    pid = rec["id"]
+    proposals.claim(cid, sid, pid)
+    proposals.transition(cid, sid, pid, ("resolving",), "resolved", {"tier": "success"})
+
+    # resolved: writes metadata, status unchanged
+    assert proposals.update_resolution(cid, sid, pid, {"tier": "success", "roll_id": "r1"}) is True
+    got = proposals.get(cid, sid)
+    assert got["status"] == "resolved" and got["resolution"]["roll_id"] == "r1"
+
+    # superseded (same id): still writes metadata, status stays superseded
+    proposals.supersede(cid, sid)
+    assert proposals.get(cid, sid)["status"] == "superseded"
+    assert proposals.update_resolution(
+        cid, sid, pid, {"tier": "success", "roll_id": "r1", "line_intent": 3}) is True
+    got = proposals.get(cid, sid)
+    assert got["status"] == "superseded"
+    assert got["resolution"]["line_intent"] == 3 and got["resolution"]["roll_id"] == "r1"
+
+
+def test_update_resolution_refuses_wrong_id_replaced_or_pending(monkeypatch, tmp_path):
+    """False (no write) for wrong id, a replaced record, or a non-terminal
+    status that never carried a resolution — the caller must stop."""
+    cid, sid = _scene(monkeypatch, tmp_path)
+    rec = proposals.new(cid, sid, {})
+    pid = rec["id"]
+
+    # pending: not resolved/superseded -> refused
+    assert proposals.update_resolution(cid, sid, pid, {"roll_id": "r1"}) is False
+    assert proposals.get(cid, sid)["resolution"] is None
+
+    proposals.claim(cid, sid, pid)
+    proposals.transition(cid, sid, pid, ("resolving",), "resolved", {"tier": "success"})
+    # wrong id -> refused, real record untouched
+    assert proposals.update_resolution(cid, sid, "pr-999999", {"roll_id": "r9"}) is False
+    assert proposals.get(cid, sid)["resolution"] == {"tier": "success"}
+
+    # replaced record (supersede + brand-new record with a different id) -> refused
+    proposals.supersede(cid, sid)
+    fresh = proposals.new(cid, sid, {})
+    assert fresh["id"] != pid
+    assert proposals.update_resolution(cid, sid, pid, {"roll_id": "r9"}) is False
+    assert proposals.get(cid, sid)["id"] == fresh["id"]
+
+
 def test_write_is_atomic_replace(monkeypatch, tmp_path):
     cid, sid = _scene(monkeypatch, tmp_path)
     proposals.new(cid, sid, {})

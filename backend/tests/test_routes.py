@@ -3527,3 +3527,101 @@ def test_superseded_same_id_still_projects(client):
               if e.get("proposal") == pid]
     assert len(tagged) == 1 and tagged[0]["id"] == result["roll_id"]
     assert len(_roll_lines(client, cid, sid)) == 1
+
+
+def _resolve_then_supersede(client, cid, sid):
+    """Drive a proposal to resolved, then supersede it keeping the same id
+    (no new() follows) — the same-id superseded state the fix must heal."""
+    rec = _pending(client, cid, sid)
+    pid = rec["id"]
+    store.proposals.claim(cid, sid, pid)
+    resolution = store.checks.resolve_check(cid, "brawl", "characters:mara", 6, 0)
+    assert store.proposals.transition(cid, sid, pid, ("resolving",), "resolved", resolution)
+    store.proposals.supersede(cid, sid)
+    assert store.proposals.get(cid, sid)["status"] == "superseded"
+    return rec, pid
+
+
+def test_superseded_same_id_projection_persists_metadata(client):
+    # The finding: projection of a same-id superseded record must PERSIST its
+    # roll_id AND line_intent onto the stored resolution (a status CAS would
+    # have silently lost them once superseded), leaving status superseded.
+    cid, sid, _ = _mech_scene(client)
+    rec, pid = _resolve_then_supersede(client, cid, sid)
+
+    result = routes._project_resolution(cid, sid, pid)
+    assert result is not None
+
+    stored = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert stored["status"] == "superseded"                      # status untouched
+    assert stored["resolution"]["roll_id"] == result["roll_id"]  # metadata persisted
+    assert "line_intent" in stored["resolution"]
+    tagged = [e for e in client.get(f"/api/campaigns/{cid}/rolls").json()
+              if e.get("proposal") == pid]
+    assert len(tagged) == 1 and tagged[0]["id"] == stored["resolution"]["roll_id"]
+    assert len(_roll_lines(client, cid, sid)) == 1
+
+
+def test_superseded_same_id_crash_before_line_heals_on_stale_post(client, monkeypatch):
+    # THE crash window (not one of the spec's two accepted ones): the roll is
+    # appended, but the process dies before the 🎲 line is written, leaving a
+    # superseded record with a roll logged and no transcript line. The POST
+    # route 409s superseded ids, so a stale client's retry must become the
+    # recovery path — projecting idempotently before the 409.
+    cid, sid, _ = _mech_scene(client)
+    rec, pid = _resolve_then_supersede(client, cid, sid)
+
+    real_append = store.scenes.append_message
+    state = {"raised": False}
+    def flaky_append(*a, **k):
+        if not state["raised"]:
+            state["raised"] = True
+            raise RuntimeError("crash before 🎲 line")
+        return real_append(*a, **k)
+    monkeypatch.setattr(store.scenes, "append_message", flaky_append)
+    with pytest.raises(RuntimeError):
+        routes._project_resolution(cid, sid, pid)
+    # restore only this attr — never monkeypatch.undo() (shared GRIMOIRE_HOME)
+    monkeypatch.setattr(store.scenes, "append_message", real_append)
+
+    # roll logged, no line, but roll_id already persisted on the superseded rec
+    tagged = [e for e in client.get(f"/api/campaigns/{cid}/rolls").json()
+              if e.get("proposal") == pid]
+    assert len(tagged) == 1
+    assert _roll_lines(client, cid, sid) == []
+    mid = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert mid["status"] == "superseded" and mid["resolution"]["roll_id"] == tagged[0]["id"]
+
+    # a stale client retries with the old id: 409, but the line is now healed
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal", json=_accept_body(rec))
+    assert resp.status_code == 409
+    assert len(_roll_lines(client, cid, sid)) == 1
+    healed = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert healed["status"] == "superseded"
+    assert "line_intent" in healed["resolution"]
+    assert len([e for e in client.get(f"/api/campaigns/{cid}/rolls").json()
+                if e.get("proposal") == pid]) == 1
+
+    # second POST heals nothing further — fully idempotent
+    resp2 = client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal", json=_accept_body(rec))
+    assert resp2.status_code == 409
+    assert len(_roll_lines(client, cid, sid)) == 1
+    assert len([e for e in client.get(f"/api/campaigns/{cid}/rolls").json()
+                if e.get("proposal") == pid]) == 1
+
+
+def test_superseded_while_pending_same_id_post_is_plain_409(client):
+    # A record superseded while still pending has no resolution to project:
+    # the POST must be a plain 409 — no roll, no line, no projection.
+    cid, sid, _ = _mech_scene(client)
+    rec = _pending(client, cid, sid)
+    store.proposals.supersede(cid, sid)          # same id, still pending -> superseded
+    stored = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert stored["status"] == "superseded" and stored["resolution"] is None
+
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal", json=_accept_body(rec))
+    assert resp.status_code == 409
+    assert client.get(f"/api/campaigns/{cid}/rolls").json() == []
+    assert _roll_lines(client, cid, sid) == []
+    after = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert after["status"] == "superseded" and after["resolution"] is None
