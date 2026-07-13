@@ -17,8 +17,8 @@ deltas through the existing StagedEdit review flow.
 | Scene-start baseline | Every scene captures a snapshot of all campaign sheets at creation (`sheet_baselines.json`), stamped with the resolved **module id** and each sheet's **sheet_type**; type changes and deletions **invalidate** the affected entries. An entity without a *valid* baseline is report-only: warnings allowed, **sheet deltas suppressed at materialize and rejected at apply** | Codex rounds 1+3+4: current-only values are ambiguous ("current 4 + narration spends 2" cannot distinguish already-applied from still-pending); assuming current-as-start can re-propose an already-applied change whose CAS would then succeed; and a baseline captured under a different module, sheet type, or a deleted-and-recreated sheet is an unrelated value that must not authorize writes. No sound before-value → no writes. |
 | Sheet write discipline | **Every** campaign-sheet mutator (`write`, `write_creation`, `advance`, `set_field`, `delete`) serializes on the per-campaign sheet lock; every campaign whole-sheet replacement carries a **mandatory** CAS on the full `{sheet_type, fields}` snapshot (`expected=None` asserts "no sheet exists yet"); `set_field` is a strict per-field CAS. All four callers inventoried and updated (see Write discipline) | Codex rounds 2–4: `sheets.write` took no lock and replaced the whole map (a pre-existing `write`-vs-`advance` hole); an *optional* CAS left a stale last-write-wins path open; a fields-only compare could silently revert a concurrent `sheet_type` change; and the content-instantiate route also calls `sheets.write`, so a "required parameter" change must update it or it breaks at runtime. |
 | Apply-time authorization | Client-supplied `"sheet"` edits are re-authorized server-side at apply: the target must be in the **scene's** sheet scope and hold a **valid baseline** for that scene (both recomputed from `cid`/`sid`, never trusted from the payload); `set_field` additionally enforces the mutable-only rule against the live schema | Codex rounds 2+4: chronicle-PUT edits are client-supplied; `set_field` alone knows no scene, so without apply-time recomputation a crafted edit could target any sheeted campaign entity (out of scope, baseline-less) with a correct `expect` and bypass the double-apply protection. Manual editing of arbitrary sheets stays where it belongs — the sheet PUT. |
-| Apply semantics | `set_field` per-field strict CAS: only the approved field is written; live ≠ expect is **always** a visible conflict (reported, never silently overwritten and never silently no-op'd) — including live == proposed-value, which reads "already applied or independently changed" | Codex rounds 1–2: plain absolute overwrite loses concurrent updates, and treating `live == value` as a confirmed retry can mask an independent same-value mutation (two XP awards collapsing into one). Strict CAS needs no operation ledger: every ambiguous case degrades to a reported skip, never wrong state. |
-| Audit visibility | The absorb response carries `mechanics: {status: "ok"\|"failed"\|"skipped", reason, warnings}`; `failed` renders a degraded-validation notice with a **Retry validation** action backed by a standalone audit endpoint | Codex round 3: an empty warnings list must mean "audited clean", never "the audit died". Retry re-runs only the audit — not the whole absorb (and its dossier calls). |
+| Apply semantics | `set_field` per-field strict CAS: only the approved field is written; live ≠ expect is **always** a visible conflict — including live == proposed-value, which reads "already applied or independently changed". **Every** failed approved sheet edit — CAS conflict, re-authorization failure, or any other `SheetError` — is returned with its id and reason; nothing is silently skipped | Codex rounds 1–2+5: plain absolute overwrite loses concurrent updates; treating `live == value` as a confirmed retry can mask an independent same-value mutation (two XP awards collapsing into one); and a schema-drift or validation `SheetError` swallowed by the generic best-effort skip would let the user close the panel believing an approved XP/damage update landed. Strict CAS + full failure reporting needs no operation ledger. |
+| Audit visibility | The absorb response carries `mechanics: {status: "ok"\|"degraded"\|"failed"\|"skipped", reason, warnings, dropped}`; `failed` and `degraded` render a notice with a **Retry validation** action backed by a standalone audit endpoint. **"ok" means every model item survived**: a malformed item or a materialize-rejected delta (other than a benign no-op) makes the status `degraded`, with each drop listed with its reason | Codex rounds 3+5: an empty warnings list must mean "audited clean", never "the audit died" *or* "the audit's findings were quietly thrown away". A proposed damage/XP delta that materialize rejects is a missing mechanical update the user must see. Retry re-runs only the audit — not the whole absorb (and its dossier calls). |
 | Sheet-row review UI | Sheet edit rows are **read-only** (approve/reject only); the displayed before/after strings are rendered from the payload that will be applied | Codex round 1: ordinary absorb rows edit `after` in a textarea, but the sheet apply branch writes `payload.value` — an editable row would let the reviewer approve one value while another lands. Read-only keeps display and payload the same fact. Typed value editing can come later if wanted. |
 | Sheet scope | Present sheeted cast + the sheeted current location — the same scope as Phase 4's `mechanics_sheets` context section. The model sees **full** compact sheet blocks (static stats included, so contradictions involving them are visible) with mutable fields explicitly marked as the only delta-eligible ones | Letting the model propose deltas against sheets it never saw is guesswork. Item sheets wait for item presence tracking (future); location wards are covered because the sheeted current location is in scope. |
 | Delta granularity | One StagedEdit per (entity, field), independently approvable | Matches how the panel works; a rejected essence spend shouldn't drag down an approved XP award. |
@@ -63,6 +63,21 @@ deltas through the existing StagedEdit review flow.
 - **Repointing**: `audit.repoint_scenes(cid, mapping)` re-keys entries,
   registered as the sixth store in `scene_refs.repoint`. Entries for
   deleted scenes are harmless orphans (same posture as rolls/changes).
+- **Locking.** Capture, invalidation, and repointing are all
+  read-modify-write transactions on one JSON object; atomic file
+  replacement alone would still allow lost updates (a capture that read
+  the map before an invalidation ran could write its stale map back and
+  *resurrect* the invalidated entries — which, for a sheet recreated with
+  the same module and type, would revalidate an unrelated old baseline).
+  All three therefore run under a per-campaign baseline lock (the
+  `_LOCKS`/`_LOCKS_GUARD` pattern from rolls/proposals). Lock ordering is
+  fixed as **sheet lock → baseline lock**: `capture_baseline` takes the
+  sheet lock first (so the multi-file sheet snapshot is not torn by a
+  concurrent write) and the baseline lock inside it; `invalidate_baseline`
+  is only ever called by `sheets.write`/`sheets.delete` while they already
+  hold the sheet lock, and takes the baseline lock inside; `repoint_scenes`
+  and reads take only the baseline lock. No path acquires them in the
+  reverse order, so the pair cannot deadlock.
 
 ## Backend — `store/audit.py` + `templates/audit/`
 
@@ -125,6 +140,15 @@ LLM call lives in the route; prompt text in `templates/audit/system.j2` +
     `modules.validate_sheet_values` for the sheet's stored fields overlaid
     with this one change;
   - the canonical value differs from the stored value (no-ops dropped).
+
+  `materialize` returns `(edits, dropped)`: every delta that fails a gate
+  is recorded in `dropped` as `{"id", "field", "reason"}` — except benign
+  no-ops (the model proposed the value the sheet already holds; that is
+  agreement, not loss). Item-level parse drops (malformed array members)
+  are folded into the same `dropped` list by the caller. A non-empty
+  `dropped` makes the audit status `degraded` (see Routes): a proposed
+  damage or XP delta that was thrown away is a missing mechanical update
+  the user must see, never a silently "clean" audit.
 
   **Canonical values.** A resource proposal is canonicalized to
   `{"current": <proposed current>, "max": <live max>}` at materialize time;
@@ -217,14 +241,18 @@ before writing** — nothing about eligibility is trusted from the payload:
 3. then `sheets.set_field` runs with `payload["value"]`/`payload["expect"]`
    (mutability + CAS at the write boundary).
 
-Failures of 1–2 and `SheetConflict` from 3 are recorded as conflicts
-(edit id + human-readable reason); any other `SheetError` is skipped like
-every other broken target. `apply_edits` returns `(applied, conflicts)` —
-`conflicts` a list of `{"id", "reason"}` — and `PUT .../chronicle`'s
-response gains a `"conflicts"` key. `"sheet"` is **not** added to
-`_BROWSABLE_KINDS` — changes.json tracks browsable prose records, not
-sheets. Manual editing of arbitrary sheets remains the sheet PUT's job,
-with its own CAS.
+**Every** failed sheet edit is reported, whatever the cause: failures of
+1–2, `SheetConflict` from 3, and any other `SheetError` (schema drift, a
+field gone static, module resolution failure, unreadable sheet, final
+validation reject) are all recorded as
+`{"id", "reason", "kind": "conflict" | "error"}` — an approved damage or
+XP update must never vanish without a user-visible reason. The generic
+best-effort skip that other edit kinds use does not apply to `"sheet"`
+edits. `apply_edits` returns `(applied, sheet_failures)` and
+`PUT .../chronicle`'s response gains a `"sheet_failures"` key. `"sheet"`
+is **not** added to `_BROWSABLE_KINDS` — changes.json tracks browsable
+prose records, not sheets. Manual editing of arbitrary sheets remains the
+sheet PUT's job, with its own CAS.
 
 ## Routes
 
@@ -233,16 +261,22 @@ with its own CAS.
   `edits` is extended with the audit's materialized StagedEdits, and the
   response gains a `"mechanics"` object:
   - `{"status": "skipped", "reason": "no module" | "no sheeted scope",
-    "warnings": []}` — module-less campaign or empty scope; zero extra
-    LLM calls;
-  - `{"status": "ok", "reason": null, "warnings": [str]}` — the audit ran
-    and passed structural parsing (an empty `warnings` now genuinely
-    means "audited clean");
+    "warnings": [], "dropped": []}` — module-less campaign or empty
+    scope; zero extra LLM calls;
+  - `{"status": "ok", "reason": null, "warnings": [str], "dropped": []}`
+    — the audit ran, passed structural parsing, and **every model item
+    survived** (an empty `warnings` now genuinely means "audited clean");
+  - `{"status": "degraded", "reason": "some findings could not be
+    validated", "warnings": [str], "dropped": [{"id", "field",
+    "reason"}]}` — the audit ran but one or more items were malformed or
+    rejected by materialize; the surviving warnings/edits are returned,
+    and each drop is listed with its reason;
   - `{"status": "failed", "reason": <human-readable cause: LLM error,
-    schema-invalid output>, "warnings": []}` — the audit died or returned
-    a reply violating the output schema (`AuditParseError`); the prose
-    absorb result is returned intact (best-effort contract), but the
-    failure is explicit, never disguised as a clean audit.
+    schema-invalid output>, "warnings": [], "dropped": []}` — the audit
+    died or returned a reply violating the output schema
+    (`AuditParseError`); the prose absorb result is returned intact
+    (best-effort contract), but the failure is explicit, never disguised
+    as a clean audit.
 - `POST /api/campaigns/{cid}/scenes/{sid}/audit` — **retry validation
   standalone**: re-runs only the audit call (not the prose absorb, not
   the dossiers) and returns `{"mechanics": {...}, "edits": [...]}` with
@@ -250,14 +284,17 @@ with its own CAS.
   module is absent. Registered before generic `{kind}` catch-alls per
   house rule.
 - `PUT .../chronicle` applies approved `"sheet"` edits through
-  `apply_edits` like every other kind and reports `"conflicts"`.
+  `apply_edits` like every other kind and reports `"sheet_failures"`.
 
 ## Frontend
 
-- `SceneAbsorb` gains `mechanics: {status, reason, warnings}`; the absorb
-  panel renders, above the edits list:
+- `SceneAbsorb` gains `mechanics: {status, reason, warnings, dropped}`;
+  the absorb panel renders, above the edits list:
   - `ok` + warnings → a ⚠ warnings section (informational);
   - `ok` + no warnings → a one-line "mechanics audited clean" hint;
+  - `degraded` → the warnings section plus a notice ("Some mechanics
+    findings could not be validated") listing each `dropped` entry with
+    its reason, and the **Retry validation** button;
   - `failed` → a degraded-validation notice ("Mechanics validation
     failed: <reason>") with a **Retry validation** button that calls
     `POST .../audit` and replaces the panel's `mechanics` + sheet-kind
@@ -269,9 +306,9 @@ with its own CAS.
   before/after as fixed text (no textarea), the `note` as the row's hint
   line. The row offers no value editing; a reviewer who wants a different
   number rejects the edit and changes the sheet in the editor.
-- `saveAbsorb` reads `conflicts` from the PUT response and surfaces a
-  notice ("N sheet change(s) skipped — the field changed while the panel
-  was open"), listing the affected labels.
+- `saveAbsorb` reads `sheet_failures` from the PUT response and surfaces
+  a notice ("N sheet change(s) did not apply"), listing each affected
+  label with its reason (conflict vs error).
 - `SheetEditor` and `CreationWizard` send `expected` on save and handle
   409 by reloading with a notice.
 
@@ -285,11 +322,16 @@ with its own CAS.
   malformed file tolerated; **regression: an entity without a valid
   baseline yields zero StagedEdits no matter what the model proposes**
   (the already-applied-change double-propose path), including after a
-  mid-scene type change and after delete/recreate.
+  mid-scene type change and after delete/recreate; **locking races**
+  (threaded) — capture racing invalidation cannot resurrect invalidated
+  entries (delete/recreate then re-validate scenario), and two concurrent
+  scene captures both land (no lost update).
 - **`audit.py` unit**: `parse_output` fail-closed matrix — no JSON, `{}`,
   `{"warnings": null}`, `sheet_deltas` as dict/string → `AuditParseError`;
-  valid arrays with malformed items → items dropped, call succeeds;
-  materialize gates one by one — unknown entity, out-of-scope entity,
+  valid arrays with malformed items → items land in `dropped` (and the
+  status turns `degraded`, never a clean ok); materialize returns each
+  gate rejection in `dropped` with a reason while a benign no-op drop
+  stays out of it; materialize gates one by one — unknown entity, out-of-scope entity,
   unsheeted entity, invalid sheet, baseline-less/invalid-baseline entity,
   unknown field, static field (`number`/`dots`/`text`), bad value
   (validation reject), resource `max` tamper ignored (canonical value
@@ -319,27 +361,32 @@ with its own CAS.
 - **`apply_edits`**: sheet branch happy path; apply-time re-authorization
   — a crafted edit with a **valid mutable field and correct `expect`** on
   an out-of-scope entity, and on a baseline-less entity, → recorded in
-  `conflicts`, not applied; `SheetConflict` → recorded, other edits still
-  applied; `SheetError` → skipped; sheet edits absent from changes.json.
+  `sheet_failures`, not applied; `SheetConflict` → recorded as kind
+  `"conflict"`, other edits still applied; **any other `SheetError`
+  (schema drift, field gone static, unreadable sheet, validation
+  reject) → recorded as kind `"error"`, never silently skipped**; sheet
+  edits absent from changes.json.
 - **Routes**: module-bound absorb fires exactly two LLM calls and returns
   merged edits + `mechanics.status == "ok"`; module-less absorb fires one
   and returns `status "skipped"`; audit LLM failure **and schema-invalid
   audit output (`{}`, nulls, wrong types)** → `status "failed"` with a
-  reason while the prose absorb result is intact; `POST .../audit`
-  returns fresh mechanics + edits (400 without a module); PUT applies an
-  approved sheet edit and the sheet reads back changed; PUT with a
-  conflicting edit returns it in `"conflicts"` and the live value
-  survives; **double-save of the same panel** — the second save reports
-  the edit in `"conflicts"` (already applied) and the sheet value is
-  unchanged; sheet PUT with a stale `expected` (fields **or**
-  sheet_type) → 409, and without `expected` → 422.
+  reason while the prose absorb result is intact; **a materialize-dropped
+  delta → `status "degraded"` with the drop listed** (never ok+empty);
+  `POST .../audit` returns fresh mechanics + edits (400 without a
+  module); PUT applies an approved sheet edit and the sheet reads back
+  changed; PUT with a conflicting edit returns it in `"sheet_failures"`
+  and the live value survives; **double-save of the same panel** — the
+  second save reports the edit in `"sheet_failures"` (already applied)
+  and the sheet value is unchanged; sheet PUT with a stale `expected`
+  (fields **or** sheet_type) → 409, and without `expected` → 422.
 - **Frontend**: warnings section renders and clears; "audited clean" hint
-  on ok+empty; degraded notice + Retry validation flow (failed → retry →
-  fresh warnings and sheet rows replace the old ones); sheet edit row is
-  read-only (no textarea) and approve/reject round-trips through save;
-  conflict notice renders from the PUT response; SheetEditor 409 → reload
-  + notice; a test asserting the displayed after string matches the
-  persisted sheet value after save.
+  on ok+empty; degraded notice lists `dropped` reasons; failed/degraded →
+  Retry validation flow (retry → fresh warnings and sheet rows replace
+  the old ones); sheet edit row is read-only (no textarea) and
+  approve/reject round-trips through save; `sheet_failures` notice
+  renders from the PUT response with per-row reasons; SheetEditor 409 →
+  reload + notice; a test asserting the displayed after string matches
+  the persisted sheet value after save.
 - **Milestone check** (verify skill, mocked OpenRouter): scripted scene
   with a logged roll and narrated damage → absorb shows the warning +
   delta, save lands the delta on the sheet; re-running absorb on the same
