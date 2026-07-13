@@ -33,9 +33,9 @@ function normalizeForSave(draft: Record<string, unknown>, defs: ModuleField[]): 
   return out;
 }
 
-export default function SheetEditor({ scope, module, kind, eid, initial, onClose, onSaved }:
+export default function SheetEditor({ scope, module, kind, eid, initial, onClose, onSaved, onOpenRef }:
   { scope: EntityScope; module: ModuleDetail; kind: string; eid: string; initial: Sheet;
-    onClose: () => void; onSaved: () => void }) {
+    onClose: () => void; onSaved: () => void; onOpenRef?: (kind: string, id: string) => void }) {
   const [mode, setMode] = useState<"view" | "edit">("view");
   const [sheetType, setSheetType] = useState<string | null>(initial.sheet_type);
   const [fields, setFields] = useState<Record<string, unknown>>(initial.fields);
@@ -123,6 +123,18 @@ export default function SheetEditor({ scope, module, kind, eid, initial, onClose
     }
   }
 
+  async function advanceField(key: string) {
+    setError(null);
+    try {
+      const { sheet: fresh } = await api.advanceSheet(scope.id, kind, eid, key);
+      setFields(fresh.fields);
+      setDraft(fresh.fields);
+      onSaved();
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
+  }
+
   async function removeSheet() {
     if (!window.confirm("Delete this sheet? This cannot be undone.")) return;
     setError(null);
@@ -168,10 +180,12 @@ export default function SheetEditor({ scope, module, kind, eid, initial, onClose
           <div className="field-hint">This entity has no sheet type yet — pick one above to begin.</div>
         ) : mode === "view" ? (
           <SheetLayout module={module} sheetType={sheetType!} mode="view"
-                       values={fields} derived={initial.derived} />
+                       values={fields} derived={initial.derived}
+                       scope={scope} onOpenRef={onOpenRef} onAdvance={advanceField} />
         ) : (
           <SheetLayout module={module} sheetType={sheetType!} mode="edit"
-                       values={draft} derived={initial.derived} onChange={setField} />
+                       values={draft} derived={initial.derived} onChange={setField}
+                       scope={scope} onOpenRef={onOpenRef} />
         )}
       </div>
     </>

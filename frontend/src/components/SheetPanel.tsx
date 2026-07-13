@@ -4,8 +4,9 @@ import SheetEditor, { typeKind } from "./SheetEditor";
 import { assembledDefs } from "./SheetLayout";
 import { isResource } from "./SheetWidgets";
 
-export default function SheetPanel({ scope, module, kind, eid }:
-  { scope: EntityScope; module: ModuleDetail | null; kind: string; eid: string }) {
+export default function SheetPanel({ scope, module, kind, eid, onOpenRef }:
+  { scope: EntityScope; module: ModuleDetail | null; kind: string; eid: string;
+    onOpenRef?: (kind: string, id: string) => void }) {
   const [sheet, setSheet] = useState<Sheet | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -71,7 +72,7 @@ export default function SheetPanel({ scope, module, kind, eid }:
     return (
       <SheetEditor scope={scope} module={module} kind={kind} eid={eid} initial={sheet}
                    onClose={() => setEditing(false)}
-                   onSaved={() => { refetch(); }} />
+                   onSaved={() => { refetch(); }} onOpenRef={onOpenRef} />
     );
   }
 

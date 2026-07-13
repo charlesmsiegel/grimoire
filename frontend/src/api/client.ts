@@ -286,10 +286,13 @@ export type ModuleSummary = {
 export type ModuleField = {
   key: string; label?: string; type: string;
   max?: number; min?: number; default?: number;
+  ref_kind?: string;
 };
 export type ModuleSheetType = {
   label: string; kind: string; groups: string[];
   fields: ModuleField[]; derived?: Record<string, string>;
+  creation?: { pools: Record<string, { budget: number | string; costs: Record<string, number> }> };
+  advancement?: { pool: string; costs: Record<string, string> };
 };
 export type ModuleDetail = {
   id: string;
@@ -304,6 +307,10 @@ export type ModuleDetail = {
   layout?: { sheet_types: Record<string, LayoutNode> };
   theme?: ModuleTheme;
   display_errors?: DisplayError[];
+};
+export type ModuleContentEntry = {
+  kind: string; id: string; name: string; body: string; keys: string;
+  sheet_type: string | null; fields: Record<string, unknown>;
 };
 export type CampaignModule = {
   setting: string; resolved: string | null; source: "campaign" | "world" | null;
@@ -699,6 +706,12 @@ export const api = {
   // modules
   listModules: () => request<ModuleSummary[]>("GET", "/api/modules"),
   readModule: (mid: string) => request<ModuleDetail>("GET", `/api/modules/${mid}`),
+  readModuleContent: (mid: string, kind: string, id: string) =>
+    request<ModuleContentEntry>("GET", `/api/modules/${mid}/content/${kind}/${id}`),
+  instantiateContent: (scope: EntityScope, kind: string, mid: string, contentId: string) =>
+    request<{ id: string }>(
+      "POST",
+      `${entityBase(scope)}/${kind}/instantiate/${mid}/${contentId}`),
   getCampaignModule: (cid: string) =>
     request<CampaignModule>("GET", `/api/campaigns/${cid}/module`),
   setCampaignModule: (cid: string, module: string) =>
@@ -729,6 +742,16 @@ export const api = {
         ? `/api/campaigns/${scope.id}/sheets/${kind}/${eid}`
         : `/api/worlds/${scope.id}/sheets/${mid}/${kind}/${eid}`,
       body),
+  putSheetCreation: (scope: EntityScope, mid: string, kind: string, eid: string,
+                     body: { sheet_type: string; spends: Record<string, Record<string, number>> }) =>
+    request<{ sheet: Sheet }>(
+      "PUT",
+      scope.kind === "campaign"
+        ? `/api/campaigns/${scope.id}/sheets/${kind}/${eid}/creation`
+        : `/api/worlds/${scope.id}/sheets/${mid}/${kind}/${eid}/creation`,
+      body),
+  advanceSheet: (cid: string, kind: string, eid: string, field: string) =>
+    request<{ sheet: Sheet }>("POST", `/api/campaigns/${cid}/sheets/${kind}/${eid}/advance`, { field }),
   deleteSheet: (scope: EntityScope, mid: string, kind: string, eid: string) =>
     request<{ ok: boolean }>(
       "DELETE",

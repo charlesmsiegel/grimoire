@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type Appearance, type Card, type CharacterDetail, type CharacterSummary, type ChubImportResult, type ChubUnlinkedVersion, type EntityScope, type Greeting, type ModuleDetail, type VersionRef } from "../api/client";
 import { AvatarFocusPicker } from "./AvatarFocusPicker";
 import { CalendarDatePicker } from "./CalendarDatePicker";
+import CreationWizard from "./CreationWizard";
 import { Field } from "./Field";
 import { GreetingMarkdown } from "./GreetingMarkdown";
 import { HtmlNote } from "./HtmlNote";
@@ -53,6 +54,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   const [greetings, setGreetings] = useState<string[]>([]);
   const [mode, setMode] = useState<Mode>("grid");
   const [error, setError] = useState<string | null>(null);
+  const [wizardOpen, setWizardOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const versionFileRef = useRef<HTMLInputElement>(null);
   const avatarRef = useRef<HTMLInputElement>(null);
@@ -83,6 +85,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   const reload = useCallback(() => api.listCharacters(scope).then(setChars), [scope.kind, scope.id]);  // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     reload();
+    setWizardOpen(false); // a scope change can reuse this instance; never carry a wizard across it
   }, [reload]);
 
   // re-clicking the Characters tab (resetSignal bumps) returns to the grid
@@ -731,6 +734,18 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   const avatarSrc = (cid: string, version: string, bust = false) =>
     api.actorImageUrl(scope, cid, version, "avatar") + (bust ? `?v=${avatarBust}` : "");
 
+  if (wizardOpen && module && worldScope) {
+    return (
+      <div className="character-editor">
+        <CreationWizard scope={scope} kind="characters" module={module}
+                        createRecord={(n) => api.createCharacter(wid, { name: n }).then((r) => r.character)}
+                        deleteRecord={(id) => api.deleteCharacter(wid, id).then(() => {})}
+                        onDone={async (id) => { setWizardOpen(false); await reload(); await openEdit(id); }}
+                        onCancel={() => setWizardOpen(false)} />
+      </div>
+    );
+  }
+
   if (mode === "grid" || !detail || !card) {
     return (
       <div className="character-editor">
@@ -745,6 +760,9 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
         <div className="grid-toolbar">
           {worldScope && <>
             <button className="primary" onClick={newCharacter}>+ New character</button>
+            {worldScope && module && Object.values(module.sheets.sheet_types).some((st) => st.kind === "characters") && (
+              <button className="subtle" onClick={() => setWizardOpen(true)}>+ New character with sheet…</button>
+            )}
             <button className="subtle" onClick={() => fileRef.current?.click()}>Import card</button>
             <input ref={fileRef} type="file" accept=".json,.png,.charx" multiple hidden aria-label="Import character card" onChange={onImport} />
             <button className="subtle" onClick={() => setUrlPromptOpen(true)}>Download from URL</button>
@@ -903,6 +921,9 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
 
             {module && detail && (
               <SheetPanel scope={scope} module={module} kind="characters" eid={detail.meta.id} />
+              /* onOpenRef intentionally unset here: no cross-editor navigation target exists
+                 yet from a character/PC sheet's ref chips (entity-form refs only; module-content
+                 ref chips still preview correctly without it) */
             )}
 
             {worldScope && <div className="chub-source-block">

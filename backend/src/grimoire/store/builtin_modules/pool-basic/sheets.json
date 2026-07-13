@@ -29,9 +29,21 @@
         {"key": "essence", "label": "Essence", "type": "resource", "max": 10},
         {"key": "health", "label": "Health", "type": "track", "max": 7},
         {"key": "quirk", "label": "Quirk", "type": "text"},
-        {"key": "gear", "label": "Gear", "type": "list"}
+        {"key": "gear", "label": "Gear", "type": "list"},
+        {"key": "bound_spirits", "label": "Bound Spirits", "type": "ref", "ref_kind": "creatures"},
+        {"key": "xp", "label": "Experience", "type": "resource", "max": 999}
       ],
-      "derived": {"sight_pool": "wits + occult"}
+      "derived": {"sight_pool": "wits + occult"},
+      "creation": {
+        "pools": {
+          "attributes": {"budget": 6, "costs": {"vigor": 2, "grace": 2, "wits": 2}},
+          "abilities": {"budget": 6, "costs": {"brawl": 1, "occult": 1, "empathy": 1}}
+        }
+      },
+      "advancement": {
+        "pool": "xp",
+        "costs": {"wits": "new * 3", "occult": "new * 2"}
+      }
     },
     "shifter": {
       "label": "Shifter",

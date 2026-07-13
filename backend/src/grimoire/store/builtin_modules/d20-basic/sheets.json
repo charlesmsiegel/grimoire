@@ -40,9 +40,21 @@
       "fields": [
         {"key": "hp", "label": "Hit Points", "type": "resource", "max": 8},
         {"key": "spell_slots", "label": "Spell Slots", "type": "track", "max": 4},
-        {"key": "spells", "label": "Spells", "type": "list"}
+        {"key": "spells", "label": "Spells", "type": "list"},
+        {"key": "known_spells", "label": "Known Spells", "type": "ref", "ref_kind": "lore"},
+        {"key": "xp", "label": "Experience", "type": "resource", "max": 999}
       ],
-      "derived": {"spell_bonus": "mind_mod + 2"}
+      "derived": {"spell_bonus": "mind_mod + 2"},
+      "creation": {
+        "pools": {
+          "attributes": {"budget": 6, "costs": {"strength": 2, "dexterity": 2, "mind": 2}},
+          "skills": {"budget": 6, "costs": {"athletics": 1, "stealth": 1, "arcana": 1}}
+        }
+      },
+      "advancement": {
+        "pool": "xp",
+        "costs": {"arcana": "new * 3", "mind": "new * 5"}
+      }
     },
     "wondrous-item": {
       "label": "Wondrous Item",

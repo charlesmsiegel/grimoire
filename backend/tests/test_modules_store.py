@@ -21,7 +21,10 @@ GOOD_SHEETS = {
             "label": "Warden",
             "kind": "characters",
             "groups": ["attributes"],
-            "fields": [{"key": "essence", "label": "Essence", "type": "resource", "max": 10}],
+            "fields": [
+                {"key": "essence", "label": "Essence", "type": "resource", "max": 10},
+                {"key": "related", "label": "Related Lore", "type": "ref", "ref_kind": "lore"},
+            ],
             "derived": {"surge": "reflex + essence_max - essence"},
         },
     },
@@ -159,7 +162,7 @@ def test_sheets_json_invalid_json(monkeypatch, tmp_path):
 
 def test_assembled_fields_and_numeric_names():
     fields = modules.assembled_fields(GOOD_SHEETS, "warden")
-    assert [f["key"] for f in fields] == ["vigor", "wits", "essence"]
+    assert [f["key"] for f in fields] == ["vigor", "wits", "essence", "related"]
     assert modules.numeric_names(fields) == {"vigor", "wits", "essence", "essence_max"}
 
 
@@ -190,6 +193,166 @@ def test_bool_max_rejected(monkeypatch, tmp_path):
         lambda s: s["groups"]["attributes"]["fields"].append(
             {"key": "aura", "type": "dots", "max": True}))
     assert any("max" in e for e in errs)
+
+
+def test_ref_field_requires_ref_kind(monkeypatch, tmp_path):
+    errs = _sheets_error(
+        monkeypatch, tmp_path,
+        lambda s: s["groups"]["attributes"]["fields"].append(
+            {"key": "known", "type": "ref"}))
+    assert any("ref_kind" in e for e in errs)
+
+
+def test_ref_field_bad_ref_kind(monkeypatch, tmp_path):
+    errs = _sheets_error(
+        monkeypatch, tmp_path,
+        lambda s: s["groups"]["attributes"]["fields"].append(
+            {"key": "known", "type": "ref", "ref_kind": "characters"}))
+    assert any("ref_kind" in e for e in errs)
+
+
+def test_ref_field_valid(monkeypatch, tmp_path):
+    errs = _sheets_error(
+        monkeypatch, tmp_path,
+        lambda s: s["groups"]["attributes"]["fields"].append(
+            {"key": "known", "type": "ref", "ref_kind": "lore"}))
+    assert errs == []
+
+
+def test_ref_field_not_numeric_addressable():
+    import copy
+    sheets = copy.deepcopy(GOOD_SHEETS)
+    sheets["groups"]["attributes"]["fields"].append(
+        {"key": "known", "type": "ref", "ref_kind": "lore"})
+    fields = modules.assembled_fields(sheets, "warden")
+    assert "known" not in modules.numeric_names(fields)
+
+
+# Task 2: creation.pools schema
+def _with_creation(sheets, pools):
+    sheets["sheet_types"]["warden"]["creation"] = {"pools": pools}
+    return sheets
+
+
+def test_creation_pool_unknown_group(monkeypatch, tmp_path):
+    errs = _sheets_error(
+        monkeypatch, tmp_path,
+        lambda s: _with_creation(s, {"ghost": {"budget": 10, "costs": {"vigor": 1}}}))
+    assert any("ghost" in e for e in errs)
+
+
+def test_creation_pool_cost_field_wrong_group(monkeypatch, tmp_path):
+    # "essence" belongs to the warden sheet type's own fields, not the
+    # "attributes" group -- a pool keyed to "attributes" can't cost it.
+    errs = _sheets_error(
+        monkeypatch, tmp_path,
+        lambda s: _with_creation(s, {"attributes": {"budget": 10, "costs": {"essence": 1}}}))
+    assert any("essence" in e for e in errs)
+
+
+def test_creation_pool_non_positive_cost(monkeypatch, tmp_path):
+    errs = _sheets_error(
+        monkeypatch, tmp_path,
+        lambda s: _with_creation(s, {"attributes": {"budget": 10, "costs": {"vigor": 0}}}))
+    assert any("vigor" in e for e in errs)
+
+
+def test_creation_pool_budget_references_field(monkeypatch, tmp_path):
+    errs = _sheets_error(
+        monkeypatch, tmp_path,
+        lambda s: _with_creation(s, {"attributes": {"budget": "vigor + 1", "costs": {"vigor": 1}}}))
+    assert any("budget" in e for e in errs)
+
+
+def test_creation_pool_valid(monkeypatch, tmp_path):
+    errs = _sheets_error(
+        monkeypatch, tmp_path,
+        lambda s: _with_creation(s, {"attributes": {"budget": 6, "costs": {"vigor": 1, "wits": 2}}}))
+    assert errs == []
+
+
+def test_creation_pool_valid_expression_budget(monkeypatch, tmp_path):
+    errs = _sheets_error(
+        monkeypatch, tmp_path,
+        lambda s: _with_creation(s, {"attributes": {"budget": "3 + 3", "costs": {"vigor": 1}}}))
+    assert errs == []
+
+
+def test_creation_pool_budget_unevaluable_expression(monkeypatch, tmp_path):
+    # References no fields (passes the names() check) but blows up when
+    # actually evaluated -- must be caught at load time, not deferred to
+    # write time inside _pool_budget().
+    errs = _sheets_error(
+        monkeypatch, tmp_path,
+        lambda s: _with_creation(s, {"attributes": {"budget": "1 / 0", "costs": {"vigor": 1}}}))
+    assert any("budget" in e for e in errs)
+
+
+# Task 3: advancement schema
+def _with_advancement(sheets, pool, costs):
+    sheets["sheet_types"]["warden"]["advancement"] = {"pool": pool, "costs": costs}
+    return sheets
+
+
+def test_advancement_pool_not_resource(monkeypatch, tmp_path):
+    errs = _sheets_error(
+        monkeypatch, tmp_path,
+        lambda s: _with_advancement(s, "vigor", {"vigor": "new * 2"}))
+    assert any("pool" in e for e in errs)
+
+
+def test_advancement_costs_key_not_raisable(monkeypatch, tmp_path):
+    # "essence" is a resource field -- not raisable via advancement
+    errs = _sheets_error(
+        monkeypatch, tmp_path,
+        lambda s: _with_advancement(s, "essence", {"essence": "new * 2"}))
+    assert any("essence" in e for e in errs)
+
+
+def test_advancement_cost_unknown_name(monkeypatch, tmp_path):
+    errs = _sheets_error(
+        monkeypatch, tmp_path,
+        lambda s: _with_advancement(s, "essence", {"vigor": "charm * 2"}))
+    assert any("charm" in e for e in errs)
+
+
+def test_advancement_cost_non_positive_sample(monkeypatch, tmp_path):
+    errs = _sheets_error(
+        monkeypatch, tmp_path,
+        lambda s: _with_advancement(s, "essence", {"vigor": "-new"}))
+    assert any("positive" in e for e in errs)
+
+
+def test_advancement_cost_bool_sample(monkeypatch, tmp_path):
+    errs = _sheets_error(
+        monkeypatch, tmp_path,
+        lambda s: _with_advancement(s, "essence", {"vigor": "new > 0"}))
+    assert any("positive" in e for e in errs)
+
+
+def test_advancement_valid(monkeypatch, tmp_path):
+    errs = _sheets_error(
+        monkeypatch, tmp_path,
+        lambda s: _with_advancement(s, "essence", {"vigor": "new * 3"}))
+    assert errs == []
+
+
+def test_advancement_cost_can_reference_derived(monkeypatch, tmp_path):
+    # "reflex" is a group-derived name (min(vigor, wits)) in GOOD_SHEETS
+    errs = _sheets_error(
+        monkeypatch, tmp_path,
+        lambda s: _with_advancement(s, "essence", {"vigor": "reflex + new"}))
+    assert errs == []
+
+
+def test_advancement_cost_can_reference_type_level_derived(monkeypatch, tmp_path):
+    # "surge" is warden's own (sheet-type-level) derived name, distinct from
+    # "reflex" which is the attributes group's derived name -- proves the
+    # cost scope includes BOTH group and type derived names, per spec.
+    errs = _sheets_error(
+        monkeypatch, tmp_path,
+        lambda s: _with_advancement(s, "essence", {"vigor": "surge + new"}))
+    assert errs == []
 
 
 def test_user_module_shadows_builtin(monkeypatch, tmp_path):
@@ -353,6 +516,58 @@ def test_validate_sheet_values():
     assert any("current/max" in e for e in errs)  # resource needs a pair
 
 
+def _sheets_with_ref():
+    import copy
+    sheets = copy.deepcopy(GOOD_SHEETS)
+    sheets["sheet_types"]["warden"]["fields"].append(
+        {"key": "known", "label": "Known", "type": "ref", "ref_kind": "lore"})
+    return sheets
+
+
+def test_validate_sheet_values_ref_entity_form():
+    sheets = _sheets_with_ref()
+    errs = modules.validate_sheet_values(sheets, "warden", {"known": ["lore:fireball"]})
+    assert errs == []
+
+
+def test_validate_sheet_values_ref_module_form():
+    sheets = _sheets_with_ref()
+    errs = modules.validate_sheet_values(sheets, "warden", {"known": ["lore:module:icebolt"]})
+    assert errs == []
+
+
+def test_validate_sheet_values_ref_mixed_forms():
+    sheets = _sheets_with_ref()
+    errs = modules.validate_sheet_values(
+        sheets, "warden", {"known": ["lore:fireball", "lore:module:icebolt"]})
+    assert errs == []
+
+
+def test_validate_sheet_values_ref_not_a_list():
+    sheets = _sheets_with_ref()
+    errs = modules.validate_sheet_values(sheets, "warden", {"known": "lore:fireball"})
+    assert any("known" in e for e in errs)
+
+
+def test_validate_sheet_values_ref_wrong_kind_prefix():
+    sheets = _sheets_with_ref()
+    errs = modules.validate_sheet_values(sheets, "warden", {"known": ["items:sword"]})
+    assert any("known" in e for e in errs)
+
+
+def test_validate_sheet_values_ref_bad_segment_count():
+    sheets = _sheets_with_ref()
+    for bad in ("fireball", "lore:module:extra:segment", "lore::"):
+        errs = modules.validate_sheet_values(sheets, "warden", {"known": [bad]})
+        assert any("known" in e for e in errs), bad
+
+
+def test_validate_sheet_values_ref_non_string_entry():
+    sheets = _sheets_with_ref()
+    errs = modules.validate_sheet_values(sheets, "warden", {"known": [5]})
+    assert any("known" in e for e in errs)
+
+
 def test_checks_json_wrong_shape(monkeypatch, tmp_path):
     make_pack(_home(monkeypatch, tmp_path))
     d = tmp_path / "modules" / "testmod"
@@ -502,6 +717,13 @@ def _mutate_variants(doc):
 
 
 def test_load_pack_never_raises_mutation_sweep(monkeypatch, tmp_path):
+    """Verify load_pack never raises on any malformed sheet/check structure.
+
+    Exercises _validate_field's descriptor-level ref_kind check via load_pack's
+    normal path. Note: validate_sheet_values's ref value-shape branch requires
+    content-sidecars (which this sweep doesn't create) and is instead directly
+    verified by test_validate_sheet_values_ref_* unit tests.
+    """
     import json as _json
     import shutil
 
@@ -873,3 +1095,72 @@ def test_builtin_packs_display_clean(monkeypatch, tmp_path):
         assert pack["layout"]["sheet_types"], mid       # every builtin ships layouts
         assert pack["theme"], mid                        # and a theme
         assert "use" not in json.dumps(pack["layout"])   # spliced
+
+
+def test_phase7_reference_fleshing(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    pool = modules.load_pack("pool-basic")
+    assert pool["errors"] == []
+    medium = pool["sheets"]["sheet_types"]["medium"]
+    ref_fields = [f for f in medium["fields"] if f["type"] == "ref"]
+    assert ref_fields and ref_fields[0]["ref_kind"] == "creatures"
+    assert "creation" in medium and "attributes" in medium["creation"]["pools"]
+    assert "advancement" in medium and medium["advancement"]["pool"] == "xp"
+
+    d20 = modules.load_pack("d20-basic")
+    assert d20["errors"] == []
+    adept = d20["sheets"]["sheet_types"]["adept"]
+    ref_fields = [f for f in adept["fields"] if f["type"] == "ref"]
+    assert ref_fields and ref_fields[0]["ref_kind"] == "lore"
+    assert "creation" in adept and set(adept["creation"]["pools"]) >= {"attributes", "skills"}
+    assert "advancement" in adept and adept["advancement"]["pool"] == "xp"
+
+
+# ---- Task 4: read_content() + ContentNotFound ----
+
+def test_read_content_plain(monkeypatch, tmp_path):
+    content = {"items/lantern.md": "---\nname: Lantern of Winnowing\nkeys: lantern, glow\n---\nA soft lantern.\n"}
+    make_pack(_home(monkeypatch, tmp_path), content=content)
+    entry = modules.read_content("testmod", "items", "lantern")
+    assert entry["name"] == "Lantern of Winnowing"
+    assert entry["body"] == "A soft lantern.\n"
+    assert entry["keys"] == "lantern, glow"
+    assert entry["sheet_type"] is None
+    assert entry["fields"] == {}
+
+
+def test_read_content_statted(monkeypatch, tmp_path):
+    content = {
+        "items/orb.md": "---\nname: Orb\n---\nAn orb.\n",
+        "items/orb.sheet.json": json.dumps({"sheet_type": "talisman-like", "fields": {"power": 2}}),
+    }
+    import copy
+    sheets = copy.deepcopy(GOOD_SHEETS)
+    sheets["sheet_types"]["talisman-like"] = {
+        "label": "Talisman-like", "kind": "items", "groups": [],
+        "fields": [{"key": "power", "type": "dots", "max": 5}],
+    }
+    make_pack(_home(monkeypatch, tmp_path), sheets=sheets, content=content)
+    entry = modules.read_content("testmod", "items", "orb")
+    assert entry["sheet_type"] == "talisman-like"
+    assert entry["fields"] == {"power": 2}
+
+
+def test_read_content_missing_module(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    with pytest.raises(modules.ModuleNotFound):
+        modules.read_content("ghost", "items", "lantern")
+
+
+def test_read_content_missing_entry(monkeypatch, tmp_path):
+    make_pack(_home(monkeypatch, tmp_path))
+    with pytest.raises(modules.ContentNotFound):
+        modules.read_content("testmod", "items", "nope")
+
+
+def test_read_content_bad_kind_or_id(monkeypatch, tmp_path):
+    make_pack(_home(monkeypatch, tmp_path))
+    with pytest.raises(modules.ContentNotFound):
+        modules.read_content("testmod", "characters", "mara")
+    with pytest.raises(modules.ContentNotFound):
+        modules.read_content("testmod", "items", "../escape")

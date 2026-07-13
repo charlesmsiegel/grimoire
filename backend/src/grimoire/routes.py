@@ -114,6 +114,15 @@ class SheetBody(BaseModel):
     fields: dict | None = None
 
 
+class SheetCreationBody(BaseModel):
+    sheet_type: str
+    spends: dict[str, dict[str, int]] = {}
+
+
+class SheetAdvanceBody(BaseModel):
+    field: str
+
+
 class PickBody(BaseModel):
     version: str
 
@@ -548,10 +557,63 @@ def put_world_sheet(wid: str, mid: str, kind: str, eid: str, body: SheetBody):
     return {"ok": True}
 
 
+@router.put("/worlds/{wid}/sheets/{mid}/{kind}/{eid}/creation")
+def put_world_sheet_creation(wid: str, mid: str, kind: str, eid: str, body: SheetCreationBody):
+    _world_root_or_404(wid)
+    try:
+        store.sheets.write_world_creation(wid, mid, kind, eid, body.sheet_type, body.spends)
+    except store.modules.ModuleNotFound:
+        raise HTTPException(status_code=404, detail="module not found")
+    except (store.characters.CharacterNotFound, store.pcs.PCNotFound, store.entities.EntityNotFound):
+        raise HTTPException(status_code=404, detail=f"{kind} not found")
+    except store.sheets.SheetError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"sheet": store.sheets.read_world(wid, mid, kind, eid)}
+
+
 @router.delete("/worlds/{wid}/sheets/{mid}/{kind}/{eid}")
 def delete_world_sheet(wid: str, mid: str, kind: str, eid: str):
     _world_root_or_404(wid)
     return {"ok": store.sheets.delete_world(wid, mid, kind, eid)}
+
+
+# registered before the generic /worlds/{wid}/{kind} entity routes below --
+# distinct path shape (extra segments), so no collision either way, but
+# grouped with the other module/sheet routes for readability
+@router.get("/modules/{mid}/content/{kind}/{id}")
+def get_module_content(mid: str, kind: str, id: str):
+    try:
+        return store.modules.read_content(mid, kind, id)
+    except store.modules.ModuleNotFound:
+        raise HTTPException(status_code=404, detail="module not found")
+    except store.modules.ContentNotFound:
+        raise HTTPException(status_code=404, detail="content not found")
+
+
+@router.post("/worlds/{wid}/{kind}/instantiate/{mid}/{content_id}")
+def post_world_instantiate(wid: str, kind: str, mid: str, content_id: str):
+    root = _world_root_or_404(wid)
+    try:
+        content = store.modules.read_content(mid, kind, content_id)
+    except store.modules.ModuleNotFound:
+        raise HTTPException(status_code=404, detail="module not found")
+    except store.modules.ContentNotFound:
+        raise HTTPException(status_code=404, detail="content not found")
+    try:
+        eid = store.entities.create_entity(root, kind, content["name"], content["body"],
+                                           content.get("keys", ""), "",
+                                           fields=_content_fields(kind, content))
+    except store.entities.UnknownKind:
+        raise HTTPException(status_code=404, detail="unknown kind")
+    if content.get("sheet_type"):
+        try:
+            store.sheets.write_world(wid, mid, kind, eid, content["sheet_type"], content.get("fields"))
+        except (store.modules.ModuleNotFound, store.sheets.SheetError) as e:
+            # Sheet write failed after the entity was already created -- roll
+            # it back so a failed instantiate leaves no sheetless orphan.
+            store.entities.delete_entity(root, kind, eid)
+            raise HTTPException(status_code=400, detail=str(e))
+    return {"id": eid}
 
 
 # ---- world tags (declared before the generic /{kind} routes) ----
@@ -1249,6 +1311,10 @@ def _check_fields(kind: str, fields: dict | None) -> None:
     bad = store.entity_schema.invalid_keys(kind, fields or {})
     if bad:
         raise HTTPException(status_code=400, detail=f"unknown fields for {kind}: {', '.join(bad)}")
+
+
+def _content_fields(kind: str, content: dict) -> dict:
+    return {k: content[k] for k in store.entity_schema.field_keys(kind) if k in content}
 
 
 def _entity_create(root, kind: str, body: EntityCreate):
@@ -2844,6 +2910,57 @@ def put_campaign_sheet(cid: str, kind: str, eid: str, body: SheetBody):
 def delete_campaign_sheet(cid: str, kind: str, eid: str):
     _campaign_root_or_404(cid)
     return {"ok": store.sheets.delete(cid, kind, eid)}
+
+
+@router.put("/campaigns/{cid}/sheets/{kind}/{eid}/creation")
+def put_campaign_sheet_creation(cid: str, kind: str, eid: str, body: SheetCreationBody):
+    _campaign_root_or_404(cid)
+    try:
+        store.sheets.write_creation(cid, kind, eid, body.sheet_type, body.spends)
+    except (store.characters.CharacterNotFound, store.pcs.PCNotFound, store.entities.EntityNotFound):
+        raise HTTPException(status_code=404, detail=f"{kind} not found")
+    except store.sheets.SheetError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"sheet": store.sheets.read(cid, kind, eid)}
+
+
+@router.post("/campaigns/{cid}/sheets/{kind}/{eid}/advance")
+def post_sheet_advance(cid: str, kind: str, eid: str, body: SheetAdvanceBody):
+    _campaign_root_or_404(cid)
+    try:
+        return {"sheet": store.sheets.advance(cid, kind, eid, body.field)}
+    except (store.characters.CharacterNotFound, store.pcs.PCNotFound, store.entities.EntityNotFound):
+        raise HTTPException(status_code=404, detail=f"{kind} not found")
+    except store.sheets.SheetError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/campaigns/{cid}/{kind}/instantiate/{mid}/{content_id}")
+def post_campaign_instantiate(cid: str, kind: str, mid: str, content_id: str):
+    _campaign_root_or_404(cid)
+    try:
+        content = store.modules.read_content(mid, kind, content_id)
+    except store.modules.ModuleNotFound:
+        raise HTTPException(status_code=404, detail="module not found")
+    except store.modules.ContentNotFound:
+        raise HTTPException(status_code=404, detail="content not found")
+    try:
+        eid = store.overlay.create_entity(cid, kind, content["name"], content["body"],
+                                          content.get("keys", ""), "",
+                                          fields=_content_fields(kind, content))
+    except store.entities.UnknownKind:
+        raise HTTPException(status_code=404, detail="unknown kind")
+    if content.get("sheet_type"):
+        try:
+            store.sheets.write(cid, kind, eid, content["sheet_type"], content.get("fields"))
+        except (store.modules.ModuleNotFound, store.sheets.SheetError) as e:
+            # The entity was just created campaign-side via overlay.create_entity
+            # with no world counterpart, so overlay.delete_entity removes the
+            # campaign file cleanly (no tombstone) -- roll it back so a failed
+            # instantiate leaves no sheetless orphan.
+            store.overlay.delete_entity(cid, kind, eid)
+            raise HTTPException(status_code=400, detail=str(e))
+    return {"id": eid}
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}/context")
