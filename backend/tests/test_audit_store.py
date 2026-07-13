@@ -39,7 +39,7 @@ def cid_with_sheet(user_pack_path):
     wid = worlds.create_world("Realm")
     cid = campaigns.create_campaign("Run", wid, module=mid)
     sheets.write(cid, "characters", "mara", "warrior",
-                 {"hp": {"current": 12, "max": 12}})
+                 {"hp": {"current": 12, "max": 12}}, expected=None)
     return cid
 
 
@@ -72,13 +72,11 @@ def test_baseline_field_validity_matrix(cid_with_sheet):
     assert audit.baseline_field(cid, "no-such-scene", "characters", "mara", "hp") is None
     assert audit.baseline_field(cid, sid, "characters", "nobody", "hp") is None
     assert audit.baseline_field(cid, sid, "characters", "mara", "nonesuch") is None
-    # gen mismatch: delete + recreate -> report-only. (Branch note: this
-    # worktree's sheets.delete/write have no expected/expected_gen CAS params
-    # yet -- Tasks 3-5 add those on a different branch -- so this uses the
-    # current unconditional signatures.)
-    sheets.delete(cid, "characters", "mara")
+    # gen mismatch: delete + recreate -> report-only
+    g = sheets.read(cid, "characters", "mara")["gen"]
+    sheets.delete(cid, "characters", "mara", expected_gen=g)
     sheets.write(cid, "characters", "mara", "warrior",
-                 {"hp": {"current": 12, "max": 12}})
+                 {"hp": {"current": 12, "max": 12}}, expected=None)
     assert audit.baseline_field(cid, sid, "characters", "mara", "hp") is None
 
 
