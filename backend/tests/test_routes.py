@@ -3190,6 +3190,60 @@ def test_world_module_rebind_clears_non_overridden_campaign_baselines(client):
     assert store.audit.read_baselines(cid_b) != {}   # own override -> untouched
 
 
+def test_campaign_module_put_serializes_on_campaign_lock(client, module_scene):
+    """Paused-writer proof for put_campaign_module (routes.py ~2952-2962): the
+    rebind (set_campaign_module + clear_baselines) runs under sheets.lock_for(cid),
+    so a rebind PUT genuinely blocks behind any writer already holding that
+    campaign's sheet lock instead of racing it and landing a stale-baseline
+    window. Deleting the `with store.sheets.lock_for(cid):` wrapper from that
+    route makes this test fail (the PUT thread completes immediately, before
+    the lock is released)."""
+    import threading
+    cid, sid = module_scene
+    assert store.audit.read_baselines(cid) != {}
+    result: dict = {}
+    with store.sheets.lock_for(cid):
+        def putter():
+            result["resp"] = client.put(f"/api/campaigns/{cid}/module", json={"module": "none"})
+        t = threading.Thread(target=putter)
+        t.start()
+        t.join(1.5)
+        assert t.is_alive()                             # blocked behind the held lock
+        assert store.audit.read_baselines(cid) != {}     # rebind hasn't run yet
+    t.join(1.5)
+    assert not t.is_alive()
+    assert result["resp"].status_code == 200
+    assert store.audit.read_baselines(cid) == {}
+
+
+def test_world_module_put_serializes_on_affected_campaign_lock(client):
+    """Paused-writer proof for put_world_module (routes.py ~505-534): it takes
+    every affected (non-overridden) campaign's sheet lock via an ExitStack
+    before rebinding, so a concurrent writer holding one of those campaigns'
+    locks blocks the whole PUT -- not just that one campaign's slice of it.
+    Deleting the ExitStack/lock_for wrapper from that route makes this test
+    fail the same way as the campaign-PUT variant above."""
+    import threading
+    wid = _world(client)
+    cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
+    client.put(f"/api/worlds/{wid}/module", json={"module": "pool-basic"})
+    client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"})
+    assert store.audit.read_baselines(cid) != {}
+    result: dict = {}
+    with store.sheets.lock_for(cid):
+        def putter():
+            result["resp"] = client.put(f"/api/worlds/{wid}/module", json={"module": "d20-basic"})
+        t = threading.Thread(target=putter)
+        t.start()
+        t.join(1.5)
+        assert t.is_alive()
+        assert store.audit.read_baselines(cid) != {}
+    t.join(1.5)
+    assert not t.is_alive()
+    assert result["resp"].status_code == 200
+    assert store.audit.read_baselines(cid) == {}
+
+
 def test_create_campaign_with_module(client):
     _world(client)
     r = client.post("/api/campaigns",

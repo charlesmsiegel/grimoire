@@ -415,6 +415,7 @@ def apply_edits(cid: str, edits: list[dict],
     applied: list[str] = []
     sheet_failures: list[dict] = []
     recorded: dict[str, list[dict]] = {}
+    from . import audit  # lazy: audit imports absorb-adjacent stores
     for e in edits:
         if not isinstance(e, dict):
             continue  # malformed batch item: skip, best-effort
@@ -428,7 +429,6 @@ def apply_edits(cid: str, edits: list[dict],
                 sheet_failures.append({"id": eid, "kind": "error",
                                        "reason": "sheet edits need a scene id"})
                 continue
-            from . import audit  # lazy: audit imports absorb-adjacent stores
             try:
                 audit.apply_delta(cid, sid, e)
                 applied.append(eid)

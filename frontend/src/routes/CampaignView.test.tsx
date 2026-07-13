@@ -765,6 +765,54 @@ test("failed mechanics shows a notice with Retry validation; retry replaces shee
   expect(api.retryAudit).toHaveBeenCalledWith("run", "s1");
 });
 
+test("a rejected retryAudit surfaces an error and leaves the mechanics notice/rows untouched", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  (api.absorbScene as any).mockResolvedValue({
+    one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
+    mechanics: { status: "failed", reason: "boom", warnings: [], dropped: [] },
+    edits: [] });
+  (api.retryAudit as any).mockRejectedValue({ detail: "audit retry blew up" });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await screen.findByText("Mechanics validation failed: boom");
+  fireEvent.click(screen.getByRole("button", { name: /Retry validation/ }));
+  await screen.findByText("audit retry blew up");
+  // the failed-mechanics panel state is untouched by the rejection
+  expect(screen.getByText("Mechanics validation failed: boom")).toBeInTheDocument();
+  expect(screen.queryByText("Mara — HP")).toBeNull();
+});
+
+test("unapproved non-sheet rows survive Retry validation without duplicating", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  const LORE_EDIT = { id: "lore:old-dock", kind: "lore",
+    target: { kind: "lore", id: "old-dock" }, label: "Old Dock — lore",
+    field: "body", before: "quiet.", after: "quiet, but watched.", authored: false };
+  (api.absorbScene as any).mockResolvedValue({
+    one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
+    mechanics: { status: "failed", reason: "boom", warnings: [], dropped: [] },
+    edits: [LORE_EDIT] });
+  (api.retryAudit as any).mockResolvedValue({
+    mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
+    edits: [SHEET_EDIT] });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await screen.findByText("Mechanics validation failed: boom");
+  const checkbox = screen.getByLabelText(`Approve ${LORE_EDIT.label}`) as HTMLInputElement;
+  expect(checkbox.checked).toBe(true);
+  fireEvent.click(checkbox);
+  expect(checkbox.checked).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: /Retry validation/ }));
+  await waitFor(() => expect(screen.queryByText(/Mechanics validation failed/)).toBeNull());
+  expect(await screen.findByText("Mara — HP")).toBeInTheDocument();
+  const loreCheckboxes = screen.getAllByLabelText(`Approve ${LORE_EDIT.label}`);
+  expect(loreCheckboxes).toHaveLength(1);
+  expect((loreCheckboxes[0] as HTMLInputElement).checked).toBe(false);
+});
+
 test("degraded mechanics shows a notice listing dropped findings", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
