@@ -25,3 +25,6 @@ frontend/*.tsbuildinfo
 .run/
 **/results.json
 .playwright-mcp/
+
+# Local Codex plugin model override (personal preference, not a repo convention)
+.codex/
