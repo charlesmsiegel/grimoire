@@ -728,6 +728,23 @@ test("mechanics: warnings render with a ⚠ prefix; a clean run shows the hint i
   await screen.findByText("mechanics audited clean");
 });
 
+test("skipped mechanics renders no mechanics section", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  (api.absorbScene as any).mockResolvedValue({
+    one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
+    mechanics: { status: "skipped", reason: null, warnings: [], dropped: [] },
+    edits: [] });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await screen.findByText("Review scene summary");
+  expect(screen.queryByText("mechanics audited clean")).toBeNull();
+  expect(screen.queryByText(/⚠/)).toBeNull();
+  expect(screen.queryByText(/Mechanics validation failed/)).toBeNull();
+  expect(screen.queryByText(/could not be validated/)).toBeNull();
+});
+
 test("failed mechanics shows a notice with Retry validation; retry replaces sheet rows and clears the notice", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
@@ -803,7 +820,12 @@ test("sheet_failures from save render a notice", async () => {
   fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
   await screen.findByText("1 sheet change did not apply");
   expect(screen.getByText(/Mara — HP/)).toBeInTheDocument();
-  expect(screen.getByText(/changed/)).toBeInTheDocument();
+  expect(screen.getByText("Mara — HP: changed (conflict)")).toBeInTheDocument();
+
+  // A stale sheet_failures notice must not survive into the next scene's
+  // absorb panel -- opening a new one (End scene) clears it immediately.
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await waitFor(() => expect(screen.queryByText(/did not apply/)).toBeNull());
 });
 
 test("Changes tab reveals the changes panel", async () => {
