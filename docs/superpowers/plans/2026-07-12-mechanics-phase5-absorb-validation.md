@@ -215,7 +215,28 @@ def test_lock_for_public_and_reentrant(cid):
         with lock:  # RLock: no deadlock
             pass
     assert sheets.lock_for(cid) is lock
+
+
+def test_write_resolves_module_inside_the_lock(cid, monkeypatch):
+    """Rebind serialization invariant: no campaign mutator may call
+    modules.resolve outside lock_for(cid) — otherwise a writer could resolve
+    module A, lose the CPU to a rebind publishing B under the lock, then
+    write under A after B is visible."""
+    from grimoire.store import modules as modules_mod
+    real = modules_mod.resolve
+    seen = []
+
+    def spy(c):
+        seen.append(sheets.lock_for(c)._is_owned())  # RLock: owned by us?
+        return real(c)
+
+    monkeypatch.setattr(modules_mod, "resolve", spy)
+    sheets.write(cid, "characters", "mara", "adventurer", None)
+    assert seen and all(seen)
 ```
+
+(Keep this spy test green through Tasks 3 and 5 — it pins the ordering for
+`write`; add the same one-liner assertion for `set_field` in Task 5's tests.)
 
 - [ ] **Step 2: Run to verify failure**
 
@@ -244,15 +265,21 @@ Update `advance` to `lock = lock_for(cid)`. Wrap the bodies of `write`, `write_c
 ```python
 def write(cid: str, kind: str, eid: str, sheet_type: str,
           fields: dict | None = None) -> None:
-    mid = modules.resolve(cid)
-    if mid is None:
-        raise SheetError("no module resolved for this campaign")
     with lock_for(cid):
+        # resolve INSIDE the lock: rebinds publish under this same lock, so a
+        # writer can never resolve module A, lose the CPU to a rebind to B,
+        # and then validate/write under A after B is visible.
+        mid = modules.resolve(cid)
+        if mid is None:
+            raise SheetError("no module resolved for this campaign")
         _checked_write(_campaign_path(cid, kind, eid), mid, kind, eid,
                        sheet_type, fields)
 ```
 
-(`delete` keeps returning `bool`; world writes are untouched.)
+(`delete` keeps returning `bool`; world writes are untouched. The same
+lock-then-resolve ordering applies to `write_creation` here and to the Task 3
+and Task 5 versions of `write`/`write_creation`/`set_field` — **no campaign
+mutator ever calls `modules.resolve` outside `lock_for(cid)`**.)
 
 - [ ] **Step 4: Run the sheet-store tests**
 
@@ -381,10 +408,10 @@ def _check_expected(path: Path, expected: dict | None) -> None:
 
 ```python
 def write(cid, kind, eid, sheet_type, fields=None, *, expected):
-    mid = modules.resolve(cid)
-    if mid is None:
-        raise SheetError("no module resolved for this campaign")
     with lock_for(cid):
+        mid = modules.resolve(cid)      # inside the lock (rebind serialization)
+        if mid is None:
+            raise SheetError("no module resolved for this campaign")
         path = _campaign_path(cid, kind, eid)
         _check_expected(path, expected)
         _checked_write(path, mid, kind, eid, sheet_type, fields)
@@ -695,10 +722,10 @@ def _set_field_locked(mid: str, cid: str, kind: str, eid: str,
 
 
 def set_field(cid: str, kind: str, eid: str, field_key: str, value, expect) -> None:
-    mid = modules.resolve(cid)
-    if mid is None:
-        raise SheetError("no module resolved for this campaign")
     with lock_for(cid):
+        mid = modules.resolve(cid)      # inside the lock (rebind serialization)
+        if mid is None:
+            raise SheetError("no module resolved for this campaign")
         _set_field_locked(mid, cid, kind, eid, field_key, value, expect)
 ```
 
@@ -1093,6 +1120,10 @@ def test_sheet_blocks_marks_and_excludes(scene_with_sheeted_cast):
     blocks, excluded = audit.sheet_blocks(cid, sid)
     assert any("characters:mara" in b for b in blocks)
     assert any("start" in b or "->" in b for b in blocks)   # start -> current markers
+    # FULL blocks: text fields present and static, never delta-eligible
+    # (pick a text field the fixture pack defines; adapt the key)
+    mara_block = next(b for b in blocks if "characters:mara" in b)
+    assert "[static]" in mara_block
     assert excluded == []
     # corrupt the sheet -> excluded, not silently missing
     p = sheets._campaign_path(cid, "characters", "mara")
@@ -1172,7 +1203,9 @@ def sheet_blocks(cid: str, sid: str) -> tuple[list[str], list[dict]]:
                     has_baseline = True
                     lines.append(f"  start {render_value(f, start)} -> now "
                                  f"{render_value(f, merged[key])}  [mutable]")
-            elif f.get("type") != "text":
+            else:
+                # spec: FULL blocks — text fields included, marked static, so
+                # contradictions involving text-valued mechanics stay visible
                 lines.append(f"  {render_value(f, merged[key])}  [static]")
         del has_baseline  # marker only lives in the lines
         blocks.append("\n".join(lines))
@@ -1537,6 +1570,22 @@ def test_absorb_dropped_delta_degrades(client, module_scene):
     assert body["mechanics"]["dropped"]
 
 
+def test_absorb_survives_audit_pipeline_crash(client, module_scene, monkeypatch):
+    """Never-fail-absorb: an exception ANYWHERE in the audit pipeline
+    (here: materialize) yields mechanics failed, absorb 200 + intact prose."""
+    cid, sid = module_scene
+    from grimoire.store import audit as audit_mod
+    monkeypatch.setattr(audit_mod, "materialize",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: FakeOpenRouterComplete([ABSORB_JSON, AUDIT_OK])
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["one_line"] and body["mechanics"]["status"] == "failed"
+    assert "boom" in body["mechanics"]["reason"]
+
+
 def test_audit_retry_endpoint(client, module_scene):
     cid, sid = module_scene
     client.app.dependency_overrides[routes.get_llm] = \
@@ -1566,33 +1615,35 @@ async def _run_audit(cid: str, sid: str, client: LLMClient, cfg: dict):
     """(edits, mechanics) for the scene audit. Never raises; every failure is
     an explicit mechanics status (spec: audit visibility)."""
     mech = {"status": "skipped", "reason": None, "warnings": [], "dropped": []}
-    if store.modules.resolve(cid) is None:
-        mech["reason"] = "no module"
-        return [], mech
+    excluded: list = []
     try:
+        if store.modules.resolve(cid) is None:
+            mech["reason"] = "no module"
+            return [], mech
+        # ONE failure boundary around the ENTIRE audit pipeline (spec:
+        # never-fail-absorb) — sheet_blocks, read_scene, transcript,
+        # roll_lines, build_prompt, complete, parse AND materialize. Any
+        # exception anywhere here is a failed audit, never a 500 absorb.
         blocks, excluded = store.audit.sheet_blocks(cid, sid)
-    except Exception as exc:  # noqa: BLE001
-        return [], {**mech, "status": "failed", "reason": f"audit setup failed: {exc}"}
-    if not blocks and not excluded:
-        mech["reason"] = "no sheeted scope"
-        return [], mech
-    if not blocks:
-        return [], {**mech, "status": "failed",
-                    "reason": "all scoped sheets invalid",
-                    "dropped": excluded}
-    scene = store.scenes.read_scene(cid, sid)
-    transcript = store.chronicle.transcript_text(scene["messages"])
-    messages = store.audit.build_prompt(transcript, blocks,
-                                        store.audit.roll_lines(cid, sid))
-    try:
+        if not blocks and not excluded:
+            mech["reason"] = "no sheeted scope"
+            return [], mech
+        if not blocks:
+            return [], {**mech, "status": "failed",
+                        "reason": "all scoped sheets invalid",
+                        "dropped": excluded}
+        scene = store.scenes.read_scene(cid, sid)
+        transcript = store.chronicle.transcript_text(scene["messages"])
+        messages = store.audit.build_prompt(transcript, blocks,
+                                            store.audit.roll_lines(cid, sid))
         text = await client.complete(messages, cfg)
         parsed = store.audit.parse_output(text)
+        edits, dropped = store.audit.materialize(cid, sid, parsed)
     except store.audit.AuditParseError as exc:
         return [], {**mech, "status": "failed", "reason": str(exc), "dropped": excluded}
-    except Exception as exc:  # noqa: BLE001 -- LLMError and anything else
-        return [], {**mech, "status": "failed", "reason": f"audit call failed: {exc}",
+    except Exception as exc:  # noqa: BLE001 -- LLMError, store errors, anything
+        return [], {**mech, "status": "failed", "reason": f"audit failed: {exc}",
                     "dropped": excluded}
-    edits, dropped = store.audit.materialize(cid, sid, parsed)
     dropped = excluded + dropped
     status = "degraded" if dropped else "ok"
     reason = ("some sheets could not be audited" if excluded else
