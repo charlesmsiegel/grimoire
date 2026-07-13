@@ -1913,7 +1913,34 @@ def test_put_chronicle_applies_approved_edits(client):
         "edits": [{"id": f"character_state:{ch}", "kind": "character_state",
                    "target": {"kind": "characters", "id": ch}, "field": "current_state", "after": "Loyal."}]})
     assert r.json()["applied"] == [f"character_state:{ch}"]
+    assert r.json()["sheet_failures"] == []
     assert store.playstate.read_state(croot, ch)["current_state"] == "Loyal."
+
+
+def test_put_chronicle_reports_sheet_failures(client):
+    wid, cid = _campaign(client)
+    client.put(f"/api/campaigns/{cid}/module", json={"module": "pool-basic"})
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"}).json()["character"]
+    store.sheets.write(cid, "characters", chid, "medium", {"health": 0}, expected=None)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]  # captures baseline
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+               json={"kind": "characters", "id": chid, "version": "default", "role": "npc"})
+    edits, dropped = store.audit.materialize(cid, sid, {"warnings": [], "dropped": [],
+        "sheet_deltas": [{"id": f"characters:{chid}", "field": "health", "value": 2, "note": ""}]})
+    assert dropped == [] and edits
+
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle", json={
+        "one_line": "o", "summary": "s", "keywords": [], "timeline_events": [], "edits": edits})
+    body = r.json()
+    assert body["applied"] == [edits[0]["id"]] and body["sheet_failures"] == []
+    assert store.sheets.read(cid, "characters", chid)["fields"]["health"] == 2
+
+    r2 = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle", json={   # replay: reported, not skipped
+        "one_line": "o", "summary": "s", "keywords": [], "timeline_events": [], "edits": edits})
+    body2 = r2.json()
+    assert body2["applied"] == []
+    assert body2["sheet_failures"] == [
+        {"id": edits[0]["id"], "kind": "conflict", "reason": body2["sheet_failures"][0]["reason"]}]
 
 
 def _apply_lore_change(client, cid):

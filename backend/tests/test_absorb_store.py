@@ -1,6 +1,6 @@
 import json
 
-from grimoire.store import absorb, campaigns, playstate, worlds
+from grimoire.store import absorb, audit, campaigns, changes, playstate, sheets, worlds
 
 
 def _campaign(monkeypatch, tmp_path):
@@ -278,7 +278,7 @@ def test_apply_edits_writes_each_kind(monkeypatch, tmp_path):
     entities.create_entity(croot, "lore", "Salt Cathedral", body="Ruined.")
     sid = scenes.create_scene(cid, "S")
     appearances.appear(cid, sid, "characters", ch, "main", "npc")
-    applied = absorb.apply_edits(cid, [
+    applied, _ = absorb.apply_edits(cid, [
         {"id": f"character_state:{ch}", "kind": "character_state",
          "target": {"kind": "characters", "id": ch}, "field": "current_state", "after": "Loyal now."},
         {"id": "lore:salt-cathedral", "kind": "lore",
@@ -294,7 +294,7 @@ def test_apply_edits_writes_each_kind(monkeypatch, tmp_path):
 
 def test_apply_edits_skips_missing_target(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
-    applied = absorb.apply_edits(cid, [
+    applied, _ = absorb.apply_edits(cid, [
         {"id": "lore:nope", "kind": "lore",
          "target": {"kind": "lore", "id": "nope"}, "field": "body", "after": "x"}])
     assert applied == []
@@ -307,7 +307,7 @@ def test_apply_edits_authored_rejects_non_card_field(monkeypatch, tmp_path):
     ch = _char(croot, "Seraphine")
     sid = scenes.create_scene(cid, "S")
     appearances.appear(cid, sid, "characters", ch, "main", "npc")
-    applied = absorb.apply_edits(cid, [
+    applied, _ = absorb.apply_edits(cid, [
         {"id": f"authored:{ch}:name", "kind": "authored",
          "target": {"kind": "characters", "id": ch}, "field": "name", "after": "Hacked"}])
     assert applied == []
@@ -319,7 +319,7 @@ def test_apply_edits_new_character_creates_and_casts_npc(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     sid = scenes.create_scene(cid, "S")
-    applied = absorb.apply_edits(cid, [
+    applied, _ = absorb.apply_edits(cid, [
         {"id": "new_character:old-bram", "kind": "new_character",
          "target": {"kind": "characters", "id": ""}, "field": "description",
          "after": "[character(\"Old Bram\") { Occupation(\"innkeep\") }]\n\nBram kept the inn.",
@@ -350,7 +350,7 @@ def test_apply_edits_new_character_without_sid_skips_casting(monkeypatch, tmp_pa
     from grimoire.store import characters
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
-    applied = absorb.apply_edits(cid, [
+    applied, _ = absorb.apply_edits(cid, [
         {"id": "new_character:old-bram", "kind": "new_character",
          "target": {"kind": "characters", "id": ""}, "field": "description", "after": "x",
          "payload": {"name": "Old Bram", "sd_prompt": ""}}])  # no sid
@@ -363,7 +363,7 @@ def test_apply_edits_new_location_auto_links_empty_scene(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     sid = scenes.create_scene(cid, "S")
-    applied = absorb.apply_edits(cid, [
+    applied, _ = absorb.apply_edits(cid, [
         {"id": "new_location:the-crypt", "kind": "new_location",
          "target": {"kind": "locations", "id": ""}, "field": "body", "after": "A cold crypt.",
          "payload": {"name": "The Crypt", "keys": "crypt", "sd_prompt": "a dark crypt",
@@ -393,7 +393,7 @@ def test_apply_edits_new_lore_creates_entity(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     sid = scenes.create_scene(cid, "S")
-    applied = absorb.apply_edits(cid, [
+    applied, _ = absorb.apply_edits(cid, [
         {"id": "new_lore:salt-pact", "kind": "new_lore",
          "target": {"kind": "lore", "id": ""}, "field": "body", "after": "An old pact.",
          "payload": {"name": "Salt Pact", "keys": "pact"}}], sid)
@@ -686,7 +686,7 @@ def test_materialize_new_locations_and_lore(monkeypatch, tmp_path):
 def test_apply_edits_writes_relationships(monkeypatch, tmp_path):
     from grimoire.store import relationships
     cid = _campaign(monkeypatch, tmp_path)
-    applied = absorb.apply_edits(cid, [
+    applied, _ = absorb.apply_edits(cid, [
         {"id": "feeling:characters:a->characters:b", "kind": "relationship",
          "target": {"kind": "relationships", "id": "characters:a->characters:b"}, "field": "feeling",
          "after": "…", "payload": {"from": "characters:a", "to": "characters:b",
@@ -702,7 +702,7 @@ def test_apply_edits_writes_relationships(monkeypatch, tmp_path):
 def test_apply_edits_writes_plot(monkeypatch, tmp_path):
     from grimoire.store import plot
     cid = _campaign(monkeypatch, tmp_path)
-    applied = absorb.apply_edits(cid, [
+    applied, _ = absorb.apply_edits(cid, [
         {"id": "plot:the-map", "kind": "plot",
          "target": {"kind": "plot", "id": "the-map"}, "field": "beat",
          "after": "It is a forgery.",
@@ -776,3 +776,68 @@ def test_group_snapshot_lists_ids_and_state(monkeypatch, tmp_path):
     assert "groups/salt-circle" in snap
     assert "Salt Circle" in snap
     assert "Goals: Expand." in snap
+
+
+# ---- "sheet" edit kind (Task 8) ----
+
+
+def test_apply_edits_sheet_failures_reported(scene_with_sheeted_cast):
+    cid, sid = scene_with_sheeted_cast
+    live = sheets.read(cid, "characters", "mara")["fields"]["hp"]
+    edits, _ = audit.materialize(cid, sid, {"warnings": [], "dropped": [],
+        "sheet_deltas": [{"id": "characters:mara", "field": "hp",
+                          "value": {"current": live["current"] - 2}, "note": ""}]})
+    applied, failures = absorb.apply_edits(cid, edits, sid)
+    assert applied == [edits[0]["id"]] and failures == []
+    applied, failures = absorb.apply_edits(cid, edits, sid)   # replay
+    assert applied == [] and failures[0]["kind"] == "conflict"
+    assert failures[0]["id"] == edits[0]["id"]
+
+
+def test_apply_edits_sheet_not_in_changes_json(scene_with_sheeted_cast):
+    cid, sid = scene_with_sheeted_cast
+    live = sheets.read(cid, "characters", "mara")["fields"]["hp"]
+    edits, _ = audit.materialize(cid, sid, {"warnings": [], "dropped": [],
+        "sheet_deltas": [{"id": "characters:mara", "field": "hp",
+                          "value": {"current": live["current"] - 1}, "note": ""}]})
+    absorb.apply_edits(cid, edits, sid)
+    assert all(not ref.startswith("sheet") for ref in changes.read(cid))
+
+
+def test_apply_edits_sheet_needs_sid():
+    edit = {"id": "sheet:characters:mara:hp", "kind": "sheet",
+            "target": {"kind": "characters", "id": "mara"}, "field": "hp",
+            "payload": {"field": "hp", "value": 1, "expect": 1, "note": ""}}
+    applied, failures = absorb.apply_edits("no-such-cid", [edit], None)
+    assert applied == [] and failures == [
+        {"id": "sheet:characters:mara:hp", "kind": "error",
+         "reason": "sheet edits need a scene id"}]
+
+
+def test_apply_edits_sheet_malformed_edit_reports_error(scene_with_sheeted_cast):
+    cid, sid = scene_with_sheeted_cast
+    malformed = {"id": "sheet:characters:mara:hp", "kind": "sheet",
+                 "target": {"kind": "characters", "id": "mara"}, "field": "hp",
+                 "payload": {"field": 123, "value": 1, "expect": 1, "note": ""}}
+    applied, failures = absorb.apply_edits(cid, [malformed], sid)
+    assert applied == [] and failures[0]["kind"] == "error"
+    assert failures[0]["id"] == "sheet:characters:mara:hp"
+
+
+def test_apply_edits_mixed_batch_still_applies_non_sheet(scene_with_sheeted_cast):
+    from grimoire.store import entities
+    cid, sid = scene_with_sheeted_cast
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "lore", "Salt Cathedral", body="Ruined.")
+    live = sheets.read(cid, "characters", "mara")["fields"]["hp"]
+    sheet_edits, _ = audit.materialize(cid, sid, {"warnings": [], "dropped": [],
+        "sheet_deltas": [{"id": "characters:mara", "field": "hp",
+                          "value": {"current": live["current"] - 2}, "note": ""}]})
+    lore_edit = {"id": "lore:salt-cathedral", "kind": "lore",
+                 "target": {"kind": "lore", "id": "salt-cathedral"}, "field": "body",
+                 "after": "Flooded."}
+    applied, failures = absorb.apply_edits(cid, [*sheet_edits, lore_edit], sid)
+    assert failures == []
+    assert set(applied) == {sheet_edits[0]["id"], "lore:salt-cathedral"}
+    assert entities.read_entity(croot, "lore", "salt-cathedral")["body"].strip() == "Flooded."
+    assert sheets.read(cid, "characters", "mara")["fields"]["hp"]["current"] == live["current"] - 2
