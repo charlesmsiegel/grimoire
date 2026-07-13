@@ -42,8 +42,12 @@ New module (pure stdlib, pydantic-free, filesystem via the same
   staging-cleanup/journal/swap/migration/recovery mutually exclusive by
   construction). Same single-process caveats as Phase 7's advance lock;
 - follows the **stage → validate → swap** primitive below. Create,
-  duplicate, and import also run under the global lock (they claim ids
-  and publish into the same library).
+  duplicate, import, **and the existing `delete_module`** all run under
+  the same global lock, recovery-first (Codex adversarial round 3: an
+  unserialized `shutil.rmtree` racing a staged edit can remove the live
+  dir mid-swap, after which recovery would resurrect the deleted module
+  from staging — `delete_module` moves into, or is wrapped by,
+  `module_edit`'s locked path).
 
 ### Stage → validate → swap
 
@@ -177,10 +181,13 @@ rename's scope cannot be rewritten globally — two disjoint types can
 each define a same-spelled field, and the shared fragment's
 `fields: ["strength"]` binds to a *different* definition under each
 type. When a rename (or cascade prune) would alter a fragment whose
-users straddle the scope boundary, the op **specializes**: clone the
-fragment under a derived id, rewrite/prune the clone, and repoint only
-the in-scope types' `use` nodes; out-of-scope users keep the original.
-Fragments used only in-scope are rewritten in place.
+users straddle the scope boundary, the op **specializes over the
+transitive `use` graph** (fragments nest — Phase 6): clone the affected
+fragment *and every fragment on a `use` path from an in-scope sheet
+type's tree down to it*, rewrite/prune the clones, and repoint the
+in-scope roots (and the cloned ancestors' `use` nodes) to the clones;
+out-of-scope users keep the originals untouched. Fragments reachable
+only from in-scope types are rewritten in place, no cloning.
 
 **Reserved contextual names**: the reserved-key set extends to the
 ambient expression names — `difficulty`, `modifier` (check scope) and
@@ -242,6 +249,20 @@ CAS, gets its now-unknown renamed key silently filtered by
   existing `_checked_write` posture) with its `gen` bumped, so any client
   CAS write built against the pre-rename sheet fails with the existing
   409 conflict instead of resurrecting the old key.
+- Gen bumps only reject writers that carry a CAS snapshot for an
+  *existing* sheet, which leaves two stale-write holes (Codex adversarial
+  round 3): world sheet writes have no CAS today, and a create-new write
+  (`expected gen = None`) sails through — in both cases
+  `_checked_write`'s silent unknown-key filter then drops the stale
+  payload's renamed key, silently losing the migrated value. Two
+  closures: **world sheet writes adopt the same mandatory gen CAS as
+  campaign writes** (Phase 5 parity — `write_world` is currently plain),
+  and **an unknown field key in a submitted sheet payload becomes a
+  validation error (`SheetError` → 400) instead of a silent filter** —
+  every writer's payload is either schema-correct or visibly rejected,
+  including creates. Migration's own rewrites are built from known keys,
+  and the Phase 5 absorb path submits existing keys under its lock, so
+  neither regresses.
 
 A sheet file that fails to parse is skipped and reported in the op result
 (`{"migrated": N, "skipped": [paths]}`), never blocks the rename. Scene
@@ -505,7 +526,14 @@ unchanged (it edits the same files the UI does).
   resolve to the module under its lock is untouched; a campaign created
   after enumeration is caught by the re-enumeration fixed point; every
   world-sheet mutator (`write_world`, `write_world_creation`, seeding,
-  instantiate) serializes on the world-scope lock; dry-run returns
+  instantiate) serializes on the world-scope lock; **stale-write
+  closure**: a queued pre-rename world PUT fails the new world gen CAS
+  after migration, and a pre-rename create-new payload (`expected gen =
+  None`) 400s on its unknown key instead of silently dropping it;
+  deletion at each staged-swap phase serializes with edits and ends
+  deleted (never resurrected by recovery); a nested/diamond fragment
+  graph (wrapper fragment `use`-ing the affected one, shared across
+  scopes) specializes the whole ancestor path; dry-run returns
   impact (migrated / newly-invalid / dangling counts, sample derived
   values) and writes nothing; **impact parity**: deleting a sheet type,
   changing a type's `kind`, and a derived expression that fails only
