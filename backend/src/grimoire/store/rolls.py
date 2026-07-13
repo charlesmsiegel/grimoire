@@ -60,12 +60,17 @@ def _write(cid: str, entries: list[dict]) -> None:
 
 
 def append(cid: str, scene: str | None, label: str | None, result: dict,
-           proposal: str | None = None) -> dict:
+           proposal: str | None = None, tier: str | None = None) -> dict:
+    """`tier` (a check's outcome label, e.g. "success") is logged as a
+    SIBLING key of `result`, never merged into it -- `replay` compares the
+    stored `result` dict against a fresh engine draw byte-for-byte, so
+    anything added to `result` itself would break that match."""
     with _lock(cid):
         entries = read(cid)
         entry = {"id": f"r{len(entries) + 1}", "ts": now_iso(),
                  "scene": scene, "label": label, "result": result,
-                 **({"proposal": proposal} if proposal else {})}
+                 **({"proposal": proposal} if proposal else {}),
+                 **({"tier": tier} if tier else {})}
         entries.append(entry)
         _write(cid, entries)
         return entry
@@ -87,10 +92,12 @@ def find_by_proposal(cid: str, pid: str) -> dict | None:
 
 
 def find_or_append_by_proposal(cid: str, scene: str | None, label: str | None,
-                                result: dict, proposal: str) -> dict:
+                                result: dict, proposal: str,
+                                tier: str | None = None) -> dict:
     """Find-else-append as one locked operation -- the projection uses this
     (not a separate find + append) so a concurrent retry for the same
-    proposal never produces two tagged entries."""
+    proposal never produces two tagged entries. `tier` is a sibling key of
+    `result`; see `append`'s docstring for why it can't be merged in."""
     with _lock(cid):
         entries = read(cid)
         for entry in entries:
@@ -98,7 +105,7 @@ def find_or_append_by_proposal(cid: str, scene: str | None, label: str | None,
                 return entry
         entry = {"id": f"r{len(entries) + 1}", "ts": now_iso(),
                  "scene": scene, "label": label, "result": result,
-                 "proposal": proposal}
+                 "proposal": proposal, **({"tier": tier} if tier else {})}
         entries.append(entry)
         _write(cid, entries)
         return entry

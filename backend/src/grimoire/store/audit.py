@@ -235,14 +235,14 @@ def roll_lines(cid: str, sid: str) -> list[str]:
         if entry.get("scene") != sid:
             continue
         r = entry.get("result", {})
-        tier = r.get("tier") or {}
         bits = [entry.get("label") or r.get("notation", ""), str(r.get("notation", ""))]
         if "successes" in r:
             bits.append(f"{r['successes']} successes")
         elif "total" in r:
             bits.append(f"total {r['total']}")
-        if isinstance(tier, dict) and tier.get("label"):
-            bits.append(tier["label"])
+        tier = entry.get("tier")          # sibling of `result` -- see rolls.append
+        if isinstance(tier, str) and tier:
+            bits.append(tier)
         out.append("- " + " · ".join(b for b in bits if b))
     return out
 
