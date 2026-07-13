@@ -200,12 +200,15 @@ the library:
   layout for this sheet type is invalid — using the default arrangement."
   — when the current sheet type has **no tree in `pack.layout`** *and* a
   `source: "layout"` entry either names the current sheet type or is
-  file-level (`sheet_type: null`, e.g. a malformed root dropping every
-  layout). Both conditions matter: an invalid-but-unused fragment (an
-  error that drops nothing) must not raise a false alarm on sheets whose
-  layouts survived, and a type that never had a layout must not warn just
-  because some *other* type's tree was dropped. Non-blocking; the
-  fallback arrangement is fully functional.
+  file-level (`sheet_type: null`) **while no sheet-type tree survived at
+  all** (a malformed root dropping every layout). All three conditions
+  matter: an invalid-but-unused fragment (an error that drops nothing)
+  must not raise a false alarm on sheets whose layouts survived, a type
+  that never had a layout must not warn just because some *other* type's
+  tree was dropped, and a file-level entry that coexists with surviving
+  trees (unknown root key, unused broken fragment) must not warn
+  never-layouted types either. Non-blocking; the fallback arrangement is
+  fully functional.
 - **Module library list**: rows for packs with `display_errors` get a
   hint-styled "display issues" marker (distinct from the existing
   invalid-module treatment — mechanics still work).
@@ -263,10 +266,11 @@ The `create-mechanics-module` skill gains layout/theme authoring steps
   view and edit, save round-trip unchanged); SheetEditor with no layout
   (default arrangement, widgets still used); SheetEditor dropped-layout
   hint routing (fires when an entry names the current type; fires on a
-  file-level `sheet_type: null` layout error with no surviving tree; does
+  file-level `sheet_type: null` layout error when no tree survived; does
   NOT fire for an unused-fragment error when the current type's layout
   survived, nor for a never-layouted type when only another type's tree
-  was dropped); theme vars +
+  was dropped, nor for a never-layouted type when a file-level entry
+  coexists with another type's surviving tree); theme vars +
   data attributes present when themed, absent when not; ModulesView
   Display section incl. `display_errors`; library list "display issues"
   marker.
