@@ -160,7 +160,7 @@ assert 'prompts.render("scene/roll_declined.j2")' in routes_src, \
 # ------------------------------------------------------------- store fixture
 
 from grimoire.store import appearances as ap  # noqa: E402
-from grimoire.store import (calendars, campaigns, characters, checks, config,  # noqa: E402
+from grimoire.store import (audit, calendars, campaigns, characters, checks, config,  # noqa: E402
                             dossiers as dstore, entities, groupstate, modules, pcs, playstate,
                             plot, scenes, sheets, styles, taglines as tstore, worlds)
 
@@ -530,6 +530,13 @@ for name, line in st_snap.items():
     st = playstate.read_state(croot, sera)
     check(f"state snapshot line (store, {name})", line,
           render("snippets/state_snapshot_line.j2", st=st))
+
+blocks, _excluded = audit.sheet_blocks(cid, sid)
+roll_log = audit.roll_lines(cid, sid)
+audit_exp = audit.build_prompt(tr, blocks, roll_log)
+check("audit system (store)", audit_exp[0]["content"], render("audit/system.j2"))
+check("audit user (store)", audit_exp[1]["content"],
+      render("audit/user.j2", sheet_blocks=blocks, roll_lines=roll_log, transcript=tr))
 
 threads = plot.open_threads(cid)
 check("plot lines (context form)", "\n".join(plot.render_open(cid, with_id=False)),

@@ -1,0 +1,11 @@
+{#- Vars: sheet_blocks [str], roll_lines [str], transcript str -#}
+Sheets:
+{% for b in sheet_blocks %}{{ b }}
+
+{% endfor -%}
+{% if roll_lines %}Roll log:
+{{ roll_lines | join("\n") }}
+
+{% endif -%}
+Transcript:
+{{ transcript }}
