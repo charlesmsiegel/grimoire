@@ -85,6 +85,29 @@ Build: `make android-bootstrap` (once per machine — JDK 17, Android SDK,
 licenses, `android/local.properties`), then `make apk` (debug) /
 `make apk-release`. On Windows run make from Git Bash.
 
+## Development workflow: Codex review gates
+
+The spec → plan → implementation pipeline (`superpowers:brainstorming` writes
+specs to `docs/superpowers/specs/`; `superpowers:writing-plans` writes plans to
+`docs/superpowers/plans/`) has mandatory Codex checkpoints — do not advance to
+the next stage until the gate passes and its findings are resolved:
+
+- **Spec → planning**: run `/codex:adversarial-review` against the spec before
+  starting `superpowers:writing-plans`.
+- **Plan → implementation**: run `/codex:adversarial-review` against the plan
+  before starting implementation.
+- **Implementation → done**: run `/codex:review` against the diff before
+  considering the work complete (merge, PR, `finishing-a-development-branch`).
+- **Done → actually done**: once implementation is otherwise complete, run
+  `/codex:adversarial-review` a final time against the diff *and* the
+  originating spec, asking specifically whether the changes implement the
+  spec (not just whether the diff is clean code) — gaps, drift, and
+  quietly-dropped requirements are the target, not style.
+
+If a gate surfaces findings, address them (or explicitly note why not) before
+moving on. Don't skip a gate because a change feels small — ask the user
+first if you think one should be skipped.
+
 ## Working notes
 
 - Backend tests isolate the store via `monkeypatch.setenv("GRIMOIRE_HOME", tmp_path)`.
