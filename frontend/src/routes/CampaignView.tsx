@@ -368,6 +368,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
     if (!activeId || absorbing) return;
     setAbsorbing(true);
     setError(null);
+    setSheetFailures([]);
     try {
       const a = await api.absorbScene(cid, activeId);
       setAbsorb(a);
@@ -553,7 +554,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
           <div className="mechanics-notice">
             <p>{sheetFailures.length} sheet change{sheetFailures.length === 1 ? "" : "s"} did not apply</p>
             {sheetFailures.map((f, i) => (
-              <p className="field-hint" key={i}>{f.label}: {f.reason}</p>
+              <p className="field-hint" key={i}>{f.label}: {f.reason} ({f.kind})</p>
             ))}
             <button className="subtle" onClick={() => setSheetFailures([])}>Dismiss</button>
           </div>
@@ -662,7 +663,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
               </div>
             )}
             <div className="form-actions">
-              <button className="subtle" onClick={() => { setAbsorb(null); setEditRows([]); }}>Cancel</button>
+              <button className="subtle" onClick={() => { setAbsorb(null); setEditRows([]); setSheetFailures([]); }}>Cancel</button>
               <button className="primary" onClick={saveAbsorb}>Save summary</button>
             </div>
           </div>
