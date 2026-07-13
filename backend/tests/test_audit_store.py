@@ -102,13 +102,40 @@ def test_clear_and_repoint(cid_with_sheet):
     assert audit.read_baselines(cid) == {}
 
 
-def test_concurrent_captures_both_land(cid_with_sheet):
+def test_concurrent_capture_and_repoint_both_land(cid_with_sheet):
+    """capture_baseline and repoint_scenes take the baseline lock from
+    different call sites (capture via sheet-lock -> baseline-lock;
+    repoint_scenes standalone, not under the sheet lock -- scene renames
+    aren't sheet mutations) -- that's the real race the baseline lock
+    guards against. Racing two captures on the *same* cid (the old version
+    of this test) can't exercise it: both captures serialize on the shared
+    per-cid sheets.lock_for(cid) before either touches the baseline lock."""
     cid = cid_with_sheet
-    s1 = scenes.create_scene(cid, "One")   # capture already ran inside; to race
-    s2 = scenes.create_scene(cid, "Two")   # captures directly:
+    s1 = scenes.create_scene(cid, "One")    # both captures already ran via
+    s2 = scenes.create_scene(cid, "Two")    # the create_scene hook
     audit.clear_baselines(cid)
-    t1 = threading.Thread(target=lambda: audit.capture_baseline(cid, s1))
-    t2 = threading.Thread(target=lambda: audit.capture_baseline(cid, s2))
+    audit.capture_baseline(cid, s1)         # give repoint something to move
+    t1 = threading.Thread(target=lambda: audit.capture_baseline(cid, s2))
+    t2 = threading.Thread(target=lambda: audit.repoint_scenes(cid, {s1: "renamed"}))
     t1.start(); t2.start(); t1.join(); t2.join()
     data = audit.read_baselines(cid)
-    assert s1 in data and s2 in data
+    assert "renamed" in data and s2 in data
+
+
+def test_baseline_entry_valid_survives_deleted_module(cid_with_sheet, monkeypatch):
+    """Module deleted (or pack otherwise unreadable) between modules.resolve
+    and the baseline check must make the baseline invalid, not raise --
+    baseline_entry_valid/baseline_field are report-only and documented as
+    never-raising."""
+    cid = cid_with_sheet
+    sid = scenes.create_scene(cid, "Landing")
+    assert audit.baseline_field(cid, sid, "characters", "mara", "hp") is not None
+
+    def _boom(mid):
+        raise modules.ModuleNotFound(mid)
+
+    monkeypatch.setattr(modules, "load_pack", _boom)
+    assert audit.baseline_field(cid, sid, "characters", "mara", "hp") is None
+    sheet = sheets.read(cid, "characters", "mara")
+    mid = "some-mid"
+    assert audit.baseline_entry_valid(cid, sid, "characters", "mara", mid, sheet) is False

@@ -515,7 +515,11 @@ def put_world_module(wid: str, body: ModuleSetting):
         for c in store.campaigns.list_campaigns():
             if c.get("world") != wid:
                 continue
-            setting = (store.campaigns.read_campaign(c["id"])["meta"].get("module") or "").strip()
+            try:
+                meta = store.campaigns.read_campaign(c["id"])["meta"]
+            except store.campaigns.CampaignNotFound:
+                continue                         # deleted between list and read
+            setting = (meta.get("module") or "").strip()
             if not setting:                      # no per-campaign override
                 affected.append(c["id"])
         with contextlib.ExitStack() as stack:
