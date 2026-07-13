@@ -7,19 +7,21 @@ end-scene absorb pass also audits the transcript against the sheets and the
 roll log: it flags narration that contradicts mechanics, and proposes sheet
 deltas through the existing StagedEdit review flow.
 
-## Decisions (settled 2026-07-12; hardened by Codex adversarial review round 1)
+## Decisions (settled 2026-07-12; hardened by Codex adversarial rounds 1–2)
 
 | Decision | Choice | Why |
 |---|---|---|
 | Architecture | A second, focused LLM call after the main absorb call; best-effort (dossier pattern: any failure leaves absorb untouched) | The absorb system prompt is already one dense block with ~13 output keys; numeric bookkeeping against sheets + a roll log is a different cognitive task from narrative summarization. The route already fires extra best-effort calls (dossiers). Costs one extra call per end-scene, module-bound campaigns only. |
 | Warnings | Ephemeral: rendered in the absorb panel, gone when the panel closes; never persisted | Warnings are advisory — the player reads them, maybe fixes something by hand, moves on. No bookkeeping. |
 | XP / advancement | No exception to the mutable-only rule. XP *awards* are ordinary resource deltas (advancement pools are structurally `resource` fields — `sheets.advance` requires `{current, max}`); *raises* stay behind the manual Advance button | The rule stays clean with zero special cases; narration-driven stat raises were the questionable half and remain out of scope. |
-| Scene-start baseline | Every scene captures a snapshot of all campaign sheets at creation (`sheet_baselines.json`); the audit prompt shows each mutable field as `start → current` | Codex adversarial review (2026-07-12): current-only values are ambiguous — "current 4 + narration spends 2" cannot distinguish already-applied from still-pending, so the model could double-apply or falsely warn. With the baseline the model sees whether the change already landed. |
-| Apply semantics | Per-field compare-and-set under the campaign sheet lock (shared with advancement): only the approved field is written; a same-field concurrent change makes the edit **skip visibly** (reported as a conflict), never silently overwrite | Codex adversarial review (2026-07-12) overturned plain absolute overwrite: whole-map `sheets.write` could revert a concurrent advancement or editor save, including unrelated fields. CAS + single-field write closes both; conflicts are reported, not swallowed. |
-| Sheet-row review UI | Sheet edit rows are **read-only** (approve/reject only); the displayed before/after strings are rendered from the payload that will be applied | Codex adversarial review (2026-07-12): ordinary absorb rows edit `after` in a textarea, but the sheet apply branch writes `payload.value` — an editable row would let the reviewer approve one value while another lands. Read-only keeps display and payload the same fact. Typed value editing can come later if wanted. |
-| Sheet scope | Present sheeted cast + the sheeted current location — the same scope as Phase 4's `mechanics_sheets` context section. The model sees **full** compact sheet blocks (static stats included, so contradictions involving them are visible) with mutable fields explicitly marked as the only delta-eligible ones | Letting the model propose deltas against sheets it never saw is guesswork. Item sheets wait for item presence tracking (future); location wards are covered because the sheeted current location is in scope. |
+| Scene-start baseline | Every scene captures a snapshot of all campaign sheets at creation (`sheet_baselines.json`); the audit prompt shows each mutable field as `start → current` | Codex round 1: current-only values are ambiguous — "current 4 + narration spends 2" cannot distinguish already-applied from still-pending, so the model could double-apply or falsely warn. With the baseline the model sees whether the change already landed. |
+| Sheet write discipline | **Every** campaign-sheet mutator (`write`, `write_creation`, `advance`, `set_field`, `delete`) serializes on the per-campaign sheet lock; the editor PUT gains a whole-map CAS (`expected_fields`, 409 on mismatch); `set_field` is a strict per-field CAS | Codex round 2: `sheets.write` (the editor PUT) took no lock and replaced the whole field map, so it could interleave with `advance`/`set_field` and lose either side — a pre-existing `write`-vs-`advance` hole Phase 5 would have widened. One lock + CAS at every entry closes every lost-update path. |
+| Apply semantics | `set_field` per-field strict CAS: only the approved field is written; live ≠ expect is **always** a visible conflict (reported, never silently overwritten and never silently no-op'd) — including live == proposed-value, which reads "already applied or independently changed" | Codex rounds 1–2: plain absolute overwrite loses concurrent updates, and treating `live == value` as a confirmed retry can mask an independent same-value mutation (two XP awards collapsing into one). Strict CAS needs no operation ledger: every ambiguous case degrades to a reported skip, never wrong state. |
+| Write-time authority | `set_field` re-resolves the live sheet schema and enforces the mutable-only rule itself (field exists in the sheet's own type, type ∈ resource/track/list, value validates, resource `max` untouchable) — materialize's checks are a convenience, not the boundary | Codex round 2: chronicle-PUT edits are client-supplied; enforcement only at materialize time would let a crafted or stale client mutate static fields and bypass the manual-advancement invariant. The write boundary is authoritative. |
+| Sheet-row review UI | Sheet edit rows are **read-only** (approve/reject only); the displayed before/after strings are rendered from the payload that will be applied | Codex round 1: ordinary absorb rows edit `after` in a textarea, but the sheet apply branch writes `payload.value` — an editable row would let the reviewer approve one value while another lands. Read-only keeps display and payload the same fact. Typed value editing can come later if wanted. |
+| Sheet scope | Present sheeted cast + the sheeted current location — the same scope as Phase 4's `mechanics_sheets` context section. The model sees **full** compact sheet blocks (static stats included, so contradictions involving them are visible) with mutable fields explicitly marked as the only delta-eligible ones | Letting the model propose deltas against sheets it never saw is guesswork. Item sheets wait for item presence tracking (future); location wards are covered because the sheeted current location is in scope. Scope is a materialize-time filter on model output (prompt trust), not a write-time authorization: the write boundary enforces mutability, and the local single-user client may legitimately edit any sheet through the editor anyway. |
 | Delta granularity | One StagedEdit per (entity, field), independently approvable | Matches how the panel works; a rejected essence spend shouldn't drag down an approved XP award. |
-| No event ledger | Idempotency comes from absolute end-values + the baseline + apply-time CAS, not a mutation ledger | Considered (Codex round 1 suggested one) and rejected as disproportionate: deltas are absolute target values, so re-applying the same edit is a value no-op; re-running absorb sees `start → current` and doesn't re-propose an applied change; a stale panel's same-field save loses the CAS and reports. grimoire is a local single-process app — same posture as Phase 4's crash-window disclosure. |
+| No event ledger | Correctness comes from the baseline (prompt side) + strict CAS (write side), not a mutation ledger | Considered (Codex rounds 1–2) and rejected as disproportionate for a local single-process app: re-running absorb sees `start → current` and doesn't re-propose an applied change; every racy or replayed apply fails its CAS and is *reported*, so no ambiguity is ever silently resolved in either direction. A ledger would only convert some reported skips into automatic decisions. |
 
 ## Scene-start sheet baselines
 
@@ -81,52 +83,92 @@ LLM call lives in the route; prompt text in `templates/audit/system.j2` +
   `id`/`field` strings, `value` kept as-is for materialize to validate,
   `note` string.
 - **`materialize(cid, sid, parsed) -> list[dict]`** — the deterministic
-  gate. For each proposed delta, in order, drop it unless:
+  gate (a mirror of the write-time checks plus the scope filter; the
+  authoritative enforcement lives in `set_field`). For each proposed
+  delta, in order, drop it unless:
   - the `id` parses as `kind:eid` and is within the shown scope (present
     sheeted cast or the sheeted current location) with a readable,
     error-free sheet;
   - `field` exists in that entity's **own sheet type's** assembled field
     set, with type `resource`, `track`, or `list`;
-  - the new value passes `modules.validate_sheet_values` for the sheet's
-    stored fields overlaid with this one change (for resources the proposed
-    value sets `current` only; `max` is copied from the stored field);
-  - the result differs from the stored value (no-ops dropped).
+  - the **canonical value** (see below) passes
+    `modules.validate_sheet_values` for the sheet's stored fields overlaid
+    with this one change;
+  - the canonical value differs from the stored value (no-ops dropped).
+
+  **Canonical values.** A resource proposal is canonicalized to
+  `{"current": <proposed current>, "max": <live max>}` at materialize time;
+  tracks to a plain int; lists to a list. Every comparison, rendering, and
+  the stored payload use the canonical form — there is no place where a
+  `{current}`-only value meets a `{current, max}` value.
 
   Surviving deltas become StagedEdits:
   `{"id": "sheet:{kind}:{eid}:{field}", "kind": "sheet",
   "target": {"kind", "id"}, "label": "<Name> — <field label> (sheet)",
   "field": <field key>, "before": <rendered>, "after": <rendered>,
-  "authored": false, "payload": {"field": key, "value": <structured>,
-  "expect": <structured live value at materialize time>, "note": str}}`.
-  Rendering: resources as `essence 6/10`, tracks as ints, lists one item
-  per line. `before`/`after` are rendered **from** `payload.expect` /
-  `payload.value`, so what the reviewer reads is by construction the value
-  the apply step uses.
+  "authored": false, "payload": {"field": key,
+  "value": <canonical proposed>, "expect": <canonical live value at
+  materialize time>, "note": str}}`. Rendering: resources as
+  `essence 6/10`, tracks as ints, lists one item per line.
+  `before`/`after` are rendered **from** `payload.expect`/`payload.value`,
+  so what the reviewer reads is by construction the value the apply step
+  uses.
 
-## Apply — `sheets.set_field` + the `"sheet"` edit kind
+## Sheet write discipline — one lock, CAS at every entry
 
-- **`sheets.set_field(cid, kind, eid, field_key, value, expect) -> None`**,
-  new in `sheets.py`, runs entirely under `_lock_for(cid)` — the **same**
-  per-campaign lock `advance` takes, so it can never interleave with an
-  advancement's read-modify-write:
-  1. read the live sheet file (module must resolve; sheet must exist);
-  2. if the live field value equals `value` already → return (no-op —
-     an idempotent retry, not a conflict);
-  3. if the live field value differs from `expect` → raise
-     `SheetConflict(SheetError)` naming the field and both values —
-     someone changed this field since the panel was materialized;
-  4. otherwise build the new field map by changing **only** `field_key`
-     (for resources: `current` from `value`, `max` from the live field),
-     validate the full map via the existing strict write path, and write
+All in `sheets.py`:
+
+- **Locking.** `write`, `write_creation`, `advance`, `set_field`, and
+  `delete` all run their read-validate-write under `_lock_for(cid)` (the
+  existing per-campaign lock `advance` already takes). This fixes a
+  pre-existing hole — the editor PUT's `sheets.write` could interleave
+  with `advance` — and guarantees no Phase 5 writer ever sees a torn
+  read-modify-write. World-sheet writes (`write_world*`) are unchanged:
+  they have a single writer (the world editor) and no engine writers.
+- **Editor CAS.** `write` gains an optional `expected_fields: dict | None`.
+  When provided, it is compared (under the lock) against the stored field
+  map; a mismatch raises `SheetConflict`. The campaign sheet PUT route
+  passes the client's `expected_fields` (the field map as loaded into the
+  editor) and maps `SheetConflict` to **409**; the SheetEditor sends it,
+  and on 409 reloads the sheet with a "changed elsewhere — reloaded"
+  notice. Omitting `expected_fields` (older clients, scripts) keeps
+  today's last-write-wins semantics.
+- **`set_field(cid, kind, eid, field_key, value, expect) -> None`** — the
+  absorb apply primitive, strict per-field CAS under the same lock:
+  1. resolve the module and read the live sheet file (missing either →
+     `SheetError`);
+  2. **enforce mutability at the write boundary**: `field_key` must exist
+     in the live sheet's own type's assembled field set with type
+     `resource`, `track`, or `list` — anything else raises `SheetError`
+     regardless of what the client sent (chronicle-PUT edits are
+     client-supplied; materialize is not the boundary, this is);
+  3. canonicalize `value` against the live field (resources take the
+     **live** `max`; proposed `max` is ignored — absorb never changes
+     `max`);
+  4. if the live field value ≠ `expect` (canonical comparison) → raise
+     `SheetConflict` naming the field and all three values. This includes
+     the live-already-equals-`value` case: without an operation identity
+     there is no way to distinguish a duplicate save from an independent
+     mutation that reached the same value (two narrated XP awards must
+     not collapse into one), so it is reported — the message reads
+     "already applied or independently changed" — never silently
+     absorbed;
+  5. otherwise build the new field map changing **only** `field_key`,
+     validate the full map via the existing strict path, and write
      atomically. Concurrent edits to *other* fields always survive.
-- **`absorb.apply_edits` gains a `"sheet"` branch** calling `set_field`
-  with `payload["value"]`/`payload["expect"]`. `SheetConflict` is caught
-  and recorded (edit id + reason); any other `SheetError` is skipped like
-  every other broken target. `apply_edits` returns
-  `(applied, conflicts)` — `conflicts` a list of `{"id", "reason"}` —
-  and `PUT .../chronicle`'s response gains a `"conflicts"` key. `"sheet"`
-  is **not** added to `_BROWSABLE_KINDS` — changes.json tracks browsable
-  prose records, not sheets.
+- **`SheetConflict(SheetError)`** — carries entity, field, expect, live,
+  and proposed values for the route/UI to report.
+
+## Apply — the `"sheet"` edit kind
+
+`absorb.apply_edits` gains a `"sheet"` branch calling `sheets.set_field`
+with `payload["value"]`/`payload["expect"]`. `SheetConflict` is caught and
+recorded (edit id + human-readable reason); any other `SheetError` is
+skipped like every other broken target. `apply_edits` returns
+`(applied, conflicts)` — `conflicts` a list of `{"id", "reason"}` — and
+`PUT .../chronicle`'s response gains a `"conflicts"` key. `"sheet"` is
+**not** added to `_BROWSABLE_KINDS` — changes.json tracks browsable prose
+records, not sheets.
 
 ## Route
 
@@ -153,6 +195,8 @@ Module-less campaigns see zero extra calls and zero behavior change.
 - `saveAbsorb` reads `conflicts` from the PUT response and surfaces a
   notice ("N sheet change(s) skipped — the field changed while the panel
   was open"), listing the affected labels.
+- `SheetEditor` sends `expected_fields` on save and handles 409 by
+  reloading with a notice.
 
 ## Testing
 
@@ -163,17 +207,26 @@ Module-less campaigns see zero extra calls and zero behavior change.
   empty); materialize gates one by one — unknown entity, out-of-scope
   entity, unsheeted entity, invalid sheet, unknown field, static field
   (`number`/`dots`/`text`), bad value (validation reject), resource `max`
-  tamper rejected (only `current` from the payload), no-op dropped; happy
-  round-trips for resource / track / list; XP-pool award accepted as a
-  plain resource delta; `before`/`after` strings render from
-  `payload.expect`/`payload.value`.
-- **`sheets.set_field`**: happy path per type; single-field isolation (an
+  tamper ignored (canonical value takes the live `max`), no-op dropped;
+  happy round-trips for resource / track / list; XP-pool award accepted as
+  a plain resource delta; `before`/`after` strings render from
+  `payload.expect`/`payload.value`; canonical forms everywhere (a
+  `{current}`-only model value never survives materialize uncanonicalized).
+- **`sheets.set_field`**: happy path per type; write-boundary enforcement
+  with materialize bypassed — static field (`number`/`dots`/`text`),
+  unknown field, field from another sheet type → `SheetError`; resource
+  `max` tamper ignored (live `max` wins); single-field isolation (an
   unrelated field changed between materialize and apply survives the
-  write); idempotent retry (live == value) is a silent no-op; conflict
-  (live ≠ expect, live ≠ value) raises `SheetConflict`; **threaded race
-  against `advance`** on the same campaign — both complete, neither's
-  write is lost (lock sharing); validation reject leaves the file
-  untouched.
+  write); conflict cases — live ≠ expect with live ≠ value, **and** live
+  == value (duplicate-save/independent-mutation ambiguity) — both raise
+  `SheetConflict`; validation reject leaves the file untouched.
+- **Locking races** (threaded): `set_field` vs `advance` — both complete,
+  neither write lost; `set_field` vs editor `write` with a **stale full
+  map + expected_fields** — the stale write 409s and the delta survives;
+  editor `write` vs `advance` (the pre-existing hole) — serialized,
+  nothing lost.
+- **`sheets.write` CAS**: expected_fields match → write; mismatch →
+  `SheetConflict`; omitted → last-write-wins (back-compat).
 - **`apply_edits`**: sheet branch happy path; `SheetConflict` → recorded
   in `conflicts`, other edits still applied; `SheetError` → skipped;
   sheet edits absent from changes.json.
@@ -183,11 +236,16 @@ Module-less campaigns see zero extra calls and zero behavior change.
   still returns a complete absorb; PUT applies an approved sheet edit and
   the sheet reads back changed; PUT with a conflicting edit returns it in
   `"conflicts"` and the live value survives; **double-save of the same
-  panel** applies once and the second save no-ops.
+  panel** — the second save reports the edit in `"conflicts"` (already
+  applied) and the sheet value is unchanged; **crafted PUT** with a
+  static-field / unknown-field / foreign-entity `"sheet"` edit → not
+  applied (write-boundary rejection), other edits unaffected; sheet PUT
+  with stale `expected_fields` → 409.
 - **Frontend**: warnings section renders and clears; sheet edit row is
   read-only (no textarea) and approve/reject round-trips through save;
-  conflict notice renders from the PUT response; a test asserting the
-  displayed after string matches the persisted sheet value after save.
+  conflict notice renders from the PUT response; SheetEditor 409 → reload
+  + notice; a test asserting the displayed after string matches the
+  persisted sheet value after save.
 - **Milestone check** (verify skill, mocked OpenRouter): scripted scene
   with a logged roll and narrated damage → absorb shows the warning +
   delta, save lands the delta on the sheet; re-running absorb on the same
@@ -201,7 +259,10 @@ tracking first); persisting warnings; typed in-row editing of sheet deltas
 (reject-and-edit-the-sheet covers it); ingestion-time auditing
 (`ingest_scene.py` runs no mechanics); auditing scenes retroactively
 (the audit sees one scene at end-scene time, like absorb itself); a sheet
-mutation ledger (see Decisions — rejected as disproportionate).
+mutation ledger / operation ids (see Decisions — strict CAS reports every
+ambiguous apply instead of auto-resolving it); revision tokens beyond
+`expected_fields` (a field-map compare is sufficient for a single-process
+local store).
 
 ## Privacy note
 
