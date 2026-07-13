@@ -859,7 +859,7 @@ button.pip { cursor: pointer; }
   border: 1.5px solid var(--sheet-rule, var(--sheet-ink, var(--rule)));
   background: transparent; /* never an app token — must sit on any themed bg */
 }
-.resource-fill { display: block; height: 100%; background: var(--sheet-accent, var(--accent)); }
+.resource-fill { display: block; height: 100%; background: var(--sheet-accent, var(--sheet-ink, var(--accent))); }
 .resource-text { font-family: var(--fm); font-size: 12px; }
 .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(90px, 1fr)); gap: 8px; }
 .stat-cell {

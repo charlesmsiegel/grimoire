@@ -75,6 +75,17 @@ test("edit mode threads onChange through widgets", () => {
   expect(onChange).toHaveBeenCalledWith("vigor", 4);
 });
 
+test("grid: true on a layout node renders a stat-grid with the group's widgets", () => {
+  const gridded: ModuleDetail = { ...MOD, layout: { sheet_types: {
+    medium: { column: [{ group: "attributes", grid: true, title: "Attributes" }] },
+  }}};
+  const { container } = render(
+    <SheetLayout module={gridded} sheetType="medium" mode="view" values={VALUES} derived={DERIVED} />);
+  const grid = container.querySelector(".stat-grid");
+  expect(grid).not.toBeNull();
+  expect(grid!.querySelectorAll(".pip").length).toBe(10);  // vigor (5) + wits (5)
+});
+
 test("themeStyle maps tokens to sheet vars", () => {
   expect(themeStyle({ colors: { bg: "#111", ink: "#eee" }, fonts: { body: "serif" } }))
     .toEqual({ "--sheet-bg": "#111", "--sheet-ink": "#eee",

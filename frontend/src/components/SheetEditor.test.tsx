@@ -229,7 +229,10 @@ test("unthemed module sets no sheet vars", () => {
   render(<SheetEditor scope={{ kind: "campaign", id: "run" }} module={MOD}
                       kind="characters" eid="mara" initial={SHEET}
                       onClose={() => {}} onSaved={() => {}} />);
-  expect(screen.getByRole("dialog").style.getPropertyValue("--sheet-bg")).toBe("");
+  const takeover = screen.getByRole("dialog");
+  expect(takeover.style.getPropertyValue("--sheet-bg")).toBe("");
+  expect(takeover.getAttribute("data-dots")).toBeNull();
+  expect(takeover.getAttribute("data-corners")).toBeNull();
 });
 
 test("dropped-layout hint routing", () => {
@@ -260,4 +263,11 @@ test("dropped-layout hint routing", () => {
     { source: "layout", sheet_type: "shifter", message: "sheet_types.shifter: bad" }] };
   const r4 = render(<SheetEditor {...base} module={other} />);
   expect(r4.queryByText(HINT)).toBeNull();
+  r4.unmount();
+  // null-sheet_type error but another type's tree survived, current type never had a layout -> does NOT fire
+  const otherSurvived: ModuleDetail = { ...MOD,
+    layout: { sheet_types: { shifter: { column: [] } } },
+    display_errors: [{ source: "layout", sheet_type: null, message: "fragments.broken: bad" }] };
+  const r5 = render(<SheetEditor {...base} module={otherSurvived} />);
+  expect(r5.queryByText(HINT)).toBeNull();
 });

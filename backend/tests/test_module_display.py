@@ -322,3 +322,17 @@ def test_theme_css_detected(tmp_path):
     _layout, theme, errors = load(tmp_path)
     assert theme == {}
     assert any("theme.css" in e["message"] and e["source"] == "theme" for e in errors)
+
+
+def test_outer_boundary_catches_unforeseen_exceptions(tmp_path, monkeypatch):
+    def boom(root, errors):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(module_display, "_load_theme", boom)
+    layout, theme, errors = module_display.load_display(tmp_path, SHEETS)
+    assert layout == {"sheet_types": {}}
+    assert theme == {}
+    assert len(errors) == 1
+    assert errors[0]["source"] == "layout"
+    assert errors[0]["sheet_type"] is None
+    assert "RuntimeError" in errors[0]["message"]
