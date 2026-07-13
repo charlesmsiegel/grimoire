@@ -2818,6 +2818,144 @@ def test_modules_api(client):
     assert client.delete("/api/modules/pool-basic").status_code == 400
 
 
+def _seed_content_module(client, tmp_path, mid="contentmod", statted=False):
+    import json as _json
+    home = tmp_path  # GRIMOIRE_HOME is already tmp_path via the client fixture
+    d = home / "modules" / mid
+    d.mkdir(parents=True)
+    (d / "module.md").write_text("---\nname: Content Test\n---\n", encoding="utf-8")
+    sheets_def = {"groups": {}, "sheet_types": {}}
+    if statted:
+        sheets_def["sheet_types"]["trinket"] = {
+            "label": "Trinket", "kind": "items", "groups": [],
+            "fields": [{"key": "power", "type": "dots", "max": 5}],
+        }
+    (d / "sheets.json").write_text(_json.dumps(sheets_def), encoding="utf-8")
+    cd = d / "content" / "items"
+    cd.mkdir(parents=True)
+    (cd / "lantern.md").write_text(
+        "---\nname: Lantern of Winnowing\nkeys: lantern\n---\nA soft lantern.\n", encoding="utf-8")
+    if statted:
+        (cd / "lantern.sheet.json").write_text(
+            _json.dumps({"sheet_type": "trinket", "fields": {"power": 2}}), encoding="utf-8")
+    return mid
+
+
+def test_module_content_read(client, tmp_path):
+    mid = _seed_content_module(client, tmp_path)
+    r = client.get(f"/api/modules/{mid}/content/items/lantern")
+    assert r.status_code == 200
+    assert r.json()["name"] == "Lantern of Winnowing"
+    assert r.json()["body"] == "A soft lantern.\n"
+    assert client.get(f"/api/modules/{mid}/content/items/nope").status_code == 404
+    assert client.get("/api/modules/ghost/content/items/lantern").status_code == 404
+
+
+def test_instantiate_into_world(client, tmp_path):
+    mid = _seed_content_module(client, tmp_path, statted=True)
+    wid = _world(client)
+    r = client.post(f"/api/worlds/{wid}/items/instantiate/{mid}/lantern")
+    assert r.status_code == 200
+    eid = r.json()["id"]
+    entity = client.get(f"/api/worlds/{wid}/items/{eid}").json()
+    assert entity["meta"]["name"] == "Lantern of Winnowing"
+    sheet = client.get(f"/api/worlds/{wid}/sheets/{mid}/items/{eid}").json()["sheet"]
+    assert sheet["sheet_type"] == "trinket"
+    assert sheet["fields"]["power"] == 2
+
+
+def test_instantiate_into_campaign(client, tmp_path):
+    mid = _seed_content_module(client, tmp_path)  # not statted -- no sheet expected
+    wid, cid = _campaign(client)
+    client.put(f"/api/campaigns/{cid}/module", json={"module": mid})
+    r = client.post(f"/api/campaigns/{cid}/items/instantiate/{mid}/lantern")
+    assert r.status_code == 200
+    eid = r.json()["id"]
+    entity = client.get(f"/api/campaigns/{cid}/items/{eid}").json()
+    assert entity["meta"]["name"] == "Lantern of Winnowing"
+    assert client.get(f"/api/campaigns/{cid}/sheets/items/{eid}").json()["sheet"] is None
+
+
+def test_instantiate_unknown_content_404(client, tmp_path):
+    mid = _seed_content_module(client, tmp_path)
+    wid = _world(client)
+    assert client.post(f"/api/worlds/{wid}/items/instantiate/{mid}/ghost").status_code == 404
+    assert client.post(f"/api/worlds/{wid}/items/instantiate/ghostmod/lantern").status_code == 404
+
+
+def _seed_content_module_bad_sheet_type(client, tmp_path, mid="badsheetmod"):
+    """Content whose sidecar names a sheet_type the module doesn't declare --
+    simulates the module pack changing out from under an instantiate between
+    the content read and the sheet write."""
+    import json as _json
+    home = tmp_path
+    d = home / "modules" / mid
+    d.mkdir(parents=True)
+    (d / "module.md").write_text("---\nname: Bad Sheet Test\n---\n", encoding="utf-8")
+    # No "trinket" sheet type declared here -- the sidecar below references it anyway.
+    (d / "sheets.json").write_text(_json.dumps({"groups": {}, "sheet_types": {}}), encoding="utf-8")
+    cd = d / "content" / "items"
+    cd.mkdir(parents=True)
+    (cd / "lantern.md").write_text(
+        "---\nname: Lantern of Winnowing\nkeys: lantern\n---\nA soft lantern.\n", encoding="utf-8")
+    (cd / "lantern.sheet.json").write_text(
+        _json.dumps({"sheet_type": "trinket", "fields": {"power": 2}}), encoding="utf-8")
+    return mid
+
+
+def test_instantiate_into_world_rolls_back_entity_on_sheet_write_failure(client, tmp_path):
+    mid = _seed_content_module_bad_sheet_type(client, tmp_path)
+    wid = _world(client)
+    r = client.post(f"/api/worlds/{wid}/items/instantiate/{mid}/lantern")
+    assert r.status_code == 400
+    # The entity was created before the sheet write failed -- it must not survive.
+    assert client.get(f"/api/worlds/{wid}/items/lantern-of-winnowing").status_code == 404
+    assert client.get(f"/api/worlds/{wid}/items").json() == []
+
+
+def test_instantiate_into_campaign_rolls_back_entity_on_sheet_write_failure(client, tmp_path):
+    mid = _seed_content_module_bad_sheet_type(client, tmp_path)
+    wid, cid = _campaign(client)
+    client.put(f"/api/campaigns/{cid}/module", json={"module": mid})
+    r = client.post(f"/api/campaigns/{cid}/items/instantiate/{mid}/lantern")
+    assert r.status_code == 400
+    assert client.get(f"/api/campaigns/{cid}/items/lantern-of-winnowing").status_code == 404
+    assert client.get(f"/api/campaigns/{cid}/items").json() == []
+
+
+def test_sheets_write_can_raise_module_not_found():
+    """Verify that store.sheets._validate_write_target can raise ModuleNotFound
+    when the module pack is missing (TOCTOU race scenario between resolve and
+    _validate_write_target in sheets.write)."""
+    # Call _validate_write_target directly with a non-existent module to confirm
+    # ModuleNotFound is one of its possible exceptions
+    with pytest.raises(store.modules.ModuleNotFound):
+        store.sheets._validate_write_target("nonexistent-module-xyz", "items", "test", "trinket")
+
+
+def test_instantiate_into_campaign_exception_handling_covers_module_not_found(client, tmp_path):
+    """Verify that post_campaign_instantiate's exception handler correctly catches
+    both SheetError (existing) and ModuleNotFound (TOCTOU race) by confirming the
+    route properly handles ModuleNotFound raised during sheet write."""
+    from unittest.mock import patch
+    mid = _seed_content_module(client, tmp_path, statted=True)
+    wid, cid = _campaign(client)
+    client.put(f"/api/campaigns/{cid}/module", json={"module": mid})
+
+    # Set up a patch that raises ModuleNotFound when sheets.write is called
+    # This simulates the TOCTOU race condition
+    def mock_write_raises_module_not_found(*args, **kwargs):
+        raise store.modules.ModuleNotFound(mid)
+
+    with patch("grimoire.store.sheets.write", side_effect=mock_write_raises_module_not_found):
+        # Post request should return 400 (not 500) because the exception is now caught
+        r = client.post(f"/api/campaigns/{cid}/items/instantiate/{mid}/lantern")
+        assert r.status_code == 400, f"Expected 400 but got {r.status_code}: {r.json()}"
+        # Verify entity was rolled back
+        items = client.get(f"/api/campaigns/{cid}/items").json()
+        assert items == [], "Entity should have been rolled back"
+
+
 def test_campaign_module_binding_api(client):
     wid, cid = _campaign(client)
     r = client.get(f"/api/campaigns/{cid}/module").json()
@@ -3771,3 +3909,57 @@ def test_retry_heals_projection_before_supersede(client):
     assert len(_roll_lines(client, cid, sid)) == 1
     after = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
     assert after["id"] == pid and after["status"] == "superseded"
+
+
+def test_campaign_sheet_creation_route(client):
+    wid, cid = _campaign(client)
+    client.put(f"/api/campaigns/{cid}/module", json={"module": "pool-basic"})
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"}).json()["character"]
+    base = f"/api/campaigns/{cid}/sheets/characters/{chid}/creation"
+    r = client.put(base, json={"sheet_type": "medium", "spends": {}})
+    assert r.status_code == 200
+    assert r.json()["sheet"]["sheet_type"] == "medium"
+    r = client.put(base, json={"sheet_type": "ghost", "spends": {}})
+    assert r.status_code == 400
+
+
+def test_campaign_sheet_creation_route_missing_target_404(client):
+    wid, cid = _campaign(client)
+    client.put(f"/api/campaigns/{cid}/module", json={"module": "pool-basic"})
+    base = f"/api/campaigns/{cid}/sheets/characters/nobody/creation"
+    r = client.put(base, json={"sheet_type": "medium", "spends": {}})
+    assert r.status_code == 404
+
+
+def test_world_sheet_creation_route(client):
+    wid = _world(client)
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"}).json()["character"]
+    base = f"/api/worlds/{wid}/sheets/pool-basic/characters/{chid}/creation"
+    r = client.put(base, json={"sheet_type": "medium", "spends": {}})
+    assert r.status_code == 200
+    assert r.json()["sheet"]["sheet_type"] == "medium"
+    assert client.put(f"/api/worlds/{wid}/sheets/ghost/characters/{chid}/creation",
+                      json={"sheet_type": "medium", "spends": {}}).status_code == 404
+
+
+def test_world_sheet_creation_route_missing_target_404(client):
+    wid = _world(client)
+    base = f"/api/worlds/{wid}/sheets/pool-basic/characters/nobody/creation"
+    r = client.put(base, json={"sheet_type": "medium", "spends": {}})
+    assert r.status_code == 404
+
+
+def test_advance_route(client):
+    wid, cid = _campaign(client)
+    client.put(f"/api/campaigns/{cid}/module", json={"module": "pool-basic"})
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"}).json()["character"]
+    client.put(f"/api/campaigns/{cid}/sheets/characters/{chid}", json={"sheet_type": "medium"})
+    # pool-basic's "medium" has advancement block (added in Task 10) -- expect 200
+    r = client.post(f"/api/campaigns/{cid}/sheets/characters/{chid}/advance", json={"field": "wits"})
+    assert r.status_code == 200
+    assert "sheet" in r.json()
+    assert client.post(f"/api/campaigns/nope/sheets/characters/{chid}/advance",
+                       json={"field": "wits"}).status_code == 404
+    # nonexistent target character -- 404, not the 400 a plain SheetError would give
+    assert client.post(f"/api/campaigns/{cid}/sheets/characters/nobody/advance",
+                       json={"field": "wits"}).status_code == 404

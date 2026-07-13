@@ -1,5 +1,5 @@
 import type { CSSProperties, ReactNode } from "react";
-import type { LayoutNode, ModuleDetail, ModuleField, ModuleTheme } from "../api/client";
+import type { EntityScope, LayoutNode, ModuleDetail, ModuleField, ModuleTheme } from "../api/client";
 import { DerivedBadge, FieldWidget, type WidgetMode } from "./SheetWidgets";
 
 /** Full field-def set (group fields + own fields) for a sheet type — the one
@@ -53,6 +53,13 @@ type Ctx = {
   onChange?: (key: string, v: unknown) => void;
   placedFields: Set<string>;
   placedDerived: Set<string>;
+  scope: EntityScope;
+  module: ModuleDetail;
+  onOpenRef?: (kind: string, id: string) => void;
+  // Set only in campaign scope when the sheet type has an advancement block;
+  // a field key present here is advancement-eligible.
+  advancementCosts?: Record<string, string>;
+  onAdvance?: (key: string) => void;
 };
 
 function fieldSet(keys: string[], grid: boolean | undefined, ctx: Ctx): ReactNode {
@@ -60,9 +67,12 @@ function fieldSet(keys: string[], grid: boolean | undefined, ctx: Ctx): ReactNod
     ctx.placedFields.add(k);
     const def = ctx.defs.get(k);
     if (!def) return null; // backend-validated; defensive only
+    const advEligible = ctx.mode === "view" && !!ctx.advancementCosts && k in ctx.advancementCosts;
     return (
       <FieldWidget key={k} def={def} value={ctx.values[k]} mode={ctx.mode} grid={grid}
-                   onChange={ctx.onChange ? (v) => ctx.onChange!(k, v) : undefined} />
+                   onChange={ctx.onChange ? (v) => ctx.onChange!(k, v) : undefined}
+                   scope={ctx.scope} module={ctx.module} onOpenRef={ctx.onOpenRef}
+                   onAdvance={advEligible ? () => ctx.onAdvance?.(k) : undefined} />
     );
   });
   return grid ? <div className="stat-grid">{widgets}</div> : <>{widgets}</>;
@@ -93,17 +103,22 @@ function renderNode(node: LayoutNode, ctx: Ctx, key: number): ReactNode {
   );
 }
 
-export default function SheetLayout({ module, sheetType, mode, values, derived, onChange }: {
+export default function SheetLayout({ module, sheetType, mode, values, derived, onChange, scope, onOpenRef, onAdvance }: {
   module: ModuleDetail; sheetType: string; mode: WidgetMode;
   values: Record<string, unknown>; derived: Record<string, unknown>;
   onChange?: (key: string, v: unknown) => void;
+  scope: EntityScope; onOpenRef?: (kind: string, id: string) => void;
+  onAdvance?: (key: string) => void;
 }) {
   const tree = module.layout?.sheet_types?.[sheetType] ?? defaultLayout(module, sheetType);
+  const typeDef = module.sheets.sheet_types[sheetType];
+  const advancementCosts = scope.kind === "campaign" ? typeDef?.advancement?.costs : undefined;
   const ctx: Ctx = {
     defs: new Map(assembledDefs(module, sheetType).map((f) => [f.key, f])),
     groupFields: (gid) => (module.sheets.groups[gid]?.fields ?? []).map((f) => f.key),
     values, derived, mode, onChange,
     placedFields: new Set(), placedDerived: new Set(),
+    scope, module, onOpenRef, advancementCosts, onAdvance,
   };
   const body = renderNode(tree, ctx, 0); // eager: populates placed* sets
   const restFields = [...ctx.defs.keys()].filter((k) => !ctx.placedFields.has(k));

@@ -12,7 +12,10 @@ Spec: docs/superpowers/specs/2026-07-12-mechanics-phase3-sheets-design.md.
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import tempfile
+import threading
 from pathlib import Path
 
 from . import campaigns, characters, entities, expressions, modules, overlay, pcs, worlds
@@ -23,6 +26,23 @@ class SheetError(Exception):
 
 
 FILE_KINDS: tuple[str, ...] = ("characters", "pcs") + entities.ENTITY_KINDS
+
+
+def _atomic_write_json(path: Path, data: dict) -> None:
+    """Write JSON via a same-directory temp file + os.replace, so a crash
+    mid-write can never leave a half-written sheet file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(data, indent=2))
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
 def sheet_kind(kind: str) -> str:
@@ -179,8 +199,9 @@ def read(cid: str, kind: str, eid: str) -> dict | None:
     return _read_path(_campaign_path(cid, kind, eid), kind, mid)
 
 
-def _checked_write(path: Path, mid: str, file_kind: str, eid: str,
-                   sheet_type: str, fields: dict | None) -> None:
+def _validate_write_target(mid: str, file_kind: str, eid: str, sheet_type: str) -> dict:
+    """Shared prelude for every checked sheet write: validates file_kind/eid/
+    sheet_type and returns the resolved sheets definition. Raises SheetError."""
     if file_kind not in FILE_KINDS:
         raise SheetError(f"unknown sheet kind {file_kind!r}")
     if not _safe_part(eid):
@@ -195,6 +216,12 @@ def _checked_write(path: Path, mid: str, file_kind: str, eid: str,
         raise SheetError(
             f"sheet type {sheet_type!r} targets {st.get('kind')!r}, "
             f"not {sheet_kind(file_kind)!r}")
+    return sheets_def
+
+
+def _checked_write(path: Path, mid: str, file_kind: str, eid: str,
+                   sheet_type: str, fields: dict | None) -> None:
+    sheets_def = _validate_write_target(mid, file_kind, eid, sheet_type)
     if fields is None:
         fields = default_fields(sheets_def, sheet_type)
     else:
@@ -206,9 +233,7 @@ def _checked_write(path: Path, mid: str, file_kind: str, eid: str,
         errs = modules.validate_sheet_values(sheets_def, sheet_type, fields)
         if errs:
             raise SheetError("; ".join(errs))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"sheet_type": sheet_type, "fields": fields},
-                               indent=2), encoding="utf-8")
+    _atomic_write_json(path, {"sheet_type": sheet_type, "fields": fields})
 
 
 def write(cid: str, kind: str, eid: str, sheet_type: str,
@@ -271,6 +296,113 @@ def write_world(wid: str, mid: str, kind: str, eid: str, sheet_type: str,
     modules.pack_root(mid)  # raises ModuleNotFound
     _checked_write(_world_path(wid, mid, kind, eid), mid, kind, eid,
                    sheet_type, fields)
+
+
+def _pool_floor(field: dict) -> int:
+    if field.get("type") == "number":
+        m = field.get("min")
+        return m if isinstance(m, int) and not isinstance(m, bool) else 0
+    return 0  # dots/track floor is always 0
+
+
+def _pool_group_fields(sheets_def: dict, pool_id: str) -> dict[str, dict]:
+    group = sheets_def.get("groups", {}).get(pool_id, {})
+    fields = group.get("fields", []) if isinstance(group, dict) else []
+    if not isinstance(fields, list):
+        return {}
+    return {f["key"]: f for f in fields if isinstance(f, dict) and isinstance(f.get("key"), str)}
+
+
+def _pool_budget(pool: dict) -> int:
+    raw = pool.get("budget", 0)
+    if isinstance(raw, int) and not isinstance(raw, bool):
+        return raw
+    return expressions.evaluate(str(raw), {})
+
+
+def _assert_world_entity_exists(wid: str, kind: str, eid: str) -> None:
+    """Raises the underlying store's NotFound exception if eid doesn't exist.
+    Skips silently for a kind outside FILE_KINDS -- the write path's own
+    kind validation (_validate_write_target) already rejects that case."""
+    if kind not in FILE_KINDS:
+        return
+    root = worlds.world_root(wid)
+    if kind == "characters":
+        characters.read_character(root, eid)
+    elif kind == "pcs":
+        pcs.read_pc(root, eid)
+    else:
+        entities.read_entity(root, kind, eid)
+
+
+def _assert_campaign_entity_exists(cid: str, kind: str, eid: str) -> None:
+    if kind not in FILE_KINDS:
+        return
+    if kind == "characters":
+        overlay.read_character(cid, eid)
+    elif kind == "pcs":
+        pcs.read_pc(overlay.pc_root(cid, eid), eid)
+    else:
+        overlay.read_entity(cid, kind, eid)
+
+
+def _checked_creation_write(path: Path, mid: str, file_kind: str, eid: str,
+                            sheet_type: str, spends: dict) -> None:
+    sheets_def = _validate_write_target(mid, file_kind, eid, sheet_type)
+    if not isinstance(spends, dict):
+        raise SheetError("spends must be an object")
+    st = sheets_def["sheet_types"][sheet_type]
+    pools = st.get("creation", {}).get("pools", {}) if isinstance(st.get("creation"), dict) else {}
+    for pool_id in spends:
+        if pool_id not in pools:
+            raise SheetError(f"unknown pool {pool_id!r}")
+    fields = default_fields(sheets_def, sheet_type)
+    for pool_id, pool in pools.items():
+        if not isinstance(pool, dict):
+            continue
+        costs = pool.get("costs", {})
+        group_fields = _pool_group_fields(sheets_def, pool_id)
+        pool_spends = spends.get(pool_id, {})
+        if not isinstance(pool_spends, dict):
+            raise SheetError(f"spends[{pool_id!r}] must be an object")
+        for extra in set(pool_spends) - set(costs):
+            raise SheetError(f"{extra!r} is not a costed field of pool {pool_id!r}")
+        total = 0
+        for field_key, cost in costs.items():
+            fdef = group_fields.get(field_key, {})
+            floor = _pool_floor(fdef)
+            value = pool_spends.get(field_key, floor)
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise SheetError(f"{field_key!r}: expected an integer")
+            fmax = fdef.get("max")
+            hi = fmax if isinstance(fmax, int) and not isinstance(fmax, bool) else floor
+            if not floor <= value <= hi:
+                raise SheetError(f"{field_key!r}: outside {floor}..{hi}")
+            total += (value - floor) * cost
+            fields[field_key] = value
+        budget = _pool_budget(pool)
+        if total > budget:
+            raise SheetError(f"pool {pool_id!r}: spent {total}, budget {budget}")
+    errs = modules.validate_sheet_values(sheets_def, sheet_type, fields)
+    if errs:
+        raise SheetError("; ".join(errs))
+    _atomic_write_json(path, {"sheet_type": sheet_type, "fields": fields})
+
+
+def write_creation(cid: str, kind: str, eid: str, sheet_type: str,
+                   spends: dict[str, dict[str, int]]) -> None:
+    mid = modules.resolve(cid)
+    if mid is None:
+        raise SheetError("no module resolved for this campaign")
+    _assert_campaign_entity_exists(cid, kind, eid)
+    _checked_creation_write(_campaign_path(cid, kind, eid), mid, kind, eid, sheet_type, spends)
+
+
+def write_world_creation(wid: str, mid: str, kind: str, eid: str, sheet_type: str,
+                         spends: dict[str, dict[str, int]]) -> None:
+    modules.pack_root(mid)  # raises ModuleNotFound
+    _assert_world_entity_exists(wid, kind, eid)
+    _checked_creation_write(_world_path(wid, mid, kind, eid), mid, kind, eid, sheet_type, spends)
 
 
 def delete_world(wid: str, mid: str, kind: str, eid: str) -> bool:
@@ -380,3 +512,88 @@ def world_coverage(wid: str, mid: str) -> dict:
             ids = [e["id"] for e in entities.list_entities(root, kind)]
         out[kind] = _tally(ids, lambda eid, k=kind: read_world(wid, mid, k, eid))
     return out
+
+
+# ---- advancement (#164, Phase 7): single resource pool, formula-priced raises ----
+
+_registry_guard = threading.Lock()
+_campaign_locks: dict[str, threading.Lock] = {}
+
+
+def _lock_for(cid: str) -> threading.Lock:
+    """Get-or-create the per-campaign lock atomically -- a plain
+    `if cid not in _campaign_locks: ...` is a check-then-act race that can
+    hand two concurrent first-ever callers different Lock objects."""
+    with _registry_guard:
+        return _campaign_locks.setdefault(cid, threading.Lock())
+
+
+def _advancement_cost(sheets_def: dict, type_id: str, field_key: str,
+                      fields: dict, new: int) -> int:
+    """Evaluate an advancement cost against a tentative post-raise scope:
+    the raised field is set to `new` before recomputing derived values, so a
+    cost formula referencing a derived name sees the post-raise state."""
+    tentative = {**fields, field_key: new}
+    scope = _numeric_scope(sheets_def, type_id, tentative)
+    derived_errors: list[str] = []
+    derived = _compute_derived(sheets_def, type_id, tentative, derived_errors)
+    st = sheets_def.get("sheet_types", {}).get(type_id, {})
+    adv = st.get("advancement", {}) if isinstance(st, dict) else {}
+    expr = adv.get("costs", {}).get(field_key) if isinstance(adv, dict) else None
+    if not isinstance(expr, str):
+        raise SheetError(f"{field_key!r} is not advancement-eligible")
+    try:
+        cost = expressions.evaluate(expr, {**scope, **derived, "new": new})
+    except expressions.ExpressionError as e:
+        raise SheetError(f"advancement cost for {field_key!r}: {e}")
+    if not isinstance(cost, int) or isinstance(cost, bool) or cost <= 0:
+        raise SheetError(f"advancement cost for {field_key!r} must be a positive integer, got {cost!r}")
+    return cost
+
+
+def advance(cid: str, kind: str, eid: str, field_key: str) -> dict:
+    lock = _lock_for(cid)
+    with lock:
+        mid = modules.resolve(cid)
+        if mid is None:
+            raise SheetError("no module resolved for this campaign")
+        _assert_campaign_entity_exists(cid, kind, eid)
+        path = _campaign_path(cid, kind, eid)
+        if not path.exists():
+            raise SheetError("no sheet exists for this entity")
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError) as e:
+            raise SheetError(f"unreadable sheet file: {e}")
+        sheet_type = data.get("sheet_type") if isinstance(data, dict) else None
+        fields = data.get("fields") if isinstance(data, dict) and isinstance(data.get("fields"), dict) else {}
+        sheets_def = modules.load_pack(mid)["sheets"]
+        st = sheets_def.get("sheet_types", {}).get(sheet_type) if isinstance(sheet_type, str) else None
+        if not isinstance(st, dict):
+            raise SheetError("sheet has no valid sheet type")
+        adv = st.get("advancement")
+        if not isinstance(adv, dict):
+            raise SheetError("this sheet type has no advancement rules")
+        pool_key = adv.get("pool")
+        costs = adv.get("costs", {})
+        if field_key not in costs:
+            raise SheetError(f"{field_key!r} is not advancement-eligible")
+        field_defs = {f["key"]: f for f in modules.assembled_fields(sheets_def, sheet_type)
+                      if isinstance(f, dict) and isinstance(f.get("key"), str)}
+        fdef = field_defs.get(field_key, {})
+        current = fields.get(field_key, 0)
+        current = current if isinstance(current, int) and not isinstance(current, bool) else 0
+        fmax = fdef.get("max")
+        if isinstance(fmax, int) and not isinstance(fmax, bool) and current >= fmax:
+            raise SheetError(f"{field_key!r} is already at its maximum ({fmax})")
+        new = current + 1
+        cost = _advancement_cost(sheets_def, sheet_type, field_key, fields, new)
+        pool_val = fields.get(pool_key)
+        balance = pool_val.get("current", 0) if isinstance(pool_val, dict) else 0
+        if balance < cost:
+            raise SheetError(f"needs {cost} {pool_key}, have {balance}")
+        pool_max = pool_val.get("max", balance) if isinstance(pool_val, dict) else 0
+        new_fields = {**fields, field_key: new,
+                      pool_key: {"current": balance - cost, "max": pool_max}}
+        _atomic_write_json(path, {"sheet_type": sheet_type, "fields": new_fields})
+        return _read_path(path, kind, mid)

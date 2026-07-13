@@ -3,7 +3,10 @@ import SheetEditor, { typeKind } from "./SheetEditor";
 import type { ModuleDetail, Sheet } from "../api/client";
 
 vi.mock("../api/client", () => ({
-  api: { putSheet: vi.fn(), deleteSheet: vi.fn() },
+  api: {
+    putSheet: vi.fn(), deleteSheet: vi.fn(), listEntities: vi.fn(), readModuleContent: vi.fn(),
+    instantiateContent: vi.fn(), advanceSheet: vi.fn(),
+  },
 }));
 import { api } from "../api/client";
 
@@ -52,6 +55,36 @@ const SHEET: Sheet = {
   fields: { vigor: 3, strength: 10, essence: { current: 6, max: 10 }, quirk: "", gear: [] },
   derived: { sight_pool: 6 },
   errors: [],
+};
+
+const REF_MOD: ModuleDetail = {
+  ...MOD,
+  sheets: {
+    groups: {},
+    sheet_types: {
+      warden: {
+        label: "Warden", kind: "characters", groups: [],
+        fields: [{ key: "known", label: "Known Spells", type: "ref", ref_kind: "lore" }],
+      },
+    },
+  },
+};
+
+const ADV_MOD: ModuleDetail = {
+  ...MOD,
+  sheets: {
+    groups: {},
+    sheet_types: {
+      warden: {
+        label: "Warden", kind: "characters", groups: [],
+        fields: [
+          { key: "wits", label: "Wits", type: "dots", max: 5 },
+          { key: "xp", label: "XP", type: "resource", max: 999 },
+        ],
+        advancement: { pool: "xp", costs: { wits: "new * 3" } },
+      },
+    },
+  },
 };
 
 beforeEach(() => {
@@ -276,4 +309,111 @@ test("dropped-layout hint routing", () => {
     display_errors: [{ source: "layout", sheet_type: null, message: "fragments.broken: bad" }] };
   const r5 = render(<SheetEditor {...base} module={otherSurvived} />);
   expect(r5.queryByText(HINT)).toBeNull();
+});
+
+test("view mode renders entity-form ref chips that call onOpenRef", async () => {
+  const onOpenRef = vi.fn();
+  const initial: Sheet = { sheet_type: "warden", fields: { known: ["lore:fireball"] }, derived: {}, errors: [] };
+  render(<SheetEditor scope={{ kind: "campaign", id: "run" }} module={REF_MOD}
+                      kind="characters" eid="mara" initial={initial}
+                      onClose={() => {}} onSaved={() => {}} onOpenRef={onOpenRef} />);
+  fireEvent.click(screen.getByText(/fireball/i));
+  expect(onOpenRef).toHaveBeenCalledWith("lore", "fireball");
+});
+
+test("view mode renders module-content ref chips that open a preview instead", async () => {
+  (api.readModuleContent as any).mockResolvedValue({
+    kind: "lore", id: "icebolt", name: "Icebolt", body: "A shard of ice.", keys: "", sheet_type: null, fields: {},
+  });
+  const initial: Sheet = { sheet_type: "warden", fields: { known: ["lore:module:icebolt"] }, derived: {}, errors: [] };
+  render(<SheetEditor scope={{ kind: "campaign", id: "run" }} module={REF_MOD}
+                      kind="characters" eid="mara" initial={initial}
+                      onClose={() => {}} onSaved={() => {}} />);
+  fireEvent.click(screen.getByText(/icebolt/i));
+  await screen.findByText("A shard of ice.");
+});
+
+test("module-content ref preview's Instantiate button calls the API and closes the preview", async () => {
+  (api.readModuleContent as any).mockResolvedValue({
+    kind: "lore", id: "icebolt", name: "Icebolt", body: "A shard of ice.", keys: "", sheet_type: null, fields: {},
+  });
+  (api.instantiateContent as any).mockResolvedValue({ id: "icebolt" });
+  const initial: Sheet = { sheet_type: "warden", fields: { known: ["lore:module:icebolt"] }, derived: {}, errors: [] };
+  render(<SheetEditor scope={{ kind: "campaign", id: "run" }} module={REF_MOD}
+                      kind="characters" eid="mara" initial={initial}
+                      onClose={() => {}} onSaved={() => {}} />);
+  fireEvent.click(screen.getByText(/icebolt/i));
+  await screen.findByText("A shard of ice.");
+  fireEvent.click(screen.getByText("Instantiate"));
+  await waitFor(() => expect(api.instantiateContent).toHaveBeenCalledWith(
+    { kind: "campaign", id: "run" }, "lore", "pool-basic", "icebolt"));
+  await waitFor(() => expect(screen.queryByText("A shard of ice.")).not.toBeInTheDocument());
+});
+
+test("module-content ref preview shows an error and stays open when Instantiate fails", async () => {
+  (api.readModuleContent as any).mockResolvedValue({
+    kind: "lore", id: "icebolt", name: "Icebolt", body: "A shard of ice.", keys: "", sheet_type: null, fields: {},
+  });
+  (api.instantiateContent as any).mockRejectedValue({ detail: "already instantiated" });
+  const initial: Sheet = { sheet_type: "warden", fields: { known: ["lore:module:icebolt"] }, derived: {}, errors: [] };
+  render(<SheetEditor scope={{ kind: "campaign", id: "run" }} module={REF_MOD}
+                      kind="characters" eid="mara" initial={initial}
+                      onClose={() => {}} onSaved={() => {}} />);
+  fireEvent.click(screen.getByText(/icebolt/i));
+  await screen.findByText("A shard of ice.");
+  fireEvent.click(screen.getByText("Instantiate"));
+  await screen.findByText("already instantiated");
+  expect(screen.getByText("A shard of ice.")).toBeInTheDocument();
+});
+
+test("edit mode offers a two-group checkbox picker for a ref field", async () => {
+  (api.listEntities as any).mockResolvedValue([{ id: "fireball", name: "Fireball" }]);
+  const initial: Sheet = { sheet_type: "warden", fields: { known: [] }, derived: {}, errors: [] };
+  render(<SheetEditor scope={{ kind: "campaign", id: "run" }} module={REF_MOD}
+                      kind="characters" eid="mara" initial={initial}
+                      onClose={() => {}} onSaved={() => {}} />);
+  fireEvent.click(screen.getByText("Edit"));
+  await screen.findByText("In your world/campaign");
+  await screen.findByText("From Pool Basic");
+  fireEvent.click(screen.getByLabelText("Fireball"));
+  fireEvent.click(screen.getByText("Save"));
+  await waitFor(() => expect(api.putSheet).toHaveBeenCalledWith(
+    { kind: "campaign", id: "run" }, "pool-basic", "characters", "mara",
+    { sheet_type: "warden", fields: { known: ["lore:fireball"] } }));
+});
+
+test("shows an advance button for advancement-eligible fields and calls the API on click", async () => {
+  const initial: Sheet = {
+    sheet_type: "warden", fields: { wits: 2, xp: { current: 20, max: 999 } }, derived: {}, errors: [],
+  };
+  (api.advanceSheet as any).mockResolvedValue({
+    sheet: { sheet_type: "warden", fields: { wits: 3, xp: { current: 11, max: 999 } }, derived: {}, errors: [] },
+  });
+  render(<SheetEditor scope={{ kind: "campaign", id: "run" }} module={ADV_MOD}
+                      kind="characters" eid="mara" initial={initial}
+                      onClose={() => {}} onSaved={() => {}} />);
+  fireEvent.click(screen.getByLabelText("Advance Wits"));
+  await waitFor(() => expect(api.advanceSheet).toHaveBeenCalledWith("run", "characters", "mara", "wits"));
+});
+
+test("shows the SheetError message on a rejected advance", async () => {
+  const initial: Sheet = {
+    sheet_type: "warden", fields: { wits: 2, xp: { current: 1, max: 999 } }, derived: {}, errors: [],
+  };
+  (api.advanceSheet as any).mockRejectedValue({ detail: "needs 6 xp, have 1" });
+  render(<SheetEditor scope={{ kind: "campaign", id: "run" }} module={ADV_MOD}
+                      kind="characters" eid="mara" initial={initial}
+                      onClose={() => {}} onSaved={() => {}} />);
+  fireEvent.click(screen.getByLabelText("Advance Wits"));
+  await screen.findByText("needs 6 xp, have 1");
+});
+
+test("hides the advance button at world scope (starting sheets have no XP economy)", () => {
+  const initial: Sheet = {
+    sheet_type: "warden", fields: { wits: 2, xp: { current: 20, max: 999 } }, derived: {}, errors: [],
+  };
+  render(<SheetEditor scope={{ kind: "world", id: "realm" }} module={ADV_MOD}
+                      kind="characters" eid="mara" initial={initial}
+                      onClose={() => {}} onSaved={() => {}} />);
+  expect(screen.queryByLabelText("Advance Wits")).not.toBeInTheDocument();
 });

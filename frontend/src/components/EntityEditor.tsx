@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { api, ENTITY_FIELDS, type EntityKind, type EntityScope, type EntitySummary, type ModuleDetail } from "../api/client";
+import { api, ENTITY_FIELDS, type EntityKind, type EntityScope, type EntitySummary, type ModuleContentEntry, type ModuleDetail } from "../api/client";
 import { loreOwnerOptions, type LoreOwner } from "../api/loreOwners";
+import CreationWizard from "./CreationWizard";
 import { Field } from "./Field";
 import { GroupStatePanel } from "./GroupStatePanel";
 import { OwnedLorePanel } from "./OwnedLorePanel";
@@ -37,6 +38,8 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
   const [mode, setMode] = useState<"view" | "edit">("edit"); // existing entries open read-only
   const [error, setError] = useState<string | null>(null);
   const [images, setImages] = useState<{ name: string; v: string }[]>([]); // selected location's assets
+  const [contentPreview, setContentPreview] = useState<ModuleContentEntry | null>(null);
+  const [wizardOpen, setWizardOpen] = useState(false);
   const shelfFileRef = useRef<HTMLInputElement>(null);
   const label = KIND_LABELS[kind];
 
@@ -72,6 +75,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
       setFields({});
       setOwners(nav.newOwner ? [nav.newOwner] : []);
       setMode("edit");
+      setContentPreview(null);
     }
     onNavConsumed?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -93,11 +97,15 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
     setOwners([]); // manual "+ New" / post-save: always world-level, never a stale nav owner
     setSdPrompt("");
     setImages([]);
+    setContentPreview(null);
+    setWizardOpen(false);
     setMode("edit"); // a brand-new entry goes straight to the form
   }
 
   async function select(id: string) {
     setError(null);
+    setContentPreview(null);
+    setWizardOpen(false);
     const e = await api.readEntity(scope, kind, id);
     setEditing(id);
     setName(e.meta.name);
@@ -108,6 +116,28 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
     setSdPrompt(e.meta.sd_prompt ?? "");
     setMode("view");
     reloadImages(id);
+  }
+
+  async function selectContent(id: string) {
+    if (!module) return;
+    setError(null);
+    const entry = await api.readModuleContent(module.id, kind, id);
+    setContentPreview(entry);
+    setEditing(null);
+    setMode("view");
+  }
+
+  async function instantiate() {
+    if (!module || !contentPreview) return;
+    setError(null);
+    try {
+      const { id } = await api.instantiateContent(scope, kind, module.id, contentPreview.id);
+      setContentPreview(null);
+      await reload();
+      await select(id);
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
   }
 
   async function save() {
@@ -228,6 +258,11 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
     <div className="editor">
       <div className="editor-list">
         <button className="primary new" onClick={resetForm}>+ New {label}</button>
+        {module && Object.values(module.sheets.sheet_types).some((st) => st.kind === kind) && (
+          <button className="subtle" onClick={() => { resetForm(); setWizardOpen(true); }}>
+            + New {label} with sheet…
+          </button>
+        )}
         {kind === "lore"
           ? groups.map((g) => (
               <div key={g.key} className="rail-group">
@@ -237,11 +272,42 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
             ))
           : items.map(row)}
         {items.length === 0 && <div className="editor-empty">No {kind} yet.</div>}
+        {module?.content.filter((c) => c.kind === kind).map((c) => (
+          <button key={`content-${c.id}`} className="row content-row"
+                  onClick={() => selectContent(c.id)}>
+            <span className="row-name">{c.name}</span>
+            <span className="chip">template</span>
+          </button>
+        ))}
       </div>
 
       <div className="editor-body">
         {error && <div className="banner">{error}</div>}
-        {mode === "view" && editing ? (
+        {wizardOpen && module ? (
+          <CreationWizard scope={scope} kind={kind} module={module}
+                          createRecord={(n) => api.createEntity(scope, kind, { name: n }).then((r) => r.id)}
+                          deleteRecord={(id) => api.deleteEntity(scope, kind, id).then(() => {})}
+                          onDone={async (id) => { setWizardOpen(false); await reload(); await select(id); }}
+                          onCancel={() => setWizardOpen(false)} />
+        ) : contentPreview ? (
+          <div className="detail-view">
+            <div className="detail-main">
+              <h3>{contentPreview.name}</h3>
+              <div className="detail-rendered">
+                <Markdown remarkPlugins={[remarkGfm]}>{contentPreview.body}</Markdown>
+              </div>
+            </div>
+            <aside className="detail-sidebar">
+              <div className="form-actions">
+                <button className="primary" onClick={instantiate}>Instantiate</button>
+              </div>
+              <div className="side-section">
+                <h4>Module</h4>
+                <span className="chip on">{module?.manifest.name}</span>
+              </div>
+            </aside>
+          </div>
+        ) : mode === "view" && editing ? (
           <div className="detail-view">
             <div className="detail-main">
               {editing && hasPrimary ? (
@@ -339,7 +405,8 @@ export function EntityEditor({ wid, kind, scope: scopeProp, nav, onNavConsumed, 
                 <GroupStatePanel cid={scope.id} gid={editing} />
               )}
               {module && editing && (
-                <SheetPanel scope={scope} module={module} kind={kind} eid={editing} />
+                <SheetPanel scope={scope} module={module} kind={kind} eid={editing}
+                            onOpenRef={(kind, id) => onOpenOwner?.(`${kind}:${id}`)} />
               )}
             </aside>
           </div>

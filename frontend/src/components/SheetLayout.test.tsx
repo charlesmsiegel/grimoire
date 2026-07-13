@@ -1,6 +1,8 @@
 import { render, screen } from "@testing-library/react";
 import SheetLayout, { defaultLayout, themeStyle } from "./SheetLayout";
-import type { ModuleDetail } from "../api/client";
+import type { EntityScope, ModuleDetail } from "../api/client";
+
+const SCOPE: EntityScope = { kind: "campaign", id: "run" };
 
 const MOD: ModuleDetail = {
   id: "pool-basic", source: "builtin",
@@ -35,7 +37,7 @@ const DERIVED = { sight_pool: 2 };
 
 test("renders layout tree with titles, widgets, and derived badges", () => {
   const { container } = render(
-    <SheetLayout module={MOD} sheetType="medium" mode="view" values={VALUES} derived={DERIVED} />);
+    <SheetLayout module={MOD} sheetType="medium" mode="view" values={VALUES} derived={DERIVED} scope={SCOPE} />);
   expect(screen.getByText("Attributes")).toBeInTheDocument();
   expect(screen.getByText("Power")).toBeInTheDocument();
   expect(container.querySelectorAll(".pip").length).toBe(10);  // vigor + wits
@@ -44,7 +46,7 @@ test("renders layout tree with titles, widgets, and derived badges", () => {
 
 test("unplaced fields land in Other", () => {
   // layout places essence but not gear
-  render(<SheetLayout module={MOD} sheetType="medium" mode="view" values={VALUES} derived={DERIVED} />);
+  render(<SheetLayout module={MOD} sheetType="medium" mode="view" values={VALUES} derived={DERIVED} scope={SCOPE} />);
   expect(screen.getByText("Other")).toBeInTheDocument();
   expect(screen.getByText("rope")).toBeInTheDocument();
 });
@@ -52,7 +54,7 @@ test("unplaced fields land in Other", () => {
 test("no layout: default arrangement with widgets and trailing Derived", () => {
   const bare: ModuleDetail = { ...MOD, layout: { sheet_types: {} } };
   const { container } = render(
-    <SheetLayout module={bare} sheetType="medium" mode="view" values={VALUES} derived={DERIVED} />);
+    <SheetLayout module={bare} sheetType="medium" mode="view" values={VALUES} derived={DERIVED} scope={SCOPE} />);
   expect(screen.getByText("Attributes")).toBeInTheDocument(); // group title
   expect(screen.getByText("Details")).toBeInTheDocument();    // own fields
   expect(screen.getByText("Derived")).toBeInTheDocument();    // trailing derived
@@ -70,7 +72,7 @@ test("defaultLayout skips groups missing from the module", () => {
 test("edit mode threads onChange through widgets", () => {
   const onChange = vi.fn();
   render(<SheetLayout module={MOD} sheetType="medium" mode="edit"
-                      values={VALUES} derived={DERIVED} onChange={onChange} />);
+                      values={VALUES} derived={DERIVED} onChange={onChange} scope={SCOPE} />);
   screen.getByLabelText("Vigor 4").click();
   expect(onChange).toHaveBeenCalledWith("vigor", 4);
 });
@@ -80,7 +82,7 @@ test("grid: true on a layout node renders a stat-grid with the group's widgets",
     medium: { column: [{ group: "attributes", grid: true, title: "Attributes" }] },
   }}};
   const { container } = render(
-    <SheetLayout module={gridded} sheetType="medium" mode="view" values={VALUES} derived={DERIVED} />);
+    <SheetLayout module={gridded} sheetType="medium" mode="view" values={VALUES} derived={DERIVED} scope={SCOPE} />);
   const grid = container.querySelector(".stat-grid");
   expect(grid).not.toBeNull();
   expect(grid!.querySelectorAll(".pip").length).toBe(10);  // vigor (5) + wits (5)

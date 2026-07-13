@@ -15,7 +15,7 @@ import re
 import shutil
 from pathlib import Path
 
-from . import dice, expressions, module_display
+from . import dice, entities, expressions, module_display
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import home, slugify, uniquify
 
@@ -27,7 +27,11 @@ class ModuleNotFound(Exception):
     pass
 
 
-FIELD_TYPES = ("number", "dots", "track", "resource", "text", "list")
+class ContentNotFound(Exception):
+    pass
+
+
+FIELD_TYPES = ("number", "dots", "track", "resource", "text", "list", "ref")
 SHEET_KINDS = ("characters", "items", "locations", "creatures", "groups", "lore")
 CONTENT_KINDS = ("locations", "lore", "items", "groups", "creatures")
 
@@ -111,6 +115,10 @@ def _validate_field(field: dict, where: str, errors: list[str]) -> None:
     if ftype not in FIELD_TYPES:
         errors.append(f"{where}.{key}: unknown field type {ftype!r}")
         return
+    if ftype == "ref":
+        ref_kind = field.get("ref_kind")
+        if ref_kind not in entities.ENTITY_KINDS:
+            errors.append(f"{where}.{key}: ref field requires ref_kind in {entities.ENTITY_KINDS}")
     if ftype in ("dots", "track", "resource"):
         m = field.get("max")
         if not isinstance(m, int) or isinstance(m, bool):
@@ -183,6 +191,102 @@ def _validate_derived(derived: dict, scope: set[str], where: str,
             errors.append(f"{where}.{name}: unknown names {sorted(unknown)}")
         out.add(name)
     return out
+
+
+def _pool_group_fields(group: dict) -> dict[str, dict]:
+    fields = group.get("fields", []) if isinstance(group, dict) else []
+    if not isinstance(fields, list):
+        return {}
+    return {f["key"]: f for f in fields if isinstance(f, dict) and isinstance(f.get("key"), str)}
+
+
+def _validate_creation(st: dict, st_groups: list, groups: dict, where: str,
+                       errors: list[str]) -> None:
+    creation = st.get("creation")
+    if creation is None:
+        return
+    if not isinstance(creation, dict):
+        errors.append(f"{where}.creation: must be an object")
+        return
+    pools = _as_dict(creation.get("pools"), f"{where}.creation", "pools", errors)
+    for pool_id, pool in pools.items():
+        pwhere = f"{where}.creation.pools.{pool_id}"
+        if not isinstance(pool, dict):
+            errors.append(f"{pwhere}: must be an object")
+            continue
+        if pool_id not in st_groups:
+            errors.append(f"{pwhere}: {pool_id!r} is not a group of this sheet type")
+            continue
+        group_fields = _pool_group_fields(groups.get(pool_id))
+        budget = pool.get("budget", 0)
+        if isinstance(budget, str):
+            try:
+                unknown = expressions.names(budget)
+            except expressions.ExpressionError as e:
+                errors.append(f"{pwhere}.budget: {e}")
+            else:
+                if unknown:
+                    errors.append(f"{pwhere}.budget: must not reference fields, found {sorted(unknown)}")
+                else:
+                    try:
+                        expressions.evaluate(budget, {})
+                    except expressions.ExpressionError as e:
+                        errors.append(f"{pwhere}.budget: {e}")
+        elif not isinstance(budget, int) or isinstance(budget, bool):
+            errors.append(f"{pwhere}.budget: must be an int or an expression string")
+        costs = _as_dict(pool.get("costs"), pwhere, "costs", errors)
+        for field_key, cost in costs.items():
+            if field_key not in group_fields:
+                errors.append(f"{pwhere}.costs.{field_key}: not a field of group {pool_id!r}")
+                continue
+            if not isinstance(cost, int) or isinstance(cost, bool) or cost <= 0:
+                errors.append(f"{pwhere}.costs.{field_key}: must be a positive integer")
+
+
+_RAISABLE_TYPES = ("number", "dots")
+
+
+def _validate_advancement(st: dict, fields: list[dict], scope: set[str],
+                          where: str, errors: list[str]) -> None:
+    adv = st.get("advancement")
+    if adv is None:
+        return
+    if not isinstance(adv, dict):
+        errors.append(f"{where}.advancement: must be an object")
+        return
+    field_defs = {f["key"]: f for f in fields if isinstance(f, dict) and isinstance(f.get("key"), str)}
+    pool = adv.get("pool")
+    pool_field = field_defs.get(pool) if isinstance(pool, str) else None
+    if not isinstance(pool_field, dict) or pool_field.get("type") != "resource":
+        errors.append(f"{where}.advancement.pool: {pool!r} must be a resource field of this sheet type")
+    costs = _as_dict(adv.get("costs"), f"{where}.advancement", "costs", errors)
+    cost_scope = scope | {"new"}
+    for field_key, expr in costs.items():
+        fdef = field_defs.get(field_key)
+        if not isinstance(fdef, dict) or fdef.get("type") not in _RAISABLE_TYPES:
+            errors.append(f"{where}.advancement.costs.{field_key}: must target a number/dots field")
+            continue
+        if not isinstance(expr, str):
+            errors.append(f"{where}.advancement.costs.{field_key}: expression must be a string")
+            continue
+        try:
+            unknown = expressions.names(expr) - cost_scope
+        except expressions.ExpressionError as e:
+            errors.append(f"{where}.advancement.costs.{field_key}: {e}")
+            continue
+        if unknown:
+            errors.append(f"{where}.advancement.costs.{field_key}: unknown names {sorted(unknown)}")
+            continue
+        sample = {name: 1 for name in cost_scope}
+        try:
+            result = expressions.evaluate(expr, sample)
+        except expressions.ExpressionError as e:
+            errors.append(f"{where}.advancement.costs.{field_key}: {e}")
+            continue
+        if not isinstance(result, int) or isinstance(result, bool) or result <= 0:
+            errors.append(
+                f"{where}.advancement.costs.{field_key}: must evaluate to a positive "
+                f"integer (sampled {result!r} at every name = 1)")
 
 
 _PLACEHOLDER = re.compile(r"\{([^{}]+)\}")
@@ -354,6 +458,36 @@ def _load_content(root: Path, sheets: dict, errors: list[str]) -> list[dict]:
     return out
 
 
+def _safe_id_like(value: str) -> bool:
+    return isinstance(value, str) and bool(value) and value not in (".", "..") \
+        and "/" not in value and "\\" not in value
+
+
+def read_content(mid: str, kind: str, id: str) -> dict:
+    root, _source = pack_root(mid)  # raises ModuleNotFound
+    if kind not in CONTENT_KINDS or not _safe_id_like(id):
+        raise ContentNotFound(f"{kind}/{id}")
+    p = root / "content" / kind / f"{id}.md"
+    if not p.exists():
+        raise ContentNotFound(f"{kind}/{id}")
+    meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
+    out = {"kind": kind, "id": id, "name": meta.get("name", id), "body": body,
+           "keys": meta.get("keys", ""), "sheet_type": None, "fields": {}}
+    for k, v in meta.items():
+        if k not in ("name", "keys"):
+            out[k] = v
+    sidecar = root / "content" / kind / f"{id}.sheet.json"
+    if sidecar.exists():
+        try:
+            stat = json.loads(sidecar.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+            stat = {}
+        if isinstance(stat, dict):
+            out["sheet_type"] = stat.get("sheet_type")
+            out["fields"] = stat.get("fields", {}) if isinstance(stat.get("fields"), dict) else {}
+    return out
+
+
 def validate_sheet_values(sheets: dict, type_id: str, values: dict) -> list[str]:
     """Validate a sheet's field-value map against a sheet type. Reused by
     campaign sheets in Phase 3."""
@@ -396,6 +530,17 @@ def validate_sheet_values(sheets: dict, type_id: str, values: dict) -> list[str]
         elif t == "list":
             if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
                 errors.append(f"{key}: expected a list of strings")
+        elif t == "ref":
+            ref_kind = f.get("ref_kind")
+            if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+                errors.append(f"{key}: expected a list of strings")
+            else:
+                for entry in value:
+                    parts = entry.split(":")
+                    valid_entity_form = len(parts) == 2 and parts[0] == ref_kind
+                    valid_module_form = len(parts) == 3 and parts[0] == ref_kind and parts[1] == "module"
+                    if not (valid_entity_form or valid_module_form):
+                        errors.append(f"{key}: {entry!r} is not a valid ref for kind {ref_kind!r}")
     return errors
 
 
@@ -459,7 +604,9 @@ def _validate_sheets(sheets: dict, errors: list[str]) -> None:
             if isinstance(g, dict) and isinstance(g.get("derived", {}), dict):
                 scope |= set(g.get("derived", {}))
         st_derived = _as_dict(st.get("derived"), where, "derived", errors)
-        _validate_derived(st_derived, scope, where, errors)
+        type_derived_names = _validate_derived(st_derived, scope, where, errors)
+        _validate_creation(st, st_groups, groups, where, errors)
+        _validate_advancement(st, fields, scope | type_derived_names, where, errors)
 
 
 def load_pack(mid: str) -> dict:

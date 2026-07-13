@@ -21,6 +21,7 @@ vi.mock("../api/client", async () => {
       getCharacterTagline: vi.fn(), setCharacterTagline: vi.fn(), generateCharacterTagline: vi.fn(),
       listImageAppearances: vi.fn(), copyGreetingImage: vi.fn(), listGreetings: vi.fn(),
       imageUrl: (w: string, c: string, v: string, n: string) => `/img/${w}/${c}/${v}/${n}`,
+      putSheetCreation: vi.fn(),
     },
   };
 });
@@ -992,4 +993,60 @@ test("appears-in tiles render the thumbnail and link to the full image", async (
   const img = await screen.findByAltText("SoL 1 art");
   expect(img.getAttribute("src")).toBe("/api/worlds/w/greetings/sol-1/images/embed-a?w=320&v=abc");
   expect(img.closest("a")!.getAttribute("href")).toBe("/api/worlds/w/greetings/sol-1/images/embed-a?v=abc");
+});
+
+it("shows a wizard trigger when the module has a characters sheet type", async () => {
+  (api.listCharacters as any).mockResolvedValue([]);
+  const module = {
+    id: "testmod", source: "builtin", manifest: { id: "testmod", name: "Test" },
+    sheets: { groups: {}, sheet_types: { hero: { label: "Hero", kind: "characters", groups: [], fields: [] } } },
+    checks: {}, rules: [], content: [], errors: [],
+  } as any;
+  render(<CharacterEditor scope={{ kind: "world", id: "w1" }} wid="w1" module={module} />);
+  await screen.findByText("+ New character with sheet…");
+});
+
+it("wires the wizard's deleteRecord to api.deleteCharacter (always wid-scoped) so a failed sheet write rolls back", async () => {
+  (api.listCharacters as any).mockResolvedValue([]);
+  const module = {
+    id: "testmod", source: "builtin", manifest: { id: "testmod", name: "Test" },
+    sheets: { groups: {}, sheet_types: { hero: { label: "Hero", kind: "characters", groups: [], fields: [] } } },
+    checks: {}, rules: [], content: [], errors: [],
+  } as any;
+  (api.createCharacter as any).mockResolvedValue({ character: "rook", version: "default" });
+  (api.putSheetCreation as any).mockRejectedValue({ detail: "nope" });
+  render(<CharacterEditor scope={{ kind: "world", id: "w1" }} wid="w1" module={module} />);
+  fireEvent.click(await screen.findByText("+ New character with sheet…"));
+  await screen.findByText("New character (with sheet)");
+
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Rook" } });
+  fireEvent.click(screen.getByText("Next"));
+  fireEvent.change(await screen.findByLabelText("Sheet type"), { target: { value: "hero" } });
+  fireEvent.click(screen.getByText("Create"));
+
+  await waitFor(() => expect(api.deleteCharacter).toHaveBeenCalledWith("w1", "rook"));
+});
+
+it("a wizard opened at world scope closes (not just its trigger) when the same instance's scope changes to campaign", async () => {
+  // Regression for a Codex finding: the button-level gate on "+ New character with
+  // sheet..." isn't enough on its own -- if a parent reuses this component instance
+  // across a scope change (no remount) instead of opening it fresh at campaign scope,
+  // a wizard already open from world scope must not survive the transition (it would
+  // otherwise keep the campaign scope, sending a sheet write to the wrong endpoint for
+  // a world-level character id). Proves both the render-path gate
+  // (wizardOpen && module && worldScope) and the scope-change reset effect, using
+  // rerender (not a fresh render) so the instance genuinely persists.
+  (api.listCharacters as any).mockResolvedValue([]);
+  const module = {
+    id: "testmod", source: "builtin", manifest: { id: "testmod", name: "Test" },
+    sheets: { groups: {}, sheet_types: { hero: { label: "Hero", kind: "characters", groups: [], fields: [] } } },
+    checks: {}, rules: [], content: [], errors: [],
+  } as any;
+  const { rerender } = render(<CharacterEditor scope={{ kind: "world", id: "w1" }} wid="w1" module={module} />);
+  fireEvent.click(await screen.findByText("+ New character with sheet…"));
+  expect(await screen.findByText("New character (with sheet)")).toBeInTheDocument();     // wizard open
+
+  rerender(<CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w1" module={module} />);
+  await waitFor(() => expect(screen.queryByText("New character (with sheet)")).toBeNull()); // wizard closed
+  expect(screen.getByText("No characters yet. Create one or import a card.")).toBeInTheDocument(); // plain view instead
 });

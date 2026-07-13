@@ -24,6 +24,9 @@ vi.mock("../api/client", () => ({
     entityImageUrl: (_s: any, k: string, e: string, n: string) => `/img/${k}/${e}/${n}`,
     getSheet: vi.fn(),
     putSheet: vi.fn(),
+    putSheetCreation: vi.fn(),
+    readModuleContent: vi.fn(),
+    instantiateContent: vi.fn(),
   },
 }));
 import { api } from "../api/client";
@@ -41,6 +44,8 @@ beforeEach(() => {
   (api.putEntityImage as any).mockResolvedValue({ name: "avatar", ext: "png" });
   (api.promoteEntityImage as any).mockResolvedValue({ ok: true });
   (api.getSheet as any).mockResolvedValue({ sheet: null });
+  (api.readModuleContent as any).mockResolvedValue(null);
+  (api.instantiateContent as any).mockResolvedValue({ id: "e1" });
 });
 
 test("lists entities and creates one with keys", async () => {
@@ -338,4 +343,131 @@ test("campaign scope with a module mounts SheetPanel with a Sheet side-section",
     { kind: "campaign", id: "run" }, "mod1", "items", "salt-knife"));
   const side = container.querySelector(".detail-sidebar") as HTMLElement;
   expect(within(side).getByText("Sheet")).toBeInTheDocument();
+});
+
+test("merges module content into the rail as templates and previews on click", async () => {
+  const module = {
+    id: "testmod", source: "builtin", manifest: { id: "testmod", name: "Test" },
+    sheets: { groups: {}, sheet_types: {} }, checks: {}, rules: [],
+    content: [{ kind: "items", id: "lantern", name: "Lantern of Winnowing", sheet_type: null }],
+    errors: [],
+  } as any;
+  (api.listEntities as any).mockResolvedValue([{ id: "sword", name: "Sword" }]);
+  (api.readModuleContent as any).mockResolvedValue({
+    kind: "items", id: "lantern", name: "Lantern of Winnowing", body: "A soft lantern.",
+    keys: "", sheet_type: null, fields: {},
+  });
+  render(<EntityEditor wid="w1" kind="items" module={module} />);
+  await screen.findByText("Sword");
+  const templateRow = await screen.findByText("Lantern of Winnowing");
+  fireEvent.click(templateRow);
+  await screen.findByText("A soft lantern.");
+  expect(screen.getByText("Instantiate")).toBeInTheDocument();
+  expect(screen.queryByText("Edit")).not.toBeInTheDocument();
+});
+
+test("instantiate creates a real record and selects it", async () => {
+  const module = {
+    id: "testmod", source: "builtin", manifest: { id: "testmod", name: "Test" },
+    sheets: { groups: {}, sheet_types: {} }, checks: {}, rules: [],
+    content: [{ kind: "items", id: "lantern", name: "Lantern of Winnowing", sheet_type: null }],
+    errors: [],
+  } as any;
+  (api.listEntities as any).mockResolvedValue([]);
+  (api.instantiateContent as any).mockResolvedValue({ id: "lantern" });
+  (api.readEntity as any).mockResolvedValue({
+    meta: { id: "lantern", name: "Lantern of Winnowing" }, body: "A soft lantern.",
+  });
+  (api.readModuleContent as any).mockResolvedValue({
+    kind: "items", id: "lantern", name: "Lantern of Winnowing", body: "A soft lantern.",
+    keys: "", sheet_type: null, fields: {},
+  });
+  render(<EntityEditor wid="w1" kind="items" module={module} />);
+  fireEvent.click(await screen.findByText("Lantern of Winnowing"));
+  fireEvent.click(await screen.findByText("Instantiate"));
+  await waitFor(() => expect(api.instantiateContent).toHaveBeenCalledWith(
+    { kind: "world", id: "w1" }, "items", "testmod", "lantern"));
+  await screen.findByText("Edit"); // back to a normal read-only view of the new record
+});
+
+test("nav.newOwner clears stale contentPreview to show the new-entry form", async () => {
+  const module = {
+    id: "testmod", source: "builtin", manifest: { id: "testmod", name: "Test" },
+    sheets: { groups: {}, sheet_types: {} }, checks: {}, rules: [],
+    content: [{ kind: "lore", id: "pact", name: "Salt Pact", sheet_type: null }],
+    errors: [],
+  } as any;
+  (api.listEntities as any).mockResolvedValue([]);
+  (api.readModuleContent as any).mockResolvedValue({
+    kind: "lore", id: "pact", name: "Salt Pact", body: "Binds all salt-related magic.",
+    keys: "", sheet_type: null, fields: {},
+  });
+  const onNavConsumed = vi.fn();
+  const { rerender } = render(
+    <EntityEditor wid="w" kind="lore" module={module} onNavConsumed={onNavConsumed} />
+  );
+  // First, click the template to populate contentPreview
+  fireEvent.click(await screen.findByText("Salt Pact"));
+  await screen.findByText("Binds all salt-related magic.");
+  expect(screen.getByText("Instantiate")).toBeInTheDocument();
+
+  // Now rerender with nav.newOwner, simulating navigation from OwnedLorePanel
+  rerender(
+    <EntityEditor wid="w" kind="lore" module={module}
+      nav={{ newOwner: "locations:some-location" }} onNavConsumed={onNavConsumed} />
+  );
+
+  // The form should now show (new entry, not template preview)
+  // Assert that the new-entry form title shows
+  await waitFor(() => expect(screen.getByText("New lore entry")).toBeInTheDocument());
+  // Assert that the stale template body is NOT visible
+  expect(screen.queryByText("Binds all salt-related magic.")).not.toBeInTheDocument();
+  // Assert that Instantiate button is NOT visible
+  expect(screen.queryByText("Instantiate")).not.toBeInTheDocument();
+});
+
+it("shows a wizard trigger only when the module has a sheet type for this kind, and opens the wizard", async () => {
+  vi.mocked(api.listEntities).mockResolvedValue([]);
+  const module = {
+    id: "testmod", source: "builtin", manifest: { id: "testmod", name: "Test" },
+    sheets: { groups: {}, sheet_types: { hero: { label: "Hero", kind: "items", groups: [], fields: [] } } },
+    checks: {}, rules: [], content: [], errors: [],
+  } as any;
+  render(<EntityEditor wid="w1" kind="items" module={module} />);
+  const trigger = await screen.findByText("+ New item with sheet…");
+  fireEvent.click(trigger);
+  await screen.findByText("New item (with sheet)");
+});
+
+it("wires the wizard's deleteRecord to api.deleteEntity so a failed sheet write rolls back the entity", async () => {
+  vi.mocked(api.listEntities).mockResolvedValue([]);
+  const module = {
+    id: "testmod", source: "builtin", manifest: { id: "testmod", name: "Test" },
+    sheets: { groups: {}, sheet_types: { hero: { label: "Hero", kind: "items", groups: [], fields: [] } } },
+    checks: {}, rules: [], content: [], errors: [],
+  } as any;
+  (api.createEntity as any).mockResolvedValue({ id: "e1" });
+  (api.putSheetCreation as any).mockRejectedValue({ detail: "nope" });
+  render(<EntityEditor wid="w1" kind="items" module={module} />);
+  fireEvent.click(await screen.findByText("+ New item with sheet…"));
+  await screen.findByText("New item (with sheet)");
+
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Sword" } });
+  fireEvent.click(screen.getByText("Next"));
+  fireEvent.change(await screen.findByLabelText("Sheet type"), { target: { value: "hero" } });
+  fireEvent.click(screen.getByText("Create"));
+
+  await waitFor(() => expect(api.deleteEntity).toHaveBeenCalledWith({ kind: "world", id: "w1" }, "items", "e1"));
+});
+
+it("hides the wizard trigger when the module has no sheet type for this kind", async () => {
+  vi.mocked(api.listEntities).mockResolvedValue([]);
+  const module = {
+    id: "testmod", source: "builtin", manifest: { id: "testmod", name: "Test" },
+    sheets: { groups: {}, sheet_types: { hero: { label: "Hero", kind: "characters", groups: [], fields: [] } } },
+    checks: {}, rules: [], content: [], errors: [],
+  } as any;
+  render(<EntityEditor wid="w1" kind="items" module={module} />);
+  await screen.findByText("+ New item");
+  expect(screen.queryByText("+ New item with sheet…")).not.toBeInTheDocument();
 });

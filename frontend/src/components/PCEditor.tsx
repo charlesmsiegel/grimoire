@@ -3,6 +3,7 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, type EntityScope, type ModuleDetail, type PCDetail, type PCSummary, type Persona, type VersionRef } from "../api/client";
 import { CalendarDatePicker } from "./CalendarDatePicker";
+import CreationWizard from "./CreationWizard";
 import { Field } from "./Field";
 import { OwnedLorePanel } from "./OwnedLorePanel";
 import SheetPanel from "./SheetPanel";
@@ -21,6 +22,7 @@ export function PCEditor({ scope, wid, onOpenLore, module = null }:
   const [persona, setPersona] = useState<Persona>(BLANK);
   const [mode, setMode] = useState<"view" | "edit">("view");
   const [error, setError] = useState<string | null>(null);
+  const [wizardOpen, setWizardOpen] = useState(false);
   const lockReq = useRef(0);
   const [locked, setLocked] = useState<string | null>(null);       // campaign: locked version id
   const [worldVersions, setWorldVersions] = useState<VersionRef[]>([]);
@@ -31,6 +33,7 @@ export function PCEditor({ scope, wid, onOpenLore, module = null }:
   useEffect(() => {
     reload();
     if (worldScope) api.listTags(wid).then(setTags);
+    setWizardOpen(false); // a scope change can reuse this instance; never carry a wizard across it
   }, [wid, worldScope, reload]);
 
   async function select(pid: string, version?: string) {
@@ -149,6 +152,9 @@ export function PCEditor({ scope, wid, onOpenLore, module = null }:
     <div className="editor">
       <div className="editor-list">
         <button className="primary new" onClick={newPC}>+ New PC</button>
+        {worldScope && module && Object.values(module.sheets.sheet_types).some((st) => st.kind === "characters") && (
+          <button className="subtle" onClick={() => setWizardOpen(true)}>+ New PC with sheet…</button>
+        )}
         {pcs.map((p) => (
           <button
             key={p.id}
@@ -162,7 +168,20 @@ export function PCEditor({ scope, wid, onOpenLore, module = null }:
 
       <div className="editor-body">
         {error && <div className="banner">{error}</div>}
-        {!detail ? (
+        {wizardOpen && module && worldScope ? (
+          <CreationWizard scope={scope} kind="pcs" module={module}
+                          createRecord={(n) => (worldScope
+                            ? api.createPC(wid, { name: n }).then((r) => r.pc)
+                            : api.createCampaignPC(scope.id, { name: n }).then((r) => r.pc))}
+                          deleteRecord={worldScope ? (id) => api.deletePC(wid, id).then(() => {}) : undefined}
+                          onDone={async (id) => {
+                            setWizardOpen(false);
+                            await reload();
+                            await select(id);
+                            setMode("edit");
+                          }}
+                          onCancel={() => setWizardOpen(false)} />
+        ) : !detail ? (
           <div className="editor-empty">Select or create a PC.</div>
         ) : mode === "view" ? (
           <div className="detail-view">
@@ -241,6 +260,9 @@ export function PCEditor({ scope, wid, onOpenLore, module = null }:
               </div>
               {module && detail && (
                 <SheetPanel scope={scope} module={module} kind="pcs" eid={detail.meta.id} />
+                /* onOpenRef intentionally unset here: no cross-editor navigation target exists
+                   yet from a character/PC sheet's ref chips (entity-form refs only; module-content
+                   ref chips still preview correctly without it) */
               )}
               {onOpenLore && (
                 <OwnedLorePanel
