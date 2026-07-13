@@ -485,8 +485,11 @@ phase — see Out of scope.
   `"sheet_failures"` and the live value survives; **double-save of the
   same panel** — the second save reports the edit in `"sheet_failures"`
   (already applied) and the sheet value is unchanged; sheet PUT with a
-  stale `expected` (fields **or** sheet_type) → 409, and without
-  `expected` → 422.
+  stale `expected` (fields, sheet_type, **or gen**) → 409; sheet PUT
+  omitting `expected` where a sheet exists → 409 (an omitted or null
+  `expected` *is* the creation assertion — pydantic v1/v2-agnostic plain
+  models cannot distinguish omitted from null, and treating both as
+  "assert no sheet exists" fails closed).
 - **Frontend**: warnings section renders and clears; "audited clean" hint
   on ok+empty; degraded notice lists `dropped` reasons; failed/degraded →
   Retry validation flow (retry → fresh warnings and sheet rows replace
