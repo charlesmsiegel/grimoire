@@ -540,6 +540,10 @@ def test_advance_first_ever_call_cold_registry_race(monkeypatch, tmp_path):
     wid, cid = _campaign_with_advancement_module(monkeypatch, tmp_path, campaign_name="Cold Registry Run")
     characters.create_character(worlds.world_root(wid), "First")  # id: "first"
     sheets.write(cid, "characters", "first", "hero", {"wits": 2, "xp": {"current": 9, "max": 999}})
+    # sheets.write above now also serializes on lock_for(cid) (Task 2), which
+    # warms the registry -- pop it back out so this test still exercises the
+    # concurrent first-ever-call race through advance()'s own lock_for(cid).
+    del sheets._campaign_locks[cid]
     assert cid not in sheets._campaign_locks
     results = []
     barrier = threading.Barrier(2)
@@ -712,3 +716,68 @@ def test_advance_preserves_gen(monkeypatch, tmp_path):
     g1 = sheets.read(cid, "characters", "mara")["gen"]
     sheets.advance(cid, "characters", "mara", "wits")
     assert sheets.read(cid, "characters", "mara")["gen"] == g1
+
+
+# lock_for() -- public per-campaign RLock shared by every sheet mutator (#164, Phase 5)
+
+
+def test_lock_for_public_and_reentrant(monkeypatch, tmp_path):
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+    lock = sheets.lock_for(cid)
+    with lock:
+        with lock:  # RLock: no deadlock
+            pass
+    assert sheets.lock_for(cid) is lock
+
+
+def test_write_resolves_module_inside_the_lock(monkeypatch, tmp_path):
+    """Rebind serialization invariant: no campaign mutator may call
+    modules.resolve outside lock_for(cid) -- otherwise a writer could resolve
+    module A, lose the CPU to a rebind publishing B under the lock, then
+    write under A after B is visible."""
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+    from grimoire.store import modules as modules_mod
+    real = modules_mod.resolve
+    seen = []
+
+    def spy(c):
+        seen.append(sheets.lock_for(c)._is_owned())  # RLock: owned by us?
+        return real(c)
+
+    monkeypatch.setattr(modules_mod, "resolve", spy)
+    sheets.write(cid, "characters", "mara", "medium", None)
+    assert seen and all(seen)
+
+
+def test_editor_write_serializes_with_advance(monkeypatch, tmp_path):
+    """The pre-existing hole: a whole-sheet write interleaving advance's
+    read-modify-write could lose the advancement. Serialized, both survive."""
+    import threading
+    _wid, cid = _campaign_with_advancement_module(monkeypatch, tmp_path)
+    base_fields = sheets.read(cid, "characters", "mara")["fields"]
+    errs = []
+
+    def do_advance():
+        try:
+            sheets.advance(cid, "characters", "mara", "wits")
+        except Exception as e:  # noqa: BLE001
+            errs.append(e)
+
+    def do_write():
+        try:
+            sheet_type = sheets.read(cid, "characters", "mara")["sheet_type"]
+            sheets.write(cid, "characters", "mara", sheet_type,
+                         {**base_fields, "wits": 2})
+        except Exception as e:  # noqa: BLE001
+            errs.append(e)
+
+    threads = [threading.Thread(target=do_advance), threading.Thread(target=do_write)]
+    for t in threads: t.start()
+    for t in threads: t.join()
+    # Serialization guarantee is about atomicity, not order: whichever ran
+    # second operated on the first's committed state, so neither raced a torn
+    # read-modify-write. (Same-field last-write-wins between these two writers
+    # is resolved by CAS in Task 3; this test only proves lock coverage --
+    # no exception from a torn file, file parses cleanly.)
+    s = sheets.read(cid, "characters", "mara")
+    assert s["errors"] == [] and not errs

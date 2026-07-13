@@ -259,21 +259,26 @@ def write(cid: str, kind: str, eid: str, sheet_type: str,
     the stored one is a type change: values whose keys exist in the new
     type's assembled field set are kept (caller passes them), others are
     filtered out here."""
-    mid = modules.resolve(cid)
-    if mid is None:
-        raise SheetError("no module resolved for this campaign")
-    _checked_write(_campaign_path(cid, kind, eid), mid, kind, eid,
-                   sheet_type, fields)
+    with lock_for(cid):
+        # resolve INSIDE the lock: rebinds publish under this same lock, so a
+        # writer can never resolve module A, lose the CPU to a rebind to B,
+        # and then validate/write under A after B is visible.
+        mid = modules.resolve(cid)
+        if mid is None:
+            raise SheetError("no module resolved for this campaign")
+        _checked_write(_campaign_path(cid, kind, eid), mid, kind, eid,
+                       sheet_type, fields)
 
 
 def delete(cid: str, kind: str, eid: str) -> bool:
     if kind not in FILE_KINDS or not _safe_part(eid):
         return False
-    p = _campaign_path(cid, kind, eid)
-    if not p.exists():
-        return False
-    p.unlink()
-    return True
+    with lock_for(cid):
+        p = _campaign_path(cid, kind, eid)
+        if not p.exists():
+            return False
+        p.unlink()
+        return True
 
 
 def list_refs(cid: str) -> list[tuple[str, str]]:
@@ -409,11 +414,13 @@ def _checked_creation_write(path: Path, mid: str, file_kind: str, eid: str,
 
 def write_creation(cid: str, kind: str, eid: str, sheet_type: str,
                    spends: dict[str, dict[str, int]]) -> None:
-    mid = modules.resolve(cid)
-    if mid is None:
-        raise SheetError("no module resolved for this campaign")
-    _assert_campaign_entity_exists(cid, kind, eid)
-    _checked_creation_write(_campaign_path(cid, kind, eid), mid, kind, eid, sheet_type, spends)
+    with lock_for(cid):
+        # resolve INSIDE the lock -- see write()'s rebind-serialization note.
+        mid = modules.resolve(cid)
+        if mid is None:
+            raise SheetError("no module resolved for this campaign")
+        _assert_campaign_entity_exists(cid, kind, eid)
+        _checked_creation_write(_campaign_path(cid, kind, eid), mid, kind, eid, sheet_type, spends)
 
 
 def write_world_creation(wid: str, mid: str, kind: str, eid: str, sheet_type: str,
@@ -532,18 +539,25 @@ def world_coverage(wid: str, mid: str) -> dict:
     return out
 
 
-# ---- advancement (#164, Phase 7): single resource pool, formula-priced raises ----
+# ---- per-campaign sheet lock (#164, Phase 5): every sheet mutator serializes here ----
 
 _registry_guard = threading.Lock()
-_campaign_locks: dict[str, threading.Lock] = {}
+_campaign_locks: dict[str, threading.RLock] = {}
 
 
-def _lock_for(cid: str) -> threading.Lock:
-    """Get-or-create the per-campaign lock atomically -- a plain
+def lock_for(cid: str) -> threading.RLock:
+    """Get-or-create the per-campaign sheet lock atomically -- a plain
     `if cid not in _campaign_locks: ...` is a check-then-act race that can
-    hand two concurrent first-ever callers different Lock objects."""
+    hand two concurrent first-ever callers different Lock objects. Public:
+    every campaign-sheet mutator (write, write_creation, delete, advance),
+    audit.capture_baseline, audit.apply_delta, and the module-rebind routes
+    serialize on this. RLock so apply_delta can compose set_field under an
+    already-held lock."""
     with _registry_guard:
-        return _campaign_locks.setdefault(cid, threading.Lock())
+        return _campaign_locks.setdefault(cid, threading.RLock())
+
+
+# ---- advancement (#164, Phase 7): single resource pool, formula-priced raises ----
 
 
 def _advancement_cost(sheets_def: dict, type_id: str, field_key: str,
@@ -570,8 +584,7 @@ def _advancement_cost(sheets_def: dict, type_id: str, field_key: str,
 
 
 def advance(cid: str, kind: str, eid: str, field_key: str) -> dict:
-    lock = _lock_for(cid)
-    with lock:
+    with lock_for(cid):
         mid = modules.resolve(cid)
         if mid is None:
             raise SheetError("no module resolved for this campaign")
