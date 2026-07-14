@@ -73,3 +73,77 @@ test("rule form loads the body and saves flags + body", async () => {
     expect.objectContaining({ always: true, on_roll: true, keys: ["melee"] }),
     "Swing first.", false));
 });
+
+test("a failed check delete's guard banner clears when another row is selected", async () => {
+  (api.deleteModuleCheck as any).mockResolvedValue(
+    { ok: false, errors: ["check 'brawl' has a live roll proposal in campaign 'c1', scene 's1' — resolve or discard it first"], display_errors: [] });
+  render(<ChecksSection pack={PACK} reload={vi.fn()} />);
+  fireEvent.click(screen.getByText("Brawl"));
+  fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+  expect(await screen.findByText(/live roll proposal/)).toBeInTheDocument();
+  fireEvent.click(screen.getByText("Defaults"));
+  expect(screen.queryByText(/live roll proposal/)).not.toBeInTheDocument();
+});
+
+test("a failed rule delete's guard banner clears when another row is selected", async () => {
+  (api.deleteModuleRule as any).mockResolvedValue(
+    { ok: false, errors: ["rule 'combat' is referenced elsewhere — resolve first"], display_errors: [] });
+  const pack = { ...PACK, rules: [...PACK.rules, { id: "stealth", keys: [], always: false, on_roll: false, sheet_types: [] }] };
+  render(<RulesSection pack={pack} reload={vi.fn()} />);
+  fireEvent.click(screen.getByText("combat"));
+  fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+  expect(await screen.findByText(/referenced elsewhere/)).toBeInTheDocument();
+  fireEvent.click(screen.getByText("stealth"));
+  expect(screen.queryByText(/referenced elsewhere/)).not.toBeInTheDocument();
+});
+
+test("deleting the selected check clears the selection instead of leaving a ghost view", async () => {
+  (api.deleteModuleCheck as any).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
+  const reload = vi.fn().mockResolvedValue(undefined);
+  render(<ChecksSection pack={PACK} reload={reload} />);
+  fireEvent.click(screen.getByText("Brawl"));
+  expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+  await waitFor(() => expect(api.deleteModuleCheck).toHaveBeenCalledWith(
+    "realm-system", "brawl", false));
+  await waitFor(() => expect(reload).toHaveBeenCalled());
+  expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+  expect(screen.queryByText("1d20 + {might}")).not.toBeInTheDocument();
+});
+
+test("deleting the selected rule clears the selection instead of leaving a ghost view", async () => {
+  (api.deleteModuleRule as any).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
+  const reload = vi.fn().mockResolvedValue(undefined);
+  render(<RulesSection pack={PACK} reload={reload} />);
+  fireEvent.click(screen.getByText("combat"));
+  expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+  await waitFor(() => expect(api.deleteModuleRule).toHaveBeenCalledWith(
+    "realm-system", "combat", false));
+  await waitFor(() => expect(reload).toHaveBeenCalled());
+  expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+});
+
+test("Defaults pseudo-row round-trips difficulty through putModuleCheckDefaults", async () => {
+  (api.putModuleCheckDefaults as any).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
+  render(<ChecksSection pack={PACK} reload={vi.fn()} />);
+  fireEvent.click(screen.getByText("Defaults"));
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  fireEvent.change(screen.getByLabelText("Difficulty"), { target: { value: "12" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.putModuleCheckDefaults).toHaveBeenCalledWith(
+    "realm-system", expect.objectContaining({ difficulty: 12 }), false));
+});
+
+test("Defaults pseudo-row omits difficulty when cleared", async () => {
+  const pack = { ...PACK, checks: { ...PACK.checks, _defaults: { difficulty: 10 } } };
+  (api.putModuleCheckDefaults as any).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
+  render(<ChecksSection pack={pack} reload={vi.fn()} />);
+  fireEvent.click(screen.getByText("Defaults"));
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  expect(screen.getByLabelText("Difficulty")).toHaveValue(10);
+  fireEvent.change(screen.getByLabelText("Difficulty"), { target: { value: "" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.putModuleCheckDefaults).toHaveBeenCalledWith(
+    "realm-system", {}, false));
+});
