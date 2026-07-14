@@ -3,6 +3,7 @@ import { api, type ModuleDetail, type ModuleEditResult } from "../api/client";
 import { Field } from "./Field";
 import { GroupsSection, SheetTypesSection } from "./ModuleSchemaEditor";
 import { ChecksSection, RulesSection } from "./ModuleRulesEditor";
+import { ContentSection } from "./ModuleContentEditor";
 
 const SECTIONS = ["Manifest", "Groups", "Sheet types", "Checks", "Rules",
                   "Content", "Layout", "Theme"] as const;
@@ -135,7 +136,8 @@ export default function ModuleEditor({ detail, onDone }: {
       {section === "Sheet types" && <SheetTypesSection pack={pack} reload={reload} />}
       {section === "Checks" && <ChecksSection pack={pack} reload={reload} />}
       {section === "Rules" && <RulesSection pack={pack} reload={reload} />}
-      {/* Content: Task 17; Layout / Theme: Task 18 */}
+      {section === "Content" && <ContentSection pack={pack} reload={reload} />}
+      {/* Layout / Theme: Task 18 */}
     </div>
   );
 }
