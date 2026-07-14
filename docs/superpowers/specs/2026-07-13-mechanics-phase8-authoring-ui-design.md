@@ -77,9 +77,16 @@ New module (pure stdlib, pydantic-free, filesystem via the same
    migration op), then `os.rename(live, trash)` and
    `os.rename(staging, live)` (trash also lives under
    `.module-staging/<nonce>/`; same filesystem, both renames atomic).
-   Readers therefore see the complete old pack or the complete new one —
-   never a mix. The only crash window leaves the live dir briefly absent
-   with journal + both complete copies on disk.
+   On disk there is therefore only ever the complete old pack or the
+   complete new one — never a mix. For *readers* that open several files
+   per call, coherence comes from the lock: `load_pack` and
+   `export_module` hold the global module-edit lock for the duration of
+   their directory read (Codex adversarial round 5: a multi-file read
+   straddling the swap could otherwise mix generations — transiently
+   failing `resolve()` or exporting a zip of a pack state that never
+   existed; the lock is uncontended except during an active edit, so
+   this costs nothing in practice). The only crash window leaves the
+   live dir briefly absent with journal + both complete copies on disk.
 5. Run sheet migration if the op requires it (see Sheet migration), then
    delete the journal, trash, and staging remnants. The journal outlives
    the swap exactly until migration completes.
@@ -202,12 +209,19 @@ Neither built-in ships such a name, so no existing pack breaks.
 
 ### Sheet migration
 
-For the sheet-migrating rename kinds (`field`, `sheet_type`, `content`),
-ordering is **lock → swap → migrate → release** (Codex adversarial
-round 1: swapping the pack *before* excluding sheet writers opens a
-window where a stale client PUT against a not-yet-migrated file passes
-CAS, gets its now-unknown renamed key silently filtered by
-`_checked_write`, and the value is gone before migration arrives):
+For **every writer that changes `sheets.json` semantics** — the
+sheet-migrating rename kinds (`field`, `sheet_type`, `content`) *and*
+ordinary group/sheet-type upserts and deletes (Codex adversarial
+round 5: a constraint or advancement-cost edit swapped mid-`advance()`
+lets the spend compute under the old rules and persist under the new
+pack, silently) — ordering is **lock → swap → migrate → release**
+(Codex adversarial round 1: swapping the pack *before* excluding sheet
+writers opens a window where a stale client PUT against a
+not-yet-migrated file passes CAS, gets its now-unknown renamed key
+silently filtered by `_checked_write`, and the value is gone before
+migration arrives). Non-migrating schema writers run the same protocol
+with an empty migration step; manifest/checks/rules/content-body/
+layout/theme writers don't touch sheet semantics and skip it:
 
 - Before the directory swap, the op enumerates all campaigns and acquires
   `sheets.lock_for(cid)` for **every** campaign, in sorted-cid order (a
@@ -226,22 +240,21 @@ CAS, gets its now-unknown renamed key silently filtered by
   world sheets — and by migration (Codex adversarial round 2: locking
   only `write_world`/`delete_world` left the creation route and seeding
   free to publish an old-schema sheet after migration passed).
-- **One global lock order, acquired up front** (Codex adversarial
-  round 4: acquiring a late-discovered campaign's lock *while already
-  holding* higher-sorted locks deadlocks against any other multi-lock
-  holder, e.g. the world-rebind route). The op acquires every campaign
-  lock in sorted-cid order, then every world lock in sorted-wid order —
-  and any multi-lock holder in the codebase (this op, the world-rebind
-  route) must follow the same campaigns-then-worlds sorted discipline.
-  After acquiring, it **re-enumerates**: if a campaign appeared since
-  enumeration, it releases *everything* and reacquires the full union in
-  sorted order, repeating until the enumeration is stable under the
-  locks (campaign creation is rare — this converges immediately). Locks
-  never grow while held.
-- **Campaigns created after the stable acquisition** cannot escape
-  either: seeding copies world sheets under the world-scope lock, which
-  this op holds until migration completes — so any such campaign blocks
-  and then seeds from already-migrated world sheets.
+- **A registry barrier freezes enumeration** (Codex adversarial rounds
+  4–5: a late-created campaign *or world* escapes any lock set
+  enumerated up front, and growing a held lock set out of order
+  deadlocks against other multi-lock holders such as the world-rebind
+  route). A single registry-barrier lock (from the same `_lock_for`
+  registry) is held by this op from before enumeration until migration
+  completes; `create_campaign` and `create_world` acquire it briefly at
+  creation. With the barrier held, the campaign/world population cannot
+  change, so the op enumerates once and acquires every campaign lock in
+  sorted-cid order, then every world lock in sorted-wid order — no
+  reacquire loop needed. Any multi-lock holder in the codebase (this op,
+  the world-rebind route) must follow the same campaigns-then-worlds
+  sorted discipline. A creation queued on the barrier proceeds after
+  release and sees only the new pack (seeding then also serializes on
+  the world-scope lock, by then released).
 - The pending migration (op kind + address + `to`) is recorded in the
   journal before the swap; migration then rewrites every affected file;
   the journal is cleared only after migration completes. A crash
@@ -543,10 +556,12 @@ unchanged (it edits the same files the UI does).
   unparseable sheet file skipped and reported; a stored sheet holding
   both the old and destination keys rejects the rename with its path
   listed; locks acquired for all campaigns then all worlds in one sorted
-  order before the swap, a late-appearing campaign triggers
-  release-and-reacquire of the full union (never lock growth while
-  held), and a campaign that doesn't resolve to the module under its
-  lock is untouched; every
+  order before the swap under the registry barrier, a campaign or world
+  created during the op blocks on the barrier and sees only the new
+  pack, and a campaign that doesn't resolve to the module under its
+  lock is untouched; a group upsert changing an advancement cost
+  excludes a concurrent `advance()` (same lock protocol, no migration);
+  `load_pack`/export mid-swap return one coherent generation; every
   world-sheet mutator (`write_world`, `write_world_creation`, seeding,
   instantiate) serializes on the world-scope lock; **stale-write
   closure**: a queued pre-rename world PUT fails the new world gen CAS
