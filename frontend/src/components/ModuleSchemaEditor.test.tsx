@@ -292,3 +292,21 @@ test("an empty Group id never fires a debounced dry-run against the API", async 
   await vi.advanceTimersByTimeAsync(600);
   expect(api.putModuleGroup).not.toHaveBeenCalled();
 });
+
+test("Save with an empty Group id keeps the form open, shows the error, makes no api call", async () => {
+  render(<GroupsSection pack={PACK} reload={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: "+ New group" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  expect(await screen.findByText("group id is required")).toBeInTheDocument();
+  expect(screen.getByLabelText("Group id")).toBeInTheDocument(); // form still open
+  expect(api.putModuleGroup).not.toHaveBeenCalled();
+});
+
+test("Save with an empty sheet type id keeps the form open, shows the error, makes no api call", async () => {
+  render(<SheetTypesSection pack={PACK} reload={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: "+ New sheet type" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  expect(await screen.findByText("sheet type id is required")).toBeInTheDocument();
+  expect(screen.getByLabelText("Sheet type id")).toBeInTheDocument(); // form still open
+  expect(api.putModuleSheetType).not.toHaveBeenCalled();
+});
