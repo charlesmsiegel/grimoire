@@ -63,8 +63,14 @@ export function useModuleDryRun(save: SaveFn, deps: unknown[]) {
       setSaving(false);
       return;
     }
-    if (revision.current !== rev) { setSaving(false); return; } // superseded meanwhile
+    // Superseded meanwhile: the debounced effect re-armed on a form edit that
+    // happened while this fresh dry-run was in flight. Silently dropping the
+    // Save click here is intentional and safe — the click targeted a form
+    // state that's no longer current, so committing it would save stale
+    // data; the user can just press Save again for the edited form.
+    if (revision.current !== rev) { setSaving(false); return; }
     setResult(fresh);
+    if (!fresh.ok) { setSaving(false); return; } // invalid draft: show errors, never commit
     if (impactful(fresh.impact)) {
       setSaving(false);
       setConfirming(true);
