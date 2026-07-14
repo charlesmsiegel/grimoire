@@ -87,6 +87,10 @@ export function ChecksSection({ pack, reload }: {
   };
   const dr = useModuleDryRun(form ? save : emptyResult, [form]);
   const done = () => { setMode("view"); setForm(null); void reload(); };
+  // Delete removes the record the form/selection points at, so unlike `done`
+  // (rename/save keep the same record selected) it must also clear `selected`
+  // — otherwise the read-only view keeps rendering the now-deleted record.
+  const doneDelete = () => { setSelected(null); setMode("view"); setForm(null); void reload(); };
 
   // impact gate shared by renames and deletes: dry-run first; confirm when
   // any impact count is nonzero; Cancel sends nothing.
@@ -95,8 +99,9 @@ export function ChecksSection({ pack, reload }: {
   const [gateError, setGateError] = useState<string[]>([]);
   const confirmGate = (dryCall: () => Promise<ModuleEditResult>,
                        realCall: () => Promise<ModuleEditResult>,
-                       onSuccess: () => void) =>
-    dryCall().then((r) => {
+                       onSuccess: () => void) => {
+    setGateError([]);
+    return dryCall().then((r) => {
       if (!r.ok) { setGateError(r.errors); return; }
       const i = r.impact;
       const run = () => realCall().then((rr) =>
@@ -107,6 +112,7 @@ export function ChecksSection({ pack, reload }: {
         void run();
       }
     });
+  };
   const renameCheck = (to: string) =>
     void confirmGate(
       () => api.renameModulePart(pack.id, "check", { from: form!.cid }, to, true),
@@ -130,18 +136,19 @@ export function ChecksSection({ pack, reload }: {
     <div className="editor">
       <div className="editor-list">
         <button className={"row" + (selected === "_defaults" ? " active" : "")}
-                onClick={() => { setSelected("_defaults"); setMode("view"); setForm(null); }}>
+                onClick={() => { setSelected("_defaults"); setMode("view"); setForm(null); setGateError([]); }}>
           Defaults
         </button>
         <button className="row" onClick={() => {
           setSelected(null);
+          setGateError([]);
           setForm({ cid: "", isNew: true, isDefaults: false, label: "", roll: "",
                      requires: [], rules: [], difficulty: "", outcomes: [] });
           setMode("edit");
         }}>+ New check</button>
         {otherIds.map((cid) => (
           <button key={cid} className={"row" + (selected === cid ? " active" : "")}
-                  onClick={() => { setSelected(cid); setMode("view"); setForm(null); }}>
+                  onClick={() => { setSelected(cid); setMode("view"); setForm(null); setGateError([]); }}>
             {checks[cid]?.label ?? cid}
           </button>
         ))}
@@ -162,7 +169,7 @@ export function ChecksSection({ pack, reload }: {
             </div>
             <aside className="detail-sidebar">
               <div className="form-actions">
-                <button onClick={() => { setForm(seed("_defaults")); setMode("edit"); }}>Edit</button>
+                <button onClick={() => { setGateError([]); setForm(seed("_defaults")); setMode("edit"); }}>Edit</button>
               </div>
             </aside>
           </div>
@@ -189,11 +196,11 @@ export function ChecksSection({ pack, reload }: {
               )}
               {gateError.map((e, i) => <div key={i} className="banner">{e}</div>)}
               <div className="form-actions">
-                <button onClick={() => { setForm(seed(selected)); setMode("edit"); }}>Edit</button>
+                <button onClick={() => { setGateError([]); setForm(seed(selected)); setMode("edit"); }}>Edit</button>
                 <button onClick={() => void confirmGate(
                   () => api.deleteModuleCheck(pack.id, selected, true),
                   () => api.deleteModuleCheck(pack.id, selected, false),
-                  done)}>Delete</button>
+                  doneDelete)}>Delete</button>
               </div>
             </aside>
           </div>
@@ -306,14 +313,19 @@ export function RulesSection({ pack, reload }: {
     }, form!.body, dryRun);
   const dr = useModuleDryRun(form ? save : emptyResult, [form]);
   const done = () => { setMode("view"); setForm(null); void reload(); };
+  // Delete removes the record the form/selection points at, so unlike `done`
+  // (rename/save keep the same record selected) it must also clear `selected`
+  // — otherwise the read-only view keeps rendering the now-deleted record.
+  const doneDelete = () => { setSelected(null); setMode("view"); setForm(null); void reload(); };
 
   const [gate, setGate] = useState<{ impact: NonNullable<ModuleEditResult["impact"]>;
                                      run: () => Promise<unknown> } | null>(null);
   const [gateError, setGateError] = useState<string[]>([]);
   const confirmGate = (dryCall: () => Promise<ModuleEditResult>,
                        realCall: () => Promise<ModuleEditResult>,
-                       onSuccess: () => void) =>
-    dryCall().then((r) => {
+                       onSuccess: () => void) => {
+    setGateError([]);
+    return dryCall().then((r) => {
       if (!r.ok) { setGateError(r.errors); return; }
       const i = r.impact;
       const run = () => realCall().then((rr) =>
@@ -324,6 +336,7 @@ export function RulesSection({ pack, reload }: {
         void run();
       }
     });
+  };
   const renameRule = (to: string) =>
     void confirmGate(
       () => api.renameModulePart(pack.id, "rule", { from: form!.slug }, to, true),
@@ -340,6 +353,7 @@ export function RulesSection({ pack, reload }: {
   // merge into the form once resolved, guarding against a stale response
   // landing after the user has switched to a different row.
   const openEdit = (slug: string) => {
+    setGateError([]);
     setForm(ruleShell(slug));
     setBodyBaseline("");
     setMode("edit");
@@ -354,6 +368,7 @@ export function RulesSection({ pack, reload }: {
       <div className="editor-list">
         <button className="row" onClick={() => {
           setSelected(null);
+          setGateError([]);
           setForm({ slug: "", isNew: true, keys: "", always: false, onRoll: false,
                      sheetTypes: [], body: "" });
           setBodyBaseline("");
@@ -361,7 +376,7 @@ export function RulesSection({ pack, reload }: {
         }}>+ New rule</button>
         {rules.map((r) => (
           <button key={r.id} className={"row" + (selected === r.id ? " active" : "")}
-                  onClick={() => { setSelected(r.id); setMode("view"); setForm(null); }}>
+                  onClick={() => { setSelected(r.id); setMode("view"); setForm(null); setGateError([]); }}>
             {r.id}
           </button>
         ))}
@@ -394,7 +409,7 @@ export function RulesSection({ pack, reload }: {
                 <button onClick={() => void confirmGate(
                   () => api.deleteModuleRule(pack.id, selected, true),
                   () => api.deleteModuleRule(pack.id, selected, false),
-                  done)}>Delete</button>
+                  doneDelete)}>Delete</button>
               </div>
             </aside>
           </div>
