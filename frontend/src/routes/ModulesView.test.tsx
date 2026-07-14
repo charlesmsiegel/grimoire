@@ -4,10 +4,26 @@ vi.mock("../api/client", () => ({
   api: {
     listModules: vi.fn(),
     readModule: vi.fn(),
+    createModule: vi.fn(),
+    duplicateModule: vi.fn(),
+    importModule: vi.fn(),
+    exportModuleUrl: (mid: string) => `/api/modules/${mid}/export`,
   },
 }));
 import { api } from "../api/client";
 import ModulesView from "./ModulesView";
+
+// minimal valid ModuleDetail — extend per-test with spreads
+const DETAIL = {
+  id: "mine",
+  source: "user",
+  manifest: { id: "mine", name: "Mine", description: "", version: "0.1", dice: "1d20" },
+  sheets: { groups: {}, sheet_types: {} },
+  checks: {},
+  rules: [],
+  content: [],
+  errors: [],
+};
 
 const POOL = {
   id: "pool-basic",
@@ -90,4 +106,56 @@ test("list row flags display issues; detail shows Display section", async () => 
   expect(screen.getByText("medium layout")).toBeInTheDocument();
   expect(screen.getByText("theme")).toBeInTheDocument();
   expect(screen.getByText("sheet_types.haven: bad")).toBeInTheDocument();
+});
+
+test("user module shows Edit; builtin shows duplicate hint", async () => {
+  (api.listModules as any).mockResolvedValue([
+    { id: "mine", name: "Mine", source: "user", valid: true },
+    { id: "d20-basic", name: "Basic D20", source: "builtin", valid: true },
+  ]);
+  (api.readModule as any).mockResolvedValue({ ...DETAIL, id: "mine", source: "user" });
+  render(<ModulesView />);
+  fireEvent.click(await screen.findByText("Mine"));
+  expect(await screen.findByRole("button", { name: "Edit" })).toBeInTheDocument();
+  (api.readModule as any).mockResolvedValue({ ...DETAIL, id: "d20-basic", source: "builtin" });
+  fireEvent.click(screen.getByText("Basic D20"));
+  await waitFor(() =>
+    expect(screen.getByText(/duplicate to customize/)).toBeInTheDocument());
+  expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+});
+
+test("Duplicate prompts for a name and selects the copy", async () => {
+  (api.listModules as any).mockResolvedValue([
+    { id: "d20-basic", name: "Basic D20", source: "builtin", valid: true },
+  ]);
+  (api.readModule as any).mockResolvedValue({ ...DETAIL, id: "d20-basic", source: "builtin" });
+  (api.duplicateModule as any).mockResolvedValue({ id: "basic-d20-copy" });
+  render(<ModulesView />);
+  fireEvent.click(await screen.findByText("Basic D20"));
+  await waitFor(() =>
+    expect(screen.getByText(/duplicate to customize/)).toBeInTheDocument());
+  fireEvent.click(screen.getByRole("button", { name: "Duplicate" }));
+  fireEvent.click(screen.getByRole("button", { name: "Create copy" }));
+  await waitFor(() => expect(api.duplicateModule).toHaveBeenCalledWith(
+    "d20-basic", "Basic D20 copy"));
+});
+
+test("Import posts the picked file and reloads the list", async () => {
+  (api.importModule as any).mockResolvedValue({ id: "imported" });
+  render(<ModulesView />);
+  const input = screen.getByLabelText("Import module zip") as HTMLInputElement;
+  const file = new File(["zip"], "pack.zip", { type: "application/zip" });
+  fireEvent.change(input, { target: { files: [file] } });
+  await waitFor(() => expect(api.importModule).toHaveBeenCalled());
+});
+
+test("Edit mounts the module editor", async () => {
+  (api.listModules as any).mockResolvedValue([
+    { id: "mine", name: "Mine", source: "user", valid: true },
+  ]);
+  (api.readModule as any).mockResolvedValue({ ...DETAIL, id: "mine", source: "user" });
+  render(<ModulesView />);
+  fireEvent.click(await screen.findByText("Mine"));
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  expect(await screen.findByText("Manifest")).toBeInTheDocument(); // section nav
 });
