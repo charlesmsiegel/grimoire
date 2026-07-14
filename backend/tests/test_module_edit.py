@@ -499,3 +499,107 @@ def test_shared_fragment_specialized(monkeypatch, tmp_path):
     assert warden_use != "stat-block"
     assert raw["fragments"][warden_use] == {"fields": ["brawn"]}
     assert pack["display_errors"] == []
+
+
+def _write_campaign_sheet(cid, kind, eid, sheet_type, fields):
+    p = campaigns.campaign_root(cid) / "sheets" / f"{kind}--{eid}.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"sheet_type": sheet_type, "fields": fields,
+                             "gen": "g1"}), encoding="utf-8")
+    return p
+
+
+def test_field_rename_migrates_sheets(monkeypatch, tmp_path):
+    mid = _mk_schema(monkeypatch, tmp_path)
+    wid, cid = _bound_campaign(mid)
+    cp = _write_campaign_sheet(cid, "characters", "mara", "warden", {"strength": 3})
+    wp = worlds.world_root(wid) / "sheets" / mid / "characters--winifred.json"
+    wp.parent.mkdir(parents=True, exist_ok=True)
+    wp.write_text(json.dumps({"sheet_type": "warden", "fields": {"strength": 2},
+                              "gen": "g0"}), encoding="utf-8")
+    res = module_edit.rename(mid, "field", {"from": "strength", "group": "attributes"}, "brawn")
+    assert res["ok"], res["errors"]
+    assert res["migration"]["migrated"] == 2 and res["migration"]["skipped"] == []
+    cdata = json.loads(cp.read_text(encoding="utf-8"))
+    assert cdata["fields"] == {"brawn": 3} and cdata["gen"] != "g1"
+    wdata = json.loads(wp.read_text(encoding="utf-8"))
+    assert wdata["fields"] == {"brawn": 2} and wdata["gen"] != "g0"
+
+
+def test_field_rename_skips_other_types_and_unbound(monkeypatch, tmp_path):
+    mid = _mk_schema(monkeypatch, tmp_path)
+    wid, cid = _bound_campaign(mid)
+    other = campaigns.create_campaign("Freeform Nights", wid)   # resolves to None
+    op = _write_campaign_sheet(other, "characters", "mara", "warden", {"strength": 5})
+    res = module_edit.rename(mid, "field", {"from": "strength", "group": "attributes"}, "brawn")
+    assert res["ok"]
+    assert json.loads(op.read_text(encoding="utf-8"))["fields"] == {"strength": 5}
+
+
+def test_both_keys_collision_rejects(monkeypatch, tmp_path):
+    mid = _mk_schema(monkeypatch, tmp_path)
+    wid, cid = _bound_campaign(mid)
+    _write_campaign_sheet(cid, "characters", "mara", "warden",
+                          {"strength": 3, "brawn": 4})   # orphaned removed key
+    res = module_edit.rename(mid, "field", {"from": "strength", "group": "attributes"}, "brawn")
+    assert res["ok"] is False
+    assert any("mara" in e for e in res["errors"])
+    # nothing swapped: schema still has strength
+    assert "strength" in json.dumps(modules.load_pack(mid)["sheets"])
+
+
+def test_sheet_type_rename_migrates(monkeypatch, tmp_path):
+    mid = _mk_schema(monkeypatch, tmp_path)
+    wid, cid = _bound_campaign(mid)
+    cp = _write_campaign_sheet(cid, "characters", "mara", "warden", {"strength": 3})
+    res = module_edit.rename(mid, "sheet_type", {"from": "warden"}, "keeper")
+    assert res["ok"], res["errors"]
+    assert json.loads(cp.read_text(encoding="utf-8"))["sheet_type"] == "keeper"
+
+
+def test_content_rename_migrates_refs(monkeypatch, tmp_path):
+    mid = _mk_schema(monkeypatch, tmp_path)
+    ref_type = {"label": "Adept", "kind": "characters", "groups": [],
+                "fields": [{"key": "known", "type": "ref", "ref_kind": "lore"}]}
+    assert module_edit.upsert_sheet_type(mid, "adept", ref_type)["ok"]
+    assert module_edit.upsert_content(mid, "lore", "old-rite", name="Old Rite",
+                                      body="", keys="", fields={}, sheet=None)["ok"]
+    wid, cid = _bound_campaign(mid)
+    cp = _write_campaign_sheet(cid, "characters", "mara", "adept",
+                               {"known": ["lore:module:old-rite", "lore:kept"]})
+    res = module_edit.rename(mid, "content", {"from": "old-rite", "kind": "lore"}, "new-rite")
+    assert res["ok"], res["errors"]
+    got = json.loads(cp.read_text(encoding="utf-8"))["fields"]["known"]
+    assert got == ["lore:module:new-rite", "lore:kept"]
+
+
+def test_unparseable_sheet_skipped(monkeypatch, tmp_path):
+    mid = _mk_schema(monkeypatch, tmp_path)
+    wid, cid = _bound_campaign(mid)
+    bad = campaigns.campaign_root(cid) / "sheets" / "characters--broken.json"
+    bad.parent.mkdir(parents=True, exist_ok=True)
+    bad.write_text("{not json", encoding="utf-8")
+    res = module_edit.rename(mid, "field", {"from": "strength", "group": "attributes"}, "brawn")
+    assert res["ok"]
+    assert any("broken" in s for s in res["migration"]["skipped"])
+
+
+def test_journaled_migration_replays(monkeypatch, tmp_path):
+    """Crash after swap, before migration: recovery finishes it."""
+    mid = _mk_schema(monkeypatch, tmp_path)
+    wid, cid = _bound_campaign(mid)
+    cp = _write_campaign_sheet(cid, "characters", "mara", "warden", {"strength": 3})
+    # Perform the rename with migration suppressed to simulate the crash,
+    # leaving a journal exactly as _apply writes it post-swap.
+    real = module_edit._run_migration
+    monkeypatch.setattr(module_edit, "_run_migration",
+                        lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt()))
+    with pytest.raises(KeyboardInterrupt):
+        module_edit.rename(mid, "field", {"from": "strength", "group": "attributes"}, "brawn")
+    monkeypatch.setattr(module_edit, "_run_migration", real)
+    # journal survived; pack already published; sheet not yet migrated
+    assert json.loads(cp.read_text(encoding="utf-8"))["fields"] == {"strength": 3}
+    module_edit.recover()
+    assert json.loads(cp.read_text(encoding="utf-8"))["fields"] == {"brawn": 3}
+    module_edit.recover()   # idempotent replay
+    assert json.loads(cp.read_text(encoding="utf-8"))["fields"] == {"brawn": 3}

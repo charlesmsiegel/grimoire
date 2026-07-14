@@ -122,10 +122,74 @@ def _replay_journal(jp: Path, quarantined: set[str]) -> None:
     jp.unlink(missing_ok=True)
 
 
+def _sheet_files(mid: str):
+    """Yield (Path, cid|None) for every stored sheet governed by this module:
+    each world's <world>/sheets/<mid>/*.json, plus each bound campaign's
+    <campaign>/sheets/*.json (bound = resolve(cid) == mid)."""
+    for w in worlds.list_worlds():
+        d = worlds.world_root(w["id"]) / "sheets" / mid
+        if d.is_dir():
+            for p in sorted(d.glob("*.json")):
+                yield p, None
+    for c in campaigns.list_campaigns():
+        cid = c["id"]
+        if modules.resolve(cid) != mid:
+            continue
+        d = campaigns.campaign_root(cid) / "sheets"
+        if d.is_dir():
+            for p in sorted(d.glob("*.json")):
+                yield p, cid
+
+
+def _migrate_file(p: Path, mig: dict) -> bool | None:
+    """True = rewritten, False = untouched, None = unparseable (skip)."""
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    fields = data.get("fields") if isinstance(data.get("fields"), dict) else {}
+    changed = False
+    op = mig.get("op")
+    if op == "field":
+        if data.get("sheet_type") in (mig.get("sheet_types") or []) \
+                and mig["from"] in fields and mig["to"] not in fields:
+            fields[mig["to"]] = fields.pop(mig["from"])
+            changed = True
+    elif op == "sheet_type":
+        if data.get("sheet_type") == mig["from"]:
+            data["sheet_type"] = mig["to"]
+            changed = True
+    elif op == "content":
+        marker = f"{mig.get('kind')}:module:{mig['from']}"
+        repl = f"{mig.get('kind')}:module:{mig['to']}"
+        for k, v in list(fields.items()):
+            if isinstance(v, list) and marker in v:
+                fields[k] = [repl if e == marker else e for e in v]
+                changed = True
+    if changed:
+        data["fields"] = fields
+        data["gen"] = uuid.uuid4().hex
+        tmp = p.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        tmp.replace(p)
+    return changed
+
+
 def _run_migration(mid: str, migration: dict) -> dict:
-    """Sheet migration for rename ops — implemented in Task 8. Until then a
-    journaled migration replays as a no-op."""
-    return {"migrated": 0, "skipped": []}
+    """Sheet migration for rename ops: rewrite every stored sheet governed by
+    this module that the migration op touches, bumping `gen` on each changed
+    file. Idempotent (old key absent ⇒ no-op) so journal replay after a crash
+    is safe to repeat."""
+    migrated, skipped = 0, []
+    for p, _cid in _sheet_files(mid):
+        got = _migrate_file(p, migration)
+        if got is None:
+            skipped.append(str(p))
+        elif got:
+            migrated += 1
+    return {"migrated": migrated, "skipped": skipped}
 
 
 @contextmanager
@@ -189,6 +253,11 @@ def _apply(mid: str, mutate, *, dry_run: bool = False,
                 jp.unlink()
             return _result(pack, **({"migration": mig} if mig else {}))
         finally:
+            # Only the nonce staging dir (`base`) is removed here — never the
+            # journal (`jp`, a sibling under _staging_root(), not under
+            # `base`). The journal must outlive a crash during
+            # _run_migration (e.g. the KeyboardInterrupt escape hatch in
+            # tests) so recover() can find it and replay the migration.
             shutil.rmtree(base, ignore_errors=True)
 
 
@@ -521,8 +590,27 @@ def rename(mid: str, kind: str, address: dict, to: str, *,
     if kind == "check":
         pre_swap = check_proposal_guard(mid, old)
     if kind == "field":
-        migration = {"op": "field", "from": old, "to": to,
-                     "owner": {k: address[k] for k in ("group", "sheet_type") if k in address}}
+        owner = {k: address[k] for k in ("group", "sheet_type") if k in address}
+        in_scope = _composing_tids(_read_sheets(live_root), owner)
+        migration = {"op": "field", "from": old, "to": to, "owner": owner,
+                     "sheet_types": sorted(in_scope)}
+
+        def both_keys_guard(_pack: dict) -> list[str]:
+            blockers = []
+            for p, _cid in _sheet_files(mid):
+                try:
+                    data = json.loads(p.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+                    continue
+                fields = data.get("fields") if isinstance(data, dict) \
+                    and isinstance(data.get("fields"), dict) else {}
+                if data.get("sheet_type") in migration["sheet_types"] \
+                        and old in fields and to in fields:
+                    blockers.append(
+                        f"{p.name}: holds both {old!r} and {to!r} — resolve the "
+                        "orphaned value first")
+            return blockers
+        pre_swap = both_keys_guard
     elif kind == "sheet_type":
         migration = {"op": "sheet_type", "from": old, "to": to}
     elif kind == "content":
