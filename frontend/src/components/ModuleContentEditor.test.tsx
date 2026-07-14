@@ -129,6 +129,63 @@ test("a successful content-id rename resyncs the still-open form to the new id",
   await waitFor(() => expect(screen.getByText("dawnblade")).toBeInTheDocument());
 });
 
+test("Save with an empty content id keeps the form open, shows the error, makes no api call", async () => {
+  render(<ContentSection pack={PACK} reload={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: "+ New content" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  expect(await screen.findByText("content id is required")).toBeInTheDocument();
+  expect(screen.getByLabelText("Content id")).toBeInTheDocument(); // form still open
+  expect(api.putModuleContent).not.toHaveBeenCalled();
+});
+
+test("switching sheet type drops stat fields the new type doesn't recognize", async () => {
+  const pack = {
+    ...PACK,
+    sheets: {
+      groups: {},
+      sheet_types: {
+        relic: { label: "Relic", kind: "items", groups: [],
+          fields: [{ key: "power", type: "dots", max: 5 }] },
+        vessel: { label: "Vessel", kind: "items", groups: [],
+          fields: [{ key: "capacity", type: "number" }] },
+      },
+    },
+  };
+  (api.readModuleContent as any).mockResolvedValue({
+    kind: "items", id: "sunblade", name: "Sunblade", body: "b", keys: "",
+    sheet_type: "relic", fields: { power: 3 } });
+  (api.putModuleContent as any).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
+  render(<ContentSection pack={pack} reload={vi.fn()} />);
+  fireEvent.click(screen.getByText("Sunblade"));
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  expect(screen.getByLabelText("power")).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("Sheet type"), { target: { value: "vessel" } });
+  // the old type's field is gone, the new type's own field appears untouched
+  expect(screen.queryByLabelText("power")).not.toBeInTheDocument();
+  expect(screen.getByLabelText("capacity")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.putModuleContent).toHaveBeenCalledWith(
+    "realm-system", "items", "sunblade",
+    expect.objectContaining({ sheet: { sheet_type: "vessel", fields: {} } }),
+    false));
+});
+
+test("switching to No stat block clears the stat fields and submits sheet: null", async () => {
+  (api.readModuleContent as any).mockResolvedValue({
+    kind: "items", id: "sunblade", name: "Sunblade", body: "b", keys: "",
+    sheet_type: "relic", fields: { power: 3 } });
+  (api.putModuleContent as any).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
+  render(<ContentSection pack={PACK} reload={vi.fn()} />);
+  fireEvent.click(screen.getByText("Sunblade"));
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  fireEvent.change(screen.getByLabelText("Sheet type"), { target: { value: "" } });
+  expect(screen.queryByLabelText("power")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.putModuleContent).toHaveBeenCalledWith(
+    "realm-system", "items", "sunblade",
+    expect.objectContaining({ sheet: null }), false));
+});
+
 test("a failed content delete's guard banner clears when another row is selected", async () => {
   const pack = { ...PACK, content: [...PACK.content,
     { kind: "lore", id: "moonshard", name: "Moonshard", sheet_type: null }] };

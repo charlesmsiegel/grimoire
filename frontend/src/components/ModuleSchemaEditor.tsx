@@ -146,8 +146,12 @@ export function GroupsSection({ pack, reload }: {
   const dirty = form != null && baseline != null && JSON.stringify(form) !== baseline;
 
   const save: SaveFn = (dryRun) => {
-    if (!form!.gid) {   // new-record form with no id yet: nothing to dry-run
-      return Promise.resolve({ ok: true, errors: [], display_errors: [] } as ModuleEditResult);
+    // A blank id must reject, not silently no-op as ok -- requestSave's
+    // `!fresh.ok` guard then keeps the form open and shows the error instead
+    // of Save quietly discarding the draft (with no PUT ever fired).
+    if (!form!.gid) {
+      return Promise.resolve(
+        { ok: false, errors: ["group id is required"], display_errors: [] } as ModuleEditResult);
     }
     return api.putModuleGroup(pack.id, form!.gid, {
       label: form!.label, fields: form!.fields,
@@ -416,8 +420,12 @@ export function SheetTypesSection({ pack, reload }: {
   };
 
   const save: SaveFn = (dryRun) => {
-    if (!form!.tid) {   // new-record form with no id yet: nothing to dry-run
-      return Promise.resolve({ ok: true, errors: [], display_errors: [] } as ModuleEditResult);
+    // A blank id must reject, not silently no-op as ok -- requestSave's
+    // `!fresh.ok` guard then keeps the form open and shows the error instead
+    // of Save quietly discarding the draft (with no PUT ever fired).
+    if (!form!.tid) {
+      return Promise.resolve(
+        { ok: false, errors: ["sheet type id is required"], display_errors: [] } as ModuleEditResult);
     }
     return api.putModuleSheetType(pack.id, form!.tid, buildDef(), dryRun);
   };

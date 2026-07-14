@@ -140,13 +140,16 @@ test("Duplicate prompts for a name and selects the copy", async () => {
     "d20-basic", "Basic D20 copy"));
 });
 
-test("Import posts the picked file and reloads the list", async () => {
+test("Import posts the picked file, reloads the list, and selects the imported module", async () => {
   (api.importModule as any).mockResolvedValue({ id: "imported" });
+  (api.readModule as any).mockResolvedValue({ ...DETAIL, id: "imported", source: "user" });
   render(<ModulesView />);
   const input = screen.getByLabelText("Import module zip") as HTMLInputElement;
   const file = new File(["zip"], "pack.zip", { type: "application/zip" });
   fireEvent.change(input, { target: { files: [file] } });
   await waitFor(() => expect(api.importModule).toHaveBeenCalled());
+  await waitFor(() => expect(api.readModule).toHaveBeenCalledWith("imported"));
+  expect(await screen.findByText("Mine")).toBeInTheDocument(); // DETAIL's manifest name, rendered
 });
 
 test("Edit mounts the module editor", async () => {

@@ -150,6 +150,24 @@ test("deleting the selected rule clears the selection instead of leaving a ghost
   expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
 });
 
+test("Save with an empty check id keeps the form open, shows the error, makes no api call", async () => {
+  render(<ChecksSection pack={PACK} reload={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: "+ New check" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  expect(await screen.findByText("check id is required")).toBeInTheDocument();
+  expect(screen.getByLabelText("Check id")).toBeInTheDocument(); // form still open
+  expect(api.putModuleCheck).not.toHaveBeenCalled();
+});
+
+test("Save with an empty rule slug keeps the form open, shows the error, makes no api call", async () => {
+  render(<RulesSection pack={PACK} reload={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: "+ New rule" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  expect(await screen.findByText("rule id is required")).toBeInTheDocument();
+  expect(screen.getByLabelText("Rule slug")).toBeInTheDocument(); // form still open
+  expect(api.putModuleRule).not.toHaveBeenCalled();
+});
+
 test("Defaults pseudo-row round-trips difficulty through putModuleCheckDefaults", async () => {
   (api.putModuleCheckDefaults as any).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
   render(<ChecksSection pack={PACK} reload={vi.fn()} />);

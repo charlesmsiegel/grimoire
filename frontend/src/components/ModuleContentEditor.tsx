@@ -51,6 +51,17 @@ function MetaRows({ meta, setMeta }: {
   );
 }
 
+// Every field a sheet type carries, own fields plus those contributed by its
+// composed groups -- the set of keys a stat block for that type may hold.
+// Shared by the live form (StatBlock's own render) and by the sheet-type
+// switch handler below, which must project `statFields` onto this same set.
+function assembledFields(pack: ModuleDetail, tid: string | null): ModuleField[] {
+  if (!tid) return [];
+  return [...(pack.sheets.sheet_types[tid]?.groups ?? [])
+             .flatMap((g) => pack.sheets.groups[g]?.fields ?? []),
+           ...(pack.sheets.sheet_types[tid]?.fields ?? [])];
+}
+
 function StatBlock({ pack, sheetType, setSheetType, fields, setFields, kind }: {
   pack: ModuleDetail; sheetType: string | null;
   setSheetType: (t: string | null) => void;
@@ -59,11 +70,7 @@ function StatBlock({ pack, sheetType, setSheetType, fields, setFields, kind }: {
 }) {
   const types = Object.entries(pack.sheets.sheet_types)
     .filter(([, st]) => st.kind === kind);
-  const assembled: ModuleField[] = sheetType
-    ? [...(pack.sheets.sheet_types[sheetType]?.groups ?? [])
-         .flatMap((g) => pack.sheets.groups[g]?.fields ?? []),
-       ...(pack.sheets.sheet_types[sheetType]?.fields ?? [])]
-    : [];
+  const assembled: ModuleField[] = assembledFields(pack, sheetType);
   return (
     <div className="side-section">
       <h4>Stat block</h4>
@@ -166,8 +173,11 @@ export function ContentSection({ pack, reload }: {
 
   const save: SaveFn = (dryRun) => {
     const f = form!;
-    if (!f.contentId) {   // new-record form with no id yet: nothing to dry-run
-      return Promise.resolve({ ok: true, errors: [], display_errors: [] });
+    // A blank id must reject, not silently no-op as ok -- requestSave's
+    // `!fresh.ok` guard then keeps the form open and shows the error instead
+    // of Save quietly discarding the draft (with no PUT ever fired).
+    if (!f.contentId) {
+      return Promise.resolve({ ok: false, errors: ["content id is required"], display_errors: [] });
     }
     const sheet = f.sheetType ? { sheet_type: f.sheetType, fields: f.statFields } : null;
     return api.putModuleContent(pack.id, f.kind, f.contentId,
@@ -352,7 +362,20 @@ export function ContentSection({ pack, reload }: {
             </label>
             <MetaRows meta={form.meta} setMeta={(meta) => setForm({ ...form, meta })} />
             <StatBlock pack={pack} kind={form.kind}
-                       sheetType={form.sheetType} setSheetType={(t) => setForm({ ...form, sheetType: t })}
+                       sheetType={form.sheetType}
+                       setSheetType={(t) => {
+                         // Switching sheet type must drop stat fields the new
+                         // type doesn't recognize -- otherwise a hidden,
+                         // unknown key from the OLD type rides along and the
+                         // save is unfixably rejected by the backend. Keep
+                         // only keys the new type actually assembles; "No
+                         // stat block" assembles nothing, so this also
+                         // covers clearing statFields on that path.
+                         const keys = new Set(assembledFields(pack, t).map((f) => f.key));
+                         const statFields = Object.fromEntries(
+                           Object.entries(form.statFields).filter(([k]) => keys.has(k)));
+                         setForm({ ...form, sheetType: t, statFields });
+                       }}
                        fields={form.statFields} setFields={(statFields) => setForm({ ...form, statFields })} />
             {/* hidden while a rename/delete or save confirmation banner is up --
                 each banner owns its own Confirm/Cancel until resolved */}

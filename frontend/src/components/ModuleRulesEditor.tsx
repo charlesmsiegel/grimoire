@@ -78,8 +78,11 @@ export function ChecksSection({ pack, reload }: {
       if (f.outcomes.length) body.outcomes = f.outcomes;
       return api.putModuleCheckDefaults(pack.id, body, dryRun);
     }
-    if (!f.cid) {   // new-record form with no id yet: nothing to dry-run
-      return Promise.resolve({ ok: true, errors: [], display_errors: [] });
+    // A blank id must reject, not silently no-op as ok -- requestSave's
+    // `!fresh.ok` guard then keeps the form open and shows the error instead
+    // of Save quietly discarding the draft (with no PUT ever fired).
+    if (!f.cid) {
+      return Promise.resolve({ ok: false, errors: ["check id is required"], display_errors: [] });
     }
     const def: Record<string, unknown> = { label: f.label, roll: f.roll };
     if (f.requires.length) def.requires = f.requires;
@@ -318,8 +321,11 @@ export function RulesSection({ pack, reload }: {
   const dirty = form != null && baseline != null && JSON.stringify(form) !== baseline;
 
   const save: SaveFn = (dryRun) => {
-    if (!form!.slug) {   // new-record form with no id yet: nothing to dry-run
-      return Promise.resolve({ ok: true, errors: [], display_errors: [] });
+    // A blank id must reject, not silently no-op as ok -- requestSave's
+    // `!fresh.ok` guard then keeps the form open and shows the error instead
+    // of Save quietly discarding the draft (with no PUT ever fired).
+    if (!form!.slug) {
+      return Promise.resolve({ ok: false, errors: ["rule id is required"], display_errors: [] });
     }
     return api.putModuleRule(pack.id, form!.slug, {
       always: form!.always, on_roll: form!.onRoll,

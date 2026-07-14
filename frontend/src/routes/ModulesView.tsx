@@ -43,8 +43,9 @@ export default function ModulesView() {
     if (!file) return;
     setError(null);
     try {
-      await api.importModule(file);
+      const { id } = await api.importModule(file);
       await reloadList();
+      select(id);
     } catch (err: any) {
       setError(err.detail ?? String(err));
     }
