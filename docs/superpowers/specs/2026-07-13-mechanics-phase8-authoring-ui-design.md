@@ -117,31 +117,40 @@ locks (sorted) → world locks (sorted)** — where every path takes a
 contiguous slice and never waits on an earlier lock while holding a
 later one:
 
-- **R1 — schema writers**: every edit that changes `sheets.json`
-  semantics holds M, the barrier, and all campaign+world locks through
-  swap and migration (detailed under Sheet migration). Non-schema
-  writers hold only M.
-- **R2 — schema+sheet consumers**: every computation that reads the pack
-  *and* a sheet holds its campaign lock across module resolution, pack
-  load, sheet I/O, and the computation — `sheets.write`/`advance`
-  already do; **`checks.resolve_check` joins them** (Codex round 6: an
-  unlocked check resolution can load the old pack, then read a
-  freshly-migrated sheet, and persist a roll priced from a
-  no-longer-existing field). These paths never take M, so they cannot
-  invert against R1 — a schema writer simply waits for their campaign
-  lock.
+- **R1 — every editing writer** (schema-affecting or not) holds M, the
+  barrier, and all campaign+world locks across its directory swap;
+  schema-semantics writers additionally run migration before releasing
+  (detailed under Sheet migration). Uniform on purpose (Codex round 7:
+  the round-6 "non-schema writers hold only M" exception was unsound —
+  the two-rename swap briefly removes the live path, during which an
+  unlocked consumer can see the module as missing, fall through a
+  same-id user shadow to the *builtin* pack, or combine files from two
+  generations; edits are rare and human-paced, so the uniform lock set
+  costs nothing).
+- **R2 — pack+campaign-state consumers**: every computation that reads
+  the pack *and* campaign state holds its campaign lock across module
+  resolution, pack load, file I/O, and the computation —
+  `sheets.write`/`advance` already do; **`checks.resolve_check` joins
+  them** (Codex round 6: an unlocked check resolution can load the old
+  pack, then read a freshly-migrated sheet, and persist a roll priced
+  from a no-longer-existing field), **and so does mechanics context
+  assembly** (`context._mechanics` reads activation metadata via
+  `load_pack`, then rule bodies via `read_rule` — Codex round 7: a rule
+  edit between those reads could inject old-flags-with-new-body
+  mechanics text into play). These paths never take M, so they cannot
+  invert against R1 — a writer simply waits for their campaign lock.
 - **R3 — pack-only readers**: multi-file readers that hold no
   campaign/world lock — `GET /modules/{mid}`, `read_content` (its `.md`
   + sidecar pair), zip export — take M for the duration of their read
   (uncontended except during an active edit). `load_pack` itself is
   lock-free; callers own the locking.
-- Residual: an R2 consumer's pack load racing a *non-schema* single-file
-  swap (a checks or rules edit) can interleave files from the two
-  generations — but a non-schema edit changes files that don't
-  participate in sheet validation, so the interleaved read is equivalent
-  to reading entirely before or entirely after. Content upsert touches
-  two files (`.md` + sidecar), but its only pack-and-sheet consumers go
-  through `read_content` (R3-locked).
+- The invariant, stated once: **any path reading more than one pack
+  file, or pack state plus campaign/world state, holds either M or the
+  relevant scope lock for the whole read** — and since R1 writers hold
+  M *and* every scope lock across the swap, no consumer can ever
+  observe the mid-swap absent-path window or a mixed generation. The
+  implementation plan must audit pack consumers against this invariant
+  (the ones named above are the known multi-read paths today).
 
 ### Section writers
 
@@ -253,9 +262,10 @@ pack, silently) — ordering is **lock → swap → migrate → release**
 writers opens a window where a stale client PUT against a
 not-yet-migrated file passes CAS, gets its now-unknown renamed key
 silently filtered by `_checked_write`, and the value is gone before
-migration arrives). Non-migrating schema writers run the same protocol
-with an empty migration step; manifest/checks/rules/content-body/
-layout/theme writers don't touch sheet semantics and skip it:
+migration arrives). Per locking rule R1 *every* writer — including
+manifest/checks/rules/content/layout/theme edits — takes this same lock
+set across its swap; the migration step is simply empty for writers
+that don't change sheet semantics:
 
 - Before the directory swap, the op enumerates all campaigns and acquires
   `sheets.lock_for(cid)` for **every** campaign, in sorted-cid order (a
@@ -603,7 +613,13 @@ unchanged (it edits the same files the UI does).
   **lock-order tests**: a two-thread edit-vs-`sheets.write`/`advance`
   interleaving completes without deadlock (R1 vs R2), a field rename
   racing `resolve_check` yields a roll computed from one generation
-  (never old-expression-with-migrated-sheet), `read_content` and
+  (never old-expression-with-migrated-sheet), mechanics context assembly
+  racing a rules edit never mixes one generation's activation flags with
+  the other's body (pause injected between `load_pack` and `read_rule`),
+  a consumer paused between the two swap renames never observes the
+  module as missing nor falls through a same-id user shadow to the
+  builtin (locked writer excludes it — cover with a shadow pack whose
+  advancement costs differ from the builtin's), `read_content` and
   instantiate racing a content upsert/rename never return or persist a
   mixed `.md`/sidecar pair, and a campaign/world deletion racing
   migration serializes on the barrier; export mid-swap returns one
