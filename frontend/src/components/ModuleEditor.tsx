@@ -4,6 +4,7 @@ import { Field } from "./Field";
 import { GroupsSection, SheetTypesSection } from "./ModuleSchemaEditor";
 import { ChecksSection, RulesSection } from "./ModuleRulesEditor";
 import { ContentSection } from "./ModuleContentEditor";
+import { LayoutSection, ThemeSection } from "./ModuleDisplayEditor";
 
 const SECTIONS = ["Manifest", "Groups", "Sheet types", "Checks", "Rules",
                   "Content", "Layout", "Theme"] as const;
@@ -137,7 +138,8 @@ export default function ModuleEditor({ detail, onDone }: {
       {section === "Checks" && <ChecksSection pack={pack} reload={reload} />}
       {section === "Rules" && <RulesSection pack={pack} reload={reload} />}
       {section === "Content" && <ContentSection pack={pack} reload={reload} />}
-      {/* Layout / Theme: Task 18 */}
+      {section === "Layout" && <LayoutSection pack={pack} reload={reload} />}
+      {section === "Theme" && <ThemeSection pack={pack} reload={reload} />}
     </div>
   );
 }

@@ -323,6 +323,7 @@ export type ModuleDetail = {
   content: { kind: string; id: string; name: string; sheet_type: string | null }[];
   errors: string[];
   layout?: { sheet_types: Record<string, LayoutNode> };
+  layout_source?: Record<string, unknown>;
   theme?: ModuleTheme;
   display_errors?: DisplayError[];
 };
