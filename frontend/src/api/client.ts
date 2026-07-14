@@ -317,7 +317,8 @@ export type ModuleDetail = {
   manifest: { id: string; name: string; description?: string; version?: string; dice?: string; notes?: string };
   sheets: { groups: Record<string, { label?: string; fields: ModuleField[]; derived?: Record<string, string> }>;
             sheet_types: Record<string, ModuleSheetType> };
-  checks: Record<string, { label: string; roll: string; requires?: string[]; rules?: string[] }>;
+  checks: Record<string, { label?: string; roll?: string; requires?: string[]; rules?: string[];
+                           difficulty?: number; outcomes?: { label: string; when: string }[] }>;
   rules: { id: string; keys: string[]; always: boolean; on_roll: boolean; sheet_types: string[] }[];
   content: { kind: string; id: string; name: string; sheet_type: string | null }[];
   errors: string[];
@@ -787,6 +788,9 @@ export const api = {
   deleteModuleRule: (mid: string, slug: string, dryRun = false) =>
     request<ModuleEditResult>("DELETE",
       `/api/modules/${mid}/rules/${slug}${dryRun ? "?dry_run=1" : ""}`),
+  readModuleRule: (mid: string, slug: string) =>
+    request<{ meta: Record<string, string>; body: string }>(
+      "GET", `/api/modules/${mid}/rules/${slug}`),
   putModuleContent: (mid: string, kind: string, id: string, body: Record<string, unknown>, dryRun = false) =>
     request<ModuleEditResult>("PUT", `/api/modules/${mid}/content/${kind}/${id}`,
       { ...body, dry_run: dryRun }),
