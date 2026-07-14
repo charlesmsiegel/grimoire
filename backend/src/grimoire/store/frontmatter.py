@@ -31,11 +31,17 @@ def parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
     if not text.startswith("---\n"):
         return {}, text
     rest = text[4:]
-    end = rest.find("\n---")
-    if end == -1:
-        return {}, text
-    block = rest[:end]
-    after = rest[end + 4:]
+    if rest.startswith("---"):
+        # empty block: the opening fence's own newline doubles as the
+        # separator, so the closing fence sits at rest[0] with no leading
+        # "\n" for the usual "\n---" search to find.
+        block, after = "", rest[3:]
+    else:
+        end = rest.find("\n---")
+        if end == -1:
+            return {}, text
+        block = rest[:end]
+        after = rest[end + 4:]
     if after.startswith("\n"):
         after = after[1:]
     if after.startswith("\n"):
