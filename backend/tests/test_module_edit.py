@@ -224,3 +224,78 @@ def test_prune_scoped_to_composing_types(monkeypatch, tmp_path):
     assert "warden" not in raw["sheet_types"] \
         or "notes_line" not in json.dumps(raw["sheet_types"].get("warden"))
     assert raw["sheet_types"]["medium"] == {"fields": ["notes_line"]}
+
+
+CHECK = {"label": "Guard Reflexes", "roll": "1d20 + {might}", "requires": ["attributes"]}
+
+
+def test_upsert_and_delete_check(monkeypatch, tmp_path):
+    mid = _mk_schema(monkeypatch, tmp_path)
+    assert module_edit.upsert_check(mid, "guard_reflexes", CHECK)["ok"]
+    assert "guard_reflexes" in modules.load_pack(mid)["checks"]
+    bad = {**CHECK, "roll": "1d20 + {nonsense}"}
+    res = module_edit.upsert_check(mid, "guard_reflexes", bad)
+    assert res["ok"] is False and any("nonsense" in e for e in res["errors"])
+    assert module_edit.delete_check(mid, "guard_reflexes")["ok"]
+    assert "guard_reflexes" not in modules.load_pack(mid)["checks"]
+
+
+def test_check_defaults_round_trip(monkeypatch, tmp_path):
+    mid = _mk_schema(monkeypatch, tmp_path)
+    assert module_edit.set_check_defaults(mid, {"difficulty": 12})["ok"]
+    assert modules.load_pack(mid)["checks"]["_defaults"]["difficulty"] == 12
+    assert module_edit.set_check_defaults(mid, {})["ok"]
+    assert "_defaults" not in modules.load_pack(mid)["checks"]
+
+
+def test_rule_round_trip_and_flags(monkeypatch, tmp_path):
+    mid = _mk_schema(monkeypatch, tmp_path)
+    res = module_edit.upsert_rule(mid, "combat-basics",
+                                  {"always": True, "keys": ["melee", "brawl"],
+                                   "sheet_types": ["warden"]},
+                                  "Swing first.")
+    assert res["ok"]
+    pack = modules.load_pack(mid)
+    doc = next(r for r in pack["rules"] if r["id"] == "combat-basics")
+    assert doc["always"] is True and doc["keys"] == ["melee", "brawl"]
+    assert modules.read_rule(mid, "combat-basics")["body"].strip() == "Swing first."
+    # unknown sheet_type flag rejects
+    bad = module_edit.upsert_rule(mid, "combat-basics", {"sheet_types": ["ghost"]}, "x")
+    assert bad["ok"] is False
+    # delete blocked while a check references the doc
+    assert module_edit.upsert_check(mid, "brawl", {**CHECK, "rules": ["combat-basics"]})["ok"]
+    res = module_edit.delete_rule(mid, "combat-basics")
+    assert res["ok"] is False and any("combat-basics" in e for e in res["errors"])
+    assert module_edit.delete_check(mid, "brawl")["ok"]
+    assert module_edit.delete_rule(mid, "combat-basics")["ok"]
+
+
+def test_content_round_trip_with_sheet(monkeypatch, tmp_path):
+    mid = _mk_schema(monkeypatch, tmp_path)
+    item_type = {"label": "Relic", "kind": "items", "groups": [],
+                 "fields": [{"key": "power", "type": "dots", "max": 5}]}
+    assert module_edit.upsert_sheet_type(mid, "relic", item_type)["ok"]
+    res = module_edit.upsert_content(
+        mid, "items", "sunblade", name="Sunblade", body="A blade of dawn.",
+        keys="sunblade, dawn", fields={},
+        sheet={"sheet_type": "relic", "fields": {"power": 3}})
+    assert res["ok"]
+    got = modules.read_content(mid, "items", "sunblade")
+    assert got["name"] == "Sunblade" and got["fields"] == {"power": 3}
+    # invalid stat block rejects
+    res = module_edit.upsert_content(
+        mid, "items", "sunblade", name="Sunblade", body="x", keys="", fields={},
+        sheet={"sheet_type": "relic", "fields": {"power": 9}})
+    assert res["ok"] is False and any("power" in e for e in res["errors"])
+    # delete removes md + sidecar
+    assert module_edit.delete_content(mid, "items", "sunblade")["ok"]
+    with pytest.raises(modules.ContentNotFound):
+        modules.read_content(mid, "items", "sunblade")
+
+
+def test_content_bad_kind_or_id(monkeypatch, tmp_path):
+    mid = _mk_schema(monkeypatch, tmp_path)
+    assert module_edit.upsert_content(mid, "characters", "x", name="x", body="",
+                                      keys="", fields={}, sheet=None)["ok"] is False
+    assert module_edit.upsert_content(mid, "items", "../evil", name="x", body="",
+                                      keys="", fields={}, sheet=None)["ok"] is False
