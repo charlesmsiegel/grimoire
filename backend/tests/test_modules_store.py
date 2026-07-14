@@ -187,6 +187,21 @@ def test_missing_sheets_json(monkeypatch, tmp_path):
     assert any("sheets.json" in e for e in modules.load_pack("testmod")["errors"])
 
 
+def test_reserved_contextual_field_key(monkeypatch, tmp_path):
+    errs = _sheets_error(
+        monkeypatch, tmp_path,
+        lambda s: s["groups"]["attributes"]["fields"].append(
+            {"key": "difficulty", "type": "number"}))
+    assert any("reserved" in e for e in errs)
+
+
+def test_reserved_contextual_derived_name(monkeypatch, tmp_path):
+    errs = _sheets_error(
+        monkeypatch, tmp_path,
+        lambda s: s["groups"]["attributes"]["derived"].update({"new": "1 + 1"}))
+    assert any("reserved" in e for e in errs)
+
+
 def test_bool_max_rejected(monkeypatch, tmp_path):
     errs = _sheets_error(
         monkeypatch, tmp_path,
