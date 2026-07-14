@@ -316,3 +316,186 @@ def test_content_bad_kind_or_id(monkeypatch, tmp_path):
                                       keys="", fields={}, sheet=None)["ok"] is False
     assert module_edit.upsert_content(mid, "items", "../evil", name="x", body="",
                                       keys="", fields={}, sheet=None)["ok"] is False
+
+
+def _pack_sheets(mid):
+    return modules.load_pack(mid)["sheets"]
+
+
+def test_rename_group_rewrites_refs(monkeypatch, tmp_path):
+    mid = _mk_schema(monkeypatch, tmp_path)
+    assert module_edit.upsert_check(mid, "brawl", CHECK)["ok"]
+    assert module_edit.set_layout(mid, {"sheet_types": {"warden": {"group": "attributes"}}})["ok"]
+    res = module_edit.rename(mid, "group", {"from": "attributes"}, "traits")
+    assert res["ok"], res["errors"]
+    pack = modules.load_pack(mid)
+    assert "traits" in pack["sheets"]["groups"] and "attributes" not in pack["sheets"]["groups"]
+    assert pack["sheets"]["sheet_types"]["warden"]["groups"] == ["traits"]
+    assert pack["checks"]["brawl"]["requires"] == ["traits"]
+    assert pack["layout"]["sheet_types"]["warden"]["group"] == "traits"
+    assert pack["errors"] == [] and pack["display_errors"] == []
+
+
+def test_rename_field_rewrites_scope_bound(monkeypatch, tmp_path):
+    mid = _mk_schema(monkeypatch, tmp_path)
+    # Disjoint second group with the SAME field key, on a different type.
+    other_group = {"label": "Spirit", "fields": [
+        {"key": "strength", "label": "Will Strength", "type": "dots", "max": 5}],
+        "derived": {"spirit_might": "strength * 3"}}
+    other_type = {"label": "Medium", "kind": "characters", "groups": ["spirit"],
+                  "fields": [], "derived": {}}
+    assert module_edit.upsert_group(mid, "spirit", other_group)["ok"]
+    assert module_edit.upsert_sheet_type(mid, "medium", other_type)["ok"]
+    # NOTE: CHECK's own roll references the derived stat {might}, which never
+    # literally contains "strength" (rewriting is textual, not semantic — see
+    # test_rename_field_rewrites_scope_bound's assertion on the group's
+    # "might" formula for that side of it). Use a local variant whose roll
+    # references the renamed field by name, to actually exercise scope-bound
+    # placeholder rewriting on an in-scope check.
+    assert module_edit.upsert_check(mid, "brawl", {**CHECK, "roll": "1d20 + {strength}"})["ok"]
+    spirit_check = {"label": "Channel", "roll": "1d20 + {strength}", "requires": ["spirit"]}
+    assert module_edit.upsert_check(mid, "channel", spirit_check)["ok"]
+    res = module_edit.rename(mid, "field", {"from": "strength", "group": "attributes"}, "brawn")
+    assert res["ok"], res["errors"]
+    pack = modules.load_pack(mid)
+    g = pack["sheets"]["groups"]
+    assert g["traits" if "traits" in g else "attributes"]["fields"][0]["key"] == "brawn"
+    assert g["attributes"]["derived"]["might"] == "brawn * 2"
+    assert pack["sheets"]["sheet_types"]["warden"]["derived"]["guard"] == "brawn + 1"
+    # the OTHER group's same-spelled field and its consumers are untouched
+    assert g["spirit"]["fields"][0]["key"] == "strength"
+    assert g["spirit"]["derived"]["spirit_might"] == "strength * 3"
+    assert pack["checks"]["channel"]["roll"] == "1d20 + {strength}"
+    # the in-scope check IS rewritten
+    assert pack["checks"]["brawl"]["roll"] == "1d20 + {brawn}"
+    assert pack["errors"] == []
+
+
+def test_rename_field_word_boundary(monkeypatch, tmp_path):
+    mid = _mk_schema(monkeypatch, tmp_path)
+    g = {"label": "A", "fields": [
+        {"key": "str", "type": "dots", "max": 5},
+        {"key": "strength_bonus", "type": "number"}],
+        "derived": {"total": "str + strength_bonus"}}
+    assert module_edit.upsert_group(mid, "abilities", g)["ok"]
+    t = {"label": "Scout", "kind": "characters", "groups": ["abilities"], "fields": []}
+    assert module_edit.upsert_sheet_type(mid, "scout", t)["ok"]
+    res = module_edit.rename(mid, "field", {"from": "str", "group": "abilities"}, "vigor")
+    assert res["ok"], res["errors"]
+    d = modules.load_pack(mid)["sheets"]["groups"]["abilities"]["derived"]
+    assert d["total"] == "vigor + strength_bonus"   # strength_bonus untouched
+
+
+def test_rename_resource_rewrites_max_name(monkeypatch, tmp_path):
+    mid = _mk_schema(monkeypatch, tmp_path)
+    t2 = {**TYPE, "derived": {"guard": "strength + 1", "reserve": "essence_max - essence"}}
+    assert module_edit.upsert_sheet_type(mid, "warden", t2)["ok"]
+    res = module_edit.rename(mid, "field", {"from": "essence", "group": "attributes"}, "mana")
+    assert res["ok"], res["errors"]
+    d = modules.load_pack(mid)["sheets"]["sheet_types"]["warden"]["derived"]
+    assert d["reserve"] == "mana_max - mana"
+
+
+def test_rename_to_reserved_or_collision_rejected(monkeypatch, tmp_path):
+    mid = _mk_schema(monkeypatch, tmp_path)
+    res = module_edit.rename(mid, "field", {"from": "strength", "group": "attributes"}, "new")
+    assert res["ok"] is False
+    res = module_edit.rename(mid, "field", {"from": "strength", "group": "attributes"}, "essence")
+    assert res["ok"] is False
+    # map-key collisions must reject, never overwrite the destination (and
+    # the destination definition must survive intact)
+    assert module_edit.upsert_check(mid, "brawl", CHECK)["ok"]
+    assert module_edit.upsert_check(mid, "melee", {**CHECK, "label": "Melee"})["ok"]
+    res = module_edit.rename(mid, "check", {"from": "brawl"}, "melee")
+    assert res["ok"] is False
+    assert modules.load_pack(mid)["checks"]["melee"]["label"] == "Melee"
+    assert module_edit.upsert_group(mid, "spirit", {"label": "Spirit", "fields": []})["ok"]
+    res = module_edit.rename(mid, "group", {"from": "spirit"}, "attributes")
+    assert res["ok"] is False
+    assert modules.load_pack(mid)["sheets"]["groups"]["attributes"]["label"] == "Attributes"
+
+
+def test_rename_sheet_type_rewrites_flags_layout_sidecars(monkeypatch, tmp_path):
+    mid = _mk_schema(monkeypatch, tmp_path)
+    assert module_edit.upsert_rule(mid, "warden-powers", {"sheet_types": ["warden"]}, "body")["ok"]
+    assert module_edit.set_layout(mid, {"sheet_types": {"warden": {"group": "attributes"}}})["ok"]
+    res = module_edit.rename(mid, "sheet_type", {"from": "warden"}, "keeper")
+    assert res["ok"], res["errors"]
+    pack = modules.load_pack(mid)
+    assert "keeper" in pack["sheets"]["sheet_types"]
+    doc = next(r for r in pack["rules"] if r["id"] == "warden-powers")
+    assert doc["sheet_types"] == ["keeper"]
+    assert "keeper" in pack["layout"]["sheet_types"]
+
+
+def test_rename_traversal_and_file_collision_rejected(monkeypatch, tmp_path):
+    mid = _mk_schema(monkeypatch, tmp_path)
+    victim = modules.create_module("Victim System")
+    before = (modules.user_dir() / victim / "module.md").read_bytes()
+    res = module_edit.rename(mid, "rule",
+                             {"from": f"../../{victim}/module"}, "stolen")
+    assert res["ok"] is False
+    assert (modules.user_dir() / victim / "module.md").read_bytes() == before
+    assert module_edit.upsert_rule(mid, "a-doc", {}, "a")["ok"]
+    assert module_edit.upsert_rule(mid, "b-doc", {}, "b")["ok"]
+    res = module_edit.rename(mid, "rule", {"from": "a-doc"}, "b-doc")
+    assert res["ok"] is False                          # file collision
+    assert modules.read_rule(mid, "b-doc")["body"].strip() == "b"
+
+
+def test_rename_rule_and_check(monkeypatch, tmp_path):
+    mid = _mk_schema(monkeypatch, tmp_path)
+    assert module_edit.upsert_rule(mid, "combat", {}, "body")["ok"]
+    assert module_edit.upsert_check(mid, "brawl", {**CHECK, "rules": ["combat"]})["ok"]
+    assert module_edit.rename(mid, "rule", {"from": "combat"}, "combat-core")["ok"]
+    pack = modules.load_pack(mid)
+    assert pack["checks"]["brawl"]["rules"] == ["combat-core"]
+    assert modules.read_rule(mid, "combat-core") is not None
+    assert module_edit.rename(mid, "check", {"from": "brawl"}, "melee")["ok"]
+    assert "melee" in modules.load_pack(mid)["checks"]
+
+
+def _bound_campaign(mid):
+    """Shared by Tasks 6-8: a world + campaign bound to the module."""
+    wid = worlds.create_world("Realm")
+    cid = campaigns.create_campaign("Saltmarch Run", wid)
+    modules.set_campaign_module(cid, mid)
+    return wid, cid
+
+
+def test_check_rename_blocked_by_live_proposal(monkeypatch, tmp_path):
+    from grimoire.store import proposals
+    mid = _mk_schema(monkeypatch, tmp_path)
+    assert module_edit.upsert_check(mid, "brawl", CHECK)["ok"]
+    wid, cid = _bound_campaign(mid)
+    proposals.new(cid, "s1", {"check": "brawl"})
+    res = module_edit.rename(mid, "check", {"from": "brawl"}, "melee")
+    assert res["ok"] is False and any(cid in e for e in res["errors"])
+    res = module_edit.delete_check(mid, "brawl",
+                                   pre_swap=module_edit.check_proposal_guard(mid, "brawl"))
+    assert res["ok"] is False
+    proposals.supersede(cid, "s1")   # superseded is terminal — guard clears
+    assert module_edit.rename(mid, "check", {"from": "brawl"}, "melee")["ok"]
+
+
+def test_shared_fragment_specialized(monkeypatch, tmp_path):
+    mid = _mk_schema(monkeypatch, tmp_path)
+    other_group = {"label": "Spirit", "fields": [
+        {"key": "strength", "type": "dots", "max": 5}]}
+    other_type = {"label": "Medium", "kind": "characters", "groups": ["spirit"], "fields": []}
+    assert module_edit.upsert_group(mid, "spirit", other_group)["ok"]
+    assert module_edit.upsert_sheet_type(mid, "medium", other_type)["ok"]
+    layout = {"fragments": {"stat-block": {"fields": ["strength"]}},
+              "sheet_types": {"warden": {"use": "stat-block"},
+                              "medium": {"use": "stat-block"}}}
+    assert module_edit.set_layout(mid, layout)["ok"]
+    res = module_edit.rename(mid, "field", {"from": "strength", "group": "attributes"}, "brawn")
+    assert res["ok"], res["errors"]
+    pack = modules.load_pack(mid)
+    raw = json.loads((modules.user_dir() / mid / "layout.json").read_text(encoding="utf-8"))
+    # medium still uses the original fragment; warden repointed to a clone
+    assert raw["fragments"]["stat-block"] == {"fields": ["strength"]}
+    warden_use = raw["sheet_types"]["warden"]["use"]
+    assert warden_use != "stat-block"
+    assert raw["fragments"][warden_use] == {"fields": ["brawn"]}
+    assert pack["display_errors"] == []
