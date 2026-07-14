@@ -22,7 +22,8 @@ the editor touches is stable.
 | Sharing | **Zip export (any module) + zip import (into the user library), validated-or-rejected** | Modules are pure data packs — sharing never ships code. stdlib `zipfile`, raw-bytes upload (no new multipart dependency, per the Android base-deps rule). An invalid or malicious zip never lands in the library. |
 | Duplicate | `duplicate_module(mid, name) -> new_mid` copies any pack into the user library under a **new** slug | The styles precedent (`duplicate_style` + immutable builtins). Builtins stay read-only; Duplicate is the customize path. Same-id shadow copies (user pack shadowing a builtin id) remain a filesystem-only trick, not offered in the UI — a shadow copy silently retargets every campaign bound to the builtin. |
 | Expression rewriting | Rename ops rewrite **scope-resolved** expressions by **word-boundary text replacement**, then the whole-pack validation re-parses everything | Field keys are unique only within an assembled sheet type (Phase 1), so two disjoint groups may both define `strength` — a blind global rewrite would corrupt the other group's expressions. Each expression's scope is resolved first (see Rename operations); only expressions whose scope binds the name to the renamed definition are rewritten. Within a selected expression, `\bold\b` can only match a `Name` (the language has no strings, attributes, or comments; function names and keywords are barred as field keys). Text replacement preserves the author's formatting; `ast.unparse` would reformat every expression and requires Python ≥ 3.9 (Android runtime not guaranteed). The staged validation gate re-parses and re-scopes every expression afterwards, so a bad rewrite cannot land. (Codex adversarial round 1.) |
-| Transactional model | **Whole-directory swap + journal + idempotent recovery**; sheet-migrating renames take every campaign lock *before* the swap | Per-file `os.replace` can crash mid-swap and leave a cross-file-invalid pack on disk permanently (`resolve()` ⇒ `None`, mechanics off for every bound campaign); publishing the schema before locking lets a stale client write race migration and silently drop the renamed key via `_checked_write`'s unknown-key filter. (Codex adversarial round 1.) |
+| Transactional model | **Whole-directory swap + journal + idempotent recovery**; sheet-migrating renames take every campaign lock *before* the swap | Per-file `os.replace` can crash mid-swap and leave a cross-file-invalid pack on disk permanently (`resolve()` ⇒ `None`, mechanics off for every bound campaign); publishing the schema before locking lets an in-flight LLM sheet write race migration and silently drop the renamed key via `_checked_write`'s unknown-key filter. (Codex adversarial round 1.) |
+| Concurrency threat model | **Exactly two concurrent actors: the User (UI) and the LLM (play-time flows)** — machinery for anything beyond that is deliberately omitted (user call, 2026-07-13) | Single-user, single-process app. Two user actions cannot race each other (one human), so multi-user-grade machinery — registry barriers, sorted multi-lock deadlock choreography, late-created-campaign/world fixed points, world-scope write locks — is out. What remains: the module edit (User) must exclude LLM play flows (context/continuation assembly, roll proposals, check resolution, absorb sheet writes) per campaign; crash safety; and stale-form validation, which is sequential, not concurrency. |
 
 ## Backend: `store/module_edit.py`
 
@@ -33,29 +34,24 @@ New module (pure stdlib, pydantic-free, filesystem via the same
 
 - raises `ModuleError` when the target resolves to a builtin (only
   user-library packs are editable — same posture as `delete_module`);
-- serializes on a **single global module-edit lock** — one re-entrant
-  `threading.RLock` for the whole store, not per-module (Codex
-  adversarial round 2: per-module locks let edit A's start-of-edit
-  recovery scan classify edit B's in-flight journal as crash debris and
-  reclaim it mid-swap, orphaning B's module; module edits are rare and
-  human-paced, so global serialization costs nothing and makes
-  staging-cleanup/journal/swap/migration/recovery mutually exclusive by
-  construction; re-entrant so the op's own internal `resolve()`/
-  `load_pack` calls never self-deadlock). Same single-process caveats
-  as Phase 7's advance lock;
+- serializes on a **single global module-edit lock (M)** — one
+  re-entrant `threading.RLock` for the whole store (module edits are
+  rare and human-paced; one lock makes staging-cleanup/journal/swap/
+  recovery mutually exclusive by construction and serializes the UI's
+  own overlapping requests — a debounced dry-run in flight when Save is
+  clicked; re-entrant so the op's own internal `resolve()`/`load_pack`
+  calls never self-deadlock). Same single-process caveats as Phase 7's
+  advance lock;
 - follows the **stage → validate → swap** primitive below. Create,
   duplicate, import, **and the existing `delete_module`** all run under
-  the same global lock, recovery-first (Codex adversarial round 3: an
-  unserialized `shutil.rmtree` racing a staged edit can remove the live
-  dir mid-swap, after which recovery would resurrect the deleted module
-  from staging — `delete_module` moves into, or is wrapped by,
-  `module_edit`'s locked path). `delete_module` takes the **full R1
-  lock set** (M → barrier → all campaign locks → all world locks) for
-  the duration of its `rmtree` (Codex adversarial round 8: M alone
-  doesn't exclude R2 consumers, which never take M — a bound module
-  vanishing, or a same-id shadow falling through to the builtin, mid-
-  `resolve_check`/context-assembly/sheet-op must be impossible, and the
-  scope locks are exactly what those consumers hold).
+  M, recovery-first (`delete_module`'s bare `shutil.rmtree` moves into,
+  or is wrapped by, `module_edit`'s locked path). Like every writer,
+  `delete_module` also takes all campaign locks for the duration of its
+  `rmtree` (Codex adversarial round 8: M alone doesn't exclude the LLM
+  consumers, which never take M — a bound module vanishing, or a
+  same-id shadow falling through to the builtin, mid-`resolve_check`/
+  context-assembly/sheet-op must be impossible, and the campaign locks
+  are exactly what those consumers hold).
 
 ### Stage → validate → swap
 
@@ -79,18 +75,17 @@ New module (pure stdlib, pydantic-free, filesystem via the same
    leaving a cross-file-invalid pack that `resolve()` permanently
    refuses). The staged copy is already a complete pack, so the swap is
    two directory renames: write a **journal** file
-   (`<GRIMOIRE_HOME>/.module-staging/<nonce>.journal.json` — per-nonce,
-   so concurrent edits of *different* modules never share one; contents:
+   (`<GRIMOIRE_HOME>/.module-staging/<nonce>.journal.json`; contents:
    mid, nonce, phase, and — for sheet-migrating renames — the pending
    migration op), then `os.rename(live, trash)` and
    `os.rename(staging, live)` (trash also lives under
    `.module-staging/<nonce>/`; same filesystem, both renames atomic).
    On disk there is therefore only ever the complete old pack or the
-   complete new one — never a mix. Multi-file *reader* coherence comes
-   from the locking rules below (`load_pack` itself stays lock-free —
-   locking lives at the caller, per rule R3; Codex adversarial rounds
-   5–6). The only crash window leaves the live dir briefly absent with
-   journal + both complete copies on disk.
+   complete new one — never a mix. Reader coherence during the swap
+   comes from the Locking rules below (`load_pack` itself stays
+   lock-free — locking lives at the caller). The only crash window
+   leaves the live dir briefly absent with journal + both complete
+   copies on disk.
 5. Run sheet migration if the op requires it (see Sheet migration), then
    delete the journal, trash, and staging remnants. The journal outlives
    the swap exactly until migration completes.
@@ -113,62 +108,52 @@ now) published. Between a crash and recovery the module reads as
 missing (`resolve()` ⇒ `None` with the existing missing-module
 warning) — degraded but self-healing, never permanent.
 
-### Locking rules (one total order, no exceptions)
+### Locking rules (two actors: User and LLM)
 
-Codex adversarial round 6 found the round-5 formulation deadlock-prone
-(`load_pack` taking the module lock inverts against sheet paths that
-hold a campaign lock and then load the pack). The corrected discipline
-is a single total order — **module-edit (M) → registry barrier → campaign
-locks (sorted) → world locks (sorted)** — where every path takes a
-contiguous slice and never waits on an earlier lock while holding a
-later one:
+Per the threat model, the only concurrency to design for is a User
+action (a module edit) racing an LLM play-time flow. The lock order is
+**module-edit (M) → campaign locks**; two rules:
 
-- **R1 — every editing writer** (schema-affecting or not) holds M, the
-  barrier, and all campaign+world locks across its directory swap;
-  schema-semantics writers additionally run migration before releasing
-  (detailed under Sheet migration). Uniform on purpose (Codex round 7:
-  the round-6 "non-schema writers hold only M" exception was unsound —
-  the two-rename swap briefly removes the live path, during which an
-  unlocked consumer can see the module as missing, fall through a
-  same-id user shadow to the *builtin* pack, or combine files from two
-  generations; edits are rare and human-paced, so the uniform lock set
-  costs nothing).
-- **R2 — pack+campaign-state consumers**: every computation that reads
-  the pack *and* campaign state holds its campaign lock across module
-  resolution, pack load, file I/O, and the computation —
-  `sheets.write`/`advance` already do; **`checks.resolve_check` joins
-  them** (Codex round 6: an unlocked check resolution can load the old
-  pack, then read a freshly-migrated sheet, and persist a roll priced
-  from a no-longer-existing field), **and so do mechanics context
-  assembly and roll-continuation assembly** (`context._mechanics` and
+- **R1 — every editing writer** (schema-affecting or not) holds M and
+  **all campaign locks** across its directory swap; schema-semantics
+  writers additionally run migration before releasing (detailed under
+  Sheet migration). Uniform on purpose (Codex round 7: the two-rename
+  swap briefly removes the live path, during which an unlocked consumer
+  could see the module as missing, fall through a same-id user shadow
+  to the *builtin* pack, or combine files from two generations — the
+  campaign locks make that window invisible to every LLM flow; edits
+  are rare and human-paced, so the uniform lock set costs nothing).
+  Acquisition order among the campaign locks is irrelevant: the module
+  edit is the only multi-lock holder that can run concurrently with
+  anything (LLM flows hold exactly one campaign lock; other multi-lock
+  paths like the world-rebind route are User actions, and two User
+  actions don't race).
+- **R2 — the LLM flows**: every computation that reads the pack *and*
+  campaign state holds its campaign lock across module resolution, pack
+  load, file I/O, and the computation — `sheets.write`/`advance`
+  already do; **`checks.resolve_check` joins them** (Codex round 6: an
+  unlocked check resolution can load the old pack, then read a
+  freshly-migrated sheet, and persist a roll priced from a
+  no-longer-existing field), **and so do mechanics context assembly and
+  roll-continuation assembly** (`context._mechanics` and
   `routes._continuation_rule_bodies` each read activation/check
   metadata via `load_pack`, then rule bodies via `read_rule` — Codex
   rounds 7 and 9: a rule edit between those reads could inject
   old-flags-with-new-body mechanics text into persisted narration).
-  These paths never take M, so they cannot invert against R1 — a writer
-  simply waits for their campaign lock.
-- **R3 — pack-only readers**: multi-file readers that hold no
-  campaign/world lock — `GET /modules/{mid}`, `read_content` (its `.md`
-  + sidecar pair), zip export — take M for the duration of their read
-  (uncontended except during an active edit). `load_pack` itself is
-  lock-free; callers own the locking. **R2 callers that need pack file
-  reads use unlocked internal readers, never the M-taking wrappers**
-  (Codex adversarial round 8: the instantiate routes read content and
-  then create a scoped entity+sheet — holding the scope lock while
-  waiting on M would invert the total order, and reading before taking
-  the scope lock re-opens the mixed-generation race; instead
-  `read_content` splits into an unlocked internal reader plus the
-  public M-owning wrapper, and instantiate takes its campaign/world
-  lock first, then calls the unlocked reader and keeps the lock through
-  entity and sheet creation — coherent because R1 writers hold every
-  scope lock, so no swap can occur while any scope lock is held).
-- The invariant, stated once: **any path reading more than one pack
-  file, or pack state plus campaign/world state, holds either M or the
-  relevant scope lock for the whole read** — and since R1 writers hold
-  M *and* every scope lock across the swap, no consumer can ever
-  observe the mid-swap absent-path window or a mixed generation. The
-  implementation plan must audit pack consumers against this invariant
-  (the ones named above are the known multi-read paths today).
+  These paths never take M — a writer simply waits for their campaign
+  lock, so no deadlock is possible.
+- Pack-only reads with no campaign lock (`GET /modules/{mid}`,
+  `read_content`, zip export, instantiate's content read, `resolve()`
+  from ordinary routes) are User-originated and may briefly observe the
+  swap window of the User's own concurrent save — a transient UI blip,
+  not a correctness hazard, and out of the threat model. Export takes M
+  anyway (one line, guarantees a coherent zip). `load_pack` itself is
+  lock-free; callers own the locking.
+- The invariant, stated once: **every LLM flow that reads pack state
+  holds its campaign lock for the whole computation, and every module
+  edit holds all campaign locks across its swap.** The implementation
+  plan must audit LLM-reachable pack consumers against this (the ones
+  named above are the known paths today).
 
 ### Section writers
 
@@ -285,43 +270,19 @@ manifest/checks/rules/content/layout/theme edits — takes this same lock
 set across its swap; the migration step is simply empty for writers
 that don't change sheet semantics:
 
-- Before the directory swap, the op enumerates all campaigns and acquires
-  `sheets.lock_for(cid)` for **every** campaign, in sorted-cid order (a
-  fixed order so two concurrent multi-lock holders cannot deadlock) —
-  the lock-everything-first discipline from the Phase 5 rebind fix,
-  where locking only a pre-enumerated "bound" subset proved stale.
-  Whether each campaign actually resolves to this module is re-checked
-  under its lock; non-matching campaigns' sheets are left untouched (but
-  their locks are held for the swap's duration — cheap, and simpler than
-  a correct-but-racy subset).
-- **World sheets have no lock today** (`write_world` locks nothing).
-  `sheets.py` gains a world-scope lock from the same `_lock_for` registry
-  (keyed `"world:<wid>"`), taken by **every world-sheet mutator** —
-  `write_world`, `write_world_creation`, `delete_world`, the world
-  instantiate path, and campaign-creation **seeding** while it copies
-  world sheets — and by migration (Codex adversarial round 2: locking
-  only `write_world`/`delete_world` left the creation route and seeding
-  free to publish an old-schema sheet after migration passed).
-- **A registry barrier freezes enumeration** (Codex adversarial rounds
-  4–5: a late-created campaign *or world* escapes any lock set
-  enumerated up front, and growing a held lock set out of order
-  deadlocks against other multi-lock holders such as the world-rebind
-  route). A single registry-barrier lock (from the same `_lock_for`
-  registry) is held by this op from before enumeration until migration
-  completes; `create_campaign`, `create_world`, **and their delete
-  counterparts** acquire it briefly (Codex adversarial round 6:
-  `delete_campaign`/`delete_world` recursively remove registry roots
-  today with no locks at all — a deletion racing migration could rip a
-  directory out mid-rewrite; deletions take the barrier plus their own
-  scope lock, in the canonical order). With the barrier held, the
-  campaign/world population cannot change, so the op enumerates once and
-  acquires every campaign lock in sorted-cid order, then every world
-  lock in sorted-wid order — no reacquire loop needed. Any multi-lock
-  holder in the codebase (this op, the world-rebind route) must follow
-  the same campaigns-then-worlds sorted discipline. A creation or
-  deletion queued on the barrier proceeds after release and sees only
-  the new pack (seeding then also serializes on the world-scope lock,
-  by then released).
+- Before the directory swap, the op enumerates all campaigns and
+  acquires `sheets.lock_for(cid)` for **every** campaign (whether each
+  actually resolves to this module is re-checked under its lock —
+  cheaper and simpler than a correct-but-racy subset; acquisition order
+  doesn't matter, per Locking rules). Per the threat model there is no
+  barrier, no sorted-order discipline, and no fixed-point re-enumeration:
+  campaigns and worlds are created/deleted by User actions, which cannot
+  race the User's own module edit.
+- **World sheets need no lock**: every world-sheet writer (`write_world`,
+  `write_world_creation`, the world instantiate path, seeding) is
+  User-originated — the LLM only ever writes campaign sheets (absorb) —
+  so during a User's module edit no concurrent world-sheet writer
+  exists. Migration rewrites world sheet files directly.
 - The pending migration (op kind + address + `to`) is recorded in the
   journal before the swap; migration then rewrites every affected file;
   the journal is cleared only after migration completes. A crash
@@ -345,23 +306,21 @@ that don't change sheet semantics:
   CAS write built against the pre-rename sheet fails with the existing
   409 conflict instead of resurrecting the old key.
 - Gen bumps only reject writers that carry a CAS snapshot for an
-  *existing* sheet, which leaves two stale-write holes (Codex adversarial
-  round 3): world sheet writes have no CAS today, and a create-new write
-  (`expected gen = None`) sails through — in both cases
-  `_checked_write`'s silent unknown-key filter then drops the stale
-  payload's renamed key, silently losing the migrated value. Two
-  closures: **world sheet writes adopt the same mandatory gen CAS as
-  campaign writes** (Phase 5 parity — `write_world` is currently plain),
-  and **an unknown field key in a submitted sheet payload becomes a
-  validation error (`SheetError` → 400) instead of a silent filter** —
-  every writer's payload is either schema-correct or visibly rejected,
-  including creates. **World sheet deletion requires `expected_gen`
-  too** (Codex adversarial round 4: campaign delete already carries CAS
-  from Phase 5; a pre-rename world DELETE queued on the world lock would
-  otherwise unlink the freshly migrated sheet) — full world/campaign CAS
-  parity: write, create, and delete alike. Migration's own rewrites are
-  built from known keys, and the Phase 5 absorb path submits existing
-  keys under its lock, so neither regresses.
+  *existing* sheet. The remaining hazard is **sequential, not
+  concurrent**: after a rename completes, the user's own still-open
+  sheet form (or second tab) submits a payload built against the old
+  schema, and `_checked_write`'s silent unknown-key filter drops the
+  renamed key — the migrated value is quietly lost with no error. Two
+  closures (Codex adversarial rounds 3–4, reframed for the threat
+  model): **world sheet writes and deletes adopt the same mandatory gen
+  CAS as campaign writes** (Phase 5 parity — `write_world` is currently
+  plain and world delete takes no `expected_gen`), and **an unknown
+  field key in a submitted sheet payload becomes a validation error
+  (`SheetError` → 400) instead of a silent filter** — every payload,
+  including creates (`expected gen = None`), is either schema-correct
+  or visibly rejected. Migration's own rewrites are built from known
+  keys, and the Phase 5 absorb path submits existing keys under its
+  lock, so neither regresses.
 
 A sheet file that fails to parse is skipped and reported in the op result
 (`{"migrated": N, "skipped": [paths]}`), never blocks the rename. Scene
@@ -614,52 +573,39 @@ unchanged (it edits the same files the UI does).
   to a complete, valid pack; the pre-swap case discards the pending
   migration and leaves stored sheets byte-identical, the post-swap cases
   finish the journaled migration idempotently (replaying an
-  already-migrated file is a no-op); recovery of one module's journal
-  while another module edit is in flight is impossible by construction
-  (global lock — assert edits serialize); sheet
+  already-migrated file is a no-op); sheet
   migration — field rename rewrites world + campaign sheets with gen
   bumps, group rename migrates zero sheets, sheet-type rename rewrites
   `sheet_type` values, content rename rewrites `kind:module:id` refs,
   unparseable sheet file skipped and reported; a stored sheet holding
   both the old and destination keys rejects the rename with its path
-  listed; locks acquired for all campaigns then all worlds in one sorted
-  order before the swap under the registry barrier, a campaign or world
-  created during the op blocks on the barrier and sees only the new
-  pack, and a campaign that doesn't resolve to the module under its
-  lock is untouched; a group upsert changing an advancement cost
-  excludes a concurrent `advance()` (same lock protocol, no migration);
-  **lock-order tests**: a two-thread edit-vs-`sheets.write`/`advance`
-  interleaving completes without deadlock (R1 vs R2), a field rename
-  racing `resolve_check` yields a roll computed from one generation
-  (never old-expression-with-migrated-sheet), mechanics context assembly
-  *and* continuation rule assembly racing a rules edit never mix one
+  listed; all campaign locks acquired before the swap, and a campaign
+  that doesn't resolve to the module under its lock is untouched;
+  **User-vs-LLM exclusion tests**: a two-thread edit-vs-`sheets.write`/
+  `advance` interleaving completes without deadlock, a group upsert
+  changing an advancement cost excludes a concurrent `advance()` (same
+  lock protocol, no migration), a field rename racing `resolve_check`
+  yields a roll computed from one generation (never
+  old-expression-with-migrated-sheet), mechanics context assembly *and*
+  continuation rule assembly racing a rules edit never mix one
   generation's activation flags with the other's body (pause injected
-  between `load_pack` and `read_rule`), a check rename/delete with a
-  non-terminal proposal referencing it is rejected naming the
-  campaign/scene (and succeeds once the proposal resolves), a proposal
-  creation paused between deriving its check from the pack and
-  persisting cannot land after a check rename/delete (unified
-  per-campaign lock domain — the round-10 TOCTOU),
-  a consumer paused between the two swap renames never observes the
-  module as missing nor falls through a same-id user shadow to the
-  builtin (locked writer excludes it — cover with a shadow pack whose
-  advancement costs differ from the builtin's), `read_content` and
-  instantiate racing a content upsert/rename never return or persist a
-  mixed `.md`/sidecar pair, instantiate holds its scope lock from
-  before the (unlocked internal) content read through sheet creation
-  without ever waiting on M (the round-8 deadlock interleaving),
-  `delete_module` racing `resolve_check`/context assembly/a sheet op
-  is fully excluded incl. the user-shadow-of-builtin case, and a
-  campaign/world deletion racing migration serializes on the barrier;
-  export mid-swap returns one coherent generation; every
-  world-sheet mutator (`write_world`, `write_world_creation`, seeding,
-  instantiate) serializes on the world-scope lock; **stale-write
-  closure**: a queued pre-rename world PUT fails the new world gen CAS
-  after migration, a pre-rename world DELETE fails its now-mandatory
-  `expected_gen`, and a pre-rename create-new payload (`expected gen =
-  None`) 400s on its unknown key instead of silently dropping it;
-  deletion at each staged-swap phase serializes with edits and ends
-  deleted (never resurrected by recovery); a nested/diamond fragment
+  between `load_pack` and `read_rule`), a campaign-locked LLM consumer
+  paused mid-computation never observes the swap window (module missing
+  or a same-id user shadow falling through to the builtin — cover with
+  a shadow pack whose advancement costs differ from the builtin's), a
+  check rename/delete with a non-terminal proposal referencing it is
+  rejected naming the campaign/scene (and succeeds once the proposal
+  resolves), a proposal creation paused between deriving its check from
+  the pack and persisting cannot land after a check rename/delete
+  (unified per-campaign lock domain — the round-10 TOCTOU), and
+  `delete_module` racing `resolve_check`/context assembly/a sheet op is
+  fully excluded incl. the user-shadow-of-builtin case; export mid-swap
+  returns one coherent generation; **stale-form closure** (sequential,
+  no concurrency): after a rename, a world PUT built against the old
+  schema fails the new world gen CAS, a world DELETE without
+  `expected_gen` is rejected, and a create-new payload (`expected gen =
+  None`) 400s on its unknown key instead of silently dropping it; a
+  nested/diamond fragment
   graph (wrapper fragment `use`-ing the affected one, shared across
   scopes) specializes the whole ancestor path; dry-run returns
   impact (migrated / newly-invalid / dangling counts, sample derived
@@ -708,9 +654,13 @@ draft/publish staging areas; a visual drag/drop layout arranger; module
 version-compatibility machinery; editing builtins in place or same-id
 shadow copies in the UI; bulk operations (multi-field editing beyond one
 record per save); concurrent-editor conflict resolution beyond
-last-write-wins (single-user app posture, unchanged); packaging images
-or fonts in packs; sharing infrastructure beyond a zip file (no registry,
-no URLs).
+last-write-wins (single-user app posture, unchanged); **any concurrency
+machinery beyond the two-actor User/LLM threat model** — races between
+two User actions (concurrent module edits, campaign/world create/delete
+during an edit, world-sheet writes during an edit, multi-lock deadlock
+choreography with the rebind route) are deliberately unhandled;
+packaging images or fonts in packs; sharing infrastructure beyond a zip
+file (no registry, no URLs).
 
 ## Privacy note
 
