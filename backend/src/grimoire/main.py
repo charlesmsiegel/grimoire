@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .routes import router
-from .store import migrations
+from .store import migrations, module_edit
 
 DEFAULT_DIST = Path(__file__).resolve().parents[2].parent / "frontend" / "dist"
 
@@ -32,6 +32,7 @@ def dist_dir() -> Path:
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     migrations.migrate_scene_ids()
+    module_edit.recover()
     yield
 
 
