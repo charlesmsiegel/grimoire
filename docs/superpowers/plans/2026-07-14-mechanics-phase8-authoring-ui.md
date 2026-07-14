@@ -268,6 +268,19 @@ def test_recover_post_swap_cleans_trash(monkeypatch, tmp_path):
     assert not base.exists()
 
 
+def test_malformed_journal_quarantined_not_destructive(monkeypatch, tmp_path):
+    mid = _mk(monkeypatch, tmp_path)
+    d = tmp_path / ".module-staging"
+    keep = d / "aaaabbbbccccddddaaaabbbbccccdddd" / mid
+    keep.mkdir(parents=True)
+    (keep / "module.md").write_text("---\nname: Rescue\n---\n", encoding="utf-8")
+    (d / "torn.journal.json").write_text("{not json", encoding="utf-8")
+    module_edit.recover()
+    assert (d / "torn.journal.bad").exists()       # quarantined, not deleted
+    assert keep.exists()                           # recovery data preserved
+    assert d.exists()                              # never rmtree'd wholesale
+
+
 def test_edit_excludes_campaign_locked_consumer(monkeypatch, tmp_path):
     """User-vs-LLM exclusion: an edit blocks while a campaign lock is held."""
     mid = _mk(monkeypatch, tmp_path)
@@ -367,39 +380,58 @@ def recover() -> None:
         if not d.is_dir():
             return
         journals = sorted(d.glob("*.journal.json"))
+        quarantined: set[str] = set()
         if journals:
             with _campaign_locks():
                 for jp in journals:
-                    _replay_journal(jp)
+                    _replay_journal(jp, quarantined)
         # non-journaled debris (crash before journal write); no edit can be
-        # in flight here — edits hold _M for their whole operation.
-        for p in list(d.iterdir()):
-            if p.is_dir():
-                shutil.rmtree(p, ignore_errors=True)
+        # in flight here — edits hold _M for their whole operation. If ANY
+        # journal was quarantined we cannot know which dirs it references,
+        # so the sweep is skipped entirely — a torn journal's staging/trash
+        # may hold the only copy of a missing live module (codex plan
+        # review round 2). Quarantined debris is a human-inspectable
+        # leftover, not a correctness hazard.
+        if not quarantined:
+            for p in list(d.iterdir()):
+                if p.is_dir():
+                    shutil.rmtree(p, ignore_errors=True)
 
 
-def _replay_journal(jp: Path) -> None:
+_NONCE_RE = re.compile(r"[0-9a-f]{32}\Z")
+
+
+def _replay_journal(jp: Path, quarantined: set[str]) -> None:
+    """Replay one journal. A journal that fails to parse or carries an
+    unsafe mid/nonce is QUARANTINED (renamed .journal.bad, its nonce dir
+    kept) — never acted on: deriving paths from a torn journal could
+    rmtree the whole recovery area (nonce '' → base == .module-staging) or
+    walk outside it (codex plan review round 2)."""
     d = _staging_root()
     try:
         j = json.loads(jp.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError, OSError):
-        j = {}
-    mid, nonce = str(j.get("mid") or ""), str(j.get("nonce") or "")
+        j = None
+    mid = str(j.get("mid") or "") if isinstance(j, dict) else ""
+    nonce = str(j.get("nonce") or "") if isinstance(j, dict) else ""
+    if not modules._safe_mid(mid) or not _NONCE_RE.match(nonce):
+        quarantined.add(jp.name)
+        jp.rename(jp.with_suffix(".bad"))
+        return
     base = d / nonce
     staging = base / mid
     live = modules.user_dir() / mid
     published = False
-    if mid and nonce:
-        if live.exists() and staging.exists():
-            pass  # pre-swap crash: discard the edit (and its migration)
-        elif not live.exists() and staging.exists():
-            live.parent.mkdir(parents=True, exist_ok=True)
-            staging.rename(live)
-            published = True
-        elif live.exists():
-            published = True  # post-swap crash: trash cleanup + migration
-        if published and isinstance(j.get("migration"), dict):
-            _run_migration(mid, j["migration"])
+    if live.exists() and staging.exists():
+        pass  # pre-swap crash: discard the edit (and its migration)
+    elif not live.exists() and staging.exists():
+        live.parent.mkdir(parents=True, exist_ok=True)
+        staging.rename(live)
+        published = True
+    elif live.exists():
+        published = True  # post-swap crash: trash cleanup + migration
+    if published and isinstance(j.get("migration"), dict):
+        _run_migration(mid, j["migration"])
     shutil.rmtree(base, ignore_errors=True)
     jp.unlink(missing_ok=True)
 
@@ -1267,6 +1299,21 @@ def test_rename_sheet_type_rewrites_flags_layout_sidecars(monkeypatch, tmp_path)
     assert "keeper" in pack["layout"]["sheet_types"]
 
 
+def test_rename_traversal_and_file_collision_rejected(monkeypatch, tmp_path):
+    mid = _mk_schema(monkeypatch, tmp_path)
+    victim = modules.create_module("Victim System")
+    before = (modules.user_dir() / victim / "module.md").read_bytes()
+    res = module_edit.rename(mid, "rule",
+                             {"from": f"../../{victim}/module"}, "stolen")
+    assert res["ok"] is False
+    assert (modules.user_dir() / victim / "module.md").read_bytes() == before
+    assert module_edit.upsert_rule(mid, "a-doc", {}, "a")["ok"]
+    assert module_edit.upsert_rule(mid, "b-doc", {}, "b")["ok"]
+    res = module_edit.rename(mid, "rule", {"from": "a-doc"}, "b-doc")
+    assert res["ok"] is False                          # file collision
+    assert modules.read_rule(mid, "b-doc")["body"].strip() == "b"
+
+
 def test_rename_rule_and_check(monkeypatch, tmp_path):
     mid = _mk_schema(monkeypatch, tmp_path)
     assert module_edit.upsert_rule(mid, "combat", {}, "body")["ok"]
@@ -1507,15 +1554,44 @@ def check_proposal_guard(mid: str, check_id: str):
     return guard
 
 
+_SAFE_KEY = re.compile(r"[a-z0-9][a-z0-9._-]*\Z", re.IGNORECASE)
+
+
 def rename(mid: str, kind: str, address: dict, to: str, *,
            dry_run: bool = False) -> dict:
     if kind not in _RENAME_KINDS:
         return {"ok": False, "errors": [f"unknown rename kind {kind!r}"], "display_errors": []}
     old = address.get("from")
-    if not isinstance(old, str) or not old or not isinstance(to, str) or not to:
-        return {"ok": False, "errors": ["rename needs 'from' and 'to'"], "display_errors": []}
+    # Codex plan review round 2: rule/content ids interpolate into paths —
+    # a '../'-laden 'from' could move ANOTHER live module's file into
+    # staging (then delete it in cleanup), and a colliding destination file
+    # would be silently overwritten on POSIX. Both names must be safe keys,
+    # for every kind (field/derived keys are never paths, but a uniform
+    # gate is cheaper than remembering which kinds touch the filesystem).
+    if not isinstance(old, str) or not _SAFE_KEY.match(old) \
+            or not isinstance(to, str) or not _SAFE_KEY.match(to):
+        return {"ok": False, "errors": ["rename needs safe 'from' and 'to' keys"],
+                "display_errors": []}
     if old == to:
         return {"ok": False, "errors": ["'from' and 'to' are the same"], "display_errors": []}
+    # source-exists + destination-free preflight per namespace: the mutate
+    # step's _rename_map_key covers map-backed kinds; file-backed kinds
+    # (rule, content) check here because a filesystem rename onto an
+    # existing path must never happen at all.
+    live_root, _src = modules.pack_root(mid)
+    if kind == "rule":
+        if not (live_root / "rules" / f"{old}.md").exists():
+            return {"ok": False, "errors": [f"unknown rules doc {old!r}"], "display_errors": []}
+        if (live_root / "rules" / f"{to}.md").exists():
+            return {"ok": False, "errors": [f"rules doc {to!r} already exists"], "display_errors": []}
+    if kind == "content":
+        ckind = address.get("kind")
+        if ckind not in modules.CONTENT_KINDS:
+            return {"ok": False, "errors": [f"unknown content kind {ckind!r}"], "display_errors": []}
+        if not (live_root / "content" / ckind / f"{old}.md").exists():
+            return {"ok": False, "errors": [f"unknown content {ckind}/{old}"], "display_errors": []}
+        if (live_root / "content" / ckind / f"{to}.md").exists():
+            return {"ok": False, "errors": [f"content {ckind}/{to} already exists"], "display_errors": []}
 
     migration = None
     pre_swap = None
@@ -2533,6 +2609,7 @@ git commit -m "feat(module_edit): duplicate, zip export, hardened zip import wit
 - Produces (spec: Sheet migration, stale-form closure — sequential hazard, not concurrency):
   - `_checked_write` **rejects** unknown submitted field keys (`SheetError: "<key>: not a field of sheet type ..."`) instead of silently filtering them. (`modules.validate_sheet_values` already produces exactly that message for unknown keys — so the fix is to *stop pre-filtering*: delete the `allowed`/filter lines and let validation see the full payload.)
   - `write_world(wid, mid, kind, eid, sheet_type, fields=None, *, expected: dict | None)` — mandatory whole-sheet CAS via the existing `_check_expected`, exactly like `write()`.
+  - `write_world_creation(wid, mid, kind, eid, sheet_type, spends, *, expected: dict | None)` — same mandatory CAS (`_check_expected` before `_checked_creation_write`); the route already receives `SheetCreationBody.expected` and now passes it, 409 on conflict (codex plan review round 2: a stale/retried creation PUT could otherwise overwrite a migrated world sheet). `CreationWizard` already sends `expected: null` for fresh creations — no frontend change.
   - `delete_world(wid, mid, kind, eid, *, expected_gen: str | None) -> bool` — gen CAS like campaign `delete()`.
   - Routes: `PUT /worlds/{wid}/sheets/{mid}/{kind}/{eid}` passes `body.expected` (the `SheetBody` model already carries it — campaign PUT uses it today); 409 on `SheetConflict`. `DELETE /worlds/...` gains `gen: str | None = None` query param, 409 on conflict.
   - Client: `deleteSheet` world branch appends the same `?gen=` query the campaign branch already sends. (`putSheet` already sends `expected` for both scopes — no client change needed there.)
@@ -2562,6 +2639,14 @@ def test_write_world_requires_cas(monkeypatch, tmp_path, ...):
     ok = {"sheet_type": stored["sheet_type"], "fields": stored["fields"], "gen": stored["gen"]}
     sheets.write_world(wid, mid, "characters", "winifred", "warden",
                        {"strength": 2}, expected=ok)
+
+
+def test_write_world_creation_requires_cas(monkeypatch, tmp_path, ...):
+    sheets.write_world_creation(wid, mid, "characters", "winifred", "warden",
+                                {}, expected=None)
+    with pytest.raises(sheets.SheetConflict):
+        sheets.write_world_creation(wid, mid, "characters", "winifred", "warden",
+                                    {}, expected=None)   # already exists
 
 
 def test_delete_world_requires_gen(monkeypatch, tmp_path, ...):
@@ -2620,6 +2705,16 @@ def write_world(wid: str, mid: str, kind: str, eid: str, sheet_type: str,
     _checked_write(path, mid, kind, eid, sheet_type, fields)
 
 
+def write_world_creation(wid: str, mid: str, kind: str, eid: str, sheet_type: str,
+                         spends: dict[str, dict[str, int]], *,
+                         expected: dict | None) -> None:
+    modules.pack_root(mid)  # raises ModuleNotFound
+    _assert_world_entity_exists(wid, kind, eid)
+    path = _world_path(wid, mid, kind, eid)
+    _check_expected(path, expected)
+    _checked_creation_write(path, mid, kind, eid, sheet_type, spends)
+
+
 def delete_world(wid: str, mid: str, kind: str, eid: str, *,
                  expected_gen: str | None) -> bool:
     if kind not in FILE_KINDS or not _safe_part(eid) or not _safe_part(mid):
@@ -2663,6 +2758,11 @@ def delete_world_sheet(wid: str, mid: str, kind: str, eid: str, gen: str | None 
     except store.sheets.SheetConflict as e:
         raise HTTPException(status_code=409, detail=str(e))
 ```
+
+and `put_world_sheet_creation` (`routes.py:585-596`) passes
+`expected=body.expected` to `sheets.write_world_creation` and gains the same
+`SheetConflict` → 409 except-clause (the body model already carries
+`expected`; the campaign creation route already does exactly this).
 
 Client (`frontend/src/api/client.ts` `deleteSheet`): make both branches
 append `${gen ? `?gen=${encodeURIComponent(gen)}` : ""}`.
@@ -3445,11 +3545,16 @@ export type SaveFn = (dryRun: boolean) => Promise<ModuleEditResult>;
 export function useModuleDryRun(save: SaveFn, deps: unknown[]) {
   const [result, setResult] = useState<ModuleEditResult | null>(null);
   const [confirming, setConfirming] = useState(false);
+  const [saving, setSaving] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout>>();
+  const revision = useRef(0);
   useEffect(() => {
+    const rev = ++revision.current;      // stale debounced responses drop
     clearTimeout(timer.current);
     timer.current = setTimeout(() => {
-      save(true).then(setResult).catch(() => {});
+      save(true).then((r) => {
+        if (rev === revision.current) setResult(r);
+      }).catch(() => {});
     }, 500);
     return () => clearTimeout(timer.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -3461,11 +3566,24 @@ export function useModuleDryRun(save: SaveFn, deps: unknown[]) {
     setResult(r);
     if (r.ok) onOk(r);
   }, [save]);
-  const requestSave = useCallback((onOk: (r: ModuleEditResult) => void) => {
-    if (impactful(result?.impact)) setConfirming(true);
-    else void commit(onOk);
-  }, [result, commit]);
-  return { result, confirming, setConfirming, commit, requestSave };
+  // Save NEVER trusts the last debounced result — it awaits a fresh
+  // dry-run of the CURRENT form before deciding whether to confirm (codex
+  // plan review round 2: save-immediately-after-edit consulted a stale or
+  // null result and committed a destructive change unconfirmed).
+  const requestSave = useCallback(async (onOk: (r: ModuleEditResult) => void) => {
+    clearTimeout(timer.current);
+    setSaving(true);
+    try {
+      const fresh = await save(true);
+      setResult(fresh);
+      if (!fresh.ok) return;             // errors render; nothing committed
+      if (impactful(fresh.impact)) setConfirming(true);
+      else await commit(onOk);
+    } finally {
+      setSaving(false);
+    }
+  }, [save, commit]);
+  return { result, confirming, setConfirming, commit, requestSave, saving };
 }
 
 export function ErrorList({ result }: { result: ModuleEditResult | null }) {
@@ -4285,6 +4403,18 @@ Only fields the user actually sets go into the saved `sheet.fields`
 untouched keys — the backend validates whatever is sent). View mode renders
 the body via `<Markdown remarkPlugins={[remarkGfm]}>` (same imports as
 `EntityEditor.tsx`).
+
+**Frontmatter metadata must round-trip** (codex plan review round 2: the
+backend writer reconstructs frontmatter from the submitted `fields`, so
+always sending `fields: {}` silently deletes an imported entry's custom
+metadata on any save). `readModuleContent` already returns extra frontmatter
+keys as top-level string properties — seed a `meta: Record<string, string>`
+form state from every returned key not in
+`("kind","id","name","body","keys","sheet_type","fields")`, render it as
+editable key/value rows (a "Metadata" `.side-section`, `+ Add` / Remove),
+and submit it as the PUT body's `fields`. Add a test: load an entry whose
+mock includes `rarity: "legendary"`, change only the body, Save — the PUT
+body's `fields` still carries `{ rarity: "legendary" }`.
 
 - [ ] **Step 4: Run tests + typecheck**
 
