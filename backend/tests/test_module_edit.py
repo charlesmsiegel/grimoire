@@ -11,6 +11,22 @@ def _mk(monkeypatch, tmp_path):
     return modules.create_module("Realm System")
 
 
+GROUP = {"label": "Attributes",
+         "fields": [{"key": "strength", "label": "Strength", "type": "dots", "max": 5},
+                    {"key": "essence", "label": "Essence", "type": "resource", "max": 10}],
+         "derived": {"might": "strength * 2"}}
+TYPE = {"label": "Warden", "kind": "characters", "groups": ["attributes"],
+        "fields": [{"key": "notes_line", "label": "Notes", "type": "text"}],
+        "derived": {"guard": "strength + 1"}}
+
+
+def _mk_schema(monkeypatch, tmp_path):
+    mid = _mk(monkeypatch, tmp_path)
+    assert module_edit.upsert_group(mid, "attributes", GROUP)["ok"]
+    assert module_edit.upsert_sheet_type(mid, "warden", TYPE)["ok"]
+    return mid
+
+
 def test_set_manifest_round_trip(monkeypatch, tmp_path):
     mid = _mk(monkeypatch, tmp_path)
     res = module_edit.set_manifest(mid, name="Realm System", description="d",
@@ -130,3 +146,81 @@ def test_edit_excludes_campaign_locked_consumer(monkeypatch, tmp_path):
     t.join(timeout=5)
     assert not t.is_alive()
     assert order == ["lock-released", "edit-done"]
+
+
+def test_upsert_group_and_type(monkeypatch, tmp_path):
+    mid = _mk_schema(monkeypatch, tmp_path)
+    pack = modules.load_pack(mid)
+    assert pack["errors"] == []
+    assert pack["sheets"]["groups"]["attributes"]["label"] == "Attributes"
+    assert pack["sheets"]["sheet_types"]["warden"]["kind"] == "characters"
+
+
+def test_upsert_group_bad_expression_rejected(monkeypatch, tmp_path):
+    mid = _mk_schema(monkeypatch, tmp_path)
+    bad = {**GROUP, "derived": {"might": "strength +"}}
+    res = module_edit.upsert_group(mid, "attributes", bad)
+    assert res["ok"] is False
+    assert any("might" in e for e in res["errors"])
+    assert modules.load_pack(mid)["errors"] == []  # live pack still valid
+
+
+def test_delete_group_with_fatal_ref_rejected(monkeypatch, tmp_path):
+    mid = _mk_schema(monkeypatch, tmp_path)
+    res = module_edit.delete_group(mid, "attributes")
+    assert res["ok"] is False
+    assert any("attributes" in e for e in res["errors"])  # named referee
+
+
+def test_delete_type_then_group_cascades_layout(monkeypatch, tmp_path):
+    mid = _mk_schema(monkeypatch, tmp_path)
+    layout = {"sheet_types": {"warden": {"column": [
+        {"group": "attributes"},
+        {"fields": ["notes_line"]},
+        {"derived": ["guard"]}]}}}
+    (modules.user_dir() / mid / "layout.json").write_text(
+        json.dumps(layout), encoding="utf-8")
+    assert module_edit.delete_sheet_type(mid, "warden")["ok"]
+    pack = modules.load_pack(mid)
+    assert pack["errors"] == []
+    assert pack["layout"]["sheet_types"] == {}      # type's tree dropped
+    assert pack["display_errors"] == []             # no dangling display refs
+    assert module_edit.delete_group(mid, "attributes")["ok"]
+    assert "attributes" not in modules.load_pack(mid)["sheets"]["groups"]
+
+
+def test_delete_field_prunes_layout_entry(monkeypatch, tmp_path):
+    mid = _mk_schema(monkeypatch, tmp_path)
+    layout = {"sheet_types": {"warden": {"column": [
+        {"group": "attributes"}, {"fields": ["notes_line"]}]}}}
+    (modules.user_dir() / mid / "layout.json").write_text(
+        json.dumps(layout), encoding="utf-8")
+    slim = {**TYPE, "fields": []}  # drop notes_line (no fatal refs on it)
+    assert module_edit.upsert_sheet_type(mid, "warden", slim)["ok"]
+    pack = modules.load_pack(mid)
+    assert pack["display_errors"] == []
+    tree = json.dumps(pack["layout"])
+    assert "notes_line" not in tree
+
+
+def test_prune_scoped_to_composing_types(monkeypatch, tmp_path):
+    """Removing warden's notes_line must not touch a disjoint type's
+    same-named field in ITS layout tree."""
+    mid = _mk_schema(monkeypatch, tmp_path)
+    other_group = {"label": "Spirit", "fields": [
+        {"key": "notes_line", "label": "Notes", "type": "text"}]}
+    other_type = {"label": "Medium", "kind": "characters",
+                  "groups": ["spirit"], "fields": []}
+    assert module_edit.upsert_group(mid, "spirit", other_group)["ok"]
+    assert module_edit.upsert_sheet_type(mid, "medium", other_type)["ok"]
+    layout = {"sheet_types": {
+        "warden": {"fields": ["notes_line"]},
+        "medium": {"fields": ["notes_line"]}}}
+    (modules.user_dir() / mid / "layout.json").write_text(
+        json.dumps(layout), encoding="utf-8")
+    slim = {**TYPE, "fields": []}          # remove warden's notes_line
+    assert module_edit.upsert_sheet_type(mid, "warden", slim)["ok"]
+    raw = json.loads((modules.user_dir() / mid / "layout.json").read_text(encoding="utf-8"))
+    assert "warden" not in raw["sheet_types"] \
+        or "notes_line" not in json.dumps(raw["sheet_types"].get("warden"))
+    assert raw["sheet_types"]["medium"] == {"fields": ["notes_line"]}
