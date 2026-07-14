@@ -611,6 +611,12 @@ def _validate_sheets(sheets: dict, errors: list[str]) -> None:
 
 def load_pack(mid: str) -> dict:
     root, source = pack_root(mid)
+    return load_pack_at(root, mid, source)
+
+
+def load_pack_at(root: Path, mid: str, source: str = "user") -> dict:
+    """load_pack against an explicit root — the staging validator uses this
+    so a staged edit is judged by the identical code path resolve() trusts."""
     errors: list[str] = []
     try:
         module_text = (root / "module.md").read_text(encoding="utf-8")
@@ -667,7 +673,7 @@ def load_pack(mid: str) -> dict:
     pack = {
         "id": mid,
         "source": source,
-        "manifest": {**meta, "id": mid},
+        "manifest": {**meta, "id": mid, "notes": _body},
         "sheets": sheets,
         "checks": checks,
         "rules": rules,
