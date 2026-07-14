@@ -49,7 +49,13 @@ New module (pure stdlib, pydantic-free, filesystem via the same
   unserialized `shutil.rmtree` racing a staged edit can remove the live
   dir mid-swap, after which recovery would resurrect the deleted module
   from staging — `delete_module` moves into, or is wrapped by,
-  `module_edit`'s locked path).
+  `module_edit`'s locked path). `delete_module` takes the **full R1
+  lock set** (M → barrier → all campaign locks → all world locks) for
+  the duration of its `rmtree` (Codex adversarial round 8: M alone
+  doesn't exclude R2 consumers, which never take M — a bound module
+  vanishing, or a same-id shadow falling through to the builtin, mid-
+  `resolve_check`/context-assembly/sheet-op must be impossible, and the
+  scope locks are exactly what those consumers hold).
 
 ### Stage → validate → swap
 
@@ -143,7 +149,17 @@ later one:
   campaign/world lock — `GET /modules/{mid}`, `read_content` (its `.md`
   + sidecar pair), zip export — take M for the duration of their read
   (uncontended except during an active edit). `load_pack` itself is
-  lock-free; callers own the locking.
+  lock-free; callers own the locking. **R2 callers that need pack file
+  reads use unlocked internal readers, never the M-taking wrappers**
+  (Codex adversarial round 8: the instantiate routes read content and
+  then create a scoped entity+sheet — holding the scope lock while
+  waiting on M would invert the total order, and reading before taking
+  the scope lock re-opens the mixed-generation race; instead
+  `read_content` splits into an unlocked internal reader plus the
+  public M-owning wrapper, and instantiate takes its campaign/world
+  lock first, then calls the unlocked reader and keeps the lock through
+  entity and sheet creation — coherent because R1 writers hold every
+  scope lock, so no swap can occur while any scope lock is held).
 - The invariant, stated once: **any path reading more than one pack
   file, or pack state plus campaign/world state, holds either M or the
   relevant scope lock for the whole read** — and since R1 writers hold
@@ -621,9 +637,13 @@ unchanged (it edits the same files the UI does).
   builtin (locked writer excludes it — cover with a shadow pack whose
   advancement costs differ from the builtin's), `read_content` and
   instantiate racing a content upsert/rename never return or persist a
-  mixed `.md`/sidecar pair, and a campaign/world deletion racing
-  migration serializes on the barrier; export mid-swap returns one
-  coherent generation; every
+  mixed `.md`/sidecar pair, instantiate holds its scope lock from
+  before the (unlocked internal) content read through sheet creation
+  without ever waiting on M (the round-8 deadlock interleaving),
+  `delete_module` racing `resolve_check`/context assembly/a sheet op
+  is fully excluded incl. the user-shadow-of-builtin case, and a
+  campaign/world deletion racing migration serializes on the barrier;
+  export mid-swap returns one coherent generation; every
   world-sheet mutator (`write_world`, `write_world_creation`, seeding,
   instantiate) serializes on the world-scope lock; **stale-write
   closure**: a queued pre-rename world PUT fails the new world gen CAS
