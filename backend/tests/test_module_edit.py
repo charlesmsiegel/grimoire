@@ -730,6 +730,8 @@ def test_import_rejections(monkeypatch, tmp_path):
         "case-collision": {"pack/module.md": "---\nname: X\n---\n",
                            "pack/Sheets.json": "{}",
                            "pack/sheets.json": "{}"},
+        "component-drive": {"pack/C:evil.txt": "x"},
+        "nested-component-drive": {"pack/sub/C:/module.md": "x"},
     }
     for label, entries in cases.items():
         zpath = tmp_path / f"{label}.zip"
@@ -737,3 +739,59 @@ def test_import_rejections(monkeypatch, tmp_path):
         with pytest.raises(modules.ModuleError):
             module_edit.import_module(zpath)
     assert not any(modules.user_dir().iterdir()) if modules.user_dir().is_dir() else True
+
+
+def test_check_archive_rejects_component_drive_colon(monkeypatch, tmp_path):
+    """`_DRIVE_OR_UNC` only anchors at the raw name's start, so a mid-path
+    drive segment like 'pack/C:evil.txt' used to slip past _member_parts —
+    Path.joinpath then COLLAPSES onto the drive segment, escaping staging
+    before the containment recheck ever ran. Assert _check_archive rejects
+    both a bare mid-path colon component and a nested one, and that nothing
+    ever reaches disk (staging never created, user_dir untouched)."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cases = {
+        "component-drive": {"pack/C:evil.txt": "x"},
+        "nested-component-drive": {"pack/sub/C:/module.md": "x"},
+    }
+    for label, entries in cases.items():
+        buf = io.BytesIO(_zip_bytes(entries))
+        with zipfile.ZipFile(buf) as z:
+            with pytest.raises(modules.ModuleError):
+                module_edit._check_archive(z)
+    assert not any(modules.user_dir().iterdir()) if modules.user_dir().is_dir() else True
+    staging = module_edit._staging_root()
+    assert not staging.is_dir() or not any(staging.iterdir())
+
+
+def test_import_wraps_extraction_oserror(monkeypatch, tmp_path):
+    """Pathological member names (reserved device names like CON on Windows,
+    trailing dots/spaces) can raise a raw OSError from mkdir/write_bytes
+    mid-extraction. That must never escape import_module as a bare OSError —
+    it should surface as modules.ModuleError (or, if the filesystem happens
+    to tolerate the name, the import may simply succeed)."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    entries = {
+        "pack/module.md": "---\nname: X\n---\n",
+        "pack/sheets.json": '{\n  "groups": {},\n  "sheet_types": {}\n}\n',
+        "pack/CON": "x",
+    }
+    zpath = tmp_path / "con.zip"
+    zpath.write_bytes(_zip_bytes(entries))
+    try:
+        module_edit.import_module(zpath)
+    except modules.ModuleError:
+        pass  # extraction failure surfaced cleanly, not a raw OSError
+
+
+def test_delete_module_rejects_builtin_before_campaign_locks(monkeypatch, tmp_path):
+    """delete_module must check source and reject a builtin BEFORE taking
+    every campaign lock — not after. Monkeypatch _campaign_locks to blow up
+    if it's ever entered, so the test fails loudly if the ordering
+    regresses."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+
+    def _boom():
+        raise AssertionError("_campaign_locks must not run for a builtin delete")
+    monkeypatch.setattr(module_edit, "_campaign_locks", _boom)
+    with pytest.raises(modules.ModuleError):
+        module_edit.delete_module("d20-basic")
