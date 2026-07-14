@@ -1,22 +1,87 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, type ModuleDetail, type ModuleSummary } from "../api/client";
+import ModuleEditor from "../components/ModuleEditor";
 
 export default function ModulesView() {
   const [mods, setMods] = useState<ModuleSummary[]>([]);
   const [detail, setDetail] = useState<ModuleDetail | null>(null);
+  const [mode, setMode] = useState<"view" | "edit">("view");
   const [error, setError] = useState<string | null>(null);
+  const [dupName, setDupName] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const reloadList = () => api.listModules().then(setMods).catch((e) => setError(String(e)));
 
   useEffect(() => {
-    api.listModules().then(setMods).catch((e) => setError(String(e)));
+    reloadList();
   }, []);
 
   const select = (mid: string) => {
+    setMode("view");
+    setDupName(null);
     api.readModule(mid).then(setDetail).catch((e) => setError(String(e)));
   };
+
+  async function createNew() {
+    const name = window.prompt("New module name?")?.trim();
+    if (!name) return;
+    setError(null);
+    try {
+      const { id } = await api.createModule(name);
+      await reloadList();
+      const d = await api.readModule(id);
+      setDetail(d);
+      setMode("edit");
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
+  }
+
+  async function onImportFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-picking the same file later
+    if (!file) return;
+    setError(null);
+    try {
+      await api.importModule(file);
+      await reloadList();
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
+  }
+
+  function startDuplicate() {
+    if (!detail) return;
+    const name = mods.find((m) => m.id === detail.id)?.name ?? detail.manifest.name;
+    setDupName(`${name} copy`);
+  }
+
+  async function confirmDuplicate() {
+    if (!detail || dupName === null) return;
+    setError(null);
+    try {
+      const { id } = await api.duplicateModule(detail.id, dupName);
+      setDupName(null);
+      await reloadList();
+      select(id);
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
+  }
 
   return (
     <div className="editor">
       <div className="editor-list">
+        <button className="primary new" onClick={createNew}>+ New module</button>
+        <button className="subtle new" onClick={() => fileRef.current?.click()}>+ Import</button>
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".zip"
+          aria-label="Import module zip"
+          style={{ display: "none" }}
+          onChange={onImportFile}
+        />
         {mods.map((m) => (
           <button
             key={m.id}
@@ -30,7 +95,9 @@ export default function ModulesView() {
       </div>
       <div className="editor-body">
         {error && <div className="banner">{error}</div>}
-        {detail ? (
+        {mode === "edit" && detail ? (
+          <ModuleEditor detail={detail} onDone={() => { setMode("view"); select(detail.id); }} />
+        ) : detail ? (
           <div className="detail-view">
             <div className="detail-main">
               <h3>{detail.manifest.name}</h3>
@@ -61,6 +128,29 @@ export default function ModulesView() {
               })}
             </div>
             <aside className="detail-sidebar">
+              <div className="form-actions">
+                {detail.source === "user" ? (
+                  <button className="subtle" onClick={() => setMode("edit")}>Edit</button>
+                ) : (
+                  <span className="field-hint">built-in — duplicate to customize</span>
+                )}
+                <button className="subtle" onClick={startDuplicate}>Duplicate</button>
+                <a className="row" href={api.exportModuleUrl(detail.id)} download>Export</a>
+              </div>
+              {dupName !== null && (
+                <div className="side-section">
+                  <h4>Duplicate as</h4>
+                  <input
+                    type="text"
+                    value={dupName}
+                    onChange={(e) => setDupName(e.target.value)}
+                  />
+                  <div className="form-actions">
+                    <button className="subtle" onClick={() => setDupName(null)}>Cancel</button>
+                    <button className="primary" onClick={confirmDuplicate}>Create copy</button>
+                  </div>
+                </div>
+              )}
               <div className="side-section">
                 <h4>Module</h4>
                 <span className="chip on">{detail.source}</span>

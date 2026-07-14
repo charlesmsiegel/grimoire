@@ -300,10 +300,21 @@ export type ModuleSheetType = {
   creation?: { pools: Record<string, { budget: number | string; costs: Record<string, number> }> };
   advancement?: { pool: string; costs: Record<string, string> };
 };
+export type ModuleEditResult = {
+  ok: boolean; errors: string[]; display_errors: DisplayError[];
+  impact?: { sheet_types: string[]; sheets_migrated: number;
+             sheets_newly_invalid: number; dangling_refs: number };
+  sample?: Record<string, { fields: Record<string, unknown>;
+                            derived: Record<string, number | boolean> }>;
+  migration?: { migrated: number; skipped: string[] };
+};
+export type ModuleRenameKind =
+  "group" | "field" | "derived" | "sheet_type" | "check" | "rule" | "content";
+
 export type ModuleDetail = {
   id: string;
   source: "builtin" | "user";
-  manifest: { id: string; name: string; description?: string; version?: string; dice?: string };
+  manifest: { id: string; name: string; description?: string; version?: string; dice?: string; notes?: string };
   sheets: { groups: Record<string, { label?: string; fields: ModuleField[]; derived?: Record<string, string> }>;
             sheet_types: Record<string, ModuleSheetType> };
   checks: Record<string, { label: string; roll: string; requires?: string[]; rules?: string[] }>;
@@ -732,6 +743,65 @@ export const api = {
   setWorldModule: (wid: string, module: string) =>
     request<{ ok: boolean }>("PUT", `/api/worlds/${wid}/module`, { module }),
 
+  // module authoring (Phase 8)
+  createModule: (name: string) => request<{ id: string }>("POST", "/api/modules", { name }),
+  duplicateModule: (mid: string, name: string) =>
+    request<{ id: string }>("POST", `/api/modules/${mid}/duplicate`, { name }),
+  importModule: (file: Blob) =>
+    fetch("/api/modules/import", { method: "POST", body: file,
+      headers: { "content-type": "application/zip" } }).then(async (r) => {
+        if (!r.ok) {
+          const data = await r.json().catch(() => ({}));
+          throw new ApiError(r.status, data.detail ?? r.statusText, data.kind);
+        }
+        return r.json() as Promise<{ id: string }>;
+      }),
+  exportModuleUrl: (mid: string) => `/api/modules/${mid}/export`,
+  putModuleManifest: (mid: string, body: { name: string; description: string;
+    version: string; dice: string; notes: string; dry_run: boolean }) =>
+    request<ModuleEditResult>("PUT", `/api/modules/${mid}/manifest`, body),
+  putModuleGroup: (mid: string, gid: string, group: unknown, dryRun = false) =>
+    request<ModuleEditResult>("PUT", `/api/modules/${mid}/groups/${gid}`,
+      { group, dry_run: dryRun }),
+  deleteModuleGroup: (mid: string, gid: string, dryRun = false) =>
+    request<ModuleEditResult>("DELETE",
+      `/api/modules/${mid}/groups/${gid}${dryRun ? "?dry_run=1" : ""}`),
+  putModuleSheetType: (mid: string, tid: string, sheetType: unknown, dryRun = false) =>
+    request<ModuleEditResult>("PUT", `/api/modules/${mid}/sheet-types/${tid}`,
+      { sheet_type: sheetType, dry_run: dryRun }),
+  deleteModuleSheetType: (mid: string, tid: string, dryRun = false) =>
+    request<ModuleEditResult>("DELETE",
+      `/api/modules/${mid}/sheet-types/${tid}${dryRun ? "?dry_run=1" : ""}`),
+  putModuleCheck: (mid: string, id: string, check: unknown, dryRun = false) =>
+    request<ModuleEditResult>("PUT", `/api/modules/${mid}/checks/${id}`,
+      { check, dry_run: dryRun }),
+  deleteModuleCheck: (mid: string, id: string, dryRun = false) =>
+    request<ModuleEditResult>("DELETE",
+      `/api/modules/${mid}/checks/${id}${dryRun ? "?dry_run=1" : ""}`),
+  putModuleCheckDefaults: (mid: string, defaults: Record<string, unknown>, dryRun = false) =>
+    request<ModuleEditResult>("PUT", `/api/modules/${mid}/check-defaults`,
+      { defaults, dry_run: dryRun }),
+  putModuleRule: (mid: string, slug: string, flags: unknown, body: string, dryRun = false) =>
+    request<ModuleEditResult>("PUT", `/api/modules/${mid}/rules/${slug}`,
+      { flags, body, dry_run: dryRun }),
+  deleteModuleRule: (mid: string, slug: string, dryRun = false) =>
+    request<ModuleEditResult>("DELETE",
+      `/api/modules/${mid}/rules/${slug}${dryRun ? "?dry_run=1" : ""}`),
+  putModuleContent: (mid: string, kind: string, id: string, body: Record<string, unknown>, dryRun = false) =>
+    request<ModuleEditResult>("PUT", `/api/modules/${mid}/content/${kind}/${id}`,
+      { ...body, dry_run: dryRun }),
+  deleteModuleContent: (mid: string, kind: string, id: string, dryRun = false) =>
+    request<ModuleEditResult>("DELETE",
+      `/api/modules/${mid}/content/${kind}/${id}${dryRun ? "?dry_run=1" : ""}`),
+  putModuleLayout: (mid: string, layout: unknown, dryRun = false) =>
+    request<ModuleEditResult>("PUT", `/api/modules/${mid}/layout`, { layout, dry_run: dryRun }),
+  putModuleTheme: (mid: string, theme: unknown, dryRun = false) =>
+    request<ModuleEditResult>("PUT", `/api/modules/${mid}/theme`, { theme, dry_run: dryRun }),
+  renameModulePart: (mid: string, kind: ModuleRenameKind, address: Record<string, string>,
+                     to: string, dryRun = false) =>
+    request<ModuleEditResult>("POST", `/api/modules/${mid}/rename`,
+      { kind, address, to, dry_run: dryRun }),
+
   // sheets
   getCampaignSheets: (cid: string) =>
     request<{ coverage: SheetCoverage; refs: [string, string][] }>(
@@ -770,5 +840,5 @@ export const api = {
       "DELETE",
       scope.kind === "campaign"
         ? `/api/campaigns/${scope.id}/sheets/${kind}/${eid}${gen ? `?gen=${encodeURIComponent(gen)}` : ""}`
-        : `/api/worlds/${scope.id}/sheets/${mid}/${kind}/${eid}`),
+        : `/api/worlds/${scope.id}/sheets/${mid}/${kind}/${eid}${gen ? `?gen=${encodeURIComponent(gen)}` : ""}`),
 };
