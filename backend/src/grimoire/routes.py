@@ -574,9 +574,12 @@ def get_world_sheet(wid: str, mid: str, kind: str, eid: str):
 def put_world_sheet(wid: str, mid: str, kind: str, eid: str, body: SheetBody):
     _world_root_or_404(wid)
     try:
-        store.sheets.write_world(wid, mid, kind, eid, body.sheet_type, body.fields)
+        store.sheets.write_world(wid, mid, kind, eid, body.sheet_type, body.fields,
+                                 expected=body.expected)
     except store.modules.ModuleNotFound:
         raise HTTPException(status_code=404, detail="module not found")
+    except store.sheets.SheetConflict as e:
+        raise HTTPException(status_code=409, detail=str(e))
     except store.sheets.SheetError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"ok": True}
@@ -586,20 +589,26 @@ def put_world_sheet(wid: str, mid: str, kind: str, eid: str, body: SheetBody):
 def put_world_sheet_creation(wid: str, mid: str, kind: str, eid: str, body: SheetCreationBody):
     _world_root_or_404(wid)
     try:
-        store.sheets.write_world_creation(wid, mid, kind, eid, body.sheet_type, body.spends)
+        store.sheets.write_world_creation(wid, mid, kind, eid, body.sheet_type, body.spends,
+                                          expected=body.expected)
     except store.modules.ModuleNotFound:
         raise HTTPException(status_code=404, detail="module not found")
     except (store.characters.CharacterNotFound, store.pcs.PCNotFound, store.entities.EntityNotFound):
         raise HTTPException(status_code=404, detail=f"{kind} not found")
+    except store.sheets.SheetConflict as e:
+        raise HTTPException(status_code=409, detail=str(e))
     except store.sheets.SheetError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"sheet": store.sheets.read_world(wid, mid, kind, eid)}
 
 
 @router.delete("/worlds/{wid}/sheets/{mid}/{kind}/{eid}")
-def delete_world_sheet(wid: str, mid: str, kind: str, eid: str):
+def delete_world_sheet(wid: str, mid: str, kind: str, eid: str, gen: str | None = None):
     _world_root_or_404(wid)
-    return {"ok": store.sheets.delete_world(wid, mid, kind, eid)}
+    try:
+        return {"ok": store.sheets.delete_world(wid, mid, kind, eid, expected_gen=gen)}
+    except store.sheets.SheetConflict as e:
+        raise HTTPException(status_code=409, detail=str(e))
 
 
 # registered before the generic /worlds/{wid}/{kind} entity routes below --
@@ -632,7 +641,8 @@ def post_world_instantiate(wid: str, kind: str, mid: str, content_id: str):
         raise HTTPException(status_code=404, detail="unknown kind")
     if content.get("sheet_type"):
         try:
-            store.sheets.write_world(wid, mid, kind, eid, content["sheet_type"], content.get("fields"))
+            store.sheets.write_world(wid, mid, kind, eid, content["sheet_type"], content.get("fields"),
+                                     expected=None)
         except (store.modules.ModuleNotFound, store.sheets.SheetError) as e:
             # Sheet write failed after the entity was already created -- roll
             # it back so a failed instantiate leaves no sheetless orphan.

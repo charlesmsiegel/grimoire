@@ -58,6 +58,14 @@ def test_write_rejects_unknown_type_and_bad_values(monkeypatch, tmp_path):
         sheets.write(cid, "characters", "mara", "medium", {"vigor": 99}, expected=None)
 
 
+def test_unknown_key_rejected_not_filtered(monkeypatch, tmp_path):
+    # _checked_write must stop silently dropping unknown submitted field
+    # keys -- validate_sheet_values sees the full payload and rejects it.
+    _, cid = _campaign(monkeypatch, tmp_path)
+    with pytest.raises(sheets.SheetError, match="not a field"):
+        sheets.write(cid, "characters", "mara", "medium", {"ghost_key": 1}, expected=None)
+
+
 def test_write_without_module_rejected(monkeypatch, tmp_path):
     _, cid = _campaign(monkeypatch, tmp_path, module=None)
     with pytest.raises(sheets.SheetError):
@@ -65,16 +73,23 @@ def test_write_without_module_rejected(monkeypatch, tmp_path):
 
 
 def test_type_change_preserves_shared_drops_orphans(monkeypatch, tmp_path):
+    # A type change is no longer server-filtered: the caller must send a
+    # clean payload containing only keys valid for the new type (the
+    # frontend's SheetEditor already builds this "survivors" map itself
+    # before calling putSheet). Feeding an old-type-only key ("essence",
+    # medium-only) while switching to "shifter" is rejected outright.
     _, cid = _campaign(monkeypatch, tmp_path)
     sheets.write(cid, "characters", "mara", "medium",
                  {"vigor": 3, "essence": {"current": 5, "max": 10}}, expected=None)
     snap = _snapshot(cid, "characters", "mara")
-    sheets.write(cid, "characters", "mara", "shifter",
-                 {"vigor": 3, "essence": {"current": 5, "max": 10}}, expected=snap)
+    with pytest.raises(sheets.SheetError, match="not a field"):
+        sheets.write(cid, "characters", "mara", "shifter",
+                     {"vigor": 3, "essence": {"current": 5, "max": 10}}, expected=snap)
+    sheets.write(cid, "characters", "mara", "shifter", {"vigor": 3}, expected=snap)
     s = sheets.read(cid, "characters", "mara")
     assert s["sheet_type"] == "shifter"
     assert s["fields"]["vigor"] == 3         # shared via attributes group
-    assert "essence" not in s["fields"]      # medium-only field dropped
+    assert "essence" not in s["fields"]      # medium-only field never carried over
 
 
 def test_invalid_after_module_switch(monkeypatch, tmp_path):
@@ -129,7 +144,7 @@ def test_write_rejects_wrong_typed_arguments(monkeypatch, tmp_path):
 def test_world_write_bad_mid_and_colon_eid_rejected(monkeypatch, tmp_path):
     wid, cid = _campaign(monkeypatch, tmp_path)
     with pytest.raises(sheets.SheetError):
-        sheets.write_world(wid, "..", "characters", "mara", "medium", None)
+        sheets.write_world(wid, "..", "characters", "mara", "medium", None, expected=None)
     with pytest.raises(sheets.SheetError):
         sheets.write(cid, "characters", "c:evil", "medium", None, expected=None)
 
@@ -138,27 +153,63 @@ def test_world_write_bad_mid_and_colon_eid_rejected(monkeypatch, tmp_path):
 
 def test_world_sheet_crud_keyed_by_module(monkeypatch, tmp_path):
     wid, _ = _campaign(monkeypatch, tmp_path, module=None)
-    sheets.write_world(wid, "pool-basic", "characters", "mara", "medium", None)
+    sheets.write_world(wid, "pool-basic", "characters", "mara", "medium", None, expected=None)
     s = sheets.read_world(wid, "pool-basic", "characters", "mara")
     assert s["sheet_type"] == "medium" and s["errors"] == []
     assert sheets.world_sheet_modules(wid) == ["pool-basic"]
     assert sheets.world_list_refs(wid, "pool-basic") == [("characters", "mara")]
     assert sheets.read_world(wid, "d20-basic", "characters", "mara") is None
-    assert sheets.delete_world(wid, "pool-basic", "characters", "mara") is True
+    assert sheets.delete_world(wid, "pool-basic", "characters", "mara",
+                               expected_gen=s["gen"]) is True
+
+
+def test_write_world_requires_cas(monkeypatch, tmp_path):
+    wid, _ = _campaign(monkeypatch, tmp_path, module=None)
+    sheets.write_world(wid, "pool-basic", "characters", "winifred", "medium", None, expected=None)
+    stored = sheets.read_world(wid, "pool-basic", "characters", "winifred")
+    # stale snapshot: wrong gen
+    with pytest.raises(sheets.SheetConflict):
+        sheets.write_world(wid, "pool-basic", "characters", "winifred", "medium",
+                           {"vigor": 2},
+                           expected={"sheet_type": "medium", "fields": {}, "gen": "stale"})
+    ok = {"sheet_type": stored["sheet_type"], "fields": stored["fields"], "gen": stored["gen"]}
+    sheets.write_world(wid, "pool-basic", "characters", "winifred", "medium",
+                       {"vigor": 2}, expected=ok)
+    assert sheets.read_world(wid, "pool-basic", "characters", "winifred")["fields"]["vigor"] == 2
+
+
+def test_write_world_creation_requires_cas(monkeypatch, tmp_path):
+    wid, _cid = _campaign_with_creation_module(monkeypatch, tmp_path)
+    characters.create_character(worlds.world_root(wid), "Winifred")  # id: "winifred"
+    sheets.write_world_creation(wid, "chargen", "characters", "winifred", "hero",
+                                {}, expected=None)
+    with pytest.raises(sheets.SheetConflict):
+        sheets.write_world_creation(wid, "chargen", "characters", "winifred", "hero",
+                                    {}, expected=None)   # already exists
+
+
+def test_delete_world_requires_gen(monkeypatch, tmp_path):
+    wid, _ = _campaign(monkeypatch, tmp_path, module=None)
+    sheets.write_world(wid, "pool-basic", "characters", "winifred", "medium", None, expected=None)
+    stored = sheets.read_world(wid, "pool-basic", "characters", "winifred")
+    with pytest.raises(sheets.SheetConflict):
+        sheets.delete_world(wid, "pool-basic", "characters", "winifred", expected_gen="stale")
+    assert sheets.delete_world(wid, "pool-basic", "characters", "winifred",
+                               expected_gen=stored["gen"]) is True
 
 
 def test_write_world_unknown_module(monkeypatch, tmp_path):
     wid, _ = _campaign(monkeypatch, tmp_path, module=None)
     with pytest.raises(modules.ModuleNotFound):
-        sheets.write_world(wid, "ghost", "characters", "mara", "medium", None)
+        sheets.write_world(wid, "ghost", "characters", "mara", "medium", None, expected=None)
 
 
 def test_seed_on_create_matching_module(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("Realm")
     sheets.write_world(wid, "pool-basic", "characters", "mara", "medium",
-                       {"vigor": 3})
-    sheets.write_world(wid, "d20-basic", "characters", "mara", "warrior", None)
+                       {"vigor": 3}, expected=None)
+    sheets.write_world(wid, "d20-basic", "characters", "mara", "warrior", None, expected=None)
     cid = campaigns.create_campaign("Run", wid, module="pool-basic")
     s = sheets.read(cid, "characters", "mara")
     assert s["sheet_type"] == "medium" and s["fields"]["vigor"] == 3
@@ -169,7 +220,7 @@ def test_seed_on_create_matching_module(monkeypatch, tmp_path):
 def test_no_seed_without_module_and_no_reseed_on_bind(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("Realm")
-    sheets.write_world(wid, "pool-basic", "characters", "mara", "medium", None)
+    sheets.write_world(wid, "pool-basic", "characters", "mara", "medium", None, expected=None)
     cid = campaigns.create_campaign("Run", wid)
     assert sheets.list_refs(cid) == []
     modules.set_campaign_module(cid, "pool-basic")   # later binding
@@ -210,7 +261,7 @@ def test_world_coverage(monkeypatch, tmp_path):
     from grimoire.store import entities as ent
     wid, _ = _campaign(monkeypatch, tmp_path, module=None)
     ent.create_entity(worlds.world_root(wid), "items", "Moon Disc")
-    sheets.write_world(wid, "pool-basic", "items", "moon-disc", "talisman", None)
+    sheets.write_world(wid, "pool-basic", "items", "moon-disc", "talisman", None, expected=None)
     cov = sheets.world_coverage(wid, "pool-basic")
     assert cov["items"] == {"total": 1, "sheeted": 1, "invalid": 0}
     assert sheets.world_coverage(wid, "ghost") == {}
@@ -220,7 +271,7 @@ def test_seed_via_world_default_module(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("Realm")
     modules.set_world_module(wid, "pool-basic")
-    sheets.write_world(wid, "pool-basic", "characters", "mara", "medium", None)
+    sheets.write_world(wid, "pool-basic", "characters", "mara", "medium", None, expected=None)
     cid = campaigns.create_campaign("Run", wid)   # no explicit module: inherits default
     assert sheets.read(cid, "characters", "mara")["sheet_type"] == "medium"
 
@@ -353,7 +404,7 @@ def test_write_creation_empty_spends_falls_through_to_defaults(monkeypatch, tmp_
 def test_write_world_creation(monkeypatch, tmp_path):
     wid, _cid = _campaign_with_creation_module(monkeypatch, tmp_path)
     sheets.write_world_creation(wid, "chargen", "characters", "mara", "hero",
-                                {"attributes": {"strength": 14}})
+                                {"attributes": {"strength": 14}}, expected=None)
     s = sheets.read_world(wid, "chargen", "characters", "mara")
     assert s["fields"]["strength"] == 14
 
@@ -382,19 +433,19 @@ def test_write_creation_missing_entity_raises_not_found(monkeypatch, tmp_path):
 def test_write_world_creation_missing_character_raises_not_found(monkeypatch, tmp_path):
     wid, _cid = _campaign_with_creation_module(monkeypatch, tmp_path)
     with pytest.raises(characters.CharacterNotFound):
-        sheets.write_world_creation(wid, "chargen", "characters", "nobody", "hero", {})
+        sheets.write_world_creation(wid, "chargen", "characters", "nobody", "hero", {}, expected=None)
 
 
 def test_write_world_creation_missing_pc_raises_not_found(monkeypatch, tmp_path):
     wid, _cid = _campaign_with_creation_module(monkeypatch, tmp_path)
     with pytest.raises(pcs.PCNotFound):
-        sheets.write_world_creation(wid, "chargen", "pcs", "nobody", "hero", {})
+        sheets.write_world_creation(wid, "chargen", "pcs", "nobody", "hero", {}, expected=None)
 
 
 def test_write_world_creation_missing_entity_raises_not_found(monkeypatch, tmp_path):
     wid, _cid = _campaign_with_creation_module(monkeypatch, tmp_path)
     with pytest.raises(entities.EntityNotFound):
-        sheets.write_world_creation(wid, "chargen", "items", "nobody", "hero", {})
+        sheets.write_world_creation(wid, "chargen", "items", "nobody", "hero", {}, expected=None)
 
 
 # advance() -- resource-pool spend to raise a sheet field (#164, Phase 7)
@@ -701,8 +752,7 @@ def test_gen_minted_on_type_change(monkeypatch, tmp_path):
                  {"vigor": 3, "essence": {"current": 5, "max": 10}}, expected=None)
     g1 = sheets.read(cid, "characters", "mara")["gen"]
     snap = _snapshot(cid, "characters", "mara")
-    sheets.write(cid, "characters", "mara", "shifter",
-                 {"vigor": 3, "essence": {"current": 5, "max": 10}}, expected=snap)
+    sheets.write(cid, "characters", "mara", "shifter", {"vigor": 3}, expected=snap)
     assert sheets.read(cid, "characters", "mara")["gen"] != g1
 
 

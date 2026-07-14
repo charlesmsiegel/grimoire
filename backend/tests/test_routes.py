@@ -3534,7 +3534,27 @@ def test_world_sheet_routes(client):
     assert client.get(f"/api/worlds/{wid}/sheets/ghost").status_code == 404
     assert client.put(f"/api/worlds/{wid}/sheets/ghost/characters/mara",
                       json={"sheet_type": "medium"}).status_code == 404
-    assert client.delete(base).json()["ok"] is True
+    gen = client.get(base).json()["sheet"]["gen"]
+    assert client.delete(f"{base}?gen={gen}").json()["ok"] is True
+
+
+def test_world_sheet_put_stale_expected_409(client):
+    wid = _world(client)
+    base = f"/api/worlds/{wid}/sheets/pool-basic/characters/mara"
+    client.put(base, json={"sheet_type": "medium", "fields": None})
+    r = client.put(base, json={
+        "sheet_type": "medium", "fields": {"vigor": 2},
+        "expected": {"sheet_type": "medium", "fields": {}, "gen": "stale"}})
+    assert r.status_code == 409
+
+
+def test_world_sheet_delete_requires_gen_409(client):
+    wid = _world(client)
+    base = f"/api/worlds/{wid}/sheets/pool-basic/characters/mara"
+    client.put(base, json={"sheet_type": "medium", "fields": None})
+    assert client.delete(base).status_code == 409  # no ?gen= against an existing sheet
+    gen = client.get(base).json()["sheet"]["gen"]
+    assert client.delete(f"{base}?gen={gen}").json() == {"ok": True}
 
 
 # ---- mechanics: roll proposals & manual checks (#162, Phase 4) -------------

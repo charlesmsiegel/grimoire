@@ -258,9 +258,6 @@ def _checked_write(path: Path, mid: str, file_kind: str, eid: str,
     else:
         if not isinstance(fields, dict):
             raise SheetError("fields must be an object")
-        allowed = {f.get("key") for f in modules.assembled_fields(sheets_def, sheet_type)
-                   if isinstance(f, dict)}
-        fields = {k: v for k, v in fields.items() if k in allowed}
         errs = modules.validate_sheet_values(sheets_def, sheet_type, fields)
         if errs:
             raise SheetError("; ".join(errs))
@@ -305,11 +302,12 @@ def _check_expected(path: Path, expected: dict | None) -> None:
 def write(cid: str, kind: str, eid: str, sheet_type: str,
           fields: dict | None = None, *, expected: dict | None) -> None:
     """Create or replace a campaign sheet. A different ``sheet_type`` than
-    the stored one is a type change: values whose keys exist in the new
-    type's assembled field set are kept (caller passes them), others are
-    filtered out here. ``expected`` is mandatory whole-sheet CAS: the
-    caller's last-read {"sheet_type", "fields", "gen"} snapshot, or None to
-    assert no sheet exists yet -- raises SheetConflict on mismatch."""
+    the stored one is a type change: the caller must pass a clean payload
+    containing only keys that exist in the new type's assembled field set --
+    an unknown key is rejected with SheetError, never silently dropped.
+    ``expected`` is mandatory whole-sheet CAS: the caller's last-read
+    {"sheet_type", "fields", "gen"} snapshot, or None to assert no sheet
+    exists yet -- raises SheetConflict on mismatch."""
     with lock_for(cid):
         # resolve INSIDE the lock: rebinds publish under this same lock, so a
         # writer can never resolve module A, lose the CPU to a rebind to B,
@@ -370,12 +368,14 @@ def read_world(wid: str, mid: str, kind: str, eid: str) -> dict | None:
 
 
 def write_world(wid: str, mid: str, kind: str, eid: str, sheet_type: str,
-                fields: dict | None = None) -> None:
+                fields: dict | None = None, *, expected: dict | None) -> None:
+    """``expected`` is mandatory whole-sheet CAS -- see write()."""
     if not _safe_part(mid):
         raise SheetError(f"bad module id {mid!r}")
     modules.pack_root(mid)  # raises ModuleNotFound
-    _checked_write(_world_path(wid, mid, kind, eid), mid, kind, eid,
-                   sheet_type, fields)
+    path = _world_path(wid, mid, kind, eid)
+    _check_expected(path, expected)
+    _checked_write(path, mid, kind, eid, sheet_type, fields)
 
 
 def _pool_floor(field: dict) -> int:
@@ -485,18 +485,27 @@ def write_creation(cid: str, kind: str, eid: str, sheet_type: str,
 
 
 def write_world_creation(wid: str, mid: str, kind: str, eid: str, sheet_type: str,
-                         spends: dict[str, dict[str, int]]) -> None:
+                         spends: dict[str, dict[str, int]], *,
+                         expected: dict | None) -> None:
+    """``expected`` is mandatory whole-sheet CAS -- see write()."""
     modules.pack_root(mid)  # raises ModuleNotFound
     _assert_world_entity_exists(wid, kind, eid)
-    _checked_creation_write(_world_path(wid, mid, kind, eid), mid, kind, eid, sheet_type, spends)
+    path = _world_path(wid, mid, kind, eid)
+    _check_expected(path, expected)
+    _checked_creation_write(path, mid, kind, eid, sheet_type, spends)
 
 
-def delete_world(wid: str, mid: str, kind: str, eid: str) -> bool:
+def delete_world(wid: str, mid: str, kind: str, eid: str, *,
+                 expected_gen: str | None) -> bool:
+    """``expected_gen`` is mandatory CAS -- see delete()."""
     if kind not in FILE_KINDS or not _safe_part(eid) or not _safe_part(mid):
         return False
     p = _world_path(wid, mid, kind, eid)
-    if not p.exists():
+    stored = _stored_snapshot(p)
+    if stored is None:
         return False
+    if stored["gen"] != expected_gen:
+        raise SheetConflict("the sheet changed since it was loaded")
     p.unlink()
     return True
 
