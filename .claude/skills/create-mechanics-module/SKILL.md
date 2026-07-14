@@ -8,8 +8,10 @@ description: Use when authoring a new game-mechanics module (data pack) for grim
 A **module** is a data pack that teaches grimoire a tabletop system's stats, checks, and rules
 text — dice pools, d20 + modifiers, whatever the table actually plays. It is pure data (JSON +
 markdown), never code: sharing a module never runs untrusted logic. This skill hand-authors a
-pack file by file, validating after every step. The in-app authoring UI (Phase 8 of the Mechanics
-& Dice milestone) doesn't exist yet — until it does, this skill is the way modules get made.
+pack file by file, validating after every step. The in-app authoring UI (mechanics Phase 8) now
+exists: the Modules page edits user-library modules directly (builtins: Duplicate first). This
+skill remains the conversational authoring path; both edit the same pack files, and this skill's
+validate-after-each-step flow is unchanged.
 
 Full format spec, including validation rules and rationale for every decision below:
 `docs/superpowers/specs/2026-07-12-mechanics-phase1-modules-design.md` (sections "Module data
