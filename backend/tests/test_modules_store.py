@@ -1164,3 +1164,23 @@ def test_read_content_bad_kind_or_id(monkeypatch, tmp_path):
         modules.read_content("testmod", "characters", "mara")
     with pytest.raises(modules.ContentNotFound):
         modules.read_content("testmod", "items", "../escape")
+
+
+def test_load_pack_at_explicit_root(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    mid = modules.create_module("Realm System")
+    root = modules.user_dir() / mid
+    pack = modules.load_pack_at(root, mid)
+    assert pack["id"] == mid
+    assert pack["errors"] == []
+    assert pack == modules.load_pack(mid)
+
+
+def test_manifest_notes_round_trip(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    mid = modules.create_module("Realm System")
+    p = modules.user_dir() / mid / "module.md"
+    text = p.read_text(encoding="utf-8")
+    p.write_text(text + "Authoring notes body.\n", encoding="utf-8")
+    pack = modules.load_pack(mid)
+    assert "Authoring notes body." in pack["manifest"]["notes"]
