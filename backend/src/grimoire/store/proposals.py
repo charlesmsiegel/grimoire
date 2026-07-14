@@ -24,13 +24,13 @@ from .paths import now_iso
 
 NON_TERMINAL = ("pending", "resolving", "resolved", "declined")
 
-_LOCKS: dict[str, threading.RLock] = {}
-_LOCKS_GUARD = threading.Lock()
-
-
 def _lock(cid: str) -> threading.RLock:
-    with _LOCKS_GUARD:
-        return _LOCKS.setdefault(cid, threading.RLock())
+    """Unified per-campaign lock domain (mechanics Phase 8): proposals share
+    sheets.lock_for so a module edit holding the campaign locks excludes
+    proposal creation/transition — a proposal derived from the old pack can
+    never persist after a check rename/delete swapped it away."""
+    from . import sheets  # function-level: avoid import cycles
+    return sheets.lock_for(cid)
 
 
 @contextmanager
