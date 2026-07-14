@@ -438,3 +438,106 @@ def delete_sheet_type(mid: str, tid: str, *, dry_run: bool = False) -> dict:
         _prune_layout(root, in_scope={tid}, drop_type=tid,
                       names=_field_keys(old) if isinstance(old, dict) else set())
     return _apply(mid, mutate, dry_run=dry_run)
+
+
+# ---- check, rule, content writers ----
+
+
+def upsert_check(mid: str, check_id: str, check: dict, *, dry_run: bool = False) -> dict:
+    if not isinstance(check_id, str) or not check_id or check_id == "_defaults":
+        return {"ok": False, "errors": [f"bad check id {check_id!r}"], "display_errors": []}
+    def mutate(root: Path) -> None:
+        data = _read_json(root, "checks.json")
+        data[check_id] = check
+        _write_json(root, "checks.json", data)
+    return _apply(mid, mutate, dry_run=dry_run)
+
+
+def delete_check(mid: str, check_id: str, *, dry_run: bool = False,
+                 pre_swap=None) -> dict:
+    def mutate(root: Path) -> None:
+        data = _read_json(root, "checks.json")
+        data.pop(check_id, None)
+        _write_json(root, "checks.json", data)
+    return _apply(mid, mutate, dry_run=dry_run, pre_swap=pre_swap)
+
+
+def set_check_defaults(mid: str, defaults: dict, *, dry_run: bool = False) -> dict:
+    def mutate(root: Path) -> None:
+        data = _read_json(root, "checks.json")
+        if defaults:
+            data["_defaults"] = defaults
+        else:
+            data.pop("_defaults", None)
+        _write_json(root, "checks.json", data)
+    return _apply(mid, mutate, dry_run=dry_run)
+
+
+def _rule_meta(flags: dict) -> dict:
+    meta: dict = {}
+    if flags.get("always"):
+        meta["always"] = "true"
+    if flags.get("on_roll"):
+        meta["on_roll"] = "true"
+    if flags.get("keys"):
+        meta["keys"] = ", ".join(flags["keys"])
+    if flags.get("sheet_types"):
+        meta["sheet_types"] = ", ".join(flags["sheet_types"])
+    return meta
+
+
+def upsert_rule(mid: str, slug: str, flags: dict, body: str, *,
+                dry_run: bool = False) -> dict:
+    if not modules._safe_mid(slug if isinstance(slug, str) else ""):
+        return {"ok": False, "errors": [f"bad rules slug {slug!r}"], "display_errors": []}
+    def mutate(root: Path) -> None:
+        (root / "rules").mkdir(exist_ok=True)
+        (root / "rules" / f"{slug}.md").write_text(
+            dump_frontmatter(_rule_meta(flags or {}), body), encoding="utf-8")
+    return _apply(mid, mutate, dry_run=dry_run)
+
+
+def delete_rule(mid: str, slug: str, *, dry_run: bool = False) -> dict:
+    def mutate(root: Path) -> None:
+        p = root / "rules" / f"{slug}.md"
+        if p.exists():
+            p.unlink()
+    return _apply(mid, mutate, dry_run=dry_run)
+
+
+def upsert_content(mid: str, kind: str, content_id: str, *, name: str,
+                   body: str, keys: str, fields: dict, sheet: dict | None,
+                   dry_run: bool = False) -> dict:
+    if kind not in modules.CONTENT_KINDS:
+        return {"ok": False, "errors": [f"unknown content kind {kind!r}"], "display_errors": []}
+    if not modules._safe_id_like(content_id):
+        return {"ok": False, "errors": [f"bad content id {content_id!r}"], "display_errors": []}
+    def mutate(root: Path) -> None:
+        d = root / "content" / kind
+        d.mkdir(parents=True, exist_ok=True)
+        meta = {"name": name or content_id}
+        if keys:
+            meta["keys"] = keys
+        for k, v in (fields or {}).items():
+            if k not in ("name", "keys") and isinstance(v, str):
+                meta[k] = v
+        (d / f"{content_id}.md").write_text(dump_frontmatter(meta, body), encoding="utf-8")
+        sidecar = d / f"{content_id}.sheet.json"
+        if sheet:
+            _write_json(root, f"content/{kind}/{content_id}.sheet.json",
+                        {"sheet_type": sheet.get("sheet_type"),
+                         "fields": sheet.get("fields", {})})
+        elif sidecar.exists():
+            sidecar.unlink()
+    return _apply(mid, mutate, dry_run=dry_run)
+
+
+def delete_content(mid: str, kind: str, content_id: str, *, dry_run: bool = False) -> dict:
+    if kind not in modules.CONTENT_KINDS or not modules._safe_id_like(content_id):
+        return {"ok": False, "errors": [f"unknown content {kind}/{content_id}"], "display_errors": []}
+    def mutate(root: Path) -> None:
+        d = root / "content" / kind
+        for p in (d / f"{content_id}.md", d / f"{content_id}.sheet.json"):
+            if p.exists():
+                p.unlink()
+    return _apply(mid, mutate, dry_run=dry_run)
