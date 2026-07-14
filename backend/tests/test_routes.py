@@ -4406,3 +4406,94 @@ def test_advance_route(client):
     # nonexistent target character -- 404, not the 400 a plain SheetError would give
     assert client.post(f"/api/campaigns/{cid}/sheets/characters/nobody/advance",
                        json={"field": "wits"}).status_code == 404
+
+
+def _user_module(client):
+    return client.post("/api/modules", json={"name": "Realm System"}).json()["id"]
+
+
+def test_module_edit_routes_round_trip(client):
+    mid = _user_module(client)
+    r = client.put(f"/api/modules/{mid}/manifest",
+                   json={"name": "Realm System", "description": "d", "version": "1",
+                         "dice": "1d20", "notes": "n", "dry_run": False})
+    assert r.status_code == 200 and r.json()["ok"] is True
+    group = {"label": "Attributes",
+             "fields": [{"key": "strength", "type": "dots", "max": 5}]}
+    assert client.put(f"/api/modules/{mid}/groups/attributes",
+                      json={"group": group, "dry_run": False}).json()["ok"]
+    st = {"label": "Warden", "kind": "characters", "groups": ["attributes"], "fields": []}
+    assert client.put(f"/api/modules/{mid}/sheet-types/warden",
+                      json={"sheet_type": st, "dry_run": False}).json()["ok"]
+    # dry-run rejection carries errors, writes nothing
+    bad = {**group, "fields": [{"key": "strength", "type": "nope"}]}
+    r = client.put(f"/api/modules/{mid}/groups/attributes",
+                   json={"group": bad, "dry_run": True})
+    assert r.status_code == 200 and r.json()["ok"] is False and r.json()["errors"]
+    # rename
+    r = client.post(f"/api/modules/{mid}/rename",
+                    json={"kind": "group", "address": {"from": "attributes"},
+                          "to": "traits", "dry_run": False})
+    assert r.json()["ok"] is True
+    pack = client.get(f"/api/modules/{mid}").json()
+    assert "traits" in pack["sheets"]["groups"]
+    assert pack["manifest"]["notes"].strip() == "n"
+
+
+def test_module_edit_builtin_400(client):
+    for call in [
+        lambda: client.put("/api/modules/d20-basic/manifest",
+                           json={"name": "X", "description": "", "version": "",
+                                 "dice": "", "notes": "", "dry_run": False}),
+        lambda: client.delete("/api/modules/d20-basic/groups/attributes"),
+        lambda: client.post("/api/modules/d20-basic/rename",
+                            json={"kind": "check", "address": {"from": "a"},
+                                  "to": "b", "dry_run": False}),
+    ]:
+        assert call().status_code == 400
+
+
+def test_module_edit_unknown_mid_404(client):
+    assert client.put("/api/modules/ghost/manifest",
+                      json={"name": "X", "description": "", "version": "",
+                            "dice": "", "notes": "", "dry_run": False}).status_code == 404
+
+
+def test_module_duplicate_export_import(client):
+    r = client.post("/api/modules/d20-basic/duplicate", json={"name": "My D20"})
+    assert r.status_code == 200
+    new = r.json()["id"]
+    z = client.get(f"/api/modules/{new}/export")
+    assert z.status_code == 200
+    assert z.headers["content-type"] == "application/zip"
+    r = client.post("/api/modules/import", content=z.content,
+                    headers={"content-type": "application/zip"})
+    assert r.status_code == 200 and r.json()["id"] not in ("", new)
+
+
+def test_module_import_413(client):
+    r = client.post("/api/modules/import", content=b"x",
+                    headers={"content-length": str(20 * 1024 * 1024)})
+    assert r.status_code == 413
+
+
+def test_module_create_delete_routes_use_transactional_path(client):
+    r = client.post("/api/modules", json={"name": "Realm System"})
+    assert r.status_code == 200 and r.json()["id"]
+    mid = r.json()["id"]
+    pack = client.get(f"/api/modules/{mid}").json()
+    assert pack["id"] == mid
+    assert client.delete(f"/api/modules/d20-basic").status_code == 400
+
+
+def test_module_rule_route(client):
+    mid = _user_module(client)
+    client.put(f"/api/modules/{mid}/rules/omen",
+              json={"flags": {"always": True}, "body": "The omens speak.", "dry_run": False})
+    r = client.get(f"/api/modules/{mid}/rules/omen")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["body"].strip() == "The omens speak."
+    assert body["meta"].get("always") == "true"
+    assert client.get(f"/api/modules/{mid}/rules/ghost-slug").status_code == 404
+    assert client.get("/api/modules/ghost/rules/omen").status_code == 404

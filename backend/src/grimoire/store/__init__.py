@@ -5,8 +5,9 @@ from __future__ import annotations
 from . import (
     absorb, appearances, assets, audit, campaigns, cards, changes, characters, checks, chronicle,
     chub, context, dice, dossiers, entities, entity_schema, epub, fence, fetch, greetings, groupstate, image_subjects,
-    localize, lorebook, migrations, modules, overlay, pcs, playing, playstate, plot, proposals, relationships,
-    rolls, scene_ids, scene_refs, scenes, sheets, styles, suggest, sync, tags, taglines, thumbs, worlds,
+    localize, lorebook, migrations, module_edit, modules, overlay, pcs, playing, playstate, plot, proposals,
+    relationships, rolls, scene_ids, scene_refs, scenes, sheets, styles, suggest, sync, tags, taglines, thumbs,
+    worlds,
 )
 from .appearances import AppearError
 from .campaigns import CampaignNotFound
