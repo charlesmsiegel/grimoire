@@ -12,17 +12,19 @@ Spec: docs/superpowers/specs/2026-07-13-mechanics-phase8-authoring-ui-design.md.
 
 from __future__ import annotations
 
+import io
 import json
 import re
 import shutil
 import threading
 import uuid
+import zipfile
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 from . import campaigns, modules, proposals, sheets, worlds
 from .frontmatter import dump_frontmatter
-from .paths import home
+from .paths import home, slugify, uniquify
 
 _M = threading.RLock()
 
@@ -44,6 +46,164 @@ def locked():
 
 def _staging_root() -> Path:
     return home() / ".module-staging"
+
+
+MAX_MEMBERS = 2000
+MAX_UNCOMPRESSED = 64 * 1024 * 1024
+
+
+def new_mid(name_or_id: str) -> str:
+    """The one id allocator for create/duplicate/import: slugify, reject
+    empty, reserve 'none', dedupe against builtin + user ids (mirrors
+    modules.create_module's predicate)."""
+    base = slugify(" ".join(str(name_or_id).split()) or "module")
+    return uniquify(base or "module",
+                    lambda i: i == "none" or (modules.user_dir() / i).exists()
+                    or (modules.builtin_dir() / i / "module.md").exists())
+
+
+def _publish(staging: Path, mid: str) -> str:
+    dest = modules.user_dir() / mid
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    staging.rename(dest)
+    return mid
+
+
+def duplicate_module(mid: str, name: str) -> str:
+    """Copy any pack (builtin or user) to staging, publish by single rename
+    into user_dir() under _M. Content copied as-is, valid or not."""
+    with _M:
+        recover()
+        root, _source = modules.pack_root(mid)   # raises ModuleNotFound
+        new = new_mid(name or f"{mid} copy")
+        nonce = uuid.uuid4().hex
+        base = _staging_root() / nonce
+        try:
+            staging = base / new
+            base.mkdir(parents=True)
+            shutil.copytree(root, staging)
+            return _publish(staging, new)
+        finally:
+            shutil.rmtree(base, ignore_errors=True)
+
+
+def create_module(name: str) -> str:
+    """Staged scaffold + single-rename publish (a crash never leaves a
+    partial live pack, unlike modules.create_module's in-place mkdir)."""
+    with _M:
+        recover()
+        clean = " ".join(str(name).split()) or "Untitled"
+        mid = new_mid(clean)
+        nonce = uuid.uuid4().hex
+        base = _staging_root() / nonce
+        try:
+            staging = base / mid
+            staging.mkdir(parents=True)
+            (staging / "module.md").write_text(
+                dump_frontmatter({"name": clean, "description": "",
+                                  "version": "0.1"}, ""), encoding="utf-8")
+            (staging / "sheets.json").write_text(
+                '{\n  "groups": {},\n  "sheet_types": {}\n}\n', encoding="utf-8")
+            return _publish(staging, mid)
+        finally:
+            shutil.rmtree(base, ignore_errors=True)
+
+
+def delete_module(mid: str) -> None:
+    """Locked deletion: a bound module vanishing (or a same-id user shadow
+    falling through to the builtin) mid-LLM-computation must be impossible —
+    the campaign locks are exactly what those consumers hold."""
+    with _M:
+        recover()
+        modules.pack_root(mid)  # 404 before taking every lock
+        with _campaign_locks():
+            modules.delete_module(mid)
+
+
+def export_module(mid: str) -> bytes:
+    with locked():
+        root, _source = modules.pack_root(mid)
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            for p in sorted(root.rglob("*")):
+                if p.is_file():
+                    z.write(p, f"{mid}/{p.relative_to(root).as_posix()}")
+        return buf.getvalue()
+
+
+_DRIVE_OR_UNC = re.compile(r"^[A-Za-z]:|^[/\\]{2}")
+
+
+def _member_parts(raw_name: str) -> list[str]:
+    """Normalized path components for a zip member, or raise. Rejects
+    absolute paths, drive-qualified and UNC names, and EMPTY / '.' / '..'
+    components (codex plan review: 'pack//module.md' passes a naive split —
+    the stripped remainder '/module.md' then resolves to the drive root)."""
+    name = raw_name.replace("\\", "/")
+    if _DRIVE_OR_UNC.match(name) or name.startswith("/"):
+        raise modules.ModuleError(f"unsafe zip entry: {raw_name}")
+    parts = name.split("/")
+    if len(parts) < 2 or any(p in ("", ".", "..") for p in parts):
+        raise modules.ModuleError(f"unsafe zip entry: {raw_name}")
+    return parts
+
+
+def _check_archive(z: zipfile.ZipFile) -> str:
+    infos = [i for i in z.infolist() if not i.is_dir()]
+    if len(infos) > MAX_MEMBERS:
+        raise modules.ModuleError(f"zip has too many entries (> {MAX_MEMBERS})")
+    if sum(i.file_size for i in infos) > MAX_UNCOMPRESSED:
+        raise modules.ModuleError("zip expands past the size cap")
+    roots: set[str] = set()
+    seen_ci: set[str] = set()
+    for i in infos:
+        if (i.external_attr >> 16) & 0o170000 == 0o120000:
+            raise modules.ModuleError(f"zip contains a symlink: {i.filename}")
+        parts = _member_parts(i.filename)
+        roots.add(parts[0])
+        ci = "/".join(parts).casefold()   # normalized + case-folded collisions
+        if ci in seen_ci:
+            raise modules.ModuleError(f"case-colliding zip entries: {i.filename}")
+        seen_ci.add(ci)
+    if len(roots) != 1:
+        raise modules.ModuleError("zip must contain exactly one top-level module directory")
+    return next(iter(roots))
+
+
+def import_module(path: Path) -> str:
+    with _M:
+        recover()
+        try:
+            z = zipfile.ZipFile(path)
+        except (zipfile.BadZipFile, OSError) as e:
+            raise modules.ModuleError(f"not a zip archive: {e}")
+        with z:
+            src_root = _check_archive(z)
+            mid = new_mid(src_root)
+            nonce = uuid.uuid4().hex
+            base = _staging_root() / nonce
+            try:
+                staging = base / mid
+                staging.mkdir(parents=True)
+                staging_resolved = staging.resolve()
+                for i in z.infolist():
+                    if i.is_dir():
+                        continue
+                    parts = _member_parts(i.filename)
+                    dest = staging.joinpath(*parts[1:])
+                    try:  # containment check (no Path.is_relative_to — 3.8-safe)
+                        dest.resolve().relative_to(staging_resolved)
+                    except ValueError:
+                        raise modules.ModuleError(f"unsafe zip entry: {i.filename}")
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    dest.write_bytes(z.read(i))
+                pack = modules.load_pack_at(staging, mid)
+                if pack["errors"]:
+                    raise modules.ModuleError(
+                        "invalid module pack: " + "; ".join(pack["errors"]))
+                return _publish(staging, mid)
+            finally:
+                shutil.rmtree(base, ignore_errors=True)
 
 
 def _require_user_root(mid: str) -> Path:

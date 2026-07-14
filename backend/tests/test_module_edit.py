@@ -1,9 +1,19 @@
+import io
 import json
 import threading
+import zipfile
 
 import pytest
 
 from grimoire.store import campaigns, module_edit, modules, sheets, worlds
+
+
+def _zip_bytes(entries: dict) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for name, text in entries.items():
+            z.writestr(name, text)
+    return buf.getvalue()
 
 
 def _mk(monkeypatch, tmp_path):
@@ -652,3 +662,78 @@ def test_dry_run_sample_derived(monkeypatch, tmp_path):
     assert res["ok"]
     sample = res["sample"]["warden"]
     assert sample["derived"]["might"] == 0        # defaults: strength 0
+
+
+# ---- Task 9: duplicate, export, import, transactional create/delete ----
+
+
+def test_duplicate_builtin(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    new = module_edit.duplicate_module("d20-basic", "My D20")
+    assert new == "my-d20"
+    pack = modules.load_pack(new)
+    assert pack["source"] == "user" and pack["errors"] == []
+    # editable now
+    assert module_edit.set_manifest(new, name="My D20", description="", version="",
+                                    dice="1d20", notes="")["ok"]
+
+
+def test_new_mid_reserves_none_and_dedupes(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    assert module_edit.new_mid("None") != "none"
+    a = modules.create_module("Realm System")
+    assert module_edit.new_mid("Realm System") != a
+
+
+def test_create_module_staged_and_locked_delete(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    mid = module_edit.create_module("Realm System")
+    assert modules.load_pack(mid)["errors"] == []
+    wid = worlds.create_world("Realm")
+    cid = campaigns.create_campaign("Saltmarch Run", wid)
+    done = []
+    with sheets.lock_for(cid):        # an LLM flow is mid-computation
+        t = threading.Thread(target=lambda: (module_edit.delete_module(mid),
+                                             done.append(1)))
+        t.start()
+        t.join(timeout=0.3)
+        assert not done               # delete waits for the campaign lock
+    t.join(timeout=5)
+    assert done
+    with pytest.raises(modules.ModuleNotFound):
+        modules.pack_root(mid)
+
+
+def test_export_import_round_trip(monkeypatch, tmp_path):
+    mid = _mk_schema(monkeypatch, tmp_path)
+    data = module_edit.export_module(mid)
+    zpath = tmp_path / "pack.zip"
+    zpath.write_bytes(data)
+    new = module_edit.import_module(zpath)
+    assert new != mid                     # deduped
+    assert modules.load_pack(new)["errors"] == []
+    assert modules.load_pack(new)["sheets"] == modules.load_pack(mid)["sheets"]
+
+
+def test_import_rejections(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cases = {
+        "traversal": {"pack/module.md": "---\nname: X\n---\n",
+                      "pack/../evil.txt": "x"},
+        "absolute": {"/abs/module.md": "x"},
+        "double-slash": {"pack//module.md": "x"},
+        "dot-segment": {"pack/./module.md": "x"},
+        "drive": {"C:/pack/module.md": "x"},
+        "unc": {"//srv/share/module.md": "x"},
+        "two-roots": {"a/module.md": "x", "b/module.md": "y"},
+        "invalid-pack": {"pack/module.md": "---\nname: X\n---\n"},  # no sheets.json
+        "case-collision": {"pack/module.md": "---\nname: X\n---\n",
+                           "pack/Sheets.json": "{}",
+                           "pack/sheets.json": "{}"},
+    }
+    for label, entries in cases.items():
+        zpath = tmp_path / f"{label}.zip"
+        zpath.write_bytes(_zip_bytes(entries))
+        with pytest.raises(modules.ModuleError):
+            module_edit.import_module(zpath)
+    assert not any(modules.user_dir().iterdir()) if modules.user_dir().is_dir() else True
