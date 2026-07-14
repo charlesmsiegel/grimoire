@@ -83,7 +83,19 @@ export function useModuleDryRun(save: SaveFn, deps: unknown[]) {
     }
   }, [save, commit]);
 
-  return { result, confirming, setConfirming, saving, commit, requestSave };
+  // Called from a rename success handler: the last debounced dry-run result
+  // was computed against the PRE-rename form text (e.g. a derived expression
+  // still reading the old field name) and would otherwise keep rendering a
+  // now-stale error until the next edit re-arms the debounce. Bumping the
+  // revision counter also drops any debounced response still in flight from
+  // before the rename.
+  const reset = useCallback(() => {
+    clearTimeout(timer.current);
+    ++revision.current;
+    setResult(null);
+  }, []);
+
+  return { result, confirming, setConfirming, saving, commit, requestSave, reset };
 }
 
 export function ErrorList({ result }: { result: ModuleEditResult | null }) {

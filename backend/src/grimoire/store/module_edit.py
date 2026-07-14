@@ -23,7 +23,7 @@ from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 from . import campaigns, modules, proposals, sheets, worlds
-from .frontmatter import dump_frontmatter
+from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import home, slugify, uniquify
 
 _M = threading.RLock()
@@ -82,6 +82,11 @@ def duplicate_module(mid: str, name: str) -> str:
             staging = base / new
             base.mkdir(parents=True)
             shutil.copytree(root, staging)
+            if name:
+                manifest = staging / "module.md"
+                meta, body = parse_frontmatter(manifest.read_text(encoding="utf-8"))
+                meta["name"] = name
+                manifest.write_text(dump_frontmatter(meta, body), encoding="utf-8")
             return _publish(staging, new)
         finally:
             shutil.rmtree(base, ignore_errors=True)
