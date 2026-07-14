@@ -1092,3 +1092,21 @@ def test_set_field_resolves_module_inside_the_lock(monkeypatch, tmp_path):
     sheets.set_field(cid, "characters", "mara", "essence",
                      {"current": live["current"] - 1}, expect=live)
     assert seen and all(seen)
+
+
+def test_instance_errors_includes_derived_failures(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    mid = modules.create_module("Realm System")
+    root = modules.user_dir() / mid
+    (root / "sheets.json").write_text(json.dumps({
+        "groups": {"a": {"fields": [{"key": "strength", "type": "dots", "max": 5}],
+                          "derived": {"bad": "10 // strength"}}},
+        "sheet_types": {"warden": {"label": "W", "kind": "characters",
+                                   "groups": ["a"], "fields": []}}}), encoding="utf-8")
+    pack = modules.load_pack(mid)
+    assert pack["errors"] == []          # valid at defaults... unless default 0
+    errs = sheets.instance_errors(pack, "characters", "warden", {"strength": 0})
+    assert any("bad" in e for e in errs)     # division by zero at stored values
+    assert sheets.instance_errors(pack, "characters", "warden", {"strength": 2}) == []
+    assert sheets.instance_errors(pack, "characters", "ghost", {}) != []
+    assert sheets.instance_errors(pack, "items", "warden", {}) != []

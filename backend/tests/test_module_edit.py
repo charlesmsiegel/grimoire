@@ -603,3 +603,52 @@ def test_journaled_migration_replays(monkeypatch, tmp_path):
     assert json.loads(cp.read_text(encoding="utf-8"))["fields"] == {"brawn": 3}
     module_edit.recover()   # idempotent replay
     assert json.loads(cp.read_text(encoding="utf-8"))["fields"] == {"brawn": 3}
+
+
+def test_dry_run_impact_counts(monkeypatch, tmp_path):
+    mid = _mk_schema(monkeypatch, tmp_path)
+    wid, cid = _bound_campaign(mid)
+    _write_campaign_sheet(cid, "characters", "mara", "warden", {"strength": 3})
+    # deleting the sheet type: its sheet becomes newly invalid
+    res = module_edit.delete_sheet_type(mid, "warden", dry_run=True)
+    assert res["ok"] is True
+    assert res["impact"]["sheets_newly_invalid"] == 1
+    # renaming a field: migration counted, nothing newly invalid
+    res = module_edit.rename(mid, "field", {"from": "strength", "group": "attributes"},
+                             "brawn", dry_run=True)
+    assert res["impact"]["sheets_migrated"] == 1
+    assert res["impact"]["sheets_newly_invalid"] == 0
+    assert "warden" in res["impact"]["sheet_types"]
+    # dry-run wrote nothing
+    assert "strength" in json.dumps(modules.load_pack(mid)["sheets"])
+
+
+def test_dry_run_dangling_refs_counts_sidecars(monkeypatch, tmp_path):
+    mid = _mk_schema(monkeypatch, tmp_path)
+    ref_type = {"label": "Adept", "kind": "characters", "groups": [],
+                "fields": [{"key": "known", "type": "ref", "ref_kind": "lore"}]}
+    lore_type = {"label": "Rite", "kind": "lore", "groups": [],
+                 "fields": [{"key": "linked", "type": "ref", "ref_kind": "lore"}]}
+    assert module_edit.upsert_sheet_type(mid, "adept", ref_type)["ok"]
+    assert module_edit.upsert_sheet_type(mid, "rite", lore_type)["ok"]
+    assert module_edit.upsert_content(mid, "lore", "old-rite", name="Old Rite",
+                                      body="", keys="", fields={}, sheet=None)["ok"]
+    assert module_edit.upsert_content(
+        mid, "lore", "linked-rite", name="Linked", body="", keys="", fields={},
+        sheet={"sheet_type": "rite", "fields": {"linked": ["lore:module:old-rite"]}})["ok"]
+    wid, cid = _bound_campaign(mid)
+    _write_campaign_sheet(cid, "characters", "mara", "adept",
+                          {"known": ["lore:module:old-rite"]})
+    res = module_edit.delete_content(mid, "lore", "old-rite", dry_run=True)
+    assert res["ok"] is True
+    assert res["impact"]["dangling_refs"] == 2    # stored sheet + sidecar
+
+
+def test_dry_run_sample_derived(monkeypatch, tmp_path):
+    mid = _mk_schema(monkeypatch, tmp_path)
+    res = module_edit.upsert_group(mid, "attributes",
+                                   {**GROUP, "derived": {"might": "strength * 2"}},
+                                   dry_run=True)
+    assert res["ok"]
+    sample = res["sample"]["warden"]
+    assert sample["derived"]["might"] == 0        # defaults: strength 0

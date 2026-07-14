@@ -177,6 +177,117 @@ def _migrate_file(p: Path, mig: dict) -> bool | None:
     return changed
 
 
+def _would_migrate(data: dict, mig: dict) -> bool:
+    fields = data.get("fields") if isinstance(data.get("fields"), dict) else {}
+    if mig["op"] == "field":
+        return data.get("sheet_type") in (mig.get("sheet_types") or []) and mig["from"] in fields
+    if mig["op"] == "sheet_type":
+        return data.get("sheet_type") == mig["from"]
+    marker = f"{mig.get('kind')}:module:{mig['from']}"
+    return any(isinstance(v, list) and marker in v for v in fields.values())
+
+
+def _migrate_preview(fields: dict, data: dict, mig: dict) -> None:
+    """Apply the migration's effect to a copy, for staged-validation parity
+    (a renamed key/type must be judged under its NEW name — otherwise every
+    sheet of a renamed type would falsely count as newly invalid)."""
+    if mig["op"] == "field" and data.get("sheet_type") in (mig.get("sheet_types") or []) \
+            and mig["from"] in fields and mig["to"] not in fields:
+        fields[mig["to"]] = fields.pop(mig["from"])
+    elif mig["op"] == "sheet_type" and data.get("sheet_type") == mig["from"]:
+        data["sheet_type"] = mig["to"]
+    elif mig["op"] == "content":
+        marker = f"{mig.get('kind')}:module:{mig['from']}"
+        repl = f"{mig.get('kind')}:module:{mig['to']}"
+        for k, v in list(fields.items()):
+            if isinstance(v, list) and marker in v:
+                fields[k] = [repl if e == marker else e for e in v]
+
+
+def _file_kind(p: Path) -> str:
+    return p.stem.partition("--")[0]
+
+
+def _iter_ref_values(fields: dict):
+    for v in (fields or {}).values():
+        if isinstance(v, list):
+            for e in v:
+                if isinstance(e, str):
+                    yield e
+
+
+def _content_ids(pack: dict) -> set[str]:
+    return {f"{c['kind']}:module:{c['id']}" for c in pack.get("content", [])}
+
+
+def _sidecar_stats(mid: str) -> list[dict]:
+    root, _ = modules.pack_root(mid)
+    out = []
+    cd = root / "content"
+    if cd.is_dir():
+        for sc in sorted(cd.rglob("*.sheet.json")):
+            try:
+                stat = json.loads(sc.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+                continue
+            if isinstance(stat, dict):
+                out.append(stat)
+    return out
+
+
+def _impact(mid: str, staged_pack: dict, migration: dict | None) -> dict:
+    """Dry-run impact scan: {"sheet_types", "sheets_migrated",
+    "sheets_newly_invalid", "dangling_refs"}. Newly-invalid = stored sheets
+    valid against the live pack but invalid against the staged one; dangling
+    = ref values whose content id exists live but not staged, counted over
+    stored sheets AND content stat sidecars."""
+    live_pack = modules.load_pack(mid)
+    newly_invalid = 0
+    dangling = 0
+    staged_ids = _content_ids(staged_pack)
+    live_ids = _content_ids(live_pack)
+    for p, _cid in _sheet_files(mid):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        st = data.get("sheet_type")
+        fields = data.get("fields") if isinstance(data.get("fields"), dict) else {}
+        if migration:   # judge post-migration state, not the raw file
+            mig_fields = dict(fields)
+            _migrate_preview(mig_fields, data, migration)
+            st = data.get("sheet_type")
+            fields = mig_fields
+        live_errs = sheets.instance_errors(live_pack, _file_kind(p), st, fields)
+        staged_errs = sheets.instance_errors(staged_pack, _file_kind(p), st, fields)
+        if not live_errs and staged_errs:
+            newly_invalid += 1
+        for ref in _iter_ref_values(fields):
+            if ":module:" in ref and ref in live_ids and ref not in staged_ids:
+                dangling += 1
+    for stat in _sidecar_stats(mid):
+        for ref in _iter_ref_values(stat.get("fields") or {}):
+            if ":module:" in ref and ref in live_ids and ref not in staged_ids:
+                dangling += 1
+    out = {"sheet_types": [], "sheets_migrated": 0,
+           "sheets_newly_invalid": newly_invalid, "dangling_refs": dangling}
+    if migration:
+        out["sheet_types"] = list(migration.get("sheet_types")
+                                  or ([migration["from"]] if migration["op"] == "sheet_type" else []))
+        migrated = 0
+        for p, _cid in _sheet_files(mid):
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+                continue
+            if isinstance(data, dict) and _would_migrate(data, migration):
+                migrated += 1
+        out["sheets_migrated"] = migrated
+    return out
+
+
 def _run_migration(mid: str, migration: dict) -> dict:
     """Sheet migration for rename ops: rewrite every stored sheet governed by
     this module that the migration op touches, bumping `gen` on each changed
@@ -210,14 +321,31 @@ def _result(pack: dict, **extra) -> dict:
     return out
 
 
+def _sample(pack: dict) -> dict:
+    """Per-sheet-type sample: schema defaults + derived, for a dry-run
+    preview of what a fresh sheet of that type would look like."""
+    out = {}
+    for tid in (pack["sheets"].get("sheet_types") or {}):
+        defaults = sheets.default_fields(pack["sheets"], tid)
+        errs: list[str] = []
+        derived = sheets._compute_derived(pack["sheets"], tid, defaults, errs)
+        out[tid] = {"fields": defaults, "derived": derived}
+    return out
+
+
 def _apply(mid: str, mutate, *, dry_run: bool = False,
-           migration: dict | None = None, pre_swap=None) -> dict:
+           migration: dict | None = None, pre_swap=None,
+           impact: bool = False, sample: bool = False) -> dict:
     """stage -> mutate -> validate -> (locks) -> journal -> swap -> migrate.
 
     mutate(staging_root) edits the staged copy in place. pre_swap(pack) runs
     under all campaign locks just before the journal and returns a list of
     blocking errors (e.g. rename collision scans). Rejection (validation or
-    pre_swap) leaves the live pack byte-identical and no staging debris."""
+    pre_swap) leaves the live pack byte-identical and no staging debris.
+    impact=True computes a dry-run impact scan (schema-affecting writers and
+    rename ops); sample=True additionally computes a per-sheet-type sample
+    (schema defaults + derived) after a clean validation, for sheets.json
+    dry-runs."""
     with _M:
         recover()
         live = _require_user_root(mid)
@@ -233,8 +361,13 @@ def _apply(mid: str, mutate, *, dry_run: bool = False,
                 return {"ok": False, "errors": [f"rename collision: {e}"],
                         "display_errors": []}
             pack = modules.load_pack_at(staging, mid)
+            extra: dict = {}
+            if impact:
+                extra["impact"] = _impact(mid, pack, migration)
             if pack["errors"] or dry_run:
-                return _result(pack)
+                if sample and not pack["errors"]:
+                    extra["sample"] = _sample(pack)
+                return _result(pack, **extra)
             with _campaign_locks():
                 if pre_swap is not None:
                     blockers = pre_swap(pack)
@@ -251,7 +384,9 @@ def _apply(mid: str, mutate, *, dry_run: bool = False,
                 staging.rename(live)
                 mig = _run_migration(mid, migration) if migration else None
                 jp.unlink()
-            return _result(pack, **({"migration": mig} if mig else {}))
+            if mig:
+                extra["migration"] = mig
+            return _result(pack, **extra)
         finally:
             # Only the nonce staging dir (`base`) is removed here — never the
             # journal (`jp`, a sibling under _staging_root(), not under
@@ -776,7 +911,8 @@ def rename(mid: str, kind: str, address: dict, to: str, *,
         if checks_json or (root / "checks.json").exists():
             _write_json(root, "checks.json", checks_json)
 
-    return _apply(mid, mutate, dry_run=dry_run, migration=migration, pre_swap=pre_swap)
+    return _apply(mid, mutate, dry_run=dry_run, migration=migration, pre_swap=pre_swap,
+                  impact=True)
 
 
 def upsert_group(mid: str, gid: str, group: dict, *, dry_run: bool = False) -> dict:
@@ -789,7 +925,7 @@ def upsert_group(mid: str, gid: str, group: dict, *, dry_run: bool = False) -> d
             removed = _field_keys(old) - _field_keys(group if isinstance(group, dict) else {})
             if removed:
                 _prune_layout(root, in_scope=_group_scope(data, gid), names=removed)
-    return _apply(mid, mutate, dry_run=dry_run)
+    return _apply(mid, mutate, dry_run=dry_run, impact=True, sample=True)
 
 
 def delete_group(mid: str, gid: str, *, dry_run: bool = False) -> dict:
@@ -800,7 +936,7 @@ def delete_group(mid: str, gid: str, *, dry_run: bool = False) -> dict:
         _write_json(root, "sheets.json", data)
         _prune_layout(root, in_scope=scope, group=gid,
                       names=_field_keys(old) if isinstance(old, dict) else set())
-    return _apply(mid, mutate, dry_run=dry_run)
+    return _apply(mid, mutate, dry_run=dry_run, impact=True)
 
 
 def upsert_sheet_type(mid: str, tid: str, sheet_type: dict, *,
@@ -815,7 +951,7 @@ def upsert_sheet_type(mid: str, tid: str, sheet_type: dict, *,
                 sheet_type if isinstance(sheet_type, dict) else {})
             if removed:
                 _prune_layout(root, in_scope={tid}, names=removed)
-    return _apply(mid, mutate, dry_run=dry_run)
+    return _apply(mid, mutate, dry_run=dry_run, impact=True, sample=True)
 
 
 def delete_sheet_type(mid: str, tid: str, *, dry_run: bool = False) -> dict:
@@ -825,7 +961,7 @@ def delete_sheet_type(mid: str, tid: str, *, dry_run: bool = False) -> dict:
         _write_json(root, "sheets.json", data)
         _prune_layout(root, in_scope={tid}, drop_type=tid,
                       names=_field_keys(old) if isinstance(old, dict) else set())
-    return _apply(mid, mutate, dry_run=dry_run)
+    return _apply(mid, mutate, dry_run=dry_run, impact=True)
 
 
 # ---- check, rule, content writers ----
@@ -928,7 +1064,7 @@ def delete_content(mid: str, kind: str, content_id: str, *, dry_run: bool = Fals
         for p in (d / f"{content_id}.md", d / f"{content_id}.sheet.json"):
             if p.exists():
                 p.unlink()
-    return _apply(mid, mutate, dry_run=dry_run)
+    return _apply(mid, mutate, dry_run=dry_run, impact=True)
 
 
 def set_layout(mid: str, layout: dict, *, dry_run: bool = False) -> dict:
