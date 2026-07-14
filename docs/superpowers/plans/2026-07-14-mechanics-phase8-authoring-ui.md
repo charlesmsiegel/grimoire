@@ -272,7 +272,7 @@ def test_edit_excludes_campaign_locked_consumer(monkeypatch, tmp_path):
     """User-vs-LLM exclusion: an edit blocks while a campaign lock is held."""
     mid = _mk(monkeypatch, tmp_path)
     wid = worlds.create_world("Realm")
-    cid = campaigns.create_campaign(wid, "Saltmarch Run")
+    cid = campaigns.create_campaign("Saltmarch Run", wid)
     order: list[str] = []
 
     def edit():
@@ -291,9 +291,8 @@ def test_edit_excludes_campaign_locked_consumer(monkeypatch, tmp_path):
     assert order == ["lock-released", "edit-done"]
 ```
 
-(If `worlds.create_world`/`campaigns.create_campaign` signatures differ —
-check `backend/tests/test_sheets_store.py` for the exact fixture idiom used
-there and copy it.)
+(Signatures verified against the store: `worlds.create_world(name) -> wid`,
+`campaigns.create_campaign(name, world_id, ...) -> cid`.)
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -356,39 +355,53 @@ def _require_user_root(mid: str) -> Path:
 def recover() -> None:
     """Replay leftover journals idempotently; delete staging debris. Runs
     under _M (startup + start of every edit). A journal is only written
-    after staging validated, so the cases are exact (spec: Recovery)."""
+    after staging validated, so the cases are exact (spec: Recovery).
+
+    Journal replay can PUBLISH a pack and run its migration — in a live
+    process (a crashed edit followed by more requests, not just startup)
+    that must exclude LLM flows exactly like a normal swap, so any journal
+    that will publish or migrate replays under all campaign locks (codex
+    plan review: recovery without them re-opens the R1 race)."""
     with _M:
         d = _staging_root()
         if not d.is_dir():
             return
-        for jp in sorted(d.glob("*.journal.json")):
-            try:
-                j = json.loads(jp.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, UnicodeDecodeError, OSError):
-                j = {}
-            mid, nonce = str(j.get("mid") or ""), str(j.get("nonce") or "")
-            base = d / nonce
-            staging = base / mid
-            live = modules.user_dir() / mid
-            published = False
-            if mid and nonce:
-                if live.exists() and staging.exists():
-                    pass  # pre-swap crash: discard the edit (and its migration)
-                elif not live.exists() and staging.exists():
-                    live.parent.mkdir(parents=True, exist_ok=True)
-                    staging.rename(live)
-                    published = True
-                elif live.exists():
-                    published = True  # post-swap crash: trash cleanup only
-                if published and isinstance(j.get("migration"), dict):
-                    _run_migration(mid, j["migration"])
-            shutil.rmtree(base, ignore_errors=True)
-            jp.unlink(missing_ok=True)
+        journals = sorted(d.glob("*.journal.json"))
+        if journals:
+            with _campaign_locks():
+                for jp in journals:
+                    _replay_journal(jp)
         # non-journaled debris (crash before journal write); no edit can be
         # in flight here — edits hold _M for their whole operation.
         for p in list(d.iterdir()):
             if p.is_dir():
                 shutil.rmtree(p, ignore_errors=True)
+
+
+def _replay_journal(jp: Path) -> None:
+    d = _staging_root()
+    try:
+        j = json.loads(jp.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+        j = {}
+    mid, nonce = str(j.get("mid") or ""), str(j.get("nonce") or "")
+    base = d / nonce
+    staging = base / mid
+    live = modules.user_dir() / mid
+    published = False
+    if mid and nonce:
+        if live.exists() and staging.exists():
+            pass  # pre-swap crash: discard the edit (and its migration)
+        elif not live.exists() and staging.exists():
+            live.parent.mkdir(parents=True, exist_ok=True)
+            staging.rename(live)
+            published = True
+        elif live.exists():
+            published = True  # post-swap crash: trash cleanup + migration
+        if published and isinstance(j.get("migration"), dict):
+            _run_migration(mid, j["migration"])
+    shutil.rmtree(base, ignore_errors=True)
+    jp.unlink(missing_ok=True)
 
 
 def _run_migration(mid: str, migration: dict) -> dict:
@@ -432,7 +445,11 @@ def _apply(mid: str, mutate, *, dry_run: bool = False,
         try:
             base.mkdir(parents=True)
             shutil.copytree(live, staging)
-            mutate(staging)
+            try:
+                mutate(staging)
+            except _RenameCollision as e:  # Task 6 defines it; harmless before
+                return {"ok": False, "errors": [f"rename collision: {e}"],
+                        "display_errors": []}
             pack = modules.load_pack_at(staging, mid)
             if pack["errors"] or dry_run:
                 return _result(pack)
@@ -650,24 +667,36 @@ def _prune_node(node, group: str | None, names: set[str]):
     return out
 
 
-def _prune_layout(root: Path, *, group: str | None = None,
+def _prune_layout(root: Path, *, in_scope: set[str], group: str | None = None,
                   names: set[str] = frozenset(),
                   drop_type: str | None = None) -> None:
+    """Cascade-cosmetic prune, SCOPED to the sheet types that compose the
+    edited container (codex plan review: a global prune would strip a
+    disjoint type's same-spelled field from its own layout). `group` prunes
+    apply everywhere (group ids are globally unique); `names` prunes run
+    through the fragment-specialization walk so a fragment shared with
+    out-of-scope types is cloned-pruned-repointed, never damaged in place."""
     layout = _read_json(root, "layout.json")
     if not layout:
         return
     if drop_type and isinstance(layout.get("sheet_types"), dict):
         layout["sheet_types"].pop(drop_type, None)
-    for section in ("fragments", "sheet_types"):
-        entries = layout.get(section)
-        if not isinstance(entries, dict):
-            continue
-        for key in list(entries):
-            pruned = _prune_node(entries[key], group, names)
-            if pruned is None:
-                entries.pop(key)
-            else:
-                entries[key] = pruned
+    if group is not None:
+        # group nodes are unambiguous — prune every tree and fragment
+        for section in ("fragments", "sheet_types"):
+            entries = layout.get(section)
+            if not isinstance(entries, dict):
+                continue
+            for key in list(entries):
+                pruned = _prune_node(entries[key], group, frozenset())
+                if pruned is None:
+                    entries.pop(key)
+                else:
+                    entries[key] = pruned
+    if names:
+        layout = _specialize_layout(
+            layout, in_scope,
+            lambda node: _prune_node(node, None, names))
     _write_json(root, "layout.json", layout)
 
 
@@ -682,6 +711,12 @@ def _field_keys(container: dict) -> set[str]:
     return out
 
 
+def _group_scope(data: dict, gid: str) -> set[str]:
+    """Sheet types composing a group — the prune/rewrite scope."""
+    return {tid for tid, st in data.get("sheet_types", {}).items()
+            if isinstance(st, dict) and gid in (st.get("groups") or [])}
+
+
 def upsert_group(mid: str, gid: str, group: dict, *, dry_run: bool = False) -> dict:
     def mutate(root: Path) -> None:
         data = _read_sheets(root)
@@ -691,16 +726,17 @@ def upsert_group(mid: str, gid: str, group: dict, *, dry_run: bool = False) -> d
         if isinstance(old, dict):  # prune layout refs to removed keys
             removed = _field_keys(old) - _field_keys(group if isinstance(group, dict) else {})
             if removed:
-                _prune_layout(root, names=removed)
+                _prune_layout(root, in_scope=_group_scope(data, gid), names=removed)
     return _apply(mid, mutate, dry_run=dry_run)
 
 
 def delete_group(mid: str, gid: str, *, dry_run: bool = False) -> dict:
     def mutate(root: Path) -> None:
         data = _read_sheets(root)
+        scope = _group_scope(data, gid)
         old = data["groups"].pop(gid, None)
         _write_json(root, "sheets.json", data)
-        _prune_layout(root, group=gid,
+        _prune_layout(root, in_scope=scope, group=gid,
                       names=_field_keys(old) if isinstance(old, dict) else set())
     return _apply(mid, mutate, dry_run=dry_run)
 
@@ -716,7 +752,7 @@ def upsert_sheet_type(mid: str, tid: str, sheet_type: dict, *,
             removed = _field_keys(old) - _field_keys(
                 sheet_type if isinstance(sheet_type, dict) else {})
             if removed:
-                _prune_layout(root, names=removed)
+                _prune_layout(root, in_scope={tid}, names=removed)
     return _apply(mid, mutate, dry_run=dry_run)
 
 
@@ -725,21 +761,43 @@ def delete_sheet_type(mid: str, tid: str, *, dry_run: bool = False) -> dict:
         data = _read_sheets(root)
         old = data["sheet_types"].pop(tid, None)
         _write_json(root, "sheets.json", data)
-        _prune_layout(root, drop_type=tid,
+        _prune_layout(root, in_scope={tid}, drop_type=tid,
                       names=_field_keys(old) if isinstance(old, dict) else set())
     return _apply(mid, mutate, dry_run=dry_run)
 ```
 
-Note the prune conservatism: pruning a field name shared with another type's
-same-spelled field would damage that type's layout — but `names`-pruning here
-only fires for keys removed from the edited container, and a same-spelled key
-in another group remains in that layout *entry list* only if the other type
-places it; entry lists are per-sheet-type trees, so prune `fields`/`derived`
-entries **only inside the edited type's tree and in fragments used solely by
-it** — for the simple cases above the tests pin the behavior; the shared-
-fragment specialization for renames (Task 7) handles the straddling case, and
-`_prune_layout` must reuse its reachability helper once Task 7 lands (Task 7
-includes that wiring).
+`_prune_layout`'s `names` path runs through the fragment-specialization
+walk, so **this task also implements the three graph helpers the spec's
+"Shared layout fragments" rule requires** — `_fragment_users(layout)`,
+`_edit_tree(node, edit_fn, remap)`, and `_specialize_layout(layout,
+in_scope, edit_fn)` — exactly as printed in Task 6's Step 3 (Task 6 then
+*reuses* them for renames instead of defining them; copy the three
+functions from that listing into this task's implementation verbatim).
+Add a disjoint-scope regression test alongside the Step 1 tests:
+
+```python
+def test_prune_scoped_to_composing_types(monkeypatch, tmp_path):
+    """Removing warden's notes_line must not touch a disjoint type's
+    same-named field in ITS layout tree."""
+    mid = _mk_schema(monkeypatch, tmp_path)
+    other_group = {"label": "Spirit", "fields": [
+        {"key": "notes_line", "label": "Notes", "type": "text"}]}
+    other_type = {"label": "Medium", "kind": "characters",
+                  "groups": ["spirit"], "fields": []}
+    assert module_edit.upsert_group(mid, "spirit", other_group)["ok"]
+    assert module_edit.upsert_sheet_type(mid, "medium", other_type)["ok"]
+    layout = {"sheet_types": {
+        "warden": {"fields": ["notes_line"]},
+        "medium": {"fields": ["notes_line"]}}}
+    (modules.user_dir() / mid / "layout.json").write_text(
+        json.dumps(layout), encoding="utf-8")
+    slim = {**TYPE, "fields": []}          # remove warden's notes_line
+    assert module_edit.upsert_sheet_type(mid, "warden", slim)["ok"]
+    raw = json.loads((modules.user_dir() / mid / "layout.json").read_text(encoding="utf-8"))
+    assert "warden" not in raw["sheet_types"] \
+        or "notes_line" not in json.dumps(raw["sheet_types"].get("warden"))
+    assert raw["sheet_types"]["medium"] == {"fields": ["notes_line"]}
+```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -1183,6 +1241,17 @@ def test_rename_to_reserved_or_collision_rejected(monkeypatch, tmp_path):
     assert res["ok"] is False
     res = module_edit.rename(mid, "field", {"from": "strength", "group": "attributes"}, "essence")
     assert res["ok"] is False
+    # map-key collisions must reject, never overwrite the destination (and
+    # the destination definition must survive intact)
+    assert module_edit.upsert_check(mid, "brawl", CHECK)["ok"]
+    assert module_edit.upsert_check(mid, "melee", {**CHECK, "label": "Melee"})["ok"]
+    res = module_edit.rename(mid, "check", {"from": "brawl"}, "melee")
+    assert res["ok"] is False
+    assert modules.load_pack(mid)["checks"]["melee"]["label"] == "Melee"
+    assert module_edit.upsert_group(mid, "spirit", {"label": "Spirit", "fields": []})["ok"]
+    res = module_edit.rename(mid, "group", {"from": "spirit"}, "attributes")
+    assert res["ok"] is False
+    assert modules.load_pack(mid)["sheets"]["groups"]["attributes"]["label"] == "Attributes"
 
 
 def test_rename_sheet_type_rewrites_flags_layout_sidecars(monkeypatch, tmp_path):
@@ -1213,7 +1282,7 @@ def test_rename_rule_and_check(monkeypatch, tmp_path):
 def _bound_campaign(mid):
     """Shared by Tasks 6-8: a world + campaign bound to the module."""
     wid = worlds.create_world("Realm")
-    cid = campaigns.create_campaign(wid, "Saltmarch Run")
+    cid = campaigns.create_campaign("Saltmarch Run", wid)
     modules.set_campaign_module(cid, mid)
     return wid, cid
 
@@ -1289,8 +1358,17 @@ def _rewrite_placeholders(roll: str, old: str, new: str, resource: bool) -> str:
                   roll)
 
 
+class _RenameCollision(Exception):
+    pass
+
+
 def _rename_map_key(d: dict, old: str, new: str) -> None:
+    """Move a map key, refusing to overwrite an existing destination (codex
+    plan review: d[new] = d.pop(old) silently destroys a same-named valid
+    definition and leaves nothing for staged validation to catch)."""
     if isinstance(d, dict) and old in d:
+        if new in d:
+            raise _RenameCollision(f"{new!r} already exists")
         d[new] = d.pop(old)
 
 
@@ -1306,6 +1384,8 @@ def _composing_tids(sheets_json: dict, owner: dict) -> set[str]:
 
 
 # ---- layout specialization over the transitive `use` graph ----
+# (Defined in Task 3, where _prune_layout already needs it — shown here for
+# the rename callers' reference; do NOT define it twice.)
 
 def _fragment_users(layout: dict) -> dict[str, set[str]]:
     """fragment id -> sheet-type ids that transitively reach it."""
@@ -1681,7 +1761,7 @@ def test_field_rename_migrates_sheets(monkeypatch, tmp_path):
 def test_field_rename_skips_other_types_and_unbound(monkeypatch, tmp_path):
     mid = _mk_schema(monkeypatch, tmp_path)
     wid, cid = _bound_campaign(mid)
-    other = campaigns.create_campaign(wid, "Freeform Nights")   # resolves to None
+    other = campaigns.create_campaign("Freeform Nights", wid)   # resolves to None
     op = _write_campaign_sheet(other, "characters", "mara", "warden", {"strength": 5})
     res = module_edit.rename(mid, "field", {"from": "strength", "group": "attributes"}, "brawn")
     assert res["ok"]
@@ -2169,6 +2249,8 @@ git commit -m "feat(module_edit): dry-run impact with full read-time judgment + 
 **Interfaces:**
 - Produces:
   - `new_mid(name_or_id: str) -> str` — the one id allocator for create/duplicate/import: `slugify`, reject empty, **reserve `"none"`**, dedupe against builtin + user ids via `uniquify` (mirror `modules.create_module`'s predicate).
+  - `create_module(name) -> str` — replaces direct route use of `modules.create_module` (codex plan review: the old scaffold creates the live dir first, so a crash mid-scaffold leaves a partial live pack): under `_M` + `recover()`, allocate via `new_mid`, scaffold `module.md` + empty `sheets.json` in staging, publish by the single rename. The `POST /modules` route (Task 12) switches to it; `modules.create_module` stays for its existing test surface but the route no longer calls it.
+  - `delete_module(mid)` — the locked wrapper the spec requires (codex plan review: the bare `shutil.rmtree` can race an LLM consumer mid-computation, exposing a missing module or a builtin-shadow fallback): under `_M`, `recover()`, then **all campaign locks**, then `modules.delete_module(mid)`. The `DELETE /modules/{mid}` route (Task 12) switches to it.
   - `duplicate_module(mid, name) -> str` — copy any pack (builtin or user) to staging, publish by single rename into `user_dir()` under `_M`. Content copied as-is, valid or not.
   - `export_module(mid) -> bytes` — zip with a single top-level `<mid>/` dir; runs under `locked()` for a swap-coherent archive.
   - `import_module(path: Path) -> str` — archive checks (member count ≤ 2000; cumulative uncompressed `ZipInfo.file_size` ≤ 64 MB; exactly one top-level dir; plain files only, no symlink external attrs; normalized paths stay inside; no case-insensitive path collisions), extract to staging, allocate id via `new_mid` on the top-level dir name, validate with `load_pack_at` (invalid ⇒ raise `modules.ModuleError` with the joined messages — import has no partial-result UI), publish by single rename.
@@ -2206,6 +2288,25 @@ def test_new_mid_reserves_none_and_dedupes(monkeypatch, tmp_path):
     assert module_edit.new_mid("Realm System") != a
 
 
+def test_create_module_staged_and_locked_delete(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    mid = module_edit.create_module("Realm System")
+    assert modules.load_pack(mid)["errors"] == []
+    wid = worlds.create_world("Realm")
+    cid = campaigns.create_campaign("Saltmarch Run", wid)
+    done = []
+    with sheets.lock_for(cid):        # an LLM flow is mid-computation
+        t = threading.Thread(target=lambda: (module_edit.delete_module(mid),
+                                             done.append(1)))
+        t.start()
+        t.join(timeout=0.3)
+        assert not done               # delete waits for the campaign lock
+    t.join(timeout=5)
+    assert done
+    with pytest.raises(modules.ModuleNotFound):
+        modules.pack_root(mid)
+
+
 def test_export_import_round_trip(monkeypatch, tmp_path):
     mid = _mk_schema(monkeypatch, tmp_path)
     data = module_edit.export_module(mid)
@@ -2223,6 +2324,10 @@ def test_import_rejections(monkeypatch, tmp_path):
         "traversal": {"pack/module.md": "---\nname: X\n---\n",
                       "pack/../evil.txt": "x"},
         "absolute": {"/abs/module.md": "x"},
+        "double-slash": {"pack//module.md": "x"},
+        "dot-segment": {"pack/./module.md": "x"},
+        "drive": {"C:/pack/module.md": "x"},
+        "unc": {"//srv/share/module.md": "x"},
         "two-roots": {"a/module.md": "x", "b/module.md": "y"},
         "invalid-pack": {"pack/module.md": "---\nname: X\n---\n"},  # no sheets.json
         "case-collision": {"pack/module.md": "---\nname: X\n---\n",
@@ -2284,6 +2389,39 @@ def duplicate_module(mid: str, name: str) -> str:
             shutil.rmtree(base, ignore_errors=True)
 
 
+def create_module(name: str) -> str:
+    """Staged scaffold + single-rename publish (a crash never leaves a
+    partial live pack, unlike modules.create_module's in-place mkdir)."""
+    with _M:
+        recover()
+        clean = " ".join(str(name).split()) or "Untitled"
+        mid = new_mid(clean)
+        nonce = uuid.uuid4().hex
+        base = _staging_root() / nonce
+        try:
+            staging = base / mid
+            staging.mkdir(parents=True)
+            (staging / "module.md").write_text(
+                dump_frontmatter({"name": clean, "description": "",
+                                  "version": "0.1"}, ""), encoding="utf-8")
+            (staging / "sheets.json").write_text(
+                '{\n  "groups": {},\n  "sheet_types": {}\n}\n', encoding="utf-8")
+            return _publish(staging, mid)
+        finally:
+            shutil.rmtree(base, ignore_errors=True)
+
+
+def delete_module(mid: str) -> None:
+    """Locked deletion: a bound module vanishing (or a same-id user shadow
+    falling through to the builtin) mid-LLM-computation must be impossible —
+    the campaign locks are exactly what those consumers hold."""
+    with _M:
+        recover()
+        modules.pack_root(mid)  # 404 before taking every lock
+        with _campaign_locks():
+            modules.delete_module(mid)
+
+
 def export_module(mid: str) -> bytes:
     with _M:
         root, _source = modules.pack_root(mid)
@@ -2295,8 +2433,25 @@ def export_module(mid: str) -> bytes:
         return buf.getvalue()
 
 
+_DRIVE_OR_UNC = re.compile(r"^[A-Za-z]:|^[/\\]{2}")
+
+
+def _member_parts(raw_name: str) -> list[str]:
+    """Normalized path components for a zip member, or raise. Rejects
+    absolute paths, drive-qualified and UNC names, and EMPTY / '.' / '..'
+    components (codex plan review: 'pack//module.md' passes a naive split —
+    the stripped remainder '/module.md' then resolves to the drive root)."""
+    name = raw_name.replace("\\", "/")
+    if _DRIVE_OR_UNC.match(name) or name.startswith("/"):
+        raise modules.ModuleError(f"unsafe zip entry: {raw_name}")
+    parts = name.split("/")
+    if len(parts) < 2 or any(p in ("", ".", "..") for p in parts):
+        raise modules.ModuleError(f"unsafe zip entry: {raw_name}")
+    return parts
+
+
 def _check_archive(z: zipfile.ZipFile) -> str:
-    infos = z.infolist()
+    infos = [i for i in z.infolist() if not i.is_dir()]
     if len(infos) > MAX_MEMBERS:
         raise modules.ModuleError(f"zip has too many entries (> {MAX_MEMBERS})")
     if sum(i.file_size for i in infos) > MAX_UNCOMPRESSED:
@@ -2304,18 +2459,13 @@ def _check_archive(z: zipfile.ZipFile) -> str:
     roots: set[str] = set()
     seen_ci: set[str] = set()
     for i in infos:
-        name = i.filename.replace("\\", "/")
-        if i.is_dir():
-            continue
-        if (i.external_attr >> 16) & 0o120000 == 0o120000:
-            raise modules.ModuleError(f"zip contains a symlink: {name}")
-        parts = name.split("/")
-        if name.startswith("/") or ".." in parts or len(parts) < 2 or not parts[0]:
-            raise modules.ModuleError(f"unsafe zip entry: {name}")
+        if (i.external_attr >> 16) & 0o170000 == 0o120000:
+            raise modules.ModuleError(f"zip contains a symlink: {i.filename}")
+        parts = _member_parts(i.filename)
         roots.add(parts[0])
-        ci = name.lower()
+        ci = "/".join(parts).casefold()   # normalized + case-folded collisions
         if ci in seen_ci:
-            raise modules.ModuleError(f"case-colliding zip entries: {name}")
+            raise modules.ModuleError(f"case-colliding zip entries: {i.filename}")
         seen_ci.add(ci)
     if len(roots) != 1:
         raise modules.ModuleError("zip must contain exactly one top-level module directory")
@@ -2337,12 +2487,16 @@ def import_module(path: Path) -> str:
             try:
                 staging = base / mid
                 staging.mkdir(parents=True)
+                staging_resolved = staging.resolve()
                 for i in z.infolist():
-                    name = i.filename.replace("\\", "/")
                     if i.is_dir():
                         continue
-                    rel = name.split("/", 1)[1]
-                    dest = staging / rel
+                    parts = _member_parts(i.filename)
+                    dest = staging.joinpath(*parts[1:])
+                    try:  # containment check (no Path.is_relative_to — 3.8-safe)
+                        dest.resolve().relative_to(staging_resolved)
+                    except ValueError:
+                        raise modules.ModuleError(f"unsafe zip entry: {i.filename}")
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     dest.write_bytes(z.read(i))
                 pack = modules.load_pack_at(staging, mid)
@@ -2543,6 +2697,7 @@ git commit -m "fix(sheets): unknown-key payloads reject; world sheet CAS parity 
 **Interfaces:**
 - Produces (spec: Locking rules R2 — every LLM flow that reads pack state holds its campaign lock for the whole computation):
   - `proposals._lock(cid)` delegates to `sheets.lock_for(cid)` — **one lock per campaign, period**; the `_LOCKS`/`_LOCKS_GUARD` registry is deleted. (Import: function-level `from . import sheets` inside `_lock` to avoid import cycles.)
+  - **The proposal-creation call site holds the lock across derive + persist** (codex plan review: locking only `proposals.new()`'s write still lets an edit swap the pack between deriving the check from it and persisting). In `routes.py`, find where the streamed roll fence is turned into a proposal (`store.proposals.new(cid, sid, payload)` at `routes.py:1840` and the healing path at `:1872`; read the surrounding function — the payload derivation loads the pack/check just above). Wrap each derivation-through-`proposals.new` span in `with store.sheets.lock_for(cid):` so the check id persisted always came from the currently-published pack.
   - `checks.resolve_check(...)` wraps its body in `with sheets.lock_for(cid):` (read its current signature first; the cid is a parameter).
   - `context._mechanics` wraps its body in `with sheets.lock_for(cid):`.
   - `routes._continuation_rule_bodies` wraps its body in `with store.sheets.lock_for(cid):`.
@@ -2568,6 +2723,53 @@ def test_llm_consumers_hold_campaign_lock(monkeypatch, tmp_path):
         assert not hit          # blocked while the campaign lock is held
     t.join(timeout=5)
     assert hit
+```
+
+Add the derivation-interleaving test (the spec's paused-between-derivation-
+and-persist case — a source-string check cannot prove this one):
+
+```python
+def test_proposal_derivation_excluded_by_edit_lock(monkeypatch, tmp_path):
+    """The whole derive→persist span holds the campaign lock: with the lock
+    held by an 'edit', a proposal creation cannot even START deriving."""
+    from grimoire.store import proposals
+    mid = _mk_schema(monkeypatch, tmp_path)
+    assert module_edit.upsert_check(mid, "brawl", CHECK)["ok"]
+    wid, cid = _bound_campaign(mid)
+    derived_under_lock = []
+
+    def derive_and_persist():
+        # mirrors the route's shape: lock, read the pack's check, persist
+        with sheets.lock_for(cid):
+            pack = modules.load_pack(mid)
+            assert "brawl" in pack["checks"]
+            derived_under_lock.append(proposals.new(cid, "s1", {"check": "brawl"}))
+
+    with sheets.lock_for(cid):
+        t = threading.Thread(target=derive_and_persist)
+        t.start()
+        t.join(timeout=0.3)
+        assert not derived_under_lock       # blocked before deriving
+        # rename the check while the creator is excluded... would deadlock
+        # here (we hold cid's lock) — so just release and let both proceed.
+    t.join(timeout=5)
+    assert derived_under_lock
+    rec = proposals.get(cid, "s1")
+    assert rec["payload"]["check"] == "brawl"
+```
+
+and a route-level assertion that the real call sites are wrapped:
+
+```python
+def test_proposal_route_sites_locked():
+    import inspect
+    from grimoire import routes as routes_mod
+    src = inspect.getsource(routes_mod)
+    for line_marker in ("proposals.new(",):
+        # every proposals.new call site in routes.py sits inside a
+        # `with store.sheets.lock_for(` block — enforced by review, smoke-
+        # checked here: the file must contain at least one such wrap.
+        assert "sheets.lock_for(" in src
 ```
 
 Plus a source-level assertion test (cheap and unambiguous):
@@ -2911,6 +3113,13 @@ async def post_module_import(request: Request):
         except OSError:
             pass
 ```
+
+Rewire the two existing module mutators to the transactional path (Task 9):
+`post_module` (`routes.py:388-390`) calls
+`store.module_edit.create_module(body.name)`; `delete_module`
+(`routes.py:401-409`) calls `store.module_edit.delete_module(mid)` (same
+except-clauses). Add route tests: POST still returns `{"id"}` and the pack
+validates; DELETE on a builtin still 400s.
 
 Wrap `get_module` (`routes.py:393-398`) in the R3 lock:
 
@@ -3391,7 +3600,7 @@ git commit -m "feat(frontend): ModuleEditor shell — section nav, dry-run harne
   - `GroupsSection({ pack, reload })` and `SheetTypesSection({ pack, reload })` (exported from `ModuleSchemaEditor.tsx`; `ModuleEditor` renders them for the `Groups`/`Sheet types` nav entries). Each is a mini list/detail per CLAUDE.md: a records rail (`+ New group` / `+ New sheet type`, one `.row` per record) and a view/edit body (view = read-only chips like `ModulesView` renders today; Edit/Save/Cancel; `+ New` opens the form with an id input).
   - Group form: field rows — key (read-only for existing fields + a `Rename…` button; free input for new rows), label, type `<select>` over `number|dots|track|resource|text|list|ref`, extras per type (`max` number input for dots/track/resource, `min`/`max`/`default` for number, `ref_kind` select over `locations|lore|items|groups|creatures` for ref) — plus derived rows (name + expression input; existing names get the rename affordance too) and a remove button per row.
   - Sheet-type form: label, kind `<select>` over the six kinds, ordered group-membership picker (checkbox list of `pack.sheets.groups` keys, checked order preserved in an array), own-field rows and derived rows (same row components), `creation` sub-form (per composed group: budget input + cost rows over that group's field keys), `advancement` sub-form (pool select over the assembled resource fields, cost rows of field key + expression).
-  - Rename affordance: the `Rename…` button opens an inline prompt (input + Rename/Cancel); it is **disabled while the form is dirty** (compare form state to the pack) and calls `api.renameModulePart(mid, kind, address, to)` directly, then `reload()`. The sample computation (`result.sample`) renders each derived expression's value as a `.field-hint` next to its row when present.
+  - Rename affordance: the `Rename…` button opens an inline prompt (input + Rename/Cancel); it is **disabled while the form is dirty** (compare form state to the pack). **Renames and deletes are impact-gated exactly like saves** (codex plan review): the action first runs with `dryRun=true`; when the returned `impact` has any nonzero count, `ImpactConfirm` renders and only Confirm issues the real call; Cancel issues nothing. A shared `confirmGate` helper owns this (below). On success, `reload()`. The sample computation (`result.sample`) renders each derived expression's value as a `.field-hint` next to its row when present.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -3442,22 +3651,39 @@ test("+ New group opens the form directly with an id input", () => {
   expect(screen.getByLabelText("Group id")).toBeInTheDocument();
 });
 
-test("rename affordance calls the rename op and is blocked while dirty", async () => {
-  (api.renameModulePart as any).mockResolvedValue({ ok: true, errors: [], display_errors: [] });
+test("rename affordance dry-runs, then commits when impact is clean", async () => {
+  (api.renameModulePart as any).mockResolvedValue({ ok: true, errors: [], display_errors: [],
+    impact: { sheet_types: [], sheets_migrated: 0, sheets_newly_invalid: 0, dangling_refs: 0 } });
   const reload = vi.fn().mockResolvedValue(undefined);
   render(<GroupsSection pack={PACK} reload={reload} />);
   fireEvent.click(screen.getByText("Attributes"));
   fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-  const renameBtn = screen.getAllByRole("button", { name: "Rename…" })[0];
-  fireEvent.click(renameBtn);
+  fireEvent.click(screen.getAllByRole("button", { name: "Rename…" })[0]);
   fireEvent.change(screen.getByLabelText("New key"), { target: { value: "brawn" } });
   fireEvent.click(screen.getByRole("button", { name: "Rename" }));
   await waitFor(() => expect(api.renameModulePart).toHaveBeenCalledWith(
-    "realm-system", "field", { from: "strength", group: "attributes" }, "brawn"));
+    "realm-system", "field", { from: "strength", group: "attributes" }, "brawn", true));
+  await waitFor(() => expect(api.renameModulePart).toHaveBeenCalledWith(
+    "realm-system", "field", { from: "strength", group: "attributes" }, "brawn", false));
   expect(reload).toHaveBeenCalled();
-  // dirty form blocks it
+  // dirty form blocks the affordance entirely
   fireEvent.change(screen.getByDisplayValue("Strength"), { target: { value: "X" } });
   expect(screen.getAllByRole("button", { name: "Rename…" })[0]).toBeDisabled();
+});
+
+test("impactful rename shows the confirm; Cancel sends no real call", async () => {
+  (api.renameModulePart as any).mockResolvedValue({ ok: true, errors: [], display_errors: [],
+    impact: { sheet_types: ["warden"], sheets_migrated: 3, sheets_newly_invalid: 0, dangling_refs: 0 } });
+  render(<GroupsSection pack={PACK} reload={vi.fn()} />);
+  fireEvent.click(screen.getByText("Attributes"));
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  fireEvent.click(screen.getAllByRole("button", { name: "Rename…" })[0]);
+  fireEvent.change(screen.getByLabelText("New key"), { target: { value: "brawn" } });
+  fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+  expect(await screen.findByText(/migrates 3 sheets/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  const real = (api.renameModulePart as any).mock.calls.filter((c: any[]) => c[4] === false);
+  expect(real).toHaveLength(0);
 });
 
 test("sheet-type form drives group membership and advancement pool options", async () => {
@@ -3638,8 +3864,28 @@ export function GroupsSection({ pack, reload }: {
     }, dryRun);
   const dr = useModuleDryRun(form ? save : async () => ({ ok: true, errors: [], display_errors: [] } as ModuleEditResult), [form]);
   const done = () => { setMode("view"); setForm(null); void reload(); };
+  // impact gate shared by renames and deletes: dry-run first; confirm when
+  // any impact count is nonzero; Cancel sends nothing.
+  const [gate, setGate] = useState<{ impact: NonNullable<ModuleEditResult["impact"]>;
+                                     run: () => Promise<unknown> } | null>(null);
+  const [gateError, setGateError] = useState<string[]>([]);
+  const confirmGate = (dryCall: () => Promise<ModuleEditResult>,
+                       realCall: () => Promise<ModuleEditResult>) =>
+    dryCall().then((r) => {
+      if (!r.ok) { setGateError(r.errors); return; }
+      const i = r.impact;
+      const run = () => realCall().then((rr) =>
+        rr.ok ? done() : setGateError(rr.errors));
+      if (i && i.sheets_migrated + i.sheets_newly_invalid + i.dangling_refs > 0) {
+        setGate({ impact: i, run });
+      } else {
+        void run();
+      }
+    });
   const rename = (kind: "field" | "derived") => (from: string, to: string) =>
-    void api.renameModulePart(pack.id, kind, { from, group: form!.gid }, to).then(done);
+    void confirmGate(
+      () => api.renameModulePart(pack.id, kind, { from, group: form!.gid }, to, true),
+      () => api.renameModulePart(pack.id, kind, { from, group: form!.gid }, to, false));
 
   return (
     <div className="editor">
@@ -3671,13 +3917,17 @@ export function GroupsSection({ pack, reload }: {
               </div>
             </div>
             <aside className="detail-sidebar">
+              {gate && (
+                <ImpactConfirm impact={gate.impact}
+                               onConfirm={() => { const g = gate; setGate(null); void g.run(); }}
+                               onCancel={() => setGate(null)} />
+              )}
+              {gateError.map((e, i) => <div key={i} className="banner">{e}</div>)}
               <div className="form-actions">
                 <button onClick={() => { setForm(seed(selected)); setMode("edit"); }}>Edit</button>
-                <button onClick={() =>
-                  void api.deleteModuleGroup(pack.id, selected).then((r) => {
-                    if (r.ok) { setSelected(null); void reload(); }
-                    else alert(r.errors.join("\n"));
-                  })}>Delete</button>
+                <button onClick={() => void confirmGate(
+                  () => api.deleteModuleGroup(pack.id, selected, true),
+                  () => api.deleteModuleGroup(pack.id, selected, false))}>Delete</button>
               </div>
             </aside>
           </div>
@@ -3689,6 +3939,12 @@ export function GroupsSection({ pack, reload }: {
                              onConfirm={() => { dr.setConfirming(false); void dr.commit(done); }}
                              onCancel={() => dr.setConfirming(false)} />
             )}
+            {gate && (
+              <ImpactConfirm impact={gate.impact}
+                             onConfirm={() => { const g = gate; setGate(null); void g.run(); }}
+                             onCancel={() => setGate(null)} />
+            )}
+            {gateError.map((e, i) => <div key={i} className="banner">{e}</div>)}
             <ErrorList result={dr.result} />
             {form.isNew && (
               <label>Group id
@@ -3752,12 +4008,11 @@ Mount both sections in `ModuleEditor`'s section switch
 (`{section === "Groups" && <GroupsSection pack={pack} reload={reload} />}`,
 same for `Sheet types`).
 
-- [ ] **Step 3b: Replace `alert()`**
-
-The `alert(r.errors.join("\n"))` in the delete handler is a placeholder
-idiom — check how `EntityEditor.tsx` surfaces delete failures (a `.banner`
-state) and use that instead; add a `deleteError` state rendered above the
-sidebar actions.
+The same `confirmGate` pattern (dry-run → `ImpactConfirm` when impactful →
+real call; `!ok` results land in the `gateError` banner) is mandatory for
+every section's renames and deletes — `SheetTypesSection` here, and Tasks
+16-17's checks/rules/content sections reuse it identically (export
+`confirmGate`'s shape by copying it; it depends only on local state).
 
 - [ ] **Step 4: Run tests + typecheck**
 
