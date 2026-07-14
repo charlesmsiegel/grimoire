@@ -222,6 +222,20 @@ export function GroupsSection({ pack, reload }: {
       () => api.renameModulePart(pack.id, kind, { from, group: form!.gid }, to, true),
       () => api.renameModulePart(pack.id, kind, { from, group: form!.gid }, to, false),
       () => { applyRename(kind, from, to); dr.reset(); void reload(); });
+  // Group ids are renameable too (backend's `group` rename op) — same
+  // confirmGate as field/derived, resyncing both the still-open form's gid
+  // and the sidebar selection so the rest of the form (existingKeys, the
+  // group-sample lookup keyed by gid) keeps pointing at the right record.
+  const renameGroup = (to: string) =>
+    void confirmGate(
+      () => api.renameModulePart(pack.id, "group", { from: form!.gid }, to, true),
+      () => api.renameModulePart(pack.id, "group", { from: form!.gid }, to, false),
+      () => {
+        setForm((f) => (f ? { ...f, gid: to } : f));
+        setSelected(to);
+        dr.reset();
+        void reload();
+      });
 
   return (
     <div className="editor">
@@ -284,11 +298,16 @@ export function GroupsSection({ pack, reload }: {
             )}
             {gateError.map((e, i) => <div key={i} className="banner">{e}</div>)}
             <ErrorList result={dr.result} />
-            {form.isNew && (
+            {form.isNew ? (
               <label>Group id
                 <input value={form.gid}
                        onChange={(e) => setForm({ ...form, gid: e.target.value })} />
               </label>
+            ) : (
+              <div className="chips">
+                <span className="chip on">{form.gid}</span>
+                <RenamePrompt disabled={dirty} onRename={renameGroup} />
+              </div>
             )}
             <label>Label
               <input value={form.label}
