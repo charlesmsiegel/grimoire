@@ -115,7 +115,9 @@ def delete_module(mid: str) -> None:
     the campaign locks are exactly what those consumers hold."""
     with _M:
         recover()
-        modules.pack_root(mid)  # 404 before taking every lock
+        _root, source = modules.pack_root(mid)  # 404 before taking every lock
+        if source != "user":
+            raise modules.ModuleError("built-in modules cannot be deleted")
         with _campaign_locks():
             modules.delete_module(mid)
 
@@ -138,12 +140,18 @@ def _member_parts(raw_name: str) -> list[str]:
     """Normalized path components for a zip member, or raise. Rejects
     absolute paths, drive-qualified and UNC names, and EMPTY / '.' / '..'
     components (codex plan review: 'pack//module.md' passes a naive split —
-    the stripped remainder '/module.md' then resolves to the drive root)."""
+    the stripped remainder '/module.md' then resolves to the drive root).
+    Also rejects any component containing ':' — the whole-name
+    `_DRIVE_OR_UNC` check only anchors at the start, so a mid-path drive
+    segment like 'pack/C:evil.txt' would otherwise pass here and then get
+    collapsed onto the drive root by Path.joinpath, escaping staging before
+    the containment recheck ever runs (review finding: all checks must
+    happen before any extraction, not be caught mid-extraction)."""
     name = raw_name.replace("\\", "/")
     if _DRIVE_OR_UNC.match(name) or name.startswith("/"):
         raise modules.ModuleError(f"unsafe zip entry: {raw_name}")
     parts = name.split("/")
-    if len(parts) < 2 or any(p in ("", ".", "..") for p in parts):
+    if len(parts) < 2 or any(p in ("", ".", "..") or ":" in p for p in parts):
         raise modules.ModuleError(f"unsafe zip entry: {raw_name}")
     return parts
 
@@ -195,8 +203,14 @@ def import_module(path: Path) -> str:
                         dest.resolve().relative_to(staging_resolved)
                     except ValueError:
                         raise modules.ModuleError(f"unsafe zip entry: {i.filename}")
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    dest.write_bytes(z.read(i))
+                    try:
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        dest.write_bytes(z.read(i))
+                    except OSError:
+                        # pathological names (reserved device names CON/NUL,
+                        # trailing dots/spaces on Windows) can raise a raw
+                        # OSError here — never let that escape uncontained.
+                        raise modules.ModuleError(f"unextractable zip entry: {i.filename}")
                 pack = modules.load_pack_at(staging, mid)
                 if pack["errors"]:
                     raise modules.ModuleError(
