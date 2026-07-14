@@ -55,6 +55,19 @@ test("debounced dry-run renders errors inline", async () => {
     "realm-system", expect.objectContaining({ dry_run: true }));
 });
 
+test("Save never commits an invalid draft", async () => {
+  (api.putModuleManifest as any).mockResolvedValue(
+    { ok: false, errors: ["module.md: manifest requires a name"], display_errors: [] });
+  render(<ModuleEditor detail={DETAIL} onDone={() => {}} />);
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  expect(await screen.findByText(/requires a name/)).toBeInTheDocument();
+  // no real (non-dry-run) save was ever issued for the invalid draft
+  const real = (api.putModuleManifest as any).mock.calls
+    .filter((c: any[]) => c[1].dry_run === false);
+  expect(real).toHaveLength(0);
+});
+
 test("impact confirm gates the save and Cancel aborts", async () => {
   (api.putModuleManifest as any).mockResolvedValue(
     { ...OK, impact: { sheet_types: ["warden"], sheets_migrated: 2,
