@@ -152,6 +152,10 @@ export function GroupsSection({ pack, reload }: {
     }, dryRun);
   const dr = useModuleDryRun(form ? save : async () => ({ ok: true, errors: [], display_errors: [] } as ModuleEditResult), [form]);
   const done = () => { setMode("view"); setForm(null); void reload(); };
+  // Delete removes the record the form/selection points at, so unlike `done`
+  // (rename/save keep the same record selected) it must also clear `selected`
+  // — otherwise the read-only view keeps rendering the now-deleted record.
+  const doneDelete = () => { setSelected(null); setMode("view"); setForm(null); void reload(); };
   // impact gate shared by renames and deletes: dry-run first; confirm when
   // any impact count is nonzero; Cancel sends nothing.
   const [gate, setGate] = useState<{ impact: NonNullable<ModuleEditResult["impact"]>;
@@ -162,8 +166,9 @@ export function GroupsSection({ pack, reload }: {
   // open with its current edits so the user can keep working.
   const confirmGate = (dryCall: () => Promise<ModuleEditResult>,
                        realCall: () => Promise<ModuleEditResult>,
-                       onSuccess: () => void) =>
-    dryCall().then((r) => {
+                       onSuccess: () => void) => {
+    setGateError([]);
+    return dryCall().then((r) => {
       if (!r.ok) { setGateError(r.errors); return; }
       const i = r.impact;
       const run = () => realCall().then((rr) =>
@@ -174,23 +179,42 @@ export function GroupsSection({ pack, reload }: {
         void run();
       }
     });
+  };
+  // Rename keeps the form open (see above), so the freshly reloaded `pack`
+  // and the still-mounted `form` must agree on the key/name that changed —
+  // otherwise the old key lingers in the form (readOnly/Rename-button checks
+  // key off `existingKeys`, which now reflects the NEW key) and `dirty`
+  // spuriously flips true.
+  const applyRename = (kind: "field" | "derived", from: string, to: string) =>
+    setForm((f) => {
+      if (!f) return f;
+      if (kind === "field") {
+        return { ...f, fields: f.fields.map((fl) => (fl.key === from ? { ...fl, key: to } : fl)) };
+      }
+      if (!(from in f.derived)) return f;
+      const derived = { ...f.derived };
+      derived[to] = derived[from];
+      delete derived[from];
+      return { ...f, derived };
+    });
   const rename = (kind: "field" | "derived") => (from: string, to: string) =>
     void confirmGate(
       () => api.renameModulePart(pack.id, kind, { from, group: form!.gid }, to, true),
       () => api.renameModulePart(pack.id, kind, { from, group: form!.gid }, to, false),
-      () => void reload());
+      () => { applyRename(kind, from, to); void reload(); });
 
   return (
     <div className="editor">
       <div className="editor-list">
         <button className="row" onClick={() => {
           setSelected(null);
+          setGateError([]);
           setForm({ gid: "", isNew: true, label: "", fields: [], derived: {} });
           setMode("edit");
         }}>+ New group</button>
         {Object.keys(groups).map((gid) => (
           <button key={gid} className={"row" + (selected === gid ? " active" : "")}
-                  onClick={() => { setSelected(gid); setMode("view"); setForm(null); }}>
+                  onClick={() => { setSelected(gid); setMode("view"); setForm(null); setGateError([]); }}>
             {groups[gid]?.label ?? gid}
           </button>
         ))}
@@ -217,11 +241,11 @@ export function GroupsSection({ pack, reload }: {
               )}
               {gateError.map((e, i) => <div key={i} className="banner">{e}</div>)}
               <div className="form-actions">
-                <button onClick={() => { setForm(seed(selected)); setMode("edit"); }}>Edit</button>
+                <button onClick={() => { setGateError([]); setForm(seed(selected)); setMode("edit"); }}>Edit</button>
                 <button onClick={() => void confirmGate(
                   () => api.deleteModuleGroup(pack.id, selected, true),
                   () => api.deleteModuleGroup(pack.id, selected, false),
-                  done)}>Delete</button>
+                  doneDelete)}>Delete</button>
               </div>
             </aside>
           </div>
@@ -324,7 +348,12 @@ export function SheetTypesSection({ pack, reload }: {
 
   const buildDef = () => {
     const f = form!;
-    const creationPools: Record<string, { budget: number | string; costs: Record<string, number> }> = {};
+    // Budgets are submitted verbatim (the backend accepts an int or an
+    // expression string, and a plain integer typed as text is a valid
+    // expression) — never coerce to a number here. A blank budget omits the
+    // `budget` key entirely (backend defaults it to 0) rather than
+    // submitting an empty string, which would fail expression parsing.
+    const creationPools: Record<string, { budget?: string; costs: Record<string, number> }> = {};
     for (const gid of f.groups) {
       const c = f.creation[gid] ?? { budget: "", costs: {} };
       const costs: Record<string, number> = {};
@@ -333,8 +362,7 @@ export function SheetTypesSection({ pack, reload }: {
       }
       const budgetTrim = c.budget.trim();
       if (budgetTrim === "" && Object.keys(costs).length === 0) continue;
-      const budget = /^-?\d+$/.test(budgetTrim) ? parseInt(budgetTrim, 10) : budgetTrim;
-      creationPools[gid] = { budget, costs };
+      creationPools[gid] = { ...(budgetTrim !== "" ? { budget: c.budget } : {}), costs };
     }
     const advancement = f.advancement.pool
       ? { pool: f.advancement.pool, costs: f.advancement.costs }
@@ -350,6 +378,10 @@ export function SheetTypesSection({ pack, reload }: {
   const save: SaveFn = (dryRun) => api.putModuleSheetType(pack.id, form!.tid, buildDef(), dryRun);
   const dr = useModuleDryRun(form ? save : async () => ({ ok: true, errors: [], display_errors: [] } as ModuleEditResult), [form]);
   const done = () => { setMode("view"); setForm(null); void reload(); };
+  // Delete removes the record the form/selection points at, so unlike `done`
+  // (rename/save keep the same record selected) it must also clear `selected`
+  // — otherwise the read-only view keeps rendering the now-deleted record.
+  const doneDelete = () => { setSelected(null); setMode("view"); setForm(null); void reload(); };
 
   const [gate, setGate] = useState<{ impact: NonNullable<ModuleEditResult["impact"]>;
                                      run: () => Promise<unknown> } | null>(null);
@@ -359,8 +391,9 @@ export function SheetTypesSection({ pack, reload }: {
   // open with its current edits so the user can keep working.
   const confirmGate = (dryCall: () => Promise<ModuleEditResult>,
                        realCall: () => Promise<ModuleEditResult>,
-                       onSuccess: () => void) =>
-    dryCall().then((r) => {
+                       onSuccess: () => void) => {
+    setGateError([]);
+    return dryCall().then((r) => {
       if (!r.ok) { setGateError(r.errors); return; }
       const i = r.impact;
       const run = () => realCall().then((rr) =>
@@ -371,11 +404,29 @@ export function SheetTypesSection({ pack, reload }: {
         void run();
       }
     });
+  };
+  // Rename keeps the form open (see above), so the freshly reloaded `pack`
+  // and the still-mounted `form` must agree on the key/name that changed —
+  // otherwise the old key lingers in the form (readOnly/Rename-button checks
+  // key off `existingKeys`, which now reflects the NEW key) and `dirty`
+  // spuriously flips true.
+  const applyRename = (kind: "field" | "derived", from: string, to: string) =>
+    setForm((f) => {
+      if (!f) return f;
+      if (kind === "field") {
+        return { ...f, fields: f.fields.map((fl) => (fl.key === from ? { ...fl, key: to } : fl)) };
+      }
+      if (!(from in f.derived)) return f;
+      const derived = { ...f.derived };
+      derived[to] = derived[from];
+      delete derived[from];
+      return { ...f, derived };
+    });
   const rename = (kind: "field" | "derived") => (from: string, to: string) =>
     void confirmGate(
       () => api.renameModulePart(pack.id, kind, { from, sheet_type: form!.tid }, to, true),
       () => api.renameModulePart(pack.id, kind, { from, sheet_type: form!.tid }, to, false),
-      () => void reload());
+      () => { applyRename(kind, from, to); void reload(); });
   const renameType = (to: string) =>
     void confirmGate(
       () => api.renameModulePart(pack.id, "sheet_type", { from: form!.tid }, to, true),
@@ -393,13 +444,14 @@ export function SheetTypesSection({ pack, reload }: {
       <div className="editor-list">
         <button className="row" onClick={() => {
           setSelected(null);
+          setGateError([]);
           setForm({ tid: "", isNew: true, label: "", kind: SHEET_KINDS[0], groups: [],
                      fields: [], derived: {}, creation: {}, advancement: { pool: "", costs: {} } });
           setMode("edit");
         }}>+ New sheet type</button>
         {Object.keys(types).map((tid) => (
           <button key={tid} className={"row" + (selected === tid ? " active" : "")}
-                  onClick={() => { setSelected(tid); setMode("view"); setForm(null); }}>
+                  onClick={() => { setSelected(tid); setMode("view"); setForm(null); setGateError([]); }}>
             {types[tid]?.label ?? tid}
           </button>
         ))}
@@ -430,11 +482,11 @@ export function SheetTypesSection({ pack, reload }: {
               )}
               {gateError.map((e, i) => <div key={i} className="banner">{e}</div>)}
               <div className="form-actions">
-                <button onClick={() => { setForm(seed(selected)); setMode("edit"); }}>Edit</button>
+                <button onClick={() => { setGateError([]); setForm(seed(selected)); setMode("edit"); }}>Edit</button>
                 <button onClick={() => void confirmGate(
                   () => api.deleteModuleSheetType(pack.id, selected, true),
                   () => api.deleteModuleSheetType(pack.id, selected, false),
-                  done)}>Delete</button>
+                  doneDelete)}>Delete</button>
               </div>
             </aside>
           </div>
