@@ -216,7 +216,7 @@ Address forms:
 | `field` | `{owner, from}` where `owner` is `{"group": gid}` or `{"sheet_type": tid}` | field `key`; **scope-bound** expressions and cost keys (see below), incl. the implicit `<key>_max` name for `resource` fields; layout `fields` entries of composing sheet types; `fields` keys in content stat sidecars of composing sheet types (sidecars are pack files — rewritten in staging, where validation checks them) | rewrite the `fields` key in every stored sheet whose sheet type includes the field |
 | `derived` | `{owner, from}` | the `derived` map key; scope-bound expressions naming it; layout `derived` entries of composing sheet types | none — derived values are computed, never stored |
 | `sheet_type` | `{from}` | `sheet_types` key; rules frontmatter `sheet_types` flags; layout `sheet_types` key; content sidecar `sheet_type` values (checks reference groups, never sheet types — nothing to rewrite there) | rewrite the `sheet_type` value in every stored sheet of that type |
-| `check` | `{from}` | `checks` key | none automatic — but check ids **are** persisted in Phase 4's `proposals.json` (pending payloads and resolved resolutions; Codex adversarial round 9 corrected the earlier "not persisted" claim). A check rename or delete scans every campaign's proposals under the already-held locks and **rejects** while any non-terminal proposal references the check (naming the campaign/scene) — proposals are short-lived play-time state, so "resolve or discard it first" is proportionate, and rejecting beats rewriting durable in-flight roll state. |
+| `check` | `{from}` | `checks` key | none automatic — but check ids **are** persisted in Phase 4's `proposals.json` (pending payloads and resolved resolutions; Codex adversarial round 9 corrected the earlier "not persisted" claim). A check rename or delete scans every campaign's proposals under the already-held locks and **rejects** while any non-terminal proposal references the check (naming the campaign/scene) — proposals are short-lived play-time state, so "resolve or discard it first" is proportionate, and rejecting beats rewriting durable in-flight roll state. For the scan to be race-free, **proposal creation/transition joins the shared per-campaign lock domain**: `proposals.py`'s independent `_LOCKS` registry unifies with `sheets.lock_for(cid)` (one lock per campaign, period), and `proposals.new()` holds it from deriving the check out of the pack through persisting the proposal (Codex adversarial round 10: with separate registries, a proposal derived from the old pack could pause and persist *after* the editor's scan and swap, leaving a durable dangling proposal the reject guarantee promised to prevent). |
 | `rule` | `{from}` | file rename `rules/<from>.md` → `rules/<to>.md`; check `rules` lists | none |
 | `content` | `{kind, from}` | file(+sidecar) rename under `content/<kind>/`; `<kind>:module:<from>` entries in other content entries' stat-sidecar `ref` values (pack files, rewritten in staging) | rewrite `<kind>:module:<from>` entries in every stored `ref` field value |
 
@@ -636,7 +636,10 @@ unchanged (it edits the same files the UI does).
   generation's activation flags with the other's body (pause injected
   between `load_pack` and `read_rule`), a check rename/delete with a
   non-terminal proposal referencing it is rejected naming the
-  campaign/scene (and succeeds once the proposal resolves),
+  campaign/scene (and succeeds once the proposal resolves), a proposal
+  creation paused between deriving its check from the pack and
+  persisting cannot land after a check rename/delete (unified
+  per-campaign lock domain — the round-10 TOCTOU),
   a consumer paused between the two swap renames never observes the
   module as missing nor falls through a same-id user shadow to the
   builtin (locked writer excludes it — cover with a shadow pack whose
