@@ -1199,3 +1199,12 @@ def test_manifest_notes_round_trip(monkeypatch, tmp_path):
     p.write_text(text + "Authoring notes body.\n", encoding="utf-8")
     pack = modules.load_pack(mid)
     assert "Authoring notes body." in pack["manifest"]["notes"]
+
+
+def test_layout_source_exposed(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    mid = modules.create_module("Realm System")
+    (modules.user_dir() / mid / "layout.json").write_text(
+        '{"fragments": {"f": {"fields": ["x"]}}, "sheet_types": {}}', encoding="utf-8")
+    pack = modules.load_pack(mid)
+    assert pack["layout_source"]["fragments"] == {"f": {"fields": ["x"]}}

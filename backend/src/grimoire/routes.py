@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
+import tempfile
+from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -104,6 +107,67 @@ class NewCampaign(BaseModel):
 
 class ModuleCreate(BaseModel):
     name: str
+
+
+class ModuleManifestBody(BaseModel):
+    name: str = ""
+    description: str = ""
+    version: str = ""
+    dice: str = ""
+    notes: str = ""
+    dry_run: bool = False
+
+
+class ModuleGroupBody(BaseModel):
+    group: dict = {}
+    dry_run: bool = False
+
+
+class ModuleSheetTypeBody(BaseModel):
+    sheet_type: dict = {}
+    dry_run: bool = False
+
+
+class ModuleCheckBody(BaseModel):
+    check: dict = {}
+    dry_run: bool = False
+
+
+class ModuleDefaultsBody(BaseModel):
+    defaults: dict = {}
+    dry_run: bool = False
+
+
+class ModuleRuleBody(BaseModel):
+    flags: dict = {}
+    body: str = ""
+    dry_run: bool = False
+
+
+class ModuleContentBody(BaseModel):
+    name: str = ""
+    body: str = ""
+    keys: str = ""
+    fields: dict = {}
+    sheet: dict | None = None
+    dry_run: bool = False
+
+
+class ModuleLayoutBody(BaseModel):
+    layout: dict = {}
+    dry_run: bool = False
+
+
+class ModuleThemeBody(BaseModel):
+    theme: dict = {}
+    dry_run: bool = False
+
+
+class ModuleRenameBody(BaseModel):
+    kind: str = ""
+    address: dict = {}
+    to: str = ""
+    dry_run: bool = False
 
 
 class ModuleSetting(BaseModel):
@@ -387,13 +451,14 @@ def get_modules():
 
 @router.post("/modules")
 def post_module(body: ModuleCreate):
-    return {"id": store.modules.create_module(body.name)}
+    return {"id": store.module_edit.create_module(body.name)}
 
 
 @router.get("/modules/{mid}")
 def get_module(mid: str):
     try:
-        return store.modules.load_pack(mid)
+        with store.module_edit.locked():
+            return store.modules.load_pack(mid)
     except store.modules.ModuleNotFound:
         raise HTTPException(status_code=404, detail="module not found")
 
@@ -401,12 +466,161 @@ def get_module(mid: str):
 @router.delete("/modules/{mid}")
 def delete_module(mid: str):
     try:
-        store.modules.delete_module(mid)
+        store.module_edit.delete_module(mid)
     except store.modules.ModuleNotFound:
         raise HTTPException(status_code=404, detail="module not found")
     except store.modules.ModuleError:
         raise HTTPException(status_code=400, detail="built-in modules cannot be deleted")
     return {"ok": True}
+
+
+def _module_edit_call(fn, *args, **kwargs):
+    try:
+        return fn(*args, **kwargs)
+    except store.modules.ModuleNotFound:
+        raise HTTPException(status_code=404, detail="module not found")
+    except store.modules.ModuleError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/modules/{mid}/duplicate")
+def post_module_duplicate(mid: str, body: ModuleCreate):
+    return {"id": _module_edit_call(store.module_edit.duplicate_module, mid, body.name)}
+
+
+@router.put("/modules/{mid}/manifest")
+def put_module_manifest(mid: str, body: ModuleManifestBody):
+    return _module_edit_call(store.module_edit.set_manifest, mid,
+                             name=body.name, description=body.description,
+                             version=body.version, dice=body.dice,
+                             notes=body.notes, dry_run=body.dry_run)
+
+
+@router.put("/modules/{mid}/groups/{gid}")
+def put_module_group(mid: str, gid: str, body: ModuleGroupBody):
+    return _module_edit_call(store.module_edit.upsert_group, mid, gid,
+                             body.group, dry_run=body.dry_run)
+
+
+@router.delete("/modules/{mid}/groups/{gid}")
+def delete_module_group(mid: str, gid: str, dry_run: bool = False):
+    return _module_edit_call(store.module_edit.delete_group, mid, gid, dry_run=dry_run)
+
+
+@router.put("/modules/{mid}/sheet-types/{tid}")
+def put_module_sheet_type(mid: str, tid: str, body: ModuleSheetTypeBody):
+    return _module_edit_call(store.module_edit.upsert_sheet_type, mid, tid,
+                             body.sheet_type, dry_run=body.dry_run)
+
+
+@router.delete("/modules/{mid}/sheet-types/{tid}")
+def delete_module_sheet_type(mid: str, tid: str, dry_run: bool = False):
+    return _module_edit_call(store.module_edit.delete_sheet_type, mid, tid, dry_run=dry_run)
+
+
+@router.put("/modules/{mid}/checks/{check_id}")
+def put_module_check(mid: str, check_id: str, body: ModuleCheckBody):
+    return _module_edit_call(store.module_edit.upsert_check, mid, check_id,
+                             body.check, dry_run=body.dry_run)
+
+
+@router.delete("/modules/{mid}/checks/{check_id}")
+def delete_module_check(mid: str, check_id: str, dry_run: bool = False):
+    return _module_edit_call(
+        store.module_edit.delete_check, mid, check_id, dry_run=dry_run,
+        pre_swap=store.module_edit.check_proposal_guard(mid, check_id))
+
+
+@router.put("/modules/{mid}/check-defaults")
+def put_module_check_defaults(mid: str, body: ModuleDefaultsBody):
+    return _module_edit_call(store.module_edit.set_check_defaults, mid,
+                             body.defaults, dry_run=body.dry_run)
+
+
+@router.get("/modules/{mid}/rules/{slug}")
+def get_module_rule(mid: str, slug: str):
+    with store.module_edit.locked():
+        try:
+            rule = store.modules.read_rule(mid, slug)
+        except store.modules.ModuleNotFound:
+            raise HTTPException(status_code=404, detail="module not found")
+        if rule is None:
+            raise HTTPException(status_code=404, detail="rule not found")
+        return rule
+
+
+@router.put("/modules/{mid}/rules/{slug}")
+def put_module_rule(mid: str, slug: str, body: ModuleRuleBody):
+    return _module_edit_call(store.module_edit.upsert_rule, mid, slug,
+                             body.flags, body.body, dry_run=body.dry_run)
+
+
+@router.delete("/modules/{mid}/rules/{slug}")
+def delete_module_rule(mid: str, slug: str, dry_run: bool = False):
+    return _module_edit_call(store.module_edit.delete_rule, mid, slug, dry_run=dry_run)
+
+
+@router.put("/modules/{mid}/content/{kind}/{id}")
+def put_module_content(mid: str, kind: str, id: str, body: ModuleContentBody):
+    return _module_edit_call(store.module_edit.upsert_content, mid, kind, id,
+                             name=body.name, body=body.body, keys=body.keys,
+                             fields=body.fields, sheet=body.sheet,
+                             dry_run=body.dry_run)
+
+
+@router.delete("/modules/{mid}/content/{kind}/{id}")
+def delete_module_content(mid: str, kind: str, id: str, dry_run: bool = False):
+    return _module_edit_call(store.module_edit.delete_content, mid, kind, id, dry_run=dry_run)
+
+
+@router.put("/modules/{mid}/layout")
+def put_module_layout(mid: str, body: ModuleLayoutBody):
+    return _module_edit_call(store.module_edit.set_layout, mid,
+                             body.layout, dry_run=body.dry_run)
+
+
+@router.put("/modules/{mid}/theme")
+def put_module_theme(mid: str, body: ModuleThemeBody):
+    return _module_edit_call(store.module_edit.set_theme, mid,
+                             body.theme, dry_run=body.dry_run)
+
+
+@router.post("/modules/{mid}/rename")
+def post_module_rename(mid: str, body: ModuleRenameBody):
+    return _module_edit_call(store.module_edit.rename, mid, body.kind,
+                             body.address, body.to, dry_run=body.dry_run)
+
+
+@router.get("/modules/{mid}/export")
+def get_module_export(mid: str):
+    data = _module_edit_call(store.module_edit.export_module, mid)
+    return Response(content=data, media_type="application/zip",
+                    headers={"Content-Disposition": f'attachment; filename="{mid}.zip"'})
+
+
+IMPORT_CAP = 16 * 1024 * 1024
+
+
+@router.post("/modules/import")
+async def post_module_import(request: Request):
+    cl = request.headers.get("content-length")
+    if cl and cl.isdigit() and int(cl) > IMPORT_CAP:
+        raise HTTPException(status_code=413, detail="zip too large")
+    fd, tmp_name = tempfile.mkstemp(suffix=".zip")
+    total = 0
+    try:
+        with os.fdopen(fd, "wb") as f:
+            async for chunk in request.stream():
+                total += len(chunk)
+                if total > IMPORT_CAP:
+                    raise HTTPException(status_code=413, detail="zip too large")
+                f.write(chunk)
+        return {"id": _module_edit_call(store.module_edit.import_module, Path(tmp_name))}
+    finally:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
 
 
 # ---- styles ----
@@ -617,7 +831,8 @@ def delete_world_sheet(wid: str, mid: str, kind: str, eid: str, gen: str | None 
 @router.get("/modules/{mid}/content/{kind}/{id}")
 def get_module_content(mid: str, kind: str, id: str):
     try:
-        return store.modules.read_content(mid, kind, id)
+        with store.module_edit.locked():
+            return store.modules.read_content(mid, kind, id)
     except store.modules.ModuleNotFound:
         raise HTTPException(status_code=404, detail="module not found")
     except store.modules.ContentNotFound:

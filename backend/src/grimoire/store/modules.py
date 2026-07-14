@@ -677,6 +677,15 @@ def load_pack_at(root: Path, mid: str, source: str = "user") -> dict:
                 _validate_checks(checks, sheets, {r["id"] for r in rules}, errors)
     content = _load_content(root, sheets, errors)
     layout, theme, display_errors = module_display.load_display(root, sheets)
+    layout_source: dict = {}
+    lp = root / "layout.json"
+    if lp.exists():
+        try:
+            raw = json.loads(lp.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError, RecursionError):
+            raw = {}
+        if isinstance(raw, dict):
+            layout_source = raw
     pack = {
         "id": mid,
         "source": source,
@@ -686,6 +695,7 @@ def load_pack_at(root: Path, mid: str, source: str = "user") -> dict:
         "rules": rules,
         "content": content,
         "layout": layout,
+        "layout_source": layout_source,
         "theme": theme,
         "display_errors": display_errors,
         "errors": errors,
