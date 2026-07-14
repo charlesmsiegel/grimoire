@@ -187,6 +187,17 @@ def _validate_instance(sheets_def: dict, file_kind: str, sheet_type,
     return modules.validate_sheet_values(sheets_def, sheet_type, fields)
 
 
+def instance_errors(pack: dict, file_kind: str, sheet_type, fields: dict) -> list[str]:
+    """The full read-time judgment for a stored sheet against an arbitrary
+    pack dict — sheet-type/kind/value validation PLUS derived evaluation
+    against the stored values (impact scans must judge exactly as reads do)."""
+    sheets_def = pack["sheets"] if isinstance(pack.get("sheets"), dict) else {}
+    errors = _validate_instance(sheets_def, file_kind, sheet_type, fields)
+    if isinstance(sheet_type, str):
+        _compute_derived(sheets_def, sheet_type, fields, errors)
+    return errors
+
+
 def _read_path(path: Path, file_kind: str, mid: str | None) -> dict | None:
     if not path.exists():
         return None
@@ -203,11 +214,11 @@ def _read_path(path: Path, file_kind: str, mid: str | None) -> dict | None:
     if mid is None:
         return {"sheet_type": sheet_type, "fields": fields, "derived": {},
                 "gen": data.get("gen"), "errors": ["no module resolved"]}
-    sheets_def = modules.load_pack(mid)["sheets"]
-    errors = _validate_instance(sheets_def, file_kind, sheet_type, fields)
+    pack = modules.load_pack(mid)
+    errors = instance_errors(pack, file_kind, sheet_type, fields)
     derived: dict = {}
     if isinstance(sheet_type, str):
-        derived = _compute_derived(sheets_def, sheet_type, fields, errors)
+        derived = _compute_derived(pack["sheets"], sheet_type, fields, [])
     return {"sheet_type": sheet_type, "fields": fields,
             "derived": derived, "gen": data.get("gen"), "errors": errors}
 
