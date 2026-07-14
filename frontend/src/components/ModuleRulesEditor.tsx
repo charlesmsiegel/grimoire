@@ -78,6 +78,9 @@ export function ChecksSection({ pack, reload }: {
       if (f.outcomes.length) body.outcomes = f.outcomes;
       return api.putModuleCheckDefaults(pack.id, body, dryRun);
     }
+    if (!f.cid) {   // new-record form with no id yet: nothing to dry-run
+      return Promise.resolve({ ok: true, errors: [], display_errors: [] });
+    }
     const def: Record<string, unknown> = { label: f.label, roll: f.roll };
     if (f.requires.length) def.requires = f.requires;
     if (f.rules.length) def.rules = f.rules;
@@ -117,7 +120,7 @@ export function ChecksSection({ pack, reload }: {
     void confirmGate(
       () => api.renameModulePart(pack.id, "check", { from: form!.cid }, to, true),
       () => api.renameModulePart(pack.id, "check", { from: form!.cid }, to, false),
-      () => { setForm((f) => (f ? { ...f, cid: to } : f)); setSelected(to); void reload(); });
+      () => { setForm((f) => (f ? { ...f, cid: to } : f)); setSelected(to); dr.reset(); void reload(); });
 
   const toggleRequires = (gid: string) => {
     if (!form) return;
@@ -305,12 +308,16 @@ export function RulesSection({ pack, reload }: {
     [form?.slug, pack, bodyBaseline]);
   const dirty = form != null && baseline != null && JSON.stringify(form) !== baseline;
 
-  const save: SaveFn = (dryRun) =>
-    api.putModuleRule(pack.id, form!.slug, {
+  const save: SaveFn = (dryRun) => {
+    if (!form!.slug) {   // new-record form with no id yet: nothing to dry-run
+      return Promise.resolve({ ok: true, errors: [], display_errors: [] });
+    }
+    return api.putModuleRule(pack.id, form!.slug, {
       always: form!.always, on_roll: form!.onRoll,
       keys: form!.keys.split(",").map((k) => k.trim()).filter(Boolean),
       sheet_types: form!.sheetTypes,
     }, form!.body, dryRun);
+  };
   const dr = useModuleDryRun(form ? save : emptyResult, [form]);
   const done = () => { setMode("view"); setForm(null); void reload(); };
   // Delete removes the record the form/selection points at, so unlike `done`
@@ -341,7 +348,7 @@ export function RulesSection({ pack, reload }: {
     void confirmGate(
       () => api.renameModulePart(pack.id, "rule", { from: form!.slug }, to, true),
       () => api.renameModulePart(pack.id, "rule", { from: form!.slug }, to, false),
-      () => { setForm((f) => (f ? { ...f, slug: to } : f)); setSelected(to); void reload(); });
+      () => { setForm((f) => (f ? { ...f, slug: to } : f)); setSelected(to); dr.reset(); void reload(); });
 
   const toggleSheetType = (tid: string) => {
     if (!form) return;

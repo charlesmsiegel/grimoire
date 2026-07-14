@@ -166,6 +166,9 @@ export function ContentSection({ pack, reload }: {
 
   const save: SaveFn = (dryRun) => {
     const f = form!;
+    if (!f.contentId) {   // new-record form with no id yet: nothing to dry-run
+      return Promise.resolve({ ok: true, errors: [], display_errors: [] });
+    }
     const sheet = f.sheetType ? { sheet_type: f.sheetType, fields: f.statFields } : null;
     return api.putModuleContent(pack.id, f.kind, f.contentId,
       { name: f.name, body: f.body, keys: f.keys, fields: f.meta, sheet }, dryRun);
@@ -210,6 +213,7 @@ export function ContentSection({ pack, reload }: {
       () => {
         setForm((f) => (f ? { ...f, contentId: to } : f));
         setSelected({ kind: form!.kind, id: to });
+        dr.reset();
         void reload();
       });
 

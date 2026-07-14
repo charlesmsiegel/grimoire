@@ -35,6 +35,7 @@ const PACK: any = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.useFakeTimers({ shouldAdvanceTime: true });
 });
 
 test("group row opens read-only view; Edit reveals the form", async () => {
@@ -219,4 +220,43 @@ test("a blank budget with a cost omits the budget key entirely", async () => {
   const def = (api.putModuleSheetType as any).mock.calls[0][2];
   expect(def.creation.pools.attributes).not.toHaveProperty("budget");
   expect(def.creation.pools.attributes.costs).toEqual({ strength: 2 });
+});
+
+test("a group's derived sample merges from every sheet type composing it", async () => {
+  (api.putModuleGroup as any).mockResolvedValue({ ok: true, errors: [], display_errors: [],
+    sample: { warden: { fields: {}, derived: { might: 0 } } } });
+  render(<GroupsSection pack={PACK} reload={vi.fn()} />);
+  fireEvent.click(screen.getByText("Attributes"));
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  await vi.advanceTimersByTimeAsync(600);
+  expect(await screen.findByText("= 0")).toBeInTheDocument();
+});
+
+test("a stale pre-rename dry-run error is cleared as soon as the rename commits", async () => {
+  (api.putModuleGroup as any).mockResolvedValue({ ok: false,
+    errors: ["groups.attributes.might: unknown names ['strength']"], display_errors: [] });
+  (api.renameModulePart as any).mockResolvedValue({ ok: true, errors: [], display_errors: [],
+    impact: { sheet_types: [], sheets_migrated: 0, sheets_newly_invalid: 0, dangling_refs: 0 } });
+  const reload = vi.fn().mockResolvedValue(undefined);
+  render(<GroupsSection pack={PACK} reload={reload} />);
+  fireEvent.click(screen.getByText("Attributes"));
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  await vi.advanceTimersByTimeAsync(600);
+  expect(await screen.findByText(/unknown names/)).toBeInTheDocument();
+
+  fireEvent.click(screen.getAllByRole("button", { name: "Rename…" })[0]);
+  fireEvent.change(screen.getByLabelText("New key"), { target: { value: "brawn" } });
+  fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+  await waitFor(() => expect(api.renameModulePart).toHaveBeenCalledWith(
+    "realm-system", "field", { from: "strength", group: "attributes" }, "brawn", false));
+
+  // the stale pre-rename error is gone immediately -- no further edit needed
+  expect(screen.queryByText(/unknown names/)).not.toBeInTheDocument();
+});
+
+test("an empty Group id never fires a debounced dry-run against the API", async () => {
+  render(<GroupsSection pack={PACK} reload={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: "+ New group" }));
+  await vi.advanceTimersByTimeAsync(600);
+  expect(api.putModuleGroup).not.toHaveBeenCalled();
 });

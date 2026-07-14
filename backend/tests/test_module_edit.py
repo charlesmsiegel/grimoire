@@ -6,6 +6,7 @@ import zipfile
 import pytest
 
 from grimoire.store import campaigns, module_edit, modules, sheets, worlds
+from grimoire.store.frontmatter import parse_frontmatter
 
 
 def _zip_bytes(entries: dict) -> bytes:
@@ -676,6 +677,20 @@ def test_duplicate_builtin(monkeypatch, tmp_path):
     # editable now
     assert module_edit.set_manifest(new, name="My D20", description="", version="",
                                     dice="1d20", notes="")["ok"]
+
+
+def test_duplicate_carries_chosen_name(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    new = module_edit.duplicate_module("d20-basic", "My D20")
+    assert new == "my-d20"
+    pack = modules.load_pack(new)
+    assert pack["manifest"]["name"] == "My D20"
+    assert pack["manifest"]["description"] == \
+        "Flat d20 + modifiers against a difficulty class."
+    assert pack["manifest"]["dice"] == "1d20"
+    manifest = modules.pack_root(new)[0] / "module.md"
+    _meta, body = parse_frontmatter(manifest.read_text(encoding="utf-8"))
+    assert body.strip() == "Reference module proving the flat-roll shape of the contract."
 
 
 def test_new_mid_reserves_none_and_dedupes(monkeypatch, tmp_path):

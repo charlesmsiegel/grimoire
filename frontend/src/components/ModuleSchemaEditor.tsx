@@ -145,12 +145,32 @@ export function GroupsSection({ pack, reload }: {
     [form?.gid, pack]);
   const dirty = form != null && baseline != null && JSON.stringify(form) !== baseline;
 
-  const save: SaveFn = (dryRun) =>
-    api.putModuleGroup(pack.id, form!.gid, {
+  const save: SaveFn = (dryRun) => {
+    if (!form!.gid) {   // new-record form with no id yet: nothing to dry-run
+      return Promise.resolve({ ok: true, errors: [], display_errors: [] } as ModuleEditResult);
+    }
+    return api.putModuleGroup(pack.id, form!.gid, {
       label: form!.label, fields: form!.fields,
       ...(Object.keys(form!.derived).length ? { derived: form!.derived } : {}),
     }, dryRun);
+  };
   const dr = useModuleDryRun(form ? save : async () => ({ ok: true, errors: [], display_errors: [] } as ModuleEditResult), [form]);
+  // Group derived samples aren't computed at the group level (the backend's
+  // group-only dry-run has no sheet to instantiate) -- they live on every
+  // sheet type that composes this group, keyed by tid. A derived name means
+  // the same thing (same defaults-based value) in every composing type, so
+  // merging is safe; collisions are harmless.
+  const composingTids = Object.entries(pack.sheets.sheet_types)
+    .filter(([, st]) => (st?.groups ?? []).includes(form?.gid ?? ""))
+    .map(([tid]) => tid);
+  const groupSample = (() => {
+    if (!form || composingTids.length === 0) return undefined;
+    const merged: Record<string, number | boolean> = {};
+    for (const tid of composingTids) {
+      Object.assign(merged, dr.result?.sample?.[tid]?.derived ?? {});
+    }
+    return Object.keys(merged).length ? merged : undefined;
+  })();
   const done = () => { setMode("view"); setForm(null); void reload(); };
   // Delete removes the record the form/selection points at, so unlike `done`
   // (rename/save keep the same record selected) it must also clear `selected`
@@ -201,7 +221,7 @@ export function GroupsSection({ pack, reload }: {
     void confirmGate(
       () => api.renameModulePart(pack.id, kind, { from, group: form!.gid }, to, true),
       () => api.renameModulePart(pack.id, kind, { from, group: form!.gid }, to, false),
-      () => { applyRename(kind, from, to); void reload(); });
+      () => { applyRename(kind, from, to); dr.reset(); void reload(); });
 
   return (
     <div className="editor">
@@ -281,7 +301,8 @@ export function GroupsSection({ pack, reload }: {
             <DerivedRows derived={form.derived}
                          setDerived={(derived) => setForm({ ...form, derived })}
                          existing={new Set(Object.keys(groups[form.gid]?.derived ?? {}))}
-                         dirty={dirty} onRename={rename("derived")} />
+                         dirty={dirty} onRename={rename("derived")}
+                         sample={groupSample} />
             {/* hidden while a rename/delete or save confirmation banner is up —
                 each banner owns its own Confirm/Cancel until resolved */}
             {!gate && !dr.confirming && (
@@ -375,7 +396,12 @@ export function SheetTypesSection({ pack, reload }: {
     };
   };
 
-  const save: SaveFn = (dryRun) => api.putModuleSheetType(pack.id, form!.tid, buildDef(), dryRun);
+  const save: SaveFn = (dryRun) => {
+    if (!form!.tid) {   // new-record form with no id yet: nothing to dry-run
+      return Promise.resolve({ ok: true, errors: [], display_errors: [] } as ModuleEditResult);
+    }
+    return api.putModuleSheetType(pack.id, form!.tid, buildDef(), dryRun);
+  };
   const dr = useModuleDryRun(form ? save : async () => ({ ok: true, errors: [], display_errors: [] } as ModuleEditResult), [form]);
   const done = () => { setMode("view"); setForm(null); void reload(); };
   // Delete removes the record the form/selection points at, so unlike `done`
@@ -426,12 +452,12 @@ export function SheetTypesSection({ pack, reload }: {
     void confirmGate(
       () => api.renameModulePart(pack.id, kind, { from, sheet_type: form!.tid }, to, true),
       () => api.renameModulePart(pack.id, kind, { from, sheet_type: form!.tid }, to, false),
-      () => { applyRename(kind, from, to); void reload(); });
+      () => { applyRename(kind, from, to); dr.reset(); void reload(); });
   const renameType = (to: string) =>
     void confirmGate(
       () => api.renameModulePart(pack.id, "sheet_type", { from: form!.tid }, to, true),
       () => api.renameModulePart(pack.id, "sheet_type", { from: form!.tid }, to, false),
-      () => { setForm((f) => (f ? { ...f, tid: to } : f)); void reload(); });
+      () => { setForm((f) => (f ? { ...f, tid: to } : f)); dr.reset(); void reload(); });
 
   const toggleGroup = (gid: string) => {
     if (!form) return;
