@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type ModuleDetail, type ModuleEditResult } from "../api/client";
 import { Field } from "./Field";
 import { GroupsSection, SheetTypesSection } from "./ModuleSchemaEditor";
+import { ChecksSection, RulesSection } from "./ModuleRulesEditor";
 
 const SECTIONS = ["Manifest", "Groups", "Sheet types", "Checks", "Rules",
                   "Content", "Layout", "Theme"] as const;
@@ -132,7 +133,9 @@ export default function ModuleEditor({ detail, onDone }: {
       {section === "Manifest" && <ManifestSection pack={pack} reload={reload} />}
       {section === "Groups" && <GroupsSection pack={pack} reload={reload} />}
       {section === "Sheet types" && <SheetTypesSection pack={pack} reload={reload} />}
-      {/* Checks / Rules: Task 16; Content: Task 17; Layout / Theme: Task 18 */}
+      {section === "Checks" && <ChecksSection pack={pack} reload={reload} />}
+      {section === "Rules" && <RulesSection pack={pack} reload={reload} />}
+      {/* Content: Task 17; Layout / Theme: Task 18 */}
     </div>
   );
 }
