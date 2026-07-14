@@ -34,6 +34,7 @@ class ContentNotFound(Exception):
 FIELD_TYPES = ("number", "dots", "track", "resource", "text", "list", "ref")
 SHEET_KINDS = ("characters", "items", "locations", "creatures", "groups", "lore")
 CONTENT_KINDS = ("locations", "lore", "items", "groups", "creatures")
+RESERVED_NAMES = ("difficulty", "modifier", "new")
 
 DEFAULT_BUILTIN_DIR = Path(__file__).resolve().parent / "builtin_modules"
 
@@ -111,6 +112,9 @@ def _validate_field(field: dict, where: str, errors: list[str]) -> None:
     if key in expressions._FUNCS:
         errors.append(f"{where}.{key}: reserved key (expression function name)")
         return
+    if key in RESERVED_NAMES:
+        errors.append(f"{where}.{key}: reserved key (ambient expression name)")
+        return
     ftype = field.get("type")
     if ftype not in FIELD_TYPES:
         errors.append(f"{where}.{key}: unknown field type {ftype!r}")
@@ -176,6 +180,9 @@ def _validate_derived(derived: dict, scope: set[str], where: str,
     """Validate a derived map against a name scope; returns derived names."""
     out: set[str] = set()
     for name, expr in derived.items():
+        if name in RESERVED_NAMES or name in expressions._FUNCS:
+            errors.append(f"{where}.{name}: reserved derived name")
+            continue
         if name in scope:
             errors.append(f"{where}.{name}: derived name collides with a field")
             continue

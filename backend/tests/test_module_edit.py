@@ -148,6 +148,23 @@ def test_edit_excludes_campaign_locked_consumer(monkeypatch, tmp_path):
     assert order == ["lock-released", "edit-done"]
 
 
+def test_set_layout_lands_with_display_errors(monkeypatch, tmp_path):
+    mid = _mk_schema(monkeypatch, tmp_path)
+    res = module_edit.set_layout(mid, {"sheet_types": {"warden": {"fields": ["ghost_key"]}}})
+    assert res["ok"] is True                       # display problems never reject
+    assert any("ghost_key" in e["message"] for e in res["display_errors"])
+    assert module_edit.set_layout(mid, {"sheet_types": {"warden": {"group": "attributes"}}})["ok"]
+    pack = modules.load_pack(mid)
+    assert "warden" in pack["layout"]["sheet_types"] and pack["display_errors"] == []
+
+
+def test_set_theme_round_trip(monkeypatch, tmp_path):
+    mid = _mk_schema(monkeypatch, tmp_path)
+    theme = {"colors": {"bg": "#171a21", "ink": "#d8d2c4"}, "dots": "diamond"}
+    assert module_edit.set_theme(mid, theme)["ok"]
+    assert modules.load_pack(mid)["theme"]["dots"] == "diamond"
+
+
 def test_upsert_group_and_type(monkeypatch, tmp_path):
     mid = _mk_schema(monkeypatch, tmp_path)
     pack = modules.load_pack(mid)

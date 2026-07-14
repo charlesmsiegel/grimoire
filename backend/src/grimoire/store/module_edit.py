@@ -541,3 +541,15 @@ def delete_content(mid: str, kind: str, content_id: str, *, dry_run: bool = Fals
             if p.exists():
                 p.unlink()
     return _apply(mid, mutate, dry_run=dry_run)
+
+
+def set_layout(mid: str, layout: dict, *, dry_run: bool = False) -> dict:
+    def mutate(root: Path) -> None:
+        _write_json(root, "layout.json", layout if isinstance(layout, dict) else {})
+    return _apply(mid, mutate, dry_run=dry_run)
+
+
+def set_theme(mid: str, theme: dict, *, dry_run: bool = False) -> dict:
+    def mutate(root: Path) -> None:
+        _write_json(root, "theme.json", theme if isinstance(theme, dict) else {})
+    return _apply(mid, mutate, dry_run=dry_run)
