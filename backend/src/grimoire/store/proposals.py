@@ -24,6 +24,7 @@ from .paths import now_iso
 
 NON_TERMINAL = ("pending", "resolving", "resolved", "declined")
 
+
 def _lock(cid: str) -> threading.RLock:
     """Unified per-campaign lock domain (mechanics Phase 8): proposals share
     sheets.lock_for so a module edit holding the campaign locks excludes
