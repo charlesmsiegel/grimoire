@@ -1845,9 +1845,10 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], cfg: dict, client: LL
     def finalize(watcher) -> list[str]:
         frames: list[str] = []
         if watcher.complete or watcher.truncated:
-            payload = _make_proposal(cid, sid, watcher)
-            _heal_current_proposal(cid, sid)  # new() erases the recovery handle
-            rec = store.proposals.new(cid, sid, payload)
+            with store.sheets.lock_for(cid):
+                payload = _make_proposal(cid, sid, watcher)
+                _heal_current_proposal(cid, sid)  # new() erases the recovery handle
+                rec = store.proposals.new(cid, sid, payload)
             _persist_reply(cid, sid, watcher.narration)
             frames.append(_sse({"proposal": {**payload, "id": rec["id"]}}))
         elif watcher.narration.strip():
@@ -1873,7 +1874,7 @@ def _continuation_stream(cid: str, sid: str, pid: str, messages: list[dict],
         frames: list[str] = []
         persist = lambda: _persist_reply(cid, sid, watcher.narration)  # noqa: E731
         if watcher.complete or watcher.truncated:
-            with store.proposals.locked(cid):
+            with store.sheets.lock_for(cid):
                 if store.proposals.commit_narration(cid, sid, pid, persist):
                     payload = _make_proposal(cid, sid, watcher)
                     # the lock is reentrant, so healing (projection) is safe
@@ -2792,23 +2793,24 @@ def _continuation_rule_bodies(cid: str, resolution: dict) -> tuple[list[str], li
     docs (the continuation's mechanical grounding)."""
     on_roll_docs: list[str] = []
     check_docs: list[str] = []
-    mid = store.modules.resolve(cid)
-    if mid is None:
+    with store.sheets.lock_for(cid):
+        mid = store.modules.resolve(cid)
+        if mid is None:
+            return on_roll_docs, check_docs
+        pack = store.modules.load_pack(mid)
+        for doc in pack.get("rules", []):
+            if doc.get("on_roll"):
+                rule = store.modules.read_rule(mid, doc["id"])
+                if rule is not None:
+                    on_roll_docs.append(rule["body"].strip())
+        cd = pack["checks"] if isinstance(pack["checks"], dict) else {}
+        check = cd.get(resolution.get("check"))
+        if isinstance(check, dict):
+            for rid in (check.get("rules") or []):
+                rule = store.modules.read_rule(mid, rid)
+                if rule is not None:
+                    check_docs.append(rule["body"].strip())
         return on_roll_docs, check_docs
-    pack = store.modules.load_pack(mid)
-    for doc in pack.get("rules", []):
-        if doc.get("on_roll"):
-            rule = store.modules.read_rule(mid, doc["id"])
-            if rule is not None:
-                on_roll_docs.append(rule["body"].strip())
-    cd = pack["checks"] if isinstance(pack["checks"], dict) else {}
-    check = cd.get(resolution.get("check"))
-    if isinstance(check, dict):
-        for rid in (check.get("rules") or []):
-            rule = store.modules.read_rule(mid, rid)
-            if rule is not None:
-                check_docs.append(rule["body"].strip())
-    return on_roll_docs, check_docs
 
 
 def _continuation_messages(cid: str, sid: str, resolution: dict) -> list[dict]:

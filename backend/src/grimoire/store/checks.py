@@ -112,65 +112,66 @@ def _actor_label(cid: str, kind: str, eid: str) -> str:
 
 def resolve_check(cid: str, check_id: str, actor_ref: str, difficulty: int | None = None,
                   modifier: int = 0, seed: int | None = None) -> dict:
-    mid = modules.resolve(cid)
-    if mid is None:
-        raise CheckError("no mechanics module is bound to this campaign")
-    pack = modules.load_pack(mid)
-    checks_def = pack["checks"] if isinstance(pack["checks"], dict) else {}
-    check = checks_def.get(check_id)
-    if check_id == "_defaults" or not isinstance(check, dict):
-        raise CheckError(f"unknown check {check_id!r}")
-    defaults = checks_def.get("_defaults")
-    defaults = defaults if isinstance(defaults, dict) else {}
+    with sheets.lock_for(cid):
+        mid = modules.resolve(cid)
+        if mid is None:
+            raise CheckError("no mechanics module is bound to this campaign")
+        pack = modules.load_pack(mid)
+        checks_def = pack["checks"] if isinstance(pack["checks"], dict) else {}
+        check = checks_def.get(check_id)
+        if check_id == "_defaults" or not isinstance(check, dict):
+            raise CheckError(f"unknown check {check_id!r}")
+        defaults = checks_def.get("_defaults")
+        defaults = defaults if isinstance(defaults, dict) else {}
 
-    kind, sep, eid = (actor_ref or "").partition(":")
-    if not sep or kind not in sheets.FILE_KINDS:
-        raise CheckError(f"bad actor reference {actor_ref!r}")
-    sheet = sheets.read(cid, kind, eid)
-    if sheet is None:
-        raise CheckError(f"{actor_ref} has no sheet")
-    if sheet["errors"]:
-        raise CheckError(f"{actor_ref}'s sheet is invalid: {sheet['errors'][0]}")
+        kind, sep, eid = (actor_ref or "").partition(":")
+        if not sep or kind not in sheets.FILE_KINDS:
+            raise CheckError(f"bad actor reference {actor_ref!r}")
+        sheet = sheets.read(cid, kind, eid)
+        if sheet is None:
+            raise CheckError(f"{actor_ref} has no sheet")
+        if sheet["errors"]:
+            raise CheckError(f"{actor_ref}'s sheet is invalid: {sheet['errors'][0]}")
 
-    sheets_def = pack["sheets"] if isinstance(pack["sheets"], dict) else {}
-    st = sheets_def.get("sheet_types", {}).get(sheet["sheet_type"])
-    st = st if isinstance(st, dict) else {}
-    st_groups = set(st.get("groups", []) if isinstance(st.get("groups"), list) else [])
-    required = check.get("requires", []) if isinstance(check.get("requires"), list) else []
-    missing = [g for g in required if g not in st_groups]
-    if missing:
-        raise CheckError(f"{actor_ref}'s sheet type lacks required groups: {missing}")
+        sheets_def = pack["sheets"] if isinstance(pack["sheets"], dict) else {}
+        st = sheets_def.get("sheet_types", {}).get(sheet["sheet_type"])
+        st = st if isinstance(st, dict) else {}
+        st_groups = set(st.get("groups", []) if isinstance(st.get("groups"), list) else [])
+        required = check.get("requires", []) if isinstance(check.get("requires"), list) else []
+        missing = [g for g in required if g not in st_groups]
+        if missing:
+            raise CheckError(f"{actor_ref}'s sheet type lacks required groups: {missing}")
 
-    if difficulty is None:
-        difficulty = check.get("difficulty", defaults.get("difficulty"))
+        if difficulty is None:
+            difficulty = check.get("difficulty", defaults.get("difficulty"))
 
-    scope = dict(sheets.expression_scope(sheet, sheets_def))
-    scope["modifier"] = modifier if isinstance(modifier, int) and not isinstance(modifier, bool) else 0
-    if isinstance(difficulty, int) and not isinstance(difficulty, bool):
-        scope["difficulty"] = difficulty
+        scope = dict(sheets.expression_scope(sheet, sheets_def))
+        scope["modifier"] = modifier if isinstance(modifier, int) and not isinstance(modifier, bool) else 0
+        if isinstance(difficulty, int) and not isinstance(difficulty, bool):
+            scope["difficulty"] = difficulty
 
-    def sub(m):
+        def sub(m):
+            try:
+                return str(int(expressions.evaluate(m.group(1), scope)))
+            except expressions.ExpressionError as e:
+                raise CheckError(f"check formula: {e}")
+
+        roll_template = check.get("roll", "")
+        roll_template = roll_template if isinstance(roll_template, str) else ""
+        notation = _PLACEHOLDER.sub(sub, roll_template)
         try:
-            return str(int(expressions.evaluate(m.group(1), scope)))
-        except expressions.ExpressionError as e:
-            raise CheckError(f"check formula: {e}")
+            result = dice.roll(notation, seed)
+        except dice.DiceError as e:
+            raise CheckError(f"bad roll notation {notation!r}: {e}")
 
-    roll_template = check.get("roll", "")
-    roll_template = roll_template if isinstance(roll_template, str) else ""
-    notation = _PLACEHOLDER.sub(sub, roll_template)
-    try:
-        result = dice.roll(notation, seed)
-    except dice.DiceError as e:
-        raise CheckError(f"bad roll notation {notation!r}: {e}")
+        tier, tier_warnings = evaluate_tier(check, defaults, roll_scope(result))
+        tier = tier or result.get("outcome")
 
-    tier, tier_warnings = evaluate_tier(check, defaults, roll_scope(result))
-    tier = tier or result.get("outcome")
-
-    return {"check": check_id, "check_label": check.get("label", check_id),
-            "actor": actor_ref, "actor_label": _actor_label(cid, kind, eid),
-            "notation": notation, "result": result, "tier": tier,
-            "difficulty": difficulty, "modifier": scope["modifier"],
-            "tier_warnings": tier_warnings}
+        return {"check": check_id, "check_label": check.get("label", check_id),
+                "actor": actor_ref, "actor_label": _actor_label(cid, kind, eid),
+                "notation": notation, "result": result, "tier": tier,
+                "difficulty": difficulty, "modifier": scope["modifier"],
+                "tier_warnings": tier_warnings}
 
 
 def available_checks(cid: str, sid: str) -> list[dict]:

@@ -296,55 +296,56 @@ def _mechanics(cid: str, sid: str, cast, recent_text: str) -> dict:
     always -> sheet_types -> keys, keys capped at 6), compact sheet summaries
     for sheeted cast + the current location, and the available-checks table.
     All empty when no module resolves (modules.resolve)."""
-    mid = modules.resolve(cid)
-    if mid is None:
-        return {"mechanics_rules": [], "mechanics_sheets": [], "mechanics_checks": []}
-    pack = modules.load_pack(mid)
-    sheets_def = pack["sheets"] if isinstance(pack["sheets"], dict) else {}
+    with sheets.lock_for(cid):
+        mid = modules.resolve(cid)
+        if mid is None:
+            return {"mechanics_rules": [], "mechanics_sheets": [], "mechanics_checks": []}
+        pack = modules.load_pack(mid)
+        sheets_def = pack["sheets"] if isinstance(pack["sheets"], dict) else {}
 
-    history_ids = scenes.get_location_history(cid, sid)
-    current_loc = history_ids[-1] if history_ids else None
-    actors = [(a["kind"], a["id"], a["name"]) for a in cast]
-    if current_loc:
-        try:
-            loc_name = overlay.read_entity(cid, "locations", current_loc)["meta"].get("name", current_loc)
-            actors.append(("locations", current_loc, loc_name))
-        except entities.EntityNotFound:
-            pass  # referenced location was deleted — omit from sheet summaries
+        history_ids = scenes.get_location_history(cid, sid)
+        current_loc = history_ids[-1] if history_ids else None
+        actors = [(a["kind"], a["id"], a["name"]) for a in cast]
+        if current_loc:
+            try:
+                loc_name = overlay.read_entity(cid, "locations", current_loc)["meta"].get("name", current_loc)
+                actors.append(("locations", current_loc, loc_name))
+            except entities.EntityNotFound:
+                pass  # referenced location was deleted — omit from sheet summaries
 
-    mechanics_sheets: list[dict] = []
-    present_types: set[str] = set()
-    for kind, eid, label in actors:
-        sheet = sheets.read(cid, kind, eid)
-        if sheet is None:
-            continue
-        type_id = sheet["sheet_type"]
-        entry = {"ref": f"{kind}:{eid}", "label": label,
-                 "type_label": _sheet_type_label(sheets_def, type_id)}
-        if sheet["errors"]:
-            entry["lines"] = ["(sheet invalid)"]
-        else:
-            if isinstance(type_id, str):
-                present_types.add(type_id)
-            entry["lines"] = _sheet_summary_lines(sheets_def, sheet)
-        mechanics_sheets.append(entry)
+        mechanics_sheets: list[dict] = []
+        present_types: set[str] = set()
+        for kind, eid, label in actors:
+            sheet = sheets.read(cid, kind, eid)
+            if sheet is None:
+                continue
+            type_id = sheet["sheet_type"]
+            entry = {"ref": f"{kind}:{eid}", "label": label,
+                     "type_label": _sheet_type_label(sheets_def, type_id)}
+            if sheet["errors"]:
+                entry["lines"] = ["(sheet invalid)"]
+            else:
+                if isinstance(type_id, str):
+                    present_types.add(type_id)
+                entry["lines"] = _sheet_summary_lines(sheets_def, sheet)
+            mechanics_sheets.append(entry)
 
-    always_docs, type_docs, key_docs = [], [], []
-    for doc in pack["rules"]:
-        if doc["always"]:
-            always_docs.append(doc)
-        elif set(doc["sheet_types"]) & present_types:
-            type_docs.append(doc)
-        elif doc["keys"] and _rule_keys_match(doc["keys"], recent_text):
-            key_docs.append(doc)
-    mechanics_rules: list[str] = []
-    for doc in always_docs + type_docs + key_docs[:6]:
-        rule = modules.read_rule(mid, doc["id"])
-        if rule is not None:
-            mechanics_rules.append(rule["body"].strip())
+        always_docs, type_docs, key_docs = [], [], []
+        for doc in pack["rules"]:
+            if doc["always"]:
+                always_docs.append(doc)
+            elif set(doc["sheet_types"]) & present_types:
+                type_docs.append(doc)
+            elif doc["keys"] and _rule_keys_match(doc["keys"], recent_text):
+                key_docs.append(doc)
+        mechanics_rules: list[str] = []
+        for doc in always_docs + type_docs + key_docs[:6]:
+            rule = modules.read_rule(mid, doc["id"])
+            if rule is not None:
+                mechanics_rules.append(rule["body"].strip())
 
-    return {"mechanics_rules": mechanics_rules, "mechanics_sheets": mechanics_sheets,
-            "mechanics_checks": checks.available_checks(cid, sid)}
+        return {"mechanics_rules": mechanics_rules, "mechanics_sheets": mechanics_sheets,
+                "mechanics_checks": checks.available_checks(cid, sid)}
 
 
 def _relationship_lines(cid: str, cast) -> list[str]:
