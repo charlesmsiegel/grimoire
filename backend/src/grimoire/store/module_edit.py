@@ -207,3 +207,234 @@ def set_manifest(mid: str, *, name: str, description: str, version: str,
         (root / "module.md").write_text(
             dump_frontmatter(meta, notes), encoding="utf-8")
     return _apply(mid, mutate, dry_run=dry_run)
+
+
+# ---- staging JSON helpers ----
+
+
+def _read_json(root: Path, name: str) -> dict:
+    p = root / name
+    if not p.exists():
+        return {}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_json(root: Path, name: str, data: dict) -> None:
+    (root / name).write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+def _read_sheets(root: Path) -> dict:
+    data = _read_json(root, "sheets.json")
+    data.setdefault("groups", {})
+    data.setdefault("sheet_types", {})
+    return data
+
+
+# ---- layout specialization over the transitive `use` graph ----
+# (Task 6 reuses these three for renames instead of redefining them.)
+
+
+def _fragment_users(layout: dict) -> dict[str, set[str]]:
+    """fragment id -> sheet-type ids that transitively reach it."""
+    frags = layout.get("fragments") if isinstance(layout.get("fragments"), dict) else {}
+
+    def uses(node) -> set[str]:
+        if not isinstance(node, dict):
+            return set()
+        out = set()
+        if isinstance(node.get("use"), str):
+            out.add(node["use"])
+        for arr in ("row", "column"):
+            for kid in (node.get(arr) or []):
+                out |= uses(kid)
+        return out
+
+    reach: dict[str, set[str]] = {}
+    for tid, tree in (layout.get("sheet_types") or {}).items():
+        frontier = uses(tree)
+        seen: set[str] = set()
+        while frontier:
+            fid = frontier.pop()
+            if fid in seen:
+                continue
+            seen.add(fid)
+            frontier |= uses(frags.get(fid))
+        for fid in seen:
+            reach.setdefault(fid, set()).add(tid)
+    return reach
+
+
+def _edit_tree(node, edit_fn, remap: dict[str, str]):
+    """Apply edit_fn to a node tree, remapping `use` refs per `remap`."""
+    node = edit_fn(node)
+    if not isinstance(node, dict):
+        return node
+    out = dict(node)
+    if isinstance(out.get("use"), str) and out["use"] in remap:
+        out["use"] = remap[out["use"]]
+    for arr in ("row", "column"):
+        if isinstance(out.get(arr), list):
+            out[arr] = [k for k in (_edit_tree(k, edit_fn, remap) for k in out[arr])
+                        if k is not None]
+    return out
+
+
+def _specialize_layout(layout: dict, in_scope: set[str], edit_fn) -> dict:
+    """Rewrite in-scope sheet-type trees; fragments reachable from both
+    in-scope and out-of-scope types are cloned (with their use-path
+    ancestors, transitively — clones reference clones) and only the
+    in-scope roots repointed (spec: Shared layout fragments)."""
+    if not isinstance(layout, dict):
+        return layout
+    out = json.loads(json.dumps(layout))  # deep copy
+    frags = out.get("fragments") if isinstance(out.get("fragments"), dict) else {}
+    users = _fragment_users(out)
+    shared = {fid for fid, tids in users.items()
+              if tids & in_scope and tids - in_scope}
+    remap: dict[str, str] = {}
+    for fid in shared:
+        clone = fid + "-2"
+        while clone in frags or clone in remap.values():
+            clone += "x"
+        remap[fid] = clone
+    # clones: edited copies whose own `use` refs also follow the remap
+    for fid, clone in remap.items():
+        frags[clone] = _edit_tree(json.loads(json.dumps(frags.get(fid))), edit_fn, remap)
+    # fragments reachable only in-scope: edit in place
+    for fid, tids in users.items():
+        if fid not in shared and tids and tids <= in_scope:
+            frags[fid] = _edit_tree(frags.get(fid), edit_fn, remap)
+    if frags:
+        out["fragments"] = frags
+    sheet_trees = out.get("sheet_types") if isinstance(out.get("sheet_types"), dict) else {}
+    for tid in list(sheet_trees):
+        if tid in in_scope:
+            sheet_trees[tid] = _edit_tree(sheet_trees[tid], edit_fn, remap)
+    return out
+
+
+def _prune_node(node, group: str | None, names: set[str]):
+    """Returns the pruned node or None when it empties (cascade-cosmetic)."""
+    if not isinstance(node, dict):
+        return node
+    out = dict(node)
+    for container in ("row", "column"):
+        if isinstance(out.get(container), list):
+            kids = [k for k in (_prune_node(k, group, names) for k in out[container])
+                    if k is not None]
+            if not kids:
+                return None
+            out[container] = kids
+            return out
+    if group is not None and out.get("group") == group:
+        return None
+    for arr in ("fields", "derived"):
+        if isinstance(out.get(arr), list):
+            kept = [n for n in out[arr] if n not in names]
+            if not kept:
+                return None
+            out[arr] = kept
+    return out
+
+
+def _prune_layout(root: Path, *, in_scope: set[str], group: str | None = None,
+                  names: set[str] = frozenset(),
+                  drop_type: str | None = None) -> None:
+    """Cascade-cosmetic prune, SCOPED to the sheet types that compose the
+    edited container (codex plan review: a global prune would strip a
+    disjoint type's same-spelled field from its own layout). `group` prunes
+    apply everywhere (group ids are globally unique); `names` prunes run
+    through the fragment-specialization walk so a fragment shared with
+    out-of-scope types is cloned-pruned-repointed, never damaged in place."""
+    layout = _read_json(root, "layout.json")
+    if not layout:
+        return
+    if drop_type and isinstance(layout.get("sheet_types"), dict):
+        layout["sheet_types"].pop(drop_type, None)
+    if group is not None:
+        # group nodes are unambiguous — prune every tree and fragment
+        for section in ("fragments", "sheet_types"):
+            entries = layout.get(section)
+            if not isinstance(entries, dict):
+                continue
+            for key in list(entries):
+                pruned = _prune_node(entries[key], group, frozenset())
+                if pruned is None:
+                    entries.pop(key)
+                else:
+                    entries[key] = pruned
+    if names:
+        layout = _specialize_layout(
+            layout, in_scope,
+            lambda node: _prune_node(node, None, names))
+    _write_json(root, "layout.json", layout)
+
+
+def _field_keys(container: dict) -> set[str]:
+    out = set()
+    for f in container.get("fields", []) or []:
+        if isinstance(f, dict) and isinstance(f.get("key"), str):
+            out.add(f["key"])
+    for name in (container.get("derived") or {}):
+        if isinstance(name, str):
+            out.add(name)
+    return out
+
+
+def _group_scope(data: dict, gid: str) -> set[str]:
+    """Sheet types composing a group — the prune/rewrite scope."""
+    return {tid for tid, st in data.get("sheet_types", {}).items()
+            if isinstance(st, dict) and gid in (st.get("groups") or [])}
+
+
+def upsert_group(mid: str, gid: str, group: dict, *, dry_run: bool = False) -> dict:
+    def mutate(root: Path) -> None:
+        data = _read_sheets(root)
+        old = data["groups"].get(gid)
+        data["groups"][gid] = group
+        _write_json(root, "sheets.json", data)
+        if isinstance(old, dict):  # prune layout refs to removed keys
+            removed = _field_keys(old) - _field_keys(group if isinstance(group, dict) else {})
+            if removed:
+                _prune_layout(root, in_scope=_group_scope(data, gid), names=removed)
+    return _apply(mid, mutate, dry_run=dry_run)
+
+
+def delete_group(mid: str, gid: str, *, dry_run: bool = False) -> dict:
+    def mutate(root: Path) -> None:
+        data = _read_sheets(root)
+        scope = _group_scope(data, gid)
+        old = data["groups"].pop(gid, None)
+        _write_json(root, "sheets.json", data)
+        _prune_layout(root, in_scope=scope, group=gid,
+                      names=_field_keys(old) if isinstance(old, dict) else set())
+    return _apply(mid, mutate, dry_run=dry_run)
+
+
+def upsert_sheet_type(mid: str, tid: str, sheet_type: dict, *,
+                      dry_run: bool = False) -> dict:
+    def mutate(root: Path) -> None:
+        data = _read_sheets(root)
+        old = data["sheet_types"].get(tid)
+        data["sheet_types"][tid] = sheet_type
+        _write_json(root, "sheets.json", data)
+        if isinstance(old, dict):
+            removed = _field_keys(old) - _field_keys(
+                sheet_type if isinstance(sheet_type, dict) else {})
+            if removed:
+                _prune_layout(root, in_scope={tid}, names=removed)
+    return _apply(mid, mutate, dry_run=dry_run)
+
+
+def delete_sheet_type(mid: str, tid: str, *, dry_run: bool = False) -> dict:
+    def mutate(root: Path) -> None:
+        data = _read_sheets(root)
+        old = data["sheet_types"].pop(tid, None)
+        _write_json(root, "sheets.json", data)
+        _prune_layout(root, in_scope={tid}, drop_type=tid,
+                      names=_field_keys(old) if isinstance(old, dict) else set())
+    return _apply(mid, mutate, dry_run=dry_run)
