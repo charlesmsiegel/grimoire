@@ -211,10 +211,15 @@ def import_module(path: Path) -> str:
                     try:
                         dest.parent.mkdir(parents=True, exist_ok=True)
                         dest.write_bytes(z.read(i))
-                    except OSError:
+                    except (OSError, RuntimeError, NotImplementedError,
+                            zipfile.BadZipFile):
                         # pathological names (reserved device names CON/NUL,
                         # trailing dots/spaces on Windows) can raise a raw
-                        # OSError here — never let that escape uncontained.
+                        # OSError from mkdir/write_bytes; z.read(i) itself
+                        # can raise RuntimeError (encrypted member),
+                        # NotImplementedError (unsupported compression), or
+                        # BadZipFile (bad CRC/corrupt data) — none of those
+                        # may escape uncontained (codex review finding).
                         raise modules.ModuleError(f"unextractable zip entry: {i.filename}")
                 pack = modules.load_pack_at(staging, mid)
                 if pack["errors"]:
@@ -259,8 +264,12 @@ def recover() -> None:
         # so the sweep is skipped entirely — a torn journal's staging/trash
         # may hold the only copy of a missing live module (codex plan
         # review round 2). Quarantined debris is a human-inspectable
-        # leftover, not a correctness hazard.
-        if not quarantined:
+        # leftover, not a correctness hazard. A journal quarantined on a
+        # PRIOR run leaves no trace in `quarantined` (that set is local to
+        # this call) — a pre-existing `*.journal.bad` file must disable the
+        # sweep just as effectively, or the next edit's recover() call would
+        # destroy the very staging dir the quarantine was preserving (P1-1).
+        if not quarantined and not any(d.glob("*.journal.bad")):
             for p in list(d.iterdir()):
                 if p.is_dir():
                     shutil.rmtree(p, ignore_errors=True)
@@ -399,8 +408,7 @@ def _content_ids(pack: dict) -> set[str]:
     return {f"{c['kind']}:module:{c['id']}" for c in pack.get("content", [])}
 
 
-def _sidecar_stats(mid: str) -> list[dict]:
-    root, _ = modules.pack_root(mid)
+def _sidecar_stats_at(root: Path) -> list[dict]:
     out = []
     cd = root / "content"
     if cd.is_dir():
@@ -414,12 +422,18 @@ def _sidecar_stats(mid: str) -> list[dict]:
     return out
 
 
-def _impact(mid: str, staged_pack: dict, migration: dict | None) -> dict:
+def _impact(mid: str, staged_pack: dict, migration: dict | None, staging_root: Path,
+           affected_types: set[str] | None = None) -> dict:
     """Dry-run impact scan: {"sheet_types", "sheets_migrated",
     "sheets_newly_invalid", "dangling_refs"}. Newly-invalid = stored sheets
     valid against the live pack but invalid against the staged one; dangling
     = ref values whose content id exists live but not staged, counted over
-    stored sheets AND content stat sidecars."""
+    stored sheets AND content stat sidecars. Sidecars are read from
+    `staging_root` (the STAGED copy, already rewritten by the mutate step) —
+    not the live pack: during a content rename the staged sidecars already
+    point at the new id, and a deleted entry's own sidecar is already gone
+    from staging, so neither would otherwise be miscounted as dangling
+    against the still-live id (P2-2)."""
     live_pack = modules.load_pack(mid)
     newly_invalid = 0
     dangling = 0
@@ -446,7 +460,7 @@ def _impact(mid: str, staged_pack: dict, migration: dict | None) -> dict:
         for ref in _iter_ref_values(fields):
             if ":module:" in ref and ref in live_ids and ref not in staged_ids:
                 dangling += 1
-    for stat in _sidecar_stats(mid):
+    for stat in _sidecar_stats_at(staging_root):
         for ref in _iter_ref_values(stat.get("fields") or {}):
             if ":module:" in ref and ref in live_ids and ref not in staged_ids:
                 dangling += 1
@@ -464,6 +478,11 @@ def _impact(mid: str, staged_pack: dict, migration: dict | None) -> dict:
             if isinstance(data, dict) and _would_migrate(data, migration):
                 migrated += 1
         out["sheets_migrated"] = migrated
+    elif affected_types:
+        # ordinary (non-rename) schema edits carry no migration, but the
+        # writer knows exactly which sheet types it touched — surface that
+        # so the UI's confirm gate can name them (P2-3).
+        out["sheet_types"] = sorted(affected_types)
     return out
 
 
@@ -514,7 +533,8 @@ def _sample(pack: dict) -> dict:
 
 def _apply(mid: str, mutate, *, dry_run: bool = False,
            migration: dict | None = None, pre_swap=None,
-           impact: bool = False, sample: bool = False) -> dict:
+           impact: bool = False, sample: bool = False,
+           affected_types: set[str] | None = None) -> dict:
     """stage -> mutate -> validate -> (locks) -> journal -> swap -> migrate.
 
     mutate(staging_root) edits the staged copy in place. pre_swap(pack) runs
@@ -524,7 +544,9 @@ def _apply(mid: str, mutate, *, dry_run: bool = False,
     impact=True computes a dry-run impact scan (schema-affecting writers and
     rename ops); sample=True additionally computes a per-sheet-type sample
     (schema defaults + derived) after a clean validation, for sheets.json
-    dry-runs."""
+    dry-runs. affected_types (group/sheet-type upserts+deletes, computed by
+    the writer from the LIVE pack before mutation) surfaces impact.sheet_types
+    for non-migration writers, which otherwise report it empty (P2-3)."""
     with _M:
         recover()
         live = _require_user_root(mid)
@@ -542,7 +564,7 @@ def _apply(mid: str, mutate, *, dry_run: bool = False,
             pack = modules.load_pack_at(staging, mid)
             extra: dict = {}
             if impact:
-                extra["impact"] = _impact(mid, pack, migration)
+                extra["impact"] = _impact(mid, pack, migration, staging, affected_types)
             if pack["errors"] or dry_run:
                 if sample and not pack["errors"]:
                     extra["sample"] = _sample(pack)
@@ -1095,6 +1117,8 @@ def rename(mid: str, kind: str, address: dict, to: str, *,
 
 
 def upsert_group(mid: str, gid: str, group: dict, *, dry_run: bool = False) -> dict:
+    live_root, _src = modules.pack_root(mid)
+    affected = _group_scope(_read_sheets(live_root), gid)  # BEFORE mutation (P2-3)
     def mutate(root: Path) -> None:
         data = _read_sheets(root)
         old = data["groups"].get(gid)
@@ -1104,10 +1128,13 @@ def upsert_group(mid: str, gid: str, group: dict, *, dry_run: bool = False) -> d
             removed = _field_keys(old) - _field_keys(group if isinstance(group, dict) else {})
             if removed:
                 _prune_layout(root, in_scope=_group_scope(data, gid), names=removed)
-    return _apply(mid, mutate, dry_run=dry_run, impact=True, sample=True)
+    return _apply(mid, mutate, dry_run=dry_run, impact=True, sample=True,
+                 affected_types=affected)
 
 
 def delete_group(mid: str, gid: str, *, dry_run: bool = False) -> dict:
+    live_root, _src = modules.pack_root(mid)
+    affected = _group_scope(_read_sheets(live_root), gid)  # BEFORE mutation (P2-3)
     def mutate(root: Path) -> None:
         data = _read_sheets(root)
         scope = _group_scope(data, gid)
@@ -1115,7 +1142,7 @@ def delete_group(mid: str, gid: str, *, dry_run: bool = False) -> dict:
         _write_json(root, "sheets.json", data)
         _prune_layout(root, in_scope=scope, group=gid,
                       names=_field_keys(old) if isinstance(old, dict) else set())
-    return _apply(mid, mutate, dry_run=dry_run, impact=True)
+    return _apply(mid, mutate, dry_run=dry_run, impact=True, affected_types=affected)
 
 
 def upsert_sheet_type(mid: str, tid: str, sheet_type: dict, *,
@@ -1130,7 +1157,8 @@ def upsert_sheet_type(mid: str, tid: str, sheet_type: dict, *,
                 sheet_type if isinstance(sheet_type, dict) else {})
             if removed:
                 _prune_layout(root, in_scope={tid}, names=removed)
-    return _apply(mid, mutate, dry_run=dry_run, impact=True, sample=True)
+    return _apply(mid, mutate, dry_run=dry_run, impact=True, sample=True,
+                 affected_types={tid})
 
 
 def delete_sheet_type(mid: str, tid: str, *, dry_run: bool = False) -> dict:
@@ -1140,7 +1168,7 @@ def delete_sheet_type(mid: str, tid: str, *, dry_run: bool = False) -> dict:
         _write_json(root, "sheets.json", data)
         _prune_layout(root, in_scope={tid}, drop_type=tid,
                       names=_field_keys(old) if isinstance(old, dict) else set())
-    return _apply(mid, mutate, dry_run=dry_run, impact=True)
+    return _apply(mid, mutate, dry_run=dry_run, impact=True, affected_types={tid})
 
 
 # ---- check, rule, content writers ----

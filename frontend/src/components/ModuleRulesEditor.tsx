@@ -295,6 +295,15 @@ export function RulesSection({ pack, reload }: {
   const [mode, setMode] = useState<"view" | "edit">("view");
   const [form, setForm] = useState<RuleForm | null>(null);
   const [bodyBaseline, setBodyBaseline] = useState("");
+  // openEdit mounts the form immediately (body "") while readModuleRule is
+  // still in flight -- ruleLoading gates the body/Save so a slow or failed
+  // fetch can never be saved over the real rule text with an empty one.
+  const [ruleLoading, setRuleLoading] = useState(false);
+  const [ruleLoadError, setRuleLoadError] = useState<string | null>(null);
+  // A new rule has no body to fetch (nothing to wait for); an existing one
+  // is only ready once its read resolved cleanly -- a pending OR failed
+  // fetch must never let the body render (with stale "" text) or Save fire.
+  const ruleBodyReady = form?.isNew || (!ruleLoading && !ruleLoadError);
 
   const ruleShell = (slug: string): RuleForm => {
     const r = rules.find((x) => x.id === slug);
@@ -364,9 +373,15 @@ export function RulesSection({ pack, reload }: {
     setForm(ruleShell(slug));
     setBodyBaseline("");
     setMode("edit");
+    setRuleLoadError(null);
+    setRuleLoading(true);
     void api.readModuleRule(pack.id, slug).then((r) => {
       setBodyBaseline(r.body);
       setForm((f) => (f && f.slug === slug ? { ...f, body: r.body } : f));
+      setRuleLoading(false);
+    }).catch((e: unknown) => {
+      setRuleLoading(false);
+      setRuleLoadError(e instanceof Error ? e.message : String(e));
     });
   };
 
@@ -379,6 +394,8 @@ export function RulesSection({ pack, reload }: {
           setForm({ slug: "", isNew: true, keys: "", always: false, onRoll: false,
                      sheetTypes: [], body: "" });
           setBodyBaseline("");
+          setRuleLoading(false);
+          setRuleLoadError(null);
           setMode("edit");
         }}>+ New rule</button>
         {rules.map((r) => (
@@ -434,6 +451,7 @@ export function RulesSection({ pack, reload }: {
                              onCancel={() => setGate(null)} />
             )}
             {gateError.map((e, i) => <div key={i} className="banner">{e}</div>)}
+            {ruleLoadError && <div className="banner">{ruleLoadError}</div>}
             <ErrorList result={dr.result} />
             {form.isNew ? (
               <label>Rule slug
@@ -446,10 +464,16 @@ export function RulesSection({ pack, reload }: {
                 <RenamePrompt disabled={dirty} onRename={renameRule} />
               </div>
             )}
-            <label>Body
-              <textarea value={form.body}
-                        onChange={(e) => setForm({ ...form, body: e.target.value })} />
-            </label>
+            {ruleBodyReady ? (
+              <label>Body
+                <textarea value={form.body}
+                          onChange={(e) => setForm({ ...form, body: e.target.value })} />
+              </label>
+            ) : (
+              <p className="field-hint">
+                {ruleLoading ? "Loading rule body…" : "Rule body failed to load — cannot save"}
+              </p>
+            )}
             <div className="chips">
               <label>Always
                 <input type="checkbox" checked={form.always}
@@ -474,7 +498,9 @@ export function RulesSection({ pack, reload }: {
             </div>
             {!gate && !dr.confirming && (
               <div className="form-actions">
-                <button className="primary" onClick={() => dr.requestSave(done)}>Save</button>
+                {ruleBodyReady && (
+                  <button className="primary" onClick={() => dr.requestSave(done)}>Save</button>
+                )}
                 <button onClick={() => { setMode("view"); setForm(null); }}>Cancel</button>
               </div>
             )}

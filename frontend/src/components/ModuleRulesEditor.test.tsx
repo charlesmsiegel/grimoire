@@ -74,6 +74,32 @@ test("rule form loads the body and saves flags + body", async () => {
     "Swing first.", false));
 });
 
+test("Save is absent while the rule body read is pending (P1-2)", async () => {
+  let resolveRead: (v: { meta: Record<string, unknown>; body: string }) => void = () => {};
+  (api.readModuleRule as any).mockReturnValue(new Promise((res) => { resolveRead = res; }));
+  render(<RulesSection pack={PACK} reload={vi.fn()} />);
+  fireEvent.click(screen.getByText("combat"));
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  // still in flight: no Save button, no body textarea to silently blank out
+  expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("Body")).not.toBeInTheDocument();
+  expect(screen.getByText("Loading rule body…")).toBeInTheDocument();
+  resolveRead({ meta: {}, body: "Swing first." });
+  expect(await screen.findByRole("button", { name: "Save" })).toBeInTheDocument();
+  expect(screen.getByLabelText("Body")).toHaveValue("Swing first.");
+});
+
+test("a failed rule body fetch shows an error and keeps Save blocked (P1-2)", async () => {
+  (api.readModuleRule as any).mockRejectedValue(new Error("network down"));
+  render(<RulesSection pack={PACK} reload={vi.fn()} />);
+  fireEvent.click(screen.getByText("combat"));
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  expect(await screen.findByText("network down")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("Body")).not.toBeInTheDocument();
+  expect(api.putModuleRule).not.toHaveBeenCalled();
+});
+
 test("a failed check delete's guard banner clears when another row is selected", async () => {
   (api.deleteModuleCheck as any).mockResolvedValue(
     { ok: false, errors: ["check 'brawl' has a live roll proposal in campaign 'c1', scene 's1' — resolve or discard it first"], display_errors: [] });

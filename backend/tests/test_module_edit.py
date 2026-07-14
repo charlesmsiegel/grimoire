@@ -136,6 +136,27 @@ def test_malformed_journal_quarantined_not_destructive(monkeypatch, tmp_path):
     assert d.exists()                              # never rmtree'd wholesale
 
 
+def test_quarantine_persists_across_recover_runs(monkeypatch, tmp_path):
+    """P1-1: `quarantined` is local to one recover() call, so a *.journal.bad
+    left by a PRIOR run leaves no trace in it. The debris sweep must still
+    stay disabled on the NEXT recover() call (e.g. the next edit's implicit
+    recover()) or it destroys the very staging dir the quarantine preserved."""
+    mid = _mk(monkeypatch, tmp_path)
+    d = tmp_path / ".module-staging"
+    keep = d / "aaaabbbbccccddddaaaabbbbccccdddd" / mid
+    keep.mkdir(parents=True)
+    (keep / "module.md").write_text("---\nname: Rescue\n---\n", encoding="utf-8")
+    (d / "torn.journal.json").write_text("{not json", encoding="utf-8")
+    module_edit.recover()
+    assert (d / "torn.journal.bad").exists()
+    assert keep.exists()
+    # A second, independent recover() call: `quarantined` starts empty again,
+    # but the leftover torn.journal.bad file must still veto the sweep.
+    module_edit.recover()
+    assert (d / "torn.journal.bad").exists()
+    assert keep.exists()                           # NOT swept away this time
+
+
 def test_edit_excludes_campaign_locked_consumer(monkeypatch, tmp_path):
     """User-vs-LLM exclusion: an edit blocks while a campaign lock is held."""
     mid = _mk(monkeypatch, tmp_path)
@@ -655,6 +676,59 @@ def test_dry_run_dangling_refs_counts_sidecars(monkeypatch, tmp_path):
     assert res["impact"]["dangling_refs"] == 2    # stored sheet + sidecar
 
 
+def test_content_rename_impact_reads_staged_sidecars(monkeypatch, tmp_path):
+    """P2-2: a content-to-content ref to the item being renamed must not
+    count as dangling — the STAGED sidecar (already rewritten to the new id
+    by the rename's mutate step) is what impact must scan, not the live one."""
+    mid = _mk_schema(monkeypatch, tmp_path)
+    lore_type = {"label": "Rite", "kind": "lore", "groups": [],
+                 "fields": [{"key": "linked", "type": "ref", "ref_kind": "lore"}]}
+    assert module_edit.upsert_sheet_type(mid, "rite", lore_type)["ok"]
+    assert module_edit.upsert_content(mid, "lore", "old-rite", name="Old Rite",
+                                      body="", keys="", fields={}, sheet=None)["ok"]
+    assert module_edit.upsert_content(
+        mid, "lore", "linked-rite", name="Linked", body="", keys="", fields={},
+        sheet={"sheet_type": "rite", "fields": {"linked": ["lore:module:old-rite"]}})["ok"]
+    res = module_edit.rename(mid, "content", {"from": "old-rite", "kind": "lore"},
+                             "new-rite", dry_run=True)
+    assert res["ok"] is True
+    assert res["impact"]["dangling_refs"] == 0
+
+
+def test_delete_content_impact_excludes_own_sidecar(monkeypatch, tmp_path):
+    """P2-2: a deleted content entry's OWN sidecar (self-referencing) must
+    not count as dangling — the staged copy no longer has that sidecar file
+    at all (it was deleted along with the entry)."""
+    mid = _mk_schema(monkeypatch, tmp_path)
+    lore_type = {"label": "Rite", "kind": "lore", "groups": [],
+                 "fields": [{"key": "linked", "type": "ref", "ref_kind": "lore"}]}
+    assert module_edit.upsert_sheet_type(mid, "rite", lore_type)["ok"]
+    assert module_edit.upsert_content(
+        mid, "lore", "self-rite", name="Self", body="", keys="", fields={},
+        sheet={"sheet_type": "rite", "fields": {"linked": ["lore:module:self-rite"]}})["ok"]
+    res = module_edit.delete_content(mid, "lore", "self-rite", dry_run=True)
+    assert res["ok"] is True
+    assert res["impact"]["dangling_refs"] == 0
+
+
+def test_delete_sheet_type_impact_carries_affected_types(monkeypatch, tmp_path):
+    """P2-3: a plain (non-migration) sheet-type delete must still surface
+    the affected type in impact.sheet_types, not leave it empty."""
+    mid = _mk_schema(monkeypatch, tmp_path)
+    res = module_edit.delete_sheet_type(mid, "warden", dry_run=True)
+    assert res["ok"] is True
+    assert res["impact"]["sheet_types"] == ["warden"]
+
+
+def test_group_edit_impact_carries_composing_sheet_types(monkeypatch, tmp_path):
+    """P2-3: a plain (non-migration) group upsert must surface the sheet
+    types composing that group in impact.sheet_types."""
+    mid = _mk_schema(monkeypatch, tmp_path)
+    res = module_edit.upsert_group(mid, "attributes", GROUP, dry_run=True)
+    assert res["ok"] is True
+    assert res["impact"]["sheet_types"] == ["warden"]
+
+
 def test_dry_run_sample_derived(monkeypatch, tmp_path):
     mid = _mk_schema(monkeypatch, tmp_path)
     res = module_edit.upsert_group(mid, "attributes",
@@ -796,6 +870,36 @@ def test_import_wraps_extraction_oserror(monkeypatch, tmp_path):
         module_edit.import_module(zpath)
     except modules.ModuleError:
         pass  # extraction failure surfaced cleanly, not a raw OSError
+
+
+def test_import_wraps_zip_read_errors(monkeypatch, tmp_path):
+    """P2-4: z.read(i) can raise RuntimeError (encrypted member),
+    NotImplementedError (unsupported compression), or zipfile.BadZipFile (bad
+    CRC/corrupt data) -- none of those may escape import_module as a bare
+    exception; they must surface as modules.ModuleError, same as the OSError
+    case above."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    entries = {
+        "pack/module.md": "---\nname: X\n---\n",
+        "pack/sheets.json": '{\n  "groups": {},\n  "sheet_types": {}\n}\n',
+    }
+    real_read = zipfile.ZipFile.read
+    for exc in (RuntimeError("Bad password for file"),
+                NotImplementedError("compression type 99"),
+                zipfile.BadZipFile("Bad CRC-32")):
+        zpath = tmp_path / "bad.zip"
+        zpath.write_bytes(_zip_bytes(entries))
+
+        def boom(self, name, *a, _exc=exc, **k):
+            if isinstance(name, zipfile.ZipInfo) and name.filename.endswith("module.md"):
+                raise _exc
+            return real_read(self, name, *a, **k)
+        monkeypatch.setattr(zipfile.ZipFile, "read", boom)
+        with pytest.raises(modules.ModuleError):
+            module_edit.import_module(zpath)
+        monkeypatch.setattr(zipfile.ZipFile, "read", real_read)
+        staging = module_edit._staging_root()
+        assert not staging.is_dir() or not any(staging.iterdir())
 
 
 def test_delete_module_rejects_builtin_before_campaign_locks(monkeypatch, tmp_path):

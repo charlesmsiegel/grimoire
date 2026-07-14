@@ -74,7 +74,8 @@ test("rename affordance dry-runs, then commits when impact is clean", async () =
   render(<GroupsSection pack={PACK} reload={reload} />);
   fireEvent.click(screen.getByText("Attributes"));
   fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-  fireEvent.click(screen.getAllByRole("button", { name: "Rename…" })[0]);
+  // index 0 is the group's own id Rename… (P2-1); index 1 is the field's
+  fireEvent.click(screen.getAllByRole("button", { name: "Rename…" })[1]);
   fireEvent.change(screen.getByLabelText("New key"), { target: { value: "brawn" } });
   fireEvent.click(screen.getByRole("button", { name: "Rename" }));
   await waitFor(() => expect(api.renameModulePart).toHaveBeenCalledWith(
@@ -84,7 +85,7 @@ test("rename affordance dry-runs, then commits when impact is clean", async () =
   expect(reload).toHaveBeenCalled();
   // dirty form blocks the affordance entirely
   fireEvent.change(screen.getByDisplayValue("Strength"), { target: { value: "X" } });
-  expect(screen.getAllByRole("button", { name: "Rename…" })[0]).toBeDisabled();
+  expect(screen.getAllByRole("button", { name: "Rename…" })[1]).toBeDisabled();
 });
 
 test("impactful rename shows the confirm; Cancel sends no real call", async () => {
@@ -93,13 +94,44 @@ test("impactful rename shows the confirm; Cancel sends no real call", async () =
   render(<GroupsSection pack={PACK} reload={vi.fn()} />);
   fireEvent.click(screen.getByText("Attributes"));
   fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-  fireEvent.click(screen.getAllByRole("button", { name: "Rename…" })[0]);
+  fireEvent.click(screen.getAllByRole("button", { name: "Rename…" })[1]);
   fireEvent.change(screen.getByLabelText("New key"), { target: { value: "brawn" } });
   fireEvent.click(screen.getByRole("button", { name: "Rename" }));
   expect(await screen.findByText(/migrates 3 sheets/)).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   const real = (api.renameModulePart as any).mock.calls.filter((c: any[]) => c[4] === false);
   expect(real).toHaveLength(0);
+});
+
+test("an existing group's id is renameable (P2-1)", async () => {
+  (api.renameModulePart as any).mockResolvedValue({ ok: true, errors: [], display_errors: [],
+    impact: { sheet_types: [], sheets_migrated: 0, sheets_newly_invalid: 0, dangling_refs: 0 } });
+  const reload = vi.fn().mockResolvedValue(undefined);
+  render(<GroupsSection pack={PACK} reload={reload} />);
+  fireEvent.click(screen.getByText("Attributes"));
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  // the id row for an EXISTING group renders read-only with a Rename… prompt
+  expect(screen.getByText("attributes")).toBeInTheDocument();
+  expect(screen.queryByLabelText("Group id")).not.toBeInTheDocument();
+  // index 0 is the group's own id Rename… (rendered before the field/derived
+  // rows' own Rename… buttons)
+  fireEvent.click(screen.getAllByRole("button", { name: "Rename…" })[0]);
+  fireEvent.change(screen.getByLabelText("New key"), { target: { value: "attribs" } });
+  fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+  await waitFor(() => expect(api.renameModulePart).toHaveBeenCalledWith(
+    "realm-system", "group", { from: "attributes" }, "attribs", true));
+  await waitFor(() => expect(api.renameModulePart).toHaveBeenCalledWith(
+    "realm-system", "group", { from: "attributes" }, "attribs", false));
+  expect(reload).toHaveBeenCalled();
+  // form.gid resynced to the new id
+  expect(await screen.findByText("attribs")).toBeInTheDocument();
+});
+
+test("+ New group still shows an editable id input, no rename prompt", () => {
+  render(<GroupsSection pack={PACK} reload={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: "+ New group" }));
+  expect(screen.getByLabelText("Group id")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Rename…" })).not.toBeInTheDocument();
 });
 
 test("sheet-type form drives group membership and advancement pool options", async () => {
@@ -174,7 +206,7 @@ test("a successful field rename updates the still-open form, not just the refres
   render(<GroupsWithReload initial={PACK} />);
   fireEvent.click(screen.getByText("Attributes"));
   fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-  fireEvent.click(screen.getAllByRole("button", { name: "Rename…" })[0]);
+  fireEvent.click(screen.getAllByRole("button", { name: "Rename…" })[1]);
   fireEvent.change(screen.getByLabelText("New key"), { target: { value: "brawn" } });
   fireEvent.click(screen.getByRole("button", { name: "Rename" }));
   await waitFor(() => expect(api.renameModulePart).toHaveBeenCalledWith(
@@ -244,7 +276,7 @@ test("a stale pre-rename dry-run error is cleared as soon as the rename commits"
   await vi.advanceTimersByTimeAsync(600);
   expect(await screen.findByText(/unknown names/)).toBeInTheDocument();
 
-  fireEvent.click(screen.getAllByRole("button", { name: "Rename…" })[0]);
+  fireEvent.click(screen.getAllByRole("button", { name: "Rename…" })[1]);
   fireEvent.change(screen.getByLabelText("New key"), { target: { value: "brawn" } });
   fireEvent.click(screen.getByRole("button", { name: "Rename" }));
   await waitFor(() => expect(api.renameModulePart).toHaveBeenCalledWith(
