@@ -185,13 +185,13 @@ Append to `backend/tests/test_context.py`:
 def test_natural_prose_in_context_sections(monkeypatch, tmp_path):
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     from grimoire.store import config
-    config.write_config(system_prompt="Never speak for the PC.")
+    # A configured style makes the ordering assertion meaningful: the spec
+    # requires Natural prose directly AFTER Prose style, mirroring system.j2.
+    config.write_config(default_style_id="gothic-horror")
     secs = context.context_sections(cid, sid)
     labels = [s["label"] for s in secs]
-    # No prose style is configured, so Natural prose lands right after the
-    # global prompt — mirroring its position in scene/system.j2.
-    assert labels[0] == "Global system prompt"
-    assert labels[1] == "Natural prose"
+    assert "Natural prose" in labels
+    assert labels.index("Natural prose") == labels.index("Prose style") + 1
     text = next(s["text"] for s in secs if s["label"] == "Natural prose")
     assert text.startswith("# Natural prose")
     assert context.count_tokens(text) > 0  # it contributes to the token total
@@ -200,7 +200,7 @@ def test_natural_prose_in_context_sections(monkeypatch, tmp_path):
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run: `backend/.venv/Scripts/python.exe -m pytest backend/tests/test_context.py -q -k natural_prose_in_context`
-Expected: FAIL — `labels[1]` is `"Character descriptions"` (or similar), because `_SECTIONS` has no Natural prose entry yet.
+Expected: FAIL — `assert "Natural prose" in labels` fails, because `_SECTIONS` has no Natural prose entry yet.
 
 - [ ] **Step 3: Add the `_SECTIONS` entry**
 
