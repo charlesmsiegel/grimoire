@@ -32,6 +32,7 @@ def dist_dir() -> Path:
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     migrations.migrate_scene_ids()
+    migrations.bake_char_macros()
     module_edit.recover()
     yield
 

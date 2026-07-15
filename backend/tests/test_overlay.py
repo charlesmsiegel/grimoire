@@ -106,6 +106,30 @@ def _greeting_pair(monkeypatch, tmp_path):
     return wroot, cid, gid
 
 
+def test_create_greeting_bakes_char_from_world_only_character(monkeypatch, tmp_path):
+    # #137 P1: a thin campaign's greeting may reference a character that only
+    # exists in the world -- name resolution must go through char_root
+    # (overlay-aware), not the bare campaign root, or baking silently no-ops.
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    characters.create_character(wroot, "Seraphine", "default")
+    cid = campaigns.create_campaign("C", wid)
+    gid = overlay.create_greeting(cid, "Open", "seraphine", "default", body="{{char}} arrives.")
+    assert overlay.read_greeting(cid, gid)["body"].strip() == "Seraphine arrives."
+
+
+def test_update_greeting_bakes_char_from_world_only_character(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    characters.create_character(wroot, "Seraphine", "default")
+    gid = greetings.create_greeting(wroot, "Open", "seraphine", "default", body="Hello.")
+    cid = campaigns.create_campaign("C", wid)
+    overlay.update_greeting(cid, gid, body="{{char}} returns.")
+    assert overlay.read_greeting(cid, gid)["body"].strip() == "Seraphine returns."
+
+
 def test_greeting_and_plotmap_fall_through(monkeypatch, tmp_path):
     wroot, cid, gid = _greeting_pair(monkeypatch, tmp_path)
     assert overlay.read_greeting(cid, gid)["body"] == "hi {{user}}"

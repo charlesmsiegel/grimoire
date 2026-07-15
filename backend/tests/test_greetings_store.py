@@ -42,6 +42,17 @@ def test_create_greeting_without_character_leaves_char_macro_literal(tmp_path):
     assert greetings.read_greeting(root, gid)["body"].strip() == "{{char}} is nowhere in sight."
 
 
+def test_create_greeting_bakes_to_the_versions_own_card_name(tmp_path):
+    # #137 P2: a card's name is version-specific -- self-reference means
+    # "this card", not the character container's original creation name.
+    root = _world(tmp_path)
+    cid, _ = characters.create_character(root, "Seraphine", "default")
+    card = characters.blank_card("Sera Alter")
+    characters.create_version(root, cid, "alter", card)
+    gid = greetings.create_greeting(root, "Open", cid, "alter", body="{{char}} enters.")
+    assert greetings.read_greeting(root, gid)["body"].strip() == "Sera Alter enters."
+
+
 def test_update_greeting_bakes_char_macro(tmp_path):
     root = _world(tmp_path)
     characters.create_character(root, "Seraphine", "default")

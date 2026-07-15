@@ -76,11 +76,21 @@ def present_in(body: str, source: str, roster: dict[str, str]) -> list[str]:
     return [source] + sorted(found, key=found.__getitem__)
 
 
-def _char_name(root: Path, character: str) -> str:
-    """The associated character's display name, or "" if there isn't one --
-    baking has nothing to bake {{char}} to (e.g. a character-less greeting)."""
+def char_name(root: Path, character: str, version: str = "") -> str:
+    """The associated character version's display name, or "" if there isn't
+    one -- baking has nothing to bake {{char}} to (e.g. a character-less
+    greeting). Card names are version-specific (self-reference means "this
+    card"), so the version's own card name wins; the container's name is a
+    fallback for a missing/invalid version."""
     if not character:
         return ""
+    if version:
+        try:
+            name = characters.read_card(root, character, version)["data"].get("name", "")
+            if name:
+                return name
+        except (characters.CharacterNotFound, characters.VersionNotFound):
+            pass
     try:
         return characters.read_character(root, character)["meta"].get("name", "")
     except characters.CharacterNotFound:
@@ -104,7 +114,7 @@ def create_greeting(root: Path, name: str, character: str, version: str, body: s
     # #137: {{char}} is the greeting's own associated character, baked at write
     # time -- scene-time substitution is ambiguous once more than one NPC is
     # present, so it's never resolved there.
-    body = cards.bake_char_token(body, _char_name(root, character))
+    body = cards.bake_char_token(body, char_name(root, character, version))
     _greeting_path(root, gid).write_text(dump_frontmatter(meta, body), encoding="utf-8")
     return gid
 
@@ -149,7 +159,8 @@ def update_greeting(root: Path, gid: str, *, name: str | None = None, body: str 
     if pcless is not None:
         meta["pcless"] = "true" if pcless else ""
     if body is not None:
-        body = cards.bake_char_token(body, _char_name(root, meta.get("character", "")))
+        body = cards.bake_char_token(
+            body, char_name(root, meta.get("character", ""), meta.get("version", "")))
     new_body = cur_body if body is None else body
     p.write_text(dump_frontmatter(meta, new_body), encoding="utf-8")
 
