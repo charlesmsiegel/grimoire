@@ -446,6 +446,21 @@ def test_no_setting_block_when_unset(monkeypatch, tmp_path):
     assert "# Current setting" not in sys
 
 
+def test_natural_prose_section_in_system_prompt(monkeypatch, tmp_path):
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    scenes.append_message(cid, sid, "user", "hi")
+    msgs = context.build_messages(cid, sid)
+    assert msgs[0]["role"] == "system"
+    assert "# Natural prose" in msgs[0]["content"]
+
+
+def test_natural_prose_section_in_opener_prompt(monkeypatch, tmp_path):
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    msgs = context.build_opener_messages(cid, sid, "A storm rolls in.")
+    assert msgs[0]["role"] == "system"
+    assert "# Natural prose" in msgs[0]["content"]
+
+
 def test_context_sections_labels_and_global_prompt(monkeypatch, tmp_path):
     wid, cid, sid = _campaign(monkeypatch, tmp_path)
     from grimoire.store import config

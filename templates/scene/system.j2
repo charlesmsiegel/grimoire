@@ -28,6 +28,9 @@
 {%- set s -%}{%- include "scene/sections/prose_style.j2" -%}{%- endset -%}
 {%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
 
+{%- set s -%}{%- include "scene/sections/natural_prose.j2" -%}{%- endset -%}
+{%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
+
 {%- set s -%}{%- include "scene/sections/card_system_prompts.j2" -%}{%- endset -%}
 {%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
 
