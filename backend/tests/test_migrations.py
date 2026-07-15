@@ -1,7 +1,22 @@
 import json
 
-from grimoire.store import campaigns, characters, chronicle, greetings, migrations, scenes, worlds
+from grimoire.store import appearances as ap
+from grimoire.store import campaigns, characters, chronicle, greetings, migrations, overlay, scenes, sync, worlds
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
+
+
+def _unbake_card(path, description):
+    """Overwrite a card file with unbaked content, bypassing the now-baking
+    write paths -- simulates a file saved before {{char}} was baked at write
+    time (or before this feature existed at all)."""
+    card = json.loads(path.read_text(encoding="utf-8"))
+    card["data"]["description"] = description
+    path.write_text(json.dumps(card), encoding="utf-8")
+
+
+def _unbake_greeting(path, body):
+    meta, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
+    path.write_text(dump_frontmatter(meta, body), encoding="utf-8")
 
 
 def _campaign(monkeypatch, tmp_path):
@@ -106,3 +121,85 @@ def test_bake_char_macros_marker_skips_later_startups(monkeypatch, tmp_path):
     card_path.write_text(json.dumps(card), encoding="utf-8")
     migrations.bake_char_macros()
     assert characters.read_card(wroot, cid, vid)["data"]["description"] == "{{char}} keeps the harbor."
+
+
+def test_bake_char_macros_repairs_materialized_greeting_baseline(monkeypatch, tmp_path):
+    # #137 P1: a materialized campaign greeting that was never actually
+    # diverged from its world source must not show a spurious "conflict"
+    # after both copies get mechanically baked the same way.
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    cid_, vid = characters.create_character(wroot, "Seraphine", "default")
+    gid = greetings.create_greeting(wroot, "Open", cid_, vid, body="placeholder")
+    _unbake_greeting(wroot / "greetings" / f"{gid}.md", "{{char}} arrives.")
+
+    cid = campaigns.create_campaign("Run", wid)
+    overlay.materialize_entity(cid, "greetings", gid)  # unmodified copy, base == unbaked hash
+
+    migrations.bake_char_macros()
+
+    assert overlay.read_greeting(cid, gid)["body"].strip() == "Seraphine arrives."
+    assert sync.incoming(cid) == []  # no spurious conflict from the mechanical bake
+
+
+def test_bake_char_macros_repairs_unpicked_actor_baseline(monkeypatch, tmp_path):
+    # same as above, for a materialized-but-unlocked whole-actor (manifest
+    # baseline, not appearances.json).
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    char_id, vid = characters.create_character(wroot, "Seraphine", "default")
+    _unbake_card(wroot / "characters" / char_id / f"{vid}.json", "{{char}} keeps the harbor.")
+
+    cid = campaigns.create_campaign("Run", wid)
+    overlay.materialize_actor(cid, "characters", char_id)  # unmodified copy
+
+    migrations.bake_char_macros()
+
+    croot = campaigns.campaign_root(cid)
+    assert characters.read_card(croot, char_id, vid)["data"]["description"] == "Seraphine keeps the harbor."
+    assert sync.incoming(cid) == []
+
+
+def test_bake_char_macros_repairs_locked_actor_version_baseline(monkeypatch, tmp_path):
+    # same as above, for a locked version (appearances.json base).
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    char_id, vid = characters.create_character(wroot, "Seraphine", "default")
+    _unbake_card(wroot / "characters" / char_id / f"{vid}.json", "{{char}} keeps the harbor.")
+
+    cid = campaigns.create_campaign("Run", wid)
+    overlay.materialize_actor(cid, "characters", char_id)
+    ap.pick_version(cid, "characters", char_id, vid)
+
+    migrations.bake_char_macros()
+
+    croot = campaigns.campaign_root(cid)
+    assert characters.read_card(croot, char_id, vid)["data"]["description"] == "Seraphine keeps the harbor."
+    assert sync.incoming(cid) == []
+
+
+def test_bake_char_macros_does_not_mask_a_real_pre_existing_conflict(monkeypatch, tmp_path):
+    # a genuine divergence (campaign edited independently of the world) must
+    # still show as a conflict after baking -- the baseline repair only fires
+    # when both sides land on the same content.
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    char_id, vid = characters.create_character(wroot, "Seraphine", "default")
+    _unbake_card(wroot / "characters" / char_id / f"{vid}.json", "{{char}} keeps the harbor.")
+
+    cid = campaigns.create_campaign("Run", wid)
+    overlay.materialize_actor(cid, "characters", char_id)
+    croot = campaigns.campaign_root(cid)
+    # the campaign copy diverges independently, unrelated to {{char}}
+    _unbake_card(croot / "characters" / char_id / f"{vid}.json", "A campaign-only edit.")
+
+    migrations.bake_char_macros()
+
+    # the campaign's own edit must survive baking untouched (no {{char}} in it)
+    assert characters.read_card(croot, char_id, vid)["data"]["description"] == "A campaign-only edit."
+    items = {(i["ref"]["kind"], i["ref"]["id"]): i for i in sync.incoming(cid)}
+    assert items[("characters", char_id)]["status"] == "conflict"

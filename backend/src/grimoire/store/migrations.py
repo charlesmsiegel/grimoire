@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import campaigns, cards, characters, greetings, overlay, scene_ids, scene_refs, scenes, worlds
+from . import (appearances, campaigns, cards, characters, entities, greetings, overlay,
+               scene_ids, scene_refs, scenes, worlds)
 from .frontmatter import parse_frontmatter
 from .paths import home, slugify, uniquify
 
@@ -58,7 +59,17 @@ def bake_char_macros() -> None:
     (removed as ambiguous once more than one NPC is present). Idempotent --
     already-baked content has no {{char}} left -- but a marker file skips the
     full-store scan on every later startup regardless, since that scan reads
-    and parses every card/greeting and isn't free for a large store."""
+    and parses every card/greeting and isn't free for a large store.
+
+    Baking a materialized campaign copy identically to its world source (the
+    common case: the campaign never actually diverged from the world for this
+    ref) changes both hashes the same way, which would otherwise surface as a
+    spurious sync conflict -- the campaign looks "changed" relative to its
+    recorded base, even though it's still exactly in step with the world. Each
+    baked campaign ref is checked against its world counterpart afterward and,
+    if they now match, the recorded sync base is advanced to match too -- a
+    genuine pre-existing divergence (campaign != world before baking) is left
+    alone, since baking each side separately doesn't resolve that."""
     marker = home() / ".char_macros_baked"
     if marker.exists():
         return
@@ -68,18 +79,25 @@ def bake_char_macros() -> None:
         for g in greetings.list_greetings(wroot):
             _bake_greeting(wroot, wroot, g)  # world greetings are self-contained
     for c in campaigns.list_campaigns():
-        croot = campaigns.campaign_root(c["id"])
-        _bake_characters(croot)  # materialized characters are self-contained
-        gdir = croot / "greetings"
-        if not gdir.exists():
-            continue
-        for p in gdir.glob("*.md"):
-            g = greetings.read_greeting(croot, p.stem)["meta"]
-            # a materialized greeting's character may still be world-only, so
-            # its name resolves through overlay.char_root, not the bare croot
-            name_root = overlay.char_root(c["id"], g["character"])
-            _bake_greeting(croot, name_root, g)
+        _bake_campaign(c["id"])
     marker.write_text("", encoding="utf-8")
+
+
+def _bake_campaign(cid: str) -> None:
+    croot = campaigns.campaign_root(cid)
+    wroot = worlds.world_root(campaigns.read_campaign(cid)["meta"].get("world", ""))
+    _bake_characters(croot)  # materialized characters are self-contained
+    _repair_character_baselines(cid, croot, wroot)
+    gdir = croot / "greetings"
+    if not gdir.exists():
+        return
+    for p in gdir.glob("*.md"):
+        g = greetings.read_greeting(croot, p.stem)["meta"]
+        # a materialized greeting's character may still be world-only, so its
+        # name resolves through overlay.char_root, not the bare croot
+        name_root = overlay.char_root(cid, g["character"])
+        _bake_greeting(croot, name_root, g)
+        _repair_greeting_baseline(cid, croot, wroot, g["id"])
 
 
 def _bake_characters(root: Path) -> None:
@@ -100,3 +118,42 @@ def _bake_greeting(root: Path, name_root: Path, g: dict) -> None:
     baked = cards.bake_char_token(full["body"], name)
     if baked != full["body"]:
         greetings.update_greeting(root, g["id"], body=baked)
+
+
+def _repair_greeting_baseline(cid: str, croot: Path, wroot: Path, gid: str) -> None:
+    ref = f"greetings/{gid}"
+    manifest = campaigns.read_manifest(cid)
+    if ref not in manifest:
+        return
+    world_h = entities.entity_hash(wroot, "greetings", gid)
+    mine_h = entities.entity_hash(croot, "greetings", gid)
+    if world_h is not None and world_h == mine_h and manifest[ref] != mine_h:
+        manifest[ref] = mine_h
+        campaigns.write_manifest(cid, manifest)
+
+
+def _repair_character_baselines(cid: str, croot: Path, wroot: Path) -> None:
+    """A materialized character is tracked one of two ways: a locked version
+    (appearances.json, one base per locked ref) or -- if never version-locked
+    -- the whole actor directory (campaigns manifest, one base per actor).
+    Only one applies per actor; check which."""
+    locked = appearances.record(cid)
+    manifest = campaigns.read_manifest(cid)
+    manifest_changed = False
+    for meta in characters.list_characters(croot):
+        actor_id = meta["id"]
+        lock_ref = f"characters/{actor_id}"
+        if lock_ref in locked:
+            vid = locked[lock_ref]["version"]
+            world_h = characters.card_hash(wroot, actor_id, vid)
+            mine_h = characters.card_hash(croot, actor_id, vid)
+            if world_h is not None and world_h == mine_h and locked[lock_ref]["base"] != mine_h:
+                appearances.set_base(cid, "characters", actor_id, mine_h)
+        elif lock_ref in manifest:
+            world_h = characters.dir_hash(wroot, actor_id)
+            mine_h = characters.dir_hash(croot, actor_id)
+            if world_h is not None and world_h == mine_h and manifest[lock_ref] != mine_h:
+                manifest[lock_ref] = mine_h
+                manifest_changed = True
+    if manifest_changed:
+        campaigns.write_manifest(cid, manifest)
