@@ -603,7 +603,7 @@ test("plot rows are editable and sent with payload on save", async () => {
         payload: expect.objectContaining({ status: "advanced" }) })]) })));
 });
 
-test("new_character proposal renders editable name/description/personality/dialogue/sd_prompt and saves them", async () => {
+test("new_character proposal renders editable card and provenance fields and saves them", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
   (api.absorbScene as any).mockResolvedValue({
@@ -613,7 +613,9 @@ test("new_character proposal renders editable name/description/personality/dialo
       target: { kind: "characters", id: "" }, label: "New character — Old Bram",
       field: "description", before: "", after: "[character(\"Old Bram\") {}]", authored: false,
       payload: { name: "Old Bram", sd_prompt: "an old innkeeper",
-        personality: "gruff but kind", mes_example: "<START>\n{{user}}: A room?\n{{char}}: Aye." } }] });
+        personality: "gruff but kind", mes_example: "<START>\n{{user}}: A room?\n{{char}}: Aye.",
+        evidence: "Bram rented the party a room.", confidence: "thin",
+        open_questions: "Why does he fear the pier?" } }] });
   renderCampaign();
   await screen.findByText("hi");
   fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
@@ -627,16 +629,28 @@ test("new_character proposal renders editable name/description/personality/dialo
   expect((dialogue as HTMLTextAreaElement).value).toBe("<START>\n{{user}}: A room?\n{{char}}: Aye.");
   const prompt = await screen.findByLabelText("Suggested image prompt New character — Old Bram");
   expect((prompt as HTMLInputElement).value).toBe("an old innkeeper");
+  const evidence = await screen.findByLabelText(/Evidence New character.*Old Bram/);
+  expect((evidence as HTMLTextAreaElement).value).toBe("Bram rented the party a room.");
+  const confidence = await screen.findByLabelText(/Confidence New character.*Old Bram/);
+  expect((confidence as HTMLSelectElement).value).toBe("thin");
+  const questions = await screen.findByLabelText(/Open questions New character.*Old Bram/);
+  expect((questions as HTMLTextAreaElement).value).toBe("Why does he fear the pier?");
   fireEvent.change(nameInput, { target: { value: "Old Man Bram" } });
   fireEvent.change(personality, { target: { value: "gruff, secretly gentle" } });
   fireEvent.change(prompt, { target: { value: "a grizzled innkeeper" } });
+  fireEvent.change(evidence, { target: { value: "Bram warned the party away from the pier." } });
+  fireEvent.change(confidence, { target: { value: "sketched" } });
+  fireEvent.change(questions, { target: { value: "Who pays Bram for rumors?" } });
   fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
   await waitFor(() => expect(api.saveChronicle).toHaveBeenCalledWith("run", "s1",
     expect.objectContaining({ edits: [expect.objectContaining({
       id: "new_character:old-bram",
       payload: { name: "Old Man Bram", sd_prompt: "a grizzled innkeeper",
         personality: "gruff, secretly gentle",
-        mes_example: "<START>\n{{user}}: A room?\n{{char}}: Aye." } })] })));
+        mes_example: "<START>\n{{user}}: A room?\n{{char}}: Aye.",
+        evidence: "Bram warned the party away from the pier.",
+        confidence: "sketched",
+        open_questions: "Who pays Bram for rumors?" } })] })));
 });
 
 test("new_location shows the setting checkbox only when the scene has no location", async () => {

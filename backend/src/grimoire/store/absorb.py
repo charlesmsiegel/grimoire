@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 
 from .. import prompts
-from . import (appearances, campaigns, cards, changes, characters, chronicle, entities,
+from . import (appearances, campaigns, cards, changes, characters, chronicle, dossiers, entities,
                groupstate, overlay, pcs, playstate, plot, relationships, scenes, sheets)
 from .paths import slugify
 
@@ -23,6 +23,11 @@ def _int05(v) -> int:
 
 def _truthy(v) -> bool:
     return v is True or (isinstance(v, str) and v.strip().lower() == "true")
+
+
+def _confidence(v: str) -> str:
+    c = (v or "").strip().lower()
+    return c if c in {"thin", "sketched", "established"} else "thin"
 
 
 def build_prompt(transcript: str, facts: dict, state_snapshot: dict | None = None,
@@ -103,7 +108,10 @@ def parse_output(text: str) -> dict:
 
     new_characters = _list("new_characters",
                            ("name", "description", "history", "personality",
-                            "mes_example", "sd_prompt"))
+                            "mes_example", "evidence", "confidence",
+                            "open_questions", "sd_prompt"))
+    for e in new_characters:
+        e["confidence"] = _confidence(e.get("confidence", ""))
 
     new_locations = []
     for e in obj.get("new_locations", []):
@@ -366,7 +374,10 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
                     "before": "", "after": after, "authored": False,
                     "payload": {"name": name, "sd_prompt": e.get("sd_prompt", ""),
                                 "personality": e.get("personality", ""),
-                                "mes_example": e.get("mes_example", "")}})
+                                "mes_example": e.get("mes_example", ""),
+                                "evidence": e.get("evidence", ""),
+                                "confidence": _confidence(e.get("confidence", "")),
+                                "open_questions": e.get("open_questions", "")}})
 
     for kind, parsed_key, prefix, label_noun in (
         ("locations", "new_locations", "new_location", "location"),
@@ -400,6 +411,31 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
 
 
 _BROWSABLE_KINDS = ("character_state", "lore", "authored", "new_character", "new_location", "new_lore")
+
+
+def _new_character_provenance(after: str, payload: dict) -> str:
+    lines = []
+    evidence = (payload.get("evidence", "") or "").strip()
+    confidence = _confidence(payload.get("confidence", ""))
+    open_questions = (payload.get("open_questions", "") or "").strip()
+    if evidence:
+        lines.append(f"Evidence: {evidence}")
+    lines.append(f"Confidence: {confidence}")
+    if open_questions:
+        lines.append(f"Open questions: {open_questions}")
+    return (after.rstrip() + "\n\n## Play Provenance\n" + "\n".join(lines)).strip()
+
+
+def _new_character_dossier(name: str, payload: dict) -> str:
+    confidence = _confidence(payload.get("confidence", ""))
+    evidence = (payload.get("evidence", "") or "").strip()
+    open_questions = (payload.get("open_questions", "") or "").strip()
+    parts = [f"{name} was introduced through play as a {confidence} emergent character."]
+    if evidence:
+        parts.append(f"Scene evidence: {evidence}")
+    if open_questions:
+        parts.append(f"Open questions: {open_questions}")
+    return " ".join(parts)
 
 
 def apply_edits(cid: str, edits: list[dict],
@@ -468,6 +504,7 @@ def apply_edits(cid: str, edits: list[dict],
             elif kind == "new_character":
                 p = e["payload"]
                 card = characters.blank_card(p["name"])
+                after = _new_character_provenance(after, p)
                 card["data"]["description"] = after
                 card["data"]["personality"] = p.get("personality", "")
                 card["data"]["mes_example"] = p.get("mes_example", "")
@@ -485,6 +522,7 @@ def apply_edits(cid: str, edits: list[dict],
                                     ("mes_example", "example dialogue"))
                     if card["data"][f]]
                 new_cid, new_vid = overlay.create_character(cid, p["name"], "default", card)
+                dossiers.write(croot, new_cid, _new_character_dossier(p["name"], p))
                 if sid:
                     appearances.appear(cid, sid, "characters", new_cid, new_vid, "npc")
                 target = {"kind": "characters", "id": new_cid}
