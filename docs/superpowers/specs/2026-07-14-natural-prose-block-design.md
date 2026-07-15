@@ -180,6 +180,17 @@ instead:
   effect shows up in practice (banned phrases surfacing *more*), the fix is
   editing the live template — trim the ban list, keep the positive guidance.
 
+**Android caveat (adversarial-review finding).** The live-rollback story is
+explicitly a *desktop/source-checkout* claim. On Android, templates are
+packaged APK assets extracted to app-private storage — not editable in
+place. There, the block is fixed per-APK and backing it out means rebuilding
+(`make apk`), which is acceptable because the APK is always self-built from
+this checkout; there is no third-party Android distribution. A user-facing
+enable/disable setting was considered and declined as YAGNI for a
+single-user app — if template-tuning cycles ever become an Android pain
+point, a config toggle (gating the include via a var) is the follow-up, and
+nothing in this design blocks adding it.
+
 ## Out of scope / follow-ups
 
 - Other LLM calls (`scene_suggestions`, `tagline`, `dossier`, `absorb`) —
