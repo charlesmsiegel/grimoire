@@ -3360,8 +3360,11 @@ def get_cast_detail(cid: str, sid: str, kind: str, id: str):
 @router.put("/campaigns/{cid}/scenes/{sid}/messages/{index}")
 def put_scene_message(cid: str, sid: str, index: int, body: EditMessage):
     _require_scene(cid, sid)
+    # Macros resolved once at persist time (#137), same as a fresh send.
+    content = store.context.expand_macros(
+        body.content, store.context.scene_substitutions(cid, sid), cid, sid)
     try:
-        store.scenes.edit_message(cid, sid, index, body.content)
+        store.scenes.edit_message(cid, sid, index, content)
     except IndexError:
         raise HTTPException(status_code=400, detail="message index out of range")
     except store.scenes.RollMessageImmutable:

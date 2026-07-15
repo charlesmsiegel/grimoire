@@ -871,6 +871,19 @@ def test_edit_message_route(client):
     assert client.put(f"/api/campaigns/{cid}/scenes/{sid}/messages/9", json={"content": "x"}).status_code == 400
 
 
+def test_edit_message_route_resolves_roll_macro_once(client):
+    # #137 regression: an edit can introduce a macro too -- it must resolve
+    # once at edit time, not re-roll on every later context rebuild.
+    wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    client.put("/api/config", json={"openrouter_key": "sk-test"})
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "helo"})
+    client.put(f"/api/campaigns/{cid}/scenes/{sid}/messages/0",
+              json={"content": "I roll {{roll:1d20}} to hit."})
+    content = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"][0]["content"]
+    assert "{{roll" not in content
+
+
 def test_edit_message_route_refuses_a_manual_roll_line(client):
     _, cid = _campaign(client)
     sid = _scene(client, cid)
@@ -2738,6 +2751,22 @@ def test_offscreen_chat_never_persists_the_director_note(client):
     msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
     assert msgs and all(m["role"] == "assistant" for m in msgs)
     assert "guard grows suspicious" not in json.dumps(msgs)
+
+
+def test_offscreen_chat_director_note_expands_roll_macro(client):
+    # #137 regression: build_director_messages appended the note raw -- an
+    # offscreen director note's macros must resolve before reaching the model.
+    _, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes",
+                      json={"title": "Cabal", "pcless": True}).json()["id"]
+    client.put("/api/config", json={"openrouter_key": "k"})
+    cap = CapturingOpenRouter()
+    client.app.dependency_overrides[routes.get_llm] = lambda: cap
+    with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/chat",
+                       json={"content": "Resolve {{roll:1d20}}."}) as r:
+        r.read()
+    note = next(m for m in cap.messages if m["role"] == "user")["content"]
+    assert "{{roll" not in note
 
 
 def test_offscreen_chat_empty_note_sends_continue(client):

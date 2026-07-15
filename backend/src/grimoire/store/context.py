@@ -574,7 +574,7 @@ def build_director_messages(cid: str, sid: str, note: str) -> list[dict]:
     if system_text:
         messages.append({"role": "system", "content": system_text})
     messages += a["history"]
-    messages.append({"role": "user", "content": note})
+    messages.append({"role": "user", "content": expand_macros(note, a["subs"], cid, sid)})
     if a["post_history"]:
         messages.append({"role": "system", "content": a["post_history"]})
     return messages
