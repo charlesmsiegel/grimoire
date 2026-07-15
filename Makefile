@@ -24,6 +24,7 @@ ifeq ($(OS),Windows_NT)
   SHELL := cmd.exe
   .SHELLFLAGS := /C
   JAVA_HOME ?= $(LOCALAPPDATA)/Android/jdk-17
+  SDK_DIR   := $(LOCALAPPDATA)/Android/Sdk
   BOOTSTRAP := powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows/android-bootstrap.ps1
   # .\ prefix: NoDefaultCurrentDirectoryInExePath (set on some machines)
   # stops cmd from resolving bare gradlew.bat out of the current directory.
@@ -33,6 +34,7 @@ ifeq ($(OS),Windows_NT)
   fixpath = $(subst /,\,$(1))
 else
   JAVA_HOME ?= $(HOME)/.local/share/grimoire-android/jdk-17
+  SDK_DIR   := $(HOME)/.local/share/grimoire-android/Sdk
   BOOTSTRAP := sh scripts/unix/android-bootstrap.sh
   GRADLEW = cd $(ANDROID) && ./gradlew --no-daemon
   MKDIR_BUILD = mkdir -p $(BUILD_DIR)
@@ -40,6 +42,9 @@ else
   fixpath = $(1)
 endif
 export JAVA_HOME
+# The bootstrap installs platform-tools but doesn't put adb on PATH; call it
+# by its SDK location.
+ADB = $(call fixpath,$(SDK_DIR)/platform-tools/adb)
 
 .PHONY: apk apk-release apk-install android-bootstrap android-clean
 
@@ -56,7 +61,7 @@ apk-release:
 	@echo Unsigned APK: $(APK_RELEASE)
 
 apk-install: apk
-	adb install -r $(APK_DEBUG)
+	$(ADB) install -r $(call fixpath,$(APK_DEBUG))
 
 android-bootstrap:
 	$(BOOTSTRAP)
