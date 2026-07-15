@@ -86,3 +86,23 @@ def test_bake_char_macros_backfills_legacy_unbaked_content(monkeypatch, tmp_path
 def test_bake_char_macros_handles_empty_store(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     migrations.bake_char_macros()  # no worlds/campaigns — must not raise
+
+
+def test_bake_char_macros_marker_skips_later_startups(monkeypatch, tmp_path):
+    # scalability: a full card/greeting scan on every startup isn't free for a
+    # large store, so a marker file makes this a true one-time migration.
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    cid, vid = characters.create_character(wroot, "Seraphine", "default")
+    migrations.bake_char_macros()
+    assert (tmp_path / ".char_macros_baked").exists()
+
+    # unbaked content appearing after the marker was written (e.g. a restored
+    # backup) is deliberately left alone -- the marker means "never scan again"
+    card_path = wroot / "characters" / cid / f"{vid}.json"
+    card = json.loads(card_path.read_text(encoding="utf-8"))
+    card["data"]["description"] = "{{char}} keeps the harbor."
+    card_path.write_text(json.dumps(card), encoding="utf-8")
+    migrations.bake_char_macros()
+    assert characters.read_card(wroot, cid, vid)["data"]["description"] == "{{char}} keeps the harbor."

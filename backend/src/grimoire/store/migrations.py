@@ -6,7 +6,7 @@ from pathlib import Path
 
 from . import campaigns, cards, characters, greetings, overlay, scene_ids, scene_refs, scenes, worlds
 from .frontmatter import parse_frontmatter
-from .paths import slugify, uniquify
+from .paths import home, slugify, uniquify
 
 
 def migrate_scene_ids() -> None:
@@ -56,7 +56,12 @@ def bake_char_macros() -> None:
     (#137): content saved before {{char}} was resolved at write time still
     carries the raw macro, and scene-time substitution no longer resolves it
     (removed as ambiguous once more than one NPC is present). Idempotent --
-    already-baked content has no {{char}} left, so a re-run touches nothing."""
+    already-baked content has no {{char}} left -- but a marker file skips the
+    full-store scan on every later startup regardless, since that scan reads
+    and parses every card/greeting and isn't free for a large store."""
+    marker = home() / ".char_macros_baked"
+    if marker.exists():
+        return
     for w in worlds.list_worlds():
         wroot = worlds.world_root(w["id"])
         _bake_characters(wroot)
@@ -74,6 +79,7 @@ def bake_char_macros() -> None:
             # its name resolves through overlay.char_root, not the bare croot
             name_root = overlay.char_root(c["id"], g["character"])
             _bake_greeting(croot, name_root, g)
+    marker.write_text("", encoding="utf-8")
 
 
 def _bake_characters(root: Path) -> None:
