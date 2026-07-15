@@ -1,4 +1,4 @@
-# Provisions the Android build toolchain for grimoire — idempotent, per-user,
+# Provisions the Android build toolchain for grimoire - idempotent, per-user,
 # no admin rights. JDK 17 and the Android SDK land under %LOCALAPPDATA%\Android;
 # android\local.properties records sdk.dir and the Chaquopy build python.
 # Invoked by `make android-bootstrap`.
@@ -59,4 +59,4 @@ $props = @("sdk.dir=" + $Sdk.Replace('\', '/'))
 if ($buildPy) { $props += "grimoire.buildPython=" + $buildPy.Replace('\', '/') }
 Set-Content "$Root\android\local.properties" ($props -join "`n") -Encoding ascii
 Write-Host "Wrote android\local.properties (sdk.dir, buildPython=$buildPy)."
-Write-Host "Toolchain ready — build with: make apk"
+Write-Host "Toolchain ready - build with: make apk"
