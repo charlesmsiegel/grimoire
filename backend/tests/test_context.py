@@ -147,7 +147,12 @@ def test_single_npc_block_order(monkeypatch, tmp_path):
     assert msgs[-1] == {"role": "user", "content": "hello"}
 
 
-def test_multi_npc_char_token_joined(monkeypatch, tmp_path):
+def test_multi_npc_scene_leaves_char_token_literal(monkeypatch, tmp_path):
+    # #137: {{char}} is never resolved to "the present NPC cast" -- with more
+    # than one NPC present that would be ambiguous (which one?). It's baked to
+    # a card's own name at creation instead (see test_bake_char_name_* below);
+    # a {{char}} typed into a chat message has no "self" to bake against, so
+    # it stays literal, same as an unresolved {{user}}.
     wid, cid, sid = _campaign(monkeypatch, tmp_path)
     wroot = worlds.world_root(wid)
     characters.create_character(wroot, "Seraphine", "default", _npc_card("Seraphine", description="A"))
@@ -157,8 +162,7 @@ def test_multi_npc_char_token_joined(monkeypatch, tmp_path):
     scenes.append_message(cid, sid, "user", "{{char}} arrives")
     msgs = context.build_messages(cid, sid)
     assert "A" in msgs[0]["content"] and "B" in msgs[0]["content"]
-    # scene_cast sorts by (kind, id): 'drowned-king' precedes 'seraphine'
-    assert msgs[-1]["content"] == "Drowned King, Seraphine arrives"
+    assert msgs[-1]["content"] == "{{char}} arrives"
 
 
 def test_player_persona_and_user_token(monkeypatch, tmp_path):
@@ -228,6 +232,9 @@ def test_character_cast_as_player_uses_persona_not_char(monkeypatch, tmp_path):
 
 
 def test_substitution_in_card_and_worldinfo(monkeypatch, tmp_path):
+    # #137: a card's own {{char}} is baked to its own name at creation
+    # (self-reference, unambiguous); world-info has no single "self" to bake
+    # against, so its {{char}} is never resolved and stays literal.
     wid, cid, sid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     characters.create_character(worlds.world_root(wid), "Seraphine", "default",
@@ -239,8 +246,8 @@ def test_substitution_in_card_and_worldinfo(monkeypatch, tmp_path):
     entities.create_entity(croot, "lore", "Note", "{{char}} knows {{user}}", keys="")
     scenes.append_message(cid, sid, "user", "hi")
     sys = context.build_messages(cid, sid)[0]["content"]
-    assert "Seraphine greets Elara" in sys   # substitution inside card text
-    assert "Seraphine knows Elara" in sys     # substitution inside world-info
+    assert "Seraphine greets Elara" in sys    # baked at card creation, then {{user}} substituted
+    assert "{{char}} knows Elara" in sys      # world-info {{char}} stays literal, {{user}} substituted
 
 
 def test_mes_example_and_system_prompt_placement(monkeypatch, tmp_path):

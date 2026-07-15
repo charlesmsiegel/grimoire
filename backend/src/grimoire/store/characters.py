@@ -13,7 +13,7 @@ import json
 import shutil
 from pathlib import Path
 
-from . import assets, chub, fetch, lorebook, statcache, taglines
+from . import assets, cards, chub, fetch, lorebook, statcache, taglines
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import slugify, uniquify
 
@@ -86,7 +86,9 @@ def create_character(root: Path, name: str, version_name: str = "default", card:
     cid = uniquify(slugify(name), exists)
     _char_dir(root, cid).mkdir(parents=True)
     vid = slugify(version_name)
-    _card_path(root, cid, vid).write_text(_dumps(card or blank_card(name)), encoding="utf-8")
+    card = card or blank_card(name)
+    cards.bake_char_name(card)  # #137: {{char}} is always self-reference, baked at write time
+    _card_path(root, cid, vid).write_text(_dumps(card), encoding="utf-8")
     _meta_path(root, cid).write_text(
         dump_frontmatter({"name": name, "default_version": vid}, ""), encoding="utf-8"
     )
@@ -96,6 +98,7 @@ def create_character(root: Path, name: str, version_name: str = "default", card:
 def create_version(root: Path, cid: str, version_name: str, card: dict) -> str:
     _require_char(root, cid)
     vid = uniquify(slugify(version_name), lambda v: _card_path(root, cid, v).exists())
+    cards.bake_char_name(card)  # #137: {{char}} is always self-reference, baked at write time
     _card_path(root, cid, vid).write_text(_dumps(card), encoding="utf-8")
     return vid
 
@@ -105,6 +108,7 @@ def update_version(root: Path, cid: str, vid: str, card: dict) -> None:
     p = _card_path(root, cid, vid)
     if not _safe(vid) or not p.exists():
         raise VersionNotFound(vid)
+    cards.bake_char_name(card)  # #137: {{char}} is always self-reference, baked at write time
     p.write_text(_dumps(card), encoding="utf-8")
 
 
@@ -371,7 +375,6 @@ def _download_avatar(card: dict) -> tuple[bytes, str] | None:
 
 def import_card(root: Path, data: bytes, fmt: str, into_cid: str | None = None,
                 name: str | None = None, update_vid: str | None = None) -> tuple[str, str]:
-    from . import cards
     card = cards.loads(data, fmt)  # raises cards.CardParseError on bad input
     cards.bake_char_name(card)
     if update_vid is not None:
@@ -456,8 +459,6 @@ def import_from_chub(root: Path, url_or_path: str, into_cid: str | None = None,
     gallery, linked lorebooks); any other URL is fetched directly and parsed
     as a PNG or JSON card -- gallery/lorebooks stay empty there, since that
     metadata only exists on chub.ai."""
-    from . import cards
-
     stored_url = chub.normalize_link(url_or_path)
     if stored_url is None:
         raise chub.ChubParseError(url_or_path)
@@ -602,5 +603,4 @@ def download_chub_lorebooks(root: Path, cid: str, vid: str) -> dict:
 
 
 def export_card(root: Path, cid: str, vid: str, fmt: str) -> bytes:
-    from . import cards
     return cards.dumps(read_card(root, cid, vid), fmt)

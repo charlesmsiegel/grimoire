@@ -60,13 +60,22 @@ _BAKE_FIELDS = ("description", "personality", "scenario", "first_mes", "mes_exam
 _CHAR_MACRO = re.compile(r"\{\{char\}\}", re.IGNORECASE)
 
 
+def bake_char_token(text: str, name: str) -> str:
+    """Replace the {{char}} macro with `name` (self-reference baking). `name`
+    empty -> no-op, since there's nothing to bake against (e.g. a greeting with
+    no associated character). Shared by card fields (bake_char_name) and
+    standalone greetings (greetings.py), so every piece of authored content
+    with a clear "self" resolves {{char}} the same way, at creation time."""
+    return _CHAR_MACRO.sub(lambda _m: name, text) if name else text
+
+
 def bake_char_name(card: dict) -> bool:
     """Replace the {{char}} macro with the card's own name in every text field,
-    greeting, and lorebook entry. Baked at import: scene-time substitution maps
-    {{char}} to the whole present cast, so a card's own macro would expand
-    wrongly in multi-character scenes — and the raw token must never surface in
-    chats. {{user}} stays literal (unknown until a scene). Mutates `card`;
-    True if anything changed."""
+    greeting, and lorebook entry. Baked at creation/import: scene-time {{char}}
+    is never resolved to the present NPC cast (ambiguous with multiple NPCs) --
+    a card's own macro would expand wrongly in multi-character scenes, and the
+    raw token must never surface in chats. {{user}} stays literal (unknown
+    until a scene). Mutates `card`; True if anything changed."""
     data = card.get("data") or {}
     name = str(data.get("name") or "").strip()
     if not name:
@@ -75,7 +84,7 @@ def bake_char_name(card: dict) -> bool:
 
     def sub(text: str) -> str:
         nonlocal changed
-        new = _CHAR_MACRO.sub(lambda _m: name, text)
+        new = bake_char_token(text, name)
         changed = changed or new != text
         return new
 
