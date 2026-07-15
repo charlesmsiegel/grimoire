@@ -8,7 +8,7 @@
 <body class="appendix">
   <h1>{{ name }}</h1>
 {% if role %}  <p class="actor-role">{{ role }}</p>
-{% endif %}{% if portrait %}  <img class="portrait" src="../images/{{ portrait }}" alt="{{ name }}"/>
+{% endif %}{% if portrait %}  <img class="portrait" src="{{ portrait }}" alt="{{ name }}"/>
 {% endif %}{% for sec in sections %}{% if sec.label %}  <h2>{{ sec.label }}</h2>
 {% endif %}{{ sec.html }}
 {% endfor %}</body>

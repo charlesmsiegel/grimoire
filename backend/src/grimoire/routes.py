@@ -1875,7 +1875,7 @@ def get_campaign(cid: str):
     return out
 
 
-# Declared before the generic /campaigns/{cid}/{kind} routes so "export.epub" isn't captured as a kind.
+# Declared before the generic /campaigns/{cid}/{kind} routes so "export.*" isn't captured as a kind.
 @router.get("/campaigns/{cid}/export.epub")
 def export_campaign_epub(cid: str):
     try:
@@ -1883,6 +1883,46 @@ def export_campaign_epub(cid: str):
     except store.campaigns.CampaignNotFound:
         raise HTTPException(status_code=404, detail="campaign not found")
     return Response(content=blob, media_type="application/epub+zip",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@router.get("/campaigns/{cid}/export.md.zip")
+def export_campaign_markdown(cid: str):
+    try:
+        blob, filename = store.export.build_markdown_bundle(cid)
+    except store.campaigns.CampaignNotFound:
+        raise HTTPException(status_code=404, detail="campaign not found")
+    return Response(content=blob, media_type="application/zip",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@router.get("/campaigns/{cid}/export.html")
+def export_campaign_html(cid: str):
+    try:
+        blob, filename = store.export.build_html(cid)
+    except store.campaigns.CampaignNotFound:
+        raise HTTPException(status_code=404, detail="campaign not found")
+    return Response(content=blob, media_type="text/html",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@router.get("/campaigns/{cid}/export.txt")
+def export_campaign_text(cid: str):
+    try:
+        blob, filename = store.export.build_text(cid)
+    except store.campaigns.CampaignNotFound:
+        raise HTTPException(status_code=404, detail="campaign not found")
+    return Response(content=blob, media_type="text/plain",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@router.get("/campaigns/{cid}/export.json")
+def export_campaign_json(cid: str):
+    try:
+        blob, filename = store.export.build_json(cid)
+    except store.campaigns.CampaignNotFound:
+        raise HTTPException(status_code=404, detail="campaign not found")
+    return Response(content=blob, media_type="application/json",
                     headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
