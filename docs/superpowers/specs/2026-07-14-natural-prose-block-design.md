@@ -45,10 +45,30 @@ OpenRouter.
   Voss…). Soft "vary, don't ban" for over-rotated token-diversity names
   (Chen, Okonkwo…) — no origin is banned; the instruction is variety within
   and across origins.
-- **Strictness**: defaults that the prose style guide overrides. Repetition
-  and stock phrasing are absolute; rhythm/punctuation devices (em dashes,
-  ellipses, fragments, italics) are "ration and vary", since styles like
-  noir-detective and gothic-horror legitimately use them.
+- **Strictness**: defaults with an explicit precedence hierarchy (see below).
+  Repetition and stock phrasing are absolute; rhythm/punctuation devices (em
+  dashes, ellipses, fragments, italics) are "ration and vary", since styles
+  like noir-detective and gothic-horror legitimately use them.
+
+### Precedence hierarchy (adversarial-review finding)
+
+One explicit ordering, stated in the block itself so models don't improvise:
+
+1. **Response format and established facts** — the `**<Name>:**` script
+   markers, `{{user}}`/`{{char}}`-resolved identities, and every name that
+   already exists in the scene, cast, or world always win. The block must
+   never cause a model to rename, avoid, or fail to attribute an existing
+   character (the repo's own fixtures include an Elara Vane and a Winifred
+   Vance).
+2. **The prose style guide** — may override the *rhythm* tier (em dashes,
+   ellipses, fragments, italics, sentence shape).
+3. **Natural-prose defaults** — the phrase, construction, and
+   name-at-invention rules hold regardless of style.
+
+Corollaries baked into the block text: the names guidance applies **only at
+the moment of inventing a new name**, never to reproducing existing ones; and
+the "no section headers in narration" rule explicitly exempts the required
+speaker markers, which are format, not prose.
 
 ## Design
 
@@ -57,8 +77,14 @@ OpenRouter.
 New template `templates/scene/sections/natural_prose.j2` — var-less, always
 renders. Included from `templates/scene/system.j2` immediately **after** the
 `prose_style` include, so "the prose style above wins" reads literally in
-context order. No backend code changes; jinja auto-reload makes the block
-live-editable like every other prompt.
+context order. Jinja auto-reload makes the block live-editable like every
+other prompt.
+
+One backend change (adversarial-review finding): `context.py`'s `_SECTIONS`
+list mirrors `system.j2` for the Context-inspector token breakdown; it gains
+`("Natural prose", "scene/sections/natural_prose.j2", False)` in the same
+position (after "Prose style"). Without it the inspector would silently
+undercount every scene prompt.
 
 `templates/README.md` gains a line documenting the section in the `scene/`
 entry.
@@ -71,15 +97,20 @@ the sibling sections' `# Section name` convention):
 ```
 # Natural prose
 
-Defaults that keep the writing from sounding machine-generated. The prose
-style guide, when one is set, outranks anything here.
+Defaults that keep the writing from sounding machine-generated. Precedence:
+the reply format and established facts always win — never rename, avoid, or
+misattribute anyone or anything that already has a name. The prose style
+guide, when one is set, overrides the rhythm guidance below. Everything else
+here holds regardless.
 
-**Names.** Invent names that fit the setting and vary in sound and origin.
-Never reach for the stock AI pool: Elara, Lyra, Kael, Aria, Seraphina,
-Selene, Thorne, Voss, Vance, Blackwood, Ashford, or a tavern called The
-Gilded-or-Rusty Anything. Don't solve variety by rotating the same few
-names either (a Chen, an Okonkwo, a Kowalski) — vary within an origin, not
-just across origins.
+**Names — only when inventing someone or something new.** Names that
+already exist in this scene, cast, or world are fixed; reproduce them
+exactly, even if they appear below. When you do invent a name, make it fit
+the setting and vary in sound and origin. Never reach for the stock AI
+pool: Elara, Lyra, Kael, Aria, Seraphina, Selene, Thorne, Voss, Vance,
+Blackwood, Ashford, or a tavern called The Gilded-or-Rusty Anything. Don't
+solve variety by rotating the same few names either (a Chen, an Okonkwo, a
+Kowalski) — vary within an origin, not just across origins.
 
 **Phrases — never use.** A voice barely above a whisper / barely audible;
 said in a low voice as a reflex tag; the air thick with (scent, tension,
@@ -112,18 +143,42 @@ rather than clarify.
 are seasoning, not structure — if the last paragraph used one, the next
 doesn't. Vary sentence length and paragraph shape; let some moments pass
 without a dramatic beat. In narration, write lists as prose, no bullet
-points or section headers.
+points or headings — the required speaker markers are reply format, not
+headings, and always stay.
 ```
 
 ### Testing & verification
 
 - `backend/.venv/Scripts/python.exe scripts/verify_templates.py` — the
   wiring harness; a var-less section must not break the documented contract.
+- New backend test: "Natural prose" appears in `context_sections()` output
+  (and therefore in the context endpoint's token total), positioned after
+  "Prose style".
 - `backend/.venv/Scripts/python.exe -m pytest backend -q` — check no test
   pins the assembled system-message text; adjust any that do.
 - Manual: render a scene prompt (or eyeball via an existing context test)
   and confirm the section lands after the prose style and before card
   system prompts.
+
+### Rollout & efficacy (adversarial-review finding)
+
+The review asked for a multi-model efficacy evaluation before making the
+block always-on. Deliberately declined as disproportionate: grimoire is a
+single-user app, "sounds less like AI" is a subjective per-user judgment,
+and there is no eval harness to piggyback on. What the design provides
+instead:
+
+- **Trivial, live rollback**: the block is a plain template file with no
+  vars. Emptying (or gutting) `natural_prose.j2` disables it instantly —
+  `system.j2` drops empty sections and jinja auto-reloads — with the
+  `_SECTIONS` entry harmlessly rendering empty. No code change to back out.
+- **Visible cost**: the Context inspector shows the section and its exact
+  token count on every scene (hence the `_SECTIONS` requirement above), so
+  the recurring cost is never hidden.
+- **In-use evaluation**: the acceptance judge is the user reading their own
+  scenes, with retry/regenerate as the natural A/B. If the pink-elephant
+  effect shows up in practice (banned phrases surfacing *more*), the fix is
+  editing the live template — trim the ban list, keep the positive guidance.
 
 ## Out of scope / follow-ups
 
