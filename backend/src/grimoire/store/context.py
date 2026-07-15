@@ -590,6 +590,7 @@ def build_director_messages(cid: str, sid: str, note: str) -> list[dict]:
 _SECTIONS = [
     ("Global system prompt", "scene/sections/global_system_prompt.j2", False),
     ("Prose style", "scene/sections/prose_style.j2", False),
+    ("Natural prose", "scene/sections/natural_prose.j2", False),
     ("System prompt", "scene/sections/card_system_prompts.j2", False),
     ("Character descriptions", "scene/sections/character_descriptions.j2", False),
     ("Character state", "scene/sections/character_state.j2", False),

@@ -935,3 +935,18 @@ def test_roll_macro_expands_in_opener_prompt(monkeypatch, tmp_path):
     user_msg = next(m for m in msgs if m["role"] == "user")
     n = int(user_msg["content"].removeprefix("Initiative: ").removesuffix("!"))
     assert 1 <= n <= 20
+
+
+def test_natural_prose_in_context_sections(monkeypatch, tmp_path):
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    from grimoire.store import config
+    # A configured style makes the ordering assertion meaningful: the spec
+    # requires Natural prose directly AFTER Prose style, mirroring system.j2.
+    config.write_config(default_style_id="gothic-horror")
+    secs = context.context_sections(cid, sid)
+    labels = [s["label"] for s in secs]
+    assert "Natural prose" in labels
+    assert labels.index("Natural prose") == labels.index("Prose style") + 1
+    text = next(s["text"] for s in secs if s["label"] == "Natural prose")
+    assert text.startswith("# Natural prose")
+    assert context.count_tokens(text) > 0  # it contributes to the token total
