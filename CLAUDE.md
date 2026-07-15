@@ -83,7 +83,8 @@ code into `android/`. Rules that keep the platforms in lockstep
 
 Build: `make android-bootstrap` (once per machine — JDK 17, Android SDK,
 licenses, `android/local.properties`), then `make apk` (debug) /
-`make apk-release`. On Windows run make from Git Bash.
+`make apk-release`. On Windows make works from PowerShell, cmd, or Git Bash
+(recipes are pinned to cmd.exe).
 
 ## Development workflow: Codex review gates
 
