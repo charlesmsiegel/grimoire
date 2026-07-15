@@ -1125,6 +1125,43 @@ def test_chat_streams_and_persists(client):
     assert msgs[-1] == {"role": "assistant", "content": "Hello"}
 
 
+def test_chat_resolves_roll_macro_once_and_persists_stably(client):
+    # #137 regression: a {{roll:}}/{{random:}} macro in a sent message must
+    # resolve ONCE, at persist time -- not get re-rolled every time the
+    # context is rebuilt from the (now historical) stored message.
+    client.put("/api/config", json={"openrouter_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat",
+                       json={"content": "I roll {{roll:1d20}} to hit."})
+    assert resp.status_code == 200
+    stored = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    user_msg = next(m for m in stored if m["role"] == "user")
+    assert "{{roll" not in user_msg["content"]  # resolved at write time, not left raw
+
+    def _user_line(msgs):
+        return next(m["content"] for m in msgs if m["role"] == "user")
+
+    first = _user_line(store.context.build_messages(cid, sid))
+    second = _user_line(store.context.build_messages(cid, sid))
+    assert first == second == user_msg["content"]
+
+
+def test_llm_reply_resolves_roll_macro_once_and_persists_stably(client):
+    # Same #137 regression, on the reply side: _persist_reply must resolve
+    # macros before writing the model's narration to history.
+    client.put("/api/config", json={"openrouter_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(
+        ["The die shows {{roll:1d20}}."])
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "roll"})
+    assert resp.status_code == 200
+    stored = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    reply = next(m for m in stored if m["role"] == "assistant")
+    assert "{{roll" not in reply["content"]
+
+
 def test_retry_regenerates_without_adding_a_user_turn(client):
     client.put("/api/config", json={"openrouter_key": "sk-or-secret"})
     _wid, cid = _campaign(client)
