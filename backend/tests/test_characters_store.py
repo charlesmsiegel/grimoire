@@ -16,6 +16,32 @@ def test_create_and_read_single_card(tmp_path):
     assert [v["id"] for v in meta["versions"]] == ["default"]
 
 
+def test_create_character_bakes_char_macro(tmp_path):
+    # #137: {{char}} is self-reference, resolved at write time -- not just on
+    # import, so a hand-authored card (create_character, not import_card) also
+    # never carries a raw {{char}} token into a scene.
+    card = ch.blank_card("Seraphine")
+    card["data"]["description"] = "{{char}} keeps the harbor."
+    cid, vid = ch.create_character(tmp_path, "Seraphine", card=card)
+    assert ch.read_card(tmp_path, cid, vid)["data"]["description"] == "Seraphine keeps the harbor."
+
+
+def test_create_version_bakes_char_macro(tmp_path):
+    cid, _ = ch.create_character(tmp_path, "Seraphine")
+    card = ch.blank_card("Seraphine")
+    card["data"]["description"] = "{{char}} is corrupted."
+    vid = ch.create_version(tmp_path, cid, "Corrupted", card)
+    assert ch.read_card(tmp_path, cid, vid)["data"]["description"] == "Seraphine is corrupted."
+
+
+def test_update_version_bakes_char_macro(tmp_path):
+    cid, vid = ch.create_character(tmp_path, "Seraphine")
+    card = ch.read_card(tmp_path, cid, vid)
+    card["data"]["description"] = "{{char}} remembers the flood."
+    ch.update_version(tmp_path, cid, vid, card)
+    assert ch.read_card(tmp_path, cid, vid)["data"]["description"] == "Seraphine remembers the flood."
+
+
 def test_add_second_version_and_set_default(tmp_path):
     cid, _ = ch.create_character(tmp_path, "Seraphine")
     v2 = ch.create_version(tmp_path, cid, "Corrupted", ch.blank_card("Seraphine"))

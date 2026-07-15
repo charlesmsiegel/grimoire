@@ -24,6 +24,32 @@ def test_create_read_list_roundtrip(tmp_path):
     assert [x["id"] for x in greetings.list_greetings(root)] == [gid]
 
 
+def test_create_greeting_bakes_char_macro_to_its_character(tmp_path):
+    # #137: {{char}} in a greeting body is the greeting's own associated
+    # character -- unambiguous, baked at creation, never left for scene-time
+    # substitution (which would be ambiguous with more than one NPC present).
+    root = _world(tmp_path)
+    characters.create_character(root, "Seraphine", "default")
+    gid = greetings.create_greeting(root, "Open", "seraphine", "default",
+                                    body="{{char}} looks up from the ledger.")
+    assert greetings.read_greeting(root, gid)["body"].strip() == \
+        "Seraphine looks up from the ledger."
+
+
+def test_create_greeting_without_character_leaves_char_macro_literal(tmp_path):
+    root = _world(tmp_path)
+    gid = greetings.create_greeting(root, "Cold open", "", "", body="{{char}} is nowhere in sight.")
+    assert greetings.read_greeting(root, gid)["body"].strip() == "{{char}} is nowhere in sight."
+
+
+def test_update_greeting_bakes_char_macro(tmp_path):
+    root = _world(tmp_path)
+    characters.create_character(root, "Seraphine", "default")
+    gid = greetings.create_greeting(root, "Open", "seraphine", "default", body="Hello.")
+    greetings.update_greeting(root, gid, body="{{char}} returns.")
+    assert greetings.read_greeting(root, gid)["body"].strip() == "Seraphine returns."
+
+
 def test_update_and_missing(tmp_path):
     root = _world(tmp_path)
     gid = greetings.create_greeting(root, "G", "c", "v")

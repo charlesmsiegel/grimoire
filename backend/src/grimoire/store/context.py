@@ -46,15 +46,19 @@ def _substitute(text: str, subs: dict[str, str]) -> str:
 
 
 def scene_substitutions(cid: str, sid: str) -> dict[str, str]:
-    """Token map for a scene's current cast: {{user}} -> player names, {{char}} -> NPC names."""
+    """Token map for a scene's current cast: {{user}} -> player names. {{char}}
+    is NOT resolved here (#137): with more than one NPC present, "the whole
+    present cast" is ambiguous (which one?), so {{char}} is baked to a card's/
+    greeting's own name at creation time (cards.bake_char_name,
+    greetings.create_greeting) instead -- any {{char}} still unresolved at
+    prompt time stays literal, same as an unresolved {{user}}."""
     croot = campaigns.campaign_root(cid)
-    npc_names: list[str] = []
     player_names: list[str] = []
     for a in appearances.scene_cast(cid, sid):
         vid = appearances.locked_version(cid, a["kind"], a["id"])
         try:
             if a["role"] == "npc":
-                npc_names.append(characters.read_card(croot, a["id"], vid)["data"].get("name", ""))
+                continue
             elif a["kind"] == "pcs":
                 player_names.append(pcs.read_persona(croot, a["id"], vid).get("name", a["id"]))
             else:
@@ -64,8 +68,7 @@ def scene_substitutions(cid: str, sid: str) -> dict[str, str]:
             continue
     if not any(player_names) and scenes.is_pcless(cid, sid):
         player_names = _campaign_player_refs(cid, croot)[1]
-    return {"{{user}}": ", ".join(n for n in player_names if n),
-            "{{char}}": ", ".join(n for n in npc_names if n)}
+    return {"{{user}}": ", ".join(n for n in player_names if n)}
 
 
 _LITERAL_MACROS = {"{{user}}", "{{char}}"}  # kept raw when unresolved (e.g. no NPCs/players yet)
@@ -484,7 +487,9 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0) -> dic
     ref_names: list[str] = []
     if pcless:
         refs, ref_names = _campaign_player_refs(cid, croot)
-    subs = {"{{user}}": ", ".join(player_names or ref_names), "{{char}}": ", ".join(npc_names)}
+    # {{char}} is not resolved here (#137): baked at creation time instead, see
+    # scene_substitutions.
+    subs = {"{{user}}": ", ".join(player_names or ref_names)}
 
     try:
         depth = max(int(config.read_config().get("context_scan_depth", "8")), 0)
