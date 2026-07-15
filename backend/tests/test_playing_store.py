@@ -79,6 +79,20 @@ def test_start_from_greeting_seeds_appears_marks(monkeypatch, tmp_path):
         playing.start_from_greeting(cid, sid, g)
 
 
+def test_start_from_greeting_expands_roll_macro(monkeypatch, tmp_path):
+    wid = _world(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    characters.create_character(wroot, "Seraphine", "default", characters.blank_card("Seraphine"))
+    g = greetings.create_greeting(wroot, "Open", "seraphine", "default",
+                                  body="You roll {{roll:1d20}} to begin.")
+    cid, sid = _campaign_after_seed(wid)
+    sid = playing.start_from_greeting(cid, sid, g)
+    content = scenes.read_scene(cid, sid)["messages"][0]["content"]
+    assert "{{roll" not in content
+    n = int(content.removeprefix("You roll ").removesuffix(" to begin."))
+    assert 1 <= n <= 20
+
+
 def test_start_from_greeting_casts_all_present(monkeypatch, tmp_path):
     wid = _world(monkeypatch, tmp_path)
     wroot = worlds.world_root(wid)
