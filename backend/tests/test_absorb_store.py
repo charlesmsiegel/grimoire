@@ -794,6 +794,36 @@ def test_apply_new_character_seeds_progressive_metadata_and_dossier(monkeypatch,
     assert "Bram rented the party a room and warned them about the pier." in dossier
 
 
+def test_apply_new_character_survives_dossier_write_failure(monkeypatch, tmp_path):
+    from grimoire.store import characters, dossiers, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    edit = {
+        "id": "new_character:old-bram", "kind": "new_character",
+        "target": {"kind": "characters", "id": ""}, "label": "New character — Old Bram",
+        "field": "description", "before": "",
+        "after": "Bram kept the inn.", "authored": False,
+        "payload": {"name": "Old Bram", "personality": "", "mes_example": "",
+                    "sd_prompt": "", "evidence": "", "confidence": "thin",
+                    "open_questions": ""},
+    }
+
+    def boom(croot, cid_, text):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(dossiers, "write", boom)
+    applied, failures = absorb.apply_edits(cid, [edit], sid)
+
+    # The dossier seed is best-effort: its failure must not strand a half-created
+    # character (which a retry would duplicate via uniquify()).
+    assert applied == ["new_character:old-bram"]
+    assert failures == []
+    croot = campaigns.campaign_root(cid)
+    card = characters.read_card(croot, "old-bram", "default")
+    assert "Bram kept the inn." in card["data"]["description"]
+    assert dossiers.read(croot, "old-bram") == ""
+
+
 def test_relationships_snapshot_tolerates_garbled(monkeypatch, tmp_path):
     from grimoire.store import scenes
     cid = _campaign(monkeypatch, tmp_path)
