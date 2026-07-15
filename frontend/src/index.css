@@ -165,8 +165,13 @@ body::before {
 .sub-actions { margin-left: auto; display: flex; align-items: stretch; align-self: stretch; }
 .sub-changes, .sub-mechanics { background: none; border: none; border-left: 1px solid var(--chrome-rule); color: var(--chrome-muted); font-family: var(--fm); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; padding: 0 16px; cursor: pointer; }
 .sub-changes:hover, .sub-mechanics:hover { color: var(--chrome-text); }
-.sub-export { display: flex; align-items: center; border-left: 1px solid var(--chrome-rule); color: var(--chrome-muted); font-family: var(--fm); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; padding: 0 16px; text-decoration: none; }
+.sub-export-menu { position: relative; align-self: stretch; }
+.sub-export { display: flex; align-items: center; height: 100%; border-left: 1px solid var(--chrome-rule); color: var(--chrome-muted); font-family: var(--fm); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; padding: 0 16px; cursor: pointer; list-style: none; }
+.sub-export::-webkit-details-marker { display: none; }
 .sub-export:hover { color: var(--chrome-text); }
+.sub-export-options { position: absolute; right: 0; top: 100%; z-index: 10; display: flex; flex-direction: column; min-width: 140px; background: var(--chrome); border: 1px solid var(--chrome-rule); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2); }
+.sub-export-options a { padding: 8px 16px; color: var(--chrome-text); font-family: var(--fm); font-size: 11px; letter-spacing: 0.06em; text-decoration: none; }
+.sub-export-options a:hover { background: var(--chrome-rule); }
 .sub-end { background: var(--accent); color: var(--on-accent); border: none; font-family: var(--fm); font-weight: 700; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; padding: 0 18px; cursor: pointer; }
 .sub-end:disabled { background: var(--disabled); color: var(--bg); cursor: default; }
 

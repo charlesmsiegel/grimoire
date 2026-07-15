@@ -1021,11 +1021,19 @@ test("Roll dice is disabled on a fresh scene until the opener/cast setup produce
   expect(rollBtn).toBeDisabled();
 });
 
-test("renders an Export EPUB download link", async () => {
+test("renders an export menu with a download link per format", async () => {
   renderCampaign();
-  const link = await screen.findByRole("link", { name: /export epub/i });
-  expect(link).toHaveAttribute("href", "/api/campaigns/run/export.epub");
-  expect(link).toHaveAttribute("download");
+  const epub = await screen.findByRole("link", { name: /^epub$/i });
+  expect(epub).toHaveAttribute("href", "/api/campaigns/run/export.epub");
+  expect(epub).toHaveAttribute("download");
+  expect(screen.getByRole("link", { name: /markdown/i }))
+    .toHaveAttribute("href", "/api/campaigns/run/export.md.zip");
+  expect(screen.getByRole("link", { name: /^html$/i }))
+    .toHaveAttribute("href", "/api/campaigns/run/export.html");
+  expect(screen.getByRole("link", { name: /plain text/i }))
+    .toHaveAttribute("href", "/api/campaigns/run/export.txt");
+  expect(screen.getByRole("link", { name: /^json$/i }))
+    .toHaveAttribute("href", "/api/campaigns/run/export.json");
 });
 
 test("rolls dice from the input bar popover and refreshes the scene", async () => {

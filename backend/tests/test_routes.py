@@ -2852,6 +2852,45 @@ def test_export_epub_unknown_campaign_404(client):
     assert client.get("/api/campaigns/nope/export.epub").status_code == 404
 
 
+def test_export_markdown_bundle_route(client):
+    _wid, cid = _campaign(client)
+    r = client.get(f"/api/campaigns/{cid}/export.md.zip")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/zip"
+    assert r.headers["content-disposition"] == f'attachment; filename="{cid}-markdown.zip"'
+    assert r.content[:2] == b"PK"
+    assert client.get("/api/campaigns/nope/export.md.zip").status_code == 404
+
+
+def test_export_html_route(client):
+    _wid, cid = _campaign(client)
+    r = client.get(f"/api/campaigns/{cid}/export.html")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "text/html; charset=utf-8"
+    assert r.headers["content-disposition"] == f'attachment; filename="{cid}.html"'
+    assert b"<!doctype html>" in r.content
+    assert client.get("/api/campaigns/nope/export.html").status_code == 404
+
+
+def test_export_text_route(client):
+    _wid, cid = _campaign(client)
+    r = client.get(f"/api/campaigns/{cid}/export.txt")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "text/plain; charset=utf-8"
+    assert r.headers["content-disposition"] == f'attachment; filename="{cid}.txt"'
+    assert client.get("/api/campaigns/nope/export.txt").status_code == 404
+
+
+def test_export_json_route(client):
+    _wid, cid = _campaign(client)
+    r = client.get(f"/api/campaigns/{cid}/export.json")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/json"
+    assert r.headers["content-disposition"] == f'attachment; filename="{cid}.json"'
+    assert r.json()["campaign"]["id"] == cid
+    assert client.get("/api/campaigns/nope/export.json").status_code == 404
+
+
 # ---- dice rolls ----
 def _scene(client, cid, title="S"):
     return client.post(f"/api/campaigns/{cid}/scenes", json={"title": title}).json()["id"]
