@@ -126,8 +126,8 @@ def start_from_greeting(cid: str, sid: str, gid: str) -> str:
         scenes.set_pcless(cid, sid)  # before substitution: {{user}} needs the pcless fallback
     _mark_played(cid, gid)
     scenes.stamp_greeting(cid, sid, gid)
-    text = context._substitute(overlay.read_greeting(cid, gid)["body"],
-                               context.scene_substitutions(cid, sid))
+    text = context.expand_macros(overlay.read_greeting(cid, gid)["body"],
+                                 context.scene_substitutions(cid, sid), cid, sid)
     scenes.append_message(cid, sid, "assistant", text)
     # retitle last: any earlier failure leaves the caller's sid valid for cleanup
     return scenes.rename_scene(cid, sid, g["name"])

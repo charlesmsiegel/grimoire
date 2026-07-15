@@ -10,11 +10,12 @@ build_messages & co. render templates/scene/system.j2 from that data.
 from __future__ import annotations
 
 import functools
+import random
 import re
 
 from .. import prompts
 from . import (appearances, calendars, campaigns, characters, checks, chronicle,
-               config, dossiers, entities, groupstate, modules, overlay, pcs, playstate,
+               config, dice, dossiers, entities, groupstate, modules, overlay, pcs, playstate,
                plot, relationships, scenes, sheets, styles)
 
 
@@ -65,6 +66,71 @@ def scene_substitutions(cid: str, sid: str) -> dict[str, str]:
         player_names = _campaign_player_refs(cid, croot)[1]
     return {"{{user}}": ", ".join(n for n in player_names if n),
             "{{char}}": ", ".join(n for n in npc_names if n)}
+
+
+_LITERAL_MACROS = {"{{user}}", "{{char}}"}  # kept raw when unresolved (e.g. no NPCs/players yet)
+_RANDOM_MACRO = re.compile(r"\{\{random:([^{}]*)\}\}", re.IGNORECASE)
+_ROLL_MACRO = re.compile(r"\{\{roll:([^{}]*)\}\}", re.IGNORECASE)
+_MACRO_TOKEN = re.compile(r"\{\{[^{}]*\}\}")
+
+
+def _datetime_subs(cid: str, sid: str) -> dict[str, str]:
+    """{{date}}/{{weekday}}/{{time}} from the scene's current native datetime, via
+    the campaign's primary calendar. {} when the scene has no time yet or the
+    stored datetime no longer parses -- _substitute then leaves the tokens
+    literal for _strip_unknown_macros to drop."""
+    history = scenes.get_time_history(cid, sid)
+    if not history:
+        return {}
+    native = history[-1]
+    try:
+        provider = calendars.get_provider(calendars.read_calendar(campaigns.campaign_root(cid))["primary"])
+        desc = provider.describe(calendars.fixed_of(provider, native))
+    except calendars.CalendarError:
+        return {}
+    _, time_str = calendars.split_native(native)
+    return {"{{date}}": desc["friendly"], "{{weekday}}": desc["weekday_name"],
+            "{{time}}": time_str or ""}
+
+
+def _expand_random(text: str) -> str:
+    def repl(m: re.Match) -> str:
+        options = [o.strip() for o in m.group(1).split(",") if o.strip()]
+        return random.choice(options) if options else m.group(0)
+    return _RANDOM_MACRO.sub(repl, text)
+
+
+def _expand_rolls(text: str) -> str:
+    def repl(m: re.Match) -> str:
+        try:
+            result = dice.roll(m.group(1).strip())
+        except dice.DiceError:
+            return m.group(0)  # malformed notation -> left for _strip_unknown_macros
+        return str(result["total"] if result["total"] is not None else result["successes"])
+    return _ROLL_MACRO.sub(repl, text)
+
+
+def _strip_unknown_macros(text: str) -> str:
+    def repl(m: re.Match) -> str:
+        # {{user}}/{{char}} stay literal (existing _substitute contract); any
+        # other macro this scene can't resolve is dropped rather than leaked
+        # raw into the model.
+        return m.group(0) if m.group(0).lower() in _LITERAL_MACROS else ""
+    return _MACRO_TOKEN.sub(repl, text)
+
+
+def expand_macros(text: str, subs: dict[str, str], cid: str, sid: str) -> str:
+    """The single choke point all prompt text flows through: `subs` ({{user}}/
+    {{char}}, caller-supplied) plus {{date}}/{{time}}/{{weekday}} (scene calendar)
+    substitute literally; {{random:a,b,...}} and {{roll:<dice.py notation>}} expand
+    per-occurrence (dice.py's full grammar -- NdM, keep/drop, exploding, pools,
+    vs-target); anything left over is an unresolved macro and gets dropped so raw
+    tokens never reach the model -- except {{user}}/{{char}}, which stay literal
+    per _substitute's existing contract."""
+    text = _substitute(text, {**subs, **_datetime_subs(cid, sid)})
+    text = _expand_random(text)
+    text = _expand_rolls(text)
+    return _strip_unknown_macros(text)
 
 
 def _project_history(messages: list[dict]) -> list[dict]:
@@ -136,8 +202,8 @@ def build_opener_messages(cid: str, sid: str, prompt: str) -> list[dict]:
     scene has no history. No conversation history is included — the opener is for a scene
     with no messages. Ephemeral: the caller does not persist the result."""
     a = _assemble(cid, sid, wi_seed=prompt, full_recap=OPENER_RECAP_DEPTH)
-    messages = [{"role": "system", "content": _system_text(a, opener=True)},
-                {"role": "user", "content": _substitute(prompt, scene_substitutions(cid, sid))}]
+    messages = [{"role": "system", "content": _system_text(a, cid, sid, opener=True)},
+                {"role": "user", "content": expand_macros(prompt, scene_substitutions(cid, sid), cid, sid)}]
     if a["post_history"]:  # mirrors build_messages
         messages.append({"role": "system", "content": a["post_history"]})
     # the shape rules go last, right before generation, so they outrank everything above
@@ -474,23 +540,23 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0) -> dic
     }
 
     post_history = prompts.render("scene/post_history.j2", npc_cards=npc_cards)
-    post_history = _substitute(post_history, subs) if post_history else ""
+    post_history = expand_macros(post_history, subs, cid, sid) if post_history else ""
 
-    sub_history = [{"role": m["role"], "content": _substitute(m["content"], subs)}
+    sub_history = [{"role": m["role"], "content": expand_macros(m["content"], subs, cid, sid)}
                    for m in _project_history(history)]
     return {"data": data, "subs": subs, "history": sub_history,
             "post_history": post_history, "npc_names": npc_names}
 
 
-def _system_text(a: dict, opener: bool = False) -> str:
-    return _substitute(prompts.render("scene/system.j2", **{**a["data"], "opener": opener}),
-                       a["subs"]).strip()
+def _system_text(a: dict, cid: str, sid: str, opener: bool = False) -> str:
+    return expand_macros(prompts.render("scene/system.j2", **{**a["data"], "opener": opener}),
+                         a["subs"], cid, sid).strip()
 
 
 def build_messages(cid: str, sid: str) -> list[dict]:
     a = _assemble(cid, sid)
     messages: list[dict] = []
-    system_text = _system_text(a)
+    system_text = _system_text(a, cid, sid)
     if system_text:
         messages.append({"role": "system", "content": system_text})
     messages += a["history"]
@@ -504,7 +570,7 @@ def build_director_messages(cid: str, sid: str, note: str) -> list[dict]:
     final user message. The note rides only this call — never persisted."""
     a = _assemble(cid, sid)
     messages: list[dict] = []
-    system_text = _system_text(a)
+    system_text = _system_text(a, cid, sid)
     if system_text:
         messages.append({"role": "system", "content": system_text})
     messages += a["history"]
@@ -547,7 +613,7 @@ def context_sections(cid: str, sid: str) -> list[dict]:
     for label, template, pcless_only in _SECTIONS:
         if pcless_only and not a["data"]["pcless"]:
             continue
-        text = _substitute(prompts.render(template, **a["data"]), a["subs"]).strip()
+        text = expand_macros(prompts.render(template, **a["data"]), a["subs"], cid, sid).strip()
         if text:
             out.append({"label": label, "text": text})
     hist = "\n\n".join(m["content"] for m in a["history"])

@@ -839,3 +839,77 @@ def test_mechanics_rules_keyword_cap(monkeypatch, tmp_path):
     present = [f"Body {i}." for i in range(1, 9) if f"Body {i}." in rules_text]
     assert len(present) == 6                        # 8 matches, capped at 6
     assert present == [f"Body {i}." for i in range(1, 7)]  # first six, in pack order
+
+
+# ---- issue #137: macro expansion ({{roll:}}, {{random:}}, {{date}}/{{time}}/{{weekday}}) ----
+
+def test_roll_macro_expands_to_a_number(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    scenes.append_message(cid, sid, "user", "You roll {{roll:1d20}} to hit.")
+    text = context.build_messages(cid, sid)[-1]["content"]
+    assert "{{roll" not in text
+    n = int(text.removeprefix("You roll ").removesuffix(" to hit."))
+    assert 1 <= n <= 20
+
+
+def test_roll_macro_supports_dice_py_grammar(monkeypatch, tmp_path):
+    # 2d6+3: dice.py's full notation (modifiers), not just bare NdM
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    scenes.append_message(cid, sid, "user", "Damage: {{roll:2d6+3}}")
+    text = context.build_messages(cid, sid)[-1]["content"]
+    n = int(text.removeprefix("Damage: "))
+    assert 5 <= n <= 15
+
+
+def test_random_macro_picks_one_option(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    scenes.append_message(cid, sid, "user", "The sky is {{random:red,blue,green}}.")
+    text = context.build_messages(cid, sid)[-1]["content"]
+    assert text in ("The sky is red.", "The sky is blue.", "The sky is green.")
+
+
+def test_malformed_roll_macro_is_dropped_not_leaked(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    scenes.append_message(cid, sid, "user", "Bad: {{roll:not-dice}} end")
+    text = context.build_messages(cid, sid)[-1]["content"]
+    assert text == "Bad:  end"
+
+
+def test_unknown_macro_is_dropped_not_leaked(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    scenes.append_message(cid, sid, "user", "{{lastMessage}} hi")
+    text = context.build_messages(cid, sid)[-1]["content"]
+    assert text == " hi"
+
+
+def test_user_and_char_macros_still_stay_literal_when_unresolved(monkeypatch, tmp_path):
+    # the cleanup pass must not regress the existing {{user}}/{{char}} contract
+    # (test_character_cast_as_player_uses_persona_not_char): unresolved cast
+    # macros stay literal, they are never silently dropped.
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    scenes.append_message(cid, sid, "user", "{{char}} is unknown here")
+    text = context.build_messages(cid, sid)[-1]["content"]
+    assert text == "{{char}} is unknown here"
+
+
+def test_date_time_weekday_macros_expand_from_scene_datetime(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.set_datetime(cid, sid, "2026-12-25T14:30")["id"]
+    scenes.append_message(cid, sid, "user", "It is {{date}} ({{weekday}}) at {{time}}.")
+    text = context.build_messages(cid, sid)[-1]["content"]
+    assert text == "It is 25 December 2026 (Friday) at 14:30."
+
+
+def test_date_time_weekday_macros_dropped_before_any_scene_time(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    scenes.append_message(cid, sid, "user", "Today is {{date}}, {{weekday}} at {{time}}.")
+    text = context.build_messages(cid, sid)[-1]["content"]
+    assert text == "Today is ,  at ."
+
+
+def test_roll_macro_expands_in_opener_prompt(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    msgs = context.build_opener_messages(cid, sid, "Initiative: {{roll:1d20}}!")
+    user_msg = next(m for m in msgs if m["role"] == "user")
+    n = int(user_msg["content"].removeprefix("Initiative: ").removesuffix("!"))
+    assert 1 <= n <= 20
