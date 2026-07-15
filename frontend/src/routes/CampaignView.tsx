@@ -652,6 +652,21 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
                                     placeholder="Example dialogue"
                                     value={(e.payload?.mes_example as string) ?? ""}
                                     onChange={(ev) => setPayload({ mes_example: ev.target.value })} />
+                          <textarea aria-label={`Evidence ${e.label}`} rows={2}
+                                    placeholder="Evidence"
+                                    value={(e.payload?.evidence as string) ?? ""}
+                                    onChange={(ev) => setPayload({ evidence: ev.target.value })} />
+                          <select aria-label={`Confidence ${e.label}`}
+                                  value={(e.payload?.confidence as string) ?? "thin"}
+                                  onChange={(ev) => setPayload({ confidence: ev.target.value })}>
+                            <option value="thin">Thin</option>
+                            <option value="sketched">Sketched</option>
+                            <option value="established">Established</option>
+                          </select>
+                          <textarea aria-label={`Open questions ${e.label}`} rows={2}
+                                    placeholder="Open questions"
+                                    value={(e.payload?.open_questions as string) ?? ""}
+                                    onChange={(ev) => setPayload({ open_questions: ev.target.value })} />
                         </>
                       )}
                       {(e.kind === "new_character" || e.kind === "new_location") && (

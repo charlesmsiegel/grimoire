@@ -329,8 +329,9 @@ def test_apply_edits_new_character_creates_and_casts_npc(monkeypatch, tmp_path):
     assert applied == ["new_character:old-bram"]
     new_char = next(c for c in characters.list_characters(croot) if c["name"] == "Old Bram")
     card = characters.read_card(croot, new_char["id"], "default")
-    assert card["data"]["description"] == ("[character(\"Old Bram\") { Occupation(\"innkeep\") }]"
-                                           "\n\nBram kept the inn.")
+    expected_description = ("[character(\"Old Bram\") { Occupation(\"innkeep\") }]"
+                            "\n\nBram kept the inn.\n\n## Play Provenance\nConfidence: thin")
+    assert card["data"]["description"] == expected_description
     assert card["data"]["personality"] == "gruff but kind"
     # {{char}} is baked to the card's own name ({{user}} stays literal): a stored
     # {{char}} would expand to the whole present cast in multi-NPC scenes.
@@ -341,7 +342,7 @@ def test_apply_edits_new_character_creates_and_casts_npc(monkeypatch, tmp_path):
     from grimoire.store import changes
     logged = changes.read(cid)[f"characters/{new_char['id']}"]["fields"]
     assert [(f["field"], f["after"]) for f in logged] == [
-        ("description", "[character(\"Old Bram\") { Occupation(\"innkeep\") }]\n\nBram kept the inn."),
+        ("description", expected_description),
         ("personality", "gruff but kind"),
         ("mes_example", "<START>\n{{user}}: A room?\nOld Bram: Aye.")]
 
@@ -420,6 +421,8 @@ def test_parse_output_new_entities():
             ' "new_characters": [{"name": "Old Bram", "description": "W++ block",'
             '   "history": "Born at sea.", "personality": "gruff but kind",'
             '   "mes_example": "<START>\\n{{user}}: Hello\\n{{char}}: Hmph.",'
+            '   "evidence": "Old Bram warned the party away from the locked pier.",'
+            '   "confidence": "sketched", "open_questions": "Why he fears the pier.",'
             '   "sd_prompt": "an old man"}],'
             ' "new_locations": [{"name": "The Crypt", "body": "cold", "keys": "crypt",'
             '   "sd_prompt": "a dark crypt", "current_setting": true}],'
@@ -428,6 +431,9 @@ def test_parse_output_new_entities():
     assert out["new_characters"] == [{"name": "Old Bram", "description": "W++ block",
                                       "history": "Born at sea.", "personality": "gruff but kind",
                                       "mes_example": "<START>\n{{user}}: Hello\n{{char}}: Hmph.",
+                                      "evidence": "Old Bram warned the party away from the locked pier.",
+                                      "confidence": "sketched",
+                                      "open_questions": "Why he fears the pier.",
                                       "sd_prompt": "an old man"}]
     assert out["new_locations"] == [{"name": "The Crypt", "body": "cold", "keys": "crypt",
                                      "sd_prompt": "a dark crypt", "current_setting": True}]
@@ -590,8 +596,10 @@ def test_materialize_new_character_creates_staged_edit(monkeypatch, tmp_path):
     parsed = {"new_characters": [
         {"name": "Old Bram", "description": "[character(\"Old Bram\") { Occupation(\"innkeep\") }]",
          "history": "Bram kept the inn for forty years.", "personality": "gruff but kind",
-         "mes_example": "<START>\n{{user}}: A room?\n{{char}}: Aye.",
-         "sd_prompt": "an old innkeeper, weathered face"}]}
+          "mes_example": "<START>\n{{user}}: A room?\n{{char}}: Aye.",
+          "evidence": "Bram rented the party a room and warned them about the pier.",
+          "confidence": "established", "open_questions": "Who pays Bram for rumors?",
+          "sd_prompt": "an old innkeeper, weathered face"}]}
     edits = {e["id"]: e for e in absorb.materialize(cid, sid, parsed)}
     e = edits["new_character:old-bram"]
     assert e["kind"] == "new_character" and e["target"] == {"kind": "characters", "id": ""}
@@ -602,7 +610,10 @@ def test_materialize_new_character_creates_staged_edit(monkeypatch, tmp_path):
                           "Bram kept the inn for forty years.")
     assert e["payload"] == {"name": "Old Bram", "sd_prompt": "an old innkeeper, weathered face",
                             "personality": "gruff but kind",
-                            "mes_example": "<START>\n{{user}}: A room?\n{{char}}: Aye."}
+                            "mes_example": "<START>\n{{user}}: A room?\n{{char}}: Aye.",
+                            "evidence": "Bram rented the party a room and warned them about the pier.",
+                            "confidence": "established",
+                            "open_questions": "Who pays Bram for rumors?"}
 
 
 def test_materialize_new_character_without_history_keeps_description_bare(monkeypatch, tmp_path):
@@ -612,6 +623,39 @@ def test_materialize_new_character_without_history_keeps_description_bare(monkey
     parsed = {"new_characters": [{"name": "Old Bram", "description": "W++ block", "sd_prompt": ""}]}
     edits = {e["id"]: e for e in absorb.materialize(cid, sid, parsed)}
     assert edits["new_character:old-bram"]["after"] == "W++ block"
+
+
+def test_materialize_new_character_without_progressive_metadata_defaults_thin(monkeypatch, tmp_path):
+    from grimoire.store import scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    parsed = {"new_characters": [{"name": "Old Bram", "description": "W++ block", "sd_prompt": ""}]}
+    edits = {e["id"]: e for e in absorb.materialize(cid, sid, parsed)}
+    assert edits["new_character:old-bram"]["payload"]["evidence"] == ""
+    assert edits["new_character:old-bram"]["payload"]["confidence"] == "thin"
+    assert edits["new_character:old-bram"]["payload"]["open_questions"] == ""
+
+
+def test_new_character_invalid_confidence_normalizes_to_thin(monkeypatch, tmp_path):
+    from grimoire.store import characters, dossiers, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    parsed = absorb.parse_output(json.dumps({
+        "new_characters": [{
+            "name": "Old Bram", "description": "W++ block",
+            "confidence": "certain", "evidence": "Bram opened the gate.",
+        }],
+    }))
+
+    edit = absorb.materialize(cid, sid, parsed)[0]
+    assert edit["payload"]["confidence"] == "thin"
+    applied, failures = absorb.apply_edits(cid, [edit], sid)
+
+    assert applied == ["new_character:old-bram"]
+    assert failures == []
+    croot = campaigns.campaign_root(cid)
+    assert "Confidence: thin" in characters.read_card(croot, "old-bram", "default")["data"]["description"]
+    assert "as a thin emergent character" in dossiers.read(croot, "old-bram")
 
 
 def test_materialize_new_character_drops_existing_name_collision(monkeypatch, tmp_path):
@@ -711,6 +755,43 @@ def test_apply_edits_writes_plot(monkeypatch, tmp_path):
     t = plot.get(cid, "the-map")
     assert t["status"] == "advanced" and t["last_scene"] == "s12"
     assert t["beats"][-1] == {"scene": "s12", "text": "It is a forgery."}
+
+
+def test_apply_new_character_seeds_progressive_metadata_and_dossier(monkeypatch, tmp_path):
+    from grimoire.store import characters, dossiers, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    edit = {
+        "id": "new_character:old-bram", "kind": "new_character",
+        "target": {"kind": "characters", "id": ""}, "label": "New character — Old Bram",
+        "field": "description", "before": "",
+        "after": "[character(\"Old Bram\") { Occupation(\"innkeep\") }]\n\nBram kept the inn.",
+        "authored": False,
+        "payload": {
+            "name": "Old Bram",
+            "personality": "gruff but kind",
+            "mes_example": "<START>\n{{user}}: A room?\n{{char}}: Aye.",
+            "sd_prompt": "old man, weathered face",
+            "evidence": "Bram rented the party a room and warned them about the pier.",
+            "confidence": "sketched",
+            "open_questions": "Who pays Bram for rumors?",
+        },
+    }
+
+    applied, failures = absorb.apply_edits(cid, [edit], sid)
+
+    assert applied == ["new_character:old-bram"]
+    assert failures == []
+    croot = campaigns.campaign_root(cid)
+    card = characters.read_card(croot, "old-bram", "default")
+    desc = card["data"]["description"]
+    assert "## Play Provenance" in desc
+    assert "Evidence: Bram rented the party a room and warned them about the pier." in desc
+    assert "Confidence: sketched" in desc
+    assert "Open questions: Who pays Bram for rumors?" in desc
+    dossier = dossiers.read(croot, "old-bram")
+    assert "Old Bram was introduced through play as a sketched emergent character." in dossier
+    assert "Bram rented the party a room and warned them about the pier." in dossier
 
 
 def test_relationships_snapshot_tolerates_garbled(monkeypatch, tmp_path):
