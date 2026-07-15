@@ -63,10 +63,17 @@ _CHAR_MACRO = re.compile(r"\{\{char\}\}", re.IGNORECASE)
 def bake_char_token(text: str, name: str) -> str:
     """Replace the {{char}} macro with `name` (self-reference baking). `name`
     empty -> no-op, since there's nothing to bake against (e.g. a greeting with
-    no associated character). Shared by card fields (bake_char_name) and
-    standalone greetings (greetings.py), so every piece of authored content
-    with a clear "self" resolves {{char}} the same way, at creation time."""
-    return _CHAR_MACRO.sub(lambda _m: name, text) if name else text
+    no associated character). A `name` that itself contains {{char}} is also
+    treated as unusable (no-op): substituting it in would reintroduce the very
+    token being resolved, so a second (redundant but otherwise harmless) bake
+    pass -- e.g. characters.update_version() re-baking after an overlay-level
+    pre-bake -- would keep expanding it further on every call. Shared by card
+    fields (bake_char_name) and standalone greetings (greetings.py), so every
+    piece of authored content with a clear "self" resolves {{char}} the same
+    way, at creation time."""
+    if not name or _CHAR_MACRO.search(name):
+        return text
+    return _CHAR_MACRO.sub(lambda _m: name, text)
 
 
 def bake_char_name(card: dict) -> bool:

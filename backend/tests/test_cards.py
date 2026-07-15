@@ -56,6 +56,17 @@ def test_bake_char_name_noop_without_name_or_macro():
     assert plain["data"]["description"] == "no macros here"
 
 
+def test_bake_char_token_name_containing_macro_is_never_substituted_in():
+    # A name containing {{char}} would reintroduce the very token being
+    # resolved -- substituting it in would make a second (redundant but
+    # otherwise harmless) bake pass corrupt the text further each time.
+    assert cards.bake_char_token("{{char}} arrives.", "A {{char}} B") == "{{char}} arrives."
+    # repeated calls must never compound, whatever the (degenerate) name is
+    once = cards.bake_char_token("{{char}} arrives.", "A {{char}} B")
+    twice = cards.bake_char_token(once, "A {{char}} B")
+    assert once == twice == "{{char}} arrives."
+
+
 def test_loads_bare_v3_json():
     card = cards.loads(json.dumps(_v3()).encode(), "json")
     assert card["spec"] == "chara_card_v3"
