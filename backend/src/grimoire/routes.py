@@ -2009,10 +2009,15 @@ def _require_key(cfg: dict[str, str]) -> None:
 
 
 def _persist_reply(cid: str, sid: str, text: str) -> None:
-    """Split one model reply into per-speaker posts and append them (#744)."""
+    """Split one model reply into per-speaker posts and append them (#744).
+    Macros are expanded before persisting (#137): {{roll}}/{{random}} must be
+    resolved once, not re-rolled on every future context build that re-reads
+    this now-historical message."""
     players = frozenset(store.appearances.player_names(cid, sid))
+    subs = store.context.scene_substitutions(cid, sid)
     for seg in store.scenes.split_reply(text, players):
-        store.scenes.append_message(cid, sid, "assistant", seg["content"], speaker=seg["speaker"])
+        content = store.context.expand_macros(seg["content"], subs, cid, sid)
+        store.scenes.append_message(cid, sid, "assistant", content, speaker=seg["speaker"])
 
 
 def _sse(data: dict) -> str:
@@ -2277,7 +2282,11 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, client: LLMClient = Depends(ge
     speaker = names[0] if len(names) == 1 else None
     if speaker:
         store.scenes.stamp_user_speaker(cid, sid, speaker)
-    store.scenes.append_message(cid, sid, "user", turn.content, speaker=speaker)
+    # Macros resolved once at persist time (#137): a player's {{roll:1d20}}
+    # must not re-roll on every later context build (retry, next turn, ...).
+    content = store.context.expand_macros(
+        turn.content, store.context.scene_substitutions(cid, sid), cid, sid)
+    store.scenes.append_message(cid, sid, "user", content, speaker=speaker)
     messages = store.context.build_messages(cid, sid)
     return _chat_stream(cid, sid, messages, cfg, client)
 
