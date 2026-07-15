@@ -522,7 +522,10 @@ def apply_edits(cid: str, edits: list[dict],
                                     ("mes_example", "example dialogue"))
                     if card["data"][f]]
                 new_cid, new_vid = overlay.create_character(cid, p["name"], "default", card)
-                dossiers.write(croot, new_cid, _new_character_dossier(p["name"], p))
+                try:
+                    dossiers.write(croot, new_cid, _new_character_dossier(p["name"], p))
+                except Exception:  # noqa: BLE001 — seed is best-effort: a failure here
+                    pass  # must not strand the created character (retry would duplicate it)
                 if sid:
                     appearances.appear(cid, sid, "characters", new_cid, new_vid, "npc")
                 target = {"kind": "characters", "id": new_cid}
