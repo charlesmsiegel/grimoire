@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import assets, campaigns, characters, entities, greetings, groupstate, pcs, taglines, worlds
+from . import assets, campaigns, cards, characters, entities, greetings, groupstate, pcs, taglines, worlds
 from .paths import natural_key
 
 
@@ -195,6 +195,10 @@ def create_greeting(cid: str, name: str, character: str, version: str, body: str
     def taken(gid: str) -> bool:
         return _flat_path(wroot, "greetings", gid).exists() or _flat_ref("greetings", gid) in gone
 
+    # #137: bake {{char}} here, not inside greetings.create_greeting -- a thin
+    # campaign's character commonly still lives only in the world, and
+    # char_root (not croot_of) is the resolver that finds it there.
+    body = cards.bake_char_token(body, greetings.char_name(char_root(cid, character), character, version))
     return greetings.create_greeting(croot_of(cid), name, character, version, body,
                                      requires_tags, predecessor_join, present=present,
                                      pcless=pcless, taken=taken)
@@ -203,6 +207,11 @@ def create_greeting(cid: str, name: str, character: str, version: str, body: str
 def update_greeting(cid: str, gid: str, **kwargs) -> None:
     if not _materialize_flat(cid, "greetings", gid):
         raise greetings.GreetingNotFound(gid)
+    if kwargs.get("body") is not None:
+        meta = greetings.read_greeting(croot_of(cid), gid)["meta"]
+        character = meta.get("character", "")
+        name = greetings.char_name(char_root(cid, character), character, meta.get("version", ""))
+        kwargs["body"] = cards.bake_char_token(kwargs["body"], name)
     greetings.update_greeting(croot_of(cid), gid, **kwargs)
 
 

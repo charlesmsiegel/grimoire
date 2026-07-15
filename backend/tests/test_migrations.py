@@ -1,5 +1,7 @@
-from grimoire.store import campaigns, chronicle, migrations, scenes, worlds
-from grimoire.store.frontmatter import dump_frontmatter
+import json
+
+from grimoire.store import campaigns, characters, chronicle, greetings, migrations, scenes, worlds
+from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 
 
 def _campaign(monkeypatch, tmp_path):
@@ -49,3 +51,38 @@ def test_migration_is_idempotent_and_continues_numbering(monkeypatch, tmp_path):
 def test_migration_handles_empty_store(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     migrations.migrate_scene_ids()  # no campaigns — must not raise
+
+
+def test_bake_char_macros_backfills_legacy_unbaked_content(monkeypatch, tmp_path):
+    # #137 P1: content saved before {{char}} was baked at write time (or from
+    # before this feature existed at all) must get baked on the next startup
+    # -- scene-time substitution no longer resolves {{char}} at all.
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    cid, vid = characters.create_character(wroot, "Seraphine", "default")
+    gid = greetings.create_greeting(wroot, "Open", cid, vid, body="Hello.")
+
+    # simulate pre-fix files on disk, bypassing the now-baking write paths
+    card_path = wroot / "characters" / cid / f"{vid}.json"
+    card = json.loads(card_path.read_text(encoding="utf-8"))
+    card["data"]["description"] = "{{char}} keeps the harbor."
+    card_path.write_text(json.dumps(card), encoding="utf-8")
+    greeting_path = wroot / "greetings" / f"{gid}.md"
+    meta, _ = parse_frontmatter(greeting_path.read_text(encoding="utf-8"))
+    greeting_path.write_text(dump_frontmatter(meta, "{{char}} arrives."), encoding="utf-8")
+
+    migrations.bake_char_macros()
+
+    assert characters.read_card(wroot, cid, vid)["data"]["description"] == "Seraphine keeps the harbor."
+    assert greetings.read_greeting(wroot, gid)["body"].strip() == "Seraphine arrives."
+
+    # idempotent: a second run touches nothing further (no crash, same content)
+    migrations.bake_char_macros()
+    assert characters.read_card(wroot, cid, vid)["data"]["description"] == "Seraphine keeps the harbor."
+    assert greetings.read_greeting(wroot, gid)["body"].strip() == "Seraphine arrives."
+
+
+def test_bake_char_macros_handles_empty_store(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    migrations.bake_char_macros()  # no worlds/campaigns — must not raise
