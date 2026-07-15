@@ -95,6 +95,11 @@ substituted by code:
 - `prose_style_name`, `prose_style_body` — the resolved style guide (scene
   `style_id` override → campaign default → global `default_style_id`),
   looked up via `store/styles.py:resolve_style()`; both `""` when none resolves
+- (no vars) `sections/natural_prose.j2` — the always-on anti-AI-ism
+  defaults (names at invention, banned stock phrases, beat-word rationing,
+  banned constructions, rhythm); sits right after the prose style, which
+  may override only its rhythm guidance. Spec:
+  docs/superpowers/specs/2026-07-14-natural-prose-block-design.md.
 - `npc_cards` — locked card `data` dicts of in-scene NPCs (also feeds the
   card-level system prompts, descriptions, message examples, post-history)
 - `states` — `[{name, current_state, knows, suspects}]` from
