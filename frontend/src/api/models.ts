@@ -1,9 +1,9 @@
 export type Model = {
   id: string;
   name: string;
-  context: number;
-  prompt: string;
-  completion: string;
+  context: number | null;
+  prompt: string | null;
+  completion: string | null;
 };
 
 const MODELS_URL = "https://openrouter.ai/api/v1/models";
@@ -51,7 +51,8 @@ function strip(x: number): string {
   return String(Math.round(x * 10) / 10);
 }
 
-export function tokensPerDollar(price: string): string {
+export function tokensPerDollar(price: string | null): string {
+  if (price == null) return "";
   const n = Number(price);
   if (!isFinite(n) || n === 0) return "Free";
   return compact(1 / n);
@@ -65,6 +66,7 @@ export function contextLabel(context: number): string {
 }
 
 export function priceLabel(model: Model): string {
+  if (model.prompt == null || model.completion == null) return "";
   if (Number(model.prompt) === 0 && Number(model.completion) === 0) return "Free";
   return `${tokensPerDollar(model.prompt)} / ${tokensPerDollar(model.completion)} tok/$`;
 }
