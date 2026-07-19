@@ -57,8 +57,13 @@ plain-JSON store files living alongside frontmatter records (e.g.
 
 ```
 {"models": [{"id": "...", "name": "...", "context": 128000, "prompt": "0.000002", "completion": "0.000006"}, ...],
- "fetched_at": "2026-07-18T12:00:00"}
+ "fetched_at": "2026-07-18T12:00:00",
+ "rev": "3f9a1c2b"}
 ```
+
+`rev` tags which connection revision this cache was fetched under — see §5,
+where it's what makes the model-list cache safe against a refresh racing a
+concurrent edit without needing a lock.
 
 `context`/`prompt`/`completion` are `null` (not `0`/`"0"`) when the server's
 `/models` response didn't report them — see §4.
@@ -78,8 +83,8 @@ def create_connection(kind: str, name: str, **fields) -> str  # stamps a fresh `
 def update_connection(id: str, **fields) -> None   # kind is immutable — not accepted here; see §6 for api_key/base_url interaction; stamps a fresh `rev`
 def delete_connection(id: str) -> None       # also removes the id's .models.json sidecar, if present
 def get_active() -> dict | None              # unmasked; resolves config.active_connection_id
-def cached_models(id: str) -> dict           # {"models": [], "fetched_at": ""} if no sidecar yet
-def set_cached_models(id: str, models: list[dict]) -> None
+def cached_models(id: str) -> dict           # {"models": [], "fetched_at": ""} if no sidecar or its rev is stale — see §5
+def set_cached_models(id: str, models: list[dict], rev: str) -> None  # unconditional write, tagged with rev
 def ensure_migrated() -> None                # see §2
 ```
 
@@ -407,22 +412,18 @@ and the new connection editor passes the active connection's cached models.
 Rows only render the context/price chip when the value isn't `null`, so a
 custom endpoint with no pricing data shows id + name only — no fake "Free".
 
-**Sidecar lifecycle.** The cache is keyed only by connection id, but
-`base_url` is mutable — without extra handling, repointing a connection at a
-different server would keep showing the old server's model ids/prices/context
-under the new one's identity until the user happens to hit Refresh. Three
-rules close this: `update_connection()` clears the `.models.json` sidecar
-(back to the empty `{"models": [], "fetched_at": ""}` state) whenever
-`base_url` is part of the update and differs from the stored value;
-`delete_connection()` always removes the sidecar file, so a deleted
-connection's id can't be reused by a same-named new connection and silently
-inherit stale metadata (`slugify`/`uniquify` frees a deleted id's slug for
-reuse the same way `styles.py` does); and — covering the case where a crash
-lands between those two deletes, or a stale sidecar is somehow left behind
-by any other path — `create_connection()` unconditionally deletes any
-pre-existing sidecar for the id it's about to write, before writing the
-record. A brand-new connection never starts with inherited cached models,
-regardless of how a stale sidecar for that id came to exist.
+**Sidecar hygiene** (belt-and-suspenders, not the correctness mechanism —
+see the `rev` gate below for that): `update_connection()` clears the
+`.models.json` sidecar (back to the empty `{"models": [], "fetched_at": ""}`
+state) whenever `base_url` is part of the update and differs from the
+stored value; `delete_connection()` always removes the sidecar file; and
+`create_connection()` unconditionally deletes any pre-existing sidecar for
+the id it's about to write, before writing the record, covering a crash
+between `delete_connection`'s two deletes or a sidecar left behind by any
+other path. Without the `rev` gate these would be the only thing standing
+between a repointed/reused connection and stale cross-endpoint data; with
+it, they're just tidiness — an orphaned sidecar left behind despite all
+three would still fail the `rev` comparison on read and never surface.
 
 **The remaining race is real even for one user in one tab**, and worth
 closing rather than accepting: a slow `models/refresh` network call can
@@ -430,18 +431,43 @@ still be in flight when the user edits the same connection's `base_url` or
 deletes and recreates it (same name → same freed slug) — ordinary async
 interleaving, no second user or device required. "Clear on write" doesn't
 help here, because the *stale refresh's own write* happens **after** the
-clear. Closing it doesn't need a lock: every connection record carries an
-opaque `rev` token (`secrets.token_hex(8)`), regenerated on every
-`create_connection`/`update_connection` write. `POST
-/llm-connections/{id}/models/refresh` captures `rev` before the network
-call, and after it returns, re-reads the connection: if it's gone or its
-`rev` no longer matches what was captured, the fetched list is still
-returned in the HTTP response (the request that asked for it gets its
-answer) but is **not** persisted to the sidecar — something changed
-underneath it, so the result is presumed stale for caching purposes. A
-delete-then-recreate at the same id also gets a fresh `rev` from
-`create_connection`, so it's covered by the same check even though the id
-repeats.
+clear.
+
+Closing it doesn't need a lock, but a naive "compare `rev`, then write if it
+still matches" check isn't enough either — that's a check-then-act gap of
+its own (an update/delete can land in the window between the comparison
+succeeding and the sidecar write actually landing). Instead, the freshness
+check lives entirely on the **read** side, where there's no gap to race:
+
+- Every connection record carries an opaque `rev` token
+  (`secrets.token_hex(8)`), regenerated on every `create_connection`/
+  `update_connection` write.
+- `set_cached_models(id, models, rev)` tags the sidecar with the `rev`
+  that was current *before* the network fetch started, and writes
+  **unconditionally** — no comparison, no conditional skip, nothing to race.
+- `cached_models(id)` — the sole read path, used by both the
+  `GET /llm-connections/{id}` merge and internally — compares the sidecar's
+  tagged `rev` against the connection's **current** `rev` at the moment of
+  the read, and returns the empty shape (`{"models": [], "fetched_at": ""}`)
+  on any mismatch (or if the connection no longer exists). A write that
+  lands after a concurrent update/delete is written with the *old* `rev` it
+  was fetched under; the very next read compares against the *new* `rev`
+  and correctly treats it as stale — regardless of exactly when the write
+  happened to land relative to the edit.
+- `POST /llm-connections/{id}/models/refresh` captures `rev`, fetches,
+  calls `set_cached_models(id, models, rev)` unconditionally, and returns
+  the freshly-fetched list directly in its HTTP response (the request that
+  asked for it gets its answer) regardless of whether that write turns out
+  to be the one future reads see — that's decided later, per read, by
+  `cached_models()`.
+- A delete-then-recreate at the same id gets a fresh `rev` from
+  `create_connection`, so it's covered by the same read-side check even
+  though the id repeats; this makes the existing "sidecar cleared on
+  `base_url` change / deleted on `delete_connection` / cleared on
+  `create_connection`" rules **redundant for correctness** (any leftover
+  sidecar just fails the rev comparison) — they're kept anyway, purely as
+  disk hygiene so stale `.models.json` files don't accumulate indefinitely,
+  not because anything still depends on them for correctness.
 
 A genuinely simultaneous edit to the *same* field from two different
 requests (e.g. two rapid `update_connection` calls) is still last-write-wins
@@ -582,10 +608,19 @@ Backend:
   seed a connection instead of flat config fields. **Stale-refresh
   rejection**: mock the outbound `/models` fetch to block on an event the
   test controls; while it's "in flight," call `update_connection` (change
-  `base_url`) from the test; release the fetch; assert the response still
-  contains the freshly-fetched models but the sidecar was **not** written
-  (still whatever it was before, or empty). Repeat for delete+recreate at
-  the same id in place of the update.
+  `base_url`) from the test — this both changes `rev` and clears the
+  sidecar; release the fetch, letting `set_cached_models` write its result
+  tagged with the now-superseded `rev`; assert the refresh's own HTTP
+  response still contains the freshly-fetched models, but a subsequent
+  `GET /llm-connections/{id}` shows an empty cache, not the stale write.
+  Repeat with delete+recreate at the same id in place of the update, to
+  prove the write lands (unconditionally) yet is still filtered on read.
+- `test_llm_connections_store.py` also covers `cached_models()`'s
+  read-side gate directly, independent of any route/timing setup: write a
+  sidecar via `set_cached_models(id, models, rev="stale")` while the
+  connection's actual current `rev` is something else — `cached_models(id)`
+  returns the empty shape, not `models`; writing with the connection's
+  actual current `rev` makes it visible again.
 
 Frontend:
 
