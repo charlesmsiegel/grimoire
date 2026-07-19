@@ -3047,9 +3047,9 @@ Expected: no output.
 ```
 (the second occurrence additionally overrides `user_label`/`assistant_label` — keep those overrides, just on the new base shape).
 
-- [ ] **Step 2: Fix the hint text in `CastPanel.tsx` and `NewSceneChooser.tsx`**
+- [ ] **Step 2: Fix the hint text in `CastPanel.tsx`, `NewSceneChooser.tsx`, and `CampaignWizard.tsx`**
 
-Both currently read `{!ready && <div className="field-hint">Set an OpenRouter key in Config to generate.</div>}` (post-rename) — this text is now wrong for non-OpenRouter connections. In both files (`frontend/src/components/CastPanel.tsx` line 253, `frontend/src/components/NewSceneChooser.tsx` line 134), change the text to:
+All three currently read `{!ready && <div className="field-hint">Set an OpenRouter key in Config to generate.</div>}` (post-rename) — this text is now wrong for non-OpenRouter connections. (The original brief only named the first two; `CampaignWizard.tsx` has the identical text and was missed — found during Task 10's implementation.) In all three files (`frontend/src/components/CastPanel.tsx` line 253, `frontend/src/components/NewSceneChooser.tsx` line 134, `frontend/src/routes/CampaignWizard.tsx` line 352), change the text to:
 
 ```tsx
 {!ready && <div className="field-hint">Set up an LLM connection in Config to generate.</div>}
