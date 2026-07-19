@@ -570,22 +570,32 @@ def ensure_migrated() -> None:
         _write_raw("claude", kind="claude", name="Claude",
                     model=meta.get("claude_model", config.DEFAULT_CLAUDE_MODEL),
                     base_url="", api_key="", post_process="none")
-    if "active_connection_id" not in meta:
-        # Presence in the raw pre-migration frontmatter, not truthiness via
-        # config.read_config() — the two conflate under a truthiness check:
-        # a key that was never written (migration hasn't decided yet, should
-        # seed from the legacy `provider` field) reads identically to a key
-        # explicitly written as "" (already decided "no active connection"
-        # on purpose, must not be silently overwritten). A truthiness check
-        # here would make ensure_migrated() re-seed "openrouter" every time
-        # active_connection_id is deliberately cleared to "" (e.g.
-        # delete_connection on the active connection, per this task's own
-        # test_get_active_none_when_unset) — found by hand-tracing that test
-        # against this function during implementation.
+    if not meta.get("active_connection_id"):
+        # Truthiness, not presence: this whole block only ever runs once,
+        # gated by the `.migrated` marker check above — there is no
+        # post-migration "explicit clear" that can reach this code path,
+        # since by construction the marker would already exist by then. So
+        # any falsy value here — the key wholly absent (a genuine
+        # pre-migration/legacy file), or present-but-"" (because
+        # config.read_config()'s own defaults bootstrap already wrote this
+        # file with active_connection_id: "" before migration ever ran,
+        # e.g. via GET /api/config's read_config()-before-get_active() call
+        # order) — equally means "not yet decided", so seed it from the
+        # legacy `provider` field either way. A presence check here (an
+        # earlier version of this function had one, to satisfy a test that
+        # itself modeled the wrong scenario — see below) would treat that
+        # bootstrap-written "" as an intentional decision and skip seeding,
+        # leaving every brand-new install with no active connection on the
+        # real route's first request — found by the final whole-branch
+        # review, reproduced directly through GET /api/config's actual call
+        # order, not caught by any earlier test because every one of them
+        # happened to trigger migration via an llm_connections-first call.
         active = "openrouter" if meta.get("provider", "openrouter") == "openrouter" else "claude"
         config.write_config(active_connection_id=active)
     marker.write_text("1", encoding="utf-8")
 ```
+
+`test_get_active_none_when_unset` models the scenario this check *does* still need to protect — an explicit clear happening *after* migration has already completed (e.g. via `delete_connection` on the active connection) — by calling `list_connections()` (letting migration finish and write the marker) before `write_config(active_connection_id="")`, rather than clearing it as the very first action against an unmigrated store (which is the pre-migration bootstrap case above, not an explicit clear). A route-level test, `test_fresh_install_active_connection_defaults_to_openrouter_via_the_real_route` in `test_routes.py`, calls `GET /api/config` as the first request against the `client` fixture's fresh store — matching the real route's actual call order — and asserts `active_connection_id == "openrouter"`, so this exact regression can't silently reappear.
 
 - [ ] **Step 4: Narrow `store/config.py`**
 
@@ -3254,6 +3264,8 @@ If any step surfaces a bug, go back to the task that owns the broken file, fix i
 **Codex adversarial review, round 3 (plan)** — a third pass (two prior attempts hit a transient Codex capacity error mid-turn and were discarded as inconclusive rather than trusted) found one more high-severity issue, an identity-confusion gap distinct from rounds 1-2's caching focus: `delete_connection` never cleared `config.active_connection_id`, so deleting the *active* connection left a dangling reference to its now-freed slug — and `create_connection` reuses freed slugs (the same collision the sidecar's `rev` gate exists to guard against). A later connection created under the same name would land at the identical id and silently become "active" — potentially a different kind or endpoint entirely — without ever being explicitly selected. Fixed at the root: `delete_connection` now clears `active_connection_id` whenever it matches the id being deleted (Task 1), so a same-slug recreation always starts inactive regardless of when or how it's recreated; `createConnection` also gained cache invalidation as explicit defense in depth (Task 6), with tests for both (a store-level delete/recreate test in Task 1, a client-cache test in Task 6).
 
 **Codex adversarial review, round 4 (plan)** — a fourth pass found that round 3's fix, while correct for the normal path, still had a partial-failure window of its own: `delete_connection` cleared `active_connection_id` *after* unlinking the file, so a failure between those two steps (disk error, process death) would leave the file gone — its slug freed and reusable — while `config.md` still referenced it, reproducing the exact dangling-reference bug from a different angle. Fixed by pure reordering, no new infrastructure: clear `active_connection_id` *before* unlinking the file, so every partial-failure window is retry-safe — fail before the config write and nothing changed yet; fail during the unlink after and `active_connection_id` is already correctly cleared even though the file (harmlessly) still exists, a retriable "delete didn't finish" state rather than a dangling active reference. Added a failure-injection test (Task 1) that forces the file unlink to raise after the config write succeeds, proving the clear survives and a retry completes cleanly.
+
+**Final whole-branch review (implementation)** — after all 11 tasks passed their own task-scoped review, a final review across the whole branch (dispatched on the most capable available model, per this skill's guidance for that gate) found one Important, genuinely cross-task defect that no narrower review could have caught: Task 1's own fix for `test_get_active_none_when_unset` (the presence-check version above) meant a brand-new install's `active_connection_id` was *never* seeded to `"openrouter"` on the real `GET /api/config` route, because that route's actual call order (`read_config()` evaluated before `get_active()` ever triggers `ensure_migrated()`) leaves `active_connection_id: ""` already physically present in a freshly-bootstrapped `config.md` by the time migration's seeding check runs — and every task's own tests, plus the Task 11 browser verification, happened to trigger migration via an `llm_connections`-first call (`list_connections()`/`get_active()`/`create_connection()`) that never replicates this exact ordering. Reproduced directly through the real route on a brand-new store before accepting the finding. Fixed by reverting to the truthiness check (safe specifically because this block only ever runs once, gated by the `.migrated` marker — no post-migration "explicit clear" can reach it), fixing `test_get_active_none_when_unset` to model the scenario it actually needs to protect (an explicit clear *after* migration, not the pre-migration bootstrap case), and adding a route-level regression test using the real call order so this can't silently regress again. Also fixed a Minor finding in the same pass: `ConnectionEditor.test.tsx`'s stale-refresh-discard test asserted on text that never renders in the component's view-mode state regardless of whether the guard works — corrected to assert on the view-mode-visible "Last fetched" sidebar text instead, so the test actually proves what it claims.
 
 ---
 
