@@ -1,13 +1,14 @@
 import { useState } from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import ModelCombobox from "./ModelCombobox";
+import type { Model } from "../api/models";
 
-const MODELS = [
+const MODELS: Model[] = [
   { id: "anthropic/claude", name: "Claude", context: 200000, prompt: "0.00001", completion: "0.00002" },
   { id: "google/gemini", name: "Gemini", context: 1048576, prompt: "0", completion: "0" },
 ];
 
-function Harness({ initial = "", models = MODELS }: { initial?: string; models?: typeof MODELS }) {
+function Harness({ initial = "", models = MODELS }: { initial?: string; models?: Model[] }) {
   const [v, setV] = useState(initial);
   return <ModelCombobox value={v} onChange={setV} models={models} />;
 }
