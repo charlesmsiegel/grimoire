@@ -606,8 +606,10 @@ Backend:
 - `test_openai_compatible.py` — SSE happy path and error normalization
   (mirrors `test_openrouter.py`'s `httpx.MockTransport` pattern); `key`
   omitted from headers when empty; `_strict_messages()` unit tests: system
-  before a user turn folds into it; system before an assistant turn becomes
-  its own user turn; a trailing system message (grimoire's `post_history`)
+  before a user turn folds into it; system before an assistant turn folds
+  into the *preceding* user turn (not a separate consecutive one — that
+  would violate strict alternation); a trailing system message (grimoire's
+  `post_history`)
   becomes a final user turn; folding-induced adjacent same-role runs
   re-merge; an assistant-first/empty list gets the defensive placeholder
   user turn; a message with an unrecognized role raises

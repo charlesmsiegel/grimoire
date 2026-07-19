@@ -835,15 +835,22 @@ def test_strict_system_before_user_folds_into_it():
     assert out == [{"role": "user", "content": "Be terse.\n\nHello"}]
 
 
-def test_strict_system_before_assistant_becomes_its_own_user_turn():
+def test_strict_system_before_assistant_folds_into_the_preceding_user_turn():
+    # A system turn sitting between an existing user turn and an assistant
+    # turn must fold INTO that preceding user turn, not become a second,
+    # separate, consecutive user message — two adjacent "user" entries would
+    # violate the strict alternation this function exists to guarantee.
+    # (Found during Task 2's implementation: an earlier draft of this test
+    # asserted the non-alternating shape and "fixed" append() to match it —
+    # backwards, since _strict_messages's whole purpose is preventing exactly
+    # that shape from reaching a backend that rejects it.)
     out = _strict_messages([
         {"role": "user", "content": "Hi"},
         {"role": "system", "content": "Stay in character."},
         {"role": "assistant", "content": "Hello there."},
     ])
     assert out == [
-        {"role": "user", "content": "Hi"},
-        {"role": "user", "content": "Stay in character."},
+        {"role": "user", "content": "Hi\n\nStay in character."},
         {"role": "assistant", "content": "Hello there."},
     ]
 
