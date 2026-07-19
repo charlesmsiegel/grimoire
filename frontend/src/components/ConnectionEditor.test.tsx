@@ -111,8 +111,18 @@ test("a stale refresh response (rev no longer matches) is discarded", async () =
   // the connection changes underneath the open form (e.g. base_url saved) before the refresh resolves
   (api.readConnection as any).mockResolvedValueOnce({ ...CUSTOM, rev: "r3", models: [], fetched_at: "" });
   await select_again();
-  resolveRefresh!({ models: [{ id: "stale", name: "stale", context: null, prompt: null, completion: null }], fetched_at: "old", rev: "r2" });
-  await waitFor(() => expect(screen.queryByText("stale")).not.toBeInTheDocument());
+  resolveRefresh!({ models: [{ id: "stale", name: "stale", context: null, prompt: null, completion: null }], fetched_at: "STALE_TIMESTAMP", rev: "r2" });
+  // The component is back in view mode after select_again(), where
+  // detail.models never renders (only ModelCombobox in edit mode does) --
+  // so "stale" would never appear here regardless of whether the rev guard
+  // works. Assert instead on the "Cached models" sidebar's "Last fetched"
+  // text, which IS visible in view mode: wait for the refresh to finish
+  // (button label reverts from "Refreshing…"), then confirm the stale
+  // response's distinctive fetched_at never reached the screen and the
+  // pre-refresh "Never fetched" state survived untouched.
+  await screen.findByRole("button", { name: /refresh models/i });
+  expect(screen.queryByText(/STALE_TIMESTAMP/)).not.toBeInTheDocument();
+  expect(screen.getByText("Never fetched")).toBeInTheDocument();
 
   async function select_again() {
     fireEvent.click(await within(rail).findByText("z.ai GLM"));
