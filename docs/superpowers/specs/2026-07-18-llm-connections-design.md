@@ -456,10 +456,10 @@ check lives entirely on the **read** side, where there's no gap to race:
   happened to land relative to the edit.
 - `POST /llm-connections/{id}/models/refresh` captures `rev`, fetches,
   calls `set_cached_models(id, models, rev)` unconditionally, and returns
-  the freshly-fetched list directly in its HTTP response (the request that
-  asked for it gets its answer) regardless of whether that write turns out
-  to be the one future reads see — that's decided later, per read, by
-  `cached_models()`.
+  `{"models": ..., "fetched_at": ..., "rev": rev}` directly in its HTTP
+  response (the request that asked for it gets its answer) regardless of
+  whether that write turns out to be the one future reads see — that's
+  decided later, per read, by `cached_models()`.
 - A delete-then-recreate at the same id gets a fresh `rev` from
   `create_connection`, so it's covered by the same read-side check even
   though the id repeats; this makes the existing "sidecar cleared on
@@ -474,6 +474,22 @@ requests (e.g. two rapid `update_connection` calls) is still last-write-wins
 with no merge — that residual is the ordinary, benign kind every settings
 form in this codebase already has, not a correctness or credential-exposure
 issue, and isn't worth defending against here.
+
+**One more path the `rev` gate doesn't cover: the refresh response itself.**
+The gate protects every *later* read (`GET /llm-connections/{id}`), but the
+in-flight refresh call's own HTTP response still hands back whatever it
+fetched, even if the connection changed underneath it while the request was
+outstanding. If the same edit session saved a `base_url` change (or
+deleted/recreated the connection) before that response arrived, the editor
+could apply a stale response over the connection it's now actually showing.
+This is an ordinary stale-async-response bug, not a new architectural gap —
+the same shape `ModelCombobox.tsx`/`StyleGuideEditor.tsx` already guard
+against elsewhere in this codebase (an `alive`/mounted-ref check around a
+`.then()`). The connection editor's refresh handler applies the same
+pattern, comparing the response's `rev` against the connection currently
+open in the form and discarding the response if they don't match, rather
+than assuming an in-flight request's answer is still relevant when it
+lands.
 
 ### 6. Routes
 
