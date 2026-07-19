@@ -35,10 +35,10 @@ beforeEach(() => {
   (api.deleteScene as any).mockResolvedValue({ ok: true });
 });
 
-async function renderChooser(props: Partial<{ afterSid: string | null; keySet: boolean;
+async function renderChooser(props: Partial<{ afterSid: string | null; ready: boolean;
                                               onClose: () => void; onCreated: (sid: string, p?: string) => void }> = {}) {
   render(<NewSceneChooser cid="c" afterSid={props.afterSid !== undefined ? props.afterSid : "s1"}
-                          keySet={props.keySet ?? true}
+                          ready={props.ready ?? true}
                           onClose={props.onClose ?? (() => {})}
                           onCreated={props.onCreated ?? (() => {})} />);
   fireEvent.click(await screen.findByText("With your PC"));
@@ -108,10 +108,10 @@ test("Cancel closes without creating anything", async () => {
 });
 
 test("without a key: no suggestions fetch, hint shown, up to 4 greetings", async () => {
-  await renderChooser({ keySet: false });
+  await renderChooser({ ready: false });
   await screen.findByText("Reckoning");
   expect(api.sceneSuggestions).not.toHaveBeenCalled();
-  expect(screen.getByText(/set an openrouter key/i)).toBeInTheDocument();
+  expect(screen.getByText(/set up an llm connection/i)).toBeInTheDocument();
   expect(screen.getByText("Dawn")).toBeInTheDocument(); // slot cap grows to 4
 });
 
@@ -188,7 +188,7 @@ test("greeting picks choose and order the greeting cards", async () => {
 });
 
 test("without a key greetings render immediately, no Choosing…", async () => {
-  await renderChooser({ keySet: false });
+  await renderChooser({ ready: false });
   await screen.findByText("Reckoning");
   expect(screen.queryByText(/choosing…/i)).toBeNull();
 });
@@ -232,7 +232,7 @@ test("mode step gates all fetches and offscreen filters to pcless greetings", as
     { id: "reck", name: "Reckoning", available: true, reasons: [], unlocked: false },
     { id: "cabal", name: "The Cabal", available: true, reasons: [], unlocked: false, pcless: true },
   ]);
-  render(<NewSceneChooser cid="c" afterSid="s1" keySet={true}
+  render(<NewSceneChooser cid="c" afterSid="s1" ready={true}
                           onClose={() => {}} onCreated={() => {}} />);
   expect(api.availableGreetings).not.toHaveBeenCalled();
   expect(api.sceneSuggestions).not.toHaveBeenCalled();
@@ -244,7 +244,7 @@ test("mode step gates all fetches and offscreen filters to pcless greetings", as
 
 test("offscreen manual create flags the scene pcless", async () => {
   const onCreated = vi.fn();
-  render(<NewSceneChooser cid="c" afterSid="s1" keySet={true}
+  render(<NewSceneChooser cid="c" afterSid="s1" ready={true}
                           onClose={() => {}} onCreated={onCreated} />);
   fireEvent.click(await screen.findByText(/offscreen \(npcs only\)/i));
   fireEvent.click(await screen.findByRole("button", { name: /create manually/i }));

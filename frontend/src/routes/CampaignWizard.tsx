@@ -9,7 +9,7 @@ type LocationDraft = { name: string; body: string; keys: string };
 const blankPersona: Persona = { name: "", pronouns: "", summary: "", description: "" };
 const STEPS = ["Backdrop", "Character", "Locations", "Opening"];
 
-export default function CampaignWizard({ keySet }: { keySet: boolean }) {
+export default function CampaignWizard({ ready }: { ready: boolean }) {
   const navigate = useNavigate();
   const [step, setStep] = useState(1);
   const [error, setError] = useState<string | null>(null);
@@ -349,11 +349,11 @@ export default function CampaignWizard({ keySet }: { keySet: boolean }) {
           </div>
           <div className="field">
             <div className="role">Generate an opener</div>
-            {!keySet && <div className="field-hint">Set an OpenRouter key in Config to generate.</div>}
+            {!ready && <div className="field-hint">Set up an LLM connection in Config to generate.</div>}
             <div className="picker">
               <input type="text" aria-label="Opener prompt" placeholder="A storm over the salt marshes…"
                      value={prompt} onChange={(e) => setPrompt(e.target.value)} />
-              <button className="primary" disabled={!keySet || busy || !prompt.trim()} onClick={generate}>
+              <button className="primary" disabled={!ready || busy || !prompt.trim()} onClick={generate}>
                 {busy ? "…" : "Generate"}
               </button>
             </div>

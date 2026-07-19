@@ -68,21 +68,21 @@ test("initialPrompt seeds the opener prompt", async () => {
 
 test("switching scenes clears a previously seeded prompt", async () => {
   const { rerender } = render(
-    <CastPanel cid="c" sid="s" keySet onSeeded={() => {}} initialPrompt="A premise" />,
+    <CastPanel cid="c" sid="s" ready onSeeded={() => {}} initialPrompt="A premise" />,
   );
   await waitFor(() => expect(
     (screen.getByLabelText("Opener prompt") as HTMLInputElement).value,
   ).toBe("A premise"));
-  rerender(<CastPanel cid="c" sid="s2" keySet onSeeded={() => {}} />);
+  rerender(<CastPanel cid="c" sid="s2" ready onSeeded={() => {}} />);
   await waitFor(() => expect(
     (screen.getByLabelText("Opener prompt") as HTMLInputElement).value,
   ).toBe(""));
 });
 
-function renderPanel(props: Partial<{ keySet: boolean; onSeeded: () => void;
+function renderPanel(props: Partial<{ ready: boolean; onSeeded: () => void;
                                       onSceneRenamed: (id: string) => void; initialPrompt: string }> = {}) {
   render(
-    <CastPanel cid="c" sid="s" keySet={props.keySet ?? true}
+    <CastPanel cid="c" sid="s" ready={props.ready ?? true}
                onSeeded={props.onSeeded ?? (() => {})} onSceneRenamed={props.onSceneRenamed}
                initialPrompt={props.initialPrompt} />,
   );
@@ -228,7 +228,7 @@ test("first date set renames the scene: adopts the new id via onSceneRenamed", a
 });
 
 test("offscreen scene hides PC and player seating", async () => {
-  render(<CastPanel cid="c" sid="s" keySet onSeeded={() => {}} pcless />);
+  render(<CastPanel cid="c" sid="s" ready onSeeded={() => {}} pcless />);
   await screen.findByText(/add to scene/i);
   expect(screen.queryByLabelText("Actor kind")).toBeNull();
   expect(screen.queryByLabelText("Role")).toBeNull();

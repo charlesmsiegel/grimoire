@@ -51,7 +51,7 @@ beforeEach(() => {
 function renderWizard() {
   render(
     <MemoryRouter>
-      <CampaignWizard keySet={false} />
+      <CampaignWizard ready={false} />
     </MemoryRouter>,
   );
 }

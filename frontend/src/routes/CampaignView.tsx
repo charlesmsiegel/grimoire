@@ -65,7 +65,7 @@ const RenderedMarkdown = memo(function RenderedMarkdown({ content }: { content: 
   );
 });
 
-export default function CampaignView({ keySet }: { keySet: boolean }) {
+export default function CampaignView({ ready }: { ready: boolean }) {
   const { cid = "" } = useParams();
   const navigate = useNavigate();
   const [name, setName] = useState("");
@@ -694,9 +694,9 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
             </div>
           </div>
         )}
-        {!keySet && (
+        {!ready && (
           <div className="banner">
-            No OpenRouter key set. <Link to="/config">Set your key in Config</Link>.
+            No LLM connection ready. <Link to="/config">Set one up in Config</Link>.
           </div>
         )}
         {error && (
@@ -711,7 +711,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
           <CastPanel
             cid={cid}
             sid={activeId}
-            keySet={keySet}
+            ready={ready}
             onSeeded={() => selectScene(activeId)}
             onSceneRenamed={sceneRenamed}
             initialPrompt={seedPrompt?.sid === activeId ? seedPrompt.prompt : undefined}
@@ -941,7 +941,7 @@ export default function CampaignView({ keySet }: { keySet: boolean }) {
         <RecordDrawer cid={cid} sid={activeId} target={drawer} onClose={() => setDrawer(null)} />
       )}
       {chooserOpen && (
-        <NewSceneChooser cid={cid} afterSid={activeId} keySet={keySet}
+        <NewSceneChooser cid={cid} afterSid={activeId} ready={ready}
                          onClose={() => setChooserOpen(false)} onCreated={sceneCreated} />
       )}
       </div>

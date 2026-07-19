@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { NavLink, Route, Routes } from "react-router-dom";
+import { NavLink, Route, Routes, useLocation } from "react-router-dom";
 import { api } from "./api/client";
 import { ThemeProvider } from "./theme/ThemeProvider";
 import { DEFAULT_THEME } from "./theme/themes";
@@ -15,17 +15,21 @@ import ConfigView from "./routes/ConfigView";
 
 export default function App() {
   const [theme, setTheme] = useState<string | null>(null);
-  const [keySet, setKeySet] = useState(false);
+  const [ready, setReady] = useState(false);
+  const [activeLabel, setActiveLabel] = useState("NO CONNECTION");
+
+  const location = useLocation();
 
   useEffect(() => {
-    api
-      .getConfig()
-      .then((c) => {
-        setTheme(c.theme);
-        setKeySet(c.key_set);
-      })
-      .catch(() => setTheme(DEFAULT_THEME));
+    api.getConfig().then((c) => setTheme(c.theme)).catch(() => setTheme(DEFAULT_THEME));
   }, []);
+
+  useEffect(() => {
+    api.getConfig().then((c) => {
+      setReady(c.ready);
+      setActiveLabel(c.active_connection ? c.active_connection.name.toUpperCase() : "NO CONNECTION");
+    });
+  }, [location.pathname]);
 
   if (theme === null) return null;
 
@@ -55,7 +59,7 @@ export default function App() {
         </nav>
         <div className="topbar-right">
           <span className="status">
-            <span className="dot">●</span> OPENROUTER · {keySet ? "CONNECTED" : "NO KEY"}
+            <span className="dot">●</span> {activeLabel} · {ready ? "CONNECTED" : "NOT READY"}
           </span>
           <span className="divider" />
           <NavLink to="/config" className={({ isActive }) => "config-link" + (isActive ? " active" : "")}>
@@ -65,8 +69,8 @@ export default function App() {
       </header>
       <Routes>
         <Route path="/" element={<CampaignsView />} />
-        <Route path="/campaigns/new" element={<CampaignWizard keySet={keySet} />} />
-        <Route path="/campaigns/:cid" element={<CampaignView keySet={keySet} />} />
+        <Route path="/campaigns/new" element={<CampaignWizard ready={ready} />} />
+        <Route path="/campaigns/:cid" element={<CampaignView ready={ready} />} />
         <Route path="/campaigns/:cid/world" element={<WorldView campaign />} />
         <Route path="/worlds" element={<WorldsView />} />
         <Route path="/worlds/:wid" element={<WorldView />} />
