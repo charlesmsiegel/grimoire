@@ -304,6 +304,11 @@ def test_get_active_resolves_the_configured_connection(monkeypatch, tmp_path):
 
 
 def test_get_active_none_when_unset(monkeypatch, tmp_path):
+    # Models an explicit clear that happens AFTER migration has already
+    # completed (e.g. via delete_connection on the active connection) --
+    # not the pre-migration bootstrap case, which ensure_migrated's own
+    # seeding step is responsible for (see test_zero_config_seeds_...).
     s = reload_with_home(monkeypatch, tmp_path)
-    s.write_config(active_connection_id="")
+    s.llm_connections.list_connections()  # let migration complete first (writes the .migrated marker)
+    s.write_config(active_connection_id="")  # simulate an explicit clear, e.g. via delete_connection
     assert s.llm_connections.get_active() is None

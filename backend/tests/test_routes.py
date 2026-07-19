@@ -38,6 +38,23 @@ def _campaign(client, name="Run"):
 
 
 # ---- config (unchanged behavior) ----
+def test_fresh_install_active_connection_defaults_to_openrouter_via_the_real_route(client):
+    # Must call GET /api/config as the FIRST request against the fixture's
+    # brand-new, unmigrated GRIMOIRE_HOME, matching the real route's actual
+    # call order (_public_config(store.read_config()) evaluates
+    # read_config() -- which auto-creates config.md with
+    # active_connection_id: "" already physically present -- before
+    # get_active() ever triggers ensure_migrated()). A test that seeds via
+    # list_connections()/create_connection() first would not catch this;
+    # the `client` fixture itself only calls reload(store) + create_app(),
+    # neither of which touches read_config or llm_connections, so this is
+    # genuinely the first store access.
+    r = client.get("/api/config")
+    body = r.json()
+    assert body["active_connection_id"] == "openrouter"
+    assert body["active_connection"]["kind"] == "openrouter"
+
+
 def test_connection_never_leaks_key_openrouter(client):
     r = client.post("/api/llm-connections", json={
         "kind": "openrouter", "name": "OR2", "api_key": "sk-or-secret"})

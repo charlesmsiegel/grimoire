@@ -209,17 +209,20 @@ def ensure_migrated() -> None:
         _write_raw("claude", kind="claude", name="Claude",
                     model=meta.get("claude_model", config.DEFAULT_CLAUDE_MODEL),
                     base_url="", api_key="", post_process="none")
-    if "active_connection_id" not in meta:
-        # Presence in the raw pre-migration frontmatter, not truthiness via
-        # config.read_config() (which backfills a "" default for a key that
-        # was never written). That distinction matters: a key that's
-        # genuinely absent means migration hasn't decided yet, so seed it
-        # from the legacy `provider` field. A key present-but-empty means
-        # something already decided "no active connection" on purpose
-        # (an explicit write_config(active_connection_id=""), or a
-        # delete_connection that cleared it before migration ever ran) —
-        # re-seeding over that would silently resurrect a connection the
-        # caller just turned off.
+    if not meta.get("active_connection_id"):
+        # Truthiness, not presence: this whole block only ever runs once,
+        # gated by the `.migrated` marker check above — there is no
+        # post-migration "explicit clear" that can reach this code path,
+        # since by construction the marker would already exist by then. So
+        # any falsy value here — the key wholly absent (a genuine
+        # pre-migration/legacy file), or present-but-"" (because
+        # config.read_config()'s own defaults bootstrap already wrote this
+        # file with active_connection_id: "" before migration ever ran,
+        # e.g. via GET /api/config's read_config()-before-get_active() call
+        # order) — equally means "not yet decided", so seed it from the
+        # legacy `provider` field either way. A presence check would treat
+        # that bootstrap-written "" as an intentional decision and skip
+        # seeding, leaving a brand-new install with no active connection.
         active = "openrouter" if meta.get("provider", "openrouter") == "openrouter" else "claude"
         config.write_config(active_connection_id=active)
     marker.write_text("1", encoding="utf-8")
