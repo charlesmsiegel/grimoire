@@ -274,6 +274,33 @@ def test_recreated_connection_never_inherits_an_orphaned_sidecar(monkeypatch, tm
     assert s.llm_connections.cached_models(new_id) == {"models": [], "fetched_at": ""}
 
 
+def test_deleting_the_active_connection_leaves_nothing_active(monkeypatch, tmp_path):
+    s = reload_with_home(monkeypatch, tmp_path)
+    cid = s.llm_connections.create_connection("openai_compatible", "Endpoint", base_url="https://x")
+    s.write_config(active_connection_id=cid)
+    s.llm_connections.delete_connection(cid)
+    assert s.read_config()["active_connection_id"] == ""
+    assert s.llm_connections.get_active() is None
+
+
+def test_recreating_a_deleted_active_connection_does_not_silently_reactivate_it(monkeypatch, tmp_path):
+    # The identity-confusion case Codex's review caught: deleting the active
+    # connection, then creating a new one under the same name (reusing the
+    # freed slug) must NOT make the new one active just because config.md
+    # still happened to reference that id — it must require an explicit
+    # Set-as-active, same as any other newly-created connection.
+    s = reload_with_home(monkeypatch, tmp_path)
+    cid = s.llm_connections.create_connection(
+        "openai_compatible", "Reused Name", base_url="https://old", api_key="sk-old")
+    s.write_config(active_connection_id=cid)
+    s.llm_connections.delete_connection(cid)
+    new_id = s.llm_connections.create_connection(
+        "claude", "Reused Name", model="opus")  # even a different kind
+    assert new_id == cid  # same freed slug
+    assert s.read_config()["active_connection_id"] == ""
+    assert s.llm_connections.get_active() is None
+
+
 # ---- get_active ----
 
 def test_get_active_resolves_the_configured_connection(monkeypatch, tmp_path):
@@ -439,6 +466,14 @@ def delete_connection(id: str) -> None:
         raise ConnectionNotFound(id)
     p.unlink()
     _sidecar_path(id).unlink(missing_ok=True)
+    if config.read_config().get("active_connection_id") == id:
+        # Otherwise config.md keeps pointing at a freed slug. create_connection
+        # reuses freed slugs (same identity-collision risk the sidecar's `rev`
+        # gate exists for) — a later connection recreated under the same name
+        # would silently become "active" without ever being explicitly
+        # selected, potentially a different kind/endpoint than the deleted
+        # one. Deleting the active connection always leaves nothing active.
+        config.write_config(active_connection_id="")
 
 
 def get_active() -> dict | None:
@@ -1776,7 +1811,7 @@ git commit -m "feat(backend): rewire LLM generation routes and the ingest_scene 
 - Modify: `frontend/src/api/models.ts`
 
 **Interfaces:**
-- Produces (used by Tasks 7, 8, 9, 10): `Model` type now nullable on `context`/`prompt`/`completion`; `LLMConnectionKind`, `LLMConnection`, `LLMConnectionDetail`, `LLMConnectionDraft`, `ModelsRefreshResult` types; `Config` type drops `model`/`key_set`/`provider`/`claude_model`, gains `active_connection_id`/`active_connection`/`ready`; `api.listConnections()`, `api.createConnection(draft)`, `api.readConnection(id)`, `api.updateConnection(id, patch)`, `api.deleteConnection(id)`, `api.refreshConnectionModels(id)`. `updateConnection`/`deleteConnection` each invalidate the shared config cache (Task 10's App-level refetch, and any other in-page `getConfig()` caller, depends on this — editing or deleting a connection can change the *active* connection's readiness even though it never calls `/api/config` itself).
+- Produces (used by Tasks 7, 8, 9, 10): `Model` type now nullable on `context`/`prompt`/`completion`; `LLMConnectionKind`, `LLMConnection`, `LLMConnectionDetail`, `LLMConnectionDraft`, `ModelsRefreshResult` types; `Config` type drops `model`/`key_set`/`provider`/`claude_model`, gains `active_connection_id`/`active_connection`/`ready`; `api.listConnections()`, `api.createConnection(draft)`, `api.readConnection(id)`, `api.updateConnection(id, patch)`, `api.deleteConnection(id)`, `api.refreshConnectionModels(id)`. `createConnection`/`updateConnection`/`deleteConnection` each invalidate the shared config cache (Task 10's App-level refetch, and any other in-page `getConfig()` caller, depends on this — editing or deleting a connection can change the *active* connection's readiness even though it never calls `/api/config` itself; `createConnection`'s invalidation is defense in depth, since Task 1's `delete_connection` fix means a freshly-created connection is never auto-active).
 
 - [ ] **Step 1: Widen `Model`'s nullable fields in `api/models.ts`**
 
@@ -1861,7 +1896,16 @@ Add near `listStyles`/`createStyle`/etc. (around line 670-676), following the sa
 
 ```ts
   listConnections: () => request<LLMConnection[]>("GET", "/api/llm-connections"),
-  createConnection: (draft: LLMConnectionDraft) => request<{ id: string }>("POST", "/api/llm-connections", draft),
+  createConnection: (draft: LLMConnectionDraft) =>
+    request<{ id: string }>("POST", "/api/llm-connections", draft).then((r) => {
+      // The backend never auto-activates a freshly-created connection (see
+      // store/llm_connections.py's delete_connection, which clears
+      // active_connection_id specifically so a same-slug recreation can't
+      // silently reactivate) — this invalidation is defense in depth, not
+      // load-bearing, in case that ever changes.
+      invalidateConfigCache();
+      return r;
+    }),
   readConnection: (id: string) => request<LLMConnectionDetail>("GET", `/api/llm-connections/${id}`),
   updateConnection: (id: string, patch: Partial<LLMConnectionDraft>) =>
     request<LLMConnectionDetail>("PUT", `/api/llm-connections/${id}`, patch).then((r) => {
@@ -1906,6 +1950,26 @@ test("updating a connection invalidates the config cache", async () => {
   fetchMock.mockResolvedValue(jsonOk({ ...CFG, ready: true }));
   await api.getConfig();  // must hit the network again -- the cache was invalidated
   expect(fetchMock).toHaveBeenCalledTimes(3);  // 1 getConfig + 1 updateConnection + 1 fresh getConfig
+  invalidateConfigCache();
+});
+
+test("creating a connection also invalidates the config cache", async () => {
+  // Defense in depth (store/llm_connections.py's delete_connection clears
+  // active_connection_id specifically so creation is never supposed to
+  // silently change what's active) — still proves the client doesn't rely
+  // solely on that server-side guarantee to stay correct.
+  invalidateConfigCache();
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk(CFG));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  await api.getConfig();
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+
+  fetchMock.mockResolvedValue(jsonOk({ id: "new-conn" }));
+  await api.createConnection({ kind: "openai_compatible", name: "New Endpoint" });
+
+  fetchMock.mockResolvedValue(jsonOk(CFG));
+  await api.getConfig();  // must hit the network again
+  expect(fetchMock).toHaveBeenCalledTimes(3);  // 1 getConfig + 1 createConnection + 1 fresh getConfig
   invalidateConfigCache();
 });
 ```
@@ -3116,6 +3180,8 @@ If any step surfaces a bug, go back to the task that owns the broken file, fix i
 **My own follow-up sweep** (after applying the above) found three more consumers of the removed config fields that neither the original plan nor the review had caught, all now fixed: `store/scenes.py`'s `create_scene()` stamped every new scene's `model` metadata from `read_config()["model"]` — would `KeyError` on the very first scene created post-migration (Task 5, Step 7); `backend/scripts/ingest_scene.py`, a standalone CLI outside `routes.py` entirely, read `cfg["model"]`/`cfg["openrouter_key"]` and hardcoded `OpenRouterClient` in its `main()` (Task 5, Steps 8-9, plus its test file); and `App.test.tsx` (missed from Task 10's original file list) mocked the old `getConfig()` shape and asserted the old hardcoded pill text (now rewritten with a dedicated navigation-refetch test). `test_frontmatter.py`'s incidental use of `"openrouter_key"` as a sample field name was checked and confirmed unrelated — it tests the generic frontmatter parser, not `config.py`'s schema, and needs no change.
 
 **Codex adversarial review, round 2 (plan)** — a second background pass against the round-1 fixes found one more high-severity issue, which round 1's own fixes had inadvertently caused: Task 6's `putConfig` replacement showed only a narrowed type signature and silently dropped the existing function's cache-refresh body (`configCache = Promise.resolve(cfg)`) in the process — a real regression that would have broken `client.test.ts`'s pre-existing cache test and made Task 10's location-based refetch (added to fix round 1's App-staleness finding) a no-op, since it reads through the very cache that was no longer being refreshed. Also flagged, correctly: `updateConnection`/`deleteConnection` never invalidated the cache at all, so editing or deleting the *active* connection's own fields (fixing a missing key, say) wouldn't be reflected in `ready` even after the `putConfig` fix, since neither call touches `/api/config`. Both fixed in Task 6 (Step 3's `putConfig` now keeps its `.then()`; `updateConnection`/`deleteConnection` each call `invalidateConfigCache()`), with `client.test.ts`'s `CFG` mock updated to the new shape and a new test proving the invalidation path against a mocked `fetch` rather than a mocked `api.getConfig()` (Step 4) — Task 10 cross-references this dependency explicitly so the two tasks aren't implemented out of order.
+
+**Codex adversarial review, round 3 (plan)** — a third pass (two prior attempts hit a transient Codex capacity error mid-turn and were discarded as inconclusive rather than trusted) found one more high-severity issue, an identity-confusion gap distinct from rounds 1-2's caching focus: `delete_connection` never cleared `config.active_connection_id`, so deleting the *active* connection left a dangling reference to its now-freed slug — and `create_connection` reuses freed slugs (the same collision the sidecar's `rev` gate exists to guard against). A later connection created under the same name would land at the identical id and silently become "active" — potentially a different kind or endpoint entirely — without ever being explicitly selected. Fixed at the root: `delete_connection` now clears `active_connection_id` whenever it matches the id being deleted (Task 1), so a same-slug recreation always starts inactive regardless of when or how it's recreated; `createConnection` also gained cache invalidation as explicit defense in depth (Task 6), with tests for both (a store-level delete/recreate test in Task 1, a client-cache test in Task 6).
 
 ---
 
