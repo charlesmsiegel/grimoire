@@ -74,8 +74,8 @@ def list_connections() -> list[dict]        # masked: key_set bool, no api_key
 def read_connection(id: str) -> dict         # masked, for GET /llm-connections/{id}
 def read_connection_raw(id: str) -> dict     # unmasked — internal use (LLM dispatch, models/refresh)
 def create_connection(kind: str, name: str, **fields) -> str
-def update_connection(id: str, **fields) -> None   # kind is immutable — not accepted here
-def delete_connection(id: str) -> None
+def update_connection(id: str, **fields) -> None   # kind is immutable — not accepted here; see §6 for api_key/base_url interaction
+def delete_connection(id: str) -> None       # also removes the id's .models.json sidecar, if present
 def get_active() -> dict | None              # unmasked; resolves config.active_connection_id
 def cached_models(id: str) -> dict           # {"models": [], "fetched_at": ""} if no sidecar yet
 def set_cached_models(id: str, models: list[dict]) -> None
@@ -83,21 +83,41 @@ def ensure_migrated() -> None                # see §2
 ```
 
 `create_connection`/`update_connection` use the existing `slugify`/`uniquify`
-helpers from `store/paths.py` for ids, same as `styles.create_style`.
+helpers from `store/paths.py` for ids, same as `styles.create_style` — **except**
+during migration, which uses the fixed ids `openrouter`/`claude` directly (see
+§2, for idempotency).
+
+Every public function in this module calls `ensure_migrated()` first (cheap:
+short-circuits on a marker-file check once migrated) — not just
+`list_connections()`/`get_active()`. A caller reaching `create_connection()`
+directly, before either of those, must not be able to leave the legacy
+config fields stranded (see §2's second finding).
 
 ### 2. One-time migration
 
-`ensure_migrated()` runs at the top of `list_connections()` and `get_active()`
-(the two entry points routes.py uses). It fires only when
-`<GRIMOIRE_HOME>/llm_connections/` doesn't exist yet — an existing-but-empty
-directory (user deleted every connection) is left alone, so this is
-genuinely one-time:
+Directory existence is not a safe "already migrated" signal: `mkdir()` and
+the two seed connections are three separate writes, and a crash, disk error,
+or a direct `create_connection()` call landing between them would leave a
+partial directory that an existence-only check would wrongly treat as
+complete — stranding the legacy `openrouter_key`/`claude_model` fields
+permanently, since `config.py`'s narrowed schema (below) stops exposing them
+the moment this change ships. Instead:
+
+- Migration writes a marker file, `<GRIMOIRE_HOME>/llm_connections/.migrated`,
+  as its **last** step — only that marker's existence gates a no-op return.
+- The two seed connections use **fixed ids** (`openrouter`, `claude`), not
+  `uniquify`-generated ones, and each is only created if its file doesn't
+  already exist — so a retry after a partial failure (e.g. the OpenRouter
+  connection was written, then the process died before Claude's) resumes
+  cleanly instead of duplicating.
+- `active_connection_id` is only written if it's currently unset.
 
 ```python
 def ensure_migrated() -> None:
-    if _dir().exists():
+    _dir().mkdir(parents=True, exist_ok=True)
+    marker = _dir() / ".migrated"
+    if marker.exists():
         return
-    _dir().mkdir(parents=True)
     # Read the pre-migration fields directly off the frontmatter file — NOT
     # via config.read_config(), whose declared key set drops them the moment
     # this change ships (see _CONFIG_KEYS below). A file that predates this
@@ -105,14 +125,24 @@ def ensure_migrated() -> None:
     # whatever keys exist regardless of the "official" schema.
     path = config._config_path()
     meta, _ = parse_frontmatter(path.read_text(encoding="utf-8")) if path.exists() else ({}, "")
-    or_id = create_connection("openrouter", "OpenRouter",
-                               api_key=meta.get("openrouter_key", ""),
-                               model=meta.get("model", config.DEFAULT_MODEL))
-    cl_id = create_connection("claude", "Claude",
-                               model=meta.get("claude_model", config.DEFAULT_CLAUDE_MODEL))
-    active = or_id if meta.get("provider", "openrouter") == "openrouter" else cl_id
-    config.write_config(active_connection_id=active)
+    if not _path("openrouter").exists():
+        _write_raw("openrouter", kind="openrouter", name="OpenRouter",
+                    api_key=meta.get("openrouter_key", ""),
+                    model=meta.get("model", config.DEFAULT_MODEL),
+                    base_url="", post_process="none")
+    if not _path("claude").exists():
+        _write_raw("claude", kind="claude", name="Claude",
+                    model=meta.get("claude_model", config.DEFAULT_CLAUDE_MODEL),
+                    base_url="", api_key="", post_process="none")
+    if not config.read_config().get("active_connection_id"):
+        active = "openrouter" if meta.get("provider", "openrouter") == "openrouter" else "claude"
+        config.write_config(active_connection_id=active)
+    marker.write_text("1", encoding="utf-8")
 ```
+
+(`_write_raw` is the same frontmatter-dump primitive `create_connection`
+uses internally, just called with a caller-chosen id instead of a
+`uniquify`d one.)
 
 A brand-new install (no `config.md` at all) takes the same path with empty
 defaults, which is now the zero-config bootstrap: an empty-keyed OpenRouter
@@ -124,9 +154,10 @@ today's `DEFAULT_PROVIDER`.
 resolved to a real id by migration before any caller sees it). Legacy fields
 already written to an existing `config.md` are left in the file untouched
 (not actively stripped) — inert clutter, never read again except by
-`ensure_migrated`'s one-time direct-frontmatter read, and harmless if a user
-ever manually deletes `llm_connections/` (migration simply reconstructs the
-same two connections from the still-present snapshot).
+`ensure_migrated`'s direct-frontmatter read, and harmless if a user ever
+manually deletes `llm_connections/` along with its `.migrated` marker
+(migration simply reconstructs the same two connections from the
+still-present snapshot).
 
 ### 3. Config & dispatch
 
@@ -182,7 +213,15 @@ class LLMClient:
         await self._openai_compatible.aclose()
 ```
 
-`_public_config()` drops the provider-specific fields and adds:
+`_public_config()` drops the provider-specific fields and adds
+`active_connection_id`/`active_connection`/`ready`. `active_connection_id` in
+the response is derived from the resolved `active`
+connection, not read back off the `cfg` argument — `get_active()` can itself
+trigger `ensure_migrated()`, which writes a fresh `active_connection_id` into
+`config.md` *after* `cfg` was already read by the caller. Trusting `cfg`'s
+copy here would show the stale (pre-migration, empty) id on the very first
+request after upgrade, even though `active_connection`/`ready` already
+reflect the real, newly-migrated connection.
 
 ```python
 def _public_config(cfg: dict) -> dict:
@@ -192,7 +231,7 @@ def _public_config(cfg: dict) -> dict:
             "user_label": cfg.get("user_label", "You"),
             "assistant_label": cfg.get("assistant_label", "Grimoire"),
             "default_style_id": cfg.get("default_style_id", ""),
-            "active_connection_id": cfg.get("active_connection_id", ""),
+            "active_connection_id": active["id"] if active else "",
             "active_connection": ({"id": active["id"], "kind": active["kind"], "name": active["name"]}
                                    if active else None),
             "ready": _connection_ready(active)}
@@ -253,10 +292,16 @@ def _strict_messages(messages: list[dict]) -> list[dict]:
             pending.append(m["content"])
         elif m["role"] == "user":
             append("user", flush(m["content"]))
-        else:  # assistant
+        elif m["role"] == "assistant":
             if pending:
                 append("user", flush())
             append("assistant", m["content"])
+        else:
+            # grimoire's context.py only ever emits system/user/assistant
+            # today, but silently folding an unrecognized role (a future
+            # tool/developer message, a malformed record) into "assistant"
+            # would misattribute its content as model-authored. Fail closed.
+            raise OpenAICompatibleError("bad_response", f"unsupported message role: {m['role']!r}")
     if pending:
         append("user", flush())
     if not folded or folded[0]["role"] != "user":
@@ -323,6 +368,18 @@ and the new connection editor passes the active connection's cached models.
 Rows only render the context/price chip when the value isn't `null`, so a
 custom endpoint with no pricing data shows id + name only — no fake "Free".
 
+**Sidecar lifecycle.** The cache is keyed only by connection id, but
+`base_url` is mutable — without extra handling, repointing a connection at a
+different server would keep showing the old server's model ids/prices/context
+under the new one's identity until the user happens to hit Refresh. Two
+rules close this: `update_connection()` clears the `.models.json` sidecar
+(back to the empty `{"models": [], "fetched_at": ""}` state) whenever
+`base_url` is part of the update and differs from the stored value; and
+`delete_connection()` always removes the sidecar file, so a deleted
+connection's id can't be reused by a same-named new connection and silently
+inherit stale metadata (`slugify`/`uniquify` frees a deleted id's slug for
+reuse the same way `styles.py` does).
+
 ### 6. Routes
 
 ```
@@ -337,6 +394,17 @@ creation, avoiding partial-field states from switching a connection's kind
 mid-life (rename/recreate instead). `api_key` on update follows the existing
 "type to replace" convention (`openrouter_key` today): omitted/empty means
 keep the stored key.
+
+**Except when `base_url` changes.** OpenRouter's URL is fixed, so this
+ambiguity never mattered before — but a custom endpoint's `base_url` is
+user-editable, and "omitted means keep the key" would silently carry a
+credential over to whatever new host the user just pointed the connection
+at, with no way to tell from the update call whether that was intended.
+`update_connection()` therefore clears `api_key` automatically whenever the
+update changes `base_url` to a different value, unless that same call also
+supplies a new `api_key` — repointing a connection always requires
+re-entering (or deliberately re-confirming) its credential, never silently
+carries the old one to a new host.
 
 ### 7. Frontend
 
@@ -394,7 +462,20 @@ Backend:
   `provider`/`openrouter_key`/`model`/`claude_model` present), correct
   zero-config seeding with no `config.md` at all, and that a second call
   after connections already exist is a no-op even if the directory is now
-  empty.
+  empty. **Crash-recovery**: create only the `openrouter` connection file
+  (simulating a migration that died before `claude`/the marker), then call
+  `ensure_migrated()` again — asserts it completes the rest without
+  duplicating the OpenRouter connection. **Preemption**: call
+  `create_connection()` directly on a fresh store (skipping
+  `list_connections()`/`get_active()`), then call `ensure_migrated()` —
+  asserts the legacy config fields are still picked up rather than silently
+  dropped. **Key-clearing**: `update_connection(id, base_url=new)` without a
+  new `api_key` clears the stored key; supplying both in the same call keeps
+  the new key; changing unrelated fields alone leaves the key untouched.
+  **Sidecar lifecycle**: `set_cached_models` then `update_connection(id,
+  base_url=new)` resets the sidecar to empty; `delete_connection` removes
+  the sidecar file; a new connection reusing a deleted one's slug starts
+  with no cached models.
 - `test_openai_compatible.py` — SSE happy path and error normalization
   (mirrors `test_openrouter.py`'s `httpx.MockTransport` pattern); `key`
   omitted from headers when empty; `_strict_messages()` unit tests: system
@@ -402,8 +483,10 @@ Backend:
   its own user turn; a trailing system message (grimoire's `post_history`)
   becomes a final user turn; folding-induced adjacent same-role runs
   re-merge; an assistant-first/empty list gets the defensive placeholder
-  user turn. `list_models()`: pricing/context present vs. absent → `None`,
-  not `0`/`""`.
+  user turn; a message with an unrecognized role raises
+  `OpenAICompatibleError("bad_response", ...)` rather than being folded in
+  as assistant content. `list_models()`: pricing/context present vs. absent
+  → `None`, not `0`/`""`.
 - `test_llm.py` — dispatch tests rekeyed from `provider`/`openrouter_key`/
   `claude_model` to `kind`/`api_key`/`model`; new `openai_compatible`
   dispatch case (with `strict` passed through correctly).
