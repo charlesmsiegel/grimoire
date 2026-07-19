@@ -275,8 +275,11 @@ test("greeting marks and version picks POST to their campaign routes", async () 
 });
 
 // ---- request coalescing ----
-const CFG = { model: "m", theme: "t", key_set: false, system_prompt: "",
-  quote_color: "off", user_label: "You", assistant_label: "Grimoire" };
+const CFG = {
+  theme: "t", system_prompt: "", quote_color: "off", user_label: "You", assistant_label: "Grimoire",
+  default_style_id: "", active_connection_id: "openrouter",
+  active_connection: { id: "openrouter", kind: "openrouter" as const, name: "OpenRouter" }, ready: true,
+};
 
 test("concurrent identical GETs share one request; later calls fetch fresh", async () => {
   let release: (v: unknown) => void = () => {};
@@ -322,6 +325,43 @@ test("getConfig is cached across sequential calls until a config write", async (
   const got = await api.getConfig();          // …so this needs no new GET
   expect(got.theme).toBe("dark");
   expect(fetchMock).toHaveBeenCalledTimes(2);
+  invalidateConfigCache();
+});
+
+test("updating a connection invalidates the config cache", async () => {
+  invalidateConfigCache();
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk(CFG));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  await api.getConfig();
+  await api.getConfig();
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+
+  fetchMock.mockResolvedValue(jsonOk({ id: "openrouter", kind: "openrouter", name: "OpenRouter", base_url: "", model: "m", post_process: "none", key_set: true, rev: "r2" }));
+  await api.updateConnection("openrouter", { name: "OpenRouter" });
+
+  fetchMock.mockResolvedValue(jsonOk({ ...CFG, ready: true }));
+  await api.getConfig();  // must hit the network again -- the cache was invalidated
+  expect(fetchMock).toHaveBeenCalledTimes(3);  // 1 getConfig + 1 updateConnection + 1 fresh getConfig
+  invalidateConfigCache();
+});
+
+test("creating a connection also invalidates the config cache", async () => {
+  // Defense in depth (store/llm_connections.py's delete_connection clears
+  // active_connection_id specifically so creation is never supposed to
+  // silently change what's active) — still proves the client doesn't rely
+  // solely on that server-side guarantee to stay correct.
+  invalidateConfigCache();
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk(CFG));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  await api.getConfig();
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+
+  fetchMock.mockResolvedValue(jsonOk({ id: "new-conn" }));
+  await api.createConnection({ kind: "openai_compatible", name: "New Endpoint" });
+
+  fetchMock.mockResolvedValue(jsonOk(CFG));
+  await api.getConfig();  // must hit the network again
+  expect(fetchMock).toHaveBeenCalledTimes(3);  // 1 getConfig + 1 createConnection + 1 fresh getConfig
   invalidateConfigCache();
 });
 

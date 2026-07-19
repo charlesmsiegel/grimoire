@@ -1,4 +1,5 @@
 import { parseSSEChunk, type ChatEvent, type LocalizeEvent, type ChubGalleryEvent, type RollProposalPayload } from "./stream";
+import type { Model } from "./models";
 
 export class ApiError extends Error {
   constructor(public status: number, public detail: string, public kind?: string) {
@@ -42,10 +43,24 @@ async function requestForm<T>(path: string, form: FormData, method = "POST"): Pr
   return res.json() as Promise<T>;
 }
 
+export type LLMConnectionKind = "openrouter" | "claude" | "openai_compatible";
+export type LLMConnection = {
+  id: string; kind: LLMConnectionKind; name: string;
+  base_url: string; model: string; post_process: "none" | "strict";
+  key_set: boolean; rev: string;
+};
+export type LLMConnectionDetail = LLMConnection & { models: Model[]; fetched_at: string };
+export type LLMConnectionDraft = {
+  kind?: LLMConnectionKind; name?: string; base_url?: string; api_key?: string;
+  model?: string; post_process?: "none" | "strict";
+};
+export type ModelsRefreshResult = { models: Model[]; fetched_at: string; rev: string };
 export type Config = {
-  model: string; theme: string; key_set: boolean; system_prompt: string;
-  quote_color: string; user_label: string; assistant_label: string;
-  provider: string; claude_model: string; default_style_id: string;
+  theme: string; system_prompt: string;
+  quote_color: string; user_label: string; assistant_label: string; default_style_id: string;
+  active_connection_id: string;
+  active_connection: { id: string; kind: LLMConnectionKind; name: string } | null;
+  ready: boolean;
 };
 export type DataDirInfo = {
   data_dir: string;
@@ -392,7 +407,7 @@ export const api = {
     }
     return configCache;
   },
-  putConfig: (body: Partial<{ model: string; theme: string; openrouter_key: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string; provider: string; claude_model: string; default_style_id: string }>) =>
+  putConfig: (body: Partial<{ theme: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string; default_style_id: string; active_connection_id: string }>) =>
     request<Config>("PUT", "/api/config", body).then((cfg) => {
       configCache = Promise.resolve(cfg); // the write's response is the fresh config
       return cfg;
@@ -667,6 +682,31 @@ export const api = {
       `/api/${scope.kind === "campaign" ? "campaigns" : "worlds"}/${scope.id}/calendar/months?year=${year}`),
   setCalendarConfig: (cid: string, cfg: CalendarConfig) =>
     request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/calendar`, cfg),
+  listConnections: () => request<LLMConnection[]>("GET", "/api/llm-connections"),
+  createConnection: (draft: LLMConnectionDraft) =>
+    request<{ id: string }>("POST", "/api/llm-connections", draft).then((r) => {
+      // The backend never auto-activates a freshly-created connection (see
+      // store/llm_connections.py's delete_connection, which clears
+      // active_connection_id specifically so a same-slug recreation can't
+      // silently reactivate) — this invalidation is defense in depth, not
+      // load-bearing, in case that ever changes.
+      invalidateConfigCache();
+      return r;
+    }),
+  readConnection: (id: string) => request<LLMConnectionDetail>("GET", `/api/llm-connections/${id}`),
+  updateConnection: (id: string, patch: Partial<LLMConnectionDraft>) =>
+    request<LLMConnectionDetail>("PUT", `/api/llm-connections/${id}`, patch).then((r) => {
+      invalidateConfigCache();
+      return r;
+    }),
+  deleteConnection: (id: string) =>
+    request<{ ok: boolean }>("DELETE", `/api/llm-connections/${id}`).then((r) => {
+      invalidateConfigCache();
+      return r;
+    }),
+  refreshConnectionModels: (id: string) =>
+    request<ModelsRefreshResult>("POST", `/api/llm-connections/${id}/models/refresh`),
+
   listStyles: () => request<Style[]>("GET", "/api/styles"),
   createStyle: (draft: StyleDraft) => request<{ id: string }>("POST", "/api/styles", draft),
   readStyle: (sid: string) => request<StyleDetail>("GET", `/api/styles/${sid}`),
