@@ -301,6 +301,41 @@ def test_recreating_a_deleted_active_connection_does_not_silently_reactivate_it(
     assert s.llm_connections.get_active() is None
 
 
+def test_delete_clears_active_id_even_if_file_removal_then_fails(monkeypatch, tmp_path):
+    # Proves the ordering fix directly: force the file unlink itself to fail
+    # AFTER active_connection_id has already been cleared, and confirm the
+    # clear survives (rather than testing the trivial case of failing before
+    # any write happens, which proves nothing about the ordering).
+    s = reload_with_home(monkeypatch, tmp_path)
+    cid = s.llm_connections.create_connection("openai_compatible", "Endpoint", base_url="https://x")
+    s.write_config(active_connection_id=cid)
+
+    from pathlib import Path
+    original_unlink = Path.unlink
+    state = {"failed_once": False}
+
+    def flaky_unlink(self, *args, **kwargs):
+        if self.name == f"{cid}.md" and not state["failed_once"]:
+            state["failed_once"] = True
+            raise OSError("simulated failure")
+        return original_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", flaky_unlink)
+    try:
+        s.llm_connections.delete_connection(cid)
+    except OSError:
+        pass
+    # active_connection_id is already cleared, even though the file unlink
+    # itself failed and the connection technically still exists on disk
+    assert s.read_config()["active_connection_id"] == ""
+
+    monkeypatch.setattr(Path, "unlink", original_unlink)
+    s.llm_connections.delete_connection(cid)  # retry completes cleanly
+    import pytest
+    with pytest.raises(s.llm_connections.ConnectionNotFound):
+        s.llm_connections.read_connection_raw(cid)
+
+
 # ---- get_active ----
 
 def test_get_active_resolves_the_configured_connection(monkeypatch, tmp_path):
@@ -464,16 +499,20 @@ def delete_connection(id: str) -> None:
     p = _path(id)
     if not p.exists():
         raise ConnectionNotFound(id)
+    if config.read_config().get("active_connection_id") == id:
+        # Clear this BEFORE unlinking the file, not after — otherwise a
+        # failure between the two steps (disk error, process death) leaves
+        # the file gone (its slug now reusable) while config.md still
+        # references it, reproducing the exact dangling-reference bug this
+        # exists to close, just via a partial-failure window instead of
+        # never having the fix at all. With this ordering, every failure
+        # window is retry-safe: fail here and nothing changed yet (clean
+        # retry); fail during the unlink below and active_connection_id is
+        # already correctly cleared even though the file still exists (a
+        # retriable "delete didn't finish" state, not a dangling reference).
+        config.write_config(active_connection_id="")
     p.unlink()
     _sidecar_path(id).unlink(missing_ok=True)
-    if config.read_config().get("active_connection_id") == id:
-        # Otherwise config.md keeps pointing at a freed slug. create_connection
-        # reuses freed slugs (same identity-collision risk the sidecar's `rev`
-        # gate exists for) — a later connection recreated under the same name
-        # would silently become "active" without ever being explicitly
-        # selected, potentially a different kind/endpoint than the deleted
-        # one. Deleting the active connection always leaves nothing active.
-        config.write_config(active_connection_id="")
 
 
 def get_active() -> dict | None:
@@ -3182,6 +3221,8 @@ If any step surfaces a bug, go back to the task that owns the broken file, fix i
 **Codex adversarial review, round 2 (plan)** — a second background pass against the round-1 fixes found one more high-severity issue, which round 1's own fixes had inadvertently caused: Task 6's `putConfig` replacement showed only a narrowed type signature and silently dropped the existing function's cache-refresh body (`configCache = Promise.resolve(cfg)`) in the process — a real regression that would have broken `client.test.ts`'s pre-existing cache test and made Task 10's location-based refetch (added to fix round 1's App-staleness finding) a no-op, since it reads through the very cache that was no longer being refreshed. Also flagged, correctly: `updateConnection`/`deleteConnection` never invalidated the cache at all, so editing or deleting the *active* connection's own fields (fixing a missing key, say) wouldn't be reflected in `ready` even after the `putConfig` fix, since neither call touches `/api/config`. Both fixed in Task 6 (Step 3's `putConfig` now keeps its `.then()`; `updateConnection`/`deleteConnection` each call `invalidateConfigCache()`), with `client.test.ts`'s `CFG` mock updated to the new shape and a new test proving the invalidation path against a mocked `fetch` rather than a mocked `api.getConfig()` (Step 4) — Task 10 cross-references this dependency explicitly so the two tasks aren't implemented out of order.
 
 **Codex adversarial review, round 3 (plan)** — a third pass (two prior attempts hit a transient Codex capacity error mid-turn and were discarded as inconclusive rather than trusted) found one more high-severity issue, an identity-confusion gap distinct from rounds 1-2's caching focus: `delete_connection` never cleared `config.active_connection_id`, so deleting the *active* connection left a dangling reference to its now-freed slug — and `create_connection` reuses freed slugs (the same collision the sidecar's `rev` gate exists to guard against). A later connection created under the same name would land at the identical id and silently become "active" — potentially a different kind or endpoint entirely — without ever being explicitly selected. Fixed at the root: `delete_connection` now clears `active_connection_id` whenever it matches the id being deleted (Task 1), so a same-slug recreation always starts inactive regardless of when or how it's recreated; `createConnection` also gained cache invalidation as explicit defense in depth (Task 6), with tests for both (a store-level delete/recreate test in Task 1, a client-cache test in Task 6).
+
+**Codex adversarial review, round 4 (plan)** — a fourth pass found that round 3's fix, while correct for the normal path, still had a partial-failure window of its own: `delete_connection` cleared `active_connection_id` *after* unlinking the file, so a failure between those two steps (disk error, process death) would leave the file gone — its slug freed and reusable — while `config.md` still referenced it, reproducing the exact dangling-reference bug from a different angle. Fixed by pure reordering, no new infrastructure: clear `active_connection_id` *before* unlinking the file, so every partial-failure window is retry-safe — fail before the config write and nothing changed yet; fail during the unlink after and `active_connection_id` is already correctly cleared even though the file (harmlessly) still exists, a retriable "delete didn't finish" state rather than a dangling active reference. Added a failure-injection test (Task 1) that forces the file unlink to raise after the config write succeeds, proving the clear survives and a retry completes cleanly.
 
 ---
 
