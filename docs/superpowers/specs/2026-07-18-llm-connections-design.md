@@ -45,6 +45,7 @@ api_key: ""                # openrouter + openai_compatible (optional for the la
 model: ""                  # all three — free text for openrouter/openai_compatible,
                             # alias/pinned id for claude
 post_process: none|strict  # openai_compatible only
+rev: "3f9a1c2b"            # opaque token, regenerated on every write — see §5
 ```
 
 The frontmatter format (`store/frontmatter.py`) is deliberately
@@ -73,8 +74,8 @@ class ConnectionNotFound(Exception): ...
 def list_connections() -> list[dict]        # masked: key_set bool, no api_key
 def read_connection(id: str) -> dict         # masked, for GET /llm-connections/{id}
 def read_connection_raw(id: str) -> dict     # unmasked — internal use (LLM dispatch, models/refresh)
-def create_connection(kind: str, name: str, **fields) -> str
-def update_connection(id: str, **fields) -> None   # kind is immutable — not accepted here; see §6 for api_key/base_url interaction
+def create_connection(kind: str, name: str, **fields) -> str  # stamps a fresh `rev`
+def update_connection(id: str, **fields) -> None   # kind is immutable — not accepted here; see §6 for api_key/base_url interaction; stamps a fresh `rev`
 def delete_connection(id: str) -> None       # also removes the id's .models.json sidecar, if present
 def get_active() -> dict | None              # unmasked; resolves config.active_connection_id
 def cached_models(id: str) -> dict           # {"models": [], "fetched_at": ""} if no sidecar yet
@@ -153,9 +154,20 @@ def ensure_migrated() -> None:
 
 
 def _valid_connection_file(id: str) -> bool:
-    """Missing, unreadable, or missing its `kind` field all count as
+    """Missing, unreadable, or lacking a recognized `kind` all count as
     "needs (re)seeding" — covers both "never written" and "process died
-    mid-write, leaving a truncated file" without requiring atomic writes."""
+    mid-write, leaving a truncated file" without requiring atomic writes.
+    `dump_frontmatter` writes the closing `---` fence last, after every
+    meta line, so `parse_frontmatter` finding a valid fence already implies
+    the whole meta block made it to disk intact for any write that's a
+    single small write_text() call (a connection record is a few hundred
+    bytes, well inside one filesystem block) — a torn/reordered partial
+    write producing a fenced-but-incomplete record is not impossible, just
+    the same negligible-probability class of risk this codebase already
+    accepts for every other frontmatter file (styles, config). Checking
+    `kind` is one of the three recognized values (not just present) is the
+    cheap, meaningful tightening; full schema/field-completeness validation
+    would be diminishing returns against that residual."""
     p = _path(id)
     if not p.exists():
         return False
@@ -163,7 +175,7 @@ def _valid_connection_file(id: str) -> bool:
         meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError):
         return False
-    return bool(meta.get("kind"))
+    return meta.get("kind") in _KINDS
 ```
 
 (`_write_raw` is the same frontmatter-dump primitive `create_connection`
@@ -382,9 +394,10 @@ with `cached_models(id)` into one response body (adding `models`/
 instant, possibly empty (`{"models": [], "fetched_at": ""}`) if never
 fetched. `list_connections()`/the list route do **not** include cached
 models — only the single-connection detail view needs them. `POST
-/llm-connections/{id}/models/refresh` does the live fetch, overwrites the
-sidecar, and returns the fresh list; 400 if the connection's kind isn't
-`openai_compatible`.
+/llm-connections/{id}/models/refresh` does the live fetch and returns the
+fresh list; 400 if the connection's kind isn't `openai_compatible`. Whether
+the result is *persisted* to the sidecar depends on the `rev` check below —
+the response always reflects what was just fetched either way.
 
 Frontend: `frontend/src/routes/ModelCombobox.tsx` is generalized to take
 `models: Model[]` as a prop instead of always calling `getModels()`
@@ -411,11 +424,30 @@ pre-existing sidecar for the id it's about to write, before writing the
 record. A brand-new connection never starts with inherited cached models,
 regardless of how a stale sidecar for that id came to exist.
 
-This does not defend against a `models/refresh` call genuinely racing an
-`update_connection`/`delete_connection` call on the same connection — see
-Known limitations, which already accepts the equivalent race for
-`active_connection_id`/`config.md` and extends the same acceptance here:
-this is a single-user local app with no store-level locking anywhere.
+**The remaining race is real even for one user in one tab**, and worth
+closing rather than accepting: a slow `models/refresh` network call can
+still be in flight when the user edits the same connection's `base_url` or
+deletes and recreates it (same name → same freed slug) — ordinary async
+interleaving, no second user or device required. "Clear on write" doesn't
+help here, because the *stale refresh's own write* happens **after** the
+clear. Closing it doesn't need a lock: every connection record carries an
+opaque `rev` token (`secrets.token_hex(8)`), regenerated on every
+`create_connection`/`update_connection` write. `POST
+/llm-connections/{id}/models/refresh` captures `rev` before the network
+call, and after it returns, re-reads the connection: if it's gone or its
+`rev` no longer matches what was captured, the fetched list is still
+returned in the HTTP response (the request that asked for it gets its
+answer) but is **not** persisted to the sidecar — something changed
+underneath it, so the result is presumed stale for caching purposes. A
+delete-then-recreate at the same id also gets a fresh `rev` from
+`create_connection`, so it's covered by the same check even though the id
+repeats.
+
+A genuinely simultaneous edit to the *same* field from two different
+requests (e.g. two rapid `update_connection` calls) is still last-write-wins
+with no merge — that residual is the ordinary, benign kind every settings
+form in this codebase already has, not a correctness or credential-exposure
+issue, and isn't worth defending against here.
 
 ### 6. Routes
 
@@ -486,11 +518,14 @@ carries the old one to a new host.
 - **Cached models go stale** until manually refreshed — by design, per the
   explicit "store locally, refresh if we want" request.
 - **No locking** around `active_connection_id`/`config.md` writes, or around
-  a connection's own record/sidecar writes (a `models/refresh` racing a
-  concurrent `update_connection`/`delete_connection` on the same connection
-  is not defended against) — consistent with the rest of the store
-  (single-user/local app; the same acceptance appears in prior specs, e.g.
-  greeting availability's played-mark writes).
+  two genuinely simultaneous edits to the same connection's fields (plain
+  last-write-wins, same as any other settings form in this codebase) —
+  consistent with the rest of the store (single-user/local app; the same
+  acceptance appears in prior specs, e.g. greeting availability's
+  played-mark writes). The one race worth closing —
+  `models/refresh` racing an `update`/`delete`/recreate on the *same*
+  connection, which could otherwise persist stale cross-endpoint model data
+  — is closed via the `rev` token in §5, not accepted as a limitation.
 
 ## Tests
 
@@ -522,7 +557,10 @@ Backend:
   with no cached models — including when the sidecar is left behind
   deliberately (simulating a crash between the two deletes) rather than via
   the normal delete path, to prove `create_connection`'s clear-before-write
-  is what's covering it, not `delete_connection`'s own cleanup.
+  is what's covering it, not `delete_connection`'s own cleanup. **`rev`
+  stamping**: `create_connection`/`update_connection` each produce a `rev`
+  different from the previous value; a delete followed by a same-name
+  recreate produces a `rev` different from the deleted connection's.
 - `test_openai_compatible.py` — SSE happy path and error normalization
   (mirrors `test_openrouter.py`'s `httpx.MockTransport` pattern); `key`
   omitted from headers when empty; `_strict_messages()` unit tests: system
@@ -541,7 +579,13 @@ Backend:
   connection; openrouter missing key; openai_compatible missing base_url);
   `POST /llm-connections/{id}/models/refresh` 400s for openrouter/claude
   kinds; existing scene-generation route tests get their fixtures updated to
-  seed a connection instead of flat config fields.
+  seed a connection instead of flat config fields. **Stale-refresh
+  rejection**: mock the outbound `/models` fetch to block on an event the
+  test controls; while it's "in flight," call `update_connection` (change
+  `base_url`) from the test; release the fetch; assert the response still
+  contains the freshly-fetched models but the sidecar was **not** written
+  (still whatever it was before, or empty). Repeat for delete+recreate at
+  the same id in place of the update.
 
 Frontend:
 
