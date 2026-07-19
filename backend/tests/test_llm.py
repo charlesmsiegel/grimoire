@@ -21,36 +21,63 @@ class FakeProvider:
         self.tag = tag
         self.calls = []
 
-    async def stream(self, messages, *args):
-        self.calls.append(args)
+    async def stream(self, messages, *args, **kwargs):
+        self.calls.append((args, kwargs))
         yield self.tag
 
 
-def _cfg(provider):
-    return {"provider": provider, "model": "or-model", "openrouter_key": "sk-or-x",
-            "claude_model": "opus"}
+def _conn(kind, **fields):
+    return {"kind": kind, "model": "m", "api_key": "k", "base_url": "", "post_process": "none", **fields}
 
 
 async def test_dispatches_to_openrouter():
-    op, cl = FakeProvider("or"), FakeProvider("cl")
-    client = LLMClient(openrouter=op, claude=cl)
-    chunks = [c async for c in client.stream([], _cfg("openrouter"))]
+    op, cl, oc = FakeProvider("or"), FakeProvider("cl"), FakeProvider("oc")
+    client = LLMClient(openrouter=op, claude=cl, openai_compatible=oc)
+    conn = _conn("openrouter", model="or-model", api_key="sk-or-x")
+    chunks = [c async for c in client.stream([], conn)]
     assert chunks == ["or"]
-    assert op.calls == [("or-model", "sk-or-x")]
-    assert cl.calls == []
+    assert op.calls == [(("or-model", "sk-or-x"), {})]
+    assert cl.calls == [] and oc.calls == []
 
 
 async def test_dispatches_to_claude():
-    op, cl = FakeProvider("or"), FakeProvider("cl")
-    client = LLMClient(openrouter=op, claude=cl)
-    chunks = [c async for c in client.stream([], _cfg("claude"))]
+    op, cl, oc = FakeProvider("or"), FakeProvider("cl"), FakeProvider("oc")
+    client = LLMClient(openrouter=op, claude=cl, openai_compatible=oc)
+    conn = _conn("claude", model="opus")
+    chunks = [c async for c in client.stream([], conn)]
     assert chunks == ["cl"]
-    assert cl.calls == [("opus",)]
-    assert op.calls == []
+    assert cl.calls == [(("opus",), {})]
+    assert op.calls == [] and oc.calls == []
 
 
-async def test_missing_provider_key_defaults_to_openrouter():
-    op, cl = FakeProvider("or"), FakeProvider("cl")
-    client = LLMClient(openrouter=op, claude=cl)
-    cfg = {"model": "or-model", "openrouter_key": "sk-or-x"}  # pre-upgrade config
-    assert [c async for c in client.stream([], cfg)] == ["or"]
+async def test_claude_missing_model_defaults_to_opus():
+    op, cl, oc = FakeProvider("or"), FakeProvider("cl"), FakeProvider("oc")
+    client = LLMClient(openrouter=op, claude=cl, openai_compatible=oc)
+    conn = _conn("claude", model="")
+    [c async for c in client.stream([], conn)]
+    assert cl.calls == [(("opus",), {})]
+
+
+async def test_dispatches_to_openai_compatible_with_strict_flag():
+    op, cl, oc = FakeProvider("or"), FakeProvider("cl"), FakeProvider("oc")
+    client = LLMClient(openrouter=op, claude=cl, openai_compatible=oc)
+    conn = _conn("openai_compatible", model="glm-4.6", api_key="sk-z",
+                 base_url="https://api.z.ai/v4", post_process="strict")
+    chunks = [c async for c in client.stream([], conn)]
+    assert chunks == ["oc"]
+    assert oc.calls == [(("glm-4.6", "sk-z", "https://api.z.ai/v4"), {"strict": True})]
+
+
+async def test_openai_compatible_none_post_process_is_not_strict():
+    op, cl, oc = FakeProvider("or"), FakeProvider("cl"), FakeProvider("oc")
+    client = LLMClient(openrouter=op, claude=cl, openai_compatible=oc)
+    conn = _conn("openai_compatible", post_process="none")
+    [c async for c in client.stream([], conn)]
+    assert oc.calls[0][1] == {"strict": False}
+
+
+async def test_missing_kind_defaults_to_openrouter():
+    op, cl, oc = FakeProvider("or"), FakeProvider("cl"), FakeProvider("oc")
+    client = LLMClient(openrouter=op, claude=cl, openai_compatible=oc)
+    conn = {"model": "or-model", "api_key": "sk-or-x"}  # defensive: no kind key at all
+    assert [c async for c in client.stream([], conn)] == ["or"]

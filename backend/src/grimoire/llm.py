@@ -11,23 +11,32 @@ class LLMError(Exception):
 
 
 class LLMClient:
-    """Dispatches each call to the provider named in the config dict."""
+    """Dispatches each call to the resolved connection's kind."""
 
-    def __init__(self, openrouter=None, claude=None):
+    def __init__(self, openrouter=None, claude=None, openai_compatible=None):
         # Imported here rather than at module top: openrouter.py imports
         # LLMError from this module, so top-level imports would be circular.
         from .claude_agent import ClaudeAgentClient
         from .openrouter import OpenRouterClient
+        from .openai_compatible import OpenAICompatibleClient
         self._openrouter = openrouter if openrouter is not None else OpenRouterClient()
         self._claude = claude if claude is not None else ClaudeAgentClient()
+        self._openai_compatible = (openai_compatible if openai_compatible is not None
+                                    else OpenAICompatibleClient())
 
-    def stream(self, messages: list[dict], cfg: dict):
-        if cfg.get("provider", "openrouter") == "claude":
-            return self._claude.stream(messages, cfg.get("claude_model", "opus"))
-        return self._openrouter.stream(messages, cfg["model"], cfg["openrouter_key"])
+    def stream(self, messages: list[dict], conn: dict):
+        kind = conn.get("kind", "openrouter")
+        if kind == "claude":
+            return self._claude.stream(messages, conn.get("model") or "opus")
+        if kind == "openai_compatible":
+            return self._openai_compatible.stream(
+                messages, conn.get("model", ""), conn.get("api_key", ""),
+                conn.get("base_url", ""), strict=conn.get("post_process") == "strict")
+        return self._openrouter.stream(messages, conn["model"], conn.get("api_key", ""))
 
-    async def complete(self, messages: list[dict], cfg: dict) -> str:
-        return "".join([chunk async for chunk in self.stream(messages, cfg)])
+    async def complete(self, messages: list[dict], conn: dict) -> str:
+        return "".join([chunk async for chunk in self.stream(messages, conn)])
 
     async def aclose(self) -> None:
         await self._openrouter.aclose()
+        await self._openai_compatible.aclose()
