@@ -1,28 +1,20 @@
-import { useEffect, useRef, useState } from "react";
-import { getModels, priceLabel, contextLabel, type Model } from "../api/models";
+import { useRef, useState } from "react";
+import { priceLabel, contextLabel, type Model } from "../api/models";
 
 export default function ModelCombobox({
   value,
   onChange,
+  models,
+  error = false,
 }: {
   value: string;
   onChange: (id: string) => void;
+  models: Model[];
+  error?: boolean;
 }) {
-  const [models, setModels] = useState<Model[]>([]);
-  const [error, setError] = useState(false);
   const [open, setOpen] = useState(false);
   const [touched, setTouched] = useState(false);
   const blurTimer = useRef<number>();
-
-  useEffect(() => {
-    let alive = true;
-    getModels()
-      .then((m) => alive && setModels(m))
-      .catch(() => alive && setError(true));
-    return () => {
-      alive = false;
-    };
-  }, []);
 
   // Show the full list on a fresh focus; narrow once the user types.
   const q = value.toLowerCase();
@@ -32,7 +24,7 @@ export default function ModelCombobox({
           (m) =>
             m.id.toLowerCase().includes(q) ||
             m.name.toLowerCase().includes(q) ||
-            priceLabel(m).toLowerCase().includes(q),
+            (m.prompt != null && m.completion != null && priceLabel(m).toLowerCase().includes(q)),
         )
       : models;
 
@@ -76,11 +68,15 @@ export default function ModelCombobox({
             >
               <div className="combobox-row-top">
                 <span className="combobox-name">{m.name}</span>
-                <span className="combobox-price">{priceLabel(m)}</span>
+                {m.prompt != null && m.completion != null && (
+                  <span className="combobox-price">{priceLabel(m)}</span>
+                )}
               </div>
               <div className="combobox-row-bottom">
                 <span className="combobox-id">{m.id}</span>
-                {m.context > 0 && <span className="combobox-ctx">{contextLabel(m.context)}</span>}
+                {m.context != null && m.context > 0 && (
+                  <span className="combobox-ctx">{contextLabel(m.context)}</span>
+                )}
               </div>
             </li>
           ))}
