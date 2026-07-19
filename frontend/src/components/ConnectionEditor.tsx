@@ -136,6 +136,7 @@ export function ConnectionEditor() {
         {connections.map((c) => (
           <button key={c.id} className={"row" + (id === c.id ? " active" : "")} onClick={() => select(c.id)}>
             {c.name}
+            <span className="mark-badge">{c.kind}</span>
             {activeId === c.id && <span className="mark-badge">active</span>}
           </button>
         ))}

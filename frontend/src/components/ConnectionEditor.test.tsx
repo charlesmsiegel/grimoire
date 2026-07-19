@@ -36,7 +36,8 @@ test("clicking a connection shows a read-only view", async () => {
   const rail = await waitFor(() => screen.getByText("+ New connection").closest(".editor-list") as HTMLElement);
   fireEvent.click(await within(rail).findByText("z.ai GLM"));
   await waitFor(() => expect(api.readConnection).toHaveBeenCalledWith("zai-glm"));
-  expect(screen.getByText(/openai_compatible/)).toBeInTheDocument();
+  const detail = screen.getByRole("heading", { name: "z.ai GLM" }).closest(".detail-view") as HTMLElement;
+  expect(within(detail).getByText(/openai_compatible/)).toBeInTheDocument();
   expect(screen.queryByLabelText("Base URL")).toBeNull();
 });
 
