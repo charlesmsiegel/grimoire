@@ -55,13 +55,10 @@ def _strict_messages(messages: list[dict]) -> list[dict]:
         return "\n\n".join(parts)
 
     def append(role: str, content: str) -> None:
-        # Adjacent same-role runs created by *folding* (consecutive system
-        # messages accumulated in `pending`, then joined by flush()) are
-        # already merged into one string before this is called. Merging here
-        # too would also collapse a folded system-turn into whatever real
-        # user turn preceded it mid-conversation, which is wrong: see
-        # test_strict_system_before_assistant_becomes_its_own_user_turn.
-        folded.append({"role": role, "content": content})
+        if folded and folded[-1]["role"] == role:
+            folded[-1]["content"] += "\n\n" + content
+        else:
+            folded.append({"role": role, "content": content})
 
     for m in messages:
         if m["role"] == "system":
