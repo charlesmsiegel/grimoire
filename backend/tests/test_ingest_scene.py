@@ -123,8 +123,8 @@ class FakeClient:
         self.text = text
         self.calls = []
 
-    async def complete(self, messages, model, key):
-        self.calls.append((messages, model, key))
+    async def complete(self, messages, conn):
+        self.calls.append((messages, conn))
         return self.text
 
 
@@ -153,7 +153,8 @@ def test_run_absorb_and_apply_scene(monkeypatch, tmp_path):
         "bond_changes": [], "plot_movements": [],
     })
     client = FakeClient(fake_text)
-    result = asyncio.run(ingest_scene.run_absorb(cid, sid, client, {"model": "test/model", "openrouter_key": "k"}))
+    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+    result = asyncio.run(ingest_scene.run_absorb(cid, sid, client, conn))
     assert result["parsed"]["one_line"] == "Marisol needles Julian."
     assert any(e["kind"] == "character_state" for e in result["edits"])
 
@@ -161,7 +162,7 @@ def test_run_absorb_and_apply_scene(monkeypatch, tmp_path):
     assert applied
     st = playstate.read_state(croot, "marisol")
     assert "wary of Julian" in st["current_state"]
-    assert client.calls[0][1] == "test/model" and client.calls[0][2] == "k"
+    assert client.calls[0][1]["model"] == "test/model" and client.calls[0][1]["api_key"] == "k"
 
 
 def test_ingest_one_scene_is_resumable(monkeypatch, tmp_path):
@@ -184,13 +185,13 @@ def test_ingest_one_scene_is_resumable(monkeypatch, tmp_path):
         "authored_edits": [], "relationship_deltas": [], "bond_changes": [], "plot_movements": [],
     })
     client = FakeClient(fake_text)
-    cfg = {"model": "test/model", "openrouter_key": "k"}
+    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
 
-    first = asyncio.run(ingest_scene.ingest_one_scene(cid, scene, client, cfg))
+    first = asyncio.run(ingest_scene.ingest_one_scene(cid, scene, client, conn))
     assert first["status"] == "done"
     assert len(client.calls) == 1
 
-    second = asyncio.run(ingest_scene.ingest_one_scene(cid, scene, client, cfg))
+    second = asyncio.run(ingest_scene.ingest_one_scene(cid, scene, client, conn))
     assert second["status"] == "skipped"
     assert second["sid"] == first["sid"]
     assert len(client.calls) == 1  # no second LLM call
@@ -226,9 +227,9 @@ def test_ingest_one_scene_resumes_after_build_then_crash(monkeypatch, tmp_path):
         "authored_edits": [], "relationship_deltas": [], "bond_changes": [], "plot_movements": [],
     })
     client = FakeClient(fake_text)
-    cfg = {"model": "test/model", "openrouter_key": "k"}
+    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
 
-    result = asyncio.run(ingest_scene.ingest_one_scene(cid, scene, client, cfg))
+    result = asyncio.run(ingest_scene.ingest_one_scene(cid, scene, client, conn))
     assert result["status"] == "done"
     assert result["sid"] == sid
     assert len(scenes.list_scenes(cid)) == 1
@@ -242,7 +243,7 @@ def test_two_scenes_accumulate_state_in_order(monkeypatch, tmp_path):
     cid = ingest_scene.ensure_campaign("Silver Oath", wid)
     croot = campaigns_store.campaign_root(cid)
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
-    cfg = {"model": "test/model", "openrouter_key": "k"}
+    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
 
     scene1 = {
         "key": "file1-scene01", "title": "Scene One",
@@ -255,7 +256,7 @@ def test_two_scenes_accumulate_state_in_order(monkeypatch, tmp_path):
         "lore_edits": [], "authored_edits": [], "relationship_deltas": [],
         "bond_changes": [], "plot_movements": [],
     })
-    asyncio.run(ingest_scene.ingest_one_scene(cid, scene1, FakeClient(text1), cfg))
+    asyncio.run(ingest_scene.ingest_one_scene(cid, scene1, FakeClient(text1), conn))
 
     captured = {}
     real_snapshot = ingest_scene.absorb.state_snapshot
@@ -277,6 +278,6 @@ def test_two_scenes_accumulate_state_in_order(monkeypatch, tmp_path):
         "character_state_edits": [], "lore_edits": [], "authored_edits": [],
         "relationship_deltas": [], "bond_changes": [], "plot_movements": [],
     })
-    asyncio.run(ingest_scene.ingest_one_scene(cid, scene2, FakeClient(text2), cfg))
+    asyncio.run(ingest_scene.ingest_one_scene(cid, scene2, FakeClient(text2), conn))
 
     assert any("wary of Julian" in v for v in captured.values())

@@ -13,9 +13,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from grimoire.openrouter import OpenRouterClient  # noqa: E402
+from grimoire.llm import LLMClient  # noqa: E402
 from grimoire.store import (  # noqa: E402
-    absorb, appearances, campaigns, characters, chronicle, overlay, read_config, scenes,
+    absorb, appearances, campaigns, characters, chronicle, llm_connections, overlay, scenes,
 )
 from grimoire.store.paths import slugify  # noqa: E402
 
@@ -95,14 +95,14 @@ def build_scene(cid: str, scene: dict) -> str:
     return sid
 
 
-async def run_absorb(cid: str, sid: str, client, cfg: dict) -> dict:
+async def run_absorb(cid: str, sid: str, client: LLMClient, conn: dict) -> dict:
     scene = scenes.read_scene(cid, sid)
     facts = chronicle.scene_facts(cid, sid)
     transcript = chronicle.transcript_text(scene["messages"])
     messages = absorb.build_prompt(
         transcript, facts, absorb.state_snapshot(cid, sid),
         absorb.relationships_snapshot(cid, sid), absorb.plot_snapshot(cid))
-    text = await client.complete(messages, cfg["model"], cfg["openrouter_key"])
+    text = await client.complete(messages, conn)
     parsed = absorb.parse_output(text)
     edits = absorb.materialize(cid, sid, parsed)
     return {"parsed": parsed, "edits": edits}
@@ -121,7 +121,7 @@ def apply_scene(cid: str, sid: str, parsed: dict, edits: list[dict]) -> list[str
     return applied
 
 
-async def ingest_one_scene(cid: str, scene: dict, client, cfg: dict) -> dict:
+async def ingest_one_scene(cid: str, scene: dict, client: LLMClient, conn: dict) -> dict:
     manifest = load_manifest(cid)
     key = scene["key"]
     entry = manifest.get(key)
@@ -141,7 +141,7 @@ async def ingest_one_scene(cid: str, scene: dict, client, cfg: dict) -> dict:
         manifest[key] = {"status": "in_progress", "sid": sid}
         save_manifest(cid, manifest)
 
-    result = await run_absorb(cid, sid, client, cfg)
+    result = await run_absorb(cid, sid, client, conn)
     applied = apply_scene(cid, sid, result["parsed"], result["edits"])
     manifest[key] = {"status": "done", "sid": sid, "one_line": result["parsed"]["one_line"],
                      "applied": applied}
@@ -174,13 +174,19 @@ def main() -> int:
         return 0
 
     scene = json.loads(args.input.read_text(encoding="utf-8"))
-    cfg = read_config()
-    if not cfg["openrouter_key"]:
-        print("error: OpenRouter key not configured (set it in grimoire's Configuration page)",
+    conn = llm_connections.get_active()
+    if conn is None:
+        print("error: no LLM connection selected (set one up in grimoire's Configuration page)",
               file=sys.stderr)
         return 1
-    client = OpenRouterClient()
-    result = asyncio.run(ingest_one_scene(args.campaign, scene, client, cfg))
+    if conn["kind"] == "openrouter" and not conn["api_key"]:
+        print("error: the active OpenRouter connection has no key set", file=sys.stderr)
+        return 1
+    if conn["kind"] == "openai_compatible" and not conn["base_url"]:
+        print("error: the active custom connection has no base URL set", file=sys.stderr)
+        return 1
+    client = LLMClient()
+    result = asyncio.run(ingest_one_scene(args.campaign, scene, client, conn))
     print(json.dumps(result, indent=2))
     return 0
 

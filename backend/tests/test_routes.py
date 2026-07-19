@@ -38,9 +38,11 @@ def _campaign(client, name="Run"):
 
 
 # ---- config (unchanged behavior) ----
-def test_config_never_leaks_key(client):
-    client.put("/api/config", json={"openrouter_key": "sk-or-secret"})
-    body = client.get("/api/config").json()
+def test_connection_never_leaks_key_openrouter(client):
+    r = client.post("/api/llm-connections", json={
+        "kind": "openrouter", "name": "OR2", "api_key": "sk-or-secret"})
+    cid = r.json()["id"]
+    body = client.get(f"/api/llm-connections/{cid}").json()
     assert body["key_set"] is True
     assert "sk-or-secret" not in json.dumps(body)
 
@@ -201,21 +203,13 @@ def test_config_system_prompt_and_quote_color_roundtrip(client):
     body = client.get("/api/config").json()
     assert body["system_prompt"] == "Never speak for the PC."
     assert body["quote_color"] == "on"
-    assert "openrouter_key" not in body
 
 
-def test_config_provider_roundtrip(client):
-    r = client.put("/api/config", json={"provider": "claude", "claude_model": "sonnet"})
+def test_config_active_connection_id_roundtrip(client):
+    r = client.put("/api/config", json={"active_connection_id": "claude"})
     assert r.status_code == 200
-    assert r.json()["provider"] == "claude"
-    r = client.get("/api/config")
-    assert r.json()["provider"] == "claude"
-    assert r.json()["claude_model"] == "sonnet"
-
-
-def test_config_rejects_unknown_provider(client):
-    r = client.put("/api/config", json={"provider": "gemini"})
-    assert r.status_code == 422
+    assert r.json()["active_connection_id"] == "claude"
+    assert client.get("/api/config").json()["active_connection"]["kind"] == "claude"
 
 
 def test_data_dir_reports_env_override(client, tmp_path):
@@ -1014,7 +1008,7 @@ def test_scene_context_breakdown(client):
 def test_edit_message_route(client):
     wid, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
-    client.put("/api/config", json={"openrouter_key": "sk-test"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-test"})
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "helo"})
     assert client.put(f"/api/campaigns/{cid}/scenes/{sid}/messages/0", json={"content": "hello"}).json() == {"ok": True}
     assert client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"][0]["content"] == "hello"
@@ -1026,7 +1020,7 @@ def test_edit_message_route_resolves_roll_macro_once(client):
     # once at edit time, not re-roll on every later context rebuild.
     wid, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
-    client.put("/api/config", json={"openrouter_key": "sk-test"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-test"})
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "helo"})
     client.put(f"/api/campaigns/{cid}/scenes/{sid}/messages/0",
               json={"content": "I roll {{roll:1d20}} to hit."})
@@ -1243,7 +1237,7 @@ def test_chat_injects_system_message(client):
     cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast", json={"kind": "characters", "id": "seraphine"})
-    client.put("/api/config", json={"openrouter_key": "sk-or-x"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
 
     cap = CapturingOpenRouter()
     client.app.dependency_overrides[routes.get_llm] = lambda: cap
@@ -1265,11 +1259,11 @@ def test_chat_missing_key_returns_409(client):
 
 
 def test_chat_missing_key_ok_for_claude_provider(client):
-    # No openrouter_key is set, but the claude provider doesn't need one — the
-    # 409 missing_key guard must be skipped. The `client` fixture already
-    # overrides routes.get_llm with a FakeOpenRouter, standing in for whatever
-    # provider is configured.
-    client.put("/api/config", json={"provider": "claude"})
+    # No api_key is set on any connection, but the claude connection doesn't
+    # need one — the 409 missing_key guard must be skipped. The `client`
+    # fixture already overrides routes.get_llm with a FakeOpenRouter, standing
+    # in for whatever connection is active.
+    client.put("/api/config", json={"active_connection_id": "claude"})
     _wid, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
     resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "hi"})
@@ -1277,7 +1271,7 @@ def test_chat_missing_key_ok_for_claude_provider(client):
 
 
 def test_chat_streams_and_persists(client):
-    client.put("/api/config", json={"openrouter_key": "sk-or-secret"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
     _wid, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
     resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "hi"})
@@ -1292,7 +1286,7 @@ def test_chat_resolves_roll_macro_once_and_persists_stably(client):
     # #137 regression: a {{roll:}}/{{random:}} macro in a sent message must
     # resolve ONCE, at persist time -- not get re-rolled every time the
     # context is rebuilt from the (now historical) stored message.
-    client.put("/api/config", json={"openrouter_key": "sk-or-secret"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
     _wid, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
     resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat",
@@ -1313,7 +1307,7 @@ def test_chat_resolves_roll_macro_once_and_persists_stably(client):
 def test_llm_reply_resolves_roll_macro_once_and_persists_stably(client):
     # Same #137 regression, on the reply side: _persist_reply must resolve
     # macros before writing the model's narration to history.
-    client.put("/api/config", json={"openrouter_key": "sk-or-secret"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
     _wid, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(
@@ -1326,7 +1320,7 @@ def test_llm_reply_resolves_roll_macro_once_and_persists_stably(client):
 
 
 def test_retry_regenerates_without_adding_a_user_turn(client):
-    client.put("/api/config", json={"openrouter_key": "sk-or-secret"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
     _wid, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
     store.scenes.append_message(cid, sid, "user", "hi")
@@ -1337,7 +1331,7 @@ def test_retry_regenerates_without_adding_a_user_turn(client):
 
 
 def test_regenerate_replaces_the_last_assistant_post(client):
-    client.put("/api/config", json={"openrouter_key": "sk-or-secret"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
     _wid, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
     store.scenes.append_message(cid, sid, "user", "hi")
@@ -1350,7 +1344,7 @@ def test_regenerate_replaces_the_last_assistant_post(client):
 
 
 def test_regenerate_excludes_the_dropped_post_from_the_prompt(client):
-    client.put("/api/config", json={"openrouter_key": "sk-or-secret"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
     _wid, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
     store.scenes.append_message(cid, sid, "user", "hi")
@@ -1364,7 +1358,7 @@ def test_regenerate_excludes_the_dropped_post_from_the_prompt(client):
 
 
 def test_regenerate_with_guidance_appends_a_system_steer(client):
-    client.put("/api/config", json={"openrouter_key": "sk-or-secret"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
     _wid, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
     store.scenes.append_message(cid, sid, "user", "hi")
@@ -1387,7 +1381,7 @@ def test_regenerate_with_guidance_appends_a_system_steer(client):
 
 
 def test_regenerate_after_a_failed_turn_behaves_like_retry(client):
-    client.put("/api/config", json={"openrouter_key": "sk-or-secret"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
     _wid, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
     store.scenes.append_message(cid, sid, "user", "hi")
@@ -1398,14 +1392,14 @@ def test_regenerate_after_a_failed_turn_behaves_like_retry(client):
 
 
 def test_regenerate_empty_scene_returns_400(client):
-    client.put("/api/config", json={"openrouter_key": "sk-or-secret"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
     _wid, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate").status_code == 400
 
 
 def test_regenerate_sole_opening_post_returns_400(client):
-    client.put("/api/config", json={"openrouter_key": "sk-or-secret"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
     _wid, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
     store.scenes.append_message(cid, sid, "assistant", "the greeting")
@@ -1416,7 +1410,7 @@ def test_regenerate_sole_opening_post_returns_400(client):
 
 
 def test_regenerate_past_a_trailing_roll_returns_400(client):
-    client.put("/api/config", json={"openrouter_key": "sk-or-secret"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
     _wid, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
     store.scenes.append_message(cid, sid, "user", "hi")
@@ -1551,7 +1545,7 @@ def test_available_greetings_after_param(client):
 def test_opener_streams_without_persisting(client):
     _wid, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
-    client.put("/api/config", json={"openrouter_key": "sk-or-x"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
     with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/opener",
                        json={"prompt": "Begin in a tavern."}) as r:
         body = "".join(r.iter_text())
@@ -1808,7 +1802,7 @@ def test_put_tagline_saves(client):
 
 def test_post_tagline_generate_from_model(client):
     wid, cid = _world_char(client)
-    client.put("/api/config", json={"openrouter_key": "sk-or-x"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: FakeOpenRouterComplete("A silent snowleopardgirl.\nignored second line")
     r = client.post(f"/api/worlds/{wid}/characters/{cid}/tagline/generate")
@@ -1969,7 +1963,7 @@ def test_scene_datetime_with_hebrew_primary(client):
 
 def test_absorb_returns_preview_without_persisting(client):
     _, cid = _campaign(client)
-    client.put("/api/config", json={"openrouter_key": "sk-or-x"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
     store.scenes.append_message(cid, sid, "user", "We entered the crypt.")
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
@@ -1989,7 +1983,7 @@ def test_absorb_writes_dossier_for_present_character(client):
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
                 json={"kind": "characters", "id": "aese", "version": "main", "role": "npc"})
     store.scenes.append_message(cid, sid, "user", "Aese served tea.")
-    client.put("/api/config", json={"openrouter_key": "sk-or-x"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: FakeOpenRouterComplete("Aese is a shy snowleopardgirl who now trusts the owner.")
     r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
@@ -2006,7 +2000,7 @@ def test_absorb_survives_dossier_failure(client):
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
                 json={"kind": "characters", "id": "aese", "version": "main", "role": "npc"})
     store.scenes.append_message(cid, sid, "user", "hi")
-    client.put("/api/config", json={"openrouter_key": "sk-or-x"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
 
     class Fake:  # 1st complete() = extraction (ok); later complete() = dossier (boom)
         def __init__(self):
@@ -2029,7 +2023,7 @@ def test_absorb_survives_dossier_failure(client):
 
 def test_absorb_empty_scene_is_400(client):
     _, cid = _campaign(client)
-    client.put("/api/config", json={"openrouter_key": "sk-or-x"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
     r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
     assert r.status_code == 400
@@ -2064,7 +2058,7 @@ def test_absorb_upstream_error_returns_502(client):
             raise OpenRouterError("bad_response", "boom")
 
     _, cid = _campaign(client)
-    client.put("/api/config", json={"openrouter_key": "sk-or-x"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
     store.scenes.append_message(cid, sid, "user", "We entered.")
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeRaises()
@@ -2074,7 +2068,7 @@ def test_absorb_upstream_error_returns_502(client):
 
 def test_absorb_returns_edits_without_persisting(client):
     _, cid = _campaign(client)
-    client.put("/api/config", json={"openrouter_key": "sk-or-x"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
     croot = store.campaigns.campaign_root(cid)
     ch = store.characters.create_character(croot, "Seraphine", "main", store.characters.blank_card("Seraphine"))[0]
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
@@ -2111,7 +2105,7 @@ def module_scene(client):
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
                json={"kind": "characters", "id": chid, "version": "default", "role": "player"})
     store.scenes.append_message(cid, sid, "user", "Mara took a hit but shrugged it off.")
-    client.put("/api/config", json={"openrouter_key": "sk-or-x"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
     return cid, sid
 
 
@@ -2121,7 +2115,7 @@ def plain_scene(client):
     _, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
     store.scenes.append_message(cid, sid, "user", "We walked into town.")
-    client.put("/api/config", json={"openrouter_key": "sk-or-x"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
     return cid, sid
 
 
@@ -2228,7 +2222,7 @@ def test_chronicle_put_applies_sheet_edit_and_reports_conflicts(client, module_s
 
 def test_scene_suggestions_returns_resolved(client):
     wid = _world(client)
-    client.put("/api/config", json={"openrouter_key": "sk-or-x"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
     ann = client.post(f"/api/worlds/{wid}/characters",
                       json={"name": "Ann", "version_name": "main"}).json()["character"]
     cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
@@ -2380,7 +2374,7 @@ def _cast_pc(client, wid, cid, sid, name="Elara Vane"):
 def test_chat_with_sole_pc_stamps_speaker_and_backfills(client):
     wid, cid = _campaign(client)
     sid = _empty_scene(client, cid)
-    client.put("/api/config", json={"openrouter_key": "k"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "k"})
     with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/chat",
                        json={"content": "sent before the PC joined"}) as r:
         r.read()
@@ -2396,7 +2390,7 @@ def test_chat_with_sole_pc_stamps_speaker_and_backfills(client):
 def test_chat_without_pc_stays_unstamped(client):
     _, cid = _campaign(client)
     sid = _empty_scene(client, cid)
-    client.put("/api/config", json={"openrouter_key": "k"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "k"})
     with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/chat",
                        json={"content": "hello"}) as r:
         r.read()
@@ -2407,7 +2401,7 @@ def test_chat_without_pc_stays_unstamped(client):
 def test_reply_is_split_into_per_speaker_posts(client):
     wid, cid = _campaign(client)
     sid = _empty_scene(client, cid)
-    client.put("/api/config", json={"openrouter_key": "k"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "k"})
     _cast_pc(client, wid, cid, sid)
     reply = ('**Seraphine Vale:** "You dare?"\n\n'
              "**Grimoire:** Thunder rolls.\n\n"
@@ -2427,7 +2421,7 @@ def test_reply_is_split_into_per_speaker_posts(client):
 def test_regenerate_drops_the_whole_trailing_run(client):
     _, cid = _campaign(client)
     sid = _empty_scene(client, cid)
-    client.put("/api/config", json={"openrouter_key": "k"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "k"})
     store.scenes.append_message(cid, sid, "user", "hi")
     store.scenes.append_message(cid, sid, "assistant", "one", speaker="Seraphine Vale")
     store.scenes.append_message(cid, sid, "assistant", "two")
@@ -2441,7 +2435,7 @@ def test_regenerate_drops_the_whole_trailing_run(client):
 def test_regenerate_multi_post_opening_returns_400(client):
     _, cid = _campaign(client)
     sid = _empty_scene(client, cid)
-    client.put("/api/config", json={"openrouter_key": "k"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "k"})
     store.scenes.append_message(cid, sid, "assistant", "opener part one")
     store.scenes.append_message(cid, sid, "assistant", "opener part two", speaker="Seraphine Vale")
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate").status_code == 400
@@ -2768,7 +2762,7 @@ def _campaign_with_greetings(client, n):
 
 
 def test_scene_suggestions_rank_greetings_when_more_than_two(client):
-    client.put("/api/config", json={"openrouter_key": "sk-or-x"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
     cid, gids = _campaign_with_greetings(client, 3)
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
         '{"suggestions": [], "greeting_picks": ["' + gids[2] + '", "ghost", "' + gids[0] + '"]}')
@@ -2778,7 +2772,7 @@ def test_scene_suggestions_rank_greetings_when_more_than_two(client):
 
 
 def test_scene_suggestions_skip_ranking_at_two_or_fewer(client):
-    client.put("/api/config", json={"openrouter_key": "sk-or-x"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
     cid, gids = _campaign_with_greetings(client, 2)
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
         '{"suggestions": [], "greeting_picks": ["' + gids[0] + '"]}')
@@ -2817,7 +2811,7 @@ def test_datetime_suggested_is_null_without_signals_and_once_dated(client):
 
 
 def test_scene_suggestions_include_dates_and_next_date(client):
-    client.put("/api/config", json={"openrouter_key": "sk-or-x"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
     _wid, cid = _campaign(client)
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
         '{"suggestions": [{"title": "T", "premise": "P", "cast": [], "location": "",'
@@ -2878,7 +2872,7 @@ def test_offscreen_opener_uses_third_person_instruction(client):
     _, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes",
                       json={"title": "Cabal", "pcless": True}).json()["id"]
-    client.put("/api/config", json={"openrouter_key": "k"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "k"})
     cap = CapturingOpenRouter()
     client.app.dependency_overrides[routes.get_llm] = lambda: cap
     with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/opener",
@@ -2892,7 +2886,7 @@ def test_offscreen_chat_never_persists_the_director_note(client):
     _, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes",
                       json={"title": "Cabal", "pcless": True}).json()["id"]
-    client.put("/api/config", json={"openrouter_key": "k"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "k"})
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: FakeOpenRouter(["**Grimoire:** The cult convenes."])
     with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/chat",
@@ -2909,7 +2903,7 @@ def test_offscreen_chat_director_note_expands_roll_macro(client):
     _, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes",
                       json={"title": "Cabal", "pcless": True}).json()["id"]
-    client.put("/api/config", json={"openrouter_key": "k"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "k"})
     cap = CapturingOpenRouter()
     client.app.dependency_overrides[routes.get_llm] = lambda: cap
     with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/chat",
@@ -2923,7 +2917,7 @@ def test_offscreen_chat_empty_note_sends_continue(client):
     _, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes",
                       json={"title": "Cabal", "pcless": True}).json()["id"]
-    client.put("/api/config", json={"openrouter_key": "k"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "k"})
     cap = CapturingOpenRouter()
     client.app.dependency_overrides[routes.get_llm] = lambda: cap
     with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/chat",
@@ -2937,7 +2931,7 @@ def test_empty_chat_in_a_normal_scene_is_an_ephemeral_npc_round(client):
     _, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
     store.scenes.append_message(cid, sid, "assistant", "The tavern hums.")
-    client.put("/api/config", json={"openrouter_key": "k"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "k"})
     cap = CapturingOpenRouter()
     client.app.dependency_overrides[routes.get_llm] = lambda: cap
     with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/chat",
@@ -3024,7 +3018,7 @@ def test_offscreen_suggestions_filter_player_cast(client):
     client.post(f"/api/worlds/{wid}/characters", json={"name": "Vex"})
     # seating vex copies him into the campaign, making his token valid for suggestions
     client.post(f"/api/campaigns/{cid}/scenes/{other}/cast", json={"kind": "characters", "id": "vex"})
-    client.put("/api/config", json={"openrouter_key": "k"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "k"})
     fake = FakeCompleter(json.dumps({"suggestions": [{
         "title": "Plot", "premise": "The cult schemes.",
         "cast": ["characters:vex", f"pcs:{pid}"], "location": ""}]}))
@@ -3044,7 +3038,7 @@ def test_offscreen_suggestions_rank_only_offscreen_greetings(client):
             "name": name, "character": "vex", "version": ver, "body": "x", "pcless": True})
     client.post(f"/api/campaigns/{cid}/greetings", json={
         "name": "Normal", "character": "vex", "version": ver, "body": "y"})
-    client.put("/api/config", json={"openrouter_key": "k"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "k"})
     fake = FakeCompleter(json.dumps({"suggestions": [], "greeting_picks": ["alpha", "beta"]}))
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
     out = client.post(f"/api/campaigns/{cid}/scene-suggestions?offscreen=true").json()
@@ -3815,7 +3809,7 @@ def test_world_sheet_delete_requires_gen_409(client):
 # ---- mechanics: roll proposals & manual checks (#162, Phase 4) -------------
 def _mech_scene(client, module="pool-basic"):
     """A module-bound campaign with one sheeted, cast character (Mara)."""
-    client.put("/api/config", json={"openrouter_key": "sk-or-x"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
     wid, cid = _campaign(client)
     client.put(f"/api/campaigns/{cid}/module", json={"module": module})
     chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"}).json()["character"]
@@ -3955,11 +3949,16 @@ def test_new_send_supersedes(client):
 
 # a send that dies on the missing-key guard must not have durably retired the
 # user's pending chip first — supersede only runs once the send is actually
-# going to happen (routes.py: after _require_scene *and* _require_key).
+# going to happen (routes.py: after _require_scene *and* _require_connection).
 def test_chat_missing_key_does_not_supersede_pending_proposal(client):
     cid, sid, _ = _mech_scene(client)
     rec = _pending(client, cid, sid)
-    client.put("/api/config", json={"openrouter_key": ""})
+    # update_connection's "type to replace" convention treats an empty api_key
+    # as "keep the stored one" (never silently erases a working credential),
+    # so clearing "openrouter"'s key isn't possible via PUT — instead, drop
+    # the active connection selection entirely, which _require_connection
+    # also reports as status 409 kind=missing_key.
+    client.put("/api/config", json={"active_connection_id": ""})
     resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "never mind"})
     assert resp.status_code == 409 and resp.json()["kind"] == "missing_key"
     rec2 = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
@@ -3969,7 +3968,7 @@ def test_chat_missing_key_does_not_supersede_pending_proposal(client):
 def test_retry_missing_key_does_not_supersede_pending_proposal(client):
     cid, sid, _ = _mech_scene(client)
     rec = _pending(client, cid, sid)
-    client.put("/api/config", json={"openrouter_key": ""})
+    client.put("/api/config", json={"active_connection_id": ""})
     resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/retry")
     assert resp.status_code == 409 and resp.json()["kind"] == "missing_key"
     rec2 = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
@@ -3979,7 +3978,7 @@ def test_retry_missing_key_does_not_supersede_pending_proposal(client):
 def test_regenerate_missing_key_does_not_supersede_pending_proposal(client):
     cid, sid, _ = _mech_scene(client)
     rec = _pending(client, cid, sid)
-    client.put("/api/config", json={"openrouter_key": ""})
+    client.put("/api/config", json={"active_connection_id": ""})
     resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
     assert resp.status_code == 409 and resp.json()["kind"] == "missing_key"
     rec2 = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
@@ -4007,7 +4006,7 @@ def test_manual_check_and_availability(client):
 
 
 def test_proposal_routes_without_module(client):
-    client.put("/api/config", json={"openrouter_key": "sk-or-x"})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
     _wid, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/check",

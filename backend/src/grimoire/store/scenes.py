@@ -6,8 +6,8 @@ import re
 from pathlib import Path
 
 from . import calendars, campaigns, overlay, scene_ids, scene_refs
-from .config import read_config
 from .frontmatter import dump_frontmatter, parse_frontmatter, parse_frontmatter_head
+from .llm_connections import get_active as _get_active_connection
 from .paths import now_iso, slugify, uniquify
 
 # The body is a script: every message is `**<Speaker>:** content`. Role is not
@@ -129,7 +129,9 @@ def create_scene(cid: str, title: str, suggested_date: str | None = None,
     now = now_iso()
     base = scene_ids.format_sid(number, width, None, slugify(title))
     sid = uniquify(base, lambda c: _scene_path(cid, c).exists())
-    meta = {"title": title, "model": read_config()["model"], "created": now, "updated": now}
+    active = _get_active_connection()
+    meta = {"title": title, "model": active["model"] if active else "",
+             "created": now, "updated": now}
     if pcless:
         meta["pcless"] = "true"
     if suggested_date:
