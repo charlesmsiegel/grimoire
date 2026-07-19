@@ -45,6 +45,156 @@ def test_config_never_leaks_key(client):
     assert "sk-or-secret" not in json.dumps(body)
 
 
+# ---- llm connections ----
+def test_llm_connections_seeded_by_migration(client):
+    ids = {c["id"] for c in client.get("/api/llm-connections").json()}
+    assert ids == {"openrouter", "claude"}
+
+
+def test_create_read_update_delete_connection(client):
+    r = client.post("/api/llm-connections", json={
+        "kind": "openai_compatible", "name": "z.ai GLM",
+        "base_url": "https://api.z.ai/v4", "api_key": "sk-z", "model": "glm-4.6",
+        "post_process": "strict",
+    })
+    assert r.status_code == 200
+    cid = r.json()["id"]
+
+    detail = client.get(f"/api/llm-connections/{cid}").json()
+    assert detail["kind"] == "openai_compatible"
+    assert detail["key_set"] is True
+    assert "api_key" not in detail
+    assert detail["models"] == []
+
+    r = client.put(f"/api/llm-connections/{cid}", json={"name": "z.ai GLM (renamed)"})
+    assert r.json()["name"] == "z.ai GLM (renamed)"
+
+    assert client.delete(f"/api/llm-connections/{cid}").json() == {"ok": True}
+    assert client.get(f"/api/llm-connections/{cid}").status_code == 404
+
+
+def test_connection_never_leaks_key(client):
+    r = client.post("/api/llm-connections", json={
+        "kind": "openai_compatible", "name": "Endpoint", "base_url": "https://x", "api_key": "sk-secret"})
+    cid = r.json()["id"]
+    body = client.get(f"/api/llm-connections/{cid}").json()
+    assert body["key_set"] is True
+    assert "sk-secret" not in json.dumps(body)
+
+
+def test_update_connection_not_found_404(client):
+    assert client.put("/api/llm-connections/nope", json={"name": "x"}).status_code == 404
+
+
+def test_delete_connection_not_found_404(client):
+    assert client.delete("/api/llm-connections/nope").status_code == 404
+
+
+def test_models_refresh_400_for_openrouter_and_claude(client):
+    assert client.post("/api/llm-connections/openrouter/models/refresh").status_code == 400
+    assert client.post("/api/llm-connections/claude/models/refresh").status_code == 400
+
+
+def test_models_refresh_404_for_missing_connection(client):
+    assert client.post("/api/llm-connections/nope/models/refresh").status_code == 404
+
+
+class FakeModelsClient:
+    def __init__(self, models=None, error=None):
+        self.models = models or []
+        self.error = error
+        self.calls = []
+
+    async def list_models(self, base_url, key):
+        self.calls.append((base_url, key))
+        if self.error:
+            raise self.error
+        return self.models
+
+
+def test_models_refresh_fetches_and_caches(client):
+    from grimoire.llm import LLMError
+    r = client.post("/api/llm-connections", json={
+        "kind": "openai_compatible", "name": "Endpoint", "base_url": "https://x", "api_key": "sk-x"})
+    cid = r.json()["id"]
+    fake = FakeModelsClient(models=[
+        {"id": "glm-4.6", "name": "GLM-4.6", "context": 128000, "prompt": None, "completion": None}])
+    client.app.dependency_overrides[routes.get_openai_compatible_client] = lambda: fake
+
+    r = client.post(f"/api/llm-connections/{cid}/models/refresh")
+    assert r.status_code == 200
+    assert r.json()["models"] == fake.models
+    assert fake.calls == [("https://x", "sk-x")]
+
+    # persisted: a plain GET now shows the cached list without another fetch
+    detail = client.get(f"/api/llm-connections/{cid}").json()
+    assert detail["models"] == fake.models
+    assert detail["fetched_at"]
+
+
+def test_models_refresh_upstream_error_normalized(client):
+    from grimoire.llm import LLMError
+    r = client.post("/api/llm-connections", json={
+        "kind": "openai_compatible", "name": "Endpoint", "base_url": "https://x", "api_key": "sk-x"})
+    cid = r.json()["id"]
+    fake = FakeModelsClient(error=LLMError("auth", "bad key"))
+    client.app.dependency_overrides[routes.get_openai_compatible_client] = lambda: fake
+
+    r = client.post(f"/api/llm-connections/{cid}/models/refresh")
+    assert r.status_code == 502
+    assert r.json()["kind"] == "auth"
+
+
+def test_models_refresh_route_write_hidden_if_connection_changes_during_the_fetch(client):
+    # This must exercise the actual ROUTE, not just cached_models()'s gate
+    # (that's already covered store-side in test_llm_connections_store.py) —
+    # a route bug (e.g. capturing rev AFTER the fetch, or conditionally
+    # skipping the write instead of writing unconditionally) wouldn't be
+    # caught by a test that bypasses the route and pokes the store directly.
+    # The fake's list_models mutates the connection AS PART OF its own
+    # execution — since the route awaits it before writing the sidecar,
+    # this reproduces "someone edited the connection while the fetch was
+    # in flight" without needing real threading/concurrency.
+    r = client.post("/api/llm-connections", json={
+        "kind": "openai_compatible", "name": "Endpoint", "base_url": "https://old", "api_key": "sk-x"})
+    cid = r.json()["id"]
+
+    class MutatingFakeClient:
+        async def list_models(self, base_url, key):
+            store.llm_connections.update_connection(cid, base_url="https://mutated-during-fetch")
+            return [{"id": "m", "name": "m", "context": None, "prompt": None, "completion": None}]
+
+    client.app.dependency_overrides[routes.get_openai_compatible_client] = lambda: MutatingFakeClient()
+    r = client.post(f"/api/llm-connections/{cid}/models/refresh")
+    assert r.status_code == 200
+    assert r.json()["models"] == [{"id": "m", "name": "m", "context": None, "prompt": None, "completion": None}]
+
+    detail = client.get(f"/api/llm-connections/{cid}").json()
+    assert detail["models"] == []  # the stale write never surfaces
+    assert detail["base_url"] == "https://mutated-during-fetch"  # the mutation itself did land
+
+
+def test_models_refresh_route_write_hidden_after_delete_and_recreate_during_fetch(client):
+    r = client.post("/api/llm-connections", json={
+        "kind": "openai_compatible", "name": "Reused Name", "base_url": "https://old", "api_key": "sk-x"})
+    cid = r.json()["id"]
+
+    class DeleteRecreateFakeClient:
+        async def list_models(self, base_url, key):
+            store.llm_connections.delete_connection(cid)
+            new_id = store.llm_connections.create_connection(
+                "openai_compatible", "Reused Name", base_url="https://new")
+            assert new_id == cid  # same freed slug — the whole point of this race
+            return [{"id": "m", "name": "m", "context": None, "prompt": None, "completion": None}]
+
+    client.app.dependency_overrides[routes.get_openai_compatible_client] = lambda: DeleteRecreateFakeClient()
+    r = client.post(f"/api/llm-connections/{cid}/models/refresh")
+    assert r.status_code == 200
+
+    detail = client.get(f"/api/llm-connections/{cid}").json()
+    assert detail["models"] == []  # the stale write never surfaces on the recreated connection
+
+
 # ---- worlds ----
 def test_config_system_prompt_and_quote_color_roundtrip(client):
     client.put("/api/config", json={"system_prompt": "Never speak for the PC.", "quote_color": "on"})

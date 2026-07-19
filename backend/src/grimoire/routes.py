@@ -15,9 +15,11 @@ from pydantic import BaseModel
 
 from . import prompts, store
 from .llm import LLMClient, LLMError
+from .openai_compatible import OpenAICompatibleClient
 
 router = APIRouter()
 _llm = LLMClient()
+_openai_compatible_client = OpenAICompatibleClient()
 
 
 def _dump(model: BaseModel) -> dict:
@@ -32,6 +34,10 @@ def get_llm() -> LLMClient:
     return _llm
 
 
+def get_openai_compatible_client() -> OpenAICompatibleClient:
+    return _openai_compatible_client
+
+
 # ---- models ----
 class ConfigUpdate(BaseModel):
     model: str | None = None
@@ -44,6 +50,23 @@ class ConfigUpdate(BaseModel):
     provider: Literal["openrouter", "claude"] | None = None
     claude_model: str | None = None
     default_style_id: str | None = None
+
+
+class ConnectionCreate(BaseModel):
+    kind: Literal["openrouter", "claude", "openai_compatible"]
+    name: str
+    base_url: str = ""
+    api_key: str = ""
+    model: str = ""
+    post_process: Literal["none", "strict"] = "none"
+
+
+class ConnectionUpdate(BaseModel):
+    name: str | None = None
+    base_url: str | None = None
+    api_key: str | None = None
+    model: str | None = None
+    post_process: Literal["none", "strict"] | None = None
 
 
 class DataDirUpdate(BaseModel):
@@ -441,6 +464,67 @@ def put_data_dir(update: DataDirUpdate):
     except (OSError, ValueError) as exc:
         raise HTTPException(status_code=400, detail={"detail": str(exc), "kind": "data_dir"})
     return store.data_dir_info()
+
+
+# ---- llm connections ----
+@router.get("/llm-connections")
+def get_connections():
+    return store.llm_connections.list_connections()
+
+
+@router.post("/llm-connections")
+def post_connection(body: ConnectionCreate):
+    fields = _dump(body)
+    kind = fields.pop("kind")
+    name = fields.pop("name")
+    return {"id": store.llm_connections.create_connection(kind, name, **fields)}
+
+
+@router.get("/llm-connections/{id}")
+def get_connection(id: str):
+    try:
+        return store.llm_connections.read_connection(id)
+    except store.llm_connections.ConnectionNotFound:
+        raise HTTPException(status_code=404, detail="connection not found")
+
+
+@router.put("/llm-connections/{id}")
+def put_connection(id: str, body: ConnectionUpdate):
+    fields = {k: v for k, v in _dump(body).items() if v is not None}
+    try:
+        store.llm_connections.update_connection(id, **fields)
+        return store.llm_connections.read_connection(id)
+    except store.llm_connections.ConnectionNotFound:
+        raise HTTPException(status_code=404, detail="connection not found")
+
+
+@router.delete("/llm-connections/{id}")
+def delete_connection_route(id: str):
+    try:
+        store.llm_connections.delete_connection(id)
+    except store.llm_connections.ConnectionNotFound:
+        raise HTTPException(status_code=404, detail="connection not found")
+    return {"ok": True}
+
+
+@router.post("/llm-connections/{id}/models/refresh")
+async def post_connection_models_refresh(
+    id: str, client: OpenAICompatibleClient = Depends(get_openai_compatible_client),
+):
+    try:
+        conn = store.llm_connections.read_connection_raw(id)
+    except store.llm_connections.ConnectionNotFound:
+        raise HTTPException(status_code=404, detail="connection not found")
+    if conn["kind"] != "openai_compatible":
+        raise HTTPException(status_code=400, detail="model listing not supported for this connection kind")
+    rev = conn["rev"]
+    try:
+        models = await client.list_models(conn["base_url"], conn["api_key"])
+    except LLMError as exc:
+        raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
+    fetched_at = store.now_iso()
+    store.llm_connections.set_cached_models(id, models, rev)
+    return {"models": models, "fetched_at": fetched_at, "rev": rev}
 
 
 # ---- modules (#160) ----
