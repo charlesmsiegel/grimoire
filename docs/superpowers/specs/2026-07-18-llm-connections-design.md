@@ -106,11 +106,23 @@ the moment this change ships. Instead:
 - Migration writes a marker file, `<GRIMOIRE_HOME>/llm_connections/.migrated`,
   as its **last** step — only that marker's existence gates a no-op return.
 - The two seed connections use **fixed ids** (`openrouter`, `claude`), not
-  `uniquify`-generated ones, and each is only created if its file doesn't
-  already exist — so a retry after a partial failure (e.g. the OpenRouter
-  connection was written, then the process died before Claude's) resumes
-  cleanly instead of duplicating.
+  `uniquify`-generated ones, and each is only (re-)created if its file is
+  **missing or fails to parse as a valid connection** (not merely
+  "doesn't exist") — so a retry after a partial failure (the process died
+  mid-write, leaving a truncated/corrupt `openrouter.md`) redoes that seed
+  instead of mistaking garbage for done, while a retry after a clean prior
+  success leaves it alone instead of duplicating.
 - `active_connection_id` is only written if it's currently unset.
+
+This deliberately does not adopt the atomic temp-file-plus-`os.replace`
+pattern `store/rolls.py`/`store/proposals.py` use for concurrent-writer,
+gameplay-critical JSON — that machinery exists specifically for high-frequency
+writes from multiple simultaneous route handlers during active play.
+Connection records are rare, single-user, settings-UI edits, the same
+profile as `store/styles.py` and `store/config.py` (both plain
+`write_text`, no atomicity) — validate-before-skip closes the realistic
+"crash mid-write" gap for a one-time migration without importing locking
+infrastructure this class of record has never needed elsewhere.
 
 ```python
 def ensure_migrated() -> None:
@@ -125,12 +137,12 @@ def ensure_migrated() -> None:
     # whatever keys exist regardless of the "official" schema.
     path = config._config_path()
     meta, _ = parse_frontmatter(path.read_text(encoding="utf-8")) if path.exists() else ({}, "")
-    if not _path("openrouter").exists():
+    if not _valid_connection_file("openrouter"):
         _write_raw("openrouter", kind="openrouter", name="OpenRouter",
                     api_key=meta.get("openrouter_key", ""),
                     model=meta.get("model", config.DEFAULT_MODEL),
                     base_url="", post_process="none")
-    if not _path("claude").exists():
+    if not _valid_connection_file("claude"):
         _write_raw("claude", kind="claude", name="Claude",
                     model=meta.get("claude_model", config.DEFAULT_CLAUDE_MODEL),
                     base_url="", api_key="", post_process="none")
@@ -138,6 +150,20 @@ def ensure_migrated() -> None:
         active = "openrouter" if meta.get("provider", "openrouter") == "openrouter" else "claude"
         config.write_config(active_connection_id=active)
     marker.write_text("1", encoding="utf-8")
+
+
+def _valid_connection_file(id: str) -> bool:
+    """Missing, unreadable, or missing its `kind` field all count as
+    "needs (re)seeding" — covers both "never written" and "process died
+    mid-write, leaving a truncated file" without requiring atomic writes."""
+    p = _path(id)
+    if not p.exists():
+        return False
+    try:
+        meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return False
+    return bool(meta.get("kind"))
 ```
 
 (`_write_raw` is the same frontmatter-dump primitive `create_connection`
@@ -371,14 +397,25 @@ custom endpoint with no pricing data shows id + name only — no fake "Free".
 **Sidecar lifecycle.** The cache is keyed only by connection id, but
 `base_url` is mutable — without extra handling, repointing a connection at a
 different server would keep showing the old server's model ids/prices/context
-under the new one's identity until the user happens to hit Refresh. Two
+under the new one's identity until the user happens to hit Refresh. Three
 rules close this: `update_connection()` clears the `.models.json` sidecar
 (back to the empty `{"models": [], "fetched_at": ""}` state) whenever
-`base_url` is part of the update and differs from the stored value; and
+`base_url` is part of the update and differs from the stored value;
 `delete_connection()` always removes the sidecar file, so a deleted
 connection's id can't be reused by a same-named new connection and silently
 inherit stale metadata (`slugify`/`uniquify` frees a deleted id's slug for
-reuse the same way `styles.py` does).
+reuse the same way `styles.py` does); and — covering the case where a crash
+lands between those two deletes, or a stale sidecar is somehow left behind
+by any other path — `create_connection()` unconditionally deletes any
+pre-existing sidecar for the id it's about to write, before writing the
+record. A brand-new connection never starts with inherited cached models,
+regardless of how a stale sidecar for that id came to exist.
+
+This does not defend against a `models/refresh` call genuinely racing an
+`update_connection`/`delete_connection` call on the same connection — see
+Known limitations, which already accepts the equivalent race for
+`active_connection_id`/`config.md` and extends the same acceptance here:
+this is a single-user local app with no store-level locking anywhere.
 
 ### 6. Routes
 
@@ -448,8 +485,12 @@ carries the old one to a new host.
   scope.
 - **Cached models go stale** until manually refreshed — by design, per the
   explicit "store locally, refresh if we want" request.
-- **No locking** around `active_connection_id`/`config.md` writes, consistent
-  with the rest of the store (single-user/local app).
+- **No locking** around `active_connection_id`/`config.md` writes, or around
+  a connection's own record/sidecar writes (a `models/refresh` racing a
+  concurrent `update_connection`/`delete_connection` on the same connection
+  is not defended against) — consistent with the rest of the store
+  (single-user/local app; the same acceptance appears in prior specs, e.g.
+  greeting availability's played-mark writes).
 
 ## Tests
 
@@ -465,7 +506,10 @@ Backend:
   empty. **Crash-recovery**: create only the `openrouter` connection file
   (simulating a migration that died before `claude`/the marker), then call
   `ensure_migrated()` again — asserts it completes the rest without
-  duplicating the OpenRouter connection. **Preemption**: call
+  duplicating the OpenRouter connection. **Corrupt-seed recovery**: write a
+  truncated/empty `openrouter.md` (no parseable `kind`) before calling
+  `ensure_migrated()` — asserts it's treated as unseeded and rewritten from
+  the legacy config fields, not skipped. **Preemption**: call
   `create_connection()` directly on a fresh store (skipping
   `list_connections()`/`get_active()`), then call `ensure_migrated()` —
   asserts the legacy config fields are still picked up rather than silently
@@ -475,7 +519,10 @@ Backend:
   **Sidecar lifecycle**: `set_cached_models` then `update_connection(id,
   base_url=new)` resets the sidecar to empty; `delete_connection` removes
   the sidecar file; a new connection reusing a deleted one's slug starts
-  with no cached models.
+  with no cached models — including when the sidecar is left behind
+  deliberately (simulating a crash between the two deletes) rather than via
+  the normal delete path, to prove `create_connection`'s clear-before-write
+  is what's covering it, not `delete_connection`'s own cleanup.
 - `test_openai_compatible.py` — SSE happy path and error normalization
   (mirrors `test_openrouter.py`'s `httpx.MockTransport` pattern); `key`
   omitted from headers when empty; `_strict_messages()` unit tests: system
