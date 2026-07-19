@@ -7,10 +7,10 @@ function errMsg(err: any): string {
   return typeof d === "string" ? d : (d?.detail ?? String(err));
 }
 
-export function NewSceneChooser({ cid, afterSid, keySet, onClose, onCreated }: {
+export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated }: {
   cid: string;
   afterSid: string | null;          // ranking reference: the selected (or latest) scene
-  keySet: boolean;
+  ready: boolean;
   onClose: () => void;
   onCreated: (sid: string, initialPrompt?: string) => void;
 }) {
@@ -18,9 +18,9 @@ export function NewSceneChooser({ cid, afterSid, keySet, onClose, onCreated }: {
   const [mode, setMode] = useState<"pc" | "offscreen" | null>(null);
   const [greetings, setGreetings] = useState<Availability[]>([]);
   // null = still generating; [] = nothing to offer (no key, empty, or failed)
-  const [suggestions, setSuggestions] = useState<SceneSuggestion[] | null>(keySet ? null : []);
+  const [suggestions, setSuggestions] = useState<SceneSuggestion[] | null>(ready ? null : []);
   // the same LLM call ranks greetings when >2 are available; null = pending
-  const [picks, setPicks] = useState<string[] | null>(keySet ? null : []);
+  const [picks, setPicks] = useState<string[] | null>(ready ? null : []);
   // the same call estimates when the next scene opens; undefined until it answers
   const [nextDate, setNextDate] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
@@ -35,11 +35,11 @@ export function NewSceneChooser({ cid, afterSid, keySet, onClose, onCreated }: {
   }, [cid, afterSid, mode]);
 
   useEffect(() => {
-    if (!keySet || !mode) return;
+    if (!ready || !mode) return;
     api.sceneSuggestions(cid, afterSid ?? undefined, mode === "offscreen")
       .then((r) => { setSuggestions(r.suggestions); setPicks(r.greeting_picks ?? []); setNextDate(r.next_date || undefined); })
       .catch((err) => { setSuggestions([]); setPicks([]); setError(errMsg(err)); });
-  }, [cid, afterSid, keySet, mode]);
+  }, [cid, afterSid, ready, mode]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !busy) onClose(); };
@@ -48,10 +48,10 @@ export function NewSceneChooser({ cid, afterSid, keySet, onClose, onCreated }: {
   }, [onClose, busy]);
 
   // 4 slots: 2 greetings + 2 generated; greetings grow to 4 when nothing will generate
-  const wantGenerated = keySet && (suggestions === null || suggestions.length > 0);
+  const wantGenerated = ready && (suggestions === null || suggestions.length > 0);
   // with >2 available the LLM chooses; until it answers, show nothing rather than
   // cards that would shuffle. Empty/failed picks fall back to today's order.
-  const rankPending = keySet && greetings.length > 2 && picks === null;
+  const rankPending = ready && greetings.length > 2 && picks === null;
   const picked = (picks ?? [])
     .map((id) => greetings.find((g) => g.id === id))
     .filter((g): g is Availability => g !== undefined);
@@ -131,8 +131,8 @@ export function NewSceneChooser({ cid, afterSid, keySet, onClose, onCreated }: {
         ))}
 
         <div className="role">Generated</div>
-        {!keySet && <div className="field-hint">Set an OpenRouter key in Config to generate.</div>}
-        {keySet && suggestions === null && <div className="field-hint">Generating…</div>}
+        {!ready && <div className="field-hint">Set up an LLM connection in Config to generate.</div>}
+        {ready && suggestions === null && <div className="field-hint">Generating…</div>}
         {generatedCards.map((s, i) => (
           <button className="chooser-card" key={i} disabled={busy} onClick={() => pickSuggestion(s)}>
             <span className="chooser-card-title">{s.title}</span>

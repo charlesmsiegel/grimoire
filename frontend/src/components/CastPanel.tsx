@@ -6,11 +6,11 @@ import {
 import { CalendarDatePicker } from "./CalendarDatePicker";
 
 export function CastPanel({
-  cid, sid, keySet, onSeeded, onSceneRenamed, initialPrompt, pcless,
+  cid, sid, ready, onSeeded, onSceneRenamed, initialPrompt, pcless,
 }: {
   cid: string;
   sid: string;
-  keySet: boolean;
+  ready: boolean;
   onSeeded: () => void;
   onSceneRenamed?: (id: string) => void;
   initialPrompt?: string;
@@ -250,11 +250,11 @@ export function CastPanel({
 
         <div>
           <div className="role">Generate an opener</div>
-          {!keySet && <div className="field-hint">Set an OpenRouter key in Config to generate.</div>}
+          {!ready && <div className="field-hint">Set up an LLM connection in Config to generate.</div>}
           <div className="picker">
             <input type="text" aria-label="Opener prompt" placeholder="A storm over the salt marshes…"
                    value={prompt} onChange={(e) => setPrompt(e.target.value)} />
-            <button className="primary" onClick={generate} disabled={!keySet || busy || !prompt.trim()}>
+            <button className="primary" onClick={generate} disabled={!ready || busy || !prompt.trim()}>
               {busy ? "…" : "Generate"}
             </button>
           </div>

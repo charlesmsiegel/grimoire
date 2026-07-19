@@ -80,7 +80,7 @@ beforeEach(() => {
   (api.resolveProposal as any).mockResolvedValue(undefined);
   (api.getSceneChecks as any).mockResolvedValue({ actors: [] });
   (api.rollCheck as any).mockResolvedValue({ ok: true, resolution: {}, message: "" });
-  (api.getConfig as any).mockResolvedValue({ model: "m", theme: "codex", key_set: true, system_prompt: "", quote_color: "off" });
+  (api.getConfig as any).mockResolvedValue({ theme: "codex", system_prompt: "", quote_color: "off", user_label: "You", assistant_label: "Grimoire", default_style_id: "", active_connection_id: "openrouter", active_connection: { id: "openrouter", kind: "openrouter", name: "OpenRouter" }, ready: true });
   (api.editMessage as any).mockResolvedValue({ ok: true });
   (api.getCast as any).mockResolvedValue([]);
   (api.getSceneLocation as any).mockResolvedValue({ current: null, visited: [] });
@@ -119,7 +119,7 @@ function renderCampaign() {
   return render(
     <MemoryRouter initialEntries={["/campaigns/run"]}>
       <Routes>
-        <Route path="/campaigns/:cid" element={<CampaignView keySet={true} />} />
+        <Route path="/campaigns/:cid" element={<CampaignView ready={true} />} />
       </Routes>
     </MemoryRouter>,
   );
@@ -181,8 +181,9 @@ test("scene rail is sortable by last updated, scene date, or order", async () =>
 
 test("groups consecutive posts under one speaker plate", async () => {
   (api.getConfig as any).mockResolvedValue({
-    model: "m", theme: "codex", key_set: true, system_prompt: "", quote_color: "off",
-    user_label: "Kestrel", assistant_label: "Grimoire",
+    theme: "codex", system_prompt: "", quote_color: "off", user_label: "Kestrel", assistant_label: "Grimoire",
+    default_style_id: "", active_connection_id: "openrouter",
+    active_connection: { id: "openrouter", kind: "openrouter", name: "OpenRouter" }, ready: true,
   });
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({
