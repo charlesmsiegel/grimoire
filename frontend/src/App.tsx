@@ -10,6 +10,7 @@ import WorldsView from "./routes/WorldsView";
 import WorldView from "./routes/WorldView";
 import ModulesView from "./routes/ModulesView";
 import StyleGuidesView from "./routes/StyleGuidesView";
+import ConnectionsView from "./routes/ConnectionsView";
 import ConfigView from "./routes/ConfigView";
 
 export default function App() {
@@ -48,6 +49,9 @@ export default function App() {
           <NavLink to="/styles" className={({ isActive }) => "nav-btn" + (isActive ? " active" : "")}>
             Styles
           </NavLink>
+          <NavLink to="/connections" className={({ isActive }) => "nav-btn" + (isActive ? " active" : "")}>
+            Connections
+          </NavLink>
         </nav>
         <div className="topbar-right">
           <span className="status">
@@ -68,6 +72,7 @@ export default function App() {
         <Route path="/worlds/:wid" element={<WorldView />} />
         <Route path="/modules" element={<ModulesView />} />
         <Route path="/styles" element={<StyleGuidesView />} />
+        <Route path="/connections" element={<ConnectionsView />} />
         <Route path="/config" element={<ConfigView />} />
       </Routes>
     </ThemeProvider>
