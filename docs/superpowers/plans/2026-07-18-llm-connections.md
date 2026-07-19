@@ -2784,6 +2784,7 @@ Read `frontend/src/routes/ConfigView.test.tsx` first (to preserve the tests unre
 
 ```tsx
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import ConfigView from "./ConfigView";
 
 vi.mock("../api/client", () => ({
@@ -2795,6 +2796,18 @@ vi.mock("../api/client", () => ({
 }));
 vi.mock("../theme/ThemeProvider", () => ({ useTheme: () => ({ setTheme: vi.fn() }) }));
 import { api } from "../api/client";
+
+// ConfigView now renders a <Link to="/connections">, which needs Router
+// context — bare render(<ConfigView />) throws ("Cannot destructure
+// property 'basename' of ...useContext(...) as it is null"). Wrap it, same
+// pattern as CampaignsView.test.tsx.
+function renderView() {
+  return render(
+    <MemoryRouter>
+      <ConfigView />
+    </MemoryRouter>,
+  );
+}
 
 const cfg = {
   theme: "codex", system_prompt: "", quote_color: "off", user_label: "You", assistant_label: "Grimoire",
@@ -2823,7 +2836,7 @@ beforeEach(() => {
 });
 
 test("saves the system prompt", async () => {
-  render(<ConfigView />);
+  renderView();
   const ta = await screen.findByLabelText(/system prompt/i);
   fireEvent.change(ta, { target: { value: "Never speak for the PC." } });
   fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
@@ -2832,7 +2845,7 @@ test("saves the system prompt", async () => {
 });
 
 test("saves the default prose style", async () => {
-  render(<ConfigView />);
+  renderView();
   const sel = await screen.findByLabelText(/default prose style/i);
   fireEvent.change(sel, { target: { value: "noir-detective" } });
   fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
@@ -2841,7 +2854,7 @@ test("saves the default prose style", async () => {
 });
 
 test("toggling quote color saves immediately", async () => {
-  render(<ConfigView />);
+  renderView();
   const cb = await screen.findByLabelText(/color quoted/i);
   fireEvent.click(cb);
   await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith({ quote_color: "on" }));
@@ -2849,7 +2862,7 @@ test("toggling quote color saves immediately", async () => {
 
 test("moving the storage location saves the new path", async () => {
   (api.putDataDir as any).mockResolvedValue({ ...dataDir, data_dir: "/sync/grimoire", is_default: false, source: "custom" });
-  render(<ConfigView />);
+  renderView();
   const input = await screen.findByLabelText(/storage location/i);
   fireEvent.change(input, { target: { value: "/sync/grimoire" } });
   fireEvent.click(screen.getByRole("button", { name: /^move$/i }));
@@ -2857,7 +2870,7 @@ test("moving the storage location saves the new path", async () => {
 });
 
 test("edits transcript labels and saves them", async () => {
-  render(<ConfigView />);
+  renderView();
   const user = await screen.findByLabelText(/your label/i);
   fireEvent.change(user, { target: { value: "Kestrel" } });
   fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
@@ -2866,14 +2879,14 @@ test("edits transcript labels and saves them", async () => {
 });
 
 test("shows the three theme cards", async () => {
-  render(<ConfigView />);
+  renderView();
   expect(await screen.findByText("CODEX")).toBeInTheDocument();
   expect(screen.getByText("MANUSCRIPT")).toBeInTheDocument();
   expect(screen.getByText("ASTRAL")).toBeInTheDocument();
 });
 
 test("shows every connection in the LLM connection dropdown", async () => {
-  render(<ConfigView />);
+  renderView();
   const select = await screen.findByLabelText("LLM connection");
   const values = Array.from(select.querySelectorAll("option")).map((o) => (o as HTMLOptionElement).value);
   expect(values).toEqual(["openrouter", "claude"]);
@@ -2881,14 +2894,14 @@ test("shows every connection in the LLM connection dropdown", async () => {
 });
 
 test("switching the active connection saves immediately", async () => {
-  render(<ConfigView />);
+  renderView();
   const select = await screen.findByLabelText("LLM connection");
   fireEvent.change(select, { target: { value: "claude" } });
   await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith({ active_connection_id: "claude" }));
 });
 
 test("links to the Connections page to manage keys/endpoints", async () => {
-  render(<ConfigView />);
+  renderView();
   await screen.findByLabelText("LLM connection");
   expect(screen.getByRole("link", { name: /connections/i })).toHaveAttribute("href", "/connections");
 });
