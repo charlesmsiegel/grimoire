@@ -1768,14 +1768,15 @@ git commit -m "feat(backend): rewire LLM generation routes and the ingest_scene 
 
 ### Task 6: Frontend API client — types and connection CRUD methods
 
-No test file exists for `client.ts` itself in this codebase (it's exercised indirectly through component tests) — this task has no standalone TDD cycle; correctness is verified by the component tests in Tasks 7-10, which mock `api.*`. Still make the edits precisely, since a typo here silently breaks every consumer's mock shape.
+`client.ts` does have its own test file, `client.test.ts` — it covers the module-level `getConfig()` cache (a `Promise<Config> | null` singleton, shared across every component that calls `api.getConfig()`, refreshed by `putConfig`'s response and explicitly invalidated by `putDataDir`). This task's `putConfig` edit is a **narrowing of an existing function**, not a fresh one — replacing it wholesale rather than editing only its type signature would silently drop its cache-refresh side effect, which is exactly the mistake to avoid here (see Step 3).
 
 **Files:**
 - Modify: `frontend/src/api/client.ts`
+- Modify: `frontend/src/api/client.test.ts`
 - Modify: `frontend/src/api/models.ts`
 
 **Interfaces:**
-- Produces (used by Tasks 7, 8, 9, 10): `Model` type now nullable on `context`/`prompt`/`completion`; `LLMConnectionKind`, `LLMConnection`, `LLMConnectionDetail`, `LLMConnectionDraft`, `ModelsRefreshResult` types; `Config` type drops `model`/`key_set`/`provider`/`claude_model`, gains `active_connection_id`/`active_connection`/`ready`; `api.listConnections()`, `api.createConnection(draft)`, `api.readConnection(id)`, `api.updateConnection(id, patch)`, `api.deleteConnection(id)`, `api.refreshConnectionModels(id)`.
+- Produces (used by Tasks 7, 8, 9, 10): `Model` type now nullable on `context`/`prompt`/`completion`; `LLMConnectionKind`, `LLMConnection`, `LLMConnectionDetail`, `LLMConnectionDraft`, `ModelsRefreshResult` types; `Config` type drops `model`/`key_set`/`provider`/`claude_model`, gains `active_connection_id`/`active_connection`/`ready`; `api.listConnections()`, `api.createConnection(draft)`, `api.readConnection(id)`, `api.updateConnection(id, patch)`, `api.deleteConnection(id)`, `api.refreshConnectionModels(id)`. `updateConnection`/`deleteConnection` each invalidate the shared config cache (Task 10's App-level refetch, and any other in-page `getConfig()` caller, depends on this — editing or deleting a connection can change the *active* connection's readiness even though it never calls `/api/config` itself).
 
 - [ ] **Step 1: Widen `Model`'s nullable fields in `api/models.ts`**
 
@@ -1844,38 +1845,81 @@ export type Config = {
 };
 ```
 
-- [ ] **Step 3: Add the connection CRUD methods and narrow `putConfig`'s type**
+- [ ] **Step 3: Narrow `putConfig`'s type — keep its cache-refresh body — and add the connection CRUD methods**
 
-Find `putConfig` in the `api` object (around line 395) and replace its type signature:
+Find `putConfig` in the `api` object (around line 395). Change **only its parameter type**; its body (the `.then()` that refreshes `configCache`) must survive unchanged:
 
 ```ts
   putConfig: (body: Partial<{ theme: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string; default_style_id: string; active_connection_id: string }>) =>
-    request<Config>("PUT", "/api/config", body),
+    request<Config>("PUT", "/api/config", body).then((cfg) => {
+      configCache = Promise.resolve(cfg); // the write's response is the fresh config
+      return cfg;
+    }),
 ```
 
-Add near `listStyles`/`createStyle`/etc. (around line 670-676), following the same shape:
+Add near `listStyles`/`createStyle`/etc. (around line 670-676), following the same shape. `updateConnection` and `deleteConnection` each call `invalidateConfigCache()` on success — neither touches `/api/config`, but either can change the *active* connection's `ready`/shape (editing its key, or deleting it out from under `active_connection_id`), and nothing else would tell the cached `Config` to refresh:
 
 ```ts
   listConnections: () => request<LLMConnection[]>("GET", "/api/llm-connections"),
   createConnection: (draft: LLMConnectionDraft) => request<{ id: string }>("POST", "/api/llm-connections", draft),
   readConnection: (id: string) => request<LLMConnectionDetail>("GET", `/api/llm-connections/${id}`),
   updateConnection: (id: string, patch: Partial<LLMConnectionDraft>) =>
-    request<LLMConnectionDetail>("PUT", `/api/llm-connections/${id}`, patch),
-  deleteConnection: (id: string) => request<{ ok: boolean }>("DELETE", `/api/llm-connections/${id}`),
+    request<LLMConnectionDetail>("PUT", `/api/llm-connections/${id}`, patch).then((r) => {
+      invalidateConfigCache();
+      return r;
+    }),
+  deleteConnection: (id: string) =>
+    request<{ ok: boolean }>("DELETE", `/api/llm-connections/${id}`).then((r) => {
+      invalidateConfigCache();
+      return r;
+    }),
   refreshConnectionModels: (id: string) =>
     request<ModelsRefreshResult>("POST", `/api/llm-connections/${id}/models/refresh`),
 ```
 
-- [ ] **Step 4: Type-check**
+- [ ] **Step 4: Fix `client.test.ts`'s stale `CFG` mock and cache test**
 
-Run (from `frontend/`): `npx tsc -b`
-Expected: new errors in `ConfigView.tsx` (still references `config.model`/`config.provider`/etc.) — that's expected and fixed in Task 9. No errors should appear in `client.ts`/`models.ts` themselves.
+Read `frontend/src/api/client.test.ts` first. `CFG` (used across several tests, not just the cache one) still has the old shape:
 
-- [ ] **Step 5: Commit**
+```ts
+const CFG = {
+  theme: "t", system_prompt: "", quote_color: "off", user_label: "You", assistant_label: "Grimoire",
+  default_style_id: "", active_connection_id: "openrouter",
+  active_connection: { id: "openrouter", kind: "openrouter" as const, name: "OpenRouter" }, ready: true,
+};
+```
+
+The cache test itself (`"getConfig is cached across sequential calls until a config write"`) doesn't need behavioral changes — `putConfig({ theme: "dark" })` still exercises the same cache-refresh path, and `theme` is still a valid field — but add a new test proving the *new* invalidation path (connection CRUD), using the real API client against a mocked `fetch` (not a mocked `api.getConfig`), so it actually proves the network call happens rather than trusting a mock to reflect the fix:
+
+```ts
+test("updating a connection invalidates the config cache", async () => {
+  invalidateConfigCache();
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk(CFG));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  await api.getConfig();
+  await api.getConfig();
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+
+  fetchMock.mockResolvedValue(jsonOk({ id: "openrouter", kind: "openrouter", name: "OpenRouter", base_url: "", model: "m", post_process: "none", key_set: true, rev: "r2" }));
+  await api.updateConnection("openrouter", { name: "OpenRouter" });
+
+  fetchMock.mockResolvedValue(jsonOk({ ...CFG, ready: true }));
+  await api.getConfig();  // must hit the network again -- the cache was invalidated
+  expect(fetchMock).toHaveBeenCalledTimes(3);  // 1 getConfig + 1 updateConnection + 1 fresh getConfig
+  invalidateConfigCache();
+});
+```
+
+- [ ] **Step 5: Run the test and type-check**
+
+Run (from `frontend/`): `npx vitest run src/api/client.test.ts && npx tsc -b`
+Expected: PASS on the test; `tsc -b` shows new errors only in `ConfigView.tsx` (still references `config.model`/`config.provider`/etc.) — that's expected and fixed in Task 9. No errors in `client.ts`/`client.test.ts`/`models.ts` themselves.
+
+- [ ] **Step 6: Commit**
 
 ```bash
-git add frontend/src/api/client.ts frontend/src/api/models.ts
-git commit -m "feat(frontend): add LLM connection types and CRUD API methods"
+git add frontend/src/api/client.ts frontend/src/api/client.test.ts frontend/src/api/models.ts
+git commit -m "feat(frontend): add LLM connection types and CRUD API methods, wire config cache invalidation"
 ```
 
 ---
@@ -2837,7 +2881,7 @@ git commit -m "refactor(frontend): ConfigView picks an active connection instead
 - Modify: `frontend/src/components/NewSceneChooser.test.tsx`
 
 **Interfaces:**
-- Consumes: `Config.ready: boolean`, `Config.active_connection: {id, kind, name} | null` (Task 6).
+- Consumes: `Config.ready: boolean`, `Config.active_connection: {id, kind, name} | null` (Task 6), and — critically — Task 6's cache-invalidation behavior on `putConfig`/`updateConnection`/`deleteConnection`; this task's location-based refetch (Step 4) is a no-op without it.
 - Produces: `ready` prop replaces `keySet` on `CampaignView`, `CampaignWizard`, `CastPanel`, `NewSceneChooser`.
 
 - [ ] **Step 1: Bulk-rename `keySet` to `ready` across all nine files**
@@ -2926,6 +2970,8 @@ Split the single `getConfig()` effect into two: keep the original one-time effec
 ```
 
 (Two separate `getConfig()` calls on first mount is an acceptable, harmless duplication — `request()`'s in-flight-GET dedup in `client.ts` already coalesces genuinely-simultaneous calls to the same path into one network request.)
+
+This effect only *reads* `getConfig()` — it depends entirely on Task 6's `putConfig`/`updateConnection`/`deleteConnection` correctly invalidating/refreshing the shared `configCache` for that read to ever return anything other than what was cached at mount. Without Task 6's fix, this effect would re-run on every navigation but keep observing the same stale cached promise, appearing to do nothing — do not implement this step out of order relative to Task 6.
 
 Change the status pill (the line with `OPENROUTER · {ready ? "CONNECTED" : "NO KEY"}`):
 
@@ -3068,6 +3114,8 @@ If any step surfaces a bug, go back to the task that owns the broken file, fix i
 **Codex adversarial review (plan)** — a background review against this plan (separate from the 5 rounds already run against the spec it implements) found 6 findings, all fixed in place: Task 1's Step 6/7 originally left two `test_config_store.py` tests and one `test_data_dir.py` test asserting removed config fields (now rewritten); `update_connection` filtered only `None`, so an explicitly-serialized empty `api_key` could erase a credential on an unrelated update (now treats empty-when-`base_url`-unchanged as omitted, with a dedicated test); Task 6's `Model` widening broke `tsc -b` through `priceLabel`/`tokensPerDollar`'s non-nullable signatures (both made null-safe); `App.tsx`'s config fetch ran once on mount with no re-fetch trigger, so switching connections elsewhere left the header pill and `ready`-gated controls stale until a hard reload (now re-fetches on every route change, with a test); `write_config()` reconstructed the file from only the narrowed `_CONFIG_KEYS`, silently erasing the legacy fields the spec explicitly promised would survive as a recovery snapshot — on migration's own first write (now preserves unrecognized raw keys); and the original stale-refresh test bypassed the route entirely, poking the store directly rather than proving the route itself captures `rev` before the fetch and writes unconditionally (replaced with two route-level tests using a fake whose `list_models` mutates the connection mid-fetch, covering both the base_url-change and delete-recreate races).
 
 **My own follow-up sweep** (after applying the above) found three more consumers of the removed config fields that neither the original plan nor the review had caught, all now fixed: `store/scenes.py`'s `create_scene()` stamped every new scene's `model` metadata from `read_config()["model"]` — would `KeyError` on the very first scene created post-migration (Task 5, Step 7); `backend/scripts/ingest_scene.py`, a standalone CLI outside `routes.py` entirely, read `cfg["model"]`/`cfg["openrouter_key"]` and hardcoded `OpenRouterClient` in its `main()` (Task 5, Steps 8-9, plus its test file); and `App.test.tsx` (missed from Task 10's original file list) mocked the old `getConfig()` shape and asserted the old hardcoded pill text (now rewritten with a dedicated navigation-refetch test). `test_frontmatter.py`'s incidental use of `"openrouter_key"` as a sample field name was checked and confirmed unrelated — it tests the generic frontmatter parser, not `config.py`'s schema, and needs no change.
+
+**Codex adversarial review, round 2 (plan)** — a second background pass against the round-1 fixes found one more high-severity issue, which round 1's own fixes had inadvertently caused: Task 6's `putConfig` replacement showed only a narrowed type signature and silently dropped the existing function's cache-refresh body (`configCache = Promise.resolve(cfg)`) in the process — a real regression that would have broken `client.test.ts`'s pre-existing cache test and made Task 10's location-based refetch (added to fix round 1's App-staleness finding) a no-op, since it reads through the very cache that was no longer being refreshed. Also flagged, correctly: `updateConnection`/`deleteConnection` never invalidated the cache at all, so editing or deleting the *active* connection's own fields (fixing a missing key, say) wouldn't be reflected in `ready` even after the `putConfig` fix, since neither call touches `/api/config`. Both fixed in Task 6 (Step 3's `putConfig` now keeps its `.then()`; `updateConnection`/`deleteConnection` each call `invalidateConfigCache()`), with `client.test.ts`'s `CFG` mock updated to the new shape and a new test proving the invalidation path against a mocked `fetch` rather than a mocked `api.getConfig()` (Step 4) — Task 10 cross-references this dependency explicitly so the two tasks aren't implemented out of order.
 
 ---
 
