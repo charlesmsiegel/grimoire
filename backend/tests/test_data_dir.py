@@ -70,9 +70,9 @@ def test_rejects_file_target(monkeypatch, tmp_path):
 def test_config_follows_data_dir(monkeypatch, tmp_path):
     isolate(monkeypatch, tmp_path)
     store.set_data_dir(str(tmp_path / "campaign-a"))
-    store.write_config(model="anthropic/claude-a")
+    store.write_config(active_connection_id="claude")
 
     store.set_data_dir(str(tmp_path / "campaign-b"))
     # A fresh store at the new location gets defaults, not campaign-a's value.
-    assert store.read_config()["model"] != "anthropic/claude-a"
+    assert store.read_config()["active_connection_id"] != "claude"
     assert (tmp_path / "campaign-b" / "config.md").exists()

@@ -11,11 +11,10 @@ DEFAULT_SCAN_DEPTH = "8"
 DEFAULT_RECAP_DEPTH = "5"
 DEFAULT_USER_LABEL = "You"
 DEFAULT_ASSISTANT_LABEL = "Grimoire"
-DEFAULT_PROVIDER = "openrouter"
 DEFAULT_CLAUDE_MODEL = "opus"
-_CONFIG_KEYS = ("openrouter_key", "model", "theme", "context_scan_depth", "system_prompt",
+_CONFIG_KEYS = ("theme", "context_scan_depth", "system_prompt",
                 "quote_color", "recap_depth", "user_label", "assistant_label",
-                "provider", "claude_model", "default_style_id")
+                "default_style_id", "active_connection_id")
 
 
 def _config_path():
@@ -25,12 +24,11 @@ def _config_path():
 def read_config() -> dict[str, str]:
     ensure_home()
     path = _config_path()
-    defaults = {"openrouter_key": "", "model": DEFAULT_MODEL, "theme": DEFAULT_THEME,
+    defaults = {"theme": DEFAULT_THEME,
                 "context_scan_depth": DEFAULT_SCAN_DEPTH, "system_prompt": "", "quote_color": "off",
                 "recap_depth": DEFAULT_RECAP_DEPTH,
                 "user_label": DEFAULT_USER_LABEL, "assistant_label": DEFAULT_ASSISTANT_LABEL,
-                "provider": DEFAULT_PROVIDER, "claude_model": DEFAULT_CLAUDE_MODEL,
-                "default_style_id": ""}
+                "default_style_id": "", "active_connection_id": ""}
     if not path.exists():
         path.write_text(dump_frontmatter(defaults, ""), encoding="utf-8")
         return defaults
@@ -39,9 +37,19 @@ def read_config() -> dict[str, str]:
 
 
 def write_config(**fields: str) -> dict[str, str]:
-    cfg = read_config()
+    # Merge onto the file's RAW frontmatter (not read_config()'s narrowed
+    # reconstruction) so any key not in _CONFIG_KEYS — including the legacy
+    # openrouter_key/model/provider/claude_model fields on a pre-migration
+    # install — survives every write untouched. This is what makes the
+    # design spec's "legacy fields stay physically present for recovery if
+    # llm_connections/ is ever deleted" claim actually true: migration's own
+    # first write (ensure_migrated's config.write_config(active_connection_id=...))
+    # would otherwise silently erase them immediately.
+    ensure_home()
+    path = _config_path()
+    raw, _ = parse_frontmatter(path.read_text(encoding="utf-8")) if path.exists() else ({}, "")
     for key, value in fields.items():
         if key in _CONFIG_KEYS and value is not None:
-            cfg[key] = value
-    _config_path().write_text(dump_frontmatter(cfg, ""), encoding="utf-8")
-    return cfg
+            raw[key] = value
+    path.write_text(dump_frontmatter(raw, ""), encoding="utf-8")
+    return read_config()

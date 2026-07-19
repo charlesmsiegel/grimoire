@@ -12,9 +12,7 @@ def reload_with_home(monkeypatch, tmp_path):
 def test_first_read_creates_defaults(monkeypatch, tmp_path):
     s = reload_with_home(monkeypatch, tmp_path)
     cfg = s.read_config()
-    assert cfg["openrouter_key"] == ""
     assert cfg["theme"] == "codex"
-    assert cfg["model"]  # some non-empty default
     assert (tmp_path / "config.md").exists()
 
 
@@ -27,12 +25,11 @@ def test_context_scan_depth_default_and_write(monkeypatch, tmp_path):
 
 def test_write_merges_without_clearing(monkeypatch, tmp_path):
     s = reload_with_home(monkeypatch, tmp_path)
-    s.write_config(openrouter_key="sk-or-secret")
-    s.write_config(model="anthropic/claude-x")  # must not wipe the key
+    s.write_config(user_label="Kestrel")
+    s.write_config(theme="manuscript")  # must not wipe the label
     cfg = s.read_config()
-    assert cfg["openrouter_key"] == "sk-or-secret"
-    assert cfg["model"] == "anthropic/claude-x"
-    assert cfg["theme"] == "codex"
+    assert cfg["user_label"] == "Kestrel"
+    assert cfg["theme"] == "manuscript"
 
 
 def test_recap_depth_default_and_write(monkeypatch, tmp_path):
@@ -50,18 +47,3 @@ def test_label_defaults_and_write(monkeypatch, tmp_path):
     cfg = s.write_config(user_label="Kestrel", assistant_label="Narrator")
     assert cfg["user_label"] == "Kestrel"
     assert s.read_config()["assistant_label"] == "Narrator"
-
-
-def test_provider_defaults(monkeypatch, tmp_path):
-    s = reload_with_home(monkeypatch, tmp_path)
-    cfg = s.read_config()
-    assert cfg["provider"] == "openrouter"
-    assert cfg["claude_model"] == "opus"
-
-
-def test_provider_roundtrip(monkeypatch, tmp_path):
-    s = reload_with_home(monkeypatch, tmp_path)
-    s.write_config(provider="claude", claude_model="sonnet")
-    cfg = s.read_config()
-    assert cfg["provider"] == "claude"
-    assert cfg["claude_model"] == "sonnet"
