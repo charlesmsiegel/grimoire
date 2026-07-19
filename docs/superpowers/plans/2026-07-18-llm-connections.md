@@ -570,7 +570,18 @@ def ensure_migrated() -> None:
         _write_raw("claude", kind="claude", name="Claude",
                     model=meta.get("claude_model", config.DEFAULT_CLAUDE_MODEL),
                     base_url="", api_key="", post_process="none")
-    if not config.read_config().get("active_connection_id"):
+    if "active_connection_id" not in meta:
+        # Presence in the raw pre-migration frontmatter, not truthiness via
+        # config.read_config() — the two conflate under a truthiness check:
+        # a key that was never written (migration hasn't decided yet, should
+        # seed from the legacy `provider` field) reads identically to a key
+        # explicitly written as "" (already decided "no active connection"
+        # on purpose, must not be silently overwritten). A truthiness check
+        # here would make ensure_migrated() re-seed "openrouter" every time
+        # active_connection_id is deliberately cleared to "" (e.g.
+        # delete_connection on the active connection, per this task's own
+        # test_get_active_none_when_unset) — found by hand-tracing that test
+        # against this function during implementation.
         active = "openrouter" if meta.get("provider", "openrouter") == "openrouter" else "claude"
         config.write_config(active_connection_id=active)
     marker.write_text("1", encoding="utf-8")
