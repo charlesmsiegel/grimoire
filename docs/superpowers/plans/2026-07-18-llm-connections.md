@@ -27,7 +27,8 @@
 - Modify: `backend/src/grimoire/store/config.py` (narrow `_CONFIG_KEYS`/defaults)
 - Modify: `backend/src/grimoire/store/__init__.py` (register the new module)
 - Create: `backend/tests/test_llm_connections_store.py`
-- Modify: `backend/tests/test_config_store.py` (remove the two provider-specific tests, now owned by the new module)
+- Modify: `backend/tests/test_config_store.py` (three tests reference removed fields — see Step 6)
+- Modify: `backend/tests/test_data_dir.py` (one test reads a removed field — see Step 7)
 
 **Interfaces:**
 - Produces (used by Tasks 3, 4, 5): `store.llm_connections.ConnectionNotFound`, `list_connections() -> list[dict]`, `read_connection(id: str) -> dict` (raises `ConnectionNotFound`), `read_connection_raw(id: str) -> dict` (raises `ConnectionNotFound`), `create_connection(kind: str, name: str, **fields) -> str`, `update_connection(id: str, **fields) -> None` (raises `ConnectionNotFound`), `delete_connection(id: str) -> None` (raises `ConnectionNotFound`), `get_active() -> dict | None`, `cached_models(id: str) -> dict`, `set_cached_models(id: str, models: list[dict], rev: str) -> None`, `ensure_migrated() -> None`.
@@ -180,6 +181,16 @@ def test_unrelated_field_update_leaves_the_key_untouched(monkeypatch, tmp_path):
     cid = s.llm_connections.create_connection(
         "openai_compatible", "Endpoint", base_url="https://x", api_key="sk-x")
     s.llm_connections.update_connection(cid, name="Renamed")
+    assert s.llm_connections.read_connection_raw(cid)["api_key"] == "sk-x"
+
+
+def test_explicit_empty_api_key_is_treated_as_omitted_when_base_url_unchanged(monkeypatch, tmp_path):
+    # A caller that always serializes api_key="" (rather than omitting the
+    # field) must not erase a working credential on an unrelated update.
+    s = reload_with_home(monkeypatch, tmp_path)
+    cid = s.llm_connections.create_connection(
+        "openai_compatible", "Endpoint", base_url="https://x", api_key="sk-x")
+    s.llm_connections.update_connection(cid, name="Renamed", api_key="")
     assert s.llm_connections.read_connection_raw(cid)["api_key"] == "sk-x"
 
 
@@ -402,12 +413,21 @@ def update_connection(id: str, **fields) -> None:
     if conn is None:
         raise ConnectionNotFound(id)
     fields = {k: v for k, v in fields.items() if v is not None}
-    if "base_url" in fields and fields["base_url"] != conn["base_url"]:
+    base_url_changed = "base_url" in fields and fields["base_url"] != conn["base_url"]
+    if base_url_changed:
         # A custom endpoint's base_url is user-editable (unlike OpenRouter's
         # fixed URL) — carrying the old key over to a newly-pointed host
         # would silently leak it, so repointing always drops the key unless
         # this same call also supplies a fresh one.
         fields.setdefault("api_key", "")
+    elif not fields.get("api_key"):
+        # "type to replace" convention: an omitted OR empty api_key means
+        # "keep the stored one" whenever base_url isn't changing. Dropping
+        # it from `fields` here (rather than filtering only None above) is
+        # what makes that true — otherwise an explicit api_key="" from any
+        # caller that always serializes the field would silently erase a
+        # working credential on an unrelated update (e.g. a rename).
+        fields.pop("api_key", None)
     merged = {**conn, **fields}
     _write_raw(id, **{k: merged[k] for k in _FIELDS})
 
@@ -526,12 +546,22 @@ def read_config() -> dict[str, str]:
 
 
 def write_config(**fields: str) -> dict[str, str]:
-    cfg = read_config()
+    # Merge onto the file's RAW frontmatter (not read_config()'s narrowed
+    # reconstruction) so any key not in _CONFIG_KEYS — including the legacy
+    # openrouter_key/model/provider/claude_model fields on a pre-migration
+    # install — survives every write untouched. This is what makes the
+    # design spec's "legacy fields stay physically present for recovery if
+    # llm_connections/ is ever deleted" claim actually true: migration's own
+    # first write (ensure_migrated's config.write_config(active_connection_id=...))
+    # would otherwise silently erase them immediately.
+    ensure_home()
+    path = _config_path()
+    raw, _ = parse_frontmatter(path.read_text(encoding="utf-8")) if path.exists() else ({}, "")
     for key, value in fields.items():
         if key in _CONFIG_KEYS and value is not None:
-            cfg[key] = value
-    _config_path().write_text(dump_frontmatter(cfg, ""), encoding="utf-8")
-    return cfg
+            raw[key] = value
+    path.write_text(dump_frontmatter(raw, ""), encoding="utf-8")
+    return read_config()
 ```
 
 (`DEFAULT_MODEL`/`DEFAULT_CLAUDE_MODEL` stay — `llm_connections.ensure_migrated()` uses them as seed defaults. `DEFAULT_PROVIDER` is deleted; nothing reads it anymore.)
@@ -554,17 +584,45 @@ Add `from .llm_connections import ConnectionNotFound` near the other `NotFound` 
 
 - [ ] **Step 6: Update `test_config_store.py`**
 
-Read `backend/tests/test_config_store.py`, then delete `test_provider_defaults` and `test_provider_roundtrip` (lines 55-67 in the current file) — that behavior is now owned by `test_llm_connections_store.py`. Leave every other test in the file unchanged.
+Read `backend/tests/test_config_store.py` in full first — three tests reference the removed `openrouter_key`/`model`/`provider`/`claude_model` fields, not just the two provider-specific ones:
 
-- [ ] **Step 7: Run the tests to verify they pass**
+1. Delete `test_provider_defaults` and `test_provider_roundtrip` entirely — that behavior is now owned by `test_llm_connections_store.py`.
+2. `test_first_read_creates_defaults` currently asserts `cfg["openrouter_key"] == ""` and `cfg["model"]` (a truthy check) — remove both lines; keep `assert cfg["theme"] == "codex"` and the `config.md` existence check.
+3. `test_write_merges_without_clearing` currently writes/asserts `openrouter_key`/`model` — replace its body to prove the same "one write doesn't clobber another field" property using fields that still exist:
+```python
+def test_write_merges_without_clearing(monkeypatch, tmp_path):
+    s = reload_with_home(monkeypatch, tmp_path)
+    s.write_config(user_label="Kestrel")
+    s.write_config(theme="manuscript")  # must not wipe the label
+    cfg = s.read_config()
+    assert cfg["user_label"] == "Kestrel"
+    assert cfg["theme"] == "manuscript"
+```
 
-Run: `backend/.venv/Scripts/python.exe -m pytest backend/tests/test_llm_connections_store.py backend/tests/test_config_store.py -v`
+- [ ] **Step 7: Fix `test_data_dir.py`'s config-follows-data-dir test**
+
+Read `backend/tests/test_data_dir.py`. `test_config_follows_data_dir` (near the end of the file) writes/reads `model`, which no longer exists:
+```python
+def test_config_follows_data_dir(monkeypatch, tmp_path):
+    isolate(monkeypatch, tmp_path)
+    store.set_data_dir(str(tmp_path / "campaign-a"))
+    store.write_config(active_connection_id="claude")
+
+    store.set_data_dir(str(tmp_path / "campaign-b"))
+    # A fresh store at the new location gets defaults, not campaign-a's value.
+    assert store.read_config()["active_connection_id"] != "claude"
+    assert (tmp_path / "campaign-b" / "config.md").exists()
+```
+
+- [ ] **Step 8: Run the tests to verify they pass**
+
+Run: `backend/.venv/Scripts/python.exe -m pytest backend/tests/test_llm_connections_store.py backend/tests/test_config_store.py backend/tests/test_data_dir.py -v`
 Expected: PASS, all tests.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
-git add backend/src/grimoire/store/llm_connections.py backend/src/grimoire/store/config.py backend/src/grimoire/store/__init__.py backend/tests/test_llm_connections_store.py backend/tests/test_config_store.py
+git add backend/src/grimoire/store/llm_connections.py backend/src/grimoire/store/config.py backend/src/grimoire/store/__init__.py backend/tests/test_llm_connections_store.py backend/tests/test_config_store.py backend/tests/test_data_dir.py
 git commit -m "feat(backend): add llm_connections store with migration from flat provider config"
 ```
 
@@ -1235,24 +1293,54 @@ def test_models_refresh_upstream_error_normalized(client):
     assert r.json()["kind"] == "auth"
 
 
-def test_models_refresh_stale_write_hidden_after_edit(client):
-    # Codex round-2 finding: an in-flight refresh's write must not resurrect
-    # itself after the connection has moved on to a new rev.
+def test_models_refresh_route_write_hidden_if_connection_changes_during_the_fetch(client):
+    # This must exercise the actual ROUTE, not just cached_models()'s gate
+    # (that's already covered store-side in test_llm_connections_store.py) —
+    # a route bug (e.g. capturing rev AFTER the fetch, or conditionally
+    # skipping the write instead of writing unconditionally) wouldn't be
+    # caught by a test that bypasses the route and pokes the store directly.
+    # The fake's list_models mutates the connection AS PART OF its own
+    # execution — since the route awaits it before writing the sidecar,
+    # this reproduces "someone edited the connection while the fetch was
+    # in flight" without needing real threading/concurrency.
     r = client.post("/api/llm-connections", json={
         "kind": "openai_compatible", "name": "Endpoint", "base_url": "https://old", "api_key": "sk-x"})
     cid = r.json()["id"]
-    old_rev = client.get(f"/api/llm-connections/{cid}").json()["rev"]
-    fake = FakeModelsClient(models=[{"id": "m", "name": "m", "context": None, "prompt": None, "completion": None}])
-    client.app.dependency_overrides[routes.get_openai_compatible_client] = lambda: fake
 
-    # simulate the connection changing after the refresh captured its rev,
-    # by writing the sidecar directly under the OLD rev via the store layer
-    import grimoire.store as store
-    store.llm_connections.update_connection(cid, base_url="https://new")
-    store.llm_connections.set_cached_models(cid, fake.models, old_rev)
+    class MutatingFakeClient:
+        async def list_models(self, base_url, key):
+            store.llm_connections.update_connection(cid, base_url="https://mutated-during-fetch")
+            return [{"id": "m", "name": "m", "context": None, "prompt": None, "completion": None}]
+
+    client.app.dependency_overrides[routes.get_openai_compatible_client] = lambda: MutatingFakeClient()
+    r = client.post(f"/api/llm-connections/{cid}/models/refresh")
+    assert r.status_code == 200
+    assert r.json()["models"] == [{"id": "m", "name": "m", "context": None, "prompt": None, "completion": None}]
 
     detail = client.get(f"/api/llm-connections/{cid}").json()
     assert detail["models"] == []  # the stale write never surfaces
+    assert detail["base_url"] == "https://mutated-during-fetch"  # the mutation itself did land
+
+
+def test_models_refresh_route_write_hidden_after_delete_and_recreate_during_fetch(client):
+    r = client.post("/api/llm-connections", json={
+        "kind": "openai_compatible", "name": "Reused Name", "base_url": "https://old", "api_key": "sk-x"})
+    cid = r.json()["id"]
+
+    class DeleteRecreateFakeClient:
+        async def list_models(self, base_url, key):
+            store.llm_connections.delete_connection(cid)
+            new_id = store.llm_connections.create_connection(
+                "openai_compatible", "Reused Name", base_url="https://new")
+            assert new_id == cid  # same freed slug — the whole point of this race
+            return [{"id": "m", "name": "m", "context": None, "prompt": None, "completion": None}]
+
+    client.app.dependency_overrides[routes.get_openai_compatible_client] = lambda: DeleteRecreateFakeClient()
+    r = client.post(f"/api/llm-connections/{cid}/models/refresh")
+    assert r.status_code == 200
+
+    detail = client.get(f"/api/llm-connections/{cid}").json()
+    assert detail["models"] == []  # the stale write never surfaces on the recreated connection
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -1405,6 +1493,9 @@ This is a mechanical but wide-reaching task: every route that generates LLM outp
 **Files:**
 - Modify: `backend/src/grimoire/routes.py`
 - Modify: `backend/tests/test_routes.py`
+- Modify: `backend/src/grimoire/store/scenes.py` (`create_scene()` stamps a new scene's `model` metadata from the removed `read_config()["model"]` — see Step 7)
+- Modify: `backend/scripts/ingest_scene.py` (a standalone CLI consumer of `read_config()`/`cfg["model"]`/`cfg["openrouter_key"]`, outside `routes.py` — easy to miss, but Task 1 removing those fields breaks its `main()` entry point; see Step 8)
+- Modify: `backend/tests/test_ingest_scene.py`
 
 **Interfaces:**
 - Consumes: `LLMClient.stream/complete(messages, conn)` (Task 3), `store.llm_connections.get_active()` (Task 1).
@@ -1570,16 +1661,107 @@ def test_config_active_connection_id_roundtrip(client):
 
 4. **`test_chat_missing_key_ok_for_claude_provider`** (lines 1117-1126) — change the setup line from `client.put("/api/config", json={"provider": "claude"})` to `client.put("/api/config", json={"active_connection_id": "claude"})`; leave the rest of the test unchanged.
 
-- [ ] **Step 7: Run the full backend suite**
+- [ ] **Step 7: Fix `store/scenes.py`'s scene-creation model stamp**
+
+`create_scene()` stamps every new scene's `meta["model"]` from `read_config()["model"]` — a third consumer of the removed field, outside both `routes.py` and `ingest_scene.py`, that would raise `KeyError` on the very first scene created after Task 1 lands. (`GET /campaigns/{cid}/scenes/{sid}/context` reads this stamped value back via `scene["meta"].get("model", "")` — it doesn't call `read_config()` itself, so fixing the stamp here is the only change needed; no route changes required.)
+
+Read `backend/src/grimoire/store/scenes.py` first. Change the import (line 9):
+```python
+from .config import read_config
+from .llm_connections import get_active as _get_active_connection
+```
+Change `create_scene`'s meta construction (line 132):
+```python
+    active = _get_active_connection()
+    meta = {"title": title, "model": active["model"] if active else "",
+             "created": now, "updated": now}
+```
+(`read_config` may still be imported/used elsewhere in this file for unrelated fields — only remove the import if this was its sole use; check with `grep -n "read_config" backend/src/grimoire/store/scenes.py` before deleting the import line.)
+
+- [ ] **Step 8: Fix `backend/scripts/ingest_scene.py`**
+
+This standalone CLI (used by the `ingest-campaign-log` skill) calls `read_config()` and reads `cfg["model"]`/`cfg["openrouter_key"]` directly, and hardcodes `OpenRouterClient` — none of that goes through `routes.py`, so it's easy to miss, but Task 1 removing those config fields breaks its `main()` entry point. Read the file first, then:
+
+1. Change the imports (near the top):
+```python
+from grimoire.llm import LLMClient  # noqa: E402
+from grimoire.store import (  # noqa: E402
+    absorb, appearances, campaigns, characters, chronicle, llm_connections, overlay, scenes,
+)
+```
+(drop the `from grimoire.openrouter import OpenRouterClient` and `read_config` imports)
+
+2. Change `run_absorb`'s signature and body (the `cfg: dict` parameter and its one use):
+```python
+async def run_absorb(cid: str, sid: str, client: LLMClient, conn: dict) -> dict:
+    scene = scenes.read_scene(cid, sid)
+    facts = chronicle.scene_facts(cid, sid)
+    transcript = chronicle.transcript_text(scene["messages"])
+    messages = absorb.build_prompt(
+        transcript, facts, absorb.state_snapshot(cid, sid),
+        absorb.relationships_snapshot(cid, sid), absorb.plot_snapshot(cid))
+    text = await client.complete(messages, conn)
+    parsed = absorb.parse_output(text)
+    edits = absorb.materialize(cid, sid, parsed)
+    return {"parsed": parsed, "edits": edits}
+```
+
+3. Change `ingest_one_scene`'s signature and its one call to `run_absorb`:
+```python
+async def ingest_one_scene(cid: str, scene: dict, client: LLMClient, conn: dict) -> dict:
+```
+(only the parameter name/type annotation changes; its body's `result = await run_absorb(cid, sid, client, cfg)` becomes `result = await run_absorb(cid, sid, client, conn)`)
+
+4. Change `main()`'s config resolution:
+```python
+    scene = json.loads(args.input.read_text(encoding="utf-8"))
+    conn = llm_connections.get_active()
+    if conn is None:
+        print("error: no LLM connection selected (set one up in grimoire's Configuration page)",
+              file=sys.stderr)
+        return 1
+    if conn["kind"] == "openrouter" and not conn["api_key"]:
+        print("error: the active OpenRouter connection has no key set", file=sys.stderr)
+        return 1
+    if conn["kind"] == "openai_compatible" and not conn["base_url"]:
+        print("error: the active custom connection has no base URL set", file=sys.stderr)
+        return 1
+    client = LLMClient()
+    result = asyncio.run(ingest_one_scene(args.campaign, scene, client, conn))
+    print(json.dumps(result, indent=2))
+    return 0
+```
+
+- [ ] **Step 9: Fix `test_ingest_scene.py`**
+
+Read `backend/tests/test_ingest_scene.py` first. `FakeClient.complete` currently mirrors `OpenRouterClient.complete(messages, model, key)` — change it to mirror `LLMClient.complete(messages, conn)`:
+
+```python
+class FakeClient:
+    def __init__(self, text: str):
+        self.text = text
+        self.calls = []
+
+    async def complete(self, messages, conn):
+        self.calls.append((messages, conn))
+        return self.text
+```
+
+Then, every `cfg = {"model": "test/model", "openrouter_key": "k"}` literal (4 occurrences) becomes `conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}`, and every call site passing `cfg` (as a variable or the inline literal in `test_run_absorb_and_apply_scene`) passes `conn` instead. `test_run_absorb_and_apply_scene`'s final assertion changes from indexing `FakeClient.calls`' old `(messages, model, key)` shape:
+```python
+    assert client.calls[0][1]["model"] == "test/model" and client.calls[0][1]["api_key"] == "k"
+```
+
+- [ ] **Step 10: Run the full backend suite**
 
 Run: `backend/.venv/Scripts/python.exe -m pytest backend -q`
 Expected: PASS, all tests (this also covers the routes.py rewiring from Steps 1-4 — most of that coverage comes from the now-passing existing route tests, not new ones).
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 11: Commit**
 
 ```bash
-git add backend/src/grimoire/routes.py backend/tests/test_routes.py
-git commit -m "feat(backend): rewire LLM generation routes to resolved connections, drop _require_key"
+git add backend/src/grimoire/routes.py backend/tests/test_routes.py backend/src/grimoire/store/scenes.py backend/scripts/ingest_scene.py backend/tests/test_ingest_scene.py
+git commit -m "feat(backend): rewire LLM generation routes and the ingest_scene CLI to resolved connections"
 ```
 
 ---
@@ -1609,7 +1791,26 @@ export type Model = {
 };
 ```
 
-Leave `fetchModels`, `getModels`, `invalidateModelsCache`, `compact`, `strip`, `tokensPerDollar`, `contextLabel`, `priceLabel` unchanged — OpenRouter's catalog always reports real values (`context_length ?? 0`, `pricing?.prompt ?? "0"`), so nothing about their current behavior changes; only the *type* is now permissive enough for a custom endpoint's partial data too.
+`fetchModels`, `getModels`, `invalidateModelsCache`, `compact`, `strip`, `contextLabel` stay unchanged — OpenRouter's catalog always reports real values, and `contextLabel`'s callers (Task 7) always guard `m.context != null` before calling it, so direct-property narrowing keeps its `number` parameter valid at every call site.
+
+`tokensPerDollar`/`priceLabel` do need a small change: `priceLabel(model: Model)` passes `model.prompt`/`model.completion` straight through to `tokensPerDollar(price: string)`, and with `Model`'s fields now `string | null`, `strict: true` rejects that at compile time — narrowing a caller's `m.prompt != null` check doesn't propagate *into* `priceLabel`'s own body, since TypeScript only narrows based on what a function's own code checks, not what its caller checked before calling it. Make both null-aware, matching the "unknown pricing renders nothing, never a fake 'Free'" rule from the design spec:
+
+```ts
+export function tokensPerDollar(price: string | null): string {
+  if (price == null) return "";
+  const n = Number(price);
+  if (!isFinite(n) || n === 0) return "Free";
+  return compact(1 / n);
+}
+
+export function priceLabel(model: Model): string {
+  if (model.prompt == null || model.completion == null) return "";
+  if (Number(model.prompt) === 0 && Number(model.completion) === 0) return "Free";
+  return `${tokensPerDollar(model.prompt)} / ${tokensPerDollar(model.completion)} tok/$`;
+}
+```
+
+Task 7's `ModelCombobox` call-site guard (`m.prompt != null && m.completion != null && <span>...`) still governs whether the chip renders *at all* — this change is what stops `priceLabel` itself from being a type error, and is redundant-but-harmless defense-in-depth if that guard is ever bypassed (it returns `""`, never `"Free"`, for unknown pricing either way).
 
 - [ ] **Step 2: Update `Config` and add connection types in `client.ts`**
 
@@ -2625,6 +2826,7 @@ git commit -m "refactor(frontend): ConfigView picks an active connection instead
 
 **Files:**
 - Modify: `frontend/src/App.tsx`
+- Modify: `frontend/src/App.test.tsx`
 - Modify: `frontend/src/routes/CampaignView.tsx`
 - Modify: `frontend/src/routes/CampaignWizard.tsx`
 - Modify: `frontend/src/components/CastPanel.tsx`
@@ -2661,6 +2863,12 @@ for p in paths:
 Verify: `grep -rn "keySet" src` (from `frontend/`)
 Expected: no output.
 
+`CampaignView.test.tsx` separately mocks `api.getConfig()` twice (unrelated to `keySet` — `CampaignView.tsx` calls it directly to read `quote_color`) with the pre-Task-6 response shape (`model`, `key_set`, no `active_connection`/`ready`). Both are cast `as any`, so this doesn't fail `tsc -b` or break the test (the component only reads `c.quote_color`, which is unaffected) — but update both occurrences to the current shape anyway, for a mock that doesn't lie about what `/api/config` actually returns:
+```ts
+{ theme: "codex", system_prompt: "", quote_color: "off", user_label: "You", assistant_label: "Grimoire", default_style_id: "", active_connection_id: "openrouter", active_connection: { id: "openrouter", kind: "openrouter", name: "OpenRouter" }, ready: true }
+```
+(the second occurrence additionally overrides `user_label`/`assistant_label` — keep those overrides, just on the new base shape).
+
 - [ ] **Step 2: Fix the hint text in `CastPanel.tsx` and `NewSceneChooser.tsx`**
 
 Both currently read `{!ready && <div className="field-hint">Set an OpenRouter key in Config to generate.</div>}` (post-rename) — this text is now wrong for non-OpenRouter connections. In both files (`frontend/src/components/CastPanel.tsx` line 253, `frontend/src/components/NewSceneChooser.tsx` line 134), change the text to:
@@ -2683,35 +2891,41 @@ Read `frontend/src/routes/CampaignView.tsx` around its (post-rename) `{!ready &&
 
 (`Link` is already imported in this file.)
 
-- [ ] **Step 4: Make `App.tsx`'s status pill provider-aware**
+- [ ] **Step 4: Make `App.tsx`'s status pill provider-aware and keep it live across navigation**
 
-Read `frontend/src/App.tsx` first. Replace the `keySet` state (post-rename, `ready`) and add an active-connection label. Change:
+`App.tsx` mounts once for the whole SPA session — it never remounts when the route changes (`<Routes>` only swaps which child element renders), so a `useEffect(..., [])` that fetches `ready`/the active connection only runs once, ever. Editing the active connection on `/config` or `/connections` would otherwise leave the header pill (and every `ready`-gated control fed by it) stuck showing the state from whenever `App.tsx` first mounted, until a hard page reload — a real regression from the feature's own point (letting you freely swap which connection is active). Refetch on every route change instead of only once.
+
+Read `frontend/src/App.tsx` first. Add the `useLocation` import (extend the existing `react-router-dom` import line):
 
 ```tsx
-  const [ready, setReady] = useState(false);
+import { NavLink, Route, Routes, useLocation } from "react-router-dom";
 ```
 
-to:
+Replace the `keySet` state (post-rename, `ready`) and add an active-connection label:
 
 ```tsx
   const [ready, setReady] = useState(false);
   const [activeLabel, setActiveLabel] = useState("NO CONNECTION");
 ```
 
-Change the `getConfig().then(...)` body:
+Split the single `getConfig()` effect into two: keep the original one-time effect fetching only `theme` (unchanged in shape — `theme === null` still gates the initial render, so this must stay a one-time, `[]`-dependency effect), and add a second effect that fetches `ready`/`active_connection` and re-runs whenever the route changes:
 
 ```tsx
+  const location = useLocation();
+
   useEffect(() => {
-    api
-      .getConfig()
-      .then((c) => {
-        setTheme(c.theme);
-        setReady(c.ready);
-        setActiveLabel(c.active_connection ? c.active_connection.name.toUpperCase() : "NO CONNECTION");
-      })
-      .catch(() => setTheme(DEFAULT_THEME));
+    api.getConfig().then((c) => setTheme(c.theme)).catch(() => setTheme(DEFAULT_THEME));
   }, []);
+
+  useEffect(() => {
+    api.getConfig().then((c) => {
+      setReady(c.ready);
+      setActiveLabel(c.active_connection ? c.active_connection.name.toUpperCase() : "NO CONNECTION");
+    });
+  }, [location.pathname]);
 ```
+
+(Two separate `getConfig()` calls on first mount is an acceptable, harmless duplication — `request()`'s in-flight-GET dedup in `client.ts` already coalesces genuinely-simultaneous calls to the same path into one network request.)
 
 Change the status pill (the line with `OPENROUTER · {ready ? "CONNECTED" : "NO KEY"}`):
 
@@ -2719,20 +2933,86 @@ Change the status pill (the line with `OPENROUTER · {ready ? "CONNECTED" : "NO 
             <span className="dot">●</span> {activeLabel} · {ready ? "CONNECTED" : "NOT READY"}
 ```
 
-- [ ] **Step 5: Run the frontend suite**
+- [ ] **Step 5: Rewrite `App.test.tsx`**
+
+The existing test mocks `getConfig()` with the old response shape (`model`, `key_set`) and asserts the old hardcoded `"openrouter · connected"` text — both are gone. Replace the file:
+
+```tsx
+import { render, screen, within, fireEvent, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
+import App from "./App";
+
+vi.mock("./api/client", () => ({
+  api: {
+    getConfig: vi.fn(),
+    listCampaigns: vi.fn().mockResolvedValue([]),
+    listWorlds: vi.fn().mockResolvedValue([]),
+    listModules: vi.fn().mockResolvedValue([]),
+  },
+}));
+import { api } from "./api/client";
+
+const READY_OPENROUTER = {
+  theme: "codex", system_prompt: "", quote_color: "off", user_label: "You", assistant_label: "Grimoire",
+  default_style_id: "", active_connection_id: "openrouter",
+  active_connection: { id: "openrouter", kind: "openrouter", name: "OpenRouter" }, ready: true,
+};
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  (api.getConfig as any).mockResolvedValue(READY_OPENROUTER);
+});
+
+test("renders the chrome top bar with brand, nav, and connection status", async () => {
+  render(<MemoryRouter><App /></MemoryRouter>);
+  expect(await screen.findByText(/GRIMOIRE/)).toBeInTheDocument();
+  const topbar = within(screen.getByRole("banner"));
+  expect(topbar.getByRole("link", { name: /campaigns/i })).toBeInTheDocument();
+  expect(topbar.getByRole("link", { name: /worlds/i })).toBeInTheDocument();
+  expect(topbar.getByRole("link", { name: /modules/i })).toBeInTheDocument();
+  expect(topbar.getByRole("link", { name: /connections/i })).toBeInTheDocument();
+  expect(topbar.getByText(/openrouter · connected/i)).toBeInTheDocument();
+  expect(topbar.getByRole("link", { name: /config/i })).toBeInTheDocument();
+});
+
+test("shows NOT READY and the connection's name when unready", async () => {
+  (api.getConfig as any).mockResolvedValue({
+    ...READY_OPENROUTER, ready: false,
+    active_connection: { id: "zai-glm", kind: "openai_compatible", name: "z.ai GLM" },
+  });
+  render(<MemoryRouter><App /></MemoryRouter>);
+  expect(await screen.findByText(/z\.ai glm · not ready/i)).toBeInTheDocument();
+});
+
+test("the status pill refetches and updates after navigating, without a reload", async () => {
+  render(<MemoryRouter initialEntries={["/"]}><App /></MemoryRouter>);
+  await screen.findByText(/openrouter · connected/i);
+
+  // simulate the active connection having changed elsewhere (Config/Connections
+  // page) — the next getConfig() call reflects it
+  (api.getConfig as any).mockResolvedValue({
+    ...READY_OPENROUTER, ready: false, active_connection_id: "claude",
+    active_connection: { id: "claude", kind: "claude", name: "Claude" },
+  });
+  fireEvent.click(screen.getByRole("link", { name: /worlds/i }));
+  await waitFor(() => expect(screen.getByText(/claude · not ready/i)).toBeInTheDocument());
+});
+```
+
+- [ ] **Step 6: Run the frontend suite**
 
 Run (from `frontend/`): `npx vitest run`
-Expected: PASS, all tests (this exercises the rename across `CampaignView.test.tsx`, `CampaignWizard.test.tsx`, `CastPanel.test.tsx`, `NewSceneChooser.test.tsx` alongside everything else).
+Expected: PASS, all tests (this exercises the rename across `CampaignView.test.tsx`, `CampaignWizard.test.tsx`, `CastPanel.test.tsx`, `NewSceneChooser.test.tsx`, and the rewritten `App.test.tsx`, alongside everything else).
 
-- [ ] **Step 6: Type-check**
+- [ ] **Step 7: Type-check**
 
 Run (from `frontend/`): `npx tsc -b`
 Expected: no errors anywhere in the frontend.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add frontend/src/App.tsx frontend/src/routes/CampaignView.tsx frontend/src/routes/CampaignWizard.tsx frontend/src/components/CastPanel.tsx frontend/src/components/NewSceneChooser.tsx frontend/src/routes/CampaignView.test.tsx frontend/src/routes/CampaignWizard.test.tsx frontend/src/components/CastPanel.test.tsx frontend/src/components/NewSceneChooser.test.tsx
+git add frontend/src/App.tsx frontend/src/App.test.tsx frontend/src/routes/CampaignView.tsx frontend/src/routes/CampaignWizard.tsx frontend/src/components/CastPanel.tsx frontend/src/components/NewSceneChooser.tsx frontend/src/routes/CampaignView.test.tsx frontend/src/routes/CampaignWizard.test.tsx frontend/src/components/CastPanel.test.tsx frontend/src/components/NewSceneChooser.test.tsx
 git commit -m "refactor(frontend): rename keySet to ready, show the active connection in the header pill"
 ```
 
@@ -2784,6 +3064,10 @@ If any step surfaces a bug, go back to the task that owns the broken file, fix i
 **Placeholder scan** — no TBD/TODO markers; every step has literal code or an exact shell command; no "similar to Task N" references (Task 5's call-site rewiring is the one place content is described by line-number pattern rather than fully reproduced, because `routes.py` is 3500+ lines — but the transformation itself is shown in full and applies identically at each named location, which is DRY rather than a placeholder).
 
 **Type consistency** — checked `conn`/connection dict field names (`kind, name, base_url, api_key, model, post_process, rev`) match across Tasks 1, 3, 4, 5, 8; `LLMClient.stream(messages, conn)` signature matches between Task 3's definition and Task 5's call sites; `Model`'s nullable fields (`context/prompt/completion: T | null`) match between Task 6's type, Task 2's `list_models()` output shape, and Task 7's `ModelCombobox` null-guards; `ModelsRefreshResult`'s `rev` field matches between Task 4's route response and Task 8's `refreshModels()` comparison.
+
+**Codex adversarial review (plan)** — a background review against this plan (separate from the 5 rounds already run against the spec it implements) found 6 findings, all fixed in place: Task 1's Step 6/7 originally left two `test_config_store.py` tests and one `test_data_dir.py` test asserting removed config fields (now rewritten); `update_connection` filtered only `None`, so an explicitly-serialized empty `api_key` could erase a credential on an unrelated update (now treats empty-when-`base_url`-unchanged as omitted, with a dedicated test); Task 6's `Model` widening broke `tsc -b` through `priceLabel`/`tokensPerDollar`'s non-nullable signatures (both made null-safe); `App.tsx`'s config fetch ran once on mount with no re-fetch trigger, so switching connections elsewhere left the header pill and `ready`-gated controls stale until a hard reload (now re-fetches on every route change, with a test); `write_config()` reconstructed the file from only the narrowed `_CONFIG_KEYS`, silently erasing the legacy fields the spec explicitly promised would survive as a recovery snapshot — on migration's own first write (now preserves unrecognized raw keys); and the original stale-refresh test bypassed the route entirely, poking the store directly rather than proving the route itself captures `rev` before the fetch and writes unconditionally (replaced with two route-level tests using a fake whose `list_models` mutates the connection mid-fetch, covering both the base_url-change and delete-recreate races).
+
+**My own follow-up sweep** (after applying the above) found three more consumers of the removed config fields that neither the original plan nor the review had caught, all now fixed: `store/scenes.py`'s `create_scene()` stamped every new scene's `model` metadata from `read_config()["model"]` — would `KeyError` on the very first scene created post-migration (Task 5, Step 7); `backend/scripts/ingest_scene.py`, a standalone CLI outside `routes.py` entirely, read `cfg["model"]`/`cfg["openrouter_key"]` and hardcoded `OpenRouterClient` in its `main()` (Task 5, Steps 8-9, plus its test file); and `App.test.tsx` (missed from Task 10's original file list) mocked the old `getConfig()` shape and asserted the old hardcoded pill text (now rewritten with a dedicated navigation-refetch test). `test_frontmatter.py`'s incidental use of `"openrouter_key"` as a sample field name was checked and confirmed unrelated — it tests the generic frontmatter parser, not `config.py`'s schema, and needs no change.
 
 ---
 
