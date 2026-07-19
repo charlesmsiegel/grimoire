@@ -40,16 +40,13 @@ def get_openai_compatible_client() -> OpenAICompatibleClient:
 
 # ---- models ----
 class ConfigUpdate(BaseModel):
-    model: str | None = None
     theme: str | None = None
-    openrouter_key: str | None = None
     system_prompt: str | None = None
     quote_color: str | None = None
     user_label: str | None = None
     assistant_label: str | None = None
-    provider: Literal["openrouter", "claude"] | None = None
-    claude_model: str | None = None
     default_style_id: str | None = None
+    active_connection_id: str | None = None
 
 
 class ConnectionCreate(BaseModel):
@@ -432,13 +429,26 @@ class LorebookCommit(BaseModel):
 
 # ---- config ----
 def _public_config(cfg: dict[str, str]) -> dict:
-    return {"model": cfg["model"], "theme": cfg["theme"], "key_set": bool(cfg["openrouter_key"]),
-            "system_prompt": cfg.get("system_prompt", ""), "quote_color": cfg.get("quote_color", "off"),
+    active = store.llm_connections.get_active()
+    return {"theme": cfg["theme"], "system_prompt": cfg.get("system_prompt", ""),
+            "quote_color": cfg.get("quote_color", "off"),
             "user_label": cfg.get("user_label", "You"),
             "assistant_label": cfg.get("assistant_label", "Grimoire"),
-            "provider": cfg.get("provider", "openrouter"),
-            "claude_model": cfg.get("claude_model", "opus"),
-            "default_style_id": cfg.get("default_style_id", "")}
+            "default_style_id": cfg.get("default_style_id", ""),
+            "active_connection_id": active["id"] if active else "",
+            "active_connection": ({"id": active["id"], "kind": active["kind"], "name": active["name"]}
+                                   if active else None),
+            "ready": _connection_ready(active)}
+
+
+def _connection_ready(conn: dict | None) -> bool:
+    if conn is None:
+        return False
+    if conn["kind"] == "openrouter":
+        return bool(conn["api_key"])
+    if conn["kind"] == "openai_compatible":
+        return bool(conn["base_url"])
+    return True  # claude never needs a key
 
 
 @router.get("/config")
@@ -1241,8 +1251,7 @@ def put_character_tagline(wid: str, cid: str, body: TaglineSave):
 async def post_character_tagline_generate(wid: str, cid: str,
                                           client: LLMClient = Depends(get_llm)):
     root = _world_root_or_404(wid)
-    cfg = store.read_config()
-    _require_key(cfg)
+    conn = _require_connection()
     try:
         ch = store.characters.read_character(root, cid)
     except store.characters.CharacterNotFound:
@@ -1250,7 +1259,7 @@ async def post_character_tagline_generate(wid: str, cid: str,
     card = store.characters.read_card(root, cid, ch["meta"]["default_version"])
     messages = store.taglines.build_prompt(card["data"])
     try:
-        text = await client.complete(messages, cfg)
+        text = await client.complete(messages, conn)
     except LLMError as exc:
         raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
     # Preview only — the caller persists via PUT on Save, so Generate-then-cancel
@@ -2084,12 +2093,18 @@ def post_reject(cid: str, body: RefList):
 # ---- scenes ----
 # Declared before the generic /campaigns/{cid}/{kind} routes so "scenes" is
 # never captured as an entity kind.
-def _require_key(cfg: dict[str, str]) -> None:
-    if cfg.get("provider", "openrouter") == "openrouter" and not cfg["openrouter_key"]:
+def _require_connection() -> dict:
+    conn = store.llm_connections.get_active()
+    if conn is None:
         raise HTTPException(
-            status_code=409,
-            detail={"detail": "OpenRouter key not set", "kind": "missing_key"},
-        )
+            status_code=409, detail={"detail": "No LLM connection selected", "kind": "missing_key"})
+    if conn["kind"] == "openrouter" and not conn["api_key"]:
+        raise HTTPException(
+            status_code=409, detail={"detail": "OpenRouter key not set", "kind": "missing_key"})
+    if conn["kind"] == "openai_compatible" and not conn["base_url"]:
+        raise HTTPException(
+            status_code=409, detail={"detail": "Endpoint base URL not set", "kind": "missing_key"})
+    return conn
 
 
 def _persist_reply(cid: str, sid: str, text: str) -> None:
@@ -2117,7 +2132,7 @@ def _sse_response(frames: list[str]):
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
-def _fence_stream(cid: str, sid: str, messages: list[dict], cfg: dict,
+def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
                   client: LLMClient, finalize, on_error=None):
     """Stream one persisted turn while watching for a ```roll fence.
 
@@ -2132,7 +2147,7 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], cfg: dict,
     async def event_stream():
         watcher = store.fence.FenceWatcher()
         try:
-            async for delta in client.stream(messages, cfg):
+            async for delta in client.stream(messages, conn):
                 out = watcher.feed(delta)
                 if out:
                     yield _sse({"delta": out})
@@ -2181,7 +2196,7 @@ def _heal_current_proposal(cid: str, sid: str) -> None:
         _project_resolution(cid, sid, rec["id"])
 
 
-def _chat_stream(cid: str, sid: str, messages: list[dict], cfg: dict, client: LLMClient):
+def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: LLMClient):
     """A normal persisted turn. A ```roll fence cuts the stream: the pending
     proposal record is written *before* the pre-fence narration persists, so a
     transcript that ends at a mechanical decision point always has a
@@ -2204,11 +2219,11 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], cfg: dict, client: LL
         if watcher.narration.strip():  # a normal turn keeps its partial reply
             _persist_reply(cid, sid, watcher.narration)
 
-    return _fence_stream(cid, sid, messages, cfg, client, finalize, on_error)
+    return _fence_stream(cid, sid, messages, conn, client, finalize, on_error)
 
 
 def _continuation_stream(cid: str, sid: str, pid: str, messages: list[dict],
-                         cfg: dict, client: LLMClient):
+                         conn: dict, client: LLMClient):
     """Stream a proposal's continuation and commit it atomically. A supersede
     that lands mid-stream makes ``commit_narration`` return False and the
     streamed text is dropped. A follow-up fence in the continuation hands off
@@ -2234,14 +2249,14 @@ def _continuation_stream(cid: str, sid: str, pid: str, messages: list[dict],
     # No on_error: an upstream failure mid-continuation drops the partial
     # (nothing persisted) and leaves the record resolved/declined, so a retry
     # re-streams a fresh continuation cleanly.
-    return _fence_stream(cid, sid, messages, cfg, client, finalize)
+    return _fence_stream(cid, sid, messages, conn, client, finalize)
 
 
-def _ephemeral_stream(messages: list[dict], cfg: dict, client: LLMClient):
+def _ephemeral_stream(messages: list[dict], conn: dict, client: LLMClient):
     """Stream a generation without persisting it to any scene (used by the opener)."""
     async def event_stream():
         try:
-            async for delta in client.stream(messages, cfg):
+            async for delta in client.stream(messages, conn):
                 yield f"data: {json.dumps({'delta': delta})}\n\n"
             yield f"data: {json.dumps({'done': True})}\n\n"
         except LLMError as exc:
@@ -2291,14 +2306,13 @@ async def post_scene_suggestions(cid: str, after: str | None = None, offscreen: 
         store.campaigns.read_campaign(cid)
     except store.campaigns.CampaignNotFound:
         raise HTTPException(status_code=404, detail="campaign not found")
-    cfg = store.read_config()
-    _require_key(cfg)
+    conn = _require_connection()
     # with >2 startable greetings the same call also ranks them for the chooser
     candidates = store.suggest.greeting_candidates(cid, after, pcless=offscreen)
     messages = store.suggest.build_prompt(store.suggest.build_snapshot(cid, offscreen=offscreen),
                                           candidates, offscreen=offscreen)
     try:
-        text = await client.complete(messages, cfg)
+        text = await client.complete(messages, conn)
     except LLMError as exc:
         raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
     loc_names = {e["id"]: e.get("name", e["id"]) for e in store.overlay.list_entities(cid, "locations")}
@@ -2352,8 +2366,7 @@ def _require_scene(cid: str, sid: str) -> dict:
 @router.post("/campaigns/{cid}/scenes/{sid}/chat")
 def post_chat(cid: str, sid: str, turn: ChatTurn, client: LLMClient = Depends(get_llm)):
     _require_scene(cid, sid)
-    cfg = store.read_config()
-    _require_key(cfg)
+    conn = _require_connection()
     _heal_current_proposal(cid, sid)     # retirement paths heal first (invariant)
     store.proposals.supersede(cid, sid)  # a new send retires any pending decision
     if store.scenes.is_pcless(cid, sid) or not turn.content.strip():
@@ -2361,7 +2374,7 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, client: LLMClient = Depends(ge
         # (pcless), or — in any scene — an empty send meaning "next NPC round"
         note = turn.content.strip() or prompts.render("scene/director_note.j2")
         messages = store.context.build_director_messages(cid, sid, note)
-        return _chat_stream(cid, sid, messages, cfg, client)
+        return _chat_stream(cid, sid, messages, conn, client)
     names = store.appearances.player_names(cid, sid)
     speaker = names[0] if len(names) == 1 else None
     if speaker:
@@ -2372,20 +2385,19 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, client: LLMClient = Depends(ge
         turn.content, store.context.scene_substitutions(cid, sid), cid, sid)
     store.scenes.append_message(cid, sid, "user", content, speaker=speaker)
     messages = store.context.build_messages(cid, sid)
-    return _chat_stream(cid, sid, messages, cfg, client)
+    return _chat_stream(cid, sid, messages, conn, client)
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/retry")
 def post_retry(cid: str, sid: str, client: LLMClient = Depends(get_llm)):
     scene = _require_scene(cid, sid)
-    cfg = store.read_config()
-    _require_key(cfg)
+    conn = _require_connection()
     _heal_current_proposal(cid, sid)     # retirement paths heal first (invariant)
     store.proposals.supersede(cid, sid)  # a fresh generation retires the old decision
     if not scene["messages"]:
         raise HTTPException(status_code=400, detail="nothing to retry")
     messages = store.context.build_messages(cid, sid)
-    return _chat_stream(cid, sid, messages, cfg, client)
+    return _chat_stream(cid, sid, messages, conn, client)
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/regenerate")
@@ -2393,8 +2405,7 @@ def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
                     client: LLMClient = Depends(get_llm)):
     """Redo the most recent post: drop a trailing assistant reply, stream a fresh one."""
     scene = _require_scene(cid, sid)
-    cfg = store.read_config()
-    _require_key(cfg)
+    conn = _require_connection()
     _heal_current_proposal(cid, sid)     # retirement paths heal first (invariant)
     store.proposals.supersede(cid, sid)  # regenerating retires the old decision
     msgs = scene["messages"]
@@ -2413,7 +2424,7 @@ def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
             "role": "system",
             "content": prompts.render("scene/regenerate_guidance.j2", guidance=guidance),
         })
-    return _chat_stream(cid, sid, messages, cfg, client)
+    return _chat_stream(cid, sid, messages, conn, client)
 
 
 @router.get("/campaigns/{cid}/chronicle")
@@ -2422,7 +2433,7 @@ def get_chronicle(cid: str):
     return store.chronicle.recent(cid, 50)
 
 
-async def _run_audit(cid: str, sid: str, client: LLMClient, cfg: dict) -> tuple[list[dict], dict]:
+async def _run_audit(cid: str, sid: str, client: LLMClient, conn: dict) -> tuple[list[dict], dict]:
     """(edits, mechanics) for the scene audit. Never raises; every failure is
     an explicit mechanics status (spec: audit visibility) so absorb stays
     intact even when the audit pipeline blows up."""
@@ -2447,7 +2458,7 @@ async def _run_audit(cid: str, sid: str, client: LLMClient, cfg: dict) -> tuple[
         transcript = store.chronicle.transcript_text(scene["messages"])
         messages = store.audit.build_prompt(transcript, blocks,
                                             store.audit.roll_lines(cid, sid))
-        text = await client.complete(messages, cfg)
+        text = await client.complete(messages, conn)
         parsed = store.audit.parse_output(text)
         edits, dropped = store.audit.materialize(cid, sid, parsed)
     except store.audit.AuditParseError as exc:
@@ -2467,8 +2478,7 @@ async def _run_audit(cid: str, sid: str, client: LLMClient, cfg: dict) -> tuple[
 async def post_absorb(cid: str, sid: str,
                       client: LLMClient = Depends(get_llm)):
     scene = _require_scene(cid, sid)
-    cfg = store.read_config()
-    _require_key(cfg)
+    conn = _require_connection()
     if not scene["messages"]:
         raise HTTPException(status_code=400, detail="nothing to absorb")
     facts = store.chronicle.scene_facts(cid, sid)
@@ -2478,7 +2488,7 @@ async def post_absorb(cid: str, sid: str,
         store.absorb.state_snapshot(cid, sid), store.absorb.relationships_snapshot(cid, sid),
         store.absorb.plot_snapshot(cid), store.absorb.group_snapshot(cid))
     try:
-        text = await client.complete(messages, cfg)
+        text = await client.complete(messages, conn)
     except LLMError as exc:
         raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
     parsed = store.absorb.parse_output(text)
@@ -2491,13 +2501,13 @@ async def post_absorb(cid: str, sid: str,
         try:
             name = store.characters.read_character(croot, a["id"])["meta"].get("name", a["id"])
             msgs = store.dossiers.build_prompt(name, store.dossiers.read(croot, a["id"]), transcript)
-            d_text = await client.complete(msgs, cfg)
+            d_text = await client.complete(msgs, conn)
             store.dossiers.write(croot, a["id"], store.dossiers.parse_output(d_text))
         except Exception:  # noqa: BLE001 — a dossier failure must not fail absorb
             continue
     # Phase 5: audit the scene's mechanics against the sheeted cast (never
     # raises -- see _run_audit's own failure boundary).
-    audit_edits, mechanics = await _run_audit(cid, sid, client, cfg)
+    audit_edits, mechanics = await _run_audit(cid, sid, client, conn)
     return {"one_line": parsed["one_line"], "summary": parsed["summary"],
             "keywords": parsed["keywords"], "timeline_events": parsed["timeline_events"],
             **facts, "edits": edits + audit_edits, "mechanics": mechanics}
@@ -2508,11 +2518,10 @@ async def post_audit(cid: str, sid: str, client: LLMClient = Depends(get_llm)):
     """Standalone audit retry: re-runs ONLY the audit step (never the prose
     absorb), returning fresh `expect` values on any resulting sheet edits."""
     _require_scene(cid, sid)
-    cfg = store.read_config()
-    _require_key(cfg)
+    conn = _require_connection()
     if store.modules.resolve(cid) is None:
         raise HTTPException(status_code=400, detail="no module resolved")
-    edits, mechanics = await _run_audit(cid, sid, client, cfg)
+    edits, mechanics = await _run_audit(cid, sid, client, conn)
     return {"mechanics": mechanics, "edits": edits}
 
 
@@ -3192,8 +3201,7 @@ def post_roll_proposal(cid: str, sid: str, body: ProposalAction,
     superseded it, another accept won the claim) — we stop dead: no
     projection, no continuation, 409."""
     _require_scene(cid, sid)
-    cfg = store.read_config()
-    _require_key(cfg)
+    conn = _require_connection()
     pid = body.proposal
     rec = store.proposals.get(cid, sid)
     if rec is None or rec.get("id") != pid:
@@ -3253,7 +3261,7 @@ def post_roll_proposal(cid: str, sid: str, body: ProposalAction,
         messages = _declined_continuation_messages(cid, sid)
     else:  # defensive: a race moved the record out from under us
         raise HTTPException(status_code=409, detail="proposal is stale")
-    return _continuation_stream(cid, sid, pid, messages, cfg, client)
+    return _continuation_stream(cid, sid, pid, messages, conn, client)
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}/checks")
@@ -3560,10 +3568,9 @@ def post_start_from_greeting(cid: str, sid: str, body: StartFromGreeting):
 @router.post("/campaigns/{cid}/scenes/{sid}/opener")
 def post_opener(cid: str, sid: str, body: Opener, client: LLMClient = Depends(get_llm)):
     _require_scene(cid, sid)
-    cfg = store.read_config()
-    _require_key(cfg)
+    conn = _require_connection()
     messages = store.context.build_opener_messages(cid, sid, body.prompt)
-    return _ephemeral_stream(messages, cfg, client)
+    return _ephemeral_stream(messages, conn, client)
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/first-post")
