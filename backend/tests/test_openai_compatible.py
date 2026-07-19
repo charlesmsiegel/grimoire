@@ -105,15 +105,14 @@ def test_strict_system_before_user_folds_into_it():
     assert out == [{"role": "user", "content": "Be terse.\n\nHello"}]
 
 
-def test_strict_system_before_assistant_becomes_its_own_user_turn():
+def test_strict_system_before_assistant_folds_into_the_preceding_user_turn():
     out = _strict_messages([
         {"role": "user", "content": "Hi"},
         {"role": "system", "content": "Stay in character."},
         {"role": "assistant", "content": "Hello there."},
     ])
     assert out == [
-        {"role": "user", "content": "Hi"},
-        {"role": "user", "content": "Stay in character."},
+        {"role": "user", "content": "Hi\n\nStay in character."},
         {"role": "assistant", "content": "Hello there."},
     ]
 
