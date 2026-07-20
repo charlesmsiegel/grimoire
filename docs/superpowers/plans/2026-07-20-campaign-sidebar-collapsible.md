@@ -846,20 +846,68 @@ Add the actor-picker state and options lists, plus a new effect to fetch them, r
 
   async function addCastMember() {
     if (!addActorId) return;
-    await api.addToCast(cid, sid, {
-      kind: addKind, id: addActorId,
-      role: pcless ? "npc" : addKind === "pcs" ? "player" : addRole,
-    });
-    setAddActorId("");
-    await reloadCast();
-    onSceneChanged();
+    setError(null);
+    try {
+      await api.addToCast(cid, sid, {
+        kind: addKind, id: addActorId,
+        role: pcless ? "npc" : addKind === "pcs" ? "player" : addRole,
+      });
+      setAddActorId("");
+      await reloadCast();
+      onSceneChanged();
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
   }
 
   async function removeCastMember(a: Actor) {
-    await api.removeFromCast(cid, sid, a.kind, a.id);
-    await reloadCast();
-    onSceneChanged();
+    setError(null);
+    try {
+      await api.removeFromCast(cid, sid, a.kind, a.id);
+      await reloadCast();
+      onSceneChanged();
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
   }
+```
+
+**Addendum 2 (found by task review): `addCastMember`/`removeCastMember` had
+no error handling.** Every sibling mutation in this file (`moveTo`,
+`chooseCalendar`, `applyDatetime`) wraps its `api.*` call in
+`try { ... } catch (err: any) { setError(err.detail ?? String(err)); }` —
+these two didn't, so a real backend rejection (e.g. a 409 from
+`_seat_cast_member` when an actor was concurrently cast with a conflicting
+version/role, or a 404 from an unknown kind) would produce an unhandled
+promise rejection: `addActorId` never resets, `reloadCast()`/`onSceneChanged()`
+never run, and nothing is shown to the user. Fixed above by matching the
+existing pattern exactly (reusing the same shared `error` state the file
+already has — note this state's banner only renders inside the "When"
+section today, a pre-existing placement quirk affecting `moveTo` and
+`chooseStyle` too, not something this task introduces or should fix).
+
+Add two regression tests to `frontend/src/components/SceneInspector.test.tsx`,
+anywhere after the other Task 4 tests:
+
+```tsx
+test("a failed add surfaces the error banner instead of silently failing", async () => {
+  (api.addToCast as any).mockRejectedValue({ detail: "already cast" });
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "mara", name: "Mara", default_version: "default", versions: [] }]);
+  render(<SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+  await screen.findByRole("option", { name: "Mara" });
+  fireEvent.change(screen.getByLabelText("Character or PC to add"), { target: { value: "mara" } });
+  fireEvent.click(screen.getByRole("button", { name: /\+ add/i }));
+  await screen.findByText("already cast");
+});
+
+test("a failed remove surfaces the error banner instead of silently failing", async () => {
+  (api.removeFromCast as any).mockRejectedValue({ detail: "actor kind not found" });
+  renderInspector();
+  await screen.findByText("Seraphine");
+  fireEvent.click(screen.getByRole("button", { name: /remove seraphine from scene/i }));
+  await screen.findByText("actor kind not found");
+});
 ```
 
 **Addendum (found by the first implementation attempt, not in the original
