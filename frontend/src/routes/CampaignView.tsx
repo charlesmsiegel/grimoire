@@ -112,6 +112,23 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   const [chooserOpen, setChooserOpen] = useState(false);
   const [seedPrompt, setSeedPrompt] = useState<{ sid: string; prompt: string } | null>(null);
   const streamRef = useRef<HTMLDivElement>(null);
+  const [railCollapsed, setRailCollapsed] = useState(
+    () => localStorage.getItem("grimoire.rail.collapsed") === "1");
+  const [inspectorCollapsed, setInspectorCollapsed] = useState(
+    () => localStorage.getItem("grimoire.inspector.collapsed") === "1");
+
+  function toggleRail() {
+    setRailCollapsed((v) => {
+      localStorage.setItem("grimoire.rail.collapsed", v ? "0" : "1");
+      return !v;
+    });
+  }
+  function toggleInspector() {
+    setInspectorCollapsed((v) => {
+      localStorage.setItem("grimoire.inspector.collapsed", v ? "0" : "1");
+      return !v;
+    });
+  }
 
   useEffect(() => {
     api.getCampaign(cid).then((c) => {
@@ -501,8 +518,12 @@ export default function CampaignView({ ready }: { ready: boolean }) {
           </button>
         </div>
       </div>
-      <div className="layout">
+      <div className={"layout" + (railCollapsed ? " rail-collapsed" : "") + (inspectorCollapsed ? " inspector-collapsed" : "")}>
+      {railCollapsed ? (
+        <button className="rail-tab" aria-label="Expand scene list" onClick={toggleRail}>›</button>
+      ) : (
       <aside className="scene-rail">
+        <button className="rail-collapse" aria-label="Collapse scene list" onClick={toggleRail}>‹</button>
         <div className="rail-counter">Scenes / {String(scenes.length).padStart(2, "0")}</div>
         <button className="btn-chrome rail-new" onClick={newScene}>+ New Scene</button>
         <select className="rail-sort" aria-label="Sort scenes by" value={sceneSort}
@@ -544,6 +565,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
           </button>
         </div>
       </aside>
+      )}
       <section className="main">
         {showCalendar && (
           <div className="panel-slot">
@@ -932,10 +954,17 @@ export default function CampaignView({ ready }: { ready: boolean }) {
           </button>
         </div>
       </section>
-      {activeId && (
-        <SceneInspector cid={cid} sid={activeId} refreshKey={ctxKey}
-                        onSceneChanged={() => selectScene(activeId)}
-                        onSceneRenamed={sceneRenamed} pcless={activePcless} />
+      {inspectorCollapsed ? (
+        <button className="inspector-tab" aria-label="Expand sidebar" onClick={toggleInspector}>‹</button>
+      ) : (
+        <div className="inspector-slot">
+          <button className="inspector-collapse" aria-label="Collapse sidebar" onClick={toggleInspector}>›</button>
+          {activeId && (
+            <SceneInspector cid={cid} sid={activeId} refreshKey={ctxKey}
+                            onSceneChanged={() => selectScene(activeId)}
+                            onSceneRenamed={sceneRenamed} pcless={activePcless} />
+          )}
+        </div>
       )}
       {drawer && activeId && (
         <RecordDrawer cid={cid} sid={activeId} target={drawer} onClose={() => setDrawer(null)} />

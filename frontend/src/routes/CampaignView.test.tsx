@@ -47,6 +47,7 @@ vi.mock("../api/client", async () => {
       // consumed by the embedded SceneInspector
       getCast: vi.fn(), getSceneLocation: vi.fn(), getSceneContext: vi.fn(),
       getCastDetail: vi.fn(), readEntity: vi.fn(),
+      addToCast: vi.fn(), removeFromCast: vi.fn(),
       getCalendarConfig: vi.fn(), setCalendarConfig: vi.fn(), getCalendarProviders: vi.fn(),
       getSceneDatetime: vi.fn(), setSceneDatetime: vi.fn(), getCalendarMonths: vi.fn(),
       listStyles: vi.fn(), getSceneStyle: vi.fn(), setSceneStyle: vi.fn(),
@@ -65,6 +66,7 @@ import { getModels } from "../api/models";
 const ONE_SCENE = [{ id: "s1", title: "Old", model: "", created: "", updated: "" }];
 
 beforeEach(() => {
+  localStorage.clear();
   vi.clearAllMocks();
   (api.getCampaign as any).mockResolvedValue({ meta: { id: "run", name: "Run One", world: "w", world_name: "Saltmarch" }, body: "" });
   (api.getWorld as any).mockResolvedValue({ meta: { id: "w", name: "Saltmarch" }, body: "", counts: {} });
@@ -83,6 +85,8 @@ beforeEach(() => {
   (api.getConfig as any).mockResolvedValue({ theme: "codex", system_prompt: "", quote_color: "off", user_label: "You", assistant_label: "Grimoire", default_style_id: "", active_connection_id: "openrouter", active_connection: { id: "openrouter", kind: "openrouter", name: "OpenRouter" }, ready: true });
   (api.editMessage as any).mockResolvedValue({ ok: true });
   (api.getCast as any).mockResolvedValue([]);
+  (api.addToCast as any).mockResolvedValue({ ok: true });
+  (api.removeFromCast as any).mockResolvedValue({ ok: true });
   (api.getSceneLocation as any).mockResolvedValue({ current: null, visited: [] });
   (api.getSceneContext as any).mockResolvedValue({ model: "m", total_tokens: 0, sections: [] });
   (api.getCalendarConfig as any).mockResolvedValue({
@@ -1273,4 +1277,39 @@ test("switching between two scenes that both have pending proposals shows the ne
     "run", expect.anything(),
     expect.objectContaining({ proposal: "pr-a" }),
     expect.anything());
+});
+
+test("collapsing the scene rail hides it and shows an edge tab; clicking the tab restores it", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  renderCampaign();
+  await screen.findByRole("button", { name: "+ New Scene" });
+  fireEvent.click(screen.getByRole("button", { name: /collapse scene list/i }));
+  expect(screen.queryByRole("button", { name: "+ New Scene" })).not.toBeInTheDocument();
+  const tab = screen.getByRole("button", { name: /expand scene list/i });
+  fireEvent.click(tab);
+  await screen.findByRole("button", { name: "+ New Scene" });
+});
+
+test("collapsing the inspector hides it and shows an edge tab; clicking the tab restores it", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  renderCampaign();
+  await screen.findByText("Active characters");
+  fireEvent.click(screen.getByRole("button", { name: /collapse sidebar/i }));
+  expect(screen.queryByText("Active characters")).not.toBeInTheDocument();
+  const tab = screen.getByRole("button", { name: /expand sidebar/i });
+  fireEvent.click(tab);
+  await screen.findByText("Active characters");
+});
+
+test("rail and inspector collapse state persist across a remount", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  const { unmount } = renderCampaign();
+  await screen.findByRole("button", { name: "+ New Scene" });
+  fireEvent.click(screen.getByRole("button", { name: /collapse scene list/i }));
+  expect(localStorage.getItem("grimoire.rail.collapsed")).toBe("1");
+  unmount();
+
+  renderCampaign();
+  await screen.findByText("Active characters"); // inspector still renders...
+  expect(screen.queryByRole("button", { name: "+ New Scene" })).not.toBeInTheDocument(); // ...but the rail stayed collapsed
 });
