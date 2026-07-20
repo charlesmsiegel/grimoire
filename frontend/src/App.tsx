@@ -22,7 +22,11 @@ export default function App() {
 
   const [topbarCollapsed, setTopbarCollapsed] = useState(
     () => localStorage.getItem("grimoire.topbar.collapsed") === "1");
-  const isCampaignRoute = /^\/campaigns\/[^/]+$/.test(location.pathname);
+  // "new" satisfies [^/]+ exactly like a real campaign id would, so the
+  // regex alone can't distinguish /campaigns/new (the wizard, not a
+  // campaign detail page) from /campaigns/<cid> — exclude it explicitly.
+  const isCampaignRoute = location.pathname !== "/campaigns/new" &&
+    /^\/campaigns\/[^/]+$/.test(location.pathname);
 
   function toggleTopbar() {
     setTopbarCollapsed((v) => {
