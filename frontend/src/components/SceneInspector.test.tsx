@@ -39,6 +39,7 @@ const GREG_MONTHS = [
 ];
 
 beforeEach(() => {
+  localStorage.clear();
   vi.clearAllMocks();
   (api.getCast as any).mockResolvedValue([{ kind: "characters", id: "seraphine", role: "npc" }]);
   (api.getCampaign as any).mockResolvedValue({ meta: { id: "c", world: "w" }, body: "" });
@@ -241,4 +242,38 @@ test("picking a scene prose style saves it immediately", async () => {
   const sel = await screen.findByLabelText("Prose style");
   fireEvent.change(sel, { target: { value: "noir-detective" } });
   await waitFor(() => expect(api.setSceneStyle).toHaveBeenCalledWith("c", "s", "noir-detective"));
+});
+
+test("clicking a section header collapses its body and toggles aria-expanded", async () => {
+  renderInspector();
+  await screen.findByText("They first met.");
+  const header = screen.getByRole("button", { name: /story so far/i });
+  expect(header).toHaveAttribute("aria-expanded", "true");
+  fireEvent.click(header);
+  expect(header).toHaveAttribute("aria-expanded", "false");
+  expect(screen.queryByText("They first met.")).not.toBeInTheDocument();
+  fireEvent.click(header);
+  expect(header).toHaveAttribute("aria-expanded", "true");
+  await screen.findByText("They first met.");
+});
+
+test("section collapse state persists across a remount", async () => {
+  const { unmount } = render(<SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+  await screen.findByText("They first met.");
+  fireEvent.click(screen.getByRole("button", { name: /story so far/i }));
+  expect(screen.queryByText("They first met.")).not.toBeInTheDocument();
+  expect(JSON.parse(localStorage.getItem("grimoire.inspector.sections")!)).toEqual({ story: true });
+  unmount();
+
+  render(<SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+  await screen.findByText("Active characters"); // sanity: the inspector rendered
+  expect(screen.queryByText("They first met.")).not.toBeInTheDocument(); // stayed collapsed
+});
+
+test("the Context section header still shows the percentage badge and collapses as a whole", async () => {
+  renderInspector();
+  await screen.findByText(/World info/);
+  const header = screen.getByRole("button", { name: /context/i });
+  fireEvent.click(header);
+  expect(screen.queryByText(/World info/)).not.toBeInTheDocument();
 });
