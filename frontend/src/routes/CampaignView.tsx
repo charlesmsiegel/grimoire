@@ -65,7 +65,9 @@ const RenderedMarkdown = memo(function RenderedMarkdown({ content }: { content: 
   );
 });
 
-export default function CampaignView({ ready }: { ready: boolean }) {
+export default function CampaignView({ ready, topbarCollapsed = false, onToggleTopbar = () => {} }: {
+  ready: boolean; topbarCollapsed?: boolean; onToggleTopbar?: () => void;
+}) {
   const { cid = "" } = useParams();
   const navigate = useNavigate();
   const [name, setName] = useState("");
@@ -126,6 +128,14 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   function toggleInspector() {
     setInspectorCollapsed((v) => {
       localStorage.setItem("grimoire.inspector.collapsed", v ? "0" : "1");
+      return !v;
+    });
+  }
+  const [subheaderCollapsed, setSubheaderCollapsed] = useState(
+    () => localStorage.getItem("grimoire.subheader.collapsed") === "1");
+  function toggleSubheader() {
+    setSubheaderCollapsed((v) => {
+      localStorage.setItem("grimoire.subheader.collapsed", v ? "0" : "1");
       return !v;
     });
   }
@@ -488,6 +498,15 @@ export default function CampaignView({ ready }: { ready: boolean }) {
 
   return (
     <div className="workspace">
+      <div className="chrome-bar">
+        <button className="chrome-toggle" aria-pressed={!topbarCollapsed} onClick={onToggleTopbar}>
+          {topbarCollapsed ? "▾ Nav" : "▴ Nav"}
+        </button>
+        <button className="chrome-toggle" aria-pressed={!subheaderCollapsed} onClick={toggleSubheader}>
+          {subheaderCollapsed ? "▾ Bar" : "▴ Bar"}
+        </button>
+      </div>
+      {!subheaderCollapsed && (
       <div className="subheader">
         <Link to="/" className="sub-back">‹ Campaigns</Link>
         <span className="sub-divider" />
@@ -518,6 +537,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
           </button>
         </div>
       </div>
+      )}
       <div className={"layout" + (railCollapsed ? " rail-collapsed" : "") + (inspectorCollapsed ? " inspector-collapsed" : "")}>
       {railCollapsed ? (
         <button className="rail-tab" aria-label="Expand scene list" onClick={toggleRail}>›</button>

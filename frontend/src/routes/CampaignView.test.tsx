@@ -1313,3 +1313,12 @@ test("rail and inspector collapse state persist across a remount", async () => {
   await screen.findByText("Active characters"); // inspector still renders...
   expect(screen.queryByRole("button", { name: "+ New Scene" })).not.toBeInTheDocument(); // ...but the rail stayed collapsed
 });
+
+test("the chrome bar toggles the subheader independently of the topbar toggle", async () => {
+  renderCampaign();
+  await screen.findByText("Run One");
+  fireEvent.click(screen.getByRole("button", { name: "▴ Bar" }));
+  expect(screen.queryByText("Run One")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "▾ Bar" }));
+  await screen.findByText("Run One");
+});

@@ -20,6 +20,17 @@ export default function App() {
 
   const location = useLocation();
 
+  const [topbarCollapsed, setTopbarCollapsed] = useState(
+    () => localStorage.getItem("grimoire.topbar.collapsed") === "1");
+  const isCampaignRoute = /^\/campaigns\/[^/]+$/.test(location.pathname);
+
+  function toggleTopbar() {
+    setTopbarCollapsed((v) => {
+      localStorage.setItem("grimoire.topbar.collapsed", v ? "0" : "1");
+      return !v;
+    });
+  }
+
   useEffect(() => {
     api.getConfig().then((c) => setTheme(c.theme)).catch(() => setTheme(DEFAULT_THEME));
   }, []);
@@ -35,7 +46,7 @@ export default function App() {
 
   return (
     <ThemeProvider initial={theme}>
-      <header className="topbar">
+      <header className={"topbar" + (isCampaignRoute && topbarCollapsed ? " collapsed" : "")}>
         <NavLink to="/" className="brand">
           <img src="/grimoire-128.png" alt="" width={30} height={30} />
           <span>✦ GRIMOIRE</span>
@@ -70,7 +81,8 @@ export default function App() {
       <Routes>
         <Route path="/" element={<CampaignsView />} />
         <Route path="/campaigns/new" element={<CampaignWizard ready={ready} />} />
-        <Route path="/campaigns/:cid" element={<CampaignView ready={ready} />} />
+        <Route path="/campaigns/:cid" element={
+          <CampaignView ready={ready} topbarCollapsed={topbarCollapsed} onToggleTopbar={toggleTopbar} />} />
         <Route path="/campaigns/:cid/world" element={<WorldView campaign />} />
         <Route path="/worlds" element={<WorldsView />} />
         <Route path="/worlds/:wid" element={<WorldView />} />

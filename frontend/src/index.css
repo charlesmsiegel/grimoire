@@ -153,10 +153,17 @@ body::before {
 .topbar-right .divider { width: 1px; align-self: stretch; margin: 10px 0; background: var(--chrome-rule); }
 .topbar-right .config-link { color: var(--chrome-muted); text-decoration: none; }
 .topbar-right .config-link.active { color: var(--chrome-text); text-decoration: underline; }
+.topbar.collapsed nav, .topbar.collapsed .topbar-right { display: none; }
 
 /* ---- scene workspace ---- */
 .workspace { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .subheader { display: flex; align-items: center; gap: 14px; background: var(--chrome); padding: 0 0 0 18px; min-height: 46px; }
+.chrome-bar { display: flex; gap: 10px; padding: 3px 14px; background: var(--panel); border-bottom: 1px solid var(--rule-soft); }
+.chrome-toggle {
+  background: none; border: none; cursor: pointer; color: var(--muted);
+  font-family: var(--fm); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; padding: 2px 0;
+}
+.chrome-toggle:hover { color: var(--accent); }
 .sub-back { font-family: var(--fm); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--chrome-muted); text-decoration: none; }
 .sub-back:hover { color: var(--chrome-text); }
 .sub-divider { width: 1px; align-self: stretch; margin: 10px 0; background: var(--chrome-rule); }

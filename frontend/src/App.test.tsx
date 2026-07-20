@@ -12,6 +12,15 @@ vi.mock("./api/client", () => ({
 }));
 import { api } from "./api/client";
 
+vi.mock("./routes/CampaignView", () => ({
+  default: ({ topbarCollapsed, onToggleTopbar }: any) => (
+    <div data-testid="campaign-view">
+      <button onClick={onToggleTopbar}>toggle-topbar</button>
+      <span>{topbarCollapsed ? "collapsed" : "expanded"}</span>
+    </div>
+  ),
+}));
+
 const READY_OPENROUTER = {
   theme: "codex", system_prompt: "", quote_color: "off", user_label: "You", assistant_label: "Grimoire",
   default_style_id: "", active_connection_id: "openrouter",
@@ -19,6 +28,7 @@ const READY_OPENROUTER = {
 };
 
 beforeEach(() => {
+  localStorage.clear();
   vi.clearAllMocks();
   (api.getConfig as any).mockResolvedValue(READY_OPENROUTER);
 });
@@ -57,4 +67,24 @@ test("the status pill refetches and updates after navigating, without a reload",
   const topbar = within(screen.getByRole("banner"));
   fireEvent.click(topbar.getByRole("link", { name: /worlds/i }));
   await waitFor(() => expect(screen.getByText(/claude · not ready/i)).toBeInTheDocument());
+});
+
+test("the topbar collapses only while viewing a campaign, via CampaignView's own toggle", async () => {
+  render(<MemoryRouter initialEntries={["/campaigns/run"]}><App /></MemoryRouter>);
+  const view = await screen.findByTestId("campaign-view");
+  expect(within(view).getByText("expanded")).toBeInTheDocument();
+  expect(screen.getByRole("banner")).not.toHaveClass("collapsed");
+
+  fireEvent.click(within(view).getByText("toggle-topbar"));
+  expect(within(view).getByText("collapsed")).toBeInTheDocument();
+  expect(screen.getByRole("banner")).toHaveClass("collapsed");
+});
+
+test("a previously-collapsed topbar preference does not apply on non-campaign routes", async () => {
+  localStorage.setItem("grimoire.topbar.collapsed", "1");
+  render(<MemoryRouter initialEntries={["/worlds"]}><App /></MemoryRouter>);
+  await screen.findByText(/GRIMOIRE/);
+  expect(screen.getByRole("banner")).not.toHaveClass("collapsed");
+  const topbar = within(screen.getByRole("banner"));
+  expect(topbar.getByRole("link", { name: /worlds/i })).toBeInTheDocument();
 });
