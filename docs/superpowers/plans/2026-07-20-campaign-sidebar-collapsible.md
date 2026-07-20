@@ -1055,16 +1055,28 @@ In `frontend/src/routes/CampaignView.test.tsx`, add `localStorage.clear();` as t
 
 Then add these tests at the end of the file:
 
+**Addendum (found by the first implementation attempt): the fixture scene's
+title collides with an unrelated element.** `ONE_SCENE[0].title` is `"Old"`,
+and `screen.findByText("Old")`/`queryByText("Old")` were meant to target the
+rail's row for that scene — but the rail never actually renders bare `"Old"`
+(`EditableRow` always prefixes it, e.g. `"01 · Old"`), while `CampaignView`'s
+own `<h2 className="scene-title">` (unrelated to this task, outside anything
+it touches) renders the *exact* string `"Old"` whenever a scene is active —
+independent of rail-collapse state, since `ONE_SCENE`'s single scene
+auto-selects on mount. So the assertion was unknowingly checking the wrong
+element and could never pass. Assert on rail-unique content instead — the
+"+ New Scene" button, which only exists inside `.scene-rail`:
+
 ```tsx
 test("collapsing the scene rail hides it and shows an edge tab; clicking the tab restores it", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   renderCampaign();
-  await screen.findByText("Old");
+  await screen.findByRole("button", { name: "+ New Scene" });
   fireEvent.click(screen.getByRole("button", { name: /collapse scene list/i }));
-  expect(screen.queryByText("Old")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "+ New Scene" })).not.toBeInTheDocument();
   const tab = screen.getByRole("button", { name: /expand scene list/i });
   fireEvent.click(tab);
-  await screen.findByText("Old");
+  await screen.findByRole("button", { name: "+ New Scene" });
 });
 
 test("collapsing the inspector hides it and shows an edge tab; clicking the tab restores it", async () => {
@@ -1081,14 +1093,14 @@ test("collapsing the inspector hides it and shows an edge tab; clicking the tab 
 test("rail and inspector collapse state persist across a remount", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   const { unmount } = renderCampaign();
-  await screen.findByText("Old");
+  await screen.findByRole("button", { name: "+ New Scene" });
   fireEvent.click(screen.getByRole("button", { name: /collapse scene list/i }));
   expect(localStorage.getItem("grimoire.rail.collapsed")).toBe("1");
   unmount();
 
   renderCampaign();
   await screen.findByText("Active characters"); // inspector still renders...
-  expect(screen.queryByText("Old")).not.toBeInTheDocument(); // ...but the rail stayed collapsed
+  expect(screen.queryByRole("button", { name: "+ New Scene" })).not.toBeInTheDocument(); // ...but the rail stayed collapsed
 });
 ```
 
