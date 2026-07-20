@@ -347,6 +347,20 @@ def test_apply_edits_new_character_creates_and_casts_npc(monkeypatch, tmp_path):
         ("mes_example", "<START>\n{{user}}: A room?\nOld Bram: Aye.")]
 
 
+def test_apply_edits_new_character_does_not_narrate_into_a_messaged_scene(monkeypatch, tmp_path):
+    from grimoire.store import scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    scenes.append_message(cid, sid, "assistant", "*The tavern is loud.*")
+    absorb.apply_edits(cid, [
+        {"id": "new_character:old-bram", "kind": "new_character",
+         "target": {"kind": "characters", "id": ""}, "field": "description",
+         "after": "[character(\"Old Bram\") { Occupation(\"innkeep\") }]\n\nBram kept the inn.",
+         "payload": {"name": "Old Bram"}}], sid)
+    assert [m["content"] for m in scenes.read_scene(cid, sid)["messages"]] == \
+        ["*The tavern is loud.*"]
+
+
 def test_apply_edits_new_character_without_sid_skips_casting(monkeypatch, tmp_path):
     from grimoire.store import characters
     cid = _campaign(monkeypatch, tmp_path)
