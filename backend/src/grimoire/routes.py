@@ -2890,6 +2890,15 @@ def post_scene_cast(cid: str, sid: str, body: Appear):
     return {"ok": True}
 
 
+@router.delete("/campaigns/{cid}/scenes/{sid}/cast/{kind}/{id}")
+def delete_scene_cast(cid: str, sid: str, kind: str, id: str):
+    _require_scene(cid, sid)
+    if kind not in store.appearances.ACTOR_KINDS:
+        raise HTTPException(status_code=404, detail="unknown actor kind")
+    store.appearances.leave(cid, sid, kind, id)
+    return {"ok": True}
+
+
 class AppearBatch(BaseModel):
     refs: list[Appear]
 
