@@ -1512,3 +1512,134 @@ git commit -m "feat(frontend): collapsible topbar and campaign subheader, scoped
 - [ ] Run the full frontend suite (from `frontend/`): `npx vitest run`
 - [ ] Run the frontend typecheck (from `frontend/`): `npx tsc -b`
 - [ ] Manually exercise the feature in a browser per this repo's "For UI or frontend changes..." convention: open a campaign, collapse/expand each sidebar section, collapse/expand the rail and inspector panels (confirm the edge tabs work and layout doesn't leave dead space), collapse/expand the topbar and subheader via the chrome bar, add and remove a character from an in-progress scene's Active characters section and confirm the narrated transition line appears in the transcript, then reload the page and confirm every collapse choice persisted.
+
+## Final whole-branch review fixes
+
+The final review (after all 6 tasks passed their individual reviews) found two
+cross-task defects — each invisible to any single task's own review, only
+showing up once the whole branch is viewed together — plus a few Minor items
+worth fixing alongside them.
+
+**Important — cast add/remove errors can become invisible.** Task 4's error
+banner reuses the file's shared `error` state, which Task 3's refactor left
+rendering only inside the collapsible "When" `SideSection`
+(`frontend/src/components/SceneInspector.tsx:319-320`). Since `SideSection`
+drops its children entirely when collapsed, a user who has collapsed "When"
+(a persisted, sticky preference) would have a failed cast add/remove
+silently vanish — exactly the failure mode Task 4's error-handling fix round
+was added to prevent, undone by a collapse feature Task 4's review never saw
+interact with it. Fix: hoist the banner out of any section, to the top of
+`<aside className="inspector">`, so it always renders regardless of which
+section is collapsed:
+
+```tsx
+  return (
+    <aside className="inspector">
+      {error && <div className="banner">{error}</div>}
+      {pcless && (
+```
+
+(and delete the now-redundant `{error && <div className="banner">{error}</div>}`
+line that currently opens the "When" `SideSection`'s body, at
+`SceneInspector.tsx:320` — the "When" section's content starts directly with
+its `when?.current ? ( ... )` ternary instead.)
+
+**Minor — the inspector's collapse button orphans onto a second grid row at
+narrow viewports.** Task 5 introduced `.inspector-slot` as the wrapper
+holding the inspector-collapse button and the `<SceneInspector>` element; the
+pre-existing `@media (max-width: 1100px)` rule hides `.inspector` and
+`.inspector-tab` but was never updated to also hide `.inspector-slot`. At a
+narrow viewport with the inspector *expanded* (the default), `.inspector`
+is force-hidden but `.inspector-slot` (and its still-visible collapse
+button) remains a grid child with no explicit column in the narrow 2-column
+template, so it wraps onto an implicit second grid row — a stray floating
+button beneath the main content. Fix in `frontend/src/index.css`:
+
+```css
+@media (max-width: 1100px) {
+  .inspector, .inspector-slot, .inspector-tab { display: none; }
+  .layout, .layout.inspector-collapsed { grid-template-columns: 236px 1fr; }
+  .layout.rail-collapsed, .layout.rail-collapsed.inspector-collapsed { grid-template-columns: 28px 1fr; }
+}
+```
+
+**Minor — trivial `SideSection` a11y polish.** Add `type="button"` to the
+header button (consistency with other buttons in the codebase; harmless
+today since `.inspector` isn't in a `<form>`, but a latent footgun) and
+`aria-hidden` to the decorative chevron (redundant/noisy for screen readers
+since `aria-expanded` on the button already communicates state):
+
+```tsx
+function SideSection({ id, title, collapsed, onToggle, extra, children }: {
+  id: string; title: string; collapsed: boolean; onToggle: (id: string) => void;
+  extra?: ReactNode; children: ReactNode;
+}) {
+  return (
+    <div className="side-section">
+      <button type="button" className="side-section-head" aria-expanded={!collapsed} onClick={() => onToggle(id)}>
+        <h4>{title}</h4>
+        <span className="side-section-head-right">
+          {extra}
+          <span className="side-section-chev" aria-hidden>{collapsed ? "▸" : "▾"}</span>
+        </span>
+      </button>
+      {!collapsed && <div className="side-section-body">{children}</div>}
+```
+
+**Minor — two test names overstate their coverage.** Fix both in place:
+
+In `frontend/src/components/SceneInspector.test.tsx`, the Context-section
+test never actually asserts the percentage badge renders — only that
+collapsing hides the content. Add the assertion (the `beforeEach` mock's
+`ctx.total_tokens: 100` against a 1000-token model context computes to
+`10%`):
+
+```tsx
+test("the Context section header still shows the percentage badge and collapses as a whole", async () => {
+  renderInspector();
+  await screen.findByText(/World info/);
+  await screen.findByText("10%");
+  const header = screen.getByRole("button", { name: /context/i });
+  fireEvent.click(header);
+  expect(screen.queryByText(/World info/)).not.toBeInTheDocument();
+});
+```
+
+In `frontend/src/routes/CampaignView.test.tsx`, "rail and inspector collapse
+state persist across a remount" only exercises rail persistence. Extend it
+to actually collapse and re-verify the inspector too:
+
+```tsx
+test("rail and inspector collapse state persist across a remount", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  const { unmount } = renderCampaign();
+  await screen.findByRole("button", { name: "+ New Scene" });
+  fireEvent.click(screen.getByRole("button", { name: /collapse scene list/i }));
+  await screen.findByText("Active characters");
+  fireEvent.click(screen.getByRole("button", { name: /collapse sidebar/i }));
+  expect(localStorage.getItem("grimoire.rail.collapsed")).toBe("1");
+  expect(localStorage.getItem("grimoire.inspector.collapsed")).toBe("1");
+  unmount();
+
+  renderCampaign();
+  await screen.findByRole("button", { name: /expand scene list/i }); // rail stayed collapsed
+  await screen.findByRole("button", { name: /expand sidebar/i }); // inspector stayed collapsed too
+  expect(screen.queryByRole("button", { name: "+ New Scene" })).not.toBeInTheDocument();
+  expect(screen.queryByText("Active characters")).not.toBeInTheDocument();
+});
+```
+
+Deliberately not fixed (per the final review's own disposition): unguarded
+`localStorage.setItem` inside the four `toggleX` state updaters (low-risk,
+consistent app-wide, deferred) and cosmetic JSX indentation differences
+between Task 5's two wrapped collapse blocks (dismissed, no functional
+effect).
+
+- [ ] Run `npx vitest run` (from `frontend/`) and `npx tsc -b` — confirm clean
+      after all of the above.
+- [ ] Re-run the manual browser check above, specifically: collapse "When" in
+      the inspector, then trigger a failed cast add (e.g. stop the backend or
+      pick an actor that's already cast via a race) and confirm the error is
+      now visible at the top of the sidebar instead of nowhere; resize the
+      browser below 1100px with the inspector expanded and confirm no stray
+      button floats below the main content.
