@@ -202,20 +202,22 @@ dead end.
 **Backend** (`backend/src/grimoire/store/appearances.py`):
 
 ```python
-class NotCastError(AppearError):
-    pass
-
 def leave(cid: str, scene_id: str, kind: str, actor_id: str) -> None:
     """Drop `scene_id` from the actor's appearance record. The actor stays
     appeared campaign-wide (other scenes, roster) — only this scene's cast
     loses them. Narrates a transition line once the scene already has
     messages; silent while the scene is still in pre-first-message setup,
-    matching appear()'s existing silent-first-add via CastPanel."""
+    matching appear()'s existing silent-first-add via CastPanel.
+
+    Idempotent: an actor already absent from this scene's cast (never cast,
+    or a repeat call after a lost response / retry) is a silent no-op, not
+    an error — a retried DELETE must not fail just because the first attempt
+    already landed."""
     data = record(cid)
     ref = _ref(kind, actor_id)
     rec = data.get(ref)
     if rec is None or scene_id not in rec.get("scenes", []):
-        raise NotCastError(f"{ref} is not in scene {scene_id}")
+        return
     from . import scenes  # lazy: scenes <-> appearances is already a lazy pair
     name = _actor_name(campaigns.campaign_root(cid), kind, actor_id, rec["version"]) or actor_id
     rec["scenes"].remove(scene_id)
@@ -267,12 +269,13 @@ def delete_scene_cast(cid: str, sid: str, kind: str, id: str):
     _require_scene(cid, sid)
     if kind not in store.appearances.ACTOR_KINDS:
         raise HTTPException(status_code=404, detail="unknown actor kind")
-    try:
-        store.appearances.leave(cid, sid, kind, id)
-    except store.appearances.NotCastError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+    store.appearances.leave(cid, sid, kind, id)
     return {"ok": True}
 ```
+
+`kind` is still validated (an unrecognized actor kind is a genuine client
+error, not a retry case), but "not currently cast" is not — see the
+idempotency note on `leave()` above.
 
 **Frontend:**
 
@@ -335,18 +338,26 @@ preference, not something that should differ campaign to campaign.
   reversible (re-add), so this intentionally does not follow the delete-scene
   precedent.
 - **No locking around `leave()`/`appear()`'s read-modify-write + narration
-  append.** Two concurrent requests (two tabs, a retry racing the original)
-  could both read the same pre-mutation `appearances.json`, and each could
-  independently decide "the scene already has messages" and append its own
-  transition line, producing a duplicate or contradictory narration, or a
-  cast-state write that loses one side's change. This is not a new risk
-  class: `set_location` and `set_scene_datetime` already do the identical
-  unguarded read-modify-write-then-narrate sequence, and the store has no
-  locking anywhere — accepted as inherent to this single-user, local-only
-  app (see the identical acceptance in
+  append.** A simple retry (lost response, client retries the same request)
+  is now safe — both are idempotent for their "already in the requested
+  state" case, so a repeat lands as a no-op rather than an error or a
+  duplicate transition line. What remains unguarded is genuine *concurrent,
+  distinct* mutation: two tabs adding/removing different actors in the same
+  scene at nearly the same instant could still race on the
+  read-modify-write of `appearances.json` and lose one side's change, or
+  independently decide "the scene already has messages" and each append
+  their own (differently-worded but not literally duplicate) transition
+  line. This is not a new risk class: `set_location` and
+  `set_scene_datetime` already do the identical unguarded
+  read-modify-write-then-narrate sequence for the same reason, and the store
+  has no locking anywhere — accepted as inherent to this single-user,
+  local-only app (see the identical acceptance in
   `docs/superpowers/specs/2026-07-17-played-greeting-exclusion-design.md`).
   Not introducing new transactional machinery here keeps this change
-  consistent with the rest of the store rather than a one-off exception.
+  consistent with the rest of the store rather than a one-off exception;
+  the idempotency fix above covers the actually-likely case (retries), and
+  true concurrent-distinct-mutation is exactly as rare here as it already is
+  everywhere else in the store.
 
 ## Tests
 
@@ -355,7 +366,9 @@ alongside the existing `post_scene_cast` coverage):
 
 - `leave()` removes the scene id from the actor's `scenes` list but leaves the
   appearance record (and other scenes) intact.
-- `leave()` on an actor not cast in that scene raises `NotCastError`.
+- `leave()` on an actor not cast in that scene (never cast, or a repeat call
+  after an earlier successful `leave()`) is a no-op: no exception, no
+  narration, `scenes.json` unchanged.
 - `leave()` on a scene with existing messages appends the
   `*{name} leaves the scene.*` transition line; on a scene with zero messages
   it stays silent.
@@ -364,7 +377,8 @@ alongside the existing `post_scene_cast` coverage):
   (covers both the fresh-lock branch and the already-locked-elsewhere,
   rejoin-this-scene branch).
 - `DELETE .../cast/{kind}/{id}` route: 200 + narration on a real member, 404
-  for an unknown kind, 404 for an actor not currently in that scene's cast.
+  for an unknown kind, 200 no-op (no narration, no error) for an actor not
+  currently in that scene's cast — including calling it twice in a row.
 
 Frontend:
 
