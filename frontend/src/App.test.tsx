@@ -21,6 +21,10 @@ vi.mock("./routes/CampaignView", () => ({
   ),
 }));
 
+vi.mock("./routes/CampaignWizard", () => ({
+  default: () => <div data-testid="campaign-wizard" />,
+}));
+
 const READY_OPENROUTER = {
   theme: "codex", system_prompt: "", quote_color: "off", user_label: "You", assistant_label: "Grimoire",
   default_style_id: "", active_connection_id: "openrouter",
@@ -87,4 +91,11 @@ test("a previously-collapsed topbar preference does not apply on non-campaign ro
   expect(screen.getByRole("banner")).not.toHaveClass("collapsed");
   const topbar = within(screen.getByRole("banner"));
   expect(topbar.getByRole("link", { name: /worlds/i })).toBeInTheDocument();
+});
+
+test("the topbar stays fully visible on /campaigns/new even with a stored collapsed preference", async () => {
+  localStorage.setItem("grimoire.topbar.collapsed", "1");
+  render(<MemoryRouter initialEntries={["/campaigns/new"]}><App /></MemoryRouter>);
+  await screen.findByTestId("campaign-wizard");
+  expect(screen.getByRole("banner")).not.toHaveClass("collapsed");
 });
