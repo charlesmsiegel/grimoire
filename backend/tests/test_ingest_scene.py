@@ -118,6 +118,25 @@ def test_build_scene_writes_transcript_cast_location_date(monkeypatch, tmp_path)
     assert cast == {("pcs", "julian"), ("characters", "marisol")}
 
 
+def test_build_scene_does_not_narrate_a_first_time_cast_member(monkeypatch, tmp_path):
+    """build_scene's appear() call must pass narrate=False -- otherwise a
+    first-time character (like Marisol, cast for the first time in this very
+    scene) gets a synthetic "joins the scene" line injected after the real
+    transcript, corrupting the ingested historical dialogue."""
+    wid = _world(monkeypatch, tmp_path)
+    cid = ingest_scene.ensure_campaign("Silver Oath", wid)
+    scene = {
+        "title": "The Reckoning",
+        "new_characters": [{"name": "Marisol", "personality": "cruel, controlled"}],
+        "characters": [{"kind": "characters", "id": "marisol"}],
+        "turns": [{"role": "assistant", "speaker": "Marisol", "content": "\"You've grown bold.\""}],
+    }
+    sid = ingest_scene.build_scene(cid, scene)
+    from grimoire.store import scenes
+    assert [m["content"] for m in scenes.read_scene(cid, sid)["messages"]] == \
+        ["\"You've grown bold.\""]
+
+
 class FakeClient:
     def __init__(self, text: str):
         self.text = text

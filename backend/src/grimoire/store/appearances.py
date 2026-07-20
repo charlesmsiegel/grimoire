@@ -175,7 +175,8 @@ def import_version(cid: str, kind: str, actor_id: str, version_id: str) -> None:
     campaigns.touch(cid)
 
 
-def appear(cid: str, scene_id: str, kind: str, actor_id: str, version_id: str, role: str) -> None:
+def appear(cid: str, scene_id: str, kind: str, actor_id: str, version_id: str, role: str,
+           narrate: bool = True) -> None:
     data = record(cid)
     ref = _ref(kind, actor_id)
     rec = data.get(ref)
@@ -187,12 +188,52 @@ def appear(cid: str, scene_id: str, kind: str, actor_id: str, version_id: str, r
         if scene_id not in rec["scenes"]:
             rec["scenes"].append(scene_id)
             _write(cid, data)
-        return
+        else:
+            return  # already in this scene: no-op, no narration
+    else:
+        base = _lock(cid, kind, actor_id, version_id)  # lazy pick: first appearance locks
+        data[ref] = {"version": version_id, "base": base, "scenes": [scene_id], "role": role}
+        _write(cid, data)
+        campaigns.touch(cid)
 
-    base = _lock(cid, kind, actor_id, version_id)  # lazy pick: first appearance locks
-    data[ref] = {"version": version_id, "base": base, "scenes": [scene_id], "role": role}
+    if not narrate:
+        return
+    from . import scenes  # lazy: scenes <-> appearances is already a lazy pair
+    try:
+        has_messages = bool(scenes.read_scene(cid, scene_id)["messages"])
+    except scenes.SceneNotFound:
+        return  # synthetic/test scene id with no backing file: nothing to narrate into
+    if has_messages:
+        name = _actor_name(campaigns.campaign_root(cid), kind, actor_id, version_id) or actor_id
+        scenes.append_message(cid, scene_id, "assistant", f"*{name} joins the scene.*")
+
+
+def leave(cid: str, scene_id: str, kind: str, actor_id: str) -> None:
+    """Drop `scene_id` from the actor's appearance record. The actor stays
+    appeared campaign-wide (other scenes, roster) -- only this scene's cast
+    loses them. Narrates a transition line once the scene already has
+    messages; silent while the scene is still in pre-first-message setup,
+    matching appear()'s silent-first-add.
+
+    Idempotent: an actor already absent from this scene's cast (never cast,
+    or a repeat call after a lost response / retry) is a silent no-op, not
+    an error -- a retried DELETE must not fail just because the first
+    attempt already landed."""
+    data = record(cid)
+    ref = _ref(kind, actor_id)
+    rec = data.get(ref)
+    if rec is None or scene_id not in rec.get("scenes", []):
+        return
+    from . import scenes  # lazy: scenes <-> appearances is already a lazy pair
+    name = _actor_name(campaigns.campaign_root(cid), kind, actor_id, rec["version"]) or actor_id
+    rec["scenes"].remove(scene_id)
     _write(cid, data)
-    campaigns.touch(cid)
+    try:
+        has_messages = bool(scenes.read_scene(cid, scene_id)["messages"])
+    except scenes.SceneNotFound:
+        return
+    if has_messages:
+        scenes.append_message(cid, scene_id, "assistant", f"*{name} leaves the scene.*")
 
 
 def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
