@@ -708,7 +708,7 @@ git commit -m "feat(frontend): make every SceneInspector sidebar section collaps
 - Modify: `frontend/src/api/client.ts` (add `removeFromCast`, after `addToCast` at line 659)
 - Modify: `frontend/src/components/SceneInspector.tsx` (add/remove UI inside the `cast` `SideSection` from Task 3)
 - Modify: `frontend/src/index.css` (row-remove button styles)
-- Test: `frontend/src/components/SceneInspector.test.tsx` (new tests + extend the `api` mock)
+- Test: `frontend/src/components/SceneInspector.test.tsx` (new tests + extend the `api` mock + tighten one pre-existing test's query, `clicking a cast row opens the drawer` at line 95-100 — see Step 3's addendum)
 
 **Interfaces:**
 - Consumes: `SideSection`, `collapsed`, `toggleSection` from Task 3 (same file). `DELETE /api/campaigns/{cid}/scenes/{sid}/cast/{kind}/{id}` from Task 2.
@@ -766,6 +766,7 @@ test("adding a PC omits the role picker and forces role=player", async () => {
 });
 
 test("offscreen scene hides the kind and role pickers, forcing npc characters only", async () => {
+  (api.getCast as any).mockResolvedValue([]); // nobody cast yet, so seraphine is available to add
   render(<SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} pcless />);
   await screen.findByLabelText("Character or PC to add");
   expect(screen.queryByLabelText("Cast kind to add")).not.toBeInTheDocument();
@@ -838,7 +839,10 @@ Add the actor-picker state and options lists, plus a new effect to fetch them, r
     api.listCampaignPCs(cid).then(setPcs).catch(() => setPcs([]));
   }, [cid]);
 
-  const addOptions = addKind === "characters" ? chars : pcs;
+  // exclude actors already in this scene's cast, mirroring the Location
+  // picker's existing `locations.filter((l) => l.id !== setting?.current?.id)`
+  const addOptions = (addKind === "characters" ? chars : pcs)
+    .filter((o) => !cast.some((a) => a.kind === addKind && a.id === o.id));
 
   async function addCastMember() {
     if (!addActorId) return;
@@ -857,6 +861,52 @@ Add the actor-picker state and options lists, plus a new effect to fetch them, r
     onSceneChanged();
   }
 ```
+
+**Addendum (found by the first implementation attempt, not in the original
+brief): two test collisions the un-filtered `addOptions` and an unanchored
+pre-existing query create together.**
+
+Without the `addOptions` filter above, a cast member's display name is
+offered a second time as an `<option>` in the add-picker (same
+`api.listCharacters`/`api.listCampaignPCs` data backs both the cast-row name
+and the picker), so `screen.findByText("Seraphine")`-style queries in two
+pre-existing tests (and this task's own "removing a cast member..." test)
+fail with "found multiple elements." The filter above fixes this at the
+root — once already-cast actors never appear in the picker, there is only
+ever one "Seraphine" text node.
+
+Separately, the new remove button's `aria-label="Remove {name} from scene"`
+means a *loose, unanchored* name regex now matches two buttons: the cast
+row (`className="inspector-row"`, accessible name "Seraphine npc" — the
+`Portrait` component's initials fallback is `aria-hidden`, so it never
+contributes to the accessible name) and the new remove button ("Remove
+Seraphine from scene"). The pre-existing test
+`clicking a cast row opens the drawer` in `SceneInspector.test.tsx:95-100`
+uses exactly such a loose regex and now matches both. Anchor it to the
+start of the name — the row's accessible name genuinely starts with the
+actor's name, the remove button's starts with "Remove" — rather than
+changing the remove button's aria-label (which needs the actor's name for
+screen-reader users to tell rows apart, especially with multiple cast
+members):
+
+```tsx
+test("clicking a cast row opens the drawer", async () => {
+  renderInspector();
+  fireEvent.click(await screen.findByRole("button", { name: /^Seraphine/ }));
+  await waitFor(() => expect(api.getCastDetail).toHaveBeenCalledWith("c", "s", "characters", "seraphine"));
+  await screen.findByText("keeper");
+});
+```
+
+Finally, this task's own new "offscreen scene..." test (Step 1 above) adds
+"seraphine" through the picker — but the shared `beforeEach`'s default
+`api.getCast` mock *already* casts seraphine, so once `addOptions` correctly
+filters already-cast actors, seraphine would no longer be offered and the
+test would fail for an unrelated reason (nothing to select). That test's
+code block in Step 1 already includes the fix: an
+`(api.getCast as any).mockResolvedValue([]);` override so the character it's
+adding isn't already present — the test description's "no one cast yet" was
+always the intended scenario.
 
 Replace the `cast` `SideSection` body from Task 3 (the `<SideSection id="cast" ...>` block) with:
 
