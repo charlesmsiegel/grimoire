@@ -331,3 +331,22 @@ test("offscreen scene hides the kind and role pickers, forcing npc characters on
   await waitFor(() => expect(api.addToCast).toHaveBeenCalledWith(
     "c", "s", { kind: "characters", id: "seraphine", role: "npc" }));
 });
+
+test("a failed add surfaces the error banner instead of silently failing", async () => {
+  (api.addToCast as any).mockRejectedValue({ detail: "already cast" });
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "mara", name: "Mara", default_version: "default", versions: [] }]);
+  render(<SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+  await screen.findByRole("option", { name: "Mara" });
+  fireEvent.change(screen.getByLabelText("Character or PC to add"), { target: { value: "mara" } });
+  fireEvent.click(screen.getByRole("button", { name: /\+ add/i }));
+  await screen.findByText("already cast");
+});
+
+test("a failed remove surfaces the error banner instead of silently failing", async () => {
+  (api.removeFromCast as any).mockRejectedValue({ detail: "actor kind not found" });
+  renderInspector();
+  await screen.findByText("Seraphine");
+  fireEvent.click(screen.getByRole("button", { name: /remove seraphine from scene/i }));
+  await screen.findByText("actor kind not found");
+});

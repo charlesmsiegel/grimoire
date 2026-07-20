@@ -100,19 +100,29 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
 
   async function addCastMember() {
     if (!addActorId) return;
-    await api.addToCast(cid, sid, {
-      kind: addKind, id: addActorId,
-      role: pcless ? "npc" : addKind === "pcs" ? "player" : addRole,
-    });
-    setAddActorId("");
-    await reloadCast();
-    onSceneChanged();
+    setError(null);
+    try {
+      await api.addToCast(cid, sid, {
+        kind: addKind, id: addActorId,
+        role: pcless ? "npc" : addKind === "pcs" ? "player" : addRole,
+      });
+      setAddActorId("");
+      await reloadCast();
+      onSceneChanged();
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
   }
 
   async function removeCastMember(a: Actor) {
-    await api.removeFromCast(cid, sid, a.kind, a.id);
-    await reloadCast();
-    onSceneChanged();
+    setError(null);
+    try {
+      await api.removeFromCast(cid, sid, a.kind, a.id);
+      await reloadCast();
+      onSceneChanged();
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
   }
 
   const reloadWhen = useCallback(
