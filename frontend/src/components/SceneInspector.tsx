@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   api, type Actor, type SceneContext, type SceneLocation, type ChronicleEntry,
   type CalendarConfig, type RosterEntry, type SceneDatetime, type Style,
@@ -7,6 +7,34 @@ import { getModels, type Model } from "../api/models";
 import { Portrait } from "./Portrait";
 import { RecordDrawer, type DrawerTarget } from "./RecordDrawer";
 import { CalendarDatePicker } from "./CalendarDatePicker";
+
+const SECTIONS_KEY = "grimoire.inspector.sections";
+
+function loadSectionCollapse(): Record<string, boolean> {
+  try {
+    return JSON.parse(localStorage.getItem(SECTIONS_KEY) ?? "{}");
+  } catch {
+    return {};
+  }
+}
+
+function SideSection({ id, title, collapsed, onToggle, extra, children }: {
+  id: string; title: string; collapsed: boolean; onToggle: (id: string) => void;
+  extra?: ReactNode; children: ReactNode;
+}) {
+  return (
+    <div className="side-section">
+      <button className="side-section-head" aria-expanded={!collapsed} onClick={() => onToggle(id)}>
+        <h4>{title}</h4>
+        <span className="side-section-head-right">
+          {extra}
+          <span className="side-section-chev">{collapsed ? "▸" : "▾"}</span>
+        </span>
+      </button>
+      {!collapsed && <div className="side-section-body">{children}</div>}
+    </div>
+  );
+}
 
 export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRenamed, pcless }:
   { cid: string; sid: string; refreshKey: number; onSceneChanged: () => void;
@@ -30,6 +58,14 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   const [styleId, setStyleId] = useState("");
   const [styleOptions, setStyleOptions] = useState<Style[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>(loadSectionCollapse);
+  const toggleSection = useCallback((id: string) => {
+    setCollapsed((prev) => {
+      const next = { ...prev, [id]: !prev[id] };
+      localStorage.setItem(SECTIONS_KEY, JSON.stringify(next));
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     Promise.all([api.listCharacters({ kind: "campaign", id: cid }), api.listCampaignPCs(cid)])
@@ -146,21 +182,18 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   return (
     <aside className="inspector">
       {pcless && (
-        <div className="side-section">
-          <h4>Offscreen scene</h4>
+        <SideSection id="offscreen" title="Offscreen scene" collapsed={!!collapsed.offscreen} onToggle={toggleSection}>
           <div className="field-hint">No player character — you direct the NPCs.</div>
-        </div>
+        </SideSection>
       )}
       {recap.length > 0 && (
-        <div className="side-section">
-          <h4>Story so far</h4>
+        <SideSection id="story" title="Story so far" collapsed={!!collapsed.story} onToggle={toggleSection}>
           {[...recap].reverse().map((r) => (
             <div className="field-hint" key={r.id}>{r.one_line || r.summary}</div>
           ))}
-        </div>
+        </SideSection>
       )}
-      <div className="side-section">
-        <h4>Active characters</h4>
+      <SideSection id="cast" title="Active characters" collapsed={!!collapsed.cast} onToggle={toggleSection}>
         {cast.length === 0 && <div className="field-hint">No one cast yet.</div>}
         {cast.map((a) => {
           const ver = a.kind === "characters"
@@ -177,10 +210,9 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
             </button>
           );
         })}
-      </div>
+      </SideSection>
 
-      <div className="side-section">
-        <h4>Location</h4>
+      <SideSection id="location" title="Location" collapsed={!!collapsed.location} onToggle={toggleSection}>
         {setting?.current
           ? <button className={"inspector-row" + (locImages.includes("avatar") ? " inspector-loc" : "")}
                     onClick={() => setDrawer({ type: "location", id: setting.current!.id })}>
@@ -204,18 +236,16 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
             <button className="primary" onClick={moveTo} disabled={!locPick}>Move to</button>
           </div>
         )}
-      </div>
+      </SideSection>
 
-      <div className="side-section">
-        <h4>Prose style</h4>
+      <SideSection id="style" title="Prose style" collapsed={!!collapsed.style} onToggle={toggleSection}>
         <select aria-label="Prose style" value={styleId} onChange={(e) => chooseStyle(e.target.value)}>
           <option value="">— use campaign default —</option>
           {styleOptions.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
-      </div>
+      </SideSection>
 
-      <div className="side-section">
-        <h4>When</h4>
+      <SideSection id="when" title="When" collapsed={!!collapsed.when} onToggle={toggleSection}>
         {error && <div className="banner">{error}</div>}
         {when?.current ? (
           <>
@@ -249,13 +279,10 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
             </div>
           </>
         )}
-      </div>
+      </SideSection>
 
-      <div className="side-section">
-        <div className="ctx-head">
-          <h4>Context</h4>
-          {ctx && ctxLen > 0 && <span className="ctx-pct">{pctNumber(ctx.total_tokens)}%</span>}
-        </div>
+      <SideSection id="context" title="Context" collapsed={!!collapsed.context} onToggle={toggleSection}
+                   extra={ctx && ctxLen > 0 ? <span className="ctx-pct">{pctNumber(ctx.total_tokens)}%</span> : undefined}>
         {ctx && (
           <>
             <div className="ctx-bar">
@@ -280,7 +307,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
             <pre className="ctx-text">{s.text}</pre>
           </details>
         ))}
-      </div>
+      </SideSection>
 
       {drawer && <RecordDrawer cid={cid} sid={sid} target={drawer} onClose={() => setDrawer(null)} />}
     </aside>
