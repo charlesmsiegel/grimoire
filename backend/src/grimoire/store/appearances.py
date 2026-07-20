@@ -225,7 +225,7 @@ def leave(cid: str, scene_id: str, kind: str, actor_id: str) -> None:
     if rec is None or scene_id not in rec.get("scenes", []):
         return
     from . import scenes  # lazy: scenes <-> appearances is already a lazy pair
-    name = _actor_name(campaigns.campaign_root(cid), kind, actor_id, rec["version"]) or actor_id
+    version = rec["version"]
     rec["scenes"].remove(scene_id)
     _write(cid, data)
     try:
@@ -233,6 +233,7 @@ def leave(cid: str, scene_id: str, kind: str, actor_id: str) -> None:
     except scenes.SceneNotFound:
         return
     if has_messages:
+        name = _actor_name(campaigns.campaign_root(cid), kind, actor_id, version) or actor_id
         scenes.append_message(cid, scene_id, "assistant", f"*{name} leaves the scene.*")
 
 

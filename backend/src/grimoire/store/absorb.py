@@ -527,7 +527,7 @@ def apply_edits(cid: str, edits: list[dict],
                 except Exception:  # noqa: BLE001 — seed is best-effort: a failure here
                     pass  # must not strand the created character (retry would duplicate it)
                 if sid:
-                    appearances.appear(cid, sid, "characters", new_cid, new_vid, "npc")
+                    appearances.appear(cid, sid, "characters", new_cid, new_vid, "npc", narrate=False)
                 target = {"kind": "characters", "id": new_cid}
             elif kind == "new_location":
                 p = e["payload"]
