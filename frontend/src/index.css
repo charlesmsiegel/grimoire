@@ -176,6 +176,9 @@ body::before {
 .sub-end:disabled { background: var(--disabled); color: var(--bg); cursor: default; }
 
 .layout { display: grid; grid-template-columns: 236px 1fr 286px; flex: 1; min-height: 0; }
+.layout.rail-collapsed { grid-template-columns: 28px 1fr 286px; }
+.layout.inspector-collapsed { grid-template-columns: 236px 1fr 28px; }
+.layout.rail-collapsed.inspector-collapsed { grid-template-columns: 28px 1fr 28px; }
 .scene-rail { background: var(--panel); border-right: var(--rw) solid var(--rule); display: flex; flex-direction: column; min-height: 0; padding: 14px; }
 .rail-counter { font-family: var(--fm); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
 .rail-new { width: 100%; margin-bottom: 12px; }
@@ -190,6 +193,20 @@ body::before {
 .rail-world { width: 100%; }
 .rail-date { background: none; border: none; cursor: pointer; text-align: left; font-family: var(--fm); font-size: 10px; letter-spacing: 0.1em; color: var(--muted); text-transform: uppercase; padding: 0; }
 .rail-holiday { display: block; margin-top: 3px; font-size: 9.5px; color: var(--accent); }
+.rail-tab, .inspector-tab {
+  background: var(--panel); border: none; cursor: pointer; color: var(--muted);
+  font-family: var(--fm); font-size: 14px; display: flex; align-items: center; justify-content: center;
+}
+.rail-tab { border-right: var(--rw) solid var(--rule); }
+.inspector-tab { border-left: var(--rw) solid var(--rule); }
+.rail-tab:hover, .inspector-tab:hover { color: var(--accent); }
+.rail-collapse, .inspector-collapse {
+  background: none; border: none; cursor: pointer; color: var(--muted); align-self: flex-end;
+  font-family: var(--fm); font-size: 12px; padding: 2px 4px; margin-bottom: 6px;
+}
+.rail-collapse:hover, .inspector-collapse:hover { color: var(--accent); }
+.inspector-slot { display: flex; flex-direction: column; min-height: 0; }
+.inspector-slot .inspector { flex: 1; }
 .panel-slot { background: var(--panel2); border-bottom: var(--rw) solid var(--rule); padding: 14px 18px; }
 
 /* ---- transcript (the page) ---- */
@@ -737,7 +754,11 @@ button.primary { background: var(--accent); color: var(--on-accent); border: var
 .drawer-close { float: right; background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 16px; }
 .drawer-close:hover { color: var(--accent); }
 .drawer-avatar { max-width: 180px; height: auto; display: block; border: 1px solid var(--muted); margin: 8px 0; }
-@media (max-width: 1100px) { .layout { grid-template-columns: 236px 1fr; } .inspector { display: none; } }
+@media (max-width: 1100px) {
+  .inspector, .inspector-tab { display: none; }
+  .layout, .layout.inspector-collapsed { grid-template-columns: 236px 1fr; }
+  .layout.rail-collapsed, .layout.rail-collapsed.inspector-collapsed { grid-template-columns: 28px 1fr; }
+}
 
 /* collapsible lorebook import inside the Lore tab */
 .import-section { margin-bottom: 16px; border: 1px solid var(--muted); padding: 8px 12px; }
