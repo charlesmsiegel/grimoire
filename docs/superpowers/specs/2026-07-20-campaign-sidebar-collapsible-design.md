@@ -222,9 +222,20 @@ def leave(cid: str, scene_id: str, kind: str, actor_id: str) -> None:
     name = _actor_name(campaigns.campaign_root(cid), kind, actor_id, rec["version"]) or actor_id
     rec["scenes"].remove(scene_id)
     _write(cid, data)
-    if scenes.read_scene(cid, scene_id)["messages"]:
+    try:
+        has_messages = bool(scenes.read_scene(cid, scene_id)["messages"])
+    except scenes.SceneNotFound:
+        return  # synthetic/test scene id with no backing file: nothing to narrate into
+    if has_messages:
         scenes.append_message(cid, scene_id, "assistant", f"*{name} leaves the scene.*")
 ```
+
+The `try/except scenes.SceneNotFound` is required, not defensive filler:
+many existing `appearances` store tests call `appear()`/`leave()` with a
+bare string scene id ("s1", "the-docks", …) that was never created via
+`scenes.create_scene` — there is no backing scene file. `scenes.read_scene`
+raises `SceneNotFound` for those, so the narration check must tolerate a
+missing scene rather than assume every appear/leave call names a real one.
 
 `appear()` gets the matching narration line added for symmetry (currently
 narrates nothing regardless of scene state). Both of its branches — an
@@ -233,7 +244,8 @@ need the same "scene already has messages → narrate" check, so it's cleanest
 as one check at the end covering either path:
 
 ```python
-def appear(cid: str, scene_id: str, kind: str, actor_id: str, version_id: str, role: str) -> None:
+def appear(cid: str, scene_id: str, kind: str, actor_id: str, version_id: str, role: str,
+           narrate: bool = True) -> None:
     data = record(cid)
     ref = _ref(kind, actor_id)
     rec = data.get(ref)
@@ -253,13 +265,47 @@ def appear(cid: str, scene_id: str, kind: str, actor_id: str, version_id: str, r
         _write(cid, data)
         campaigns.touch(cid)
 
+    if not narrate:
+        return
     from . import scenes  # lazy: scenes <-> appearances is already a lazy pair
-    if scenes.read_scene(cid, scene_id)["messages"]:
+    try:
+        has_messages = bool(scenes.read_scene(cid, scene_id)["messages"])
+    except scenes.SceneNotFound:
+        return
+    if has_messages:
         name = _actor_name(campaigns.campaign_root(cid), kind, actor_id, version_id) or actor_id
         scenes.append_message(cid, scene_id, "assistant", f"*{name} joins the scene.*")
 ```
 
 `_actor_name` already exists and is reused, not duplicated.
+
+**Why `narrate` is a parameter, not inferred.** `appear()` has a second
+caller: `backend/scripts/ingest_scene.py`'s `build_scene()` writes a whole
+historical scene's dialogue via `scenes.append_message` *first*, then calls
+`appear()` for every cast member afterward — including characters appearing
+for the very first time in the campaign. Without an explicit opt-out, the
+rule above ("scene already has messages → narrate the join") would inject a
+synthetic "*Marisol joins the scene.*" line into what's supposed to be a
+faithful transcript of an already-complete, real historical RP log — a
+different kind of appear() call than an interactive mid-scene add through
+this feature's new sidebar UI, which genuinely should narrate a first-time
+join. The two calls are structurally identical (fresh lock, target scene has
+messages) and cannot be told apart from inside `appear()`, so the caller
+states its intent explicitly. Fix `build_scene`'s call site
+(`backend/scripts/ingest_scene.py:91-94`) to opt out:
+
+```python
+    for actor in scene["characters"]:
+        kind, aid = actor["kind"], actor["id"]
+        vid = resolve_version(cid, kind, aid)
+        appearances.appear(cid, sid, kind, aid, vid, "player" if kind == "pcs" else "npc",
+                            narrate=False)
+```
+
+Every other caller (the existing `POST .../cast` route via `_seat_cast_member`,
+and this feature's new sidebar add) keeps the default `narrate=True` and
+narrates exactly as designed. `leave()` has no batch/non-interactive caller
+today, so it does not need the same parameter — YAGNI; add it if one shows up.
 
 New route in `backend/src/grimoire/routes.py`, next to `post_scene_cast`:
 
@@ -317,6 +363,10 @@ preference, not something that should differ campaign to campaign.
   unaffected — only the outer section gains a collapse toggle.
 - No change to how `scene_cast` / `roster` / `getCast` responses are shaped —
   `leave()` only mutates the `scenes` array inside an existing record.
+- `backend/scripts/ingest_scene.py`'s `build_scene()` needs its one-line
+  `appear()` call site updated to pass `narrate=False` (see section 4) — the
+  only other caller of `appear()` in the codebase, and the reason the
+  `narrate` parameter exists at all.
 - The `@media (max-width: 1100px)` narrow-viewport rule (`.inspector { display: none; }`)
   is untouched; it now composes with the new manual collapse (both hide the
   same element for different reasons — narrow viewport wins regardless of the
@@ -376,9 +426,23 @@ alongside the existing `post_scene_cast` coverage):
   appends `*{name} joins the scene.*`; joining an empty scene stays silent
   (covers both the fresh-lock branch and the already-locked-elsewhere,
   rejoin-this-scene branch).
+- `appear(..., narrate=False)` never narrates regardless of scene state —
+  covers `ingest_scene.build_scene`'s use.
+- `appear()`/`leave()` on a scene id with no backing scene file (the
+  `SceneNotFound` case most pre-existing `appearances` tests already use)
+  does not raise — it's treated the same as "nothing to narrate into."
 - `DELETE .../cast/{kind}/{id}` route: 200 + narration on a real member, 404
   for an unknown kind, 200 no-op (no narration, no error) for an actor not
   currently in that scene's cast — including calling it twice in a row.
+
+Also (`backend/tests/test_ingest_scene.py`):
+
+- `build_scene()` on a scene whose cast includes a first-time character
+  still produces the exact transcript from the source `turns` — no
+  synthetic "joins the scene" line — confirming `narrate=False` actually
+  suppresses it (this is the regression the `narrate` parameter exists to
+  prevent; `test_build_scene_writes_transcript_cast_location_date` already
+  covers the transcript-content assertion and must keep passing unchanged).
 
 Frontend:
 
