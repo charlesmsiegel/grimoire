@@ -1311,6 +1311,43 @@ test("a previously-collapsed topbar preference does not apply on non-campaign ro
 });
 ```
 
+**Addendum (found by task review): `isCampaignRoute`'s regex doesn't actually
+exclude `/campaigns/new`.** `[^/]+` matches the literal segment `"new"` just
+as readily as a real campaign id — `/^\/campaigns\/[^/]+$/.test("/campaigns/new")`
+is `true`. This is reachable through a normal flow (open a campaign, collapse
+the topbar, go back to the campaign list, click "+ New Campaign") and leaves
+the campaign-creation wizard with a permanently degraded topbar (no nav,
+status, or Config link) with no in-page way to undo it, since the chrome-bar
+toggle only exists inside `CampaignView`. Fix the `isCampaignRoute`
+definition in Step 3 above to exclude it explicitly:
+
+```tsx
+  const isCampaignRoute = location.pathname !== "/campaigns/new" &&
+    /^\/campaigns\/[^/]+$/.test(location.pathname);
+```
+
+Add a stub for `CampaignWizard` (the component `/campaigns/new` renders) next
+to the existing `CampaignView` mock in `App.test.tsx` — real `CampaignWizard`
+needs API mocks this file doesn't provide (`getCalendarProviders`, etc.),
+which isn't what this regression test needs to exercise:
+
+```tsx
+vi.mock("./routes/CampaignWizard", () => ({
+  default: () => <div data-testid="campaign-wizard" />,
+}));
+```
+
+Then add this test, anywhere after the other new App.test.tsx tests:
+
+```tsx
+test("the topbar stays fully visible on /campaigns/new even with a stored collapsed preference", async () => {
+  localStorage.setItem("grimoire.topbar.collapsed", "1");
+  render(<MemoryRouter initialEntries={["/campaigns/new"]}><App /></MemoryRouter>);
+  await screen.findByTestId("campaign-wizard");
+  expect(screen.getByRole("banner")).not.toHaveClass("collapsed");
+});
+```
+
 In `frontend/src/routes/CampaignView.test.tsx`, add this test at the end of the file:
 
 ```tsx
@@ -1336,7 +1373,11 @@ In `frontend/src/App.tsx`, add state and route-scoping logic inside `App`, right
 ```tsx
   const [topbarCollapsed, setTopbarCollapsed] = useState(
     () => localStorage.getItem("grimoire.topbar.collapsed") === "1");
-  const isCampaignRoute = /^\/campaigns\/[^/]+$/.test(location.pathname);
+  // "new" satisfies [^/]+ exactly like a real campaign id would, so the
+  // regex alone can't distinguish /campaigns/new (the wizard, not a
+  // campaign detail page) from /campaigns/<cid> — exclude it explicitly.
+  const isCampaignRoute = location.pathname !== "/campaigns/new" &&
+    /^\/campaigns\/[^/]+$/.test(location.pathname);
 
   function toggleTopbar() {
     setTopbarCollapsed((v) => {
