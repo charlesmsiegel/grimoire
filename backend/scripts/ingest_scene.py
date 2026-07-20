@@ -91,7 +91,8 @@ def build_scene(cid: str, scene: dict) -> str:
     for actor in scene["characters"]:
         kind, aid = actor["kind"], actor["id"]
         vid = resolve_version(cid, kind, aid)
-        appearances.appear(cid, sid, kind, aid, vid, "player" if kind == "pcs" else "npc")
+        appearances.appear(cid, sid, kind, aid, vid, "player" if kind == "pcs" else "npc",
+                            narrate=False)
     return sid
 
 

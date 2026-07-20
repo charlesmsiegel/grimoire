@@ -48,6 +48,114 @@ def test_second_scene_appends_only(monkeypatch, tmp_path):
         {"kind": "characters", "id": "seraphine", "role": "npc", "name": "Seraphine"}]
 
 
+def test_leave_removes_scene_but_keeps_appearance_record(monkeypatch, tmp_path):
+    _wid, cid = _world_with_char(monkeypatch, tmp_path)
+    ap.appear(cid, "s1", "characters", "seraphine", "corrupted", "npc")
+    ap.appear(cid, "s2", "characters", "seraphine", "corrupted", "npc")
+    ap.leave(cid, "s1", "characters", "seraphine")
+    assert ap.record(cid)["characters/seraphine"]["scenes"] == ["s2"]
+    assert ap.scene_cast(cid, "s1") == []
+    assert ap.scene_cast(cid, "s2") == [
+        {"kind": "characters", "id": "seraphine", "role": "npc", "name": "Seraphine"}]
+
+
+def test_leave_on_actor_not_cast_is_a_silent_no_op(monkeypatch, tmp_path):
+    """Idempotency: a retried DELETE (lost response, double-click) must not fail
+    just because the first attempt already landed."""
+    _wid, cid = _world_with_char(monkeypatch, tmp_path)
+    ap.leave(cid, "s1", "characters", "seraphine")  # never cast at all
+    assert ap.record(cid) == {}
+    ap.appear(cid, "s1", "characters", "seraphine", "corrupted", "npc")
+    ap.leave(cid, "s1", "characters", "seraphine")
+    ap.leave(cid, "s1", "characters", "seraphine")  # repeat call: still a no-op
+    assert ap.record(cid)["characters/seraphine"]["scenes"] == []
+
+
+def test_leave_narrates_once_scene_has_messages(monkeypatch, tmp_path):
+    from grimoire.store import scenes
+    _wid, cid = _world_with_char(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    ap.appear(cid, sid, "characters", "seraphine", "corrupted", "npc")
+    ap.leave(cid, sid, "characters", "seraphine")
+    assert scenes.read_scene(cid, sid)["messages"] == []  # still empty: silent
+
+    ap.appear(cid, sid, "characters", "seraphine", "corrupted", "npc")
+    scenes.append_message(cid, sid, "user", "hi")
+    ap.leave(cid, sid, "characters", "seraphine")
+    assert scenes.read_scene(cid, sid)["messages"] == [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "*Seraphine leaves the scene.*"},
+    ]
+
+
+def test_appear_narrates_first_time_join_into_a_messaged_scene(monkeypatch, tmp_path):
+    """The Task 4 case: adding a brand-new character to a scene that's already
+    underway (e.g. via the sidebar's new "+ Add" control) must narrate, exactly
+    like a rejoin does. This is the fresh-lock branch, not the rejoin branch."""
+    from grimoire.store import scenes
+    _wid, cid = _world_with_char(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    scenes.append_message(cid, sid, "user", "hi")
+    ap.appear(cid, sid, "characters", "seraphine", "corrupted", "npc")  # first-ever lock
+    assert scenes.read_scene(cid, sid)["messages"] == [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "*Seraphine joins the scene.*"},
+    ]
+
+
+def test_appear_narrates_join_once_scene_has_messages(monkeypatch, tmp_path):
+    from grimoire.store import scenes
+    _wid, cid = _world_with_char(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    # fresh lock, empty scene: silent (matches CastPanel's pre-scene setup today)
+    ap.appear(cid, sid, "characters", "seraphine", "corrupted", "npc")
+    assert scenes.read_scene(cid, sid)["messages"] == []
+
+    scenes.append_message(cid, sid, "user", "hi")
+    sid2 = scenes.create_scene(cid, "S2")
+    # already-locked actor rejoining a *different*, non-empty scene: narrates
+    ap.appear(cid, sid2, "characters", "seraphine", "corrupted", "npc")
+    assert scenes.read_scene(cid, sid)["messages"] == [{"role": "user", "content": "hi"}]  # untouched
+    scenes.append_message(cid, sid2, "user", "hi")
+    ap.leave(cid, sid2, "characters", "seraphine")
+    ap.appear(cid, sid2, "characters", "seraphine", "corrupted", "npc")
+    assert scenes.read_scene(cid, sid2)["messages"][-1] == \
+        {"role": "assistant", "content": "*Seraphine joins the scene.*"}
+
+
+def test_appear_rejoin_same_scene_is_a_noop_no_duplicate_narration(monkeypatch, tmp_path):
+    from grimoire.store import scenes
+    _wid, cid = _world_with_char(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    scenes.append_message(cid, sid, "user", "hi")
+    ap.appear(cid, sid, "characters", "seraphine", "corrupted", "npc")
+    before = scenes.read_scene(cid, sid)["messages"]
+    ap.appear(cid, sid, "characters", "seraphine", "corrupted", "npc")  # already in this scene
+    assert scenes.read_scene(cid, sid)["messages"] == before  # no second join line
+
+
+def test_appear_narrate_false_suppresses_narration(monkeypatch, tmp_path):
+    """ingest_scene.build_scene's use case: the scene's transcript is written
+    first, then cast is registered -- narration must be fully suppressed even
+    though the scene already has messages."""
+    from grimoire.store import scenes
+    _wid, cid = _world_with_char(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    scenes.append_message(cid, sid, "assistant", "*The study is silent.*")
+    ap.appear(cid, sid, "characters", "seraphine", "corrupted", "npc", narrate=False)
+    assert scenes.read_scene(cid, sid)["messages"] == [
+        {"role": "assistant", "content": "*The study is silent.*"}]
+
+
+def test_appear_and_leave_tolerate_a_scene_id_with_no_backing_file(monkeypatch, tmp_path):
+    """Every pre-existing test in this file calls appear()/leave() with a bare
+    scene id string ("s1", "the-docks", ...) that scenes.create_scene never
+    created -- appear()/leave() must not raise SceneNotFound for those."""
+    _wid, cid = _world_with_char(monkeypatch, tmp_path)
+    ap.appear(cid, "no-such-scene", "characters", "seraphine", "corrupted", "npc")
+    ap.leave(cid, "no-such-scene", "characters", "seraphine")
+
+
 def test_version_or_role_mismatch_rejected(monkeypatch, tmp_path):
     _wid, cid = _world_with_char(monkeypatch, tmp_path)
     ap.appear(cid, "s1", "characters", "seraphine", "corrupted", "npc")
