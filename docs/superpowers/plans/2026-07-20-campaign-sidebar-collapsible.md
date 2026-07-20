@@ -26,11 +26,17 @@
 **Files:**
 - Modify: `backend/src/grimoire/store/appearances.py:178-195` (the `appear()` function)
 - Modify: `backend/src/grimoire/store/appearances.py` (add `leave()` after `appear()`, i.e. after line 195)
+- Modify: `backend/scripts/ingest_scene.py:91-94` (the `appear()` call site in `build_scene()`)
 - Test: `backend/tests/test_appearances_store.py` (add tests after the existing `test_character_appears_locks_version_and_role`/`test_second_scene_appends_only` tests, i.e. after line 48)
+- Test: `backend/tests/test_ingest_scene.py` (add one test after `test_build_scene_writes_transcript_cast_location_date`)
 
 **Interfaces:**
-- Consumes: `campaigns.campaign_root`, `_actor_name`, `_ref`, `record`, `_write` — all already defined in `appearances.py`. `scenes.read_scene(cid, sid)["messages"]` and `scenes.append_message(cid, sid, role, content)` from `store/scenes.py`, imported lazily inside the function bodies (matching the existing lazy `from . import scenes` pattern already used in `appearances.suggestions()`).
-- Produces: `appearances.leave(cid: str, scene_id: str, kind: str, actor_id: str) -> None`, used by Task 2's route. `appear()`'s public signature is unchanged; only its body gains narration.
+- Consumes: `campaigns.campaign_root`, `_actor_name`, `_ref`, `record`, `_write` — all already defined in `appearances.py`. `scenes.read_scene(cid, sid)["messages"]`, `scenes.append_message(cid, sid, role, content)`, and `scenes.SceneNotFound` from `store/scenes.py`, imported lazily inside the function bodies (matching the existing lazy `from . import scenes` pattern already used in `appearances.suggestions()`).
+- Produces: `appearances.leave(cid: str, scene_id: str, kind: str, actor_id: str) -> None`, used by Task 2's route. `appearances.appear(...)` gains a new keyword-only-by-convention parameter `narrate: bool = True` — every existing positional call site (the tests above, `routes.py`'s `_seat_cast_member`) is unaffected since it's optional and defaults to the prior behavior's intent; only `ingest_scene.py`'s call site passes `narrate=False` explicitly.
+
+**Why `narrate` exists:** `backend/scripts/ingest_scene.py`'s `build_scene()` writes a scene's entire historical transcript via `scenes.append_message` *before* calling `appear()` to register its cast — including characters appearing for the first time ever in the campaign. Narrating unconditionally whenever the target scene has messages would inject a synthetic "*X joins the scene.*" line into what must be a faithful transcript of an already-complete, real historical RP log. That call shape (fresh lock, scene already has messages) is structurally identical to a live, interactive first-time add through this feature's new sidebar UI (Task 4), which genuinely should narrate — the two cannot be told apart from inside `appear()`, so the caller states its intent explicitly via the parameter. Full rationale: `docs/superpowers/specs/2026-07-20-campaign-sidebar-collapsible-design.md`, section 4, "Why `narrate` is a parameter, not inferred."
+
+**Why the `SceneNotFound` handling is required, not defensive filler:** many existing `appearances` store tests (see `test_appearances_store.py`, e.g. `test_character_appears_locks_version_and_role`) call `appear()`/`leave()` with a bare string scene id ("s1", "the-docks", …) that was never created via `scenes.create_scene` — there is no backing scene file. `scenes.read_scene` raises `SceneNotFound` for those. Without tolerating it, every pre-existing test that calls `appear()` with a synthetic scene id would start raising instead of passing.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -77,6 +83,21 @@ def test_leave_narrates_once_scene_has_messages(monkeypatch, tmp_path):
     ]
 
 
+def test_appear_narrates_first_time_join_into_a_messaged_scene(monkeypatch, tmp_path):
+    """The Task 4 case: adding a brand-new character to a scene that's already
+    underway (e.g. via the sidebar's new "+ Add" control) must narrate, exactly
+    like a rejoin does. This is the fresh-lock branch, not the rejoin branch."""
+    from grimoire.store import scenes
+    _wid, cid = _world_with_char(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    scenes.append_message(cid, sid, "user", "hi")
+    ap.appear(cid, sid, "characters", "seraphine", "corrupted", "npc")  # first-ever lock
+    assert scenes.read_scene(cid, sid)["messages"] == [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "*Seraphine joins the scene.*"},
+    ]
+
+
 def test_appear_narrates_join_once_scene_has_messages(monkeypatch, tmp_path):
     from grimoire.store import scenes
     _wid, cid = _world_with_char(monkeypatch, tmp_path)
@@ -106,19 +127,65 @@ def test_appear_rejoin_same_scene_is_a_noop_no_duplicate_narration(monkeypatch, 
     before = scenes.read_scene(cid, sid)["messages"]
     ap.appear(cid, sid, "characters", "seraphine", "corrupted", "npc")  # already in this scene
     assert scenes.read_scene(cid, sid)["messages"] == before  # no second join line
+
+
+def test_appear_narrate_false_suppresses_narration(monkeypatch, tmp_path):
+    """ingest_scene.build_scene's use case: the scene's transcript is written
+    first, then cast is registered -- narration must be fully suppressed even
+    though the scene already has messages."""
+    from grimoire.store import scenes
+    _wid, cid = _world_with_char(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    scenes.append_message(cid, sid, "assistant", "*The study is silent.*")
+    ap.appear(cid, sid, "characters", "seraphine", "corrupted", "npc", narrate=False)
+    assert scenes.read_scene(cid, sid)["messages"] == [
+        {"role": "assistant", "content": "*The study is silent.*"}]
+
+
+def test_appear_and_leave_tolerate_a_scene_id_with_no_backing_file(monkeypatch, tmp_path):
+    """Every pre-existing test in this file calls appear()/leave() with a bare
+    scene id string ("s1", "the-docks", ...) that scenes.create_scene never
+    created -- appear()/leave() must not raise SceneNotFound for those."""
+    _wid, cid = _world_with_char(monkeypatch, tmp_path)
+    ap.appear(cid, "no-such-scene", "characters", "seraphine", "corrupted", "npc")
+    ap.leave(cid, "no-such-scene", "characters", "seraphine")
+```
+
+Also add to `backend/tests/test_ingest_scene.py`, directly after `test_build_scene_writes_transcript_cast_location_date` (find it by name — it's the test that builds a scene with `new_characters: [{"name": "Marisol", ...}]` and asserts the exact transcript content):
+
+```python
+def test_build_scene_does_not_narrate_a_first_time_cast_member(monkeypatch, tmp_path):
+    """build_scene's appear() call must pass narrate=False -- otherwise a
+    first-time character (like Marisol, cast for the first time in this very
+    scene) gets a synthetic "joins the scene" line injected after the real
+    transcript, corrupting the ingested historical dialogue."""
+    wid = _world(monkeypatch, tmp_path)
+    cid = ingest_scene.ensure_campaign("Silver Oath", wid)
+    scene = {
+        "title": "The Reckoning",
+        "new_characters": [{"name": "Marisol", "personality": "cruel, controlled"}],
+        "characters": [{"kind": "characters", "id": "marisol"}],
+        "turns": [{"role": "assistant", "speaker": "Marisol", "content": "\"You've grown bold.\""}],
+    }
+    sid = ingest_scene.build_scene(cid, scene)
+    from grimoire.store import scenes
+    assert [m["content"] for m in scenes.read_scene(cid, sid)["messages"]] == \
+        ["\"You've grown bold.\""]
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `backend/.venv/Scripts/python.exe -m pytest backend/tests/test_appearances_store.py -k "leave or narrat" -v`
-Expected: FAIL — `AttributeError: module 'grimoire.store.appearances' has no attribute 'leave'` (and the `appear()` tests fail on missing narration lines).
+and: `backend/.venv/Scripts/python.exe -m pytest backend/tests/test_ingest_scene.py -k "narrate" -v`
+Expected: FAIL — `AttributeError: module 'grimoire.store.appearances' has no attribute 'leave'` (and the `appear()`/`build_scene` tests fail on missing narration lines / an unexpected extra message).
 
-- [ ] **Step 3: Implement `leave()` and add narration to `appear()`**
+- [ ] **Step 3: Implement `leave()`, narration + the `narrate` parameter on `appear()`, and the `ingest_scene.py` opt-out**
 
 Replace `appear()` in `backend/src/grimoire/store/appearances.py:178-195`:
 
 ```python
-def appear(cid: str, scene_id: str, kind: str, actor_id: str, version_id: str, role: str) -> None:
+def appear(cid: str, scene_id: str, kind: str, actor_id: str, version_id: str, role: str,
+           narrate: bool = True) -> None:
     data = record(cid)
     ref = _ref(kind, actor_id)
     rec = data.get(ref)
@@ -138,8 +205,14 @@ def appear(cid: str, scene_id: str, kind: str, actor_id: str, version_id: str, r
         _write(cid, data)
         campaigns.touch(cid)
 
+    if not narrate:
+        return
     from . import scenes  # lazy: scenes <-> appearances is already a lazy pair
-    if scenes.read_scene(cid, scene_id)["messages"]:
+    try:
+        has_messages = bool(scenes.read_scene(cid, scene_id)["messages"])
+    except scenes.SceneNotFound:
+        return  # synthetic/test scene id with no backing file: nothing to narrate into
+    if has_messages:
         name = _actor_name(campaigns.campaign_root(cid), kind, actor_id, version_id) or actor_id
         scenes.append_message(cid, scene_id, "assistant", f"*{name} joins the scene.*")
 
@@ -164,19 +237,35 @@ def leave(cid: str, scene_id: str, kind: str, actor_id: str) -> None:
     name = _actor_name(campaigns.campaign_root(cid), kind, actor_id, rec["version"]) or actor_id
     rec["scenes"].remove(scene_id)
     _write(cid, data)
-    if scenes.read_scene(cid, scene_id)["messages"]:
+    try:
+        has_messages = bool(scenes.read_scene(cid, scene_id)["messages"])
+    except scenes.SceneNotFound:
+        return
+    if has_messages:
         scenes.append_message(cid, scene_id, "assistant", f"*{name} leaves the scene.*")
+```
+
+Update the `appear()` call site in `backend/scripts/ingest_scene.py:91-94` (inside `build_scene()`):
+
+```python
+    for actor in scene["characters"]:
+        kind, aid = actor["kind"], actor["id"]
+        vid = resolve_version(cid, kind, aid)
+        appearances.appear(cid, sid, kind, aid, vid, "player" if kind == "pcs" else "npc",
+                            narrate=False)
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `backend/.venv/Scripts/python.exe -m pytest backend/tests/test_appearances_store.py -v`
-Expected: PASS (all tests in the file, including the pre-existing ones — `appear()`'s behavior for scenes with no messages is unchanged).
+Run: `backend/.venv/Scripts/python.exe -m pytest backend/tests/test_appearances_store.py backend/tests/test_ingest_scene.py -v`
+Expected: PASS (both full files, including every pre-existing test — the pre-existing `appearances` tests call `appear()`/`leave()` with synthetic scene ids that have no backing scene file, which is exactly what the `SceneNotFound` handling exists for; the pre-existing `test_build_scene_writes_transcript_cast_location_date` must produce byte-identical transcript content to before, confirming `narrate=False` fully suppresses the new narration for ingested scenes).
+
+Then run the full backend suite to catch anything outside these two files: `backend/.venv/Scripts/python.exe -m pytest backend -q`
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add backend/src/grimoire/store/appearances.py backend/tests/test_appearances_store.py
+git add backend/src/grimoire/store/appearances.py backend/scripts/ingest_scene.py backend/tests/test_appearances_store.py backend/tests/test_ingest_scene.py
 git commit -m "feat(backend): add appearances.leave() with join/leave transition narration"
 ```
 
