@@ -27,8 +27,10 @@
 - Modify: `backend/src/grimoire/store/appearances.py:178-195` (the `appear()` function)
 - Modify: `backend/src/grimoire/store/appearances.py` (add `leave()` after `appear()`, i.e. after line 195)
 - Modify: `backend/scripts/ingest_scene.py:91-94` (the `appear()` call site in `build_scene()`)
+- Modify: `backend/src/grimoire/store/absorb.py:530` (the `appear()` call site in `apply_edits`'s `new_character` handling — found by task review, not the original brief; see Step 3's addendum)
 - Test: `backend/tests/test_appearances_store.py` (add tests after the existing `test_character_appears_locks_version_and_role`/`test_second_scene_appends_only` tests, i.e. after line 48)
 - Test: `backend/tests/test_ingest_scene.py` (add one test after `test_build_scene_writes_transcript_cast_location_date`)
+- Test: `backend/tests/test_absorb_store.py` (add one test after `test_apply_edits_new_character_creates_and_casts_npc`)
 
 **Interfaces:**
 - Consumes: `campaigns.campaign_root`, `_actor_name`, `_ref`, `record`, `_write` — all already defined in `appearances.py`. `scenes.read_scene(cid, sid)["messages"]`, `scenes.append_message(cid, sid, role, content)`, and `scenes.SceneNotFound` from `store/scenes.py`, imported lazily inside the function bodies (matching the existing lazy `from . import scenes` pattern already used in `appearances.suggestions()`).
@@ -255,17 +257,84 @@ Update the `appear()` call site in `backend/scripts/ingest_scene.py:91-94` (insi
                             narrate=False)
 ```
 
+**Addendum (found by task review, not in the original brief):** `appear()`
+has a *third* caller the original caller audit missed:
+`backend/src/grimoire/store/absorb.py:530`, inside `apply_edits`'s
+`new_character` handling (the emergent-new-character-during-absorb
+feature). A character discovered and retroactively cast during post-scene
+absorb is not "live-joining" the scene the way an interactive sidebar add
+is — it's recording something the already-written transcript already
+implies — so it needs the same `narrate=False` opt-out, for the same reason
+as `ingest_scene.py`. Left unfixed, this call site would have reintroduced
+the transcript-corruption bug through a second door: it's reachable from
+both the live `PUT .../chronicle` route (normal end-of-scene absorb) and
+`ingest_scene.py`'s own `apply_scene` step, meaning ingest scenes remain
+vulnerable even with `build_scene`'s own call site fixed above. Fix
+`backend/src/grimoire/store/absorb.py:530`:
+
+```python
+                if sid:
+                    appearances.appear(cid, sid, "characters", new_cid, new_vid, "npc", narrate=False)
+```
+
+Also add a regression test to `backend/tests/test_absorb_store.py`, directly
+after `test_apply_edits_new_character_creates_and_casts_npc` (find it by
+name — it asserts a new character gets created and cast; reuse its exact
+`_campaign`/`applied`/`edits` pattern):
+
+```python
+def test_apply_edits_new_character_does_not_narrate_into_a_messaged_scene(monkeypatch, tmp_path):
+    from grimoire.store import scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    scenes.append_message(cid, sid, "assistant", "*The tavern is loud.*")
+    absorb.apply_edits(cid, [
+        {"id": "new_character:old-bram", "kind": "new_character",
+         "target": {"kind": "characters", "id": ""}, "field": "description",
+         "after": "[character(\"Old Bram\") { Occupation(\"innkeep\") }]\n\nBram kept the inn.",
+         "payload": {"name": "Old Bram"}}], sid)
+    assert [m["content"] for m in scenes.read_scene(cid, sid)["messages"]] == \
+        ["*The tavern is loud.*"]
+```
+
+**Minor consistency fix (also found by task review):** in `leave()`,
+resolve `name = _actor_name(...)` only after confirming the scene has
+messages (matching `appear()`'s ordering, which already does this) instead
+of unconditionally up front — avoids a wasted file read on the common silent
+(pre-first-message) path:
+
+```python
+def leave(cid: str, scene_id: str, kind: str, actor_id: str) -> None:
+    """..."""  # docstring unchanged
+    data = record(cid)
+    ref = _ref(kind, actor_id)
+    rec = data.get(ref)
+    if rec is None or scene_id not in rec.get("scenes", []):
+        return
+    from . import scenes  # lazy: scenes <-> appearances is already a lazy pair
+    version = rec["version"]
+    rec["scenes"].remove(scene_id)
+    _write(cid, data)
+    try:
+        has_messages = bool(scenes.read_scene(cid, scene_id)["messages"])
+    except scenes.SceneNotFound:
+        return
+    if has_messages:
+        name = _actor_name(campaigns.campaign_root(cid), kind, actor_id, version) or actor_id
+        scenes.append_message(cid, scene_id, "assistant", f"*{name} leaves the scene.*")
+```
+
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `backend/.venv/Scripts/python.exe -m pytest backend/tests/test_appearances_store.py backend/tests/test_ingest_scene.py -v`
-Expected: PASS (both full files, including every pre-existing test — the pre-existing `appearances` tests call `appear()`/`leave()` with synthetic scene ids that have no backing scene file, which is exactly what the `SceneNotFound` handling exists for; the pre-existing `test_build_scene_writes_transcript_cast_location_date` must produce byte-identical transcript content to before, confirming `narrate=False` fully suppresses the new narration for ingested scenes).
+Run: `backend/.venv/Scripts/python.exe -m pytest backend/tests/test_appearances_store.py backend/tests/test_ingest_scene.py backend/tests/test_absorb_store.py -v`
+Expected: PASS (all three full files, including every pre-existing test — the pre-existing `appearances` tests call `appear()`/`leave()` with synthetic scene ids that have no backing scene file, which is exactly what the `SceneNotFound` handling exists for; the pre-existing `test_build_scene_writes_transcript_cast_location_date` and `test_apply_edits_new_character_creates_and_casts_npc` must produce identical results to before, confirming `narrate=False` fully suppresses the new narration at both fixed call sites).
 
-Then run the full backend suite to catch anything outside these two files: `backend/.venv/Scripts/python.exe -m pytest backend -q`
+Then run the full backend suite to catch anything outside these files: `backend/.venv/Scripts/python.exe -m pytest backend -q`
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add backend/src/grimoire/store/appearances.py backend/scripts/ingest_scene.py backend/tests/test_appearances_store.py backend/tests/test_ingest_scene.py
+git add backend/src/grimoire/store/appearances.py backend/src/grimoire/store/absorb.py backend/scripts/ingest_scene.py backend/tests/test_appearances_store.py backend/tests/test_ingest_scene.py backend/tests/test_absorb_store.py
 git commit -m "feat(backend): add appearances.leave() with join/leave transition narration"
 ```
 
