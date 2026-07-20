@@ -276,6 +276,7 @@ test("section collapse state persists across a remount", async () => {
 test("the Context section header still shows the percentage badge and collapses as a whole", async () => {
   renderInspector();
   await screen.findByText(/World info/);
+  await screen.findByText("10%");
   const header = screen.getByRole("button", { name: /context/i });
   fireEvent.click(header);
   expect(screen.queryByText(/World info/)).not.toBeInTheDocument();

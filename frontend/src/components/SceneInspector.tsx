@@ -25,11 +25,11 @@ function SideSection({ id, title, collapsed, onToggle, extra, children }: {
 }) {
   return (
     <div className="side-section">
-      <button className="side-section-head" aria-expanded={!collapsed} onClick={() => onToggle(id)}>
+      <button type="button" className="side-section-head" aria-expanded={!collapsed} onClick={() => onToggle(id)}>
         <h4>{title}</h4>
         <span className="side-section-head-right">
           {extra}
-          <span className="side-section-chev">{collapsed ? "▸" : "▾"}</span>
+          <span className="side-section-chev" aria-hidden>{collapsed ? "▸" : "▾"}</span>
         </span>
       </button>
       {!collapsed && <div className="side-section-body">{children}</div>}
@@ -226,6 +226,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
 
   return (
     <aside className="inspector">
+      {error && <div className="banner">{error}</div>}
       {pcless && (
         <SideSection id="offscreen" title="Offscreen scene" collapsed={!!collapsed.offscreen} onToggle={toggleSection}>
           <div className="field-hint">No player character — you direct the NPCs.</div>
@@ -317,7 +318,6 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
       </SideSection>
 
       <SideSection id="when" title="When" collapsed={!!collapsed.when} onToggle={toggleSection}>
-        {error && <div className="banner">{error}</div>}
         {when?.current ? (
           <>
             <div className="field-hint">{when.current.friendly} ({when.current.weekday})</div>
