@@ -95,13 +95,37 @@ the whole block, entries and all.
 
 Add two booleans, `railCollapsed` / `inspectorCollapsed`, initialized from
 `localStorage` (`grimoire.rail.collapsed`, `grimoire.inspector.collapsed`) and
-persisted on toggle. Compute the grid template inline from these:
+persisted on toggle, applied as classes: `<div className={"layout" + (railCollapsed ? " rail-collapsed" : "") + (inspectorCollapsed ? " inspector-collapsed" : "")}>`.
 
-```tsx
-const railW = railCollapsed ? "28px" : "236px";
-const inspectorW = inspectorCollapsed ? "28px" : "286px";
-<div className="layout" style={{ gridTemplateColumns: `${railW} 1fr ${inspectorW}` }}>
+**Not inline styles.** An inline `style={{ gridTemplateColumns: ... }}` would
+always beat the existing `@media (max-width: 1100px)` stylesheet rule
+(inline style has higher specificity than any selector in an external
+sheet), so a persisted "expanded" inspector would keep its 286px grid track
+reserved — invisible but still taking the space — on narrow viewports. Using
+classes keeps the cascade in one place (the stylesheet) so the narrow
+breakpoint can still win. In `index.css`:
+
+```css
+.layout { grid-template-columns: 236px 1fr 286px; }
+.layout.rail-collapsed { grid-template-columns: 28px 1fr 286px; }
+.layout.inspector-collapsed { grid-template-columns: 236px 1fr 28px; }
+.layout.rail-collapsed.inspector-collapsed { grid-template-columns: 28px 1fr 28px; }
+
+@media (max-width: 1100px) {
+  .inspector, .inspector-tab { display: none; }
+  .layout, .layout.inspector-collapsed { grid-template-columns: 236px 1fr; }
+  .layout.rail-collapsed, .layout.rail-collapsed.inspector-collapsed { grid-template-columns: 28px 1fr; }
+}
 ```
+
+The media-query rules must stay positioned *after* the four base
+`.layout...` rules in the file (same specificity per matched selector pair,
+so normal cascade source-order decides it) — this mirrors how the existing
+narrow-viewport rule already overrides the base `.layout` today, just
+extended to the two new collapsed-state selectors so neither can leave a
+stale, invisible grid track reserved. (`inspector-collapsed` alone collapses
+to the same 236px/1fr as the plain narrow case, since the inspector is force-hidden
+either way below 1100px; only `rail-collapsed` still matters there.)
 
 Each panel gets a small toggle button pinned to its inner edge (`‹` on the
 rail's right edge, `›` on the inspector's left edge, when expanded). When
@@ -310,6 +334,19 @@ preference, not something that should differ campaign to campaign.
   `window.confirm`). Removing from a scene's active cast is low-stakes and
   reversible (re-add), so this intentionally does not follow the delete-scene
   precedent.
+- **No locking around `leave()`/`appear()`'s read-modify-write + narration
+  append.** Two concurrent requests (two tabs, a retry racing the original)
+  could both read the same pre-mutation `appearances.json`, and each could
+  independently decide "the scene already has messages" and append its own
+  transition line, producing a duplicate or contradictory narration, or a
+  cast-state write that loses one side's change. This is not a new risk
+  class: `set_location` and `set_scene_datetime` already do the identical
+  unguarded read-modify-write-then-narrate sequence, and the store has no
+  locking anywhere — accepted as inherent to this single-user, local-only
+  app (see the identical acceptance in
+  `docs/superpowers/specs/2026-07-17-played-greeting-exclusion-design.md`).
+  Not introducing new transactional machinery here keeps this change
+  consistent with the rest of the store rather than a one-off exception.
 
 ## Tests
 
