@@ -14,6 +14,7 @@ vi.mock("../api/client", async () => {
       listAppearances: vi.fn(), listEntityImages: vi.fn(),
       listEntities: vi.fn(), setSceneLocation: vi.fn(),
       getSceneStyle: vi.fn(), setSceneStyle: vi.fn(), listStyles: vi.fn(),
+      addToCast: vi.fn(), removeFromCast: vi.fn(),
       campaignImageUrl: () => "/img",
       entityImageUrl: () => "/loc-img",
     },
@@ -42,6 +43,8 @@ beforeEach(() => {
   localStorage.clear();
   vi.clearAllMocks();
   (api.getCast as any).mockResolvedValue([{ kind: "characters", id: "seraphine", role: "npc" }]);
+  (api.addToCast as any).mockResolvedValue({ ok: true });
+  (api.removeFromCast as any).mockResolvedValue({ ok: true });
   (api.getCampaign as any).mockResolvedValue({ meta: { id: "c", world: "w" }, body: "" });
   (api.listCharacters as any).mockResolvedValue([{ id: "seraphine", name: "Seraphine", default_version: "default", versions: [] }]);
   (api.listPCs as any).mockResolvedValue([]);
@@ -91,7 +94,7 @@ test("lists cast names and the location and a context section", async () => {
 
 test("clicking a cast row opens the drawer", async () => {
   renderInspector();
-  fireEvent.click(await screen.findByRole("button", { name: /Seraphine/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /^Seraphine/ }));
   await waitFor(() => expect(api.getCastDetail).toHaveBeenCalledWith("c", "s", "characters", "seraphine"));
   await screen.findByText("keeper");
 });
@@ -110,8 +113,8 @@ test("cast rows show portraits with roster versions and role chips", async () =>
   await screen.findByText("Seraphine");
   expect(screen.getByAltText("Seraphine portrait")).toBeInTheDocument(); // roster version found
   expect(screen.getByText("Y")).toBeInTheDocument();                     // PC initials fallback
-  expect(screen.getByText("player")).toBeInTheDocument();
-  expect(screen.getByText("npc")).toBeInTheDocument();
+  expect(screen.getByText("player", { selector: ".role-chip" })).toBeInTheDocument();
+  expect(screen.getByText("npc", { selector: ".role-chip" })).toBeInTheDocument();
 });
 
 test("location with a primary image renders a clickable thumbnail", async () => {
@@ -276,4 +279,55 @@ test("the Context section header still shows the percentage badge and collapses 
   const header = screen.getByRole("button", { name: /context/i });
   fireEvent.click(header);
   expect(screen.queryByText(/World info/)).not.toBeInTheDocument();
+});
+
+test("removing a cast member calls removeFromCast, reloads cast, and notifies the scene changed", async () => {
+  const onSceneChanged = vi.fn();
+  render(<SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={onSceneChanged} />);
+  await screen.findByText("Seraphine");
+  fireEvent.click(screen.getByRole("button", { name: /remove seraphine from scene/i }));
+  await waitFor(() => expect(api.removeFromCast).toHaveBeenCalledWith("c", "s", "characters", "seraphine"));
+  await waitFor(() => expect(onSceneChanged).toHaveBeenCalled());
+  expect(api.getCast).toHaveBeenCalledTimes(2); // initial load + reload after remove
+});
+
+test("adding a character posts kind + id + role, reloads cast, and notifies the scene changed", async () => {
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "seraphine", name: "Seraphine", default_version: "default", versions: [] },
+    { id: "mara", name: "Mara", default_version: "default", versions: [] },
+  ]);
+  const onSceneChanged = vi.fn();
+  render(<SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={onSceneChanged} />);
+  await screen.findByRole("option", { name: "Mara" });
+  fireEvent.change(screen.getByLabelText("Character or PC to add"), { target: { value: "mara" } });
+  fireEvent.change(screen.getByLabelText("Role for new cast member"), { target: { value: "player" } });
+  fireEvent.click(screen.getByRole("button", { name: /\+ add/i }));
+  await waitFor(() => expect(api.addToCast).toHaveBeenCalledWith(
+    "c", "s", { kind: "characters", id: "mara", role: "player" }));
+  await waitFor(() => expect(onSceneChanged).toHaveBeenCalled());
+});
+
+test("adding a PC omits the role picker and forces role=player", async () => {
+  (api.listCampaignPCs as any).mockResolvedValue([
+    { id: "elara", name: "Elara", tags: [], default_version: "default", versions: [] }]);
+  render(<SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+  fireEvent.change(await screen.findByLabelText("Cast kind to add"), { target: { value: "pcs" } });
+  await screen.findByRole("option", { name: "Elara" });
+  expect(screen.queryByLabelText("Role for new cast member")).not.toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("Character or PC to add"), { target: { value: "elara" } });
+  fireEvent.click(screen.getByRole("button", { name: /\+ add/i }));
+  await waitFor(() => expect(api.addToCast).toHaveBeenCalledWith(
+    "c", "s", { kind: "pcs", id: "elara", role: "player" }));
+});
+
+test("offscreen scene hides the kind and role pickers, forcing npc characters only", async () => {
+  (api.getCast as any).mockResolvedValue([]);
+  render(<SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} pcless />);
+  await screen.findByLabelText("Character or PC to add");
+  expect(screen.queryByLabelText("Cast kind to add")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("Role for new cast member")).not.toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("Character or PC to add"), { target: { value: "seraphine" } });
+  fireEvent.click(screen.getByRole("button", { name: /\+ add/i }));
+  await waitFor(() => expect(api.addToCast).toHaveBeenCalledWith(
+    "c", "s", { kind: "characters", id: "seraphine", role: "npc" }));
 });
