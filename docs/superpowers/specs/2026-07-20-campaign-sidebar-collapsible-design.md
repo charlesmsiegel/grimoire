@@ -302,10 +302,33 @@ states its intent explicitly. Fix `build_scene`'s call site
                             narrate=False)
 ```
 
-Every other caller (the existing `POST .../cast` route via `_seat_cast_member`,
-and this feature's new sidebar add) keeps the default `narrate=True` and
-narrates exactly as designed. `leave()` has no batch/non-interactive caller
-today, so it does not need the same parameter — YAGNI; add it if one shows up.
+**Full caller audit** (every `appearances.appear(` call site in the
+codebase, confirmed by grep — not just the one this section originally
+named):
+
+- `backend/src/grimoire/routes.py:2880` (`_seat_cast_member`, the existing
+  `POST .../cast` route) and this feature's new sidebar add (Task 4) — both
+  interactive, keep the default `narrate=True`.
+- `backend/src/grimoire/store/playing.py:124` (`start_from_greeting`) — safe
+  as-is with the default: the function raises `PlayError` earlier if the
+  scene already has messages (a greeting can only start a scene, never
+  resume one mid-way), so `appear()`'s has-messages check never finds a
+  non-empty scene here in practice. No change needed.
+- `backend/src/grimoire/store/absorb.py:530` (`apply_edits`'s
+  `new_character` handling — the emergent-new-character-during-absorb
+  feature) — **also needs `narrate=False`**, for the same reason as
+  `ingest_scene.py`: a character absorb discovers mid-transcript and
+  retroactively casts is not "live-joining" the scene, it's recording
+  something the already-written transcript already implies. Reachable from
+  two paths, both post-transcript: the live `PUT .../chronicle` route
+  (normal end-of-scene absorb) and `ingest_scene.py`'s own `apply_scene`
+  step — meaning this call site left unfixed would have reintroduced the
+  exact transcript-corruption bug in the ingest pipeline through a second
+  door, even with `build_scene`'s own call site correctly fixed.
+- `backend/scripts/ingest_scene.py:94` (`build_scene`) — fixed above.
+
+`leave()` has no batch/non-interactive caller today, so it does not need
+the same parameter — YAGNI; add it if one shows up.
 
 New route in `backend/src/grimoire/routes.py`, next to `post_scene_cast`:
 
@@ -363,10 +386,12 @@ preference, not something that should differ campaign to campaign.
   unaffected — only the outer section gains a collapse toggle.
 - No change to how `scene_cast` / `roster` / `getCast` responses are shaped —
   `leave()` only mutates the `scenes` array inside an existing record.
-- `backend/scripts/ingest_scene.py`'s `build_scene()` needs its one-line
-  `appear()` call site updated to pass `narrate=False` (see section 4) — the
-  only other caller of `appear()` in the codebase, and the reason the
-  `narrate` parameter exists at all.
+- `backend/scripts/ingest_scene.py`'s `build_scene()` and
+  `backend/src/grimoire/store/absorb.py`'s `apply_edits` (`new_character`
+  handling) each need their `appear()` call site updated to pass
+  `narrate=False` (see section 4's full caller audit) — the reason the
+  `narrate` parameter exists at all. `playing.py`'s `start_from_greeting`
+  call needs no change (see section 4 for why it's already safe).
 - The `@media (max-width: 1100px)` narrow-viewport rule (`.inspector { display: none; }`)
   is untouched; it now composes with the new manual collapse (both hide the
   same element for different reasons — narrow viewport wins regardless of the
