@@ -657,6 +657,8 @@ export const api = {
   addToCast: (cid: string, sid: string,
               body: { kind: string; id: string; version?: string; role?: string }) =>
     request<{ ok: boolean }>("POST", `/api/campaigns/${cid}/scenes/${sid}/cast`, body),
+  removeFromCast: (cid: string, sid: string, kind: string, id: string) =>
+    request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}/scenes/${sid}/cast/${kind}/${id}`),
   availableGreetings: (cid: string, after?: string) =>
     request<Availability[]>("GET",
       `/api/campaigns/${cid}/greetings/available${after ? `?after=${encodeURIComponent(after)}` : ""}`),

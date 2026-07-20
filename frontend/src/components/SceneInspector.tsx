@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import {
   api, type Actor, type SceneContext, type SceneLocation, type ChronicleEntry,
   type CalendarConfig, type RosterEntry, type SceneDatetime, type Style,
+  type CharacterSummary, type PCSummary,
 } from "../api/client";
 import { getModels, type Model } from "../api/models";
 import { Portrait } from "./Portrait";
@@ -83,6 +84,37 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
     api.listStyles().then(setStyleOptions).catch(() => setStyleOptions([]));
   }, [cid]);
 
+  const [chars, setChars] = useState<CharacterSummary[]>([]);
+  const [pcs, setPcs] = useState<PCSummary[]>([]);
+  const [addKind, setAddKind] = useState<"characters" | "pcs">("characters");
+  const [addActorId, setAddActorId] = useState("");
+  const [addRole, setAddRole] = useState<"player" | "npc">("npc");
+
+  useEffect(() => {
+    api.listCharacters({ kind: "campaign", id: cid }).then(setChars).catch(() => setChars([]));
+    api.listCampaignPCs(cid).then(setPcs).catch(() => setPcs([]));
+  }, [cid]);
+
+  const addOptions = (addKind === "characters" ? chars : pcs)
+    .filter((o) => !cast.some((a) => a.kind === addKind && a.id === o.id));
+
+  async function addCastMember() {
+    if (!addActorId) return;
+    await api.addToCast(cid, sid, {
+      kind: addKind, id: addActorId,
+      role: pcless ? "npc" : addKind === "pcs" ? "player" : addRole,
+    });
+    setAddActorId("");
+    await reloadCast();
+    onSceneChanged();
+  }
+
+  async function removeCastMember(a: Actor) {
+    await api.removeFromCast(cid, sid, a.kind, a.id);
+    await reloadCast();
+    onSceneChanged();
+  }
+
   const reloadWhen = useCallback(
     () => api.getSceneDatetime(cid, sid).then((w) => {
       setWhen(w);
@@ -96,9 +128,12 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   const reloadStyle = useCallback(
     () => api.getSceneStyle(cid, sid).then((r) => setStyleId(r.style_id)).catch(() => setStyleId("")),
     [cid, sid]);
+  const reloadCast = useCallback(
+    () => api.getCast(cid, sid).then(setCast).catch(() => setCast([])),
+    [cid, sid]);
 
   useEffect(() => {
-    api.getCast(cid, sid).then(setCast).catch(() => setCast([]));
+    reloadCast();
     api.listAppearances(cid).then(setRoster).catch(() => setRoster([]));
     api.getSceneLocation(cid, sid).then(setSetting).catch(() => setSetting(null));
     api.getSceneContext(cid, sid).then(setCtx).catch(() => setCtx(null));
@@ -106,7 +141,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
     reloadWhen();
     reloadCfg();
     reloadStyle();
-  }, [cid, sid, refreshKey, reloadWhen, reloadCfg, reloadStyle]);
+  }, [cid, sid, refreshKey, reloadWhen, reloadCfg, reloadStyle, reloadCast]);
 
   // the location section shows the primary image when the store has one
   useEffect(() => {
@@ -201,15 +236,41 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
             : undefined;
           const pc = a.role === "player";
           return (
-            <button key={`${a.kind}/${a.id}`} className={"inspector-row" + (pc ? " pc" : "")}
-                    onClick={() => setDrawer({ type: "actor", kind: a.kind, id: a.id })}>
-              <Portrait src={ver ? api.campaignImageUrl(cid, a.id, ver, "avatar") : null}
-                        name={nameOf(a)} />
-              <span className="inspector-name">{nameOf(a)}</span>
-              <span className="role-chip">{pc ? "player" : "npc"}</span>
-            </button>
+            <div className="inspector-row-item" key={`${a.kind}/${a.id}`}>
+              <button className={"inspector-row" + (pc ? " pc" : "")}
+                      onClick={() => setDrawer({ type: "actor", kind: a.kind, id: a.id })}>
+                <Portrait src={ver ? api.campaignImageUrl(cid, a.id, ver, "avatar") : null}
+                          name={nameOf(a)} />
+                <span className="inspector-name">{nameOf(a)}</span>
+                <span className="role-chip">{pc ? "player" : "npc"}</span>
+              </button>
+              <button className="inspector-row-remove" aria-label={`Remove ${nameOf(a)} from scene`}
+                      onClick={() => removeCastMember(a)}>✕</button>
+            </div>
           );
         })}
+        <div className="picker">
+          {!pcless && (
+            <select aria-label="Cast kind to add" value={addKind}
+                    onChange={(e) => { setAddKind(e.target.value as "characters" | "pcs"); setAddActorId(""); }}>
+              <option value="characters">Character</option>
+              <option value="pcs">PC</option>
+            </select>
+          )}
+          <select aria-label="Character or PC to add" value={addActorId}
+                  onChange={(e) => setAddActorId(e.target.value)}>
+            <option value="">— pick —</option>
+            {addOptions.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+          </select>
+          {addKind === "characters" && !pcless && (
+            <select aria-label="Role for new cast member" value={addRole}
+                    onChange={(e) => setAddRole(e.target.value as "player" | "npc")}>
+              <option value="npc">npc</option>
+              <option value="player">player</option>
+            </select>
+          )}
+          <button className="primary" onClick={addCastMember} disabled={!addActorId}>+ Add</button>
+        </div>
       </SideSection>
 
       <SideSection id="location" title="Location" collapsed={!!collapsed.location} onToggle={toggleSection}>
