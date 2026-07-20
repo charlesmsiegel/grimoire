@@ -1306,12 +1306,17 @@ test("rail and inspector collapse state persist across a remount", async () => {
   const { unmount } = renderCampaign();
   await screen.findByRole("button", { name: "+ New Scene" });
   fireEvent.click(screen.getByRole("button", { name: /collapse scene list/i }));
+  await screen.findByText("Active characters");
+  fireEvent.click(screen.getByRole("button", { name: /collapse sidebar/i }));
   expect(localStorage.getItem("grimoire.rail.collapsed")).toBe("1");
+  expect(localStorage.getItem("grimoire.inspector.collapsed")).toBe("1");
   unmount();
 
   renderCampaign();
-  await screen.findByText("Active characters"); // inspector still renders...
-  expect(screen.queryByRole("button", { name: "+ New Scene" })).not.toBeInTheDocument(); // ...but the rail stayed collapsed
+  await screen.findByRole("button", { name: /expand scene list/i }); // rail stayed collapsed
+  await screen.findByRole("button", { name: /expand sidebar/i }); // inspector stayed collapsed too
+  expect(screen.queryByRole("button", { name: "+ New Scene" })).not.toBeInTheDocument();
+  expect(screen.queryByText("Active characters")).not.toBeInTheDocument();
 });
 
 test("the chrome bar toggles the subheader independently of the topbar toggle", async () => {
