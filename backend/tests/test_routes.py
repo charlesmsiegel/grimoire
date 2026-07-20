@@ -1180,6 +1180,35 @@ def test_cast_and_suggestions_flow(client):
     assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/suggestions").json() == []
 
 
+def test_delete_cast_removes_member_and_narrates_when_scene_has_messages(client):
+    wid = _world(client)
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Seraphine"})
+    cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Docks"}).json()["id"]
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast", json={"kind": "characters", "id": "seraphine"})
+    store.scenes.append_message(cid, sid, "user", "hi")
+
+    r = client.delete(f"/api/campaigns/{cid}/scenes/{sid}/cast/characters/seraphine")
+    assert r.status_code == 200 and r.json() == {"ok": True}
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/cast").json() == []
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"][-1] == \
+        {"role": "assistant", "content": "*Seraphine leaves the scene.*"}
+
+
+def test_delete_cast_unknown_kind_404(client):
+    wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    assert client.delete(f"/api/campaigns/{cid}/scenes/{sid}/cast/monsters/x").status_code == 404
+
+
+def test_delete_cast_not_currently_cast_is_a_200_noop(client):
+    """Idempotency: retrying the DELETE (or double-clicking remove) must not 404."""
+    wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    assert client.delete(f"/api/campaigns/{cid}/scenes/{sid}/cast/characters/ghost").status_code == 200
+    assert client.delete(f"/api/campaigns/{cid}/scenes/{sid}/cast/characters/ghost").status_code == 200
+
+
 def test_cast_pc_and_character_as_player(client):
     wid = _world(client)
     client.post(f"/api/worlds/{wid}/characters", json={"name": "Desmond"})
