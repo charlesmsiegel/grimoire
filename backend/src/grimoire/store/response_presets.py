@@ -121,3 +121,84 @@ def supplies(meta: dict) -> dict | None:
     elif style:
         out["style_id"] = style
     return out
+
+
+# Scope names, narrowest first — the order every field is walked in.
+_SCOPES = ("turn", "scene", "campaign", "global")
+
+
+def _override_key(field: str, scope: str) -> str:
+    """The loose-override frontmatter key for a field at a given scope.
+
+    style_id is spelled `default_style_id` globally and keeps that spelling:
+    renaming it would break every existing install's global style for no
+    functional gain.
+    """
+    if field == "style_id":
+        return "default_style_id" if scope == "global" else "style_id"
+    return f"length_{field}"
+
+
+def _supplied_by_preset(meta: dict) -> dict:
+    """What the preset named by this scope supplies. A scope naming a missing
+    or invalid preset supplies nothing and the walk continues."""
+    pid = (meta.get("response_preset") or "").strip()
+    if not pid:
+        return {}
+    try:
+        record = read_preset(pid)
+    except PresetNotFound:
+        return {}
+    return supplies(record["meta"]) or {}
+
+
+def _override(meta: dict, field: str, scope: str):
+    raw = (meta.get(_override_key(field, scope)) or "").strip()
+    if not raw:
+        return None
+    if field == "style_id":
+        return "" if raw == _STYLE_CLEAR else raw
+    return lengths.coerce(raw)
+
+
+def resolve(*, turn: dict | None = None, scene_meta: dict | None = None,
+            campaign_meta: dict | None = None, config: dict | None = None) -> dict:
+    """The per-field cascade over turn -> scene -> campaign -> global.
+
+    EACH FIELD RESOLVES INDEPENDENTLY. For one field, walk the scopes and take
+    the first value found; within a scope, a loose override beats that scope's
+    own preset. There is no single "base preset" — that formulation is what made
+    a narrower length-only preset wipe a broader style.
+
+    Always returns a COMPLETE dict: style_id plus every knob. The Jinja env runs
+    with StrictUndefined, so a missing key is a hard render failure mid-scene.
+    """
+    from . import styles  # lazy: keeps the store package's import order simple
+
+    scoped = {"turn": turn or {}, "scene": scene_meta or {},
+              "campaign": campaign_meta or {}, "global": config or {}}
+    presets = {name: _supplied_by_preset(meta) for name, meta in scoped.items()}
+
+    out: dict = {}
+    provenance: dict = {}
+    for field in ("style_id",) + lengths.KNOBS:
+        for scope in _SCOPES:
+            for source, value in (("override", _override(scoped[scope], field, scope)),
+                                  ("preset", presets[scope].get(field))):
+                if value is None:
+                    continue
+                # An id naming a style that doesn't exist is no opinion, not a
+                # clear — the walk continues. "" IS a clear and stops the walk.
+                if field == "style_id" and value and not styles.exists(value):
+                    continue
+                out[field] = value
+                provenance[field] = {"scope": scope, "source": source}
+                break
+            if field in out:
+                break
+        if field not in out:
+            out[field] = "" if field == "style_id" else lengths.PRESETS[lengths.DEFAULT][field]
+            provenance[field] = {"scope": "default", "source": "default"}
+
+    out["provenance"] = provenance
+    return out

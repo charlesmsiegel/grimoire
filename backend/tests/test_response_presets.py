@@ -107,3 +107,153 @@ def test_shipped_builtins_are_length_only(monkeypatch, tmp_path):
         supplied = rp.supplies(rp.read_preset(pid)["meta"])
         assert "style_id" not in supplied, pid
         assert supplied["reply_words"] > 0
+
+
+def _scope(preset="", style="", **knobs):
+    meta = {}
+    if preset:
+        meta["response_preset"] = preset
+    if style:
+        meta["style_id"] = style
+    for k, v in knobs.items():
+        meta[f"length_{k}"] = str(v)
+    return meta
+
+
+def test_no_settings_anywhere_falls_back_to_standard(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    got = rp.resolve()
+    assert got["reply_words"] == 550
+    assert got["style_id"] == ""
+    assert got["provenance"]["reply_words"]["scope"] == "default"
+
+
+def test_narrower_preset_wins_for_length(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    _write(tmp_path / "templates" / "response_presets", "terse",
+           name="Terse", length_preset="terse")
+    _write(tmp_path / "templates" / "response_presets", "cinematic",
+           name="Cinematic", length_preset="cinematic")
+    got = rp.resolve(scene_meta=_scope(preset="terse"),
+                     campaign_meta=_scope(preset="cinematic"))
+    assert got["reply_words"] == 150
+    assert got["provenance"]["reply_words"]["scope"] == "scene"
+
+
+def test_length_only_preset_does_not_wipe_a_broader_loose_style(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    _write(tmp_path / "templates" / "styles", "gothic-horror", name="Gothic Horror")
+    _write(tmp_path / "templates" / "response_presets", "terse",
+           name="Terse", length_preset="terse")
+    got = rp.resolve(scene_meta=_scope(preset="terse"),
+                     campaign_meta=_scope(style="gothic-horror"))
+    assert got["style_id"] == "gothic-horror"
+    assert got["reply_words"] == 150
+
+
+def test_length_only_preset_does_not_wipe_a_broader_preset_style(tmp_path, monkeypatch):
+    """The case an earlier draft of the design got wrong."""
+    _isolate(tmp_path, monkeypatch)
+    _write(tmp_path / "templates" / "styles", "gothic-horror", name="Gothic Horror")
+    _write(tmp_path / "templates" / "response_presets", "terse",
+           name="Terse", length_preset="terse")
+    _write(tmp_path / "home" / "response_presets", "slow-burn",
+           name="Slow Burn", style_id="gothic-horror", length_preset="cinematic")
+    got = rp.resolve(scene_meta=_scope(preset="terse"),
+                     config=_scope(preset="slow-burn"))
+    assert got["style_id"] == "gothic-horror"
+    assert got["reply_words"] == 150
+
+
+def test_global_default_style_id_spelling(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    _write(tmp_path / "templates" / "styles", "gothic-horror", name="Gothic Horror")
+    got = rp.resolve(config={"default_style_id": "gothic-horror"})
+    assert got["style_id"] == "gothic-horror"
+
+
+def test_loose_override_beats_its_own_scopes_preset(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    _write(tmp_path / "templates" / "response_presets", "cinematic",
+           name="Cinematic", length_preset="cinematic")
+    got = rp.resolve(campaign_meta=_scope(preset="cinematic", speakers=3))
+    assert got["speakers"] == 3
+    assert got["reply_words"] == 900
+
+
+def test_stale_broad_override_cannot_haunt_a_narrow_preset(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    _write(tmp_path / "templates" / "response_presets", "cinematic",
+           name="Cinematic", length_preset="cinematic")
+    got = rp.resolve(scene_meta=_scope(preset="cinematic"),
+                     config=_scope(reply_words=90))
+    assert got["reply_words"] == 900
+
+
+def test_style_only_preset_leaves_length_resolving_outward(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    _write(tmp_path / "templates" / "styles", "gothic-horror", name="Gothic Horror")
+    _write(tmp_path / "home" / "response_presets", "just-gothic",
+           name="Just Gothic", style_id="gothic-horror")
+    _write(tmp_path / "templates" / "response_presets", "cinematic",
+           name="Cinematic", length_preset="cinematic")
+    got = rp.resolve(scene_meta=_scope(preset="just-gothic"),
+                     campaign_meta=_scope(preset="cinematic"))
+    assert got["style_id"] == "gothic-horror"
+    assert got["reply_words"] == 900
+
+
+def test_none_sentinel_clears_a_broader_style(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    _write(tmp_path / "templates" / "styles", "gothic-horror", name="Gothic Horror")
+    _write(tmp_path / "home" / "response_presets", "bare",
+           name="Bare", style_id="none", length_preset="terse")
+    got = rp.resolve(scene_meta=_scope(preset="bare"),
+                     campaign_meta=_scope(style="gothic-horror"))
+    assert got["style_id"] == ""
+
+
+def test_unknown_style_id_continues_outward(tmp_path, monkeypatch):
+    """styles.resolve_style skips unresolvable ids so a stale reference never
+    breaks generation -- the new cascade must not regress that."""
+    _isolate(tmp_path, monkeypatch)
+    _write(tmp_path / "templates" / "styles", "gothic-horror", name="Gothic Horror")
+    got = rp.resolve(scene_meta=_scope(style="deleted-style"),
+                     campaign_meta=_scope(style="gothic-horror"))
+    assert got["style_id"] == "gothic-horror"
+
+
+def test_missing_or_invalid_preset_is_skipped(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    _write(tmp_path / "templates" / "response_presets", "cinematic",
+           name="Cinematic", length_preset="cinematic")
+    _write(tmp_path / "home" / "response_presets", "broken",
+           name="Broken", length_preset="nonesuch")
+    assert rp.resolve(scene_meta=_scope(preset="ghost"),
+                      campaign_meta=_scope(preset="cinematic"))["reply_words"] == 900
+    assert rp.resolve(scene_meta=_scope(preset="broken"),
+                      campaign_meta=_scope(preset="cinematic"))["reply_words"] == 900
+
+
+def test_turn_scope_is_narrowest(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    _write(tmp_path / "templates" / "response_presets", "terse",
+           name="Terse", length_preset="terse")
+    _write(tmp_path / "templates" / "response_presets", "cinematic",
+           name="Cinematic", length_preset="cinematic")
+    got = rp.resolve(turn=_scope(preset="terse"), scene_meta=_scope(preset="cinematic"))
+    assert got["reply_words"] == 150
+
+
+def test_malformed_scope_override_is_ignored(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    got = rp.resolve(scene_meta={"length_reply_words": "-4"})
+    assert got["reply_words"] == 550
+
+
+def test_result_is_always_complete(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    got = rp.resolve(scene_meta=_scope(preset="ghost"))
+    for knob in rp.lengths.KNOBS:
+        assert isinstance(got[knob], int) and got[knob] > 0
+    assert isinstance(got["style_id"], str)
