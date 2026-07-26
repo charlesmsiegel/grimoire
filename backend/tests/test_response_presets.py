@@ -257,3 +257,17 @@ def test_result_is_always_complete(tmp_path, monkeypatch):
     for knob in rp.lengths.KNOBS:
         assert isinstance(got[knob], int) and got[knob] > 0
     assert isinstance(got["style_id"], str)
+
+
+def test_unreadable_preset_falls_through_instead_of_raising(tmp_path, monkeypatch):
+    """A damaged or externally-edited file is an invalid record, not a crash:
+    one corrupt preset must not take the whole scene down."""
+    _isolate(tmp_path, monkeypatch)
+    _write(tmp_path / "templates" / "response_presets", "cinematic",
+           name="Cinematic", length_preset="cinematic")
+    d = tmp_path / "home" / "response_presets"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "broken.md").write_bytes(b"---\nname: \xff\xfe not utf-8 \xff\n---\n")
+    got = rp.resolve(scene_meta=_scope(preset="broken"),
+                     campaign_meta=_scope(preset="cinematic"))
+    assert got["reply_words"] == 900          # kept walking to the campaign

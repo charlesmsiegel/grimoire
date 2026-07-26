@@ -304,10 +304,21 @@ def append_message(cid: str, sid: str, role: str, content: str, speaker: str | N
     if not _safe_id(sid) or not p.exists():
         raise SceneNotFound(sid)
     meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
-    block = f"**{_label(role, speaker)}:** {content.strip()}\n"
-    body = (body.rstrip() + "\n\n" + block) if body.strip() else block
+    body = _append_block(body, _block(role, speaker, content))
     meta["updated"] = now_iso()
     p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+
+
+def _block(role: str, speaker: str | None, content: str) -> str:
+    return f"**{_label(role, speaker)}:** {content.strip()}\n"
+
+
+def _append_block(body: str, block: str) -> str:
+    return (body.rstrip() + "\n\n" + block) if body.strip() else block
+
+
+def _parse_turn_sizes(raw: str) -> list[int]:
+    return [int(x) for x in raw.split(",") if x.strip().isdigit()]
 
 
 def get_turn_sizes(cid: str, sid: str) -> list[int]:
@@ -322,8 +333,7 @@ def get_turn_sizes(cid: str, sid: str) -> list[int]:
     p = _scene_path(cid, sid)
     if not _safe_id(sid) or not p.exists():
         return []
-    raw = parse_frontmatter_head(p).get("turn_sizes", "")
-    return [int(x) for x in raw.split(",") if x.strip().isdigit()]
+    return _parse_turn_sizes(parse_frontmatter_head(p).get("turn_sizes", ""))
 
 
 def _write_turn_sizes(p: Path, sizes: list[int]) -> None:
@@ -341,6 +351,13 @@ def append_reply(cid: str, sid: str, segments: list[dict]) -> None:
     persisted, so consecutive generations leave no user message between them.
     Counts rather than indices — a message EDIT leaves counts untouched, where
     indices would need rewriting on every edit.
+
+    Blocks and their boundary are written in ONE file write. Appending each
+    segment separately and recording the count afterwards leaves a window where
+    untracked blocks sit at the tail: drift segmentation would then misalign the
+    recorded boundaries, and — worse — reroll would consume `sizes[-1]` blocks
+    counting back through the orphans into the previous completed reply,
+    destroying transcript that was never meant to be rerolled.
     """
     p = _scene_path(cid, sid)
     if not _safe_id(sid) or not p.exists():
@@ -348,16 +365,19 @@ def append_reply(cid: str, sid: str, segments: list[dict]) -> None:
     kept = [s for s in segments if s["content"].strip()]
     if not kept:
         return
+    meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
     for seg in kept:
-        append_message(cid, sid, "assistant", seg["content"], speaker=seg.get("speaker"))
-    _write_turn_sizes(p, get_turn_sizes(cid, sid) + [len(kept)])
+        body = _append_block(body, _block("assistant", seg.get("speaker"), seg["content"]))
+    sizes = _parse_turn_sizes(meta.get("turn_sizes", "")) + [len(kept)]
+    meta["turn_sizes"] = ",".join(str(n) for n in sizes)
+    meta["updated"] = now_iso()
+    p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
 
 
 def _serialize_messages(messages: list[dict]) -> str:
     body = ""
     for m in messages:
-        block = f"**{_label(m['role'], m.get('speaker'))}:** {m['content'].strip()}\n"
-        body = (body.rstrip() + "\n\n" + block) if body.strip() else block
+        body = _append_block(body, _block(m["role"], m.get("speaker"), m["content"]))
     return body
 
 

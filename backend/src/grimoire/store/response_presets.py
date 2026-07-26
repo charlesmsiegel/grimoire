@@ -147,7 +147,11 @@ def _supplied_by_preset(meta: dict) -> dict:
         return {}
     try:
         record = read_preset(pid)
-    except PresetNotFound:
+    except (PresetNotFound, OSError, UnicodeDecodeError):
+        # A damaged or externally-edited file is an invalid record, not a crash:
+        # resolution must degrade to "supplies nothing" and keep walking, or a
+        # single corrupt preset takes the whole scene down. list_presets already
+        # treats these as broken-file cases.
         return {}
     return supplies(record["meta"]) or {}
 
