@@ -217,6 +217,9 @@ first value found. Within each scope, look in this order:
 If the walk finds nothing, fall back to `standard`'s value for a length knob, or to
 no style for `style_id`.
 
+One refinement for `style_id` only: a value naming a **style that does not exist**
+counts as no opinion, and the walk continues outward. See Error handling.
+
 **What "supplies" means** is defined once, above: a preset supplies exactly the
 fields it specifies — all five knobs under the named form, only the knobs present
 under the explicit form, none under neither form, and `style_id` only when it holds
@@ -406,23 +409,53 @@ sites — following `ROLL_SPEAKER` exactly, including the U+2063 prefix that mak
 the marker uncollidable with a real character name. This is a small backend change
 that belongs to this work, not a pre-existing bug to route around.
 
-**Turn segmentation**, defined standalone rather than borrowed:
+### Turn boundaries must be persisted, not inferred
 
-> A **model turn** is a maximal run of assistant-side messages containing no
-> reserved-speaker message. Reserved-speaker messages — `ROLL_SPEAKER` and
-> `TRANSITION_SPEAKER` — are **separators**: excluded from all metrics, and they
-> end the run they interrupt. A run with no remaining blocks is not a turn.
+Message roles cannot delimit turns either, because **ephemeral turns are never
+stored**. `post_chat` builds a director note (pcless scene) or an empty send
+("next NPC round") as a user message that steers one generation and is then
+discarded; only the generated assistant segments persist. Consecutive director
+generations — the normal way an offscreen scene is played — therefore leave *no*
+user message between them. Any role-based segmentation merges an entire offscreen
+scene into one enormous "turn", measures it as one cumulative reply, and fires
+false corrections that can never clear.
 
-The spec does not claim this notion is shared with
+So each generation records its own boundary. `scenes.append_reply(cid, sid,
+segments)` becomes the single entry point for persisting a model reply — it already
+happens as one loop over `split_reply` output — and appends that generation's block
+count to a `turn_sizes` list in the scene's frontmatter, comma-joined, exactly as
+`location_history` and `time_history` already are. `remove_trailing_assistant_run`
+pops the last entry.
+
+Counts rather than indices, deliberately: message *edits* leave counts untouched,
+where indices would need rewriting on every edit.
+
+**Turn segmentation** is then:
+
+> A **model turn** is one entry in `turn_sizes` — the run of messages that one
+> generation persisted. Reserved-speaker messages (`ROLL_SPEAKER`,
+> `TRANSITION_SPEAKER`) are never part of a generation's segments, so they fall
+> outside every turn and are excluded from all metrics automatically.
+
+The greeting is appended through the same entry point and so records a turn of its
+own.
+
+Scenes played before this change have no `turn_sizes`. Rather than guess, the
+fallback is explicit: **a scene with no `turn_sizes` is not measured**, and no
+corrective renders until it has accumulated three recorded generations. Silence for
+the first few turns of a pre-existing scene is a far better failure than confident
+wrong numbers.
+
+The earlier draft of this design proposed detecting legacy transition lines by
+matching their prose shape. That is dropped: a model can legitimately write
+`*Mara leaves the scene.*`, and a content match would then delete a real narration
+block from the metrics and split a genuine reply in two. Identity is not
+recoverable from prose, so it is not inferred from prose.
+
+This spec makes no claim that its turn notion is shared with
 `scenes.remove_trailing_assistant_run`; that function *stops at* roll lines rather
-than treating them as separators, because it serves a different purpose (never
-deleting a roll whose entry still lives in `rolls.json`).
-
-**Legacy backstop**: scenes played before this change carry unmarked transition
-lines. A narrator block whose entire content matches one of the four fixed shapes
-above is therefore also treated as a separator. The templates are fixed strings
-with a single interpolation, so the match is exact rather than heuristic. It can be
-dropped once old scenes have aged out of measurement windows.
+than skipping them, because it serves a different purpose (never deleting a roll
+whose entry still lives in `rolls.json`).
 
 **Greetings are counted as model turns.** `playing.py` appends the greeting body as
 an assistant message, and it is authored rather than generated — but it is the
@@ -440,10 +473,25 @@ starts.
 - **blocks** — messages in the run (separators are already excluded by
   segmentation).
 - **max paragraphs** — the largest paragraph count of any single block.
-- **distinct speakers** — count of distinct non-`None` speakers. Narrator segments
-  store `speaker: None`, so "narration does not count against the speaker cap"
-  falls out of the existing data model for free.
-- **max blocks per speaker** — the largest number of blocks held by any one speaker.
+- **distinct speakers** — count of distinct non-`None` speakers, **canonicalized
+  against the scene cast first**. Narrator segments store `speaker: None`, so
+  "narration does not count against the speaker cap" falls out of the existing data
+  model for free.
+- **max blocks per speaker** — the largest number of blocks held by any one
+  canonicalized speaker.
+
+**Speaker labels are not identities.** `split_reply` preserves whatever label the
+model wrote, so one character can appear as `Winifred` in one block and
+`Winifred Vance` in the next. Counting raw strings would read that as two speakers
+— inflating the speaker count into a false violation while simultaneously letting
+the character slip under `blocks_per_speaker`, breaking both structural signals at
+once under perfectly ordinary label variation.
+
+Measurement therefore takes the scene's cast names and canonicalizes each label
+through `scenes.match_name`, which already resolves exact matches and unambiguous
+word-boundary prefixes and is the same helper the rest of the system uses. Labels
+it cannot resolve are kept verbatim and counted as themselves — an unrecognized
+name is most likely a genuinely new character.
 
 **Window**: the last **3** completed assistant turns. A constant, deliberately not
 a setting.
@@ -602,8 +650,14 @@ Nothing here may break play. Every failure degrades to a working budget.
   scope named nothing, falling through to the next scope.
 - **Malformed knob values** at a scope (non-integer, negative, zero) are treated as
   unset and fall through the resolution chain.
-- An **unknown `style_id`** in a preset or override renders no style section,
-  matching today's behavior when a style is deleted out from under a campaign.
+- An **unknown `style_id`** in a preset or override is treated as **no opinion**:
+  style resolution continues outward to the next scope. This matches
+  `styles.resolve_style`, which today skips an id that doesn't resolve and falls
+  back up the chain precisely so a stale reference "never breaks generation". Only
+  the explicit `none` sentinel clears an inherited style. Taking "first `style_id`
+  found, valid or not" would let one stale scene-level reference suppress a
+  perfectly good campaign style after upgrade — and would falsify the no-op
+  migration claim.
 - Measurement never raises. A transcript it cannot segment yields no metrics and
   therefore no corrective.
 
@@ -633,7 +687,9 @@ Per `docs/android-architecture.md` and CLAUDE.md:
   (d) a global preset supplying a style. Case (d) is the one an earlier draft of
   this design got wrong.
 - Migration: a store with only legacy `style_id` / `default_style_id` resolves to
-  the same style it does today, plus the `standard` budget.
+  the same style it does today, plus the `standard` budget — **including** a scene
+  carrying a stale reference to a deleted style over a valid campaign style, which
+  must still resolve to the campaign's.
 - `response_presets`: read/write/list, built-in immutability, both-forms rejection
   on write, unknown `length_preset` invalidating a record *without* activating its
   explicit keys, partial explicit form supplying only the knobs present, malformed
@@ -641,10 +697,16 @@ Per `docs/android-architecture.md` and CLAUDE.md:
 - **Style-only (neither-form) preset**: accepted on write, and over a broader named
   length preset it must supply its style while leaving all five knobs to resolve
   outward — the case an earlier draft left implementation-dependent.
-- **Synthetic-message segmentation**: a budget-compliant reply followed by each of
-  the four transition messages must **not** trigger a `blocks` correction, and a
-  transition sitting between two replies must yield two turns, not one. Both the
-  marked (`TRANSITION_SPEAKER`) and legacy unmarked forms.
+- **Turn boundaries**: several consecutive director / empty-send generations, which
+  persist no user message between them, must measure as separate turns — the case
+  that breaks any role-based segmentation. Plus: a budget-compliant reply followed
+  by each of the four transition messages must **not** trigger a `blocks`
+  correction; `turn_sizes` survives message edits and is popped by
+  `remove_trailing_assistant_run`; a scene with no `turn_sizes` renders no
+  corrective at all.
+- **Speaker canonicalization**: a character writing blocks as `Winifred` and
+  `Winifred Vance` counts as one speaker for both `speakers` and
+  `blocks_per_speaker`; an unresolvable label counts as itself.
 - `length_drift`: turn segmentation, roll-line exclusion, fence stripping,
   narrator-is-not-a-speaker, per-turn cap evaluation (explicitly: a 5/2/2 speaker
   window with a cap of 3 **does** trigger), fewer-than-three turns, zero turns,
@@ -691,10 +753,14 @@ useful and independently verifiable:
    `_SECTIONS` registration. At this point every scene renders a `standard` budget
    and existing styles still resolve identically — verifiable purely by tests and
    the token breakdown.
-2. **The counterweight.** `scenes.TRANSITION_SPEAKER` applied at the four synthetic
-   message sites, `length_drift.py`, `length_correction.j2`, post-history plumbing.
-   This is the piece that solves the stated problem, and it works before any picker
-   exists.
+2. **The counterweight.** Two transcript-integrity changes first — `scenes.
+   TRANSITION_SPEAKER` at the four synthetic message sites, and
+   `scenes.append_reply` recording `turn_sizes` — then `length_drift.py`,
+   `length_correction.j2`, and post-history plumbing on top. This is the piece that
+   solves the stated problem, and it works before any picker exists. The two
+   transcript changes are worth landing and testing on their own: measurement is
+   worthless if turn boundaries are wrong, and every false correction the design
+   could produce traces back to them.
 3. **Scope settings and API.** The `/response` endpoints, retirement of the
    `/style` endpoints, `ResponsePresetPicker` at all three scopes.
 4. **Saving and managing presets.** `ResponsePresetsView`, **Save as preset…**,
