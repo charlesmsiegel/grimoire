@@ -37,7 +37,8 @@
 - `backend/tests/test_lengths.py`, `test_response_presets.py`, `test_length_drift.py`
 
 **Modify:**
-- `backend/src/grimoire/store/scenes.py` — add `TRANSITION_SPEAKER`, `append_reply()`, `turn_sizes` bookkeeping.
+- `backend/src/grimoire/store/scenes.py` — add `TRANSITION_SPEAKER`, `append_reply()`, `turn_sizes` bookkeeping, and make `remove_trailing_assistant_run` / `trim_continuation` boundary-aware.
+- `scripts/verify_templates.py` — mirrors `_assemble`; breaks under `StrictUndefined` once the budget section and the `length_correction` var exist.
 - `backend/src/grimoire/store/appearances.py:208,237` — tag join/leave messages.
 - `backend/src/grimoire/store/playing.py:131` — greeting goes through `append_reply`.
 - `backend/src/grimoire/routes.py:2110` — `_persist_reply` goes through `append_reply`.
@@ -806,7 +807,9 @@ This task also switches style resolution onto the new cascade. The migration is 
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `backend/tests/test_context.py`. It already has a `_campaign(monkeypatch, tmp_path)` helper returning `(cid, sid)` and already imports `campaigns`, `entities`, and `scenes` — use them rather than adding new ones.
+Append to `backend/tests/test_context.py`. It already has a `_campaign(monkeypatch, tmp_path)` helper and already imports `campaigns`, `entities`, and `scenes` — use them rather than adding new ones.
+
+**`_campaign` returns a 3-tuple `(wid, cid, sid)`**, so unpack it as `_wid, cid, sid = _campaign(...)`. Unpacking two names raises `ValueError: too many values to unpack` before the test reaches any assertion.
 
 **Do not write style fixtures into `prompts.templates_dir()`.** `_campaign` sets only `GRIMOIRE_HOME`, so the templates dir is the *real repo* `templates/` and a test writing there would pollute the working tree. User styles live under `GRIMOIRE_HOME/styles`, which is `tmp_path` and safely isolated.
 
@@ -818,7 +821,7 @@ def _user_style(tmp_path, sid, name, body):
 
 
 def test_budget_section_renders_with_resolved_numbers(monkeypatch, tmp_path):
-    cid, sid = _campaign(monkeypatch, tmp_path)
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     text = context.build_messages(cid, sid)[0]["content"]
     assert "# Response budget" in text
     assert "550 words" in text                         # standard fallback
@@ -826,7 +829,7 @@ def test_budget_section_renders_with_resolved_numbers(monkeypatch, tmp_path):
 
 
 def test_budget_follows_the_scene_override(monkeypatch, tmp_path):
-    cid, sid = _campaign(monkeypatch, tmp_path)
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     scenes.set_response_preset(cid, sid, "terse")
     text = context.build_messages(cid, sid)[0]["content"]
     assert "150 words" in text
@@ -834,7 +837,7 @@ def test_budget_follows_the_scene_override(monkeypatch, tmp_path):
 
 
 def test_repeats_allowed_wording(monkeypatch, tmp_path):
-    cid, sid = _campaign(monkeypatch, tmp_path)
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     scenes.set_response_preset(cid, sid, "cinematic")
     text = context.build_messages(cid, sid)[0]["content"]
     assert "No character takes more than 2 blocks." in text
@@ -843,7 +846,7 @@ def test_repeats_allowed_wording(monkeypatch, tmp_path):
 def test_legacy_style_id_still_resolves_identically(monkeypatch, tmp_path):
     """Migration is a no-op: a store with only the legacy style_id keys must
     resolve the same style it does today, now through the new cascade."""
-    cid, sid = _campaign(monkeypatch, tmp_path)
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     _user_style(tmp_path, "gothic-horror", "Gothic Horror", "Atmosphere first.")
     campaigns.set_campaign_style(cid, "gothic-horror")
     text = context.build_messages(cid, sid)[0]["content"]
@@ -851,7 +854,7 @@ def test_legacy_style_id_still_resolves_identically(monkeypatch, tmp_path):
 
 
 def test_stale_scene_style_falls_back_to_campaign(monkeypatch, tmp_path):
-    cid, sid = _campaign(monkeypatch, tmp_path)
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     _user_style(tmp_path, "gothic-horror", "Gothic Horror", "Atmosphere first.")
     campaigns.set_campaign_style(cid, "gothic-horror")
     scenes.set_style(cid, sid, "deleted-style")
@@ -860,7 +863,7 @@ def test_stale_scene_style_falls_back_to_campaign(monkeypatch, tmp_path):
 
 
 def test_budget_section_appears_in_the_token_breakdown(monkeypatch, tmp_path):
-    cid, sid = _campaign(monkeypatch, tmp_path)
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     labels = [s["label"] for s in context.context_sections(cid, sid)]
     assert "Response budget" in labels
 ```
@@ -1076,6 +1079,11 @@ git commit -m "feat(scenes): tag synthetic transition messages with a reserved s
 
 Turn boundaries **cannot be inferred from message role**: `post_chat` builds director notes and empty sends as ephemeral user messages that are never persisted, so consecutive director generations — the normal way an offscreen scene is played — leave no user message between them. Role-based segmentation would merge an entire offscreen scene into one turn.
 
+**The invariant**, which every step below exists to hold: `turn_sizes` describes the **last `sum(turn_sizes)` model blocks** in the scene — a tracked *suffix*, not the whole transcript. Two consequences that a naive "parallel list of counts" design gets wrong:
+
+- **Legacy scenes become measurable.** Blocks written before tracking existed form an untracked prefix that segmentation simply ignores. Comparing `sum(turn_sizes)` against *all* model blocks instead would mean any scene with pre-tracking history could never be measured again — not "not measured until three generations", but never.
+- **Every path that deletes model blocks must maintain it.** Two exist besides `append_reply`: `remove_trailing_assistant_run` (reroll) and `trim_continuation` (crash recovery, called from `proposals.commit_narration`). If either desyncs the count, segmentation stops returning measurements permanently.
+
 - [ ] **Step 1: Write the failing test**
 
 Append to `backend/tests/test_scene_store.py`:
@@ -1173,15 +1181,54 @@ def append_reply(cid: str, sid: str, segments: list[dict]) -> None:
     _write_turn_sizes(p, get_turn_sizes(cid, sid) + [len(kept)])
 ```
 
-- [ ] **Step 4: Pop the boundary when a run is removed**
+- [ ] **Step 4: Make reroll remove exactly one generation**
 
-In `remove_trailing_assistant_run`, after the existing message-truncation write, add:
+`remove_trailing_assistant_run` currently pops *every* trailing assistant message back to a user message or a roll line. With no persisted user separator between director generations, that deletes **all** consecutive generations while a naive `sizes[:-1]` pops only one — desyncing the invariant permanently, and deleting more than the user asked to reroll.
+
+Replace the pop loop so that, when a tracked generation exists, exactly that many blocks come off:
 
 ```python
+    messages = read_scene(cid, sid)["messages"]
+    if (not messages or messages[-1]["role"] != "assistant"
+            or messages[-1].get("speaker") in (ROLL_SPEAKER, TRANSITION_SPEAKER)):
+        raise IndexError("no trailing assistant reply")
     sizes = get_turn_sizes(cid, sid)
+    if sizes:
+        # Remove exactly the last recorded generation. Untracked messages
+        # (rolls, transitions) are skipped, not consumed.
+        remaining = sizes[-1]
+        while remaining and messages:
+            if messages[-1].get("speaker") in (ROLL_SPEAKER, TRANSITION_SPEAKER):
+                break
+            messages.pop()
+            remaining -= 1
+    else:
+        while (messages and messages[-1]["role"] == "assistant"
+               and messages[-1].get("speaker") not in (ROLL_SPEAKER, TRANSITION_SPEAKER)):
+            messages.pop()
+    meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
+    meta["updated"] = now_iso()
+    p.write_text(dump_frontmatter(meta, _serialize_messages(messages)), encoding="utf-8")
     if sizes:
         _write_turn_sizes(p, sizes[:-1])
 ```
+
+Note the guard and both loops now also exclude `TRANSITION_SPEAKER`. Without that, Task 5's change turns reroll into something that silently deletes `*Time passes…*` and `*Mara joins the scene.*` lines — a regression Task 5 introduces and this step must close.
+
+- [ ] **Step 4b: Keep `trim_continuation` consistent**
+
+`proposals.commit_narration` calls `scenes.trim_continuation` during crash recovery, which drops model blocks without touching `turn_sizes`. Clamp the list to what survives, at the end of `trim_continuation`:
+
+```python
+    kept_blocks = sum(1 for m in kept if m["role"] == "assistant"
+                      and m.get("speaker") not in (ROLL_SPEAKER, TRANSITION_SPEAKER))
+    sizes = get_turn_sizes(cid, sid)
+    while sizes and sum(sizes) > kept_blocks:
+        sizes.pop()          # drop whole generations until the suffix fits
+    _write_turn_sizes(p, sizes)
+```
+
+Dropping whole entries rather than shrinking one keeps every recorded size an accurate block count for a real generation; a partially-trimmed generation is no longer a generation worth measuring.
 
 - [ ] **Step 5: Route model output through `append_reply`**
 
@@ -1270,10 +1317,20 @@ def test_returns_none_without_turn_sizes():
     assert length_drift.measure(msgs, [], CAST, BUDGET) is None
 
 
-def test_returns_none_when_sizes_do_not_match_the_transcript():
+def test_returns_none_when_sizes_exceed_the_transcript():
     # a hand-edited file: fail safe rather than measure garbage
     msgs = [_msg("Mara", 50)]
     assert length_drift.measure(msgs, [5], CAST, BUDGET) is None
+
+
+def test_pre_tracking_history_is_an_ignored_prefix():
+    """An upgraded scene must become measurable once new generations land —
+    not stay disabled forever because old untracked blocks outnumber them."""
+    legacy = [_msg("Mara", 900), _msg(None, 900)]      # written before tracking
+    tracked = [_msg("Mara", 40), _msg("Mara", 40)]
+    got = length_drift.measure(legacy + tracked, [1, 1], CAST, BUDGET)
+    assert got is not None
+    assert got["totals"] == [40, 40]                    # the legacy bloat is ignored
 
 
 def test_compliant_replies_produce_no_tier():
@@ -1405,15 +1462,24 @@ def _is_model_block(m: dict) -> bool:
 
 
 def segment(messages: list[dict], turn_sizes: list[int]) -> list[list[dict]]:
-    """Partition model-generated blocks into turns using the recorded sizes.
+    """Partition the TRACKED SUFFIX of model blocks into turns.
 
-    Returns [] when the sizes don't account for exactly the model blocks present
-    — a hand-edited scene file. Measuring a transcript we can't explain would
-    produce confident wrong numbers; silence is the better failure.
+    turn_sizes describes the last sum(turn_sizes) model blocks, not the whole
+    transcript. Anything before that is pre-tracking history — a scene played
+    before turn recording existed — and is simply ignored, which is what lets
+    an upgraded scene start being measured after a few new generations.
+    Comparing against ALL model blocks instead would disable drift control on
+    such a scene forever.
+
+    Returns [] when the recorded sizes don't fit the transcript at all (a
+    hand-edited file): measuring what we can't explain produces confident wrong
+    numbers, and silence is the better failure.
     """
     blocks = [m for m in messages if _is_model_block(m)]
-    if not turn_sizes or sum(turn_sizes) != len(blocks):
+    tracked = sum(turn_sizes)
+    if not turn_sizes or tracked > len(blocks):
         return []
+    blocks = blocks[len(blocks) - tracked:]
     turns, at = [], 0
     for size in turn_sizes:
         turns.append(blocks[at:at + size])
@@ -1517,13 +1583,13 @@ def _bloat(cid, sid, turns, words):
 
 
 def test_no_corrective_on_a_fresh_scene(monkeypatch, tmp_path):
-    cid, sid = _campaign(monkeypatch, tmp_path)
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     messages = context.build_messages(cid, sid)
     assert not any("run long" in m["content"] for m in messages)
 
 
 def test_no_corrective_while_replies_are_compliant(monkeypatch, tmp_path):
-    cid, sid = _campaign(monkeypatch, tmp_path)
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     scenes.set_response_preset(cid, sid, "cinematic")   # 900-word budget
     _bloat(cid, sid, turns=3, words=200)
     messages = context.build_messages(cid, sid)
@@ -1531,7 +1597,7 @@ def test_no_corrective_while_replies_are_compliant(monkeypatch, tmp_path):
 
 
 def test_corrective_lands_in_the_last_message(monkeypatch, tmp_path):
-    cid, sid = _campaign(monkeypatch, tmp_path)
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     scenes.set_response_preset(cid, sid, "terse")       # 150-word budget
     _bloat(cid, sid, turns=3, words=600)
     messages = context.build_messages(cid, sid)
@@ -1543,7 +1609,7 @@ def test_corrective_lands_in_the_last_message(monkeypatch, tmp_path):
 
 
 def test_trim_tier_wording(monkeypatch, tmp_path):
-    cid, sid = _campaign(monkeypatch, tmp_path)
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     scenes.set_response_preset(cid, sid, "terse")       # 150 -> trim band is 188..262
     _bloat(cid, sid, turns=3, words=220)
     text = context.build_messages(cid, sid)[-1]["content"]
@@ -1552,7 +1618,7 @@ def test_trim_tier_wording(monkeypatch, tmp_path):
 
 
 def test_structural_lines_appear_only_when_violated(monkeypatch, tmp_path):
-    cid, sid = _campaign(monkeypatch, tmp_path)
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     scenes.set_response_preset(cid, sid, "terse")       # speakers 2, repeats 1
     scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "Short."},
                                    {"speaker": "Mara", "content": "Again."}])
@@ -1566,7 +1632,7 @@ def test_transition_between_replies_does_not_fire_a_false_block_violation(monkey
     """A budget-compliant reply followed by a scene transition must not
     measure as one over-cap turn."""
     from grimoire.store import entities
-    cid, sid = _campaign(monkeypatch, tmp_path)
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     scenes.set_response_preset(cid, sid, "brisk")       # blocks cap 4
     croot = campaigns.campaign_root(cid)
     entities.create_entity(croot, "locations", "Saltmarch Docks", "Wet rope.")
@@ -1584,7 +1650,7 @@ def test_transition_between_replies_does_not_fire_a_false_block_violation(monkey
 
 
 def test_corrective_rides_alone_when_cards_have_no_post_history(monkeypatch, tmp_path):
-    cid, sid = _campaign(monkeypatch, tmp_path)
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     scenes.set_response_preset(cid, sid, "terse")
     _bloat(cid, sid, turns=3, words=600)
     messages = context.build_messages(cid, sid)
@@ -1708,16 +1774,51 @@ git commit -m "feat(context): push back on measured length drift from the post-h
 
 ---
 
-## Task 9: Document the new templates
+## Task 9: Update the template verifier and docs
 
 **Files:**
+- Modify: `scripts/verify_templates.py`
 - Modify: `templates/README.md`
 
-**Interfaces:** none — documentation only.
+**Interfaces:** none — tooling and documentation.
 
-`templates/README.md` documents each template's variables, and two new templates plus a changed one need entries or the next person editing prompts is guessing.
+`scripts/verify_templates.py` deliberately mirrors `_assemble` and renders every prompt template standalone. Two changes in this plan break it under `StrictUndefined`: `gather()` produces no `budget` (so the new section fails to render), and line ~471 renders `post_history.j2` with only `npc_cards` (so the new required `length_correction` var is undefined). Neither is caught by pytest, because the verifier is a script.
 
-- [ ] **Step 1: Add the entries**
+- [ ] **Step 1: Give the verifier a budget and a corrective**
+
+In `scripts/verify_templates.py`, in `gather()` beside the existing `resolved_style` block, add a resolved budget to the returned data:
+
+```python
+    budget = response_presets.resolve(scene_meta=..., campaign_meta=..., config=...)
+```
+
+matching however `gather()` already sources its scene/campaign/config fixtures, and include in the returned dict:
+
+```python
+            "budget": {k: budget[k] for k in lengths.KNOBS},
+```
+
+Then pass the corrective when rendering the post-history template (~line 471):
+
+```python
+    post = render("scene/post_history.j2", npc_cards=data["npc_cards"],
+                  length_correction=render("scene/length_correction.j2",
+                                           drift={"totals": [1400, 1500, 1600],
+                                                  "max_ratio": 2.9, "tier": "cut",
+                                                  "blocks": True, "paragraphs": False,
+                                                  "speakers": True,
+                                                  "blocks_per_speaker": False},
+                                           budget=data["budget"]))
+```
+
+Using a violating fixture rather than an empty string means the verifier actually exercises the corrective template's branches instead of rendering it as a no-op.
+
+- [ ] **Step 2: Run the verifier**
+
+Run: `backend/.venv/Scripts/python.exe scripts/verify_templates.py`
+Expected: completes without an undefined-variable error.
+
+- [ ] **Step 3: Add the README entries**
 
 In `templates/README.md`, following the existing format for scene templates, document:
 
@@ -1725,16 +1826,11 @@ In `templates/README.md`, following the existing format for scene templates, doc
 - `scene/length_correction.j2` — vars: `drift` (output of `length_drift.measure`), `budget`. Rendered only when a rule was measurably violated; joined into the post-history system message.
 - `post_history.j2` — note the added `length_correction` var.
 
-- [ ] **Step 2: Verify templates still render**
-
-Run: `backend/.venv/Scripts/python.exe -m pytest backend/tests/test_context.py -q`
-Expected: PASS
-
-- [ ] **Step 3: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add templates/README.md
-git commit -m "docs(templates): document the response budget and length corrective"
+git add scripts/verify_templates.py templates/README.md
+git commit -m "chore(templates): teach the verifier the budget and corrective, document both"
 ```
 
 ---
@@ -1743,8 +1839,10 @@ git commit -m "docs(templates): document the response budget and length correcti
 
 Before considering this plan complete, confirm all of the following and paste the actual output:
 
-- [ ] `backend/.venv/Scripts/python.exe -m pytest backend -q` — full suite passes
+- [ ] `backend/.venv/Scripts/python.exe -m pytest backend -q` — full suite passes (takes ~2.5 min; baseline before this work is 1616 passed)
+- [ ] `backend/.venv/Scripts/python.exe scripts/verify_templates.py` — renders every template with no undefined-variable error
 - [ ] The four shipped built-in presets load against the real `templates/` dir (covered by `test_shipped_builtins_are_length_only`)
+- [ ] Reroll on an offscreen scene with three consecutive director generations removes **one** generation, not all three, and leaves `sum(turn_sizes)` consistent
 - [ ] A manual smoke check via the `verify` skill: start a scene, send several turns, and confirm the budget section appears in the scene inspector's token breakdown and that a deliberately long stretch produces a corrective
 
 ## What this plan does NOT cover
