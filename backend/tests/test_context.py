@@ -950,3 +950,59 @@ def test_natural_prose_in_context_sections(monkeypatch, tmp_path):
     text = next(s["text"] for s in secs if s["label"] == "Natural prose")
     assert text.startswith("# Natural prose")
     assert context.count_tokens(text) > 0  # it contributes to the token total
+
+
+# ---- response budget (2026-07-26 response-presets design) ----
+
+def _user_style(tmp_path, sid, name, body):
+    d = tmp_path / "styles"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{sid}.md").write_text(f"---\nname: {name}\n---\n\n{body}", encoding="utf-8")
+
+
+def test_budget_section_renders_with_resolved_numbers(monkeypatch, tmp_path):
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    text = context.build_messages(cid, sid)[0]["content"]
+    assert "# Response budget" in text
+    assert "550 words" in text                         # standard fallback
+    assert "at most 5 blocks" in text
+
+
+def test_budget_follows_the_scene_override(monkeypatch, tmp_path):
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    scenes.set_response_preset(cid, sid, "terse")
+    text = context.build_messages(cid, sid)[0]["content"]
+    assert "150 words" in text
+    assert "do not return to a character you have already written" in text
+
+
+def test_repeats_allowed_wording(monkeypatch, tmp_path):
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    scenes.set_response_preset(cid, sid, "cinematic")
+    text = context.build_messages(cid, sid)[0]["content"]
+    assert "No character takes more than 2 blocks." in text
+
+
+def test_legacy_style_id_still_resolves_identically(monkeypatch, tmp_path):
+    """Migration is a no-op: a store with only the legacy style_id keys must
+    resolve the same style it does today, now through the new cascade."""
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    _user_style(tmp_path, "gothic-horror", "Gothic Horror", "Atmosphere first.")
+    campaigns.set_campaign_style(cid, "gothic-horror")
+    text = context.build_messages(cid, sid)[0]["content"]
+    assert "Atmosphere first." in text
+
+
+def test_stale_scene_style_falls_back_to_campaign(monkeypatch, tmp_path):
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    _user_style(tmp_path, "gothic-horror", "Gothic Horror", "Atmosphere first.")
+    campaigns.set_campaign_style(cid, "gothic-horror")
+    scenes.set_style(cid, sid, "deleted-style")
+    text = context.build_messages(cid, sid)[0]["content"]
+    assert "Atmosphere first." in text
+
+
+def test_budget_section_appears_in_the_token_breakdown(monkeypatch, tmp_path):
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    labels = [s["label"] for s in context.context_sections(cid, sid)]
+    assert "Response budget" in labels

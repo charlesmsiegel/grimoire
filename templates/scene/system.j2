@@ -89,6 +89,9 @@
 {%- set s -%}{%- include "scene/sections/response_format.j2" -%}{%- endset -%}
 {%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
 
+{%- set s -%}{%- include "scene/sections/response_budget.j2" -%}{%- endset -%}
+{%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
+
 {%- if opener -%}
 {%- set instruction -%}{%- include "scene/opener_instruction/" ~ ("offscreen" if pcless else "standard") ~ ".j2" -%}{%- endset -%}
 {%- if sections -%}

@@ -205,7 +205,8 @@ def appear(cid: str, scene_id: str, kind: str, actor_id: str, version_id: str, r
         return  # synthetic/test scene id with no backing file: nothing to narrate into
     if has_messages:
         name = _actor_name(campaigns.campaign_root(cid), kind, actor_id, version_id) or actor_id
-        scenes.append_message(cid, scene_id, "assistant", f"*{name} joins the scene.*")
+        scenes.append_message(cid, scene_id, "assistant", f"*{name} joins the scene.*",
+                              speaker=scenes.TRANSITION_SPEAKER)
 
 
 def leave(cid: str, scene_id: str, kind: str, actor_id: str) -> None:
@@ -234,7 +235,8 @@ def leave(cid: str, scene_id: str, kind: str, actor_id: str) -> None:
         return
     if has_messages:
         name = _actor_name(campaigns.campaign_root(cid), kind, actor_id, version) or actor_id
-        scenes.append_message(cid, scene_id, "assistant", f"*{name} leaves the scene.*")
+        scenes.append_message(cid, scene_id, "assistant", f"*{name} leaves the scene.*",
+                              speaker=scenes.TRANSITION_SPEAKER)
 
 
 def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
