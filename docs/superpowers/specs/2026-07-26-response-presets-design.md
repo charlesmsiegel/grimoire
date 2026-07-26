@@ -118,39 +118,51 @@ blocks_per_speaker: 1
 ---
 ```
 
-#### Length is a tagged union
+#### A preset supplies exactly the fields it specifies
 
-The length half of a record is **exactly one of** two forms, and this is validated,
-not merely documented:
+This one rule governs both halves of a record, and every other rule below is a
+consequence of it. A field a preset does not specify is not "defaulted" — the
+preset simply has no opinion, and resolution walks past it to the next scope.
 
-- **Named form** — `length_preset: <id>`.
-- **Explicit form** — the five knob keys.
-
-Rules, stated exhaustively so two implementers cannot diverge:
-
-- **Write path** (`POST` / `PUT`) rejects a record carrying both forms with 400.
-  There is no normalization, no silent precedence.
-- **Read path**, if `length_preset` is present, ignores the explicit keys
-  *unconditionally* — including when `length_preset` names something unknown.
-- A `length_preset` naming an unknown length preset makes the record **invalid**.
-  An invalid record is never partially used: a scope naming it resolves as though
-  it named nothing, and the management view flags it. Explicit values can therefore
-  never spring to life because a name was mistyped or a preset was renamed.
-- **Explicit form with missing or malformed knobs** completes those knobs from
-  `standard` and stays valid. Hand-editing files under `<GRIMOIRE_HOME>` is a
-  supported workflow, so a partially-written record degrades rather than breaking;
-  the view flags the completed fields.
-
-#### Style is optional and tri-state
-
-`style_id` in a preset has three meanings, and the distinction matters — without it,
-selecting a length-only preset would silently wipe an inherited style:
+**Style** — `style_id` is tri-state:
 
 | value | meaning |
 |---|---|
-| absent / empty | **the preset has no opinion on style** — style keeps resolving up the chain |
-| a style id | the preset supplies that style |
-| `none` | the preset explicitly clears the style |
+| absent / empty | **no opinion** — style keeps resolving outward |
+| a style id | supplies that style |
+| `none` | explicitly clears the style |
+
+**Length** is a tagged union of two forms, validated rather than merely documented:
+
+- **Named form** — `length_preset: <id>`. Supplies all five knobs.
+- **Explicit form** — one or more of the five knob keys. Supplies **exactly the
+  knobs present**; the rest are no-opinion and keep resolving outward.
+- **Neither form** — a valid, useful record: a style-only preset with no length
+  opinion at all. All five knobs keep resolving outward.
+
+Rules, stated exhaustively so two implementers cannot diverge:
+
+- **Write path** (`POST` / `PUT`) rejects a record carrying **both** forms with 400.
+  No normalization, no silent precedence. A record carrying neither is accepted —
+  it is style-only, not malformed.
+- **Read path**, when `length_preset` is present, ignores the explicit keys
+  *unconditionally*, including when `length_preset` names something unknown.
+- A `length_preset` naming an unknown length preset makes the record **invalid**.
+  An invalid record is never partially used: a scope naming it resolves as though
+  it named nothing at all — not even its style — and the management view flags it.
+  Explicit values can therefore never spring to life because a name was mistyped or
+  a preset was renamed.
+- **Malformed individual knob values** in explicit form (non-integer, negative,
+  zero) are treated as absent for that knob, which keeps resolving outward. The
+  view flags them. There is no completion from `standard`: completing a knob would
+  make a preset silently supply a field it never specified, which is exactly the
+  behaviour that caused the earlier style-wiping bug.
+
+The uniform rule is what makes a style-only preset unambiguous. Under an earlier
+formulation it could have been read either as invalid (falling through entirely) or
+as an explicit form with five missing knobs (silently supplying `standard` lengths
+and clobbering a broader Cinematic). Now it is neither: it supplies a style, and
+nothing else.
 
 **Shipped built-ins**: `terse`, `brisk`, `standard`, `cinematic` — each naming the
 matching length preset with `style_id` absent. Out of the box the preset list
@@ -205,11 +217,11 @@ first value found. Within each scope, look in this order:
 If the walk finds nothing, fall back to `standard`'s value for a length knob, or to
 no style for `style_id`.
 
-**What "supplies" means.** A valid preset always supplies all five length knobs
-(via either union form). It supplies `style_id` only when that key holds a style id
-or the `none` sentinel; absent or empty means the preset has **no opinion** and the
-walk continues past it. A scope naming a missing or invalid preset supplies nothing
-at all, and the walk continues.
+**What "supplies" means** is defined once, above: a preset supplies exactly the
+fields it specifies — all five knobs under the named form, only the knobs present
+under the explicit form, none under neither form, and `style_id` only when it holds
+a style id or the `none` sentinel. A scope naming a missing or invalid preset
+supplies nothing at all, and the walk continues.
 
 This is the whole algorithm. Two properties fall out of it that earlier, more
 elaborate formulations got wrong:
@@ -371,10 +383,53 @@ The transcript is **already stored per speaker**: `scenes.split_reply` splits ea
 model reply on the `**Name:**` marker grammar into separate messages carrying a
 `speaker` field. Measurement needs no new parsing.
 
-**Turn segmentation** reuses the existing notion: one turn's output is a maximal
-run of assistant-side messages — the same run `scenes.remove_trailing_assistant_run`
-operates on. Manual dice-roll lines (`scenes.ROLL_SPEAKER`) are skipped entirely;
-they are interleaved into runs but are not model prose.
+### Assistant role is not the same thing as a model turn
+
+Measurement cannot infer turns from message role, because grimoire appends
+**synthetic assistant messages** that no model wrote. There are four:
+
+| site | text |
+|---|---|
+| `appearances.appear` | `*{name} joins the scene.*` |
+| `appearances.leave`  | `*{name} leaves the scene.*` |
+| `scenes.set_location` | `*The scene moves to {name}.*` |
+| `scenes.set_datetime` | `*Time passes. It is now {friendly}.*` |
+
+These are speakerless, so they read as narrator blocks. Left alone they would break
+measurement two ways: they inflate a turn's block and word counts, and — worse —
+one sitting between two model replies **merges them into a single run**. A Brisk
+reply of four blocks followed by a location change would measure as a five-block
+turn and fire a false `blocks` correction against a reply that obeyed the budget.
+
+**Fix**: a new reserved speaker, `scenes.TRANSITION_SPEAKER`, applied at all four
+sites — following `ROLL_SPEAKER` exactly, including the U+2063 prefix that makes
+the marker uncollidable with a real character name. This is a small backend change
+that belongs to this work, not a pre-existing bug to route around.
+
+**Turn segmentation**, defined standalone rather than borrowed:
+
+> A **model turn** is a maximal run of assistant-side messages containing no
+> reserved-speaker message. Reserved-speaker messages — `ROLL_SPEAKER` and
+> `TRANSITION_SPEAKER` — are **separators**: excluded from all metrics, and they
+> end the run they interrupt. A run with no remaining blocks is not a turn.
+
+The spec does not claim this notion is shared with
+`scenes.remove_trailing_assistant_run`; that function *stops at* roll lines rather
+than treating them as separators, because it serves a different purpose (never
+deleting a roll whose entry still lives in `rolls.json`).
+
+**Legacy backstop**: scenes played before this change carry unmarked transition
+lines. A narrator block whose entire content matches one of the four fixed shapes
+above is therefore also treated as a separator. The templates are fixed strings
+with a single interpolation, so the match is exact rather than heuristic. It can be
+dropped once old scenes have aged out of measurement windows.
+
+**Greetings are counted as model turns.** `playing.py` appends the greeting body as
+an assistant message, and it is authored rather than generated — but it is the
+single strongest length anchor the model has at the start of a scene, and the model
+will match it. Measuring it is correct: a 900-word greeting under a 300-word budget
+*should* produce a corrective on turn one, because that is exactly where drift
+starts.
 
 **Per turn:**
 
@@ -382,7 +437,8 @@ they are interleaved into runs but are not model prose.
   narration included, after stripping ` ```roll ` fenced bodies. `store/fence.py`
   already owns that grammar; measurement reuses its opener regex rather than
   restating it.
-- **blocks** — assistant messages in the run, roll lines excluded.
+- **blocks** — messages in the run (separators are already excluded by
+  segmentation).
 - **max paragraphs** — the largest paragraph count of any single block.
 - **distinct speakers** — count of distinct non-`None` speakers. Narrator segments
   store `speaker: None`, so "narration does not count against the speaker cap"
@@ -462,24 +518,34 @@ completed-from-`standard` records are flagged in the detail view.
 
 ### Deleting a preset in use
 
-Deleting a preset that scopes reference is permitted, but never silent. The delete
-confirmation states the blast radius, sourced from
-`GET /api/response-presets/{id}/usage`, which scans campaign and scene frontmatter.
-The scan runs only on delete, so its cost is irrelevant.
+Deleting a preset that scopes reference is permitted, but never silent. The
+confirmation must describe what will **actually** happen, and two things make that
+harder than counting references:
 
-The confirmation must describe what will **actually** happen, which is
-re-resolution, not a uniform fall back to `standard`. A scene that loses its preset
-re-runs the per-field cascade and may pick up a campaign or global preset's style
-and lengths; loose overrides at any scope still apply; `standard` is only reached
-when nothing else supplies a field. So `/usage` returns, per affected scope, the
-**post-deletion effective values** — computed by re-running `resolve` with the
-preset treated as absent — and the dialog shows them:
+1. **Deletion re-resolves; it does not reset to `standard`.** A scene that loses
+   its preset re-runs the per-field cascade and may pick up a campaign or global
+   preset's style and lengths. `standard` is reached only where nothing else
+   supplies a field.
+2. **Scopes that never named the preset still change.** If a campaign names it and
+   twenty scenes inherit, deleting changes all twenty. If it is the *global*
+   default, potentially every campaign and scene changes. A scan for direct
+   references would report one campaign and understate the blast radius twentyfold.
 
-> **Slow Burn** is used by 2 campaigns and 5 scenes, and as the global default.
-> After deleting:
-> • Campaign *Saltmarch* → Gothic Horror, Standard lengths
+So `GET /api/response-presets/{id}/usage` does not scan for references. It
+**diffs resolutions**: for the global scope, every campaign, and every scene, it
+computes the effective bundle now and again with the preset treated as absent, and
+returns every scope whose bundle changes, with both values. Finding direct
+references already requires reading every campaign and scene's frontmatter, so the
+extra work is an in-memory `resolve` per scope — the I/O was already being paid.
+
+The dialog shows the changed scopes, capped with a count so a global-default
+deletion does not render five hundred lines:
+
+> **Slow Burn** — deleting changes 1 global default, 2 campaigns, and 23 scenes.
+> • Global → no style, Standard lengths
+> • Campaign *Saltmarch* → Gothic Horror (from global), Standard lengths
 > • Scene *The Long Dark* → Gothic Horror, Cinematic lengths (from campaign)
-> • …
+> • …and 23 more
 
 Stating "they will fall back to Standard" would be false for most of these, and a
 false impact preview immediately before an irreversible delete is worse than no
@@ -503,7 +569,8 @@ returns **400** with an explanatory detail, as `PUT /styles/{sid}` does today, n
 - `GET /api/response-presets/{id}`
 - `PUT /api/response-presets/{id}` — 400 on built-in; 400 on both length forms
 - `DELETE /api/response-presets/{id}` — 400 on built-in
-- `GET /api/response-presets/{id}/usage` — scopes referencing this preset
+- `GET /api/response-presets/{id}/usage` — every scope whose effective bundle would
+  change if this preset were deleted, with before and after values
 - `POST /api/response-presets/{id}/duplicate`
 - `GET /api/length-presets` — the four constants, so the picker can show the
   numbers behind a named length
@@ -569,7 +636,15 @@ Per `docs/android-architecture.md` and CLAUDE.md:
   the same style it does today, plus the `standard` budget.
 - `response_presets`: read/write/list, built-in immutability, both-forms rejection
   on write, unknown `length_preset` invalidating a record *without* activating its
-  explicit keys, explicit form completing missing knobs from `standard`.
+  explicit keys, partial explicit form supplying only the knobs present, malformed
+  knobs treated as absent rather than completed.
+- **Style-only (neither-form) preset**: accepted on write, and over a broader named
+  length preset it must supply its style while leaving all five knobs to resolve
+  outward — the case an earlier draft left implementation-dependent.
+- **Synthetic-message segmentation**: a budget-compliant reply followed by each of
+  the four transition messages must **not** trigger a `blocks` correction, and a
+  transition sitting between two replies must yield two turns, not one. Both the
+  marked (`TRANSITION_SPEAKER`) and legacy unmarked forms.
 - `length_drift`: turn segmentation, roll-line exclusion, fence stripping,
   narrator-is-not-a-speaker, per-turn cap evaluation (explicitly: a 5/2/2 speaker
   window with a cap of 3 **does** trigger), fewer-than-three turns, zero turns,
@@ -587,9 +662,11 @@ Per `docs/android-architecture.md` and CLAUDE.md:
   the corrective when card instructions are empty.
 - Routes: CRUD including 400 on built-in edit/delete and on both-forms bodies;
   scope GET/PUT round-trip; a send carrying a one-shot override.
-- `/usage`: post-deletion effective values are the *re-resolved* ones, asserted
-  against a fixture where a scene inherits a campaign preset's style after its own
-  preset is removed — not a blanket `standard`.
+- `/usage`: reports **indirectly** affected scopes, not just direct references —
+  a campaign-level preset with N inheriting scenes reports all N, and a
+  global-default preset reports affected campaigns and scenes. Post-deletion values
+  are the *re-resolved* ones (a scene inheriting a campaign preset's style), not a
+  blanket `standard`.
 
 Store isolation via `monkeypatch.setenv("GRIMOIRE_HOME", tmp_path)` as usual.
 
@@ -614,9 +691,10 @@ useful and independently verifiable:
    `_SECTIONS` registration. At this point every scene renders a `standard` budget
    and existing styles still resolve identically — verifiable purely by tests and
    the token breakdown.
-2. **The counterweight.** `length_drift.py`, `length_correction.j2`, post-history
-   plumbing. This is the piece that solves the stated problem, and it works before
-   any picker exists.
+2. **The counterweight.** `scenes.TRANSITION_SPEAKER` applied at the four synthetic
+   message sites, `length_drift.py`, `length_correction.j2`, post-history plumbing.
+   This is the piece that solves the stated problem, and it works before any picker
+   exists.
 3. **Scope settings and API.** The `/response` endpoints, retirement of the
    `/style` endpoints, `ResponsePresetPicker` at all three scopes.
 4. **Saving and managing presets.** `ResponsePresetsView`, **Save as preset…**,
