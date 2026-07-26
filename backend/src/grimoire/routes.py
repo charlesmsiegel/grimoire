@@ -2418,6 +2418,9 @@ def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
             raise HTTPException(status_code=400, detail="cannot regenerate the opening post")
         if msgs[-1].get("speaker") == store.scenes.ROLL_SPEAKER:
             raise HTTPException(status_code=400, detail="cannot regenerate past a manual dice roll")
+        if msgs[-1].get("speaker") == store.scenes.TRANSITION_SPEAKER:
+            raise HTTPException(status_code=400,
+                                detail="cannot regenerate past a scene transition")
         store.scenes.remove_trailing_assistant_run(cid, sid)
     messages = store.context.build_messages(cid, sid)
     guidance = (body.guidance or "").strip() if body else ""

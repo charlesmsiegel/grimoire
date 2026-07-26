@@ -452,10 +452,20 @@ def trim_continuation(cid: str, sid: str, from_index: int) -> None:
     # segmentation is left describing blocks that no longer exist. Whole
     # generations come off: a partially-trimmed one is not a generation worth
     # measuring.
-    kept_blocks = sum(1 for m in kept if m["role"] == "assistant"
-                      and m.get("speaker") not in SYNTHETIC_SPEAKERS)
+    #
+    # Clamp against TRACKED blocks, not every retained assistant block. On an
+    # upgraded scene the untracked legacy prefix would otherwise absorb the
+    # difference — 10 legacy blocks plus sizes [1, 2] trimmed back to the first
+    # tracked turn still leaves 11 blocks, so a total-based comparison keeps the
+    # stale 2 and segmentation then reads legacy messages as a turn.
+    def _blocks(msgs: list[dict]) -> int:
+        return sum(1 for m in msgs if m["role"] == "assistant"
+                   and m.get("speaker") not in SYNTHETIC_SPEAKERS)
+
     sizes = get_turn_sizes(cid, sid)
-    while sizes and sum(sizes) > kept_blocks:
+    prefix = max(_blocks(messages) - sum(sizes), 0)   # untracked legacy blocks
+    tracked_after = max(_blocks(kept) - prefix, 0)
+    while sizes and sum(sizes) > tracked_after:
         sizes.pop()
     _write_turn_sizes(p, sizes)
 

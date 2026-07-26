@@ -1085,3 +1085,22 @@ def test_corrective_rides_alone_when_cards_have_no_post_history(monkeypatch, tmp
     messages = context.build_messages(cid, sid)
     assert messages[-1]["role"] == "system"
     assert "run long" in messages[-1]["content"]
+
+
+def test_speaker_canonicalization_survives_a_cast_departure(monkeypatch, tmp_path):
+    """A character who leaves still has blocks in the 3-turn window. Dropping
+    their name from the canonicalization set would split 'Winifred' and
+    'Winifred Vance' into two speakers on an ordinary departure — inventing a
+    speakers violation and hiding the real blocks_per_speaker one."""
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    characters.create_character(croot, "Winifred Vance", "default",
+                                characters.blank_card("Winifred Vance"))
+    ap.appear(cid, sid, "characters", "winifred-vance", "default", "npc")
+    scenes.set_response_preset(cid, sid, "terse")   # speakers 2, blocks_per_speaker 1
+    scenes.append_reply(cid, sid, [{"speaker": "Winifred", "content": "One."},
+                                   {"speaker": "Winifred Vance", "content": "Two."}])
+    ap.leave(cid, sid, "characters", "winifred-vance")
+    text = context.build_messages(cid, sid)[-1]["content"]
+    assert "give each character at most 1" in text   # one character, two blocks
+    assert "speaking characters" not in text         # NOT two distinct speakers
