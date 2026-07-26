@@ -1006,3 +1006,82 @@ def test_budget_section_appears_in_the_token_breakdown(monkeypatch, tmp_path):
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     labels = [s["label"] for s in context.context_sections(cid, sid)]
     assert "Response budget" in labels
+
+
+def _bloat(cid, sid, turns, words):
+    for _ in range(turns):
+        scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "w " * words}])
+
+
+def test_no_corrective_on_a_fresh_scene(monkeypatch, tmp_path):
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    messages = context.build_messages(cid, sid)
+    assert not any("run long" in m["content"] for m in messages)
+
+
+def test_no_corrective_while_replies_are_compliant(monkeypatch, tmp_path):
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    scenes.set_response_preset(cid, sid, "cinematic")   # 900-word budget
+    _bloat(cid, sid, turns=3, words=200)
+    messages = context.build_messages(cid, sid)
+    assert not any("run long" in m["content"] for m in messages)
+
+
+def test_corrective_lands_in_the_last_message(monkeypatch, tmp_path):
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    scenes.set_response_preset(cid, sid, "terse")       # 150-word budget
+    _bloat(cid, sid, turns=3, words=600)
+    messages = context.build_messages(cid, sid)
+    last = messages[-1]
+    assert last["role"] == "system"
+    assert "run long" in last["content"]
+    assert "Cut hard" in last["content"]
+    assert "150 words total" in last["content"]
+
+
+def test_trim_tier_wording(monkeypatch, tmp_path):
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    scenes.set_response_preset(cid, sid, "terse")       # 150 -> trim band 188..262
+    _bloat(cid, sid, turns=3, words=220)
+    text = context.build_messages(cid, sid)[-1]["content"]
+    assert "Trim toward the budget" in text
+    assert "Cut hard" not in text
+
+
+def test_structural_lines_appear_only_when_violated(monkeypatch, tmp_path):
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    scenes.set_response_preset(cid, sid, "terse")       # speakers 2, repeats 1
+    scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "Short."},
+                                   {"speaker": "Mara", "content": "Again."}])
+    text = context.build_messages(cid, sid)[-1]["content"]
+    assert "give each character at most 1" in text
+    assert "speaking characters" not in text     # the speaker cap was NOT broken
+    assert "run long" not in text                # nor the word budget
+
+
+def test_transition_between_replies_does_not_fire_a_false_block_violation(monkeypatch, tmp_path):
+    """A budget-compliant reply followed by a scene transition must not
+    measure as one over-cap turn."""
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    scenes.set_response_preset(cid, sid, "brisk")       # blocks cap 4
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "locations", "Saltmarch Docks", "Wet rope.")
+    entities.create_entity(croot, "locations", "The Long Stair", "Down.")
+    scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "One."},
+                                   {"speaker": None, "content": "Two."},
+                                   {"speaker": "Winifred", "content": "Three."},
+                                   {"speaker": None, "content": "Four."}])
+    scenes.set_location(cid, sid, "saltmarch-docks")
+    scenes.set_location(cid, sid, "the-long-stair")
+    scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "Five."}])
+    messages = context.build_messages(cid, sid)
+    assert not any("keep this one to at most 4" in m["content"] for m in messages)
+
+
+def test_corrective_rides_alone_when_cards_have_no_post_history(monkeypatch, tmp_path):
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    scenes.set_response_preset(cid, sid, "terse")
+    _bloat(cid, sid, turns=3, words=600)
+    messages = context.build_messages(cid, sid)
+    assert messages[-1]["role"] == "system"
+    assert "run long" in messages[-1]["content"]

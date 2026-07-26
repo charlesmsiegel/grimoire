@@ -128,6 +128,10 @@ def start_from_greeting(cid: str, sid: str, gid: str) -> str:
     scenes.stamp_greeting(cid, sid, gid)
     text = context.expand_macros(overlay.read_greeting(cid, gid)["body"],
                                  context.scene_substitutions(cid, sid), cid, sid)
-    scenes.append_message(cid, sid, "assistant", text)
+    # append_reply, not append_message: the greeting is authored rather than
+    # generated, but it is the strongest length anchor the model has at the
+    # start of a scene and it WILL be matched, so it records a turn like any
+    # other model output.
+    scenes.append_reply(cid, sid, [{"speaker": None, "content": text}])
     # retitle last: any earlier failure leaves the caller's sid valid for cleanup
     return scenes.rename_scene(cid, sid, g["name"])

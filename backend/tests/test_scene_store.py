@@ -541,3 +541,90 @@ def test_transition_speaker_cannot_collide_with_a_real_name():
     # called "Scene" round-trips as plain "Scene"
     assert scenes.TRANSITION_SPEAKER.startswith("\u2063")
     assert scenes.TRANSITION_SPEAKER != scenes.ROLL_SPEAKER
+
+
+def test_append_reply_records_a_turn_boundary(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Turns")
+    scenes.append_reply(cid, sid, [{"speaker": None, "content": "The door opens."},
+                                   {"speaker": "Mara", "content": "You're late."}])
+    scenes.append_reply(cid, sid, [{"speaker": "Winifred", "content": "I walked."}])
+    assert scenes.get_turn_sizes(cid, sid) == [2, 1]
+    assert len(scenes.read_scene(cid, sid)["messages"]) == 3
+
+
+def test_consecutive_generations_stay_separate_without_user_messages(monkeypatch, tmp_path):
+    """Offscreen/director play persists no user turn between generations."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Offscreen")
+    for _ in range(3):
+        scenes.append_reply(cid, sid, [{"speaker": None, "content": "Time grinds on."}])
+    assert scenes.get_turn_sizes(cid, sid) == [1, 1, 1]
+
+
+def test_turn_sizes_survive_a_message_edit(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Edits")
+    scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "Short."}])
+    scenes.edit_message(cid, sid, 0, "Much, much longer now.")
+    assert scenes.get_turn_sizes(cid, sid) == [1]
+
+
+def test_remove_trailing_assistant_run_pops_the_boundary(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Reroll")
+    scenes.append_message(cid, sid, "user", "Go on.")
+    scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "First try."},
+                                   {"speaker": None, "content": "She waits."}])
+    scenes.remove_trailing_assistant_run(cid, sid)
+    assert scenes.get_turn_sizes(cid, sid) == []
+    assert len(scenes.read_scene(cid, sid)["messages"]) == 1
+
+
+def test_reroll_removes_only_the_last_director_generation(monkeypatch, tmp_path):
+    """Director generations have no persisted user separator between them, so
+    a role-based trailing-run removal would delete ALL of them at once while
+    popping a single recorded size."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Offscreen reroll")
+    for n in ("one", "two", "three"):
+        scenes.append_reply(cid, sid, [{"speaker": None, "content": n}])
+    scenes.remove_trailing_assistant_run(cid, sid)
+    assert scenes.get_turn_sizes(cid, sid) == [1, 1]
+    assert [m["content"] for m in scenes.read_scene(cid, sid)["messages"]] == ["one", "two"]
+
+
+def test_reroll_does_not_eat_transition_messages(monkeypatch, tmp_path):
+    """A transition is not model output; reroll must stop at it rather than
+    silently deleting the scene's *Time passes...* line."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Transitions")
+    scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "Before."}])
+    scenes.append_message(cid, sid, "assistant", "*Time passes. It is now dusk.*",
+                          speaker=scenes.TRANSITION_SPEAKER)
+    scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "After."}])
+    scenes.remove_trailing_assistant_run(cid, sid)
+    contents = [m["content"] for m in scenes.read_scene(cid, sid)["messages"]]
+    assert contents == ["Before.", "*Time passes. It is now dusk.*"]
+    assert scenes.get_turn_sizes(cid, sid) == [1]
+
+
+def test_trim_continuation_clamps_turn_sizes(monkeypatch, tmp_path):
+    """proposals.commit_narration crash recovery drops model blocks; the
+    boundary list must not be left describing blocks that no longer exist."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Crash")
+    scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "Kept."}])
+    scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "Crashed."},
+                                   {"speaker": None, "content": "Half-written."}])
+    assert scenes.get_turn_sizes(cid, sid) == [1, 2]
+    scenes.trim_continuation(cid, sid, 1)
+    assert scenes.get_turn_sizes(cid, sid) == [1]
+    assert len(scenes.read_scene(cid, sid)["messages"]) == 1
+
+
+def test_no_turn_sizes_on_a_legacy_scene(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Legacy")
+    scenes.append_message(cid, sid, "assistant", "Written before turn tracking.")
+    assert scenes.get_turn_sizes(cid, sid) == []

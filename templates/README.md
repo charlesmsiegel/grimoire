@@ -79,7 +79,12 @@ Message assembly (code-side, mirrored from `context.py`):
    opener prompt as the user message (openers include no history).
 4. Regenerate with guidance only: `scene/regenerate_guidance.j2` as an extra
    system message before the post-history.
-5. `scene/post_history.j2` as a system message, if non-empty.
+5. `scene/post_history.j2` as a system message, if non-empty. Vars:
+   `npc_cards` and `length_correction` — the latter rendered from
+   `scene/length_correction.j2` (vars: `drift`, `budget`) when
+   `length_drift.measure()` finds the last 3 turns over budget, else `""`.
+   This is the closest slot to generation, which is why the drift
+   counterweight rides here rather than in the system prompt.
 6. Opener only: `scene/opener_shape.j2` as the final system message (always
    sent — last, right before generation, so it outranks the system prompt).
 
@@ -92,9 +97,16 @@ configured `recap_depth`).
 `system.j2` data vars, in section order — all already `{{user}}`/`{{char}}`
 substituted by code:
 - `global_system_prompt` — config `system_prompt`
-- `prose_style_name`, `prose_style_body` — the resolved style guide (scene
-  `style_id` override → campaign default → global `default_style_id`),
-  looked up via `store/styles.py:resolve_style()`; both `""` when none resolves
+- `prose_style_name`, `prose_style_body` — the resolved style guide; both
+  `""` when none resolves. Resolved by `response_presets.resolve()`, whose
+  per-field cascade (turn → scene → campaign → global) subsumes the older
+  `styles.resolve_style()` chain and walks the same `style_id` /
+  `default_style_id` keys when no response preset is set
+- `budget` — `{reply_words, blocks, paragraphs, speakers,
+  blocks_per_speaker}`, the resolved length budget from
+  `response_presets.resolve()`; feeds `sections/response_budget.j2`. Always
+  complete (StrictUndefined), falling back to the `standard` length preset.
+  Spec: docs/superpowers/specs/2026-07-26-response-presets-design.md
 - (no vars) `sections/natural_prose.j2` — the always-on anti-AI-ism
   defaults (names at invention, banned stock phrases, beat-word rationing,
   banned constructions, rhythm); sits right after the prose style, which

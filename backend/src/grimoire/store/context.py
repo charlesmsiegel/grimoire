@@ -15,8 +15,8 @@ import re
 
 from .. import prompts
 from . import (appearances, calendars, campaigns, characters, checks, chronicle,
-               config, dice, dossiers, entities, groupstate, lengths, modules, overlay, pcs, playstate,
-               plot, relationships, response_presets, scenes, sheets, styles)
+               config, dice, dossiers, entities, groupstate, length_drift, lengths, modules, overlay,
+               pcs, playstate, plot, relationships, response_presets, scenes, sheets, styles)
 
 
 def activate(entries: list[dict], recent_text: str, present: frozenset = frozenset()) -> list[dict]:
@@ -551,7 +551,19 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0) -> dic
         "mechanics_checks": mech["mechanics_checks"],
     }
 
-    post_history = prompts.render("scene/post_history.j2", npc_cards=npc_cards)
+    # npc_names + player_names, NOT `cast` — scene_cast entries carry role/kind/id
+    # with no name, so reading a name off them yields "" and silently disables
+    # speaker canonicalization.
+    drift = length_drift.measure(history, scenes.get_turn_sizes(cid, sid),
+                                 npc_names + player_names,
+                                 {k: budget[k] for k in lengths.KNOBS})
+    length_correction = (prompts.render("scene/length_correction.j2",
+                                        drift=drift,
+                                        budget={k: budget[k] for k in lengths.KNOBS})
+                         if drift else "")
+
+    post_history = prompts.render("scene/post_history.j2", npc_cards=npc_cards,
+                                  length_correction=length_correction)
     post_history = expand_macros(post_history, subs, cid, sid) if post_history else ""
 
     sub_history = [{"role": m["role"], "content": expand_macros(m["content"], subs, cid, sid)}

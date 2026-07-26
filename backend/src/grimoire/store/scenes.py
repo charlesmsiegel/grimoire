@@ -310,6 +310,49 @@ def append_message(cid: str, sid: str, role: str, content: str, speaker: str | N
     p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
 
 
+def get_turn_sizes(cid: str, sid: str) -> list[int]:
+    """Block counts for each recorded model generation, oldest first.
+
+    Describes the LAST sum(turn_sizes) model blocks — a tracked suffix, not the
+    whole transcript. Blocks written before turn tracking existed form an
+    untracked prefix that measurement ignores, which is what lets an upgraded
+    scene start being measured once new generations land. Empty on a scene with
+    no tracking yet; such a scene is simply not measured.
+    """
+    p = _scene_path(cid, sid)
+    if not _safe_id(sid) or not p.exists():
+        return []
+    raw = parse_frontmatter_head(p).get("turn_sizes", "")
+    return [int(x) for x in raw.split(",") if x.strip().isdigit()]
+
+
+def _write_turn_sizes(p: Path, sizes: list[int]) -> None:
+    meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
+    meta["turn_sizes"] = ",".join(str(n) for n in sizes)
+    p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+
+
+def append_reply(cid: str, sid: str, segments: list[dict]) -> None:
+    """Persist ONE model generation as per-speaker posts, recording its block
+    count as a turn boundary.
+
+    The single entry point for model output, because boundaries cannot be
+    recovered later: ephemeral director notes and empty sends are never
+    persisted, so consecutive generations leave no user message between them.
+    Counts rather than indices — a message EDIT leaves counts untouched, where
+    indices would need rewriting on every edit.
+    """
+    p = _scene_path(cid, sid)
+    if not _safe_id(sid) or not p.exists():
+        raise SceneNotFound(sid)
+    kept = [s for s in segments if s["content"].strip()]
+    if not kept:
+        return
+    for seg in kept:
+        append_message(cid, sid, "assistant", seg["content"], speaker=seg.get("speaker"))
+    _write_turn_sizes(p, get_turn_sizes(cid, sid) + [len(kept)])
+
+
 def _serialize_messages(messages: list[dict]) -> str:
     body = ""
     for m in messages:
@@ -365,14 +408,28 @@ def remove_trailing_assistant_run(cid: str, sid: str) -> None:
         raise SceneNotFound(sid)
     messages = read_scene(cid, sid)["messages"]
     if (not messages or messages[-1]["role"] != "assistant"
-            or messages[-1].get("speaker") == ROLL_SPEAKER):
+            or messages[-1].get("speaker") in SYNTHETIC_SPEAKERS):
         raise IndexError("no trailing assistant reply")
-    while (messages and messages[-1]["role"] == "assistant"
-           and messages[-1].get("speaker") != ROLL_SPEAKER):
-        messages.pop()
+    sizes = get_turn_sizes(cid, sid)
+    if sizes:
+        # Remove EXACTLY the last recorded generation. A role-based trailing-run
+        # removal would eat every consecutive generation, because director turns
+        # persist no user message to stop at — deleting more than the caller
+        # asked to reroll, and desyncing turn_sizes permanently.
+        remaining = sizes[-1]
+        while remaining and messages and messages[-1]["role"] == "assistant" \
+                and messages[-1].get("speaker") not in SYNTHETIC_SPEAKERS:
+            messages.pop()
+            remaining -= 1
+    else:
+        while (messages and messages[-1]["role"] == "assistant"
+               and messages[-1].get("speaker") not in SYNTHETIC_SPEAKERS):
+            messages.pop()
     meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
     meta["updated"] = now_iso()
     p.write_text(dump_frontmatter(meta, _serialize_messages(messages)), encoding="utf-8")
+    if sizes:
+        _write_turn_sizes(p, sizes[:-1])
 
 
 def trim_continuation(cid: str, sid: str, from_index: int) -> None:
@@ -391,6 +448,16 @@ def trim_continuation(cid: str, sid: str, from_index: int) -> None:
     meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
     meta["updated"] = now_iso()
     p.write_text(dump_frontmatter(meta, _serialize_messages(kept)), encoding="utf-8")
+    # Trimming drops model blocks, so the tracked suffix must shrink to match or
+    # segmentation is left describing blocks that no longer exist. Whole
+    # generations come off: a partially-trimmed one is not a generation worth
+    # measuring.
+    kept_blocks = sum(1 for m in kept if m["role"] == "assistant"
+                      and m.get("speaker") not in SYNTHETIC_SPEAKERS)
+    sizes = get_turn_sizes(cid, sid)
+    while sizes and sum(sizes) > kept_blocks:
+        sizes.pop()
+    _write_turn_sizes(p, sizes)
 
 
 class RollMessageImmutable(Exception):

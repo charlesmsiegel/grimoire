@@ -1,0 +1,41 @@
+{#- The adaptive counterweight, appended to the post-history system message —
+    the last message before generation, and so the closest available push-back
+    against a transcript full of increasingly long replies.
+
+    Renders only when a rule was measurably violated; each rule contributes its
+    own lines independently. Vars: drift (length_drift.measure output),
+    budget (the resolved knobs). -#}
+{%- set lines = [] -%}
+{%- if drift.tier -%}
+{%- set _ = lines.append(
+  "Your recent replies have run long: the last " ~ (drift.totals | length) ~
+  " turns ran " ~ (drift.totals | join(", ")) ~ " words against a budget of " ~
+  budget.reply_words ~ " — up to " ~ ("%.1f" | format(drift.max_ratio)) ~
+  "× over. " ~
+  ("Cut hard; this" if drift.tier == "cut" else "Trim toward the budget; this") ~
+  " reply must land near " ~ budget.reply_words ~
+  " words total. Trim description first, then dialogue tags.") -%}
+{%- endif -%}
+{%- if drift.blocks -%}
+{%- set _ = lines.append(
+  "Recent replies have exceeded " ~ budget.blocks ~
+  " blocks; keep this one to at most " ~ budget.blocks ~ ", narration included.") -%}
+{%- endif -%}
+{%- if drift.speakers -%}
+{%- set _ = lines.append(
+  "Recent replies have exceeded " ~ budget.speakers ~
+  " speaking characters; keep this one to at most " ~ budget.speakers ~ ".") -%}
+{%- endif -%}
+{%- if drift.blocks_per_speaker -%}
+{%- set b = budget.blocks_per_speaker -%}
+{%- set _ = lines.append(
+  "A character has taken more than " ~ b ~ (" block" if b == 1 else " blocks") ~
+  " in a single reply; give each character at most " ~ b ~ ".") -%}
+{%- endif -%}
+{%- if drift.paragraphs -%}
+{%- set p = budget.paragraphs -%}
+{%- set _ = lines.append(
+  "A block has run past " ~ p ~ (" paragraph" if p == 1 else " paragraphs") ~
+  "; keep every block to at most " ~ p ~ ".") -%}
+{%- endif -%}
+{{ lines | join("\n") }}

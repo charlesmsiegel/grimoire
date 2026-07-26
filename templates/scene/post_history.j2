@@ -1,8 +1,10 @@
-{#- The trailing system message: the NPC cards' post-history instructions,
-    blank-line separated. Sent last, right before generation; omitted when
-    empty. Vars: npc_cards. -#}
+{#- The trailing system message: the NPC cards' post-history instructions and
+    the adaptive length corrective, blank-line separated. Sent last, right
+    before generation; omitted entirely when both are empty.
+    Vars: npc_cards, length_correction (str, possibly empty). -#}
 {%- set blocks = [] -%}
 {%- for d in npc_cards -%}
 {%- if d.get("post_history_instructions", "").strip() -%}{%- set _ = blocks.append(d.get("post_history_instructions", "").strip()) -%}{%- endif -%}
 {%- endfor -%}
+{%- if length_correction.strip() -%}{%- set _ = blocks.append(length_correction.strip()) -%}{%- endif -%}
 {{ blocks | join("\n\n") }}

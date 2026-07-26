@@ -995,7 +995,8 @@ def test_scene_location_set_get_and_move(client):
     assert client.put(f"/api/campaigns/{cid}/scenes/{sid}/location", json={"location": b}).json() == \
         {"ok": True, "moved": True, "name": "Drowned Market"}
     assert client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"] == [
-        {"role": "assistant", "content": "*The scene moves to Drowned Market.*"}]
+        {"role": "assistant", "content": "*The scene moves to Drowned Market.*",
+         "speaker": store.scenes.TRANSITION_SPEAKER}]
     assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/location").json() == \
         {"current": {"id": b, "name": "Drowned Market"}, "visited": [{"id": a, "name": "Salt Cathedral"}]}
 
@@ -1192,7 +1193,8 @@ def test_delete_cast_removes_member_and_narrates_when_scene_has_messages(client)
     assert r.status_code == 200 and r.json() == {"ok": True}
     assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/cast").json() == []
     assert client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"][-1] == \
-        {"role": "assistant", "content": "*Seraphine leaves the scene.*"}
+        {"role": "assistant", "content": "*Seraphine leaves the scene.*",
+         "speaker": store.scenes.TRANSITION_SPEAKER}
 
 
 def test_delete_cast_unknown_kind_404(client):

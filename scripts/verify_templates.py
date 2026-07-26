@@ -161,8 +161,9 @@ assert 'prompts.render("scene/roll_declined.j2")' in routes_src, \
 
 from grimoire.store import appearances as ap  # noqa: E402
 from grimoire.store import (audit, calendars, campaigns, characters, checks, config,  # noqa: E402
-                            dossiers as dstore, entities, groupstate, modules, pcs, playstate,
-                            plot, scenes, sheets, styles, taglines as tstore, worlds)
+                            dossiers as dstore, entities, groupstate, length_drift, lengths, modules, pcs,
+                            playstate, plot, response_presets, scenes, sheets, styles,
+                            taglines as tstore, worlds)
 
 config.write_config(system_prompt="Global GM rules: be vivid, be fair.")
 
@@ -431,11 +432,16 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
                                "versions": [v["id"] for v in ch["versions"]]})
 
     campaign_meta = campaigns.read_campaign(cid)["meta"]
-    resolved_style = styles.resolve_style(
-        scene_style_id=scene["meta"].get("style_id", ""),
-        campaign_style_id=campaign_meta.get("style_id", ""),
-        default_style_id=cfg.get("default_style_id", ""))
+    # Mirrors context._assemble: one per-field cascade resolves both the prose
+    # style and the length budget.
+    budget = response_presets.resolve(scene_meta=scene["meta"],
+                                      campaign_meta=campaign_meta, config=cfg)
+    try:
+        resolved_style = styles.read_style(budget["style_id"]) if budget["style_id"] else None
+    except styles.StyleNotFound:
+        resolved_style = None
     return {"global_system_prompt": cfg.get("system_prompt", ""),
+            "budget": {k: budget[k] for k in lengths.KNOBS},
             "prose_style_name": resolved_style["meta"]["name"] if resolved_style else "",
             "prose_style_body": resolved_style["body"].strip() if resolved_style else "",
             "npc_cards": npc_cards,
@@ -468,7 +474,17 @@ def rendered_messages(scene_id: str, data: dict, note: str | None = None,
         out.append({"role": "user", "content": note})
     if opener_prompt is not None:
         out.append({"role": "user", "content": opener_prompt})
-    post = render("scene/post_history.j2", npc_cards=data["npc_cards"])
+    # Mirrors context._assemble exactly — this script's whole point is proving
+    # the templates render what the real path renders, so the corrective is
+    # measured from the same scene rather than injected from a fixture.
+    drift = length_drift.measure(scenes.read_scene(cid, scene_id)["messages"],
+                                 scenes.get_turn_sizes(cid, scene_id),
+                                 [d.get("name", "") for d in data["npc_cards"] if d.get("name")],
+                                 data["budget"])
+    correction = (render("scene/length_correction.j2", drift=drift, budget=data["budget"])
+                  if drift else "")
+    post = render("scene/post_history.j2", npc_cards=data["npc_cards"],
+                  length_correction=correction)
     if post:
         out.append({"role": "system", "content": post})
     if opener_prompt is not None:  # the shape rules always ride last on openers
