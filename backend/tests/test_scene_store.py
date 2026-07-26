@@ -628,3 +628,19 @@ def test_no_turn_sizes_on_a_legacy_scene(monkeypatch, tmp_path):
     sid = scenes.create_scene(cid, "Legacy")
     scenes.append_message(cid, sid, "assistant", "Written before turn tracking.")
     assert scenes.get_turn_sizes(cid, sid) == []
+
+
+def test_trim_continuation_clamps_against_tracked_blocks_not_total(monkeypatch, tmp_path):
+    """On an upgraded scene the untracked legacy prefix must not mask a trim.
+    Counting every retained assistant block leaves a stale size behind, and
+    segmentation then attributes legacy messages to a turn that never existed."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Upgraded")
+    for n in range(10):                                   # legacy, untracked
+        scenes.append_message(cid, sid, "assistant", f"old {n}")
+    scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "Kept."}])
+    scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "Crashed."},
+                                   {"speaker": None, "content": "Half-written."}])
+    assert scenes.get_turn_sizes(cid, sid) == [1, 2]
+    scenes.trim_continuation(cid, sid, 11)                # drop the 2-block turn
+    assert scenes.get_turn_sizes(cid, sid) == [1]

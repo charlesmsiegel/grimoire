@@ -25,6 +25,10 @@ import { quotePlugin } from "../markdown/quotePlugin";
 // typed speaker label or cast name — a character actually named "Roll" is
 // unaffected.
 const ROLL_SPEAKER = "⁣Roll";
+// Marks a scene transition line — join/leave, location change, time advance
+// (backend: scenes.TRANSITION_SPEAKER). No model wrote it, so it can't be
+// rerolled; same invisible-separator prefix as ROLL_SPEAKER.
+const TRANSITION_SPEAKER = "⁣Scene";
 
 // The scene rail lists scenes most-recently-edited first, but the displayed
 // number must reflect story order — the id's own leading number (its
@@ -453,6 +457,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   const canReroll = messages.length > 0 &&
     messages[messages.length - 1].role === "assistant" &&
     messages[messages.length - 1].speaker !== ROLL_SPEAKER &&
+    messages[messages.length - 1].speaker !== TRANSITION_SPEAKER &&
     messages.some((x) => x.role === "user");
 
   const speakerOf = (m: Message) =>

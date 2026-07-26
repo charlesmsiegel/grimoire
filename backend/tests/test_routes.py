@@ -4799,3 +4799,18 @@ def test_module_rule_route(client):
     assert body["meta"].get("always") == "true"
     assert client.get(f"/api/modules/{mid}/rules/ghost-slug").status_code == 404
     assert client.get("/api/modules/ghost/rules/omen").status_code == 404
+
+
+def test_regenerate_past_a_scene_transition_is_a_clean_400(client):
+    """A trailing join/leave/location/time line is not model output, so reroll
+    must refuse it with a handled error rather than a 500."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "Go on.")
+    store.scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "A reply."}])
+    store.scenes.append_message(cid, sid, "assistant", "*Time passes. It is now dusk.*",
+                                speaker=store.scenes.TRANSITION_SPEAKER)
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
+    assert r.status_code == 400
+    assert "transition" in r.json()["detail"].lower()

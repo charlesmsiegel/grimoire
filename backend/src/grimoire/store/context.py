@@ -251,6 +251,28 @@ def _cast_directory_data(croot, cid: str, sid: str) -> tuple[list[dict], list[di
     return active, known
 
 
+def _drift_roster(cid: str, croot, npc_names: list[str], player_names: list[str]) -> list[str]:
+    """Names drift measurement canonicalizes speaker labels against.
+
+    The whole campaign roster, not the present cast: the measurement window
+    reaches back three turns, so a character who has since LEFT still has blocks
+    in it. Dropping their name would split "Winifred" and "Winifred Vance" into
+    two speakers on an ordinary departure — inventing a `speakers` violation
+    while hiding the real `blocks_per_speaker` one.
+
+    Deduplicated, and that is load-bearing: scenes.match_name resolves an exact
+    match only when it is UNIQUE, so a name appearing twice in this list would
+    make it return None and silently disable canonicalization for that character.
+    """
+    names = list(npc_names) + list(player_names)
+    for char_id in overlay.character_refs(cid):
+        try:
+            names.append(_char_name(overlay.char_root(cid, char_id), char_id))
+        except (characters.CharacterNotFound, characters.VersionNotFound):
+            continue
+    return list(dict.fromkeys(n for n in names if n))
+
+
 def cast_datetime_facts(cid: str, sid: str, native: str) -> list[dict]:
     """Age / birthday-today for each in-scene actor that has a birthdate. Others skipped."""
     croot = campaigns.campaign_root(cid)
@@ -551,11 +573,8 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0) -> dic
         "mechanics_checks": mech["mechanics_checks"],
     }
 
-    # npc_names + player_names, NOT `cast` — scene_cast entries carry role/kind/id
-    # with no name, so reading a name off them yields "" and silently disables
-    # speaker canonicalization.
     drift = length_drift.measure(history, scenes.get_turn_sizes(cid, sid),
-                                 npc_names + player_names,
+                                 _drift_roster(cid, croot, npc_names, player_names),
                                  {k: budget[k] for k in lengths.KNOBS})
     length_correction = (prompts.render("scene/length_correction.j2",
                                         drift=drift,
