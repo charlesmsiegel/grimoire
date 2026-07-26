@@ -84,7 +84,8 @@ def test_leave_narrates_once_scene_has_messages(monkeypatch, tmp_path):
     ap.leave(cid, sid, "characters", "seraphine")
     assert scenes.read_scene(cid, sid)["messages"] == [
         {"role": "user", "content": "hi"},
-        {"role": "assistant", "content": "*Seraphine leaves the scene.*"},
+        {"role": "assistant", "content": "*Seraphine leaves the scene.*",
+         "speaker": scenes.TRANSITION_SPEAKER},
     ]
 
 
@@ -99,7 +100,8 @@ def test_appear_narrates_first_time_join_into_a_messaged_scene(monkeypatch, tmp_
     ap.appear(cid, sid, "characters", "seraphine", "corrupted", "npc")  # first-ever lock
     assert scenes.read_scene(cid, sid)["messages"] == [
         {"role": "user", "content": "hi"},
-        {"role": "assistant", "content": "*Seraphine joins the scene.*"},
+        {"role": "assistant", "content": "*Seraphine joins the scene.*",
+         "speaker": scenes.TRANSITION_SPEAKER},
     ]
 
 
@@ -120,7 +122,8 @@ def test_appear_narrates_join_once_scene_has_messages(monkeypatch, tmp_path):
     ap.leave(cid, sid2, "characters", "seraphine")
     ap.appear(cid, sid2, "characters", "seraphine", "corrupted", "npc")
     assert scenes.read_scene(cid, sid2)["messages"][-1] == \
-        {"role": "assistant", "content": "*Seraphine joins the scene.*"}
+        {"role": "assistant", "content": "*Seraphine joins the scene.*",
+         "speaker": scenes.TRANSITION_SPEAKER}
 
 
 def test_appear_rejoin_same_scene_is_a_noop_no_duplicate_narration(monkeypatch, tmp_path):

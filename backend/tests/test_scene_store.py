@@ -56,7 +56,8 @@ def test_set_location_first_is_silent_then_move_announces(monkeypatch, tmp_path)
     assert scenes.set_location(cid, sid, b) == {"moved": True, "name": "Drowned Market"}
     assert scenes.get_location_history(cid, sid) == [a, b]
     assert scenes.read_scene(cid, sid)["messages"] == [
-        {"role": "assistant", "content": "*The scene moves to Drowned Market.*"}]
+        {"role": "assistant", "content": "*The scene moves to Drowned Market.*",
+         "speaker": scenes.TRANSITION_SPEAKER}]
     # re-select current: no-op
     assert scenes.set_location(cid, sid, b) == {"moved": False, "name": "Drowned Market"}
     assert scenes.get_location_history(cid, sid) == [a, b]
@@ -150,7 +151,8 @@ def test_set_datetime_first_silent_then_advance(monkeypatch, tmp_path):
     assert res == {"advanced": True, "friendly": "4 July 2026", "id": sid}
     assert scenes.get_time_history(cid, sid) == ["2026-06-29", "2026-07-04T09:00"]
     assert scenes.read_scene(cid, sid)["messages"] == [
-        {"role": "assistant", "content": "*Time passes. It is now 4 July 2026.*"}]
+        {"role": "assistant", "content": "*Time passes. It is now 4 July 2026.*",
+         "speaker": scenes.TRANSITION_SPEAKER}]
     # re-set the same current: no-op
     assert scenes.set_datetime(cid, sid, "2026-07-04T09:00") == {
         "advanced": False, "friendly": "4 July 2026", "id": sid}
@@ -504,3 +506,38 @@ def test_trim_continuation_missing_scene_raises(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     with pytest.raises(scenes.SceneNotFound):
         scenes.trim_continuation(cid, "nope", 0)
+
+
+# ---- transition speaker / turn boundaries (2026-07-26 response-presets design) ----
+
+def test_transition_messages_carry_the_reserved_speaker(monkeypatch, tmp_path):
+    from grimoire.store import entities
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Moves")
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "locations", "Saltmarch Docks", "Wet rope and tar.")
+    entities.create_entity(croot, "locations", "The Long Stair", "Down and down.")
+    scenes.set_location(cid, sid, "saltmarch-docks")     # first is silent
+    scenes.set_location(cid, sid, "the-long-stair")      # this one appends
+    messages = scenes.read_scene(cid, sid)["messages"]
+    assert messages[-1]["speaker"] == scenes.TRANSITION_SPEAKER
+    assert "The Long Stair" in messages[-1]["content"]
+
+
+def test_time_advance_carries_the_reserved_speaker(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Clock")
+    # the first set is silent and stamps the date into the filename, so the
+    # scene id changes underneath us — carry it forward
+    sid = scenes.set_datetime(cid, sid, "2026-06-29")["id"]
+    got = scenes.set_datetime(cid, sid, "2026-07-04T09:00")
+    messages = scenes.read_scene(cid, got["id"])["messages"]
+    assert messages[-1]["speaker"] == scenes.TRANSITION_SPEAKER
+    assert "Time passes" in messages[-1]["content"]
+
+
+def test_transition_speaker_cannot_collide_with_a_real_name():
+    # U+2063-prefixed, exactly like ROLL_SPEAKER, so a character actually
+    # called "Scene" round-trips as plain "Scene"
+    assert scenes.TRANSITION_SPEAKER.startswith("\u2063")
+    assert scenes.TRANSITION_SPEAKER != scenes.ROLL_SPEAKER

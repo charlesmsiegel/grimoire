@@ -24,6 +24,16 @@ ROLE_TO_LABEL = {"user": "You", "assistant": "Grimoire"}
 # collide with an ordinary typed speaker label or cast name — a real
 # character or NPC named "Roll" round-trips as plain "Roll", not this.
 ROLL_SPEAKER = "⁣Roll"
+# Scene transitions (location change, time advance, cast join/leave) are
+# appended as assistant-role messages so they render inline, but no model wrote
+# them. Tagged with this speaker so drift measurement can treat them as turn
+# SEPARATORS rather than counting them as model prose — untagged, a transition
+# between two replies merges them into one apparently-oversized turn. Same
+# U+2063 prefix as ROLL_SPEAKER, for the same anti-collision reason.
+TRANSITION_SPEAKER = "⁣Scene"
+# Speakers that mark a message as not-model-output. Both are excluded from
+# drift metrics, and neither may be consumed by reroll.
+SYNTHETIC_SPEAKERS = (ROLL_SPEAKER, TRANSITION_SPEAKER)
 _MARKER = re.compile(r"^\*\*([^*\n]{1,64}?)(?: \(([^)\n]+)\))?:\*\*[ ]?", re.MULTILINE)
 _SAFE_LABEL = re.compile(r"^[^*\n]{1,64}$")
 
@@ -278,6 +288,17 @@ def set_style(cid: str, sid: str, style_id: str) -> None:
     p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
 
 
+def set_response_preset(cid: str, sid: str, preset_id: str) -> None:
+    """The scene-scope response preset. Loose per-knob overrides use the
+    `length_*` frontmatter keys and are written by the same routes."""
+    p = _scene_path(cid, sid)
+    if not _safe_id(sid) or not p.exists():
+        raise SceneNotFound(sid)
+    meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
+    meta["response_preset"] = preset_id
+    p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+
+
 def append_message(cid: str, sid: str, role: str, content: str, speaker: str | None = None) -> None:
     p = _scene_path(cid, sid)
     if not _safe_id(sid) or not p.exists():
@@ -430,7 +451,8 @@ def set_location(cid: str, sid: str, eid: str) -> dict:
         return {"moved": False, "name": name}
     moved = bool(history)
     if moved:
-        append_message(cid, sid, "assistant", f"*The scene moves to {name}.*")
+        append_message(cid, sid, "assistant", f"*The scene moves to {name}.*",
+                       speaker=TRANSITION_SPEAKER)
     # re-read after the possible append_message rewrite, then record the new current
     meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
     history.append(eid)
@@ -474,7 +496,8 @@ def set_datetime(cid: str, sid: str, native: str) -> dict:
         return {"advanced": False, "friendly": friendly, "id": sid}
     advanced = bool(history)
     if advanced:
-        append_message(cid, sid, "assistant", f"*Time passes. It is now {friendly}.*")
+        append_message(cid, sid, "assistant", f"*Time passes. It is now {friendly}.*",
+                       speaker=TRANSITION_SPEAKER)
     meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
     meta.pop("suggested_date", None)  # the hint is stale once a real date exists
     history.append(canonical)

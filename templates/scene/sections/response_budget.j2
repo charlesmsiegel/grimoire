@@ -1,0 +1,9 @@
+{#- The resolved length budget, rendered right after the reply-format rule.
+    Word counts are TARGETS ("about N") — a hard cap makes models truncate
+    mid-thought, where a target makes them compose shorter. The structural
+    limits are caps, because they are.
+    Vars: budget ({reply_words, blocks, paragraphs, speakers,
+                   blocks_per_speaker}). -#}
+# Response budget
+This whole reply runs about {{ budget.reply_words }} words across at most {{ budget.blocks }} blocks, narration (**Grimoire:**) included — roughly {{ budget.reply_words // budget.blocks }} words per block. No block exceeds {{ budget.paragraphs }} paragraph{{ "" if budget.paragraphs == 1 else "s" }}.
+At most {{ budget.speakers }} characters act or speak. {% if budget.blocks_per_speaker == 1 %}Give each exactly one block — do not return to a character you have already written.{% else %}No character takes more than {{ budget.blocks_per_speaker }} blocks.{% endif %}

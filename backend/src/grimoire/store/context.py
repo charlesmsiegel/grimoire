@@ -15,8 +15,8 @@ import re
 
 from .. import prompts
 from . import (appearances, calendars, campaigns, characters, checks, chronicle,
-               config, dice, dossiers, entities, groupstate, modules, overlay, pcs, playstate,
-               plot, relationships, scenes, sheets, styles)
+               config, dice, dossiers, entities, groupstate, lengths, modules, overlay, pcs, playstate,
+               plot, relationships, response_presets, scenes, sheets, styles)
 
 
 def activate(entries: list[dict], recent_text: str, present: frozenset = frozenset()) -> list[dict]:
@@ -516,10 +516,16 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0) -> dic
 
     cfg = config.read_config()
     campaign_meta = campaigns.read_campaign(cid)["meta"]
-    resolved_style = styles.resolve_style(
-        scene_style_id=scene["meta"].get("style_id", ""),
-        campaign_style_id=campaign_meta.get("style_id", ""),
-        default_style_id=cfg.get("default_style_id", ""))
+    # One per-field cascade resolves BOTH the prose style and the length budget
+    # over turn -> scene -> campaign -> global. It subsumes styles.resolve_style:
+    # with no response presets set anywhere (every pre-existing install) it walks
+    # the same style_id keys in the same order, so the migration is a no-op.
+    budget = response_presets.resolve(scene_meta=scene["meta"],
+                                      campaign_meta=campaign_meta, config=cfg)
+    try:
+        resolved_style = styles.read_style(budget["style_id"]) if budget["style_id"] else None
+    except styles.StyleNotFound:
+        resolved_style = None  # belt and braces: resolve() already skips unknown ids
     offscene_active, offscene_known = _cast_directory_data(croot, cid, sid)
     activated_wi = _world_info(cid, recent_text, exclude, frozenset(present))
     mech = _mechanics(cid, sid, cast, recent_text)
@@ -528,6 +534,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0) -> dic
         "global_system_prompt": cfg.get("system_prompt", ""),
         "prose_style_name": resolved_style["meta"]["name"] if resolved_style else "",
         "prose_style_body": resolved_style["body"].strip() if resolved_style else "",
+        "budget": {k: budget[k] for k in lengths.KNOBS},
         "npc_cards": npc_cards,
         "states": _character_states(croot, cast),
         "relationship_lines": _relationship_lines(cid, cast),
@@ -610,6 +617,7 @@ _SECTIONS = [
     ("Off-scene cast", "scene/sections/off_scene_cast.j2", False),
     ("Mechanics response format", "scene/sections/mechanics_response_format.j2", False),
     ("Response format", "scene/sections/response_format.j2", False),
+    ("Response budget", "scene/sections/response_budget.j2", False),
 ]
 
 
