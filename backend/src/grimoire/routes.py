@@ -2111,12 +2111,14 @@ def _persist_reply(cid: str, sid: str, text: str) -> None:
     """Split one model reply into per-speaker posts and append them (#744).
     Macros are expanded before persisting (#137): {{roll}}/{{random}} must be
     resolved once, not re-rolled on every future context build that re-reads
-    this now-historical message."""
+    this now-historical message. Goes through append_reply so the generation
+    records its own turn boundary for drift measurement."""
     players = frozenset(store.appearances.player_names(cid, sid))
     subs = store.context.scene_substitutions(cid, sid)
-    for seg in store.scenes.split_reply(text, players):
-        content = store.context.expand_macros(seg["content"], subs, cid, sid)
-        store.scenes.append_message(cid, sid, "assistant", content, speaker=seg["speaker"])
+    segments = [{"speaker": seg["speaker"],
+                 "content": store.context.expand_macros(seg["content"], subs, cid, sid)}
+                for seg in store.scenes.split_reply(text, players)]
+    store.scenes.append_reply(cid, sid, segments)
 
 
 def _sse(data: dict) -> str:
