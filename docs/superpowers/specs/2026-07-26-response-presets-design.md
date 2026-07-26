@@ -192,43 +192,62 @@ Migration.
 `response_presets.resolve(turn, scene_meta, campaign_meta, config) -> dict`,
 mirroring the shape of `styles.resolve_style`.
 
-1. **Base.** Walk turn → scene → campaign → global for the first scope naming a
-   **resolvable** response preset. A scope naming a missing or invalid preset is
-   treated as naming nothing and the walk continues. If no scope names a resolvable
-   preset, the base is the `standard` length preset supplying no style.
+**There is no single "base preset".** Resolution is a **per-field cascade**: each
+of the six fields (`style_id` plus the five length knobs) resolves independently.
 
-2. **A preset supplies only the fields it specifies.**
-   - A valid preset always supplies all five length knobs (via either union form).
-   - It supplies a style only when `style_id` is a style id or the `none` sentinel.
-     Absent or empty means it supplies nothing for style.
+For one field, walk the scopes **turn → scene → campaign → global** and take the
+first value found. Within each scope, look in this order:
 
-3. **Overrides.** For each field independently, the narrowest scope-level override
-   wins, subject to one restriction: a field **supplied by the base preset** accepts
-   overrides only from the base preset's own scope or narrower. A field the base
-   preset did **not** supply accepts overrides from every scope.
+1. that scope's **loose override** for the field, if set;
+2. that scope's **named preset's** value for the field, if the scope names a
+   resolvable preset *and that preset supplies this field*.
 
-Rule 3's restriction is the important one and deserves the heaviest tests. Naming a
-preset at a scope means *start fresh from these numbers here*, so a stale global
-`length_reply_words: 90` cannot quietly haunt a scene the user just set to
-Cinematic. Scoping it **per field** rather than wholesale is what keeps that
-freshness from spilling into fields the preset never spoke to — the concrete
-failure being: a campaign set to Gothic Horror, a scene set to the built-in
-Cinematic preset, and the scene silently losing Gothic Horror because a
-*length* choice reset a *style*. Under these rules it doesn't: `cinematic` supplies
-no style, so the campaign's style override still applies.
+If the walk finds nothing, fall back to `standard`'s value for a length knob, or to
+no style for `style_id`.
+
+**What "supplies" means.** A valid preset always supplies all five length knobs
+(via either union form). It supplies `style_id` only when that key holds a style id
+or the `none` sentinel; absent or empty means the preset has **no opinion** and the
+walk continues past it. A scope naming a missing or invalid preset supplies nothing
+at all, and the walk continues.
+
+This is the whole algorithm. Two properties fall out of it that earlier, more
+elaborate formulations got wrong:
+
+- **A length choice never disturbs a style.** Global preset *Slow Burn*
+  (`style_id: gothic-horror`, `length_preset: cinematic`), scene preset `terse`.
+  `reply_words` resolves at the scene (its preset supplies it) → 150. `style_id`
+  finds nothing at scene — `terse` has no opinion — and continues to global →
+  `gothic-horror`. The scene gets terse lengths and keeps its style. This holds for
+  *every* cascade ordering, whether the broader style came from a preset or a loose
+  override, because the walk does not care which of the two supplied it.
+- **Stale broad settings cannot haunt a narrow choice.** A global
+  `length_reply_words: 90` with a scene set to Cinematic resolves `reply_words` at
+  the scene, since the scene's preset supplies it. The global value is never
+  consulted. No "start fresh" restriction is needed to get this; the walk order
+  already produces it.
+
+Within a scope, a loose override beating that scope's own preset is what makes the
+"preset plus a tweak" UI work: setting `length_speakers: 3` on a campaign whose
+preset is Cinematic yields Cinematic everywhere except speakers.
 
 `resolve` always returns a **complete** dict — `style_id` (possibly empty) plus all
 five knobs as valid values. This is mandatory, not stylistic: the Jinja environment
 runs with `StrictUndefined`, so a missing template var is a hard render failure in
 the middle of a scene turn.
 
+`resolve` also returns, per field, **which scope and which source** produced the
+value. The UI's provenance readout needs it, and it makes the cascade directly
+testable rather than inferable from effective values.
+
 ### Migration
 
 Existing installs have `default_style_id` in `config.md` and `style_id` on
-campaigns and scenes, and no `response_preset` anywhere. Under the rules above that
-reads as "no scope names a preset, so the base is `standard` supplying no style;
-since the base supplies no style, style overrides from every scope apply" — which
-yields exactly the style each scope already had, plus a `standard` length budget.
+campaigns and scenes, and no `response_preset` anywhere. Under the per-field
+cascade that reads as: `style_id` resolves to the first loose override found
+walking scene → campaign → global (no presets exist to supply anything), which is
+precisely what `styles.resolve_style` does today; and every length knob falls
+through to `standard`.
 
 So the migration is a no-op on disk. No rewrite pass, no version bump. Existing
 libraries keep resolving their current style with zero user action; the only
@@ -273,12 +292,15 @@ its own lines, and a rule within tolerance contributes nothing. A reply whose to
 length is fine but which crowds in six speakers gets a corrective containing only
 the speaker line.
 
-Total-words violation:
+Total-words violation, quoting the actual per-turn totals rather than a summary
+statistic — concrete numbers are better prompt material, and they stay honest
+about a signal that is driven by the worst turn, not the average:
 
 ```
-Your recent replies have run long: the last 3 turns averaged 1,640 words
-against a budget of 300 — 5.5× over. Cut hard; this reply must land near
-300 words total. Trim description first, then dialogue tags.
+Your recent replies have run long: the last 3 turns ran 900, 1,510, and
+1,640 words against a budget of 300 — up to 5.5× over. Cut hard; this
+reply must land near 300 words total. Trim description first, then
+dialogue tags.
 ```
 
 Structural violations each render their own line:
@@ -290,13 +312,31 @@ A character has taken more than 1 block in a reply; give each character at most 
 A block has run past 2 paragraphs; keep every block to at most 2.
 ```
 
-**Word-budget tiers**, so mild drift is not shouted at:
+**Word-budget tiers**, driven by the **worst** turn in the window — the largest
+per-turn ratio, not the window mean:
 
-| drift ratio | rendered |
+| max per-turn ratio | rendered |
 |---|---|
 | < 1.25× | nothing |
 | 1.25× – 1.75× | "Trim toward the budget." |
 | ≥ 1.75× | "Cut hard." |
+
+**Max, not mean, is load-bearing.** A mean-driven signal oscillates near the
+threshold: with a 100-word budget, turns of 130/130/130 sit at 1.30× and render a
+correction; one compliant 100-word turn drops the window to 1.20× and clears it,
+and the next 150-word turn re-triggers at 1.27×. The corrective would flicker on
+and off while behaviour had not meaningfully changed. Using the window maximum
+makes the rule "a correction shows iff some turn in the last 3 broke the budget",
+which is monotone in the window's contents and cannot flicker.
+
+It also makes **clearing** true rather than merely claimed: since every signal is
+"any turn in the window violated", all of them disappear only after 3 consecutive
+compliant turns have rolled through. One good turn is never enough. No hysteresis
+latch and no persisted state — the signal is a pure function of the last 3 turns.
+
+The cost is that one deliberately long set-piece reply keeps a gentle corrective on
+for three turns. That is the right trade: at 1.25×–1.75× the corrective is a nudge,
+and predictable behaviour matters more here than optimal sensitivity.
 
 Because the budget is on the *total*, splitting the same prose across more blocks
 does not reduce the ratio — the loophole is closed structurally rather than by
@@ -304,14 +344,10 @@ asking the model not to exploit it. The `blocks` cap backs this up.
 
 The four structural rules are **not** tiered — they are caps, not targets, so they
 are either met or not. Each renders when **any single turn in the window** violates
-it. Evaluating a cap against the window *mean* would be wrong: with a cap of 3,
-turns of 5, 2, and 2 speakers average exactly 3 and would produce no correction
-despite one turn plainly breaking the rule.
-
-**Clearing** is automatic and needs no hysteresis: the window is the last 3 turns,
-so every signal disappears once 3 consecutive compliant turns have rolled through.
-A single compliant turn does not clear a violation, which is what prevents
-oscillation between corrected and uncorrected states.
+it, the same any-violation rule the word signal uses. Evaluating a cap against the
+window *mean* would be wrong for the same reason: with a cap of 3, turns of 5, 2,
+and 2 speakers average exactly 3 and would produce no correction despite one turn
+plainly breaking the rule.
 
 ### Plumbing
 
@@ -356,10 +392,12 @@ they are interleaved into runs but are not model prose.
 **Window**: the last **3** completed assistant turns. A constant, deliberately not
 a setting.
 
-**Signals:**
+**Signals** — every one of them is "any turn in the window violated", so they all
+activate and clear on the same rule:
 
-- **Word drift ratio** = mean *total words per turn* across the window ÷
-  `reply_words`. This is the tiered signal.
+- **Word drift ratio** = **max** over the window of (turn total words ÷
+  `reply_words`). This is the tiered signal. The per-turn totals are returned
+  alongside it, since the corrective quotes them.
 - **Cap violations** — `blocks`, `paragraphs`, `speakers`, `blocks_per_speaker` are
   each violated if **any single turn** in the window exceeded them.
 
@@ -425,10 +463,27 @@ completed-from-`standard` records are flagged in the detail view.
 ### Deleting a preset in use
 
 Deleting a preset that scopes reference is permitted, but never silent. The delete
-confirmation states the blast radius — *"Used by 2 campaigns and 5 scenes, and as
-the global default. They will fall back to Standard."* — sourced from
+confirmation states the blast radius, sourced from
 `GET /api/response-presets/{id}/usage`, which scans campaign and scene frontmatter.
 The scan runs only on delete, so its cost is irrelevant.
+
+The confirmation must describe what will **actually** happen, which is
+re-resolution, not a uniform fall back to `standard`. A scene that loses its preset
+re-runs the per-field cascade and may pick up a campaign or global preset's style
+and lengths; loose overrides at any scope still apply; `standard` is only reached
+when nothing else supplies a field. So `/usage` returns, per affected scope, the
+**post-deletion effective values** — computed by re-running `resolve` with the
+preset treated as absent — and the dialog shows them:
+
+> **Slow Burn** is used by 2 campaigns and 5 scenes, and as the global default.
+> After deleting:
+> • Campaign *Saltmarch* → Gothic Horror, Standard lengths
+> • Scene *The Long Dark* → Gothic Horror, Cinematic lengths (from campaign)
+> • …
+
+Stating "they will fall back to Standard" would be false for most of these, and a
+false impact preview immediately before an irreversible delete is worse than no
+preview — it is the whole justification for not keeping tombstones.
 
 Snapshots or tombstones that preserve a deleted preset's last resolved values were
 considered and rejected: they add a second, invisible source of truth to a store
@@ -500,12 +555,16 @@ Per `docs/android-architecture.md` and CLAUDE.md:
 
 **Backend.** The cascade is where the bugs will be, so it carries the most weight:
 
-- `resolve`: nearest-preset search across all four scopes; the per-field override
-  restriction (a preset-supplied field rejecting broader overrides, a
-  non-supplied field accepting them); **the specific case of a scene-level
-  built-in length preset over a campaign-level style, asserting the style
-  survives**; the `none` sentinel clearing a style; fallthrough on a missing or
-  invalid preset; a complete dict returned in every case.
+- `resolve`: the per-field cascade across all four scopes; loose override beating
+  its own scope's preset; fallthrough on a missing or invalid preset; the `none`
+  sentinel clearing a style; a complete dict plus per-field provenance returned in
+  every case.
+- **Style survival, exhaustively.** A narrower length-only preset must never wipe a
+  broader style, whichever way the broader style arrived. Cover the cross-product:
+  a scene-level built-in length preset over (a) a campaign *loose* `style_id`,
+  (b) a campaign *preset* supplying a style, (c) a global `default_style_id`,
+  (d) a global preset supplying a style. Case (d) is the one an earlier draft of
+  this design got wrong.
 - Migration: a store with only legacy `style_id` / `default_style_id` resolves to
   the same style it does today, plus the `standard` budget.
 - `response_presets`: read/write/list, built-in immutability, both-forms rejection
@@ -514,7 +573,11 @@ Per `docs/android-architecture.md` and CLAUDE.md:
 - `length_drift`: turn segmentation, roll-line exclusion, fence stripping,
   narrator-is-not-a-speaker, per-turn cap evaluation (explicitly: a 5/2/2 speaker
   window with a cap of 3 **does** trigger), fewer-than-three turns, zero turns,
-  clearing after 3 compliant turns.
+  clearing only after 3 compliant turns.
+- **No-oscillation regression**: with a 100-word budget, the sequence
+  130/130/130 → 130/130/100 → 130/100/150 must keep the corrective **on**
+  throughout. Under a mean-driven signal the middle window clears at 1.20× and the
+  third re-triggers at 1.27×; under the specified max-driven signal it stays on.
 - **Closed-loop check**: a synthetic transcript of budget-sized blocks whose *count*
   grows each turn must trigger the total-words corrective — the regression test for
   the split-into-more-blocks loophole.
@@ -523,7 +586,10 @@ Per `docs/android-architecture.md` and CLAUDE.md:
 - `context`: new section registered in `_SECTIONS`; post-history message carrying
   the corrective when card instructions are empty.
 - Routes: CRUD including 400 on built-in edit/delete and on both-forms bodies;
-  `/usage`; scope GET/PUT round-trip; a send carrying a one-shot override.
+  scope GET/PUT round-trip; a send carrying a one-shot override.
+- `/usage`: post-deletion effective values are the *re-resolved* ones, asserted
+  against a fixture where a scene inherits a campaign preset's style after its own
+  preset is removed — not a blanket `standard`.
 
 Store isolation via `monkeypatch.setenv("GRIMOIRE_HOME", tmp_path)` as usual.
 
@@ -534,7 +600,8 @@ Store isolation via `monkeypatch.setenv("GRIMOIRE_HOME", tmp_path)` as usual.
   preset…**.
 - `ResponsePresetsView`: the CLAUDE.md list/detail checks — clicking a row shows
   the read-only view with no `textarea`, **Edit** reveals the form, **+ New** opens
-  the form directly. Plus the delete confirmation showing usage counts.
+  the form directly. Plus the delete confirmation listing affected scopes with
+  their post-deletion effective values.
 - Composer chip: shows the resolved name, takes a one-shot pick, reverts after send.
 
 ## Build order
