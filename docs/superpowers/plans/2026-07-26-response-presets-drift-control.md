@@ -19,6 +19,7 @@
 - **Android-safe filesystem access.** Built-in data files resolve through `prompts.templates_dir()`; user data through `store.paths.home()`. Never assume a repo checkout layout.
 - **No new dependencies.** Base `pyproject.toml` deps must stay Android-installable.
 - **Jinja runs with `StrictUndefined`.** Every variable a template references must always be present. A missing var is a hard render failure mid-scene, so `resolve()` must always return a complete dict.
+- **Every new store module must be registered in `backend/src/grimoire/store/__init__.py`** — add it to the `from . import (...)` tuple *and* to `__all__`. The package does not auto-discover modules, so `from grimoire.store import <new>` raises `ImportError` until you do. This applies to all three modules created by this plan.
 - **Backend test command:** `backend/.venv/Scripts/python.exe -m pytest backend -q`
 - **Backend store tests isolate via** `monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))`; tests touching built-in data files also set `GRIMOIRE_TEMPLATES`.
 
