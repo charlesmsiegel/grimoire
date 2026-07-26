@@ -1104,3 +1104,23 @@ def test_speaker_canonicalization_survives_a_cast_departure(monkeypatch, tmp_pat
     text = context.build_messages(cid, sid)[-1]["content"]
     assert "give each character at most 1" in text   # one character, two blocks
     assert "speaking characters" not in text         # NOT two distinct speakers
+
+
+def test_unrelated_world_character_does_not_poison_canonicalization(monkeypatch, tmp_path):
+    """The roster must cover campaign history, not every character the campaign
+    can SEE. An unrelated same-prefix world character would make 'Winifred'
+    ambiguous and split one on-screen actor into two speakers."""
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    characters.create_character(croot, "Winifred Vance", "default",
+                                characters.blank_card("Winifred Vance"))
+    # never in this campaign's history — but visible in the world
+    characters.create_character(worlds.world_root(wid), "Winifred Vale", "default",
+                                characters.blank_card("Winifred Vale"))
+    ap.appear(cid, sid, "characters", "winifred-vance", "default", "npc")
+    scenes.set_response_preset(cid, sid, "terse")   # blocks_per_speaker 1
+    scenes.append_reply(cid, sid, [{"speaker": "Winifred", "content": "One."},
+                                   {"speaker": "Winifred Vance", "content": "Two."}])
+    text = context.build_messages(cid, sid)[-1]["content"]
+    assert "give each character at most 1" in text   # still one character
+    assert "speaking characters" not in text         # not two

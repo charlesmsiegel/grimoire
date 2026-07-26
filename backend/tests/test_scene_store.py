@@ -644,3 +644,28 @@ def test_trim_continuation_clamps_against_tracked_blocks_not_total(monkeypatch, 
     assert scenes.get_turn_sizes(cid, sid) == [1, 2]
     scenes.trim_continuation(cid, sid, 11)                # drop the 2-block turn
     assert scenes.get_turn_sizes(cid, sid) == [1]
+
+
+def test_append_reply_persists_blocks_and_boundary_in_one_write(monkeypatch, tmp_path):
+    """Segments and their turn_sizes entry must land together. Writing each
+    segment separately leaves untracked blocks at the tail if persistence is
+    interrupted, and reroll then counts sizes[-1] blocks back THROUGH them into
+    the previous completed reply."""
+    from pathlib import Path
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Atomic")
+    writes = []
+    real = Path.write_text
+
+    def counting(self, *a, **kw):
+        if self.suffix == ".md":
+            writes.append(self.name)
+        return real(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "write_text", counting)
+    scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "One."},
+                                   {"speaker": None, "content": "Two."},
+                                   {"speaker": "Winifred Vance", "content": "Three."}])
+    assert len(writes) == 1, f"expected a single scene write, got {writes}"
+    assert scenes.get_turn_sizes(cid, sid) == [3]
+    assert len(scenes.read_scene(cid, sid)["messages"]) == 3

@@ -282,6 +282,22 @@ def roster(cid: str) -> list[dict]:
     return out
 
 
+def roster_names(cid: str) -> list[str]:
+    """Display names of every actor that has appeared anywhere in this campaign.
+
+    Unlike scene_cast this retains actors after they leave a scene, which is what
+    drift measurement needs: its window reaches back three turns, so a departed
+    character still has blocks in it. Unreadable actors are skipped.
+    """
+    croot = campaigns.campaign_root(cid)
+    out = []
+    for a in roster(cid):
+        name = _actor_name(croot, a["kind"], a["id"], a["version"])
+        if name:
+            out.append(name)
+    return out
+
+
 def _actor_name(croot: Path, kind: str, actor_id: str, vid: str | None) -> str | None:
     """Display name from the campaign copy at the locked version; None if unreadable."""
     try:

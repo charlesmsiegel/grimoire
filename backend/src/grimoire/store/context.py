@@ -251,25 +251,27 @@ def _cast_directory_data(croot, cid: str, sid: str) -> tuple[list[dict], list[di
     return active, known
 
 
-def _drift_roster(cid: str, croot, npc_names: list[str], player_names: list[str]) -> list[str]:
+def _drift_roster(cid: str, npc_names: list[str], player_names: list[str]) -> list[str]:
     """Names drift measurement canonicalizes speaker labels against.
 
-    The whole campaign roster, not the present cast: the measurement window
-    reaches back three turns, so a character who has since LEFT still has blocks
-    in it. Dropping their name would split "Winifred" and "Winifred Vance" into
-    two speakers on an ordinary departure — inventing a `speakers` violation
-    while hiding the real `blocks_per_speaker` one.
+    The present cast plus the CAMPAIGN roster — actors that have appeared in this
+    campaign, which `appearances.roster_names` keeps after they leave a scene.
+    The window reaches back three turns, so a departed character still has blocks
+    in it; dropping their name would split "Winifred" and "Winifred Vance" into
+    two speakers on an ordinary departure, inventing a `speakers` violation while
+    hiding the real `blocks_per_speaker` one.
+
+    Deliberately NOT every character the campaign can see. Pulling in inherited
+    world characters who were never in this campaign's history adds names that
+    cannot appear in the measured turns but can still collide: an unrelated
+    "Winifred Vale" elsewhere in the world would make the label "Winifred"
+    ambiguous and break canonicalization for the Winifred actually on screen.
 
     Deduplicated, and that is load-bearing: scenes.match_name resolves an exact
     match only when it is UNIQUE, so a name appearing twice in this list would
     make it return None and silently disable canonicalization for that character.
     """
-    names = list(npc_names) + list(player_names)
-    for char_id in overlay.character_refs(cid):
-        try:
-            names.append(_char_name(overlay.char_root(cid, char_id), char_id))
-        except (characters.CharacterNotFound, characters.VersionNotFound):
-            continue
+    names = list(npc_names) + list(player_names) + appearances.roster_names(cid)
     return list(dict.fromkeys(n for n in names if n))
 
 
@@ -546,8 +548,10 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0) -> dic
                                       campaign_meta=campaign_meta, config=cfg)
     try:
         resolved_style = styles.read_style(budget["style_id"]) if budget["style_id"] else None
-    except styles.StyleNotFound:
-        resolved_style = None  # belt and braces: resolve() already skips unknown ids
+    except (styles.StyleNotFound, OSError, UnicodeDecodeError):
+        # resolve() already skips ids that don't exist; this also covers a file
+        # that exists but can't be read, which must not break generation either.
+        resolved_style = None
     offscene_active, offscene_known = _cast_directory_data(croot, cid, sid)
     activated_wi = _world_info(cid, recent_text, exclude, frozenset(present))
     mech = _mechanics(cid, sid, cast, recent_text)
@@ -574,7 +578,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0) -> dic
     }
 
     drift = length_drift.measure(history, scenes.get_turn_sizes(cid, sid),
-                                 _drift_roster(cid, croot, npc_names, player_names),
+                                 _drift_roster(cid, npc_names, player_names),
                                  {k: budget[k] for k in lengths.KNOBS})
     length_correction = (prompts.render("scene/length_correction.j2",
                                         drift=drift,
