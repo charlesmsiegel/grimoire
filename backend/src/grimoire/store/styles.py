@@ -92,6 +92,13 @@ def is_built_in(sid: str) -> bool:
     return found is not None and found[1]
 
 
+def exists(sid: str) -> bool:
+    """Whether `sid` names a readable style. Resolution treats an id that
+    doesn't as 'no opinion' and keeps walking outward, matching resolve_style's
+    long-standing skip-and-fall-back behaviour."""
+    return _find_path(sid) is not None
+
+
 def read_style(sid: str) -> dict:
     found = _find_path(sid)
     if found is None:
