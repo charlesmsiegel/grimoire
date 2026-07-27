@@ -96,5 +96,21 @@ def scene_facts(cid: str, sid: str) -> dict:
 
 
 def transcript_text(messages: list[dict]) -> str:
+    """Render messages via transcript.j2. The transition tag is internal drift
+    metadata (`scenes.TRANSITION_SPEAKER`), never a speaker a prompt should see —
+    strip it here so every caller (app transcript, exports, and the mechanics
+    audit/absorb LLM prompts) gets the same never-displayed guarantee, rather
+    than relying on each caller to normalize raw `scenes.read_scene` messages
+    itself. `ROLL_SPEAKER` is left untouched: manual dice-roll lines are real
+    transcript content and their labelling is intentional.
+
+    Local import: `scenes` transitively imports this module (via scene_refs),
+    so a module-level import here would cycle.
+    """
     from .. import prompts
-    return prompts.render("snippets/transcript.j2", messages=messages)
+    from . import scenes
+    normalized = [
+        {**m, "speaker": None} if m.get("speaker") == scenes.TRANSITION_SPEAKER else m
+        for m in messages
+    ]
+    return prompts.render("snippets/transcript.j2", messages=normalized)
