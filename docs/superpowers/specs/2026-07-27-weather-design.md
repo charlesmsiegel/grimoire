@@ -369,13 +369,35 @@ optional — resolves to `afternoon`, the block containing midday. That keeps
 dateless-time scenes stable and sensible rather than defaulting to a sky nobody
 expects.
 
-**Block identity is an integer on a continuous minute axis**, never a
-`(date, block name)` pair. Index from `fixed_day * 1440 + minutes`, so `night`
-is one contiguous interval and 22:00 does not land in a different block from
-02:00 the following morning. Concretely: the 00:00–03:59 stretch belongs to the
-*preceding* date's `night`. Deriving identity from the date would let the sky
-reroll halfway through a single night — the one span most likely to hold a
-continuous scene.
+A moment is resolved to a block by its **wall-clock minute on a continuous
+axis** (`fixed_day * 1440 + minutes`), never by a `(date, block name)` pair, so
+`night` is one contiguous interval and 22:00 does not land in a different block
+from 02:00 the following morning. Concretely: the 00:00–03:59 stretch belongs to
+the *preceding* date's `night`. Deriving the block from the date alone would let
+the sky reroll halfway through a single night — the one span most likely to hold
+a continuous scene.
+
+**That minute coordinate is not the noise index.** The two are separate and
+conflating them breaks the whole construction: the noise field defines
+`persistence` as the correlation between indices differing by **1**, while
+adjacent blocks differ by 240–480 minutes. Feeding minute coordinates to the
+filter would put neighbouring blocks outside each other's windows entirely — at
+`persistence: 0.9` the windows are 38 wide and 240 apart — making every block
+independent, the exact opposite of the setting's meaning, and silently: the
+distributions would all still look right.
+
+The noise index is therefore a **consecutive block ordinal**:
+
+```
+ordinal = 5 * fixed_day + position       position: dawn 0, morning 1,
+                                                   afternoon 2, evening 3,
+                                                   night 4
+```
+
+with `night` belonging to the date it *starts* on, so 02:00 on day *D+1*
+resolves to `5*D + 4` — the same ordinal as 22:00 on day *D*, one less than
+dawn of *D+1*. Consecutive blocks differ by exactly 1 across day and year
+boundaries alike, which is what makes `persistence` mean what it says.
 
 ### The noise field
 
@@ -412,22 +434,36 @@ pinned down exactly:
    `(cid, zone, axis, i)`. This is the only source of randomness, it is defined
    at negative indices, and it does **not** depend on `persistence`.
 2. **Smoothing.** The correlated field is a normalized **one-sided** (causal)
-   exponential filter over the latent, with `a = persistence`:
+   exponential filter over the latent, with `a = persistence`, indexed by the
+   **block ordinal** of § Blocks — never by the minute coordinate:
 
-   `g(t) = sqrt(1 − a²) · Σ_{k=0}^{W} a^k · z(t − k)`
+   `g(t) = Σ_{k=0}^{W} a^k · z(t − k) / sqrt( Σ_{k=0}^{W} a^{2k} )`
+
+   Normalization is by the **finite** sum, not by `sqrt(1 − a²)`. The infinite
+   form gives `Var(g) = 1 − a^{2(W+1)}` once truncated, so `Φ(g)` would not be
+   exactly uniform and the weight-fidelity guarantee — the whole reason for the
+   copula — would hold only approximately. Dividing by the actual sum of the
+   weights used makes the variance exactly 1 for any `W`.
 
    The filter is one-sided on purpose. For two-sided weights `a^{|k|}` the
    lag-1 autocorrelation works out to `2a / (1 + a²)`, not `a` — so `a = 0.35`
    would actually give 0.624 and `a = 0.9` would give 0.994, and every preset
    would be far more persistent than its number claimed. For the one-sided
-   filter the lag-1 autocorrelation is **exactly `a`**. Weather remembering its
-   past but not its future is also the more defensible model.
-3. **Parameter mapping.** `a = persistence` directly. That makes
-   **`persistence` exactly the lag-1 autocorrelation** between adjacent blocks
-   — measurable, portable, and meaningful to an author: `0.35` means "a block
-   is 35% correlated with the one before it." No log/exp round trip, so `p = 0`
-   needs no special case: the filter collapses to `g(t) = z(t)`, independent
-   blocks, exactly as documented.
+   filter the lag-1 autocorrelation is `a` for the untruncated sum. Weather
+   remembering its past but not its future is also the more defensible model.
+3. **Parameter mapping.** `a = persistence` directly, making **`persistence`
+   the lag-1 autocorrelation** between adjacent blocks — measurable, portable,
+   and meaningful to an author: `0.35` means "a block is 35% correlated with the
+   one before it." No log/exp round trip, so `p = 0` needs no special case: the
+   filter collapses to `g(t) = z(t)`, independent blocks, exactly as documented.
+
+   Truncation perturbs this slightly — the finite filter's lag-1 correlation is
+   `a · (1 − a^{2W}) / (1 − a^{2(W+1)})`. With `W` as specified below the
+   relative error is under `10⁻³`, so the calibration test asserts within a
+   tolerance covering both that bias and sampling error rather than exact
+   equality. Stating the exact finite form matters because an implementer who
+   measures `0.8997` against a documented `0.9` needs to know that is correct
+   and expected, not a bug to chase.
 4. **Truncation.** `W = ceil(4 / ln(1/a))` for `a > 0`, else 0. The discarded
    tail is below any weight that could shift an inverse-CDF bucket. Cost is
    O(W) per sample — 0 taps at `p = 0`, 38 at `p = 0.9`, 400 at `p = 0.99` —
@@ -706,19 +742,37 @@ Backend, `backend/tests/test_weather.py`, store isolated with
 - Config leniency: `persistence` of `"2"`, `"-1"` and `"NaN"` each fall back to
   the climate's value; a campaign default naming a deleted climate falls back
   to the shipped preset rather than looping.
-- Season-boundary remap: at high persistence, a value absent from the new
-  season's table never survives the boundary, and the entry it remaps to sits
-  at the same quantile in the new table as the old value did in the old one.
+- Season-boundary remap, tested **counterfactually on a single sample**: take
+  one `g(t)` and map it through both the outgoing and incoming season tables;
+  the two selected entries must sit at the same quantile. Comparing the actual
+  blocks either side of the boundary would be wrong — `g(t−1)` and `g(t)` are
+  different samples and their quantiles differ even at the clamp, so an
+  equality assertion there would reject conforming implementations. The
+  counterfactual is what actually catches the failure worth catching: an
+  implementation that reseeds, offsets, or re-derives the sample when the
+  active table changes.
+- Season-boundary continuity, separately: at high persistence the distribution
+  of change magnitude across a season boundary matches the distribution
+  mid-season.
 - Persistence clamp: a climate declaring `persistence: 1` loads, warns, and
   resolves at the clamp — it neither raises nor produces a constant sky. A
   single-entry table, by contrast, does produce a constant value at any
   persistence.
 - Zero persistence: `persistence: 0` yields `g(t) = z(t)` and independent
   blocks, with no division by zero anywhere in the filter.
-- Persistence calibration: the measured lag-1 autocorrelation of the latent
-  field is within tolerance of the configured `persistence`, across several
-  values — the test that makes a preset's `0.35` mean the same thing in any
-  implementation, which a "0.9 runs longer than 0.1" test cannot.
+- Persistence calibration: the measured lag-1 autocorrelation of the field is
+  within tolerance of the configured `persistence`, across several values —
+  the test that makes a preset's `0.35` mean the same thing in any
+  implementation, which a "0.9 runs longer than 0.1" test cannot. Tolerance
+  must cover the finite-filter bias as well as sampling error.
+- Block ordinal: two chronologically adjacent blocks receive noise indices
+  differing by exactly 1 — across a day boundary, a year boundary, and the
+  cross-midnight night span. This is the test that catches the minute
+  coordinate being passed to the filter, which would leave every block
+  independent while every distribution still looked correct.
+- Unit variance: the sampled field has variance 1 at several persistence
+  values including the clamp, so `Φ(g)` is genuinely uniform and the
+  weight-fidelity test is measuring the table rather than the filter.
 - Cross-persistence zone coupling: two locations sharing a zone but configured
   with *different* `persistence` still show correlated weather, since both are
   smoothings of the same latent. This fails immediately if an implementation
