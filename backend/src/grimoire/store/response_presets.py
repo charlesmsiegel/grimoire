@@ -282,6 +282,8 @@ def validity(meta: dict) -> dict:
     a preset can look selected while supplying nothing, which is
     indistinguishable from ordinary inheritance.
     """
+    from . import styles  # lazy: matches resolve()'s import, avoids an import cycle
+
     issues: list[str] = []
     named = (meta.get("length_preset") or "").strip()
     if named and lengths.get(named) is None:
@@ -292,6 +294,9 @@ def validity(meta: dict) -> dict:
             raw = (meta.get(knob) or "").strip()
             if raw and lengths.coerce(raw) is None:
                 issues.append(f"{knob}: '{raw}' is not a positive whole number — ignored")
+    sid = (meta.get("style_id") or "").strip()
+    if sid and sid != _STYLE_CLEAR and not styles.exists(sid):
+        issues.append(f"style '{sid}' does not exist — this selection is ignored")
     return {"valid": True, "issues": issues}
 
 
