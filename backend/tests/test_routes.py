@@ -4851,3 +4851,34 @@ def test_duplicate_builtin_yields_an_editable_copy(client):
     pid = client.post("/api/response-presets/terse/duplicate").json()["id"]
     assert client.put(f"/api/response-presets/{pid}",
                       json={"name": "Mine"}).status_code == 200
+
+
+def _corrupt_preset_file(tmp_path, pid):
+    """Overwrite a preset's file with invalid UTF-8, simulating a damaged or
+    hand-edited record on disk."""
+    (tmp_path / "response_presets" / f"{pid}.md").write_bytes(
+        b"---\nname: \xff\xfe broken \xff\n---\n")
+
+
+def test_get_unreadable_preset_is_a_clean_400(client, tmp_path):
+    """A corrupt/undecodable preset file must fail open with a handled 400,
+    not a 500 -- matching list_presets()/_supplied_by_preset()'s degrade-not-
+    crash contract for the same store module."""
+    pid = client.post("/api/response-presets", json={"name": "Slow Burn"}).json()["id"]
+    _corrupt_preset_file(tmp_path, pid)
+    r = client.get(f"/api/response-presets/{pid}")
+    assert r.status_code == 400
+
+
+def test_put_unreadable_preset_is_a_clean_400(client, tmp_path):
+    pid = client.post("/api/response-presets", json={"name": "Slow Burn"}).json()["id"]
+    _corrupt_preset_file(tmp_path, pid)
+    r = client.put(f"/api/response-presets/{pid}", json={"name": "Slower Burn"})
+    assert r.status_code == 400
+
+
+def test_duplicate_unreadable_preset_is_a_clean_400(client, tmp_path):
+    pid = client.post("/api/response-presets", json={"name": "Slow Burn"}).json()["id"]
+    _corrupt_preset_file(tmp_path, pid)
+    r = client.post(f"/api/response-presets/{pid}/duplicate")
+    assert r.status_code == 400
