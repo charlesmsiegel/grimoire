@@ -63,6 +63,11 @@ function describeChange(a: ResponsePresetUsageEntry): string {
 
 const AFFECTED_CAP = 10;
 
+// The `none` sentinel: an explicit "clear whatever a broader scope supplies",
+// which is a different answer from "" ("this record has no opinion about
+// style"). Without an option for it the tri-state is unreachable from the UI.
+const STYLE_CLEAR = "none";
+
 export default function ResponsePresetsView() {
   const [presets, setPresets] = useState<ResponsePresetSummary[]>([]);
   const [styles, setStyles] = useState<Style[]>([]);
@@ -74,7 +79,12 @@ export default function ResponsePresetsView() {
   const [mode, setMode] = useState<"view" | "edit">("edit");
   const [error, setError] = useState<string | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const [affected, setAffected] = useState<ResponsePresetUsageEntry[] | null>(null);
+  // Three distinct states, and they must stay distinct: null = still checking,
+  // "failed" = the lookup errored so the impact is UNKNOWN, an array = a real
+  // answer (possibly empty). Collapsing "failed" into [] renders a confident
+  // "nothing else changes" immediately before an irreversible delete.
+  const [affected, setAffected] =
+    useState<ResponsePresetUsageEntry[] | "failed" | null>(null);
 
   const reload = useCallback(() => api.listResponsePresets().then(setPresets).catch(() => setPresets([])), []);
   useEffect(() => {
@@ -98,7 +108,16 @@ export default function ResponsePresetsView() {
     setError(null);
     setConfirmingDelete(false);
     setAffected(null);
-    const { meta, validity: v } = await api.getResponsePreset(id);
+    let detail;
+    try {
+      detail = await api.getResponsePreset(id);
+    } catch (err: any) {
+      // An unreadable preset file must say so: without this the row click
+      // does nothing visible and leaves an unhandled rejection behind.
+      setError(err?.detail ?? String(err));
+      return;
+    }
+    const { meta, validity: v } = detail;
     setPid(id);
     setBuiltIn(meta.built_in);
     setValidity(v);
@@ -176,7 +195,9 @@ export default function ResponsePresetsView() {
     if (!pid) return;
     setConfirmingDelete(true);
     setAffected(null);
-    api.responsePresetUsage(pid).then((r) => setAffected(r.affected)).catch(() => setAffected([]));
+    api.responsePresetUsage(pid)
+      .then((r) => setAffected(r.affected ?? []))
+      .catch(() => setAffected("failed"));
   }
 
   function cancelDelete() {
@@ -241,7 +262,10 @@ export default function ResponsePresetsView() {
                 </div>
                 <div className="side-section">
                   <h4>Style</h4>
-                  <span className="chip on">{form.style_id || "— none —"}</span>
+                  <span className="chip on">
+                    {form.style_id === STYLE_CLEAR ? "no style (clears inherited)"
+                      : form.style_id || "— none —"}
+                  </span>
                 </div>
                 {validity && validity.issues.length > 0 && (
                   <div className="side-section">
@@ -258,6 +282,11 @@ export default function ResponsePresetsView() {
               <h3>Delete "{form.name}"?</h3>
               {affected === null ? (
                 <div className="field-hint">Checking affected scopes…</div>
+              ) : affected === "failed" ? (
+                <div className="banner error-banner" role="alert">
+                  The impact of this delete could not be checked — campaigns or scenes
+                  that inherit this preset may change, and this list is unknown.
+                </div>
               ) : affected.length === 0 ? (
                 <div className="field-hint">No campaigns or scenes inherit this preset — nothing else changes.</div>
               ) : (
@@ -291,6 +320,7 @@ export default function ResponsePresetsView() {
               <Field label="Style">
                 <select value={form.style_id} onChange={(e) => setForm({ ...form, style_id: e.target.value })}>
                   <option value="">— none —</option>
+                  <option value={STYLE_CLEAR}>— no style (clear inherited) —</option>
                   {styles.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                 </select>
               </Field>

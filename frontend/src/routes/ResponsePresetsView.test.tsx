@@ -107,3 +107,34 @@ it("delete confirmation lists affected scopes and their post-deletion values", a
   expect(await screen.findByText(/Saltmarch/)).toBeInTheDocument();
   expect(screen.getByText(/550/)).toBeInTheDocument();
 });
+
+it("warns that the impact is unknown when the usage lookup fails", async () => {
+  // A failed lookup is NOT an empty impact: rendering it as "nothing else
+  // changes" is a false reassurance immediately before an irreversible delete.
+  (api.responsePresetUsage as any).mockRejectedValue({ detail: "boom" });
+  render(<ResponsePresetsView />);
+  await userEvent.click(await screen.findByRole("button", { name: "Slow Burn" }));
+  await userEvent.click(screen.getByRole("button", { name: "Edit" }));
+  await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent(/could not be checked/i);
+  expect(screen.queryByText(/nothing else changes/i)).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /confirm delete/i })).toBeInTheDocument();
+});
+
+it("offers the `none` sentinel as a style option distinct from inherit", async () => {
+  render(<ResponsePresetsView />);
+  await userEvent.click(await screen.findByRole("button", { name: "Slow Burn" }));
+  await userEvent.click(screen.getByRole("button", { name: "Edit" }));
+  const select = screen.getByRole("combobox", { name: "Style" });
+  await userEvent.selectOptions(select, "none");
+  await userEvent.click(screen.getByRole("button", { name: /save preset/i }));
+  expect(api.updateResponsePreset).toHaveBeenCalledWith(
+    "slow-burn", expect.objectContaining({ style_id: "none" }));
+});
+
+it("surfaces an error when a preset row cannot be read", async () => {
+  (api.getResponsePreset as any).mockRejectedValue({ detail: "preset file could not be read" });
+  render(<ResponsePresetsView />);
+  await userEvent.click(await screen.findByRole("button", { name: "Slow Burn" }));
+  expect(await screen.findByText(/could not be read/)).toBeInTheDocument();
+});

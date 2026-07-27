@@ -51,7 +51,7 @@ vi.mock("../api/client", async () => {
       getCalendarConfig: vi.fn(), setCalendarConfig: vi.fn(), getCalendarProviders: vi.fn(),
       getSceneDatetime: vi.fn(), setSceneDatetime: vi.fn(), getCalendarMonths: vi.fn(),
       listStyles: vi.fn(),
-      listResponsePresets: vi.fn(),
+      listResponsePresets: vi.fn(), getSceneResponse: vi.fn(),
       listCharacters: vi.fn(), listPCs: vi.fn(), listCampaignPCs: vi.fn(),
       campaignChanges: vi.fn(),
       listAppearances: vi.fn(), listEntityImages: vi.fn(), listEntities: vi.fn(),
@@ -74,6 +74,16 @@ const RESPONSE_PRESETS = [
   { id: "cinematic", name: "Cinematic", built_in: true },
   { id: "terse", name: "Terse", built_in: true },
 ];
+
+// What GET /api/campaigns/:cid/scenes/:sid/response returns: the scene's own
+// (here: empty) fields plus the SERVER-resolved bundle and its provenance.
+const RESPONSE_BUNDLE = {
+  response_preset: "", style_id: "",
+  length_reply_words: "", length_blocks: "", length_paragraphs: "",
+  length_speakers: "", length_blocks_per_speaker: "",
+  effective: { style_id: "", reply_words: 550, blocks: 5, paragraphs: 2, speakers: 4, blocks_per_speaker: 2 },
+  provenance: { reply_words: { scope: "default", source: "default" } },
+};
 
 beforeEach(() => {
   localStorage.clear();
@@ -107,6 +117,7 @@ beforeEach(() => {
   ] });
   (api.getSceneDatetime as any).mockResolvedValue({ current: null, history: [] });
   (api.listStyles as any).mockResolvedValue([]);
+  (api.getSceneResponse as any).mockResolvedValue(RESPONSE_BUNDLE);
   (api.listCharacters as any).mockResolvedValue([]);
   (api.listPCs as any).mockResolvedValue([]);
   (api.listCampaignPCs as any).mockResolvedValue([]);
@@ -1418,4 +1429,76 @@ test("the chrome bar toggles the subheader independently of the topbar toggle", 
   expect(screen.queryByText("Run One")).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "▾ Bar" }));
   await screen.findByText("Run One");
+});
+
+test("the chip names the preset resolved at campaign scope, not a hardcoded Standard", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  // the scene itself names no preset — the campaign does, so nothing in the
+  // scene's frontmatter can tell the chip what the reply will actually be
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [] });
+  (api.getSceneResponse as any).mockResolvedValue({
+    ...RESPONSE_BUNDLE,
+    effective: { ...RESPONSE_BUNDLE.effective, reply_words: 900 },
+    provenance: { reply_words: { scope: "campaign", source: "preset" } },
+  });
+  (api.listResponsePresets as any).mockResolvedValue(RESPONSE_PRESETS);
+  renderCampaign();
+  const chip = await screen.findByRole("button", { name: /Response length/ });
+  await waitFor(() => expect(chip).toHaveTextContent("900 words"));
+  expect(chip).toHaveTextContent("this campaign");
+  expect(chip).not.toHaveTextContent("Standard");
+});
+
+test("a pending one-shot pick is badged and can be cancelled without sending", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({
+    meta: { id: "s1", title: "Old", response_preset: "cinematic" }, messages: [] });
+  (api.listResponsePresets as any).mockResolvedValue(RESPONSE_PRESETS);
+  renderCampaign();
+  const chip = await screen.findByRole("button", { name: /Response length/ });
+  // an inherited/scene setting carries no badge...
+  expect(chip).toHaveTextContent("Cinematic");
+  expect(chip).not.toHaveTextContent(/next reply only/i);
+  expect(screen.queryByLabelText(/cancel the one-shot/i)).toBeNull();
+  // ...a one-shot pick does, and is distinguishable from it
+  fireEvent.click(chip);
+  fireEvent.click(screen.getByRole("option", { name: "Terse" }));
+  expect(chip).toHaveTextContent("Terse");
+  expect(chip).toHaveTextContent(/next reply only/i);
+  // cancelling reverts to the scene's own setting without sending anything
+  fireEvent.click(screen.getByLabelText(/cancel the one-shot/i));
+  expect(chip).toHaveTextContent("Cinematic");
+  expect(chip).not.toHaveTextContent(/next reply only/i);
+  expect(api.chat).not.toHaveBeenCalled();
+});
+
+test("a scene transition renders as unlabelled narration, with no Scene plate", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" },
+    { role: "assistant", content: "a reply" },
+    { role: "assistant", content: "*Time passes. It is now dusk.*", speaker: "⁣Scene" }] });
+  const { container } = renderCampaign();
+  await screen.findByText(/Time passes/);
+  expect(screen.queryByText(/⁣Scene/)).toBeNull();
+  // the tagged transition joins the reply's run instead of opening its own
+  // plate — exactly how an untagged transition rendered before the tag existed
+  const names = [...container.querySelectorAll(".plate-name")].map((n) => n.textContent);
+  expect(names).toEqual(["You", "Grimoire"]);
+});
+
+test("Reroll is offered past a trailing scene transition and keeps it", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" },
+    { role: "assistant", content: "a reply" },
+    { role: "assistant", content: "*Time passes. It is now dusk.*", speaker: "⁣Scene" }] });
+  renderCampaign();
+  await screen.findByText(/Time passes/);
+  fireEvent.click(screen.getByTitle("Reroll"));
+  fireEvent.click(screen.getByRole("button", { name: /reroll ▸/i }));
+  // the optimistic trim drops the reply but leaves the transition standing
+  expect(screen.queryByText("a reply")).toBeNull();
+  expect(screen.getByText(/Time passes/)).toBeInTheDocument();
+  await waitFor(() => expect(api.regenerate).toHaveBeenCalled());
 });

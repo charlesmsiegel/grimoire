@@ -23,6 +23,10 @@ const KNOB_FIELDS: {
   { key: "length_blocks_per_speaker", label: "Max blocks per character", effectiveKey: "blocks_per_speaker", unit: "blocks per character" },
 ];
 
+// Matches response_presets._STYLE_CLEAR: an explicit "clear the inherited
+// style", as opposed to "" which means "this scope has no opinion".
+const STYLE_CLEAR = "none";
+
 function scopeLabel(scope: string | undefined): string {
   switch (scope) {
     case "turn": return "this turn";
@@ -35,7 +39,13 @@ function scopeLabel(scope: string | undefined): string {
 }
 
 export function ResponsePresetPicker(
-  { scope, cid, sid }: { scope: "global" | "campaign" | "scene"; cid?: string; sid?: string },
+  { scope, cid, sid, onChanged }: {
+    scope: "global" | "campaign" | "scene"; cid?: string; sid?: string;
+    // Fired after a successful write so surfaces that render the RESOLVED
+    // bundle elsewhere (the composer chip) can re-read it. Without this, a
+    // change made here leaves the chip advertising the previous setting.
+    onChanged?: () => void;
+  },
 ) {
   const [presets, setPresets] = useState<ResponsePresetSummary[]>([]);
   const [styles, setStyles] = useState<Style[]>([]);
@@ -80,6 +90,7 @@ export function ResponsePresetPicker(
       else await api.setSceneResponse(cid!, sid!, next);
       setSaved(true);
       await load();
+      onChanged?.();
     } catch (err: any) {
       setError(err.detail ?? String(err));
     }
@@ -149,6 +160,10 @@ export function ResponsePresetPicker(
               <option value="">
                 {effective ? `— inherit${effective.style_id ? ` (${effective.style_id})` : ""} —` : "— inherit —"}
               </option>
+              {/* The `none` sentinel. Distinct from inherit: it stops the walk
+                  with an explicit clear, so a broader scope's style does NOT
+                  apply. Without it the tri-state is unreachable from the UI. */}
+              <option value={STYLE_CLEAR}>— no style (clear inherited) —</option>
               {styles.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select>
           </label>

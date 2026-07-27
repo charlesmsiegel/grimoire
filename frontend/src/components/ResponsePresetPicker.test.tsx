@@ -99,3 +99,29 @@ it("saves a single knob override without leaving the preset", async () => {
     "run", "s1", expect.objectContaining({ response_preset: "terse",
                                            length_speakers: "2" })));
 });
+
+it("offers an explicit style clear distinct from inherit", async () => {
+  // The tri-state: "" = no opinion (inherit), "none" = explicitly clear the
+  // inherited style. Without an option for the sentinel it is unreachable.
+  (api.listStyles as any).mockResolvedValue([
+    { id: "gothic-horror", name: "Gothic Horror", description: "", tags: [], built_in: true },
+  ]);
+  render(<ResponsePresetPicker scope="scene" cid="run" sid="s1" />);
+  await userEvent.click(await screen.findByText("Overrides"));
+  const style = screen.getByLabelText("Style");
+  expect([...style.querySelectorAll("option")].map((o) => (o as HTMLOptionElement).value))
+    .toEqual(["", "none", "gothic-horror"]);
+  await userEvent.selectOptions(style, "none");
+  await userEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.setSceneResponse).toHaveBeenCalledWith(
+    "run", "s1", expect.objectContaining({ style_id: "none" })));
+});
+
+it("notifies the host after a successful write so resolved surfaces can refresh", async () => {
+  // The composer chip renders the RESOLVED bundle, which this picker can
+  // change; without the callback it keeps advertising the previous setting.
+  const onChanged = vi.fn();
+  render(<ResponsePresetPicker scope="scene" cid="run" sid="s1" onChanged={onChanged} />);
+  await userEvent.selectOptions(await screen.findByLabelText("Response preset"), "cinematic");
+  await waitFor(() => expect(onChanged).toHaveBeenCalled());
+});
