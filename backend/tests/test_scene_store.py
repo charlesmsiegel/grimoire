@@ -586,6 +586,70 @@ def test_turn_sizes_survive_a_message_edit(monkeypatch, tmp_path):
     assert scenes.get_turn_sizes(cid, sid) == [1]
 
 
+def test_editing_a_reply_into_two_blocks_retracks_the_turn(monkeypatch, tmp_path):
+    """Stored content is re-split at READ time, so an edit that introduces a
+    `**Speaker:**` marker grows the reply by a block. Leave turn_sizes saying
+    1 and reroll removes half the reply the user asked to regenerate."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Split")
+    scenes.append_message(cid, sid, "user", "Go on.")
+    scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "One thing."}])
+    scenes.edit_message(cid, sid, 1, "One thing.\n\n**Winifred:** And another.")
+    assert len(scenes.read_scene(cid, sid)["messages"]) == 3
+    assert scenes.get_turn_sizes(cid, sid) == [2]
+    scenes.remove_trailing_assistant_run(cid, sid)
+    assert [m["content"] for m in scenes.read_scene(cid, sid)["messages"]] == ["Go on."]
+    assert scenes.get_turn_sizes(cid, sid) == []
+
+
+def test_editing_an_earlier_turn_keeps_later_turns_attributed(monkeypatch, tmp_path):
+    """A block spliced in mid-transcript shifts the last-sum(sizes) window, so
+    drift segmentation would read the wrong blocks as the most recent turn."""
+    from grimoire.store import length_drift
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Window")
+    scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "First."}])
+    scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "Second."}])
+    scenes.edit_message(cid, sid, 0, "First.\n\n**Winifred:** Aside.")
+    assert scenes.get_turn_sizes(cid, sid) == [2, 1]
+    turns = length_drift.segment(scenes.read_scene(cid, sid)["messages"],
+                                 scenes.get_turn_sizes(cid, sid))
+    assert [m["content"] for m in turns[-1]] == ["Second."]
+
+
+def test_editing_an_untracked_legacy_block_leaves_turn_sizes_alone(monkeypatch, tmp_path):
+    """The tracked suffix is anchored at the END: growing the pre-tracking
+    prefix cannot move it, so nothing needs adjusting."""
+    from grimoire.store import length_drift
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Upgraded")
+    scenes.append_message(cid, sid, "assistant", "Written before turn tracking.")
+    scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "Tracked."}])
+    scenes.edit_message(cid, sid, 0, "Written before it.\n\n**Winifred:** Also legacy.")
+    assert scenes.get_turn_sizes(cid, sid) == [1]
+    turns = length_drift.segment(scenes.read_scene(cid, sid)["messages"],
+                                 scenes.get_turn_sizes(cid, sid))
+    assert [m["content"] for m in turns[-1]] == ["Tracked."]
+
+
+def test_an_edit_that_removes_a_model_block_shrinks_the_turn(monkeypatch, tmp_path):
+    """The count can fall as well as rise: a legacy `**Grimoire (Name):**`
+    label is rewritten as plain `**Name:**` by the next save, and when Name is
+    the seated player that block parses back as a USER line — one model block
+    fewer than turn_sizes was told about."""
+    from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
+    cid, sid = _campaign_with_pc(monkeypatch, tmp_path)
+    p = campaigns.campaign_root(cid) / "scenes" / f"{sid}.md"
+    meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
+    meta["turn_sizes"] = "2"
+    p.write_text(dump_frontmatter(
+        meta, "**Grimoire:** The gate holds.\n\n**Grimoire (Elara Vane):** I brace it.\n"),
+        encoding="utf-8")
+    assert len(scenes.read_scene(cid, sid)["messages"]) == 2
+    scenes.edit_message(cid, sid, 0, "The gate holds fast.")
+    assert scenes.get_turn_sizes(cid, sid) == [1]
+
+
 def test_remove_trailing_assistant_run_pops_the_boundary(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "Reroll")
