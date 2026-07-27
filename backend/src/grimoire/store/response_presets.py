@@ -17,13 +17,17 @@ from pathlib import Path
 
 from .. import prompts
 from . import lengths
-from .frontmatter import parse_frontmatter
-from .paths import home, natural_key
+from .frontmatter import dump_frontmatter, parse_frontmatter
+from .paths import home, natural_key, slugify, uniquify
 
 _STYLE_CLEAR = "none"
 
 
 class PresetNotFound(Exception):
+    pass
+
+
+class BuiltInPresetImmutable(Exception):
     pass
 
 
@@ -69,7 +73,9 @@ def _list_dir(directory: Path, built_in: bool) -> list[dict]:
             meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError):
             continue  # a broken file is skipped, not fatal — as in styles.py
-        out.append(_meta_dict(p.stem, meta, built_in))
+        row = _meta_dict(p.stem, meta, built_in)
+        row["validity"] = validity(row)
+        out.append(row)
     return out
 
 
@@ -91,7 +97,8 @@ def read_preset(pid: str) -> dict:
         raise PresetNotFound(pid)
     p, built_in = found
     meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
-    return {"meta": _meta_dict(pid, meta, built_in)}
+    row = _meta_dict(pid, meta, built_in)
+    return {"meta": row, "validity": validity(row)}
 
 
 def supplies(meta: dict) -> dict | None:
@@ -206,3 +213,92 @@ def resolve(*, turn: dict | None = None, scene_meta: dict | None = None,
 
     out["provenance"] = provenance
     return out
+
+
+def _length_fields(length_preset: str, knobs: dict | None) -> dict:
+    """Frontmatter for the length half, enforcing the tagged union on write.
+
+    Exactly one form is stored. Switching form must ERASE the other, or a record
+    ends up carrying both on disk — which read_preset resolves by silently
+    preferring length_preset, exactly the ambiguity the union exists to remove.
+    """
+    if length_preset and knobs:
+        raise ValueError("a preset carries either length_preset or explicit knobs, not both")
+    out = {"length_preset": length_preset or ""}
+    for knob in lengths.KNOBS:
+        out[knob] = str((knobs or {}).get(knob, "")) if (knobs or {}).get(knob) else ""
+    return out
+
+
+def create_preset(name: str, description: str = "", style_id: str = "",
+                  length_preset: str = "", knobs: dict | None = None) -> str:
+    _custom_dir().mkdir(parents=True, exist_ok=True)
+
+    def exists(c: str) -> bool:
+        return (_custom_dir() / f"{c}.md").exists() or (_builtin_dir() / f"{c}.md").exists()
+
+    pid = uniquify(slugify(name), exists)
+    meta = {"name": name, "description": description, "style_id": style_id,
+            **_length_fields(length_preset, knobs)}
+    (_custom_dir() / f"{pid}.md").write_text(dump_frontmatter(meta, ""), encoding="utf-8")
+    return pid
+
+
+def update_preset(pid: str, *, name: str | None = None, description: str | None = None,
+                  style_id: str | None = None, length_preset: str | None = None,
+                  knobs: dict | None = None) -> None:
+    if is_built_in(pid):
+        raise BuiltInPresetImmutable(pid)
+    p = _custom_dir() / f"{pid}.md"
+    if not _safe(pid) or not p.exists():
+        raise PresetNotFound(pid)
+    meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
+    if name is not None:
+        meta["name"] = name
+    if description is not None:
+        meta["description"] = description
+    if style_id is not None:
+        meta["style_id"] = style_id
+    if length_preset is not None or knobs is not None:
+        meta.update(_length_fields(
+            length_preset if length_preset is not None else meta.get("length_preset", ""),
+            knobs))
+    p.write_text(dump_frontmatter(meta, ""), encoding="utf-8")
+
+
+def delete_preset(pid: str) -> None:
+    if is_built_in(pid):
+        raise BuiltInPresetImmutable(pid)
+    p = _custom_dir() / f"{pid}.md"
+    if not _safe(pid) or not p.exists():
+        raise PresetNotFound(pid)
+    p.unlink()
+
+
+def validity(meta: dict) -> dict:
+    """What this record's fields were understood to mean — {"valid", "issues"}.
+
+    Reporting only; resolution's fail-open behaviour is unchanged. Without this
+    a preset can look selected while supplying nothing, which is
+    indistinguishable from ordinary inheritance.
+    """
+    issues: list[str] = []
+    named = (meta.get("length_preset") or "").strip()
+    if named and lengths.get(named) is None:
+        return {"valid": False,
+                "issues": [f"unknown length preset '{named}' — this preset supplies nothing"]}
+    if not named:
+        for knob in lengths.KNOBS:
+            raw = (meta.get(knob) or "").strip()
+            if raw and lengths.coerce(raw) is None:
+                issues.append(f"{knob}: '{raw}' is not a positive whole number — ignored")
+    return {"valid": True, "issues": issues}
+
+
+def duplicate_preset(pid: str) -> str:
+    src = read_preset(pid)["meta"]
+    knobs = {k: lengths.coerce(src.get(k, "")) for k in lengths.KNOBS}
+    knobs = {k: v for k, v in knobs.items() if v is not None}
+    return create_preset(f"{src['name']} (copy)", src.get("description", ""),
+                         src.get("style_id", ""), src.get("length_preset", ""),
+                         knobs or None)
