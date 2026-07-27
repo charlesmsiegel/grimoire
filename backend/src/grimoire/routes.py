@@ -88,6 +88,22 @@ class StyleSelect(BaseModel):
     style_id: str = ""
 
 
+class ResponsePresetCreate(BaseModel):
+    name: str
+    description: str = ""
+    style_id: str = ""
+    length_preset: str = ""
+    knobs: dict | None = None
+
+
+class ResponsePresetUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    style_id: str | None = None
+    length_preset: str | None = None
+    knobs: dict | None = None
+
+
 class RegenerateBody(BaseModel):
     guidance: str | None = None
 
@@ -765,6 +781,74 @@ def post_style_duplicate(sid: str):
         return {"id": store.styles.duplicate_style(sid)}
     except store.styles.StyleNotFound:
         raise HTTPException(status_code=404, detail="style not found")
+
+
+# ---- response presets ----
+@router.get("/response-presets")
+def get_response_presets():
+    return store.response_presets.list_presets()
+
+
+@router.post("/response-presets")
+def post_response_preset(body: ResponsePresetCreate):
+    try:
+        return {"id": store.response_presets.create_preset(
+            body.name, body.description, body.style_id, body.length_preset, body.knobs)}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/response-presets/{pid}")
+def get_response_preset(pid: str):
+    try:
+        return store.response_presets.read_preset(pid)
+    except store.response_presets.PresetNotFound:
+        raise HTTPException(status_code=404, detail="response preset not found")
+
+
+@router.put("/response-presets/{pid}")
+def put_response_preset(pid: str, body: ResponsePresetUpdate):
+    try:
+        store.response_presets.update_preset(
+            pid, name=body.name, description=body.description, style_id=body.style_id,
+            length_preset=body.length_preset, knobs=body.knobs)
+    except store.response_presets.PresetNotFound:
+        raise HTTPException(status_code=404, detail="response preset not found")
+    except store.response_presets.BuiltInPresetImmutable:
+        raise HTTPException(status_code=400,
+                            detail="built-in presets can't be edited — duplicate it first")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True}
+
+
+@router.delete("/response-presets/{pid}")
+def delete_response_preset(pid: str):
+    try:
+        store.response_presets.delete_preset(pid)
+    except store.response_presets.PresetNotFound:
+        raise HTTPException(status_code=404, detail="response preset not found")
+    except store.response_presets.BuiltInPresetImmutable:
+        raise HTTPException(status_code=400, detail="built-in presets can't be deleted")
+    return {"ok": True}
+
+
+@router.post("/response-presets/{pid}/duplicate")
+def post_response_preset_duplicate(pid: str):
+    try:
+        return {"id": store.response_presets.duplicate_preset(pid)}
+    except store.response_presets.PresetNotFound:
+        raise HTTPException(status_code=404, detail="response preset not found")
+
+
+@router.get("/response-presets/{pid}/usage")
+def get_response_preset_usage(pid: str):
+    return {"affected": store.response_presets.usage(pid)}
+
+
+@router.get("/length-presets")
+def get_length_presets():
+    return store.lengths.PRESETS
 
 
 # ---- worlds ----

@@ -4814,3 +4814,40 @@ def test_regenerate_past_a_scene_transition_is_a_clean_400(client):
     r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
     assert r.status_code == 400
     assert "transition" in r.json()["detail"].lower()
+
+
+def test_response_preset_crud_roundtrip(client):
+    r = client.post("/api/response-presets",
+                    json={"name": "Slow Burn", "description": "Gothic dread.",
+                          "length_preset": "cinematic"})
+    assert r.status_code == 200
+    pid = r.json()["id"]
+    assert client.get(f"/api/response-presets/{pid}").json()["meta"]["name"] == "Slow Burn"
+    assert client.put(f"/api/response-presets/{pid}",
+                      json={"name": "Slower Burn"}).status_code == 200
+    assert client.delete(f"/api/response-presets/{pid}").status_code == 200
+    assert client.get(f"/api/response-presets/{pid}").status_code == 404
+
+
+def test_builtin_preset_edit_and_delete_are_400(client):
+    assert client.put("/api/response-presets/terse", json={"name": "No"}).status_code == 400
+    assert client.delete("/api/response-presets/terse").status_code == 400
+
+
+def test_creating_with_both_length_forms_is_400(client):
+    r = client.post("/api/response-presets",
+                    json={"name": "Both", "length_preset": "terse",
+                          "knobs": {"reply_words": 220}})
+    assert r.status_code == 400
+
+
+def test_length_presets_endpoint_exposes_the_numbers(client):
+    body = client.get("/api/length-presets").json()
+    assert body["terse"]["reply_words"] == 150
+    assert body["cinematic"]["blocks_per_speaker"] == 2
+
+
+def test_duplicate_builtin_yields_an_editable_copy(client):
+    pid = client.post("/api/response-presets/terse/duplicate").json()["id"]
+    assert client.put(f"/api/response-presets/{pid}",
+                      json={"name": "Mine"}).status_code == 200
