@@ -187,6 +187,34 @@ export type GreetingDraft = {
 export type Style = { id: string; name: string; description: string; tags: string[]; built_in: boolean };
 export type StyleDetail = { meta: Style; body: string };
 export type StyleDraft = { name: string; description?: string; tags?: string[]; body?: string };
+
+// response presets & the response bundle (scoped preset + overrides + resolution)
+export type ResponsePresetSummary = {
+  id: string; name: string; description?: string; built_in: boolean;
+  style_id?: string; length_preset?: string;
+  reply_words?: string; blocks?: string; paragraphs?: string;
+  speakers?: string; blocks_per_speaker?: string;
+  validity?: { valid: boolean; issues: string[] };
+};
+export type ResponsePresetDetail = { meta: ResponsePresetSummary; validity: { valid: boolean; issues: string[] } };
+export type ResponsePresetDraft = {
+  name: string; description?: string; style_id?: string; length_preset?: string;
+  knobs?: Record<string, number> | null;
+};
+export type LengthPreset = {
+  reply_words: number; blocks: number; paragraphs: number; speakers: number; blocks_per_speaker: number;
+};
+export type ResponseFields = {
+  response_preset: string; style_id: string;
+  length_reply_words: string; length_blocks: string; length_paragraphs: string;
+  length_speakers: string; length_blocks_per_speaker: string;
+};
+export type ResponseEffective = {
+  style_id: string; reply_words: number; blocks: number; paragraphs: number;
+  speakers: number; blocks_per_speaker: number;
+};
+export type ResponseProvenance = Record<string, { scope: string; source?: string }>;
+export type ResponseBundle = ResponseFields & { effective: ResponseEffective; provenance: ResponseProvenance };
 export type Availability = {
   id: string; name: string; available: boolean; reasons: string[]; unlocked: boolean;
   pcless?: boolean;
@@ -716,13 +744,43 @@ export const api = {
     request<{ ok: boolean }>("PUT", `/api/styles/${sid}`, patch),
   deleteStyle: (sid: string) => request<{ ok: boolean }>("DELETE", `/api/styles/${sid}`),
   duplicateStyle: (sid: string) => request<{ id: string }>("POST", `/api/styles/${sid}/duplicate`),
-  getCampaignStyle: (cid: string) => request<{ style_id: string }>("GET", `/api/campaigns/${cid}/style`),
-  setCampaignStyle: (cid: string, style_id: string) =>
-    request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/style`, { style_id }),
+  // NOTE: the backend /campaigns/{cid}/style and /campaigns/{cid}/scenes/{sid}/style
+  // endpoints were removed when response presets shipped (superseded by the
+  // /response bundle below). getSceneStyle/setSceneStyle are kept ONLY because
+  // SceneInspector.tsx still calls them (Task 6 remounts it against
+  // getSceneResponse/setSceneResponse); calling them now 404s. Do not add new
+  // callers — use get/setSceneResponse instead.
   getSceneStyle: (cid: string, sid: string) =>
     request<{ style_id: string }>("GET", `/api/campaigns/${cid}/scenes/${sid}/style`),
   setSceneStyle: (cid: string, sid: string, style_id: string) =>
     request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/scenes/${sid}/style`, { style_id }),
+
+  // response presets
+  listResponsePresets: () => request<ResponsePresetSummary[]>("GET", "/api/response-presets"),
+  createResponsePreset: (draft: ResponsePresetDraft) =>
+    request<{ id: string }>("POST", "/api/response-presets", draft),
+  getResponsePreset: (pid: string) => request<ResponsePresetDetail>("GET", `/api/response-presets/${pid}`),
+  updateResponsePreset: (pid: string, patch: Partial<ResponsePresetDraft>) =>
+    request<{ ok: boolean }>("PUT", `/api/response-presets/${pid}`, patch),
+  deleteResponsePreset: (pid: string) => request<{ ok: boolean }>("DELETE", `/api/response-presets/${pid}`),
+  duplicateResponsePreset: (pid: string) =>
+    request<{ id: string }>("POST", `/api/response-presets/${pid}/duplicate`),
+  responsePresetUsage: (pid: string) =>
+    request<{ affected: unknown[] }>("GET", `/api/response-presets/${pid}/usage`),
+  listLengthPresets: () => request<Record<string, LengthPreset>>("GET", "/api/length-presets"),
+
+  // response bundle (scoped preset + overrides + resolution), all three scopes
+  getGlobalResponse: () => request<ResponseBundle>("GET", "/api/response"),
+  setGlobalResponse: (patch: Partial<ResponseFields>) =>
+    request<{ ok: boolean }>("PUT", "/api/response", patch),
+  getCampaignResponse: (cid: string) => request<ResponseBundle>("GET", `/api/campaigns/${cid}/response`),
+  setCampaignResponse: (cid: string, patch: Partial<ResponseFields>) =>
+    request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/response`, patch),
+  getSceneResponse: (cid: string, sid: string) =>
+    request<ResponseBundle>("GET", `/api/campaigns/${cid}/scenes/${sid}/response`),
+  setSceneResponse: (cid: string, sid: string, patch: Partial<ResponseFields>) =>
+    request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/scenes/${sid}/response`, patch),
+
   getSceneContext: (cid: string, sid: string) =>
     request<SceneContext>("GET", `/api/campaigns/${cid}/scenes/${sid}/context`),
   sceneSuggestions: (cid: string, after?: string, offscreen?: boolean) => {
