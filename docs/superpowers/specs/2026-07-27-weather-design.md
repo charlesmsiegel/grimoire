@@ -164,6 +164,12 @@ Lenient parsing throughout: an unknown `climate` falls back to the campaign
 default, an unparseable `persistence` falls back to the climate's. Weather never
 raises into a turn.
 
+"Unparseable" means **not a finite number in `[0, 1]`**, not merely "float()
+raised." `"2"`, `"-1"`, and `"NaN"` all parse successfully and are all invalid:
+they would make the carry test always true, always false, or undefined, which is
+worse than the fallback because it looks like a working setting. Range-check
+after parsing, and fall back on failure.
+
 A campaign-wide default climate lives in **`campaigns/<cid>/climate.json`**,
 beside `calendar.json` and copied at create time the same way, so a world that
 hasn't tagged its locations still gets weather. It needs its own file and its
@@ -175,11 +181,16 @@ defaults in one blob.
 { "default_climate": "temperate-coastal", "epoch": "1492-01-01" }
 ```
 
-Both fields are optional. When the file is absent or `default_climate` is
-unset, the fallback is the shipped `temperate-interior` preset — a named,
-committed default rather than an implicit one, so an untagged world and a
-missing file resolve identically. `epoch` is only meaningful under Option 1
-(§ Anchoring).
+Both fields are optional. When the file is absent, `default_climate` is unset,
+**or the climate it names cannot be loaded**, the fallback is the shipped
+`temperate-interior` preset — a named, committed default rather than an implicit
+one, so an untagged world and a missing file resolve identically. The
+unloadable case matters as much as the missing one: a configured default can
+name a malformed climate, or a custom-only climate the user has since deleted,
+and without this rule an untagged location has nowhere left to fall — and a
+location naming that same dead id would bounce to the campaign default and back.
+The shipped preset terminates the chain unconditionally. `epoch` is only
+meaningful under Option 1 (§ Anchoring), and is stored as a fixed day.
 
 ### Weather zones (the deferred-correlation hook)
 
@@ -253,8 +264,21 @@ hash-diffing of entity blobs is undisturbed.
   token (`hebrew.py:70`), so `5784-nisan-01` and `5784-tishrei-01` sort
   alphabetically into the wrong order. String comparison would silently match
   the wrong spans rather than fail loudly. An endpoint with no clock takes
-  minute 0 for `from` and end-of-day for `to`, so a date-only span covers the
-  whole day it names.
+  minute 0 for `from`, and for `to` **the following fixed day at minute 0** —
+  not end-of-day. Native times validate only through 23:59
+  (`calendars.minutes_of`), so an end-of-day `to` under `t < to` would exclude
+  the final minute and `from: 1492-06-14, to: 1492-06-14` would cover nothing
+  at all rather than the whole day it names.
+- **Records store resolved coordinates, not just native strings.** Each span
+  carries `from_fixed` / `to_fixed` as `(fixed_day, minute)` pairs alongside the
+  human-readable native strings, and those are what resolution compares.
+  `PUT /campaigns/{cid}/calendar` (`routes.py:2079`) can swap the primary
+  provider after overrides exist, and it validates only the new config — a
+  Gregorian-looking `1492-06-14` then either fails to parse under `hebrew` or
+  silently maps to a different day. Native strings are for display and
+  re-editing; the fixed coordinates are authoritative and survive a provider
+  change. Writers compute both. The same applies to Option 1's epoch, which is
+  stored as a fixed day rather than a native string.
 - **`id` is required**, and it is what makes the precedence backstop
   implementable — the rules below need a stable per-span identity that array
   position cannot supply. Writers generate one; a hand-authored entry missing an
@@ -360,8 +384,21 @@ starts from year *N−1*'s final block, computed lazily and cached, recursing ba
 to the campaign's first year. Correlation is then genuinely continuous. Cost is
 O(years since epoch) on first touch and O(1) after — ~91k cheap RNG steps for a
 50-year span, which is milliseconds, and a jump to year +50 pays it once.
-Carries three liabilities. Backward time travel before the epoch needs the chain
-extended backward. The per-year memo must be invalidated when climates or
+Carries three liabilities. **Dates before the epoch need a construction the
+forward chain cannot supply** — a seeded Markov walk generates successors, not
+predecessors, and `set_datetime` permits arbitrary backward jumps, so a prequel
+scene set before the epoch has no defined sky. Two acceptable resolutions, and
+the spec must pick one rather than leave it to the implementer: run a second
+chain *backward* from the epoch state, using the same transition rule and a
+distinct seed, which stays deterministic and joins continuously at the epoch
+because it starts from that state; or reject pre-epoch dates outright and place
+the epoch a generous margin before the campaign's first recorded moment so the
+case effectively cannot arise. The backward chain is preferable — rejection
+turns a legal in-app action into an error the user cannot fix. Note that
+Option 2 has no such case: a noise field is defined at negative indices exactly
+as it is at positive ones.
+
+The per-year memo must be invalidated when climates or
 location settings change, or a long-running process will keep serving a stale
 walk while a restarted one computes something different — breaking the
 cross-process determinism this spec promises; the climate content hash and the
@@ -454,6 +491,16 @@ reading gets wrong:
   value is ineligible under the new temperature, it is discarded and redrawn
   from the filtered table. Persistence orders the axes, it does not exempt
   them.
+- **A carried value is also revalidated when the season table changes.** The
+  same defect one boundary out: at `persistence: 1` under Option 1, carrying
+  every axis unchanged forever means a winter `freezing` temperature persists
+  into a summer table that offers only `hot`, and the sky holds a value the
+  active season does not contain. Whenever the active table changes, any held
+  value absent from the new table is remapped — by rank if the tables share an
+  ordering, otherwise redrawn. This is what makes the scoped `persistence: 1`
+  guarantee (§ Climate documents) true rather than aspirational under Option 1;
+  under Option 2 it is automatic, since the sample is remapped through the new
+  table by construction.
 - **The filtered table can be empty**, and normalizing an empty table is
   undefined. A climate whose season pairs a `mild` temperature band with
   conditions that all require `freezing` is structurally valid but unresolvable.
@@ -515,7 +562,14 @@ rather than reimplement it.
   Resolving from `cid` alone would return an arbitrary scene's sky. Accepts
   optional explicit `location` / `native` overrides for previewing a moment the
   scene isn't at.
-- **Manual override** (#45): `PUT /api/campaigns/{cid}/weather`. **Both** weather
+- **Manual override** (#45): `PUT /api/campaigns/{cid}/weather`, with the target
+  in the **request body** — `{location, from, to, condition?, temperature?,
+  wind?, note?}`, where `location` accepts `_default`. The campaign id alone
+  cannot say what is being overridden: `weather.json` holds the target only as
+  an outer object key and the span record itself has no location field, so a
+  handler given just `cid` has nothing to key the write by. The body carries it
+  rather than the route, so one endpoint covers both a location and the
+  campaign-wide default. **Both** weather
   routes must be declared before the generic entity routes — not just the PUT:
   `@router.get("/campaigns/{cid}/{kind}")` sits at `routes.py:3783`, so a
   later-registered weather GET is captured as an entity-list request for kind
@@ -536,8 +590,10 @@ rather than reimplement it.
   whole blocks by rounding outward. Narration that implies onset rather than
   extent ("rain begins") takes the default — one block, re-narratable next turn.
 - **Climate editor** (#40): `GET /api/climates` (the merged list, each entry
-  tagged `builtin` or `custom`), `GET /api/climates/{id}`, and
-  `PUT /api/climates/{id}`. The write path needs a rule the spec cannot leave
+  tagged `builtin` or `custom`), `GET /api/climates/{id}`,
+  `PUT /api/climates/{id}`, and `DELETE /api/climates/{id}` — the delete route
+  is what makes the revert behavior below reachable, and without it a custom
+  copy can never be undone from inside the app. The write path needs a rule the spec cannot leave
   implicit: shipped presets live inside the installed backend package and must
   never be written, so **editing a preset copies it to
   `<GRIMOIRE_HOME>/climates/{id}.json` and edits the copy** — same
@@ -586,6 +642,15 @@ Backend, `backend/tests/test_weather.py`, store isolated with
 - Climate editing: writing a shipped preset creates a custom copy under
   `<GRIMOIRE_HOME>/climates/` and leaves the installed file untouched;
   deleting the copy restores the preset.
+- Date-only spans: `from: <day>, to: <day>` covers every minute of that day,
+  including 23:59, and does not bleed into the next.
+- Provider swap: overrides written under `gregorian` resolve to the same real
+  moments after the campaign's primary calendar is changed.
+- Config leniency: `persistence` of `"2"`, `"-1"` and `"NaN"` each fall back to
+  the climate's value; a campaign default naming a deleted climate falls back
+  to the shipped preset rather than looping.
+- Season-boundary carry: at `persistence: 1`, a held value absent from the new
+  season's table is remapped rather than retained.
 - Weight fidelity: over a long sample the observed frequency of each condition
   matches its normalized weight, at several persistence settings — the test
   that catches a non-uniform marginal reaching the inverse CDF.
