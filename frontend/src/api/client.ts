@@ -189,6 +189,13 @@ export type StyleDetail = { meta: Style; body: string };
 export type StyleDraft = { name: string; description?: string; tags?: string[]; body?: string };
 
 // response presets & the response bundle (scoped preset + overrides + resolution)
+// The explicit "clear the inherited style" sentinel, mirroring
+// response_presets.STYLE_CLEAR byte for byte. "" is a different answer — "this
+// scope has no opinion, keep walking outward". The U+2063 prefix (invisible
+// separator, as in scenes.ROLL_SPEAKER) keeps it out of slugify's reach, so a
+// user style genuinely named "None" — id `none` — stays an ordinary style.
+// Defined here, not per-component, so the two pickers cannot drift apart.
+export const STYLE_CLEAR = "⁣none";
 export type ResponsePresetSummary = {
   id: string; name: string; description?: string; built_in: boolean;
   style_id?: string; length_preset?: string;

@@ -130,7 +130,11 @@ preset simply has no opinion, and resolution walks past it to the next scope.
 |---|---|
 | absent / empty | **no opinion** — style keeps resolving outward |
 | a style id | supplies that style |
-| `none` | explicitly clears the style |
+| the clear sentinel (`response_presets.STYLE_CLEAR`) | explicitly clears the style |
+
+The sentinel is `"⁣none"` — U+2063-prefixed like `scenes.ROLL_SPEAKER` — not
+a bare `none`, which `slugify` can produce (a user style named "None" has the id
+`none`) and which would therefore clear the style instead of applying it.
 
 **Length** is a tagged union of two forms, validated rather than merely documented:
 

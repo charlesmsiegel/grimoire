@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ResponsePresetPicker } from "./ResponsePresetPicker";
-import { api } from "../api/client";
+import { api, STYLE_CLEAR } from "../api/client";
 
 vi.mock("../api/client");
 
@@ -65,6 +65,9 @@ it("uses the global endpoints when scope is global", async () => {
 });
 
 it("saves the currently-resolved values as a new preset and selects it at this scope", async () => {
+  // The resolved style here is empty — "no style at all". Saving that as ""
+  // would mean "no opinion", so applying the preset under a campaign that DOES
+  // have a style would resurrect it instead of reproducing what was saved.
   const originalPrompt = window.prompt;
   window.prompt = () => "Slow Burn";
   (api.createResponsePreset as any).mockResolvedValue({ id: "slow-burn" });
@@ -72,11 +75,31 @@ it("saves the currently-resolved values as a new preset and selects it at this s
   await userEvent.click(await screen.findByText("Overrides"));
   await userEvent.click(screen.getByRole("button", { name: "Save as preset…" }));
   await waitFor(() => expect(api.createResponsePreset).toHaveBeenCalledWith({
-    name: "Slow Burn", style_id: "",
+    name: "Slow Burn", style_id: STYLE_CLEAR,
     knobs: { reply_words: 150, blocks: 3, paragraphs: 1, speakers: 3, blocks_per_speaker: 1 },
   }));
   await waitFor(() => expect(api.setSceneResponse).toHaveBeenCalledWith(
     "run", "s1", expect.objectContaining({ response_preset: "slow-burn" })));
+  window.prompt = originalPrompt;
+});
+
+it("saves a resolved style as that style, not as the clear sentinel", async () => {
+  const originalPrompt = window.prompt;
+  window.prompt = () => "Slow Burn";
+  (api.createResponsePreset as any).mockResolvedValue({ id: "slow-burn" });
+  (api.getSceneResponse as any).mockResolvedValue({
+    response_preset: "terse", style_id: "", length_reply_words: "",
+    length_blocks: "", length_paragraphs: "", length_speakers: "",
+    length_blocks_per_speaker: "",
+    effective: { style_id: "gothic-horror", reply_words: 150, blocks: 3,
+                 paragraphs: 1, speakers: 3, blocks_per_speaker: 1 },
+    provenance: { style_id: { scope: "campaign" } },
+  });
+  render(<ResponsePresetPicker scope="scene" cid="run" sid="s1" />);
+  await userEvent.click(await screen.findByText("Overrides"));
+  await userEvent.click(screen.getByRole("button", { name: "Save as preset…" }));
+  await waitFor(() => expect(api.createResponsePreset).toHaveBeenCalledWith(
+    expect.objectContaining({ style_id: "gothic-horror" })));
   window.prompt = originalPrompt;
 });
 
@@ -101,20 +124,23 @@ it("saves a single knob override without leaving the preset", async () => {
 });
 
 it("offers an explicit style clear distinct from inherit", async () => {
-  // The tri-state: "" = no opinion (inherit), "none" = explicitly clear the
-  // inherited style. Without an option for the sentinel it is unreachable.
+  // The tri-state: "" = no opinion (inherit), STYLE_CLEAR = explicitly clear
+  // the inherited style. Without an option for the sentinel it is unreachable.
+  // A user style whose id is literally "none" is an ordinary option: the
+  // sentinel is U+2063-prefixed precisely so the two cannot collide.
   (api.listStyles as any).mockResolvedValue([
+    { id: "none", name: "None", description: "", tags: [], built_in: false },
     { id: "gothic-horror", name: "Gothic Horror", description: "", tags: [], built_in: true },
   ]);
   render(<ResponsePresetPicker scope="scene" cid="run" sid="s1" />);
   await userEvent.click(await screen.findByText("Overrides"));
   const style = screen.getByLabelText("Style");
   expect([...style.querySelectorAll("option")].map((o) => (o as HTMLOptionElement).value))
-    .toEqual(["", "none", "gothic-horror"]);
-  await userEvent.selectOptions(style, "none");
+    .toEqual(["", STYLE_CLEAR, "none", "gothic-horror"]);
+  await userEvent.selectOptions(style, STYLE_CLEAR);
   await userEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(api.setSceneResponse).toHaveBeenCalledWith(
-    "run", "s1", expect.objectContaining({ style_id: "none" })));
+    "run", "s1", expect.objectContaining({ style_id: STYLE_CLEAR })));
 });
 
 it("notifies the host after a successful write so resolved surfaces can refresh", async () => {

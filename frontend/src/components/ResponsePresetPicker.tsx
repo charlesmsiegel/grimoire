@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  api, type ResponseBundle, type ResponseEffective, type ResponseFields,
+  api, STYLE_CLEAR, type ResponseBundle, type ResponseEffective, type ResponseFields,
   type ResponsePresetSummary, type Style,
 } from "../api/client";
 
@@ -22,10 +22,6 @@ const KNOB_FIELDS: {
   { key: "length_speakers", label: "Max speaking characters", effectiveKey: "speakers", unit: "speaking characters" },
   { key: "length_blocks_per_speaker", label: "Max blocks per character", effectiveKey: "blocks_per_speaker", unit: "blocks per character" },
 ];
-
-// Matches response_presets._STYLE_CLEAR: an explicit "clear the inherited
-// style", as opposed to "" which means "this scope has no opinion".
-const STYLE_CLEAR = "none";
 
 function scopeLabel(scope: string | undefined): string {
   switch (scope) {
@@ -108,7 +104,10 @@ export function ResponsePresetPicker(
     try {
       const { id } = await api.createResponsePreset({
         name,
-        style_id: effective.style_id,
+        // A resolved style of "" means "no style at all", and the preset has to
+        // SAY so: saved as "" it would read back as "no opinion" and applying
+        // the preset under a campaign that has a style would resurrect it.
+        style_id: effective.style_id || STYLE_CLEAR,
         knobs: {
           reply_words: effective.reply_words, blocks: effective.blocks, paragraphs: effective.paragraphs,
           speakers: effective.speakers, blocks_per_speaker: effective.blocks_per_speaker,
@@ -146,7 +145,7 @@ export function ResponsePresetPicker(
           <li>Up to {effective.paragraphs} paragraphs per block — from {scopeLabel(provenance.paragraphs?.scope)}</li>
           <li>Up to {effective.speakers} speaking characters — from {scopeLabel(provenance.speakers?.scope)}</li>
           <li>Up to {effective.blocks_per_speaker} blocks per character — from {scopeLabel(provenance.blocks_per_speaker?.scope)}</li>
-          <li>Style: {effective.style_id || "none"} — from {scopeLabel(provenance.style_id?.scope)}</li>
+          <li>Style: {effective.style_id || "no style"} — from {scopeLabel(provenance.style_id?.scope)}</li>
         </ul>
       )}
 
@@ -160,9 +159,11 @@ export function ResponsePresetPicker(
               <option value="">
                 {effective ? `— inherit${effective.style_id ? ` (${effective.style_id})` : ""} —` : "— inherit —"}
               </option>
-              {/* The `none` sentinel. Distinct from inherit: it stops the walk
+              {/* The clear sentinel. Distinct from inherit: it stops the walk
                   with an explicit clear, so a broader scope's style does NOT
-                  apply. Without it the tri-state is unreachable from the UI. */}
+                  apply. Without it the tri-state is unreachable from the UI —
+                  and its value can never be a style id, so a user style called
+                  "None" still lists (and selects) as itself below. */}
               <option value={STYLE_CLEAR}>— no style (clear inherited) —</option>
               {styles.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select>

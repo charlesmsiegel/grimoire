@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import ResponsePresetsView from "./ResponsePresetsView";
-import { api } from "../api/client";
+import { api, STYLE_CLEAR } from "../api/client";
 
 vi.mock("../api/client");
 
@@ -121,15 +121,15 @@ it("warns that the impact is unknown when the usage lookup fails", async () => {
   expect(screen.getByRole("button", { name: /confirm delete/i })).toBeInTheDocument();
 });
 
-it("offers the `none` sentinel as a style option distinct from inherit", async () => {
+it("offers the clear sentinel as a style option distinct from inherit", async () => {
   render(<ResponsePresetsView />);
   await userEvent.click(await screen.findByRole("button", { name: "Slow Burn" }));
   await userEvent.click(screen.getByRole("button", { name: "Edit" }));
   const select = screen.getByRole("combobox", { name: "Style" });
-  await userEvent.selectOptions(select, "none");
+  await userEvent.selectOptions(select, STYLE_CLEAR);
   await userEvent.click(screen.getByRole("button", { name: /save preset/i }));
   expect(api.updateResponsePreset).toHaveBeenCalledWith(
-    "slow-burn", expect.objectContaining({ style_id: "none" }));
+    "slow-burn", expect.objectContaining({ style_id: STYLE_CLEAR }));
 });
 
 it("surfaces an error when a preset row cannot be read", async () => {

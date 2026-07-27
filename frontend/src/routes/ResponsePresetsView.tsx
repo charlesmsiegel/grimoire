@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  api, type LengthPreset, type ResponsePresetSummary, type ResponsePresetUsageEntry, type Style,
+  api, STYLE_CLEAR, type LengthPreset, type ResponsePresetSummary,
+  type ResponsePresetUsageEntry, type Style,
 } from "../api/client";
 import { Field } from "../components/Field";
 
@@ -56,17 +57,12 @@ function describeChange(a: ResponsePresetUsageEntry): string {
     parts.push(`${a.before.blocks_per_speaker ?? "—"} → ${a.after.blocks_per_speaker ?? "—"} blocks/speaker`);
   }
   if (a.before.style_id !== a.after.style_id) {
-    parts.push(`style ${a.before.style_id || "none"} → ${a.after.style_id || "none"}`);
+    parts.push(`style ${a.before.style_id || "no style"} → ${a.after.style_id || "no style"}`);
   }
   return parts.length ? parts.join(", ") : "no visible change";
 }
 
 const AFFECTED_CAP = 10;
-
-// The `none` sentinel: an explicit "clear whatever a broader scope supplies",
-// which is a different answer from "" ("this record has no opinion about
-// style"). Without an option for it the tri-state is unreachable from the UI.
-const STYLE_CLEAR = "none";
 
 export default function ResponsePresetsView() {
   const [presets, setPresets] = useState<ResponsePresetSummary[]>([]);

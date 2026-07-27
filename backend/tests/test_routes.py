@@ -3779,6 +3779,21 @@ def test_global_style_is_normalized_to_style_id(client):
     assert store.read_config()["default_style_id"] == sid_style      # on disk
 
 
+def test_a_style_named_none_survives_the_round_trip(client):
+    """`none` is a perfectly ordinary style id (slugify reserves nothing), so
+    selecting it must apply that style; only the U+2063 sentinel clears."""
+    _wid, cid = _campaign(client)
+    client.post("/api/styles", json={"name": "None", "description": "",
+                                     "tags": [], "body": "Nothing in particular."})
+    assert "none" in {s["id"] for s in client.get("/api/styles").json()}
+    client.put("/api/response", json={"style_id": "none"})
+    assert client.get("/api/response").json()["effective"]["style_id"] == "none"
+    # the sentinel at a narrower scope still clears the inherited style
+    client.put(f"/api/campaigns/{cid}/response",
+               json={"style_id": store.response_presets.STYLE_CLEAR})
+    assert client.get(f"/api/campaigns/{cid}/response").json()["effective"]["style_id"] == ""
+
+
 def test_global_invalid_preset_still_reports_a_usable_effective(client):
     assert client.put("/api/response", json={"response_preset": "ghost"}).status_code == 200
     body = client.get("/api/response").json()
