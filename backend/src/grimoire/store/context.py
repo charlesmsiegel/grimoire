@@ -466,12 +466,15 @@ def _story_entries(cid: str, depth: int | None = None, full: bool = False) -> li
         return []
 
 
-def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0) -> dict:
+def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
+              turn: dict | None = None) -> dict:
     """One pass gathering the template data + projected history + post-history.
     build_* render templates/scene/system.j2 from data; context_sections renders
     the per-section templates for the token breakdown. `wi_seed` folds extra text
     (the opener prompt) into the world-info activation window; `full_recap` (> 0)
-    selects the full story-so-far variant over the compact recap."""
+    selects the full story-so-far variant over the compact recap. `turn` is a
+    one-shot, unpersisted override (e.g. a per-turn response-length chip) that
+    outranks every stored scope in response_presets.resolve -- see build_messages."""
     scene = scenes.read_scene(cid, sid)
     history = [dict(m) for m in scene["messages"]]
     croot = campaigns.campaign_root(cid)
@@ -544,7 +547,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0) -> dic
     # over turn -> scene -> campaign -> global. It subsumes styles.resolve_style:
     # with no response presets set anywhere (every pre-existing install) it walks
     # the same style_id keys in the same order, so the migration is a no-op.
-    budget = response_presets.resolve(scene_meta=scene["meta"],
+    budget = response_presets.resolve(turn=turn or {}, scene_meta=scene["meta"],
                                       campaign_meta=campaign_meta, config=cfg)
     try:
         resolved_style = styles.read_style(budget["style_id"]) if budget["style_id"] else None
@@ -600,8 +603,13 @@ def _system_text(a: dict, cid: str, sid: str, opener: bool = False) -> str:
                          a["subs"], cid, sid).strip()
 
 
-def build_messages(cid: str, sid: str) -> list[dict]:
-    a = _assemble(cid, sid)
+def build_messages(cid: str, sid: str, turn: dict | None = None) -> list[dict]:
+    """`turn` is a one-shot, unpersisted response-preset override (a pending
+    per-turn length chip) that beats the scene/campaign/global cascade for this
+    call only -- see response_presets.resolve. Callers that need it to survive a
+    failed generation (retry, regenerate) must re-pass it themselves; nothing
+    here remembers it."""
+    a = _assemble(cid, sid, turn=turn)
     messages: list[dict] = []
     system_text = _system_text(a, cid, sid)
     if system_text:
@@ -612,10 +620,11 @@ def build_messages(cid: str, sid: str) -> list[dict]:
     return messages
 
 
-def build_director_messages(cid: str, sid: str, note: str) -> list[dict]:
+def build_director_messages(cid: str, sid: str, note: str, turn: dict | None = None) -> list[dict]:
     """One offscreen director turn: full system + history, then the note as the
-    final user message. The note rides only this call — never persisted."""
-    a = _assemble(cid, sid)
+    final user message. The note rides only this call — never persisted. `turn`
+    is the same one-shot response-preset override as build_messages."""
+    a = _assemble(cid, sid, turn=turn)
     messages: list[dict] = []
     system_text = _system_text(a, cid, sid)
     if system_text:

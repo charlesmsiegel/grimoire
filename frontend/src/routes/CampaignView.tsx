@@ -5,6 +5,7 @@ import remarkGfm from "remark-gfm";
 import {
   api, type Actor, type SceneMeta, type Message, type RosterEntry, type SceneAbsorb,
   type SceneDatetime, type StagedEdit, type ProposalRecord, type SceneCheckActor,
+  type ResponsePresetSummary, type ResponseOverride,
 } from "../api/client";
 import type { ChatEvent } from "../api/stream";
 import { EditableRow } from "../components/EditableRow";
@@ -117,6 +118,16 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     { id: string; reason: string; kind: "conflict" | "error"; label: string }[]>([]);
   const [chooserOpen, setChooserOpen] = useState(false);
   const [seedPrompt, setSeedPrompt] = useState<{ sid: string; prompt: string } | null>(null);
+  // Response-length chip beside Send: the scene's own preset (its saved
+  // setting, from the loaded scene's frontmatter) versus a one-shot pending
+  // override the player just picked for the next reply only. `pendingResponse`
+  // is never persisted — it rides the next chat/retry/regenerate call and is
+  // cleared once a reply actually lands, but survives a failed stream so
+  // retry/reroll still honour it (see runStream/send/retry/reroll below).
+  const [responsePresets, setResponsePresets] = useState<ResponsePresetSummary[]>([]);
+  const [sceneResponsePreset, setSceneResponsePreset] = useState("");
+  const [pendingResponse, setPendingResponse] = useState<ResponseOverride | null>(null);
+  const [responseChipOpen, setResponseChipOpen] = useState(false);
   const streamRef = useRef<HTMLDivElement>(null);
   const [railCollapsed, setRailCollapsed] = useState(
     () => localStorage.getItem("grimoire.rail.collapsed") === "1");
@@ -157,6 +168,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       setColorQuotes(c.quote_color === "on");
       setLabels({ user: c.user_label || "You", assistant: c.assistant_label || "Grimoire" });
     }).catch(() => {});
+    api.listResponsePresets().then(setResponsePresets).catch(() => setResponsePresets([]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cid]);
 
@@ -174,6 +186,18 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   const activePcless = useMemo(
     () => scenes.find((s) => s.id === activeId)?.pcless ?? false,
     [scenes, activeId]);
+
+  // the response-length chip: a pending one-shot pick beats the scene's own
+  // saved preset, which beats the built-in default's name.
+  const responseChipPresetId = pendingResponse?.response_preset || sceneResponsePreset;
+  const responseChipLabel = responseChipPresetId
+    ? (responsePresets.find((p) => p.id === responseChipPresetId)?.name ?? responseChipPresetId)
+    : (responsePresets.find((p) => p.id === "standard")?.name ?? "Standard");
+
+  function chooseResponseOverride(id: string) {
+    setPendingResponse({ response_preset: id });
+    setResponseChipOpen(false);
+  }
   const [directorNote, setDirectorNote] = useState<string | null>(null);
 
   async function selectScene(id: string) {
@@ -190,6 +214,10 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       // flight (and so a stale checkActors list can't leak across scenes).
       setProposal(null);
       setRollForm(null);
+      // a one-shot override belongs to the turn the player picked it for, on
+      // the scene they picked it on — switching scenes must not carry it
+      // silently onto an unrelated scene's next reply.
+      setPendingResponse(null);
     }
     api.getSceneDatetime(cid, id).then(setDt).catch(() => setDt(null));
     api.getCast(cid, id).then(setCast).catch(() => setCast([]));
@@ -202,6 +230,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     )).catch(() => setProposal(null));
     const scene = await api.getScene(cid, id);
     setMessages(scene.messages);
+    setSceneResponsePreset(scene.meta.response_preset ?? "");
     setStreaming("");
     setCtxKey((n) => n + 1);
   }
@@ -245,10 +274,14 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     }
   }
 
+  // Returns whether the turn actually landed (no thrown error and no e.error
+  // event) — callers use this to decide whether a pending one-shot response
+  // override was honoured and can be cleared, or must survive for retry/reroll.
   async function runStream(id: string, start: (onEvent: (e: ChatEvent) => void) => Promise<void>) {
     setBusy(true);
     setError(null);
     let acc = "";
+    let landed = true;
     try {
       await start((e) => {
         if (e.delta) {
@@ -256,12 +289,14 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
           setStreaming(acc);
         } else if (e.error) {
           setError(e.error.detail);
+          landed = false;
         } else if (e.proposal) {
           setProposal({ id: e.proposal.id, status: "pending", payload: e.proposal, resolution: null });
         }
       });
     } catch (err: any) {
       setError(err.detail ?? String(err));
+      landed = false;
     } finally {
       setStreaming("");
       setBusy(false);
@@ -269,6 +304,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       // (selectScene also bumps ctxKey and refreshes the player name)
       await selectScene(id);
     }
+    return landed;
   }
 
   async function send() {
@@ -290,14 +326,20 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     if (activePcless || !content) {
       if (activePcless) setDirectorNote(content || null);
       try {
-        await runStream(id, (onEvent) => api.chat(cid, id!, content, onEvent));
+        const landed = await runStream(id, (onEvent) => pendingResponse
+          ? api.chat(cid, id!, content, onEvent, pendingResponse)
+          : api.chat(cid, id!, content, onEvent));
+        if (landed) setPendingResponse(null);
       } finally {
         setDirectorNote(null);
       }
       return;
     }
     setMessages((m) => [...m, { role: "user", content }]);
-    await runStream(id, (onEvent) => api.chat(cid, id!, content, onEvent));
+    const landed = await runStream(id, (onEvent) => pendingResponse
+      ? api.chat(cid, id!, content, onEvent, pendingResponse)
+      : api.chat(cid, id!, content, onEvent));
+    if (landed) setPendingResponse(null);
   }
 
   async function saveEdit() {
@@ -309,7 +351,10 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
 
   async function retry() {
     if (!activeId || busy || rolling) return;
-    await runStream(activeId, (onEvent) => api.retry(cid, activeId, onEvent));
+    const landed = await runStream(activeId, (onEvent) => pendingResponse
+      ? api.retry(cid, activeId, onEvent, pendingResponse)
+      : api.retry(cid, activeId, onEvent));
+    if (landed) setPendingResponse(null);
   }
 
   async function reroll() {
@@ -322,11 +367,16 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       while (end > 0 && m[end - 1].role === "assistant") end--;
       return m.slice(0, end);
     });
-    // omit the 4th argument entirely for a plain reroll (an explicit
-    // undefined would change the call shape)
-    await runStream(activeId, (onEvent) => guidance
-      ? api.regenerate(cid, activeId!, onEvent, guidance)
-      : api.regenerate(cid, activeId!, onEvent));
+    // omit trailing arguments entirely for a plain reroll (an explicit
+    // undefined would change the call shape) — but a pending one-shot
+    // override must ride regenerate too, same promise as retry.
+    const landed = await runStream(activeId, (onEvent) => {
+      if (guidance && pendingResponse) return api.regenerate(cid, activeId!, onEvent, guidance, pendingResponse);
+      if (guidance) return api.regenerate(cid, activeId!, onEvent, guidance);
+      if (pendingResponse) return api.regenerate(cid, activeId!, onEvent, undefined, pendingResponse);
+      return api.regenerate(cid, activeId!, onEvent);
+    });
+    if (landed) setPendingResponse(null);
   }
 
   async function doRoll() {
@@ -974,6 +1024,23 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onKeyDown}
           />
+          <div className="response-length-chip">
+            <button type="button" className="chip-toggle" aria-haspopup="listbox"
+                    aria-expanded={responseChipOpen}
+                    onClick={() => setResponseChipOpen((v) => !v)}>
+              Response length: {responseChipLabel}
+            </button>
+            {responseChipOpen && (
+              <ul className="chip-menu" role="listbox" aria-label="Response length options">
+                {responsePresets.map((p) => (
+                  <li key={p.id} role="option" aria-selected={p.id === responseChipPresetId}
+                      onClick={() => chooseResponseOverride(p.id)}>
+                    {p.name}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
           <button className="send" onClick={send} disabled={busy || rolling}>
             {busy ? "…" : !input.trim() ? "Continue ▶" : "Send ▸"}
           </button>

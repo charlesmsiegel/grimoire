@@ -90,7 +90,7 @@ export type CampaignMeta = {
 };
 export type SceneMeta = { id: string; title: string; model: string; created: string; updated: string; date: string; pcless?: boolean };
 export type Message = { role: "user" | "assistant"; content: string; speaker?: string };
-export type Scene = { meta: { id: string; title: string }; messages: Message[] };
+export type Scene = { meta: { id: string; title: string; response_preset?: string }; messages: Message[] };
 
 // entities (locations | lore)
 export type EntityKind = "locations" | "lore" | "items" | "groups" | "creatures";
@@ -218,6 +218,10 @@ export type ResponseEffective = {
   speakers: number; blocks_per_speaker: number;
 };
 export type ResponseProvenance = Record<string, { scope: string; source?: string }>;
+// A one-shot, unpersisted per-turn override — the same scope-shaped dict
+// response_presets.resolve(turn=...) accepts server-side: a bare
+// {response_preset: id} or loose knob overrides.
+export type ResponseOverride = Partial<ResponseFields>;
 export type ResponseBundle = ResponseFields & { effective: ResponseEffective; provenance: ResponseProvenance };
 export type Availability = {
   id: string; name: string; available: boolean; reasons: string[]; unlocked: boolean;
@@ -484,13 +488,22 @@ export const api = {
   deleteScene: (cid: string, sid: string) =>
     request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}/scenes/${sid}`),
 
-  chat: (cid: string, sid: string, content: string, onEvent: (e: ChatEvent) => void) =>
-    streamPost(`/api/campaigns/${cid}/scenes/${sid}/chat`, { content }, onEvent),
-  retry: (cid: string, sid: string, onEvent: (e: ChatEvent) => void) =>
-    streamPost(`/api/campaigns/${cid}/scenes/${sid}/retry`, undefined, onEvent),
-  regenerate: (cid: string, sid: string, onEvent: (e: ChatEvent) => void, guidance?: string) =>
+  // `response` is a one-shot, unpersisted per-turn override (the length chip
+  // beside Send) — rides only this call, exactly like regenerate's guidance.
+  chat: (cid: string, sid: string, content: string, onEvent: (e: ChatEvent) => void,
+         response?: ResponseOverride) =>
+    streamPost(`/api/campaigns/${cid}/scenes/${sid}/chat`,
+               response ? { content, response } : { content }, onEvent),
+  retry: (cid: string, sid: string, onEvent: (e: ChatEvent) => void, response?: ResponseOverride) =>
+    streamPost(`/api/campaigns/${cid}/scenes/${sid}/retry`,
+               response ? { response } : undefined, onEvent),
+  regenerate: (cid: string, sid: string, onEvent: (e: ChatEvent) => void, guidance?: string,
+               response?: ResponseOverride) =>
     streamPost(`/api/campaigns/${cid}/scenes/${sid}/regenerate`,
-               guidance ? { guidance } : undefined, onEvent),
+               (guidance || response)
+                 ? { ...(guidance ? { guidance } : {}), ...(response ? { response } : {}) }
+                 : undefined,
+               onEvent),
 
   // dice rolls
   roll: (cid: string, sid: string, notation: string, label?: string) =>

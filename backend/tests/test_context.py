@@ -976,6 +976,21 @@ def test_budget_follows_the_scene_override(monkeypatch, tmp_path):
     assert "do not return to a character you have already written" in text
 
 
+def test_turn_override_beats_the_scene_setting(monkeypatch, tmp_path):
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    scenes.set_response(cid, sid, {"response_preset": "cinematic"})
+    text = context.build_messages(cid, sid, turn={"response_preset": "terse"})[0]["content"]
+    assert "150 words" in text
+
+
+def test_turn_override_is_not_persisted(monkeypatch, tmp_path):
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    scenes.set_response(cid, sid, {"response_preset": "cinematic"})
+    context.build_messages(cid, sid, turn={"response_preset": "terse"})
+    assert scenes.read_scene(cid, sid)["meta"]["response_preset"] == "cinematic"
+    assert "900 words" in context.build_messages(cid, sid)[0]["content"]
+
+
 def test_repeats_allowed_wording(monkeypatch, tmp_path):
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     scenes.set_response(cid, sid, {"response_preset": "cinematic"})

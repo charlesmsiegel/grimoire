@@ -1439,6 +1439,57 @@ def test_regenerate_after_a_failed_turn_behaves_like_retry(client):
     assert [m["role"] for m in msgs] == ["user", "assistant"]
 
 
+def test_retry_carries_a_pending_one_shot_override(client):
+    """If streaming fails, the user's next action is retry -- and the chip still
+    shows the override, so retry must honour it rather than silently reverting
+    to inherited settings."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    client.put(f"/api/campaigns/{cid}/scenes/{sid}/response",
+              json={"response_preset": "cinematic"})
+    store.scenes.append_message(cid, sid, "user", "Go on.")
+    cap = CapturingOpenRouter()
+    client.app.dependency_overrides[routes.get_llm] = lambda: cap
+    with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/retry",
+                       json={"response": {"response_preset": "terse"}}) as r:
+        for _ in r.iter_lines():
+            pass
+    assert "150 words" in cap.messages[0]["content"]
+
+
+def test_regenerate_carries_a_pending_one_shot_override(client):
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    client.put(f"/api/campaigns/{cid}/scenes/{sid}/response",
+              json={"response_preset": "cinematic"})
+    store.scenes.append_message(cid, sid, "user", "Go on.")
+    store.scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "Too long."}])
+    cap = CapturingOpenRouter()
+    client.app.dependency_overrides[routes.get_llm] = lambda: cap
+    with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
+                       json={"response": {"response_preset": "terse"}}) as r:
+        for _ in r.iter_lines():
+            pass
+    assert "150 words" in cap.messages[0]["content"]
+
+
+def test_retry_without_an_override_uses_inherited_settings(client):
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    client.put(f"/api/campaigns/{cid}/scenes/{sid}/response",
+              json={"response_preset": "cinematic"})
+    store.scenes.append_message(cid, sid, "user", "Go on.")
+    cap = CapturingOpenRouter()
+    client.app.dependency_overrides[routes.get_llm] = lambda: cap
+    with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/retry") as r:
+        for _ in r.iter_lines():
+            pass
+    assert "900 words" in cap.messages[0]["content"]
+
+
 def test_regenerate_empty_scene_returns_400(client):
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
     _wid, cid = _campaign(client)
