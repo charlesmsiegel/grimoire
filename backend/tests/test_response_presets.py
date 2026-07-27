@@ -367,6 +367,35 @@ def test_list_presets_carries_validity(tmp_path, monkeypatch):
     assert row["validity"]["valid"] is False
 
 
+def test_validity_flags_a_dangling_style_reference(tmp_path, monkeypatch):
+    """resolve() skips a style that doesn't exist and keeps walking outward, so
+    the selection silently does nothing. Degraded, not invalid — the length
+    half still applies."""
+    _isolate(tmp_path, monkeypatch)
+    _write(tmp_path / "home" / "response_presets", "orphan",
+           name="Orphan", style_id="deleted-style", length_preset="terse")
+    got = rp.read_preset("orphan")
+    assert got["validity"]["valid"] is True
+    assert any("deleted-style" in i for i in got["validity"]["issues"])
+    assert rp.supplies(got["meta"])["reply_words"] == 150      # unchanged
+
+
+def test_validity_accepts_the_none_sentinel(tmp_path, monkeypatch):
+    """`none` is an explicit clear, not a dangling reference."""
+    _isolate(tmp_path, monkeypatch)
+    _write(tmp_path / "home" / "response_presets", "bare",
+           name="Bare", style_id="none", length_preset="terse")
+    assert rp.read_preset("bare")["validity"]["issues"] == []
+
+
+def test_validity_accepts_a_style_that_exists(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    _write(tmp_path / "templates" / "styles", "gothic-horror", name="Gothic Horror")
+    _write(tmp_path / "home" / "response_presets", "fine",
+           name="Fine", style_id="gothic-horror", length_preset="terse")
+    assert rp.read_preset("fine")["validity"]["issues"] == []
+
+
 def test_duplicate_makes_an_editable_copy(tmp_path, monkeypatch):
     _isolate(tmp_path, monkeypatch)
     _write(tmp_path / "templates" / "response_presets", "terse",
