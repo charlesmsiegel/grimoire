@@ -143,9 +143,22 @@ plugin and is never committed.
   that nobody edited. JavaScript makes it worse by reordering integer-like keys
   during enumeration. An array is ordered by construction, so the guarantee
   survives any conforming JSON implementation.
+- **Entry names must be unique within each axis of each season.** Uniqueness
+  came free when tables were name-keyed objects and does not survive the move
+  to arrays. Two entries sharing a name are individually unidentifiable
+  everywhere downstream — `requires_temp` cannot say which temperature row it
+  means, the override popover and the HUD show one label for two rows, and the
+  override store records a name rather than an index — so a duplicate is not a
+  quirk but a row the user can neither select nor remove.
 - **Weights must be finite and non-negative, and every axis of every season
-  must carry at least one strictly positive weight.** Validated at load and at
-  save. Zeroing an entry is the documented way to disable it, which makes
+  must carry at least one strictly positive weight, and each axis's total must
+  itself be finite.** Validated at load and at save. The total matters
+  separately from the individual values: two entries of `1e308` are each finite
+  and positive while their sum overflows to infinity, after which every
+  normalized probability is zero and the close-at-1.0 rule hands back the last
+  entry — a silent, wrong, and perfectly deterministic answer. Normalization
+  additionally scales by the largest weight before summing, so a table that
+  validates cannot overflow on the way to a distribution. Zeroing an entry is the documented way to disable it, which makes
   zeroing *all* of them an easy accident — and a table with zero total weight
   has no inverse CDF at all, so the resolver has nothing to fall back to. The
   unconstrained-condition fallback (§ Drawing a block) does not help here: it
@@ -905,8 +918,9 @@ The form is where the real work is:
   weight is finite and non-negative**; every axis of every season has at least
   one positive weight; every season declares at least one unconstrained
   condition; every positive-weight temperature band has at least one eligible
-  condition; **every `requires_temp` value names a temperature entry that
-  exists in the same season**; and **the climate's own `persistence` is finite
+  condition; **entry names are unique within each axis**; **each axis's weight
+  total is finite**; **every `requires_temp` value names a temperature entry
+  that exists in the same season**; and **the climate's own `persistence` is finite
   and within `[0, 1]`** — the same range rule the location field gets, which
   the editor would otherwise leave to a backend failure. Each failure names the
   season and the fix.
@@ -944,6 +958,14 @@ same one-field shape, copied into the campaign at create time exactly as
 `calendars.copy_calendar` copies the calendar. Without it the campaign wizard
 has nothing to prefill from — a world author would have to set the default
 again for every campaign, or tag every location individually.
+
+**`create_campaign` takes a `climate` argument**, alongside the `calendar` one
+it already has, and the wizard passes the user's selection through it. Copying
+the world file unconditionally would make the wizard's control a lie: it would
+render an editable prefilled choice and then discard whatever the user chose.
+The world file is the default *for* that argument, not a substitute for it —
+same shape as `calendar`, which the wizard also prefills and the caller can
+also override.
 
 This inherits a gap rather than inventing one: #40 records that the *calendar*
 is world-scoped on disk with no world-side read/write route and no UI, settable
@@ -1050,7 +1072,24 @@ cannot see.
 
 **Clear override** is therefore the three-axis case of *"leave to chance"* — it
 clears all three at once rather than being a separate mechanism, and both route
-through the same stack-removal logic.
+through the same operation:
+
+```
+POST /api/campaigns/{cid}/weather/clear   { location, at, axes: [...] }
+```
+
+**Clearing is one atomic server-side call, not client-orchestrated edits.**
+Removing a single axis from a span that sets several means *mutating* that
+record while preserving its `source`, `note`, `set_at` and range — and the
+client has only whole-record `DELETE` and a create-shaped `PUT` to work with,
+so it would have to delete and recreate, losing exactly the fields precedence
+depends on. Worse, it would have to do that across a stack of spans
+non-atomically, leaving a half-cleared state if anything failed midway. The
+server walks the covering stack, strips the named axes from each span, deletes
+any span left setting nothing, and returns the new resolved weather.
+
+`DELETE .../{storage_key}/{span_id}` stays, for removing a specific record
+outright rather than clearing an axis of it.
 
 Saving `PUT`s to the override endpoint with the scene's location, and the widget
 re-reads. The next turn's prompt picks it up through the ordinary weather
@@ -1212,7 +1251,10 @@ Frontend, from `frontend/` with `npx vitest run` and `npx tsc -b`:
   conditions referencing it.
 - *"Leave to chance"* on an axis that currently has an override returns that
   axis to procedural weather, rather than leaving the existing override in
-  place.
+  place — and when that override also sets other axes, those survive with
+  their `source`, `note` and `set_at` intact rather than being recreated.
+- The campaign wizard's selected climate is what the created campaign has, not
+  the world default it was prefilled from.
 - A covering span stored under `_default` is clearable from the HUD, which
   requires its storage key to be present in the resolver's response.
 - The campaign settings control reads and writes the default climate, and the
@@ -1226,6 +1268,10 @@ Frontend, from `frontend/` with `npx vitest run` and `npx tsc -b`:
   takes.
 - Individual weights: an axis containing a negative or non-finite weight is
   rejected inline even when a positive sibling is present.
+- Duplicate entry names within one axis are rejected inline.
+- An axis of two `1e308` weights is rejected rather than silently resolving to
+  its last entry, and a table of large-but-summable weights still produces its
+  declared distribution.
 - Climate `persistence` of `2`, `-1` or `NaN` is rejected inline by the editor
   rather than deferred to a backend save error.
 - **Clear override** with a shadowed second span beneath the winner returns the
