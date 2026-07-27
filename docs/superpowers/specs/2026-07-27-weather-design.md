@@ -128,6 +128,14 @@ plugin and is never committed.
   otherwise read as an empty interval and fail the coverage check.
 - A table entry is either a bare weight (`"clear": 2`) or an object with
   `weight` plus modifiers. Both forms parse to the same internal shape.
+- **Weights must be finite and non-negative, and every axis of every season
+  must carry at least one strictly positive weight.** Validated at load and at
+  save. Zeroing an entry is the documented way to disable it, which makes
+  zeroing *all* of them an easy accident — and a table with zero total weight
+  has no inverse CDF at all, so the resolver has nothing to fall back to. The
+  unconstrained-condition fallback (§ Drawing a block) does not help here: it
+  covers a condition table emptied by `requires_temp`, not a temperature or
+  wind table with no drawable entries.
 - **Entry order is significant**, and tables are read in declared document
   order when building the cumulative distribution. Order carries no meaning to
   the draw itself — the weights alone decide frequencies — but it decides what
@@ -274,6 +282,15 @@ hash-diffing of entity blobs is undisturbed.
   endpoint must match exactly one record, or the precedence rules below decide
   between two spans that were never meant to compete. This convention also
   governs how writers merge, truncate, and round durations.
+- **`to` may be `null`, meaning open-ended** — the span matches every `t >= from`
+  with no upper bound, and `to_fixed` is `null` alongside it. This is the
+  storage for the HUD's *"until I clear it"* duration (§ Interface), which
+  otherwise has no representation and would force implementers to invent a
+  sentinel far-future date. Clearing such an override **deletes the record**
+  rather than setting `to` to the current moment: a deleted span leaves no
+  trace in the resolution chain, while a closed one would keep shadowing lower-
+  precedence overrides for its historical range, so re-reading an old scene
+  would show weather the GM had already retracted.
 - **Comparison happens on the fixed-day axis, never on the stored strings.**
   `from`, `to`, and the queried moment are each parsed through the campaign's
   primary provider to `(fixed_day, minute)` before any ordering test. Native
@@ -399,6 +416,15 @@ resolves to `5*D + 4` — the same ordinal as 22:00 on day *D*, one less than
 dawn of *D+1*. Consecutive blocks differ by exactly 1 across day and year
 boundaries alike, which is what makes `persistence` mean what it says.
 
+**The season is looked up from the block's owning date too**, not from the
+queried moment. A night block spans midnight and can therefore span a season
+or year boundary: 22:00 on *D* and 02:00 on *D+1* share an ordinal and so share
+a sample, but looking the season up per-moment would map that one sample
+through *D*'s table for the first query and *D+1*'s for the second — changing
+the weather halfway through a single night, which is exactly what indexing the
+block contiguously was meant to prevent. Everything about a block derives from
+the date it starts on.
+
 ### The noise field
 
 Weather is **not** a Markov chain over blocks. Each axis is a **correlated noise
@@ -430,9 +456,29 @@ make presets non-portable and `0.35` meaningless. The process is therefore
 pinned down exactly:
 
 1. **Latent field.** For each `(cid, zone, axis)` there is an i.i.d. standard
-   normal `z(i)` at every integer block index, drawn from a stable hash of
-   `(cid, zone, axis, i)`. This is the only source of randomness, it is defined
-   at negative indices, and it does **not** depend on `persistence`.
+   normal `z(i)` at every integer block ordinal. This is the only source of
+   randomness, it is defined at negative ordinals, and it does **not** depend
+   on `persistence`.
+
+   "A stable hash" is not good enough here, and saying it was is inconsistent
+   with rejecting two extra filter taps two paragraphs down — if the digest,
+   the serialization, or the normal transform is left open, two conforming
+   implementations produce different weather and the whole determinism
+   argument collapses. So, exactly:
+
+   - **Key**: the UTF-8 string `cid \x1f zone \x1f axis \x1f i`, with `i` in
+     decimal and `-` for negatives. Unit separators, so no id containing a
+     dash or colon can collide with another key.
+   - **Digest**: BLAKE2b-256 of that key.
+   - **Uniform**: the leading 53 bits of the digest, big-endian, divided by
+     2⁵³ — giving `u ∈ [0, 1)` with exactly float64's mantissa precision.
+   - **Normal**: `z = Φ⁻¹(u)` by Wichura's AS241, the algorithm behind
+     `scipy.special.ndtri`, with `u = 0` mapped to the smallest representable
+     `u` first so the tail is finite.
+
+   The test plan carries **reference vectors** — fixed `(cid, zone, axis, i)`
+   tuples with their expected `z` — so conformance is checkable rather than
+   asserted.
 2. **Smoothing.** The correlated field is a normalized **one-sided** (causal)
    exponential filter over the latent, with `a = persistence`, indexed by the
    **block ordinal** of § Blocks — never by the minute coordinate:
@@ -464,16 +510,17 @@ pinned down exactly:
    equality. Stating the exact finite form matters because an implementer who
    measures `0.8997` against a documented `0.9` needs to know that is correct
    and expected, not a bug to chase.
-4. **Truncation.** `W = ceil(4 / ln(1/a))` for `a > 0`, else 0. The discarded
-   tail is below any weight that could shift an inverse-CDF bucket. Cost is
-   O(W) per sample — 0 taps at `p = 0`, **38** at `p = 0.9`, **398** at
-   `p = 0.99` — still O(1) in campaign age, which is the property this
-   construction exists for. Those counts are the formula's exact output, not
-   round numbers: an implementation that used 400 instead of 398 would include
-   two extra latent samples and could land in a different inverse-CDF bucket,
-   which is a determinism break rather than a rounding preference.
-5. **Upper bound.** `persistence` is clamped to `0.998` (`W = 1998`, a
-   correlation length around a hundred days). A document may write `1`; it
+4. **Truncation.** `W` is the **maximum lag**, `W = ceil(4 / ln(1/a))` for
+   `a > 0`, else 0. Since the sum runs `k = 0..W` inclusive, the number of taps
+   evaluated is **`W + 1`**: 1 tap at `p = 0` (just `z(t)`), 39 at `p = 0.9`
+   (`W = 38`), 399 at `p = 0.99` (`W = 398`). Cost is O(W) per sample, still
+   O(1) in campaign age, which is the property this construction exists for.
+   The exact counts matter — an implementation that evaluated a different
+   number of taps would normalize differently and could land in a different
+   inverse-CDF bucket, which is a determinism break rather than a rounding
+   preference.
+5. **Upper bound.** `persistence` is clamped to `0.998` (`W = 1998`, 1999 taps,
+   a correlation length around a hundred days). A document may write `1`; it
    resolves to the clamp with a validation warning rather than an error.
    **There is no `persistence: 1` special case**, because an infinite-
    correlation process is not implementable and faking it with a constant
@@ -735,9 +782,23 @@ The form is where the real work is:
   storage model and a terrible authoring model; nobody can read a column of
   integers as a distribution. The percentage is display-only — the stored value
   stays the integer.
-- **Season boundaries are edited as dates, stored as fractions.** Each boundary
-  shows the equivalent date in the campaign's current calendar and accepts a
-  date as input. `0.45` is not authorable by a human (§ Climate documents).
+- **Season boundaries are edited as dates, stored as fractions**, since `0.45`
+  is not authorable by a human (§ Climate documents). The conversion needs a
+  fixed reference or it is not stable: 1 March is a different fraction in a
+  Gregorian leap year than in a common one, and custom calendars vary more.
+  Climates are also campaign-agnostic while calendars are campaign-scoped, and
+  a campaign has no single "current" date — its scenes each carry their own.
+
+  So: the display provider is the calendar of the campaign the editor was
+  opened from, falling back to `gregorian` when there is none, and the
+  reference year is that provider's `RULE_REFERENCE_YEAR` — already the
+  convention for calendar-relative rules in `calendars/base.py`. Dates round
+  to the day.
+
+  **Crucially, the stored fraction is only rewritten for a boundary the user
+  actually edited.** Round-tripping a climate through the editor — open, look,
+  save — must leave every untouched fraction byte-identical, or opening a
+  climate under a leap-year calendar would silently walk its seasons.
 - **Entry order is drag-reorderable and its meaning is stated inline.** Order
   decides what a quantile maps to across a season boundary (§ Drawing a block),
   so the form says so — otherwise a well-meaning alphabetical sort silently
@@ -745,11 +806,25 @@ The form is where the real work is:
 - **`requires_temp`** is a multi-select on each condition row, offering exactly
   the temperature bands declared in that season.
 - **Validation is inline and blocking on save**, covering the invariants the
-  resolver depends on: seasons cover the year without gaps, every season
-  declares at least one unconstrained condition, and every positive-weight
-  temperature band has at least one eligible condition. Each failure names the
-  season and the fix. These are the conditions that would otherwise surface at
-  runtime as a fallback sky nobody asked for.
+  resolver depends on: seasons cover the year without gaps; every axis of every
+  season has at least one finite, positive weight; every season declares at
+  least one unconstrained condition; and every positive-weight temperature band
+  has at least one eligible condition. Each failure names the season and the
+  fix. These are the conditions that would otherwise surface at runtime as a
+  fallback sky nobody asked for — or, for a zero-total table, as no sky at all.
+
+### Campaign default climate
+
+`campaigns/<cid>/climate.json` needs a surface too, or the only way to set the
+default every untagged location falls back to is hand-editing the store or
+tagging every location one at a time.
+
+`GET`/`PUT /api/campaigns/{cid}/climate`, rendered as a single select in the
+campaign's settings alongside the calendar config it sits beside on disk
+(`CalendarConfig.tsx` is the model, and #73's per-campaign settings tabs are
+where it belongs long-term). The campaign wizard prefills it from the world's
+default where one exists, the same way it prefills the calendar. This route
+also needs declaring before the generic `/{kind}` entity routes.
 
 ### Assigning a climate to a location
 
@@ -826,7 +901,13 @@ Backend, `backend/tests/test_weather.py`, store isolated with
 - Season seam: likewise across a season boundary, where the table changes but
   the underlying stream should not jump.
 - Block identity: 23:00 and 01:00 the following morning resolve to the same
-  block; 03:59 and 04:01 do not.
+  block; 03:59 and 04:01 do not. Include a night that **spans a season
+  boundary and a year boundary** — both moments must resolve to the same
+  weather, which fails if the season is looked up from the queried moment
+  rather than from the block's owning date.
+- Latent reference vectors: fixed `(cid, zone, axis, ordinal)` tuples produce
+  the documented `z` values, pinning the hash, serialization, uniform
+  derivation and normal transform against drift.
 - Override precedence: location beats `_default`, newer `set_at` beats older,
   and two spans differing only in array order resolve identically.
 - Span boundaries are half-open: at the shared endpoint of two adjacent
@@ -847,15 +928,20 @@ Backend, `backend/tests/test_weather.py`, store isolated with
 - Config leniency: `persistence` of `"2"`, `"-1"` and `"NaN"` each fall back to
   the climate's value; a campaign default naming a deleted climate falls back
   to the shipped preset rather than looping.
-- Season-boundary remap, tested **counterfactually on a single sample**: take
-  one `g(t)` and map it through both the outgoing and incoming season tables;
-  the two selected entries must sit at the same quantile. Comparing the actual
-  blocks either side of the boundary would be wrong — `g(t−1)` and `g(t)` are
-  different samples and their quantiles differ even at the clamp, so an
-  equality assertion there would reject conforming implementations. The
-  counterfactual is what actually catches the failure worth catching: an
-  implementation that reseeds, offsets, or re-derives the sample when the
-  active table changes.
+- Season-boundary remap, tested **through the production resolver under two
+  climates**: resolve the same ordinal twice, once with a climate whose season
+  table is A and once with an otherwise identical climate whose table is B,
+  and assert first that the **latent `g(t)` is identical in both runs**, then
+  that the selected entries sit at the same quantile of their respective
+  tables.
+
+  The latent assertion is the whole test. Hand-feeding one sample to two
+  inverse CDFs proves nothing — the quantile is preserved by definition of the
+  inverse CDF, so it would pass against an implementation that reseeds per
+  season, which is the defect being hunted. Only sampling through the real
+  resolver can show the table swap left the field alone. Comparing the actual
+  blocks either side of a real boundary is also wrong: `g(t−1)` and `g(t)` are
+  different samples with different quantiles even at the clamp.
 - Season-boundary continuity, separately, asserted on **the latent field and
   not the rendered weather**: the distribution of `g(t) − g(t−1)` at boundary
   indices matches its distribution at non-boundary indices. Rendered weather
@@ -893,9 +979,15 @@ Backend, `backend/tests/test_weather.py`, store isolated with
 - Random access: resolving block *t* directly and resolving it after walking
   every block from 0 to *t* yield the same answer, at any *t*, including
   negative — the property that makes prequel scenes and multi-year jumps free.
-- Weight fidelity: over a long sample the observed frequency of each condition
+- Weight fidelity, against a climate **with no `requires_temp` anywhere**:
+  over a long sample the observed frequency of each condition
   matches its normalized weight, at several persistence settings — the test
-  that catches a non-uniform marginal reaching the inverse CDF.
+  that catches a non-uniform marginal reaching the inverse CDF. The
+  unconstrained climate is required, not incidental: under `requires_temp` an
+  entry is filtered out whenever its band is absent and the survivors are
+  renormalized, so a conforming resolver's unconditional frequencies
+  legitimately differ from the raw weights. Constrained tables are covered by
+  comparing against the temperature-conditioned expectation instead.
 - Degenerate tables: a season whose conditions are all ineligible for a drawn
   temperature yields the unconstrained fallback, and never a `requires_temp`
   violation.
@@ -925,8 +1017,15 @@ Frontend, from `frontend/` with `npx vitest run` and `npx tsc -b`:
 - Weight percentages recompute live as sibling weights change, and reordering
   entries does not alter them.
 - Save is blocked, with a message naming the season, when a season leaves a
-  year gap, declares no unconstrained condition, or has a temperature band with
-  no eligible condition.
+  year gap, declares no unconstrained condition, has a temperature band with
+  no eligible condition, or has an axis whose weights are all zero.
+- Round-tripping a climate through the editor — open, save, no edits — leaves
+  every season fraction byte-identical, including under a leap-year calendar.
+- The campaign settings control reads and writes the default climate, and the
+  campaign wizard prefills it from the world's default.
+- An override saved as *"until I clear it"* stores `to: null` and matches
+  arbitrarily far-future moments; clearing it removes the record rather than
+  closing it, so a re-read of an earlier scene shows procedural weather.
 - A location saved with an unknown climate id is rejected with the available
   ids, rather than accepted and silently falling back.
 - The HUD widget renders nothing when weather resolution returns `None`, and
