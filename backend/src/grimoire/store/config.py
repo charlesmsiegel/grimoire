@@ -12,9 +12,16 @@ DEFAULT_RECAP_DEPTH = "5"
 DEFAULT_USER_LABEL = "You"
 DEFAULT_ASSISTANT_LABEL = "Grimoire"
 DEFAULT_CLAUDE_MODEL = "opus"
+# The global scope of the response-preset cascade. These MUST be listed here:
+# read_config() narrows its return to _CONFIG_KEYS, so a key omitted from this
+# tuple is silently dropped and the global scope resolves as if unset — no
+# error, just the wrong budget.
+_LENGTH_KEYS = ("response_preset", "length_reply_words", "length_blocks",
+                "length_paragraphs", "length_speakers", "length_blocks_per_speaker")
+
 _CONFIG_KEYS = ("theme", "context_scan_depth", "system_prompt",
                 "quote_color", "recap_depth", "user_label", "assistant_label",
-                "default_style_id", "active_connection_id")
+                "default_style_id", "active_connection_id") + _LENGTH_KEYS
 
 
 def _config_path():
@@ -28,7 +35,8 @@ def read_config() -> dict[str, str]:
                 "context_scan_depth": DEFAULT_SCAN_DEPTH, "system_prompt": "", "quote_color": "off",
                 "recap_depth": DEFAULT_RECAP_DEPTH,
                 "user_label": DEFAULT_USER_LABEL, "assistant_label": DEFAULT_ASSISTANT_LABEL,
-                "default_style_id": "", "active_connection_id": ""}
+                "default_style_id": "", "active_connection_id": "",
+                **{k: "" for k in _LENGTH_KEYS}}
     if not path.exists():
         path.write_text(dump_frontmatter(defaults, ""), encoding="utf-8")
         return defaults
