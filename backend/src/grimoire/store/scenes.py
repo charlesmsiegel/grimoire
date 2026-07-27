@@ -210,6 +210,16 @@ def read_scene(cid: str, sid: str) -> dict:
     return {"meta": {"id": sid, **meta}, "messages": _parse_messages(body, players)}
 
 
+def read_scene_meta(cid: str, sid: str) -> dict:
+    """A scene's frontmatter without parsing its transcript. For bulk scans
+    (response-preset usage) where the messages are irrelevant and reading them
+    for every scene in the library is pure waste."""
+    p = _scene_path(cid, sid)
+    if not _safe_id(sid) or not p.exists():
+        raise SceneNotFound(sid)
+    return {"id": sid, **parse_frontmatter_head(p)}
+
+
 def rename_scene(cid: str, sid: str, title: str) -> str:
     p = _scene_path(cid, sid)
     if not _safe_id(sid) or not p.exists():
