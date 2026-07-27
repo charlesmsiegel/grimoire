@@ -141,17 +141,22 @@ plugin and is never committed.
   validated at load. This is what makes the degenerate-table fallback safe
   (§ Drawing a block) without letting it emit a constrained condition outside
   its band.
-- `persistence` is `[0, 1]`: 0 rerolls every block independently, 1 holds the
-  underlying stream constant. Absent means 0.5.
+- `persistence` is the **lag-1 autocorrelation between adjacent blocks**, in
+  `[0, 1)`. `0` makes every block independent; `0.35` means a block is 35%
+  correlated with the one before it; higher values give longer runs. Absent
+  means 0.5. Values are clamped to `0.998` (§ The construction, concretely),
+  so `1` is accepted but resolves to the clamp with a warning.
 
-  Note what `1` does **not** mean. It cannot mean "the weather never changes,"
-  because the season table underneath it changes: a held value that no longer
-  exists in the new season's table, or a constant noise sample mapped through a
-  different inverse CDF, both yield different weather at a season boundary. The
-  guarantee is therefore scoped: **at `persistence: 1` weather is constant
-  within a season and may change only where the table changes.** That is also
-  the desirable reading — a climate whose sky is genuinely immutable across a
-  season change would be a bug, not a feature.
+  This is a real unit, not a dial — the same number produces the same run
+  lengths in any conforming implementation, and it is measurable directly from
+  a generated series.
+
+  **It never means "the weather never changes."** Even at the clamp the season
+  table underneath it changes, so a sample held across a season boundary maps
+  through a different inverse CDF and yields different weather. High
+  persistence buys long runs *within* a season, nothing more. Genuinely
+  unchanging weather is a **single-entry table** — exact, visible in the
+  climate document, and unrelated to this setting.
 
 ### Locations
 
@@ -406,22 +411,37 @@ pinned down exactly:
    normal `z(i)` at every integer block index, drawn from a stable hash of
    `(cid, zone, axis, i)`. This is the only source of randomness, it is defined
    at negative indices, and it does **not** depend on `persistence`.
-2. **Smoothing.** The correlated field is a normalized exponential filter over
-   the latent:
-   `g(t) = Σ_k w_k · z(t+k) / sqrt(Σ_k w_k²)`, with `w_k = exp(−|k| / L)`
-   summed over `|k| ≤ W`. Normalization makes `g` standard normal, so Φ(g) is
-   uniform as § the copula rule requires.
-3. **Parameter mapping.** `L = −1 / ln(persistence)`, which makes
-   **`persistence` exactly the lag-1 autocorrelation** of `g` between adjacent
-   blocks — a definition that is measurable, portable, and interpretable:
-   `0.35` means "a block is 35% correlated with the one before it." `p → 0`
-   gives independent blocks; `p → 1` gives infinite correlation length.
-4. **Truncation.** `W = ceil(4L)`, capped at 2000, which bounds the discarded
-   tail below any weight that could change an inverse-CDF bucket. `p = 1`
-   is special-cased to a constant sample rather than an infinite filter.
+2. **Smoothing.** The correlated field is a normalized **one-sided** (causal)
+   exponential filter over the latent, with `a = persistence`:
 
-Cost is O(W) per sample — 38 taps at `p = 0.9`, 400 at `p = 0.99` — which is
-still O(1) in campaign age, the property this whole construction exists for.
+   `g(t) = sqrt(1 − a²) · Σ_{k=0}^{W} a^k · z(t − k)`
+
+   The filter is one-sided on purpose. For two-sided weights `a^{|k|}` the
+   lag-1 autocorrelation works out to `2a / (1 + a²)`, not `a` — so `a = 0.35`
+   would actually give 0.624 and `a = 0.9` would give 0.994, and every preset
+   would be far more persistent than its number claimed. For the one-sided
+   filter the lag-1 autocorrelation is **exactly `a`**. Weather remembering its
+   past but not its future is also the more defensible model.
+3. **Parameter mapping.** `a = persistence` directly. That makes
+   **`persistence` exactly the lag-1 autocorrelation** between adjacent blocks
+   — measurable, portable, and meaningful to an author: `0.35` means "a block
+   is 35% correlated with the one before it." No log/exp round trip, so `p = 0`
+   needs no special case: the filter collapses to `g(t) = z(t)`, independent
+   blocks, exactly as documented.
+4. **Truncation.** `W = ceil(4 / ln(1/a))` for `a > 0`, else 0. The discarded
+   tail is below any weight that could shift an inverse-CDF bucket. Cost is
+   O(W) per sample — 0 taps at `p = 0`, 38 at `p = 0.9`, 400 at `p = 0.99` —
+   still O(1) in campaign age, which is the property this construction exists
+   for.
+5. **Upper bound.** `persistence` is clamped to `0.998` (`W = 2000`, a
+   correlation length around a hundred days). A document may write `1`; it
+   resolves to the clamp with a validation warning rather than an error.
+   **There is no `persistence: 1` special case**, because an infinite-
+   correlation process is not implementable and faking it with a constant
+   sample would silently decouple that location from the rest of its zone —
+   the one guarantee § Weather zones makes. Genuinely unchanging weather is
+   expressed by a **single-entry table**, which is exact, obvious in the
+   climate document, and needs no support from the noise field at all.
 
 **Persistence is a filter over a shared latent, not a different field.** That is
 load-bearing for § Weather zones: two locations sharing a zone but disagreeing
@@ -445,9 +465,9 @@ is not.
 
 Three properties follow structurally rather than by maintenance:
 
-- **No seam at any boundary**, year or season. `persistence: 1` is infinite
-  correlation length, holding the sample constant, which under the scoped
-  guarantee (§ Climate documents) means constant weather within a season.
+- **No seam at any boundary**, year or season. The latent is indexed globally
+  and the filter looks back across whatever boundary happens to fall inside its
+  window, so nothing distinguishes 31 Twelfthmonth from any other block.
 - **Nothing to invalidate.** Determinism is a property of the construction, not
   something a cache key has to preserve.
 - **Condition revalidation is automatic.** Condition is always
@@ -505,9 +525,8 @@ implementation has to work for and which earlier drafts of this spec got wrong:
   a sample sitting at quantile 0.8 of winter's conditions lands at quantile 0.8
   of summer's, and an author who orders both tables monotonically gets
   continuity for free — a stormy winter reading becomes the stormy end of
-  summer, not a coin flip. This is what makes the scoped `persistence: 1`
-  guarantee (§ Climate documents) true by construction rather than by
-  enforcement.
+  summer, not a coin flip. This is what makes the high-persistence guarantee
+  (§ Climate documents) true by construction rather than by enforcement.
 - **The filtered table can be empty**, and normalizing an empty table is
   undefined. A climate whose season pairs a `mild` temperature band with
   conditions that all require `freezing` is structurally valid but unresolvable.
@@ -655,13 +674,14 @@ Backend, `backend/tests/test_weather.py`, store isolated with
 - Persistence: at `persistence: 0.9` runs are demonstrably longer than at
   `0.1`, over a sampled year.
 - Year seam: the distribution of change-events across the year boundary matches
-  the distribution mid-year, **and** at `persistence: 1` the value is identical
-  either side of a New Year. Scope that equality to a climate whose season does
-  *not* boundary at fraction 0, or assert on the underlying sample instead — a
-  season change at New Year is licensed to change the weather by the scoped
-  guarantee, so an unconditional assertion would reject a conforming
-  implementation. This is the assertion every chain-with-an-anchor design in
-  this spec's history failed, and it is the reason for the noise field.
+  the distribution mid-year, **and** the underlying sample `g(t)` is continuous
+  across 31 Twelfthmonth → 1 Firstmonth, with the same lag-1 correlation there
+  as anywhere else. Assert on the sample rather than the rendered weather: a
+  climate whose season boundary sits at fraction 0 is licensed to change the
+  weather at New Year, so an assertion on the visible value would reject a
+  conforming implementation. This is the assertion every chain-with-an-anchor
+  design in this spec's history failed, and it is the reason for the noise
+  field.
 - Season seam: likewise across a season boundary, where the table changes but
   the underlying stream should not jump.
 - Block identity: 23:00 and 01:00 the following morning resolve to the same
@@ -686,9 +706,15 @@ Backend, `backend/tests/test_weather.py`, store isolated with
 - Config leniency: `persistence` of `"2"`, `"-1"` and `"NaN"` each fall back to
   the climate's value; a campaign default naming a deleted climate falls back
   to the shipped preset rather than looping.
-- Season-boundary remap: at `persistence: 1`, a value absent from the new
+- Season-boundary remap: at high persistence, a value absent from the new
   season's table never survives the boundary, and the entry it remaps to sits
   at the same quantile in the new table as the old value did in the old one.
+- Persistence clamp: a climate declaring `persistence: 1` loads, warns, and
+  resolves at the clamp — it neither raises nor produces a constant sky. A
+  single-entry table, by contrast, does produce a constant value at any
+  persistence.
+- Zero persistence: `persistence: 0` yields `g(t) = z(t)` and independent
+  blocks, with no division by zero anywhere in the filter.
 - Persistence calibration: the measured lag-1 autocorrelation of the latent
   field is within tolerance of the configured `persistence`, across several
   values — the test that makes a preset's `0.35` mean the same thing in any
