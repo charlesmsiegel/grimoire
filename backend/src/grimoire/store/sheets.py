@@ -19,7 +19,7 @@ import threading
 import uuid
 from pathlib import Path
 
-from . import campaigns, characters, entities, expressions, modules, overlay, pcs, worlds
+from . import campaigns, characters, entities, expressions, modules, overlay, pcs, shapes, worlds
 
 
 class SheetError(Exception):
@@ -154,7 +154,7 @@ def _compute_derived(sheets_def: dict, type_id: str, fields: dict,
             out[name] = value
             scope[name] = value
 
-    groups = st.get("groups") if isinstance(st.get("groups"), list) else []
+    groups = shapes.list_at(st, "groups")
     for gid in groups:
         g = sheets_def.get("groups", {}).get(gid) if isinstance(gid, str) else None
         if isinstance(g, dict):
@@ -191,7 +191,7 @@ def instance_errors(pack: dict, file_kind: str, sheet_type, fields: dict) -> lis
     """The full read-time judgment for a stored sheet against an arbitrary
     pack dict — sheet-type/kind/value validation PLUS derived evaluation
     against the stored values (impact scans must judge exactly as reads do)."""
-    sheets_def = pack["sheets"] if isinstance(pack.get("sheets"), dict) else {}
+    sheets_def = shapes.dict_at(pack, "sheets")
     errors = _validate_instance(sheets_def, file_kind, sheet_type, fields)
     if isinstance(sheet_type, str):
         _compute_derived(sheets_def, sheet_type, fields, errors)
@@ -210,7 +210,7 @@ def _read_path(path: Path, file_kind: str, mid: str | None) -> dict | None:
         return {"sheet_type": None, "fields": {}, "derived": {}, "gen": None,
                 "errors": ["sheet file must be an object"]}
     sheet_type = data.get("sheet_type")
-    fields = data.get("fields") if isinstance(data.get("fields"), dict) else {}
+    fields = shapes.dict_at(data, "fields")
     if mid is None:
         return {"sheet_type": sheet_type, "fields": fields, "derived": {},
                 "gen": data.get("gen"), "errors": ["no module resolved"]}
@@ -277,7 +277,7 @@ def _stored_snapshot(path: Path) -> dict | None:
     if not isinstance(data, dict):
         data = {}
     return {"sheet_type": data.get("sheet_type"),
-            "fields": data.get("fields") if isinstance(data.get("fields"), dict) else {},
+            "fields": shapes.dict_at(data, "fields"),
             "gen": data.get("gen")}
 
 
@@ -666,8 +666,10 @@ def advance(cid: str, kind: str, eid: str, field_key: str) -> dict:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError, OSError) as e:
             raise SheetError(f"unreadable sheet file: {e}")
-        sheet_type = data.get("sheet_type") if isinstance(data, dict) else None
-        fields = data.get("fields") if isinstance(data, dict) and isinstance(data.get("fields"), dict) else {}
+        if not isinstance(data, dict):
+            data = {}
+        sheet_type = data.get("sheet_type")
+        fields = shapes.dict_at(data, "fields")
         sheets_def = modules.load_pack(mid)["sheets"]
         st = sheets_def.get("sheet_types", {}).get(sheet_type) if isinstance(sheet_type, str) else None
         if not isinstance(st, dict):

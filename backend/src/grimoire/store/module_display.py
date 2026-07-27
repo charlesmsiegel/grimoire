@@ -16,6 +16,8 @@ import json
 import re
 from pathlib import Path
 
+from . import shapes
+
 NODE_FORMS = ("row", "column", "group", "fields", "derived", "use")
 MAX_DEPTH = 32
 MAX_NODES = 1000
@@ -77,7 +79,7 @@ def _type_scope(sheets: dict, tid: str) -> dict:
         g = groups.get(gid)
         if not isinstance(g, dict):
             continue
-        gf = g.get("fields") if isinstance(g.get("fields"), list) else []
+        gf = shapes.list_at(g, "fields")
         group_fields[gid] = [f["key"] for f in gf
                              if isinstance(f, dict) and isinstance(f.get("key"), str)]
         if isinstance(g.get("derived"), dict):
@@ -105,7 +107,7 @@ def _union_scope(sheets: dict) -> dict:
     for gid, g in groups.items():
         if not isinstance(g, dict):
             continue
-        gf = g.get("fields") if isinstance(g.get("fields"), list) else []
+        gf = shapes.list_at(g, "fields")
         group_fields[gid] = [f["key"] for f in gf
                              if isinstance(f, dict) and isinstance(f.get("key"), str)]
         if isinstance(g.get("derived"), dict):

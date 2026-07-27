@@ -28,6 +28,10 @@ _MONTHS = [
     ("Elul", "Elul", 6, True, True),
 ]
 _WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Shabbat"]
+# Longest each month ever runs; the short years are handled by _year_months().
+_MAX_DAYS = {"Tishrei": 30, "Cheshvan": 30, "Kislev": 30, "Tevet": 29,
+             "Shevat": 30, "Adar": 29, "Adar1": 30, "Adar2": 29, "Nisan": 30,
+             "Iyar": 29, "Sivan": 30, "Tammuz": 29, "Av": 30, "Elul": 29}
 
 
 def _is_leap(year: int) -> bool:
@@ -42,9 +46,8 @@ def _year_months(year: int) -> list[tuple[str, str, int]]:
 
 class HebrewProvider(CalendarProvider):
     def __init__(self, config: dict):
+        super().__init__(config)
         self.region = config.get("region", "")
-        self.custom_holidays = config.get("custom_holidays", []) or []
-        self.anchor = config.get("anchor")  # canonical calendar — anchor is ignored
 
     def parse(self, native: str) -> int:
         parts = str(native).rsplit("-", 2)
@@ -81,10 +84,6 @@ class HebrewProvider(CalendarProvider):
         return {"year": h.year, "month": pos, "month_name": disp, "day": h.day,
                 "weekday_name": _WEEKDAYS[widx], "weekday_index": widx,
                 "friendly": f"{h.day} {disp} {h.year}"}
-
-    _MAX_DAYS = {"Tishrei": 30, "Cheshvan": 30, "Kislev": 30, "Tevet": 29,
-                 "Shevat": 30, "Adar": 29, "Adar1": 30, "Adar2": 29, "Nisan": 30,
-                 "Iyar": 29, "Sivan": 30, "Tammuz": 29, "Av": 30, "Elul": 29}
 
     def holidays(self, start_fixed: int, end_fixed: int) -> list[dict]:
         israel = self.region == "IL"
@@ -133,7 +132,7 @@ class HebrewProvider(CalendarProvider):
                 f"the hebrew calendar supports only fixed {{month, day}} custom holidays: {rule!r}")
         if not rule.get("name"):
             raise CalendarError(f"custom holiday needs a name: {rule!r}")
-        token = next((t for t in self._MAX_DAYS
+        token = next((t for t in _MAX_DAYS
                       if t.lower() == str(rule.get("month", "")).lower()), None)
         if token is None:
             raise CalendarError(f"custom holiday month is unknown: {rule!r}")
@@ -141,7 +140,7 @@ class HebrewProvider(CalendarProvider):
             day = int(rule["day"])
         except (ValueError, TypeError) as e:
             raise CalendarError(f"custom holiday day is malformed: {rule!r}") from e
-        if not (1 <= day <= self._MAX_DAYS[token]):
+        if not (1 <= day <= _MAX_DAYS[token]):
             raise CalendarError(f"custom holiday day out of range: {rule!r}")
 
     def months(self, year: int) -> list[dict]:

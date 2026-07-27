@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 
 from . import (appearances, campaigns, characters, dice, entities, expressions,
-               modules, overlay, pcs, sheets)
+               modules, overlay, pcs, shapes, sheets)
 
 
 class CheckError(Exception):
@@ -30,7 +30,7 @@ def roll_scope(result: dict) -> dict:
     "doesn't apply to this roll shape" rather than evaluated against a
     sentinel."""
     scope: dict = {}
-    dice_list = result.get("dice") if isinstance(result.get("dice"), list) else []
+    dice_list = shapes.list_at(result, "dice")
     scope["dice"] = len(dice_list)
     raw = [r for d in dice_list if isinstance(d, dict)
            for r in (d.get("rolls") or []) if isinstance(r, int)]
@@ -136,8 +136,8 @@ def resolve_check(cid: str, check_id: str, actor_ref: str, difficulty: int | Non
         sheets_def = pack["sheets"] if isinstance(pack["sheets"], dict) else {}
         st = sheets_def.get("sheet_types", {}).get(sheet["sheet_type"])
         st = st if isinstance(st, dict) else {}
-        st_groups = set(st.get("groups", []) if isinstance(st.get("groups"), list) else [])
-        required = check.get("requires", []) if isinstance(check.get("requires"), list) else []
+        st_groups = set(shapes.list_at(st, "groups"))
+        required = shapes.list_at(check, "requires")
         missing = [g for g in required if g not in st_groups]
         if missing:
             raise CheckError(f"{actor_ref}'s sheet type lacks required groups: {missing}")
@@ -192,11 +192,11 @@ def available_checks(cid: str, sid: str) -> list[dict]:
             return None
         st = sheet_types.get(sheet["sheet_type"])
         st = st if isinstance(st, dict) else {}
-        st_groups = set(st.get("groups", []) if isinstance(st.get("groups"), list) else [])
+        st_groups = set(shapes.list_at(st, "groups"))
         options = [[check_id, check.get("label", check_id)]
                    for check_id, check in checks_def.items()
                    if check_id != "_defaults" and isinstance(check, dict)
-                   and set(check.get("requires", []) if isinstance(check.get("requires"), list) else [])
+                   and set(shapes.list_at(check, "requires"))
                    <= st_groups]
         return {"ref": f"{kind}:{eid}", "label": label,
                 "sheet_type": sheet["sheet_type"], "checks": options}

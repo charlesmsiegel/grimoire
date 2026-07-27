@@ -15,7 +15,7 @@ import re
 import shutil
 from pathlib import Path
 
-from . import dice, entities, expressions, module_display
+from . import dice, entities, expressions, module_display, shapes
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import home, slugify, uniquify
 
@@ -458,9 +458,9 @@ def _load_content(root: Path, sheets: dict, errors: list[str]) -> list[dict]:
                         f"{td.get('kind')!r}, not {kind!r}")
                 else:
                     entry["sheet_type"] = tid
-                    for e in validate_sheet_values(sheets, tid,
-                                                   stat.get("fields", {})):
-                        errors.append(f"{where}: {e}")
+                    for err in validate_sheet_values(sheets, tid,
+                                                     stat.get("fields", {})):
+                        errors.append(f"{where}: {err}")
             out.append(entry)
     return out
 
@@ -491,7 +491,7 @@ def read_content(mid: str, kind: str, id: str) -> dict:
             stat = {}
         if isinstance(stat, dict):
             out["sheet_type"] = stat.get("sheet_type")
-            out["fields"] = stat.get("fields", {}) if isinstance(stat.get("fields"), dict) else {}
+            out["fields"] = shapes.dict_at(stat, "fields")
     return out
 
 

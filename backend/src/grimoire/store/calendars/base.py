@@ -21,6 +21,15 @@ class CalendarError(Exception):
 
 
 class CalendarProvider(ABC):
+    def __init__(self, config: dict):
+        """Providers are constructed as `cls(config)` by get_provider(), so the
+        config-taking signature is part of the contract a user-authored plugin
+        implements (store/calendars/plugins.py). Subclasses that override this
+        should call super() — the base holiday helpers read `custom_holidays`."""
+        self.config = config
+        self.custom_holidays = config.get("custom_holidays", []) or []
+        self.anchor = config.get("anchor")  # canonical calendar — anchor is ignored
+
     @abstractmethod
     def parse(self, native: str) -> int:
         """Native date string (no time component) -> fixed day. Raise CalendarError on bad input."""
@@ -88,6 +97,8 @@ class CalendarProvider(ABC):
         out: list[dict] = []
         y0 = self.describe(start_fixed)["year"]
         y1 = self.describe(end_fixed)["year"]
+        # getattr, not self.custom_holidays: a plugin provider predating the base
+        # __init__ may override it without calling super() and never set it.
         for rule in getattr(self, "custom_holidays", []) or []:
             if "day" not in rule:
                 continue
@@ -138,10 +149,9 @@ def split_native(native: str) -> tuple[str, str | None]:
     return native, None
 
 
-def minutes_of(native: str) -> int | None:
-    _, time_str = split_native(native)
-    if not time_str:
-        return None
+def _minutes_from(time_str: str) -> int:
+    """Minutes since midnight for an 'hh:mm' suffix. Raises CalendarError on a
+    malformed or out-of-range time."""
     try:
         hh, mm = time_str.split(":")
         h, m = int(hh), int(mm)
@@ -150,6 +160,12 @@ def minutes_of(native: str) -> int | None:
     if not (0 <= h < 24 and 0 <= m < 60):
         raise CalendarError(f"time-of-day out of range: {time_str!r}")
     return h * 60 + m
+
+
+def minutes_of(native: str) -> int | None:
+    """Minutes since midnight, or None when `native` carries no time-of-day."""
+    _, time_str = split_native(native)
+    return _minutes_from(time_str) if time_str else None
 
 
 def fixed_of(provider: CalendarProvider, native: str) -> int:
@@ -162,7 +178,7 @@ def normalize(provider: CalendarProvider, native: str) -> str:
     date_str, time_str = split_native(native)
     canonical = provider.format(provider.parse(date_str))
     if time_str is not None:
-        m = minutes_of(native)  # validates range, raises CalendarError
+        m = _minutes_from(time_str)  # validates range, raises CalendarError
         return f"{canonical}T{m // 60:02d}:{m % 60:02d}"  # zero-pad for a stable key
     return canonical
 

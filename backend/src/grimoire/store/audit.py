@@ -17,7 +17,7 @@ import threading
 from pathlib import Path
 
 from .. import prompts
-from . import appearances, campaigns, entities, modules, overlay, rolls, scenes, sheets
+from . import appearances, campaigns, entities, modules, overlay, rolls, scenes, shapes, sheets
 
 _LOCKS: dict[str, threading.Lock] = {}
 _LOCKS_GUARD = threading.Lock()
@@ -85,7 +85,7 @@ def capture_baseline(cid: str, sid: str) -> None:
                 if isinstance(raw, dict):
                     snap[f"{kind}--{eid}"] = {
                         "sheet_type": raw.get("sheet_type"), "gen": raw.get("gen"),
-                        "fields": raw.get("fields") if isinstance(raw.get("fields"), dict) else {}}
+                        "fields": shapes.dict_at(raw, "fields")}
             entry = {"module": mid, "schema": schema_stamp(mid), "sheets": snap}
             with _lock(cid):                # sheet lock -> baseline lock
                 data = read_baselines(cid)

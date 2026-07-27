@@ -13,9 +13,8 @@ from .base import CalendarError, CalendarProvider, register
 
 class GregorianProvider(CalendarProvider):
     def __init__(self, config: dict):
+        super().__init__(config)
         self.region = config.get("region", "US")
-        self.custom_holidays = config.get("custom_holidays", []) or []
-        self.anchor = config.get("anchor")  # canonical calendar — anchor is ignored
 
     def parse(self, native: str) -> int:
         try:

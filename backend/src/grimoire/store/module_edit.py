@@ -22,7 +22,7 @@ import zipfile
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
-from . import campaigns, modules, proposals, sheets, worlds
+from . import campaigns, modules, proposals, shapes, sheets, worlds
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import home, slugify, uniquify
 
@@ -337,7 +337,7 @@ def _migrate_file(p: Path, mig: dict) -> bool | None:
         return None
     if not isinstance(data, dict):
         return None
-    fields = data.get("fields") if isinstance(data.get("fields"), dict) else {}
+    fields = shapes.dict_at(data, "fields")
     changed = False
     op = mig.get("op")
     if op == "field":
@@ -366,7 +366,7 @@ def _migrate_file(p: Path, mig: dict) -> bool | None:
 
 
 def _would_migrate(data: dict, mig: dict) -> bool:
-    fields = data.get("fields") if isinstance(data.get("fields"), dict) else {}
+    fields = shapes.dict_at(data, "fields")
     if mig["op"] == "field":
         return data.get("sheet_type") in (mig.get("sheet_types") or []) and mig["from"] in fields
     if mig["op"] == "sheet_type":
@@ -447,7 +447,7 @@ def _impact(mid: str, staged_pack: dict, migration: dict | None, staging_root: P
         if not isinstance(data, dict):
             continue
         st = data.get("sheet_type")
-        fields = data.get("fields") if isinstance(data.get("fields"), dict) else {}
+        fields = shapes.dict_at(data, "fields")
         if migration:   # judge post-migration state, not the raw file
             mig_fields = dict(fields)
             _migrate_preview(mig_fields, data, migration)
@@ -646,7 +646,7 @@ def _read_sheets(root: Path) -> dict:
 
 def _fragment_users(layout: dict) -> dict[str, set[str]]:
     """fragment id -> sheet-type ids that transitively reach it."""
-    frags = layout.get("fragments") if isinstance(layout.get("fragments"), dict) else {}
+    frags = shapes.dict_at(layout, "fragments")
 
     def uses(node) -> set[str]:
         if not isinstance(node, dict):
@@ -697,7 +697,7 @@ def _specialize_layout(layout: dict, in_scope: set[str], edit_fn) -> dict:
     if not isinstance(layout, dict):
         return layout
     out = json.loads(json.dumps(layout))  # deep copy
-    frags = out.get("fragments") if isinstance(out.get("fragments"), dict) else {}
+    frags = shapes.dict_at(out, "fragments")
     users = _fragment_users(out)
     shared = {fid for fid, tids in users.items()
               if tids & in_scope and tids - in_scope}
@@ -716,7 +716,7 @@ def _specialize_layout(layout: dict, in_scope: set[str], edit_fn) -> dict:
             frags[fid] = _edit_tree(frags.get(fid), edit_fn, remap)
     if frags:
         out["fragments"] = frags
-    sheet_trees = out.get("sheet_types") if isinstance(out.get("sheet_types"), dict) else {}
+    sheet_trees = shapes.dict_at(out, "sheet_types")
     for tid in list(sheet_trees):
         if tid in in_scope:
             sheet_trees[tid] = _edit_tree(sheet_trees[tid], edit_fn, remap)
@@ -872,8 +872,8 @@ def check_proposal_guard(mid: str, check_id: str):
             for sid, rec in proposals._read(cid).items():
                 if not isinstance(rec, dict) or rec.get("status") not in proposals.NON_TERMINAL:
                     continue
-                payload = rec.get("payload") if isinstance(rec.get("payload"), dict) else {}
-                res = rec.get("resolution") if isinstance(rec.get("resolution"), dict) else {}
+                payload = shapes.dict_at(rec, "payload")
+                res = shapes.dict_at(rec, "resolution")
                 if payload.get("check") == check_id or res.get("check") == check_id:
                     blockers.append(
                         f"check {check_id!r} has a live roll proposal in campaign "
@@ -921,7 +921,7 @@ def rename(mid: str, kind: str, address: dict, to: str, *,
         if (live_root / "content" / ckind / f"{to}.md").exists():
             return {"ok": False, "errors": [f"content {ckind}/{to} already exists"], "display_errors": []}
 
-    migration = None
+    migration: dict | None = None
     pre_swap = None
     if kind == "check":
         pre_swap = check_proposal_guard(mid, old)
@@ -938,9 +938,10 @@ def rename(mid: str, kind: str, address: dict, to: str, *,
                     data = json.loads(p.read_text(encoding="utf-8"))
                 except (json.JSONDecodeError, UnicodeDecodeError, OSError):
                     continue
-                fields = data.get("fields") if isinstance(data, dict) \
-                    and isinstance(data.get("fields"), dict) else {}
-                if data.get("sheet_type") in migration["sheet_types"] \
+                if not isinstance(data, dict):
+                    continue  # hand-edited file that parsed as a non-object
+                fields = shapes.dict_at(data, "fields")
+                if data.get("sheet_type") in in_scope \
                         and old in fields and to in fields:
                     blockers.append(
                         f"{p.name}: holds both {old!r} and {to!r} — resolve the "
