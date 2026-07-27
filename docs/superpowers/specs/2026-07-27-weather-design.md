@@ -105,15 +105,24 @@ plugin and is never committed.
       "name": "winter",
       "from": 0.92,
       "to": 0.21,
-      "temperature": { "freezing": 2, "cold": 6, "mild": 2 },
-      "conditions": {
-        "clear": 2,
-        "overcast": 5,
-        "light rain": 4,
-        "storm": 1,
-        "snow": { "weight": 2, "requires_temp": ["freezing"] }
-      },
-      "wind": { "calm": 1, "breeze": 4, "strong": 3, "gale": 1 }
+      "temperature": [
+        { "name": "freezing", "weight": 2 },
+        { "name": "cold", "weight": 6 },
+        { "name": "mild", "weight": 2 }
+      ],
+      "conditions": [
+        { "name": "clear", "weight": 2 },
+        { "name": "overcast", "weight": 5 },
+        { "name": "light rain", "weight": 4 },
+        { "name": "snow", "weight": 2, "requires_temp": ["freezing"] },
+        { "name": "storm", "weight": 1 }
+      ],
+      "wind": [
+        { "name": "calm", "weight": 1 },
+        { "name": "breeze", "weight": 4 },
+        { "name": "strong", "weight": 3 },
+        { "name": "gale", "weight": 1 }
+      ]
     }
   ]
 }
@@ -126,8 +135,14 @@ plugin and is never committed.
   equatorial climate — a case this spec explicitly claims to support — has no
   legal encoding: the range forbids `to: 1`, and `from: 0, to: 0` would
   otherwise read as an empty interval and fail the coverage check.
-- A table entry is either a bare weight (`"clear": 2`) or an object with
-  `weight` plus modifiers. Both forms parse to the same internal shape.
+- **Tables are JSON arrays of `{name, weight, …}`, never objects keyed by
+  name.** Order is semantically significant here (see below), and JSON objects
+  are unordered by specification — a formatter, an editor round-trip, or a
+  parser that does not preserve member insertion order would silently change
+  which entry a quantile maps to, and therefore change deterministic weather
+  that nobody edited. JavaScript makes it worse by reordering integer-like keys
+  during enumeration. An array is ordered by construction, so the guarantee
+  survives any conforming JSON implementation.
 - **Weights must be finite and non-negative, and every axis of every season
   must carry at least one strictly positive weight.** Validated at load and at
   save. Zeroing an entry is the documented way to disable it, which makes
@@ -136,8 +151,8 @@ plugin and is never committed.
   unconstrained-condition fallback (§ Drawing a block) does not help here: it
   covers a condition table emptied by `requires_temp`, not a temperature or
   wind table with no drawable entries.
-- **Entry order is significant**, and tables are read in declared document
-  order when building the cumulative distribution. Order carries no meaning to
+- **Entry order is significant**, and tables are read in **array order** when
+  building the cumulative distribution. Order carries no meaning to
   the draw itself — the weights alone decide frequencies — but it decides what
   a quantile maps to, and therefore how weather transitions across a season
   boundary (§ Drawing a block). Author each table **monotonically along its
@@ -472,9 +487,14 @@ pinned down exactly:
    - **Digest**: BLAKE2b-256 of that key.
    - **Uniform**: the leading 53 bits of the digest, big-endian, divided by
      2⁵³ — giving `u ∈ [0, 1)` with exactly float64's mantissa precision.
-   - **Normal**: `z = Φ⁻¹(u)` by Wichura's AS241, the algorithm behind
-     `scipy.special.ndtri`, with `u = 0` mapped to the smallest representable
-     `u` first so the tail is finite.
+   - **Normal**: `z = Φ⁻¹(u)` by **Wichura's AS241** (Applied Statistics 37(3),
+     1988), using its published double-precision coefficients, with `u = 0`
+     mapped to the smallest representable `u` first so the tail is finite.
+     AS241 specifically, and not "whatever the standard library provides" —
+     `scipy.special.ndtri` is the Cephes implementation, not AS241, and the two
+     disagree in the last bits, which is enough to cross an inverse-CDF bucket
+     boundary. The vendored implementation is the normative one; the reference
+     vectors below are what pin it.
 
    The test plan carries **reference vectors** — fixed `(cid, zone, axis, i)`
    tuples with their expected `z` — so conformance is checkable rather than
@@ -546,8 +566,10 @@ entries at the tails and over-draw the common middle ones, quietly violating the
 weights the whole data model is built on. The process is therefore **correlated
 Gaussian noise pushed through the standard normal CDF Φ** to obtain uniform
 marginals, and only then through the table's inverse CDF — a Gaussian copula.
-Any construction with provably uniform marginals is acceptable; an unstated one
-is not.
+Uniform marginals are the *reason* for this shape, not a licence to substitute
+another construction that also has them: the exact process above is normative,
+because two implementations that both produce uniform marginals still produce
+different weather, and the reference vectors exist precisely to forbid that.
 
 Three properties follow structurally rather than by maintenance:
 
@@ -607,7 +629,7 @@ implementation has to work for and which earlier drafts of this spec got wrong:
   season boundary remaps automatically. What is preserved across the boundary is
   the **quantile**, not a "nearest" entry — categorical tables have no distance
   metric, so nearness is undefined unless the ordering is. Since inverse-CDF
-  sampling walks entries in **declared document order** (§ Climate documents),
+  sampling walks entries in **array order** (§ Climate documents),
   a sample sitting at quantile 0.8 of winter's conditions lands at quantile 0.8
   of summer's, and an author who orders both tables monotonically gets
   continuity for free — a stormy winter reading becomes the stormy end of
@@ -806,12 +828,19 @@ The form is where the real work is:
 - **`requires_temp`** is a multi-select on each condition row, offering exactly
   the temperature bands declared in that season.
 - **Validation is inline and blocking on save**, covering the invariants the
-  resolver depends on: seasons cover the year without gaps; every axis of every
-  season has at least one finite, positive weight; every season declares at
-  least one unconstrained condition; and every positive-weight temperature band
-  has at least one eligible condition. Each failure names the season and the
-  fix. These are the conditions that would otherwise surface at runtime as a
-  fallback sky nobody asked for — or, for a zero-total table, as no sky at all.
+  resolver depends on: seasons cover the year without gaps; **every individual
+  weight is finite and non-negative**; every axis of every season has at least
+  one positive weight; every season declares at least one unconstrained
+  condition; and every positive-weight temperature band has at least one
+  eligible condition. Each failure names the season and the fix.
+
+  The per-weight check is separate from the per-axis one on purpose:
+  `{clear: 1, storm: −1}` satisfies "this axis has a positive weight" while
+  still violating the data model, and would otherwise reach the author as a
+  backend 400 instead of the promised inline error — or be accepted outright
+  if the server check ever drifts. These are the conditions that would
+  otherwise surface at runtime as a fallback sky nobody asked for, or for a
+  zero-total table as no sky at all.
 
 ### Campaign default climate
 
@@ -822,9 +851,22 @@ tagging every location one at a time.
 `GET`/`PUT /api/campaigns/{cid}/climate`, rendered as a single select in the
 campaign's settings alongside the calendar config it sits beside on disk
 (`CalendarConfig.tsx` is the model, and #73's per-campaign settings tabs are
-where it belongs long-term). The campaign wizard prefills it from the world's
-default where one exists, the same way it prefills the calendar. This route
-also needs declaring before the generic `/{kind}` entity routes.
+where it belongs long-term). This route needs declaring before the generic
+`/{kind}` entity routes.
+
+**A world-level default exists too**, in `worlds/<wid>/climate.json` with the
+same one-field shape, copied into the campaign at create time exactly as
+`calendars.copy_calendar` copies the calendar. Without it the campaign wizard
+has nothing to prefill from — a world author would have to set the default
+again for every campaign, or tag every location individually.
+
+This inherits a gap rather than inventing one: #40 records that the *calendar*
+is world-scoped on disk with no world-side read/write route and no UI, settable
+only by hand-editing before the first campaign exists. Climate lands in exactly
+the same position, so `GET`/`PUT /worlds/{wid}/climate` and its control belong
+in the same world-settings tab that issue proposes for the calendar — and if
+that tab is not built, the world default is dead weight and the wizard prefill
+should be dropped with it rather than reading a file nothing can write.
 
 ### Assigning a climate to a location
 
@@ -846,6 +888,17 @@ a typo *invisible*: `temperate-costal` produces plausible weather from the wrong
 climate and reports nothing. Leniency is right in the turn loop and wrong at the
 authoring surface, where the user is present and can simply be told. When the
 ref-valued widget lands, the field becomes a picker and the validation stays.
+
+**The check belongs in the backend save path, not only in the form.**
+`entity_schema.invalid_keys` and `routes._check_fields` validate field *names*
+and nothing else, so a location saved through the API — a script, a sync, a
+future importer — would persist an unknown climate however careful the UI is,
+which is exactly the invisible typo this section exists to prevent. Entity
+fields therefore need a per-field **value** validator alongside the descriptor,
+with `climate` supplying one that checks the registry, `persistence` one that
+checks finite-and-in-range, and the frontend calling the same rule for its
+inline error. This is a small extension to `entity_schema`, and the first field
+in the codebase to need it.
 
 ### Scene HUD widget (#195)
 
@@ -875,6 +928,20 @@ you decide it should be raining:
 - **Clear override**, shown only when one is active on this location and
   moment, which deletes rather than writing a counter-override, so the store
   doesn't accumulate cancelling spans.
+
+Deleting needs a contract the `PUT` cannot provide — its body carries axes and
+a duration, not an identity. So `current_weather` returns, alongside each
+axis's `source`, the **`id` of the span that supplied it**, and there is a
+`DELETE /api/campaigns/{cid}/weather/{span_id}` (before the catch-all, like the
+others). **Clear override** deletes every distinct span id currently
+contributing at this location and moment — plural, because different axes can
+legitimately come from different records.
+
+Note the asymmetry with *"leave to chance"*, which is easy to conflate: that
+option means "omit this axis from the span I am about to write," affecting only
+the new record. It does not retract an existing override, and a user who wants
+one axis to go back to procedural clears and re-sets rather than expecting the
+select to do it.
 
 Saving `PUT`s to the override endpoint with the scene's location, and the widget
 re-reads. The next turn's prompt picks it up through the ordinary weather
@@ -1027,7 +1094,13 @@ Frontend, from `frontend/` with `npx vitest run` and `npx tsc -b`:
   arbitrarily far-future moments; clearing it removes the record rather than
   closing it, so a re-read of an earlier scene shows procedural weather.
 - A location saved with an unknown climate id is rejected with the available
-  ids, rather than accepted and silently falling back.
+  ids, rather than accepted and silently falling back — asserted **through the
+  API as well as the form**, since the API path is the one a script or importer
+  takes.
+- Individual weights: an axis containing a negative or non-finite weight is
+  rejected inline even when a positive sibling is present.
+- Table order survives a save/load round-trip through the JSON store unchanged,
+  including a table whose entry names are numeric-looking strings.
 - The HUD widget renders nothing when weather resolution returns `None`, and
   marks authored axes distinctly from generated ones.
 - The override popover writes only the axes the user set, leaves *"leave to
