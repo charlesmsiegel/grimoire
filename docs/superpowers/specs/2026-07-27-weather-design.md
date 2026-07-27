@@ -525,21 +525,40 @@ pinned down exactly:
    And end-to-end, through the filter and the wind table of the worked example
    above (`calm 1, breeze 4, strong 3, gale 1`) at ordinal 0:
 
-   | persistence | W | taps | g(0) | Φ(g) | drawn |
+   | persistence | W | taps | g(0) | Φ(g) ≈ | drawn |
    | --- | --- | --- | --- | --- | --- |
-   | 0.0 | 0 | 1 | `-0.9239873403260146` | `0.1777464535410927` | breeze |
-   | 0.5 | 6 | 7 | `-1.6636640450077727` | `0.04808979266518426` | calm |
-   | 0.9 | 38 | 39 | `-0.6397550785578683` | `0.2611659206506862` | breeze |
+   | 0.0 | 0 | 1 | `-0.9239873403260146` | 0.17774645354109 | breeze |
+   | 0.5 | 6 | 7 | `-1.6636640450077727` | 0.04808979266518 | calm |
+   | 0.9 | 38 | 39 | `-0.6397550785578683` | 0.26116592065069 | breeze |
 
-   The `p = 0` row is worth reading closely: `Φ(g)` comes back as
-   `0.1777464535410927` against a latent `u` of `0.17774645354109264`. The
-   round trip is not bit-exact, which is precisely why the forward direction
-   had to be named and why these vectors exist.
+   **`u`, `z` and `g` are asserted exactly; `Φ(g)` is asserted to a tolerance
+   and the drawn entry exactly.** The asymmetry is deliberate and was measured,
+   not assumed: `u` and `z` come from BLAKE2b and AS241, both pure Python and
+   bit-reproducible, and `g` follows once the accumulation order above is
+   pinned. `Φ(g)` goes through `math.erf`, which may defer to platform libm —
+   two environments evaluating `Φ(-1.6636640450077727)` during review returned
+   `0.04808979266518426` and `0.04808979266518429`. That is a last-bit
+   disagreement between real builds, not a hypothetical.
+
+   It cannot change the drawn entry: bucket boundaries here sit at 0.111, 0.556
+   and 0.889, and a quantile would have to land within an ulp of one to be
+   affected. So the *weather* is stable across builds even where the last
+   digit of the quantile is not, which is exactly the guarantee worth testing
+   for — and exactly why asserting `Φ(g)` bit-exactly would have made the
+   reference-vector test fail on a conforming implementation.
 2. **Smoothing.** The correlated field is a normalized **one-sided** (causal)
    exponential filter over the latent, with `a = persistence`, indexed by the
    **block ordinal** of § Blocks — never by the minute coordinate:
 
    `g(t) = Σ_{k=0}^{W} a^k · z(t − k) / sqrt( Σ_{k=0}^{W} a^{2k} )`
+
+   **Accumulate ascending in `k`, from 0 to `W`, term by term.** Floating-point
+   addition is not associative, and summing the same terms in descending order
+   gives a result one ulp away — `-1.6636640450077729` against
+   `-1.6636640450077727` for the worked example below. One ulp cannot change a
+   drawn entry unless the quantile sits on a bucket boundary, but the reference
+   vectors are asserted exactly, so the order is part of the specification
+   rather than an implementation detail.
 
    Normalization is by the **finite** sum, not by `sqrt(1 − a²)`. The infinite
    form gives `Var(g) = 1 − a^{2(W+1)}` once truncated, so `Φ(g)` would not be
@@ -864,10 +883,17 @@ The form is where the real work is:
   convention for calendar-relative rules in `calendars/base.py`. Dates round
   to the day.
 
-  **Crucially, the stored fraction is only rewritten for a boundary the user
-  actually edited.** Round-tripping a climate through the editor — open, look,
-  save — must leave every untouched fraction byte-identical, or opening a
-  climate under a leap-year calendar would silently walk its seasons.
+  **Crucially, the stored fraction is only recomputed for a boundary the user
+  actually edited.** A boundary the user did not touch is written back as the
+  number that was read, never re-derived from the date the form displayed —
+  otherwise opening a climate under a leap-year calendar and saving an
+  unrelated field would silently walk its seasons.
+
+  The invariant is **exact numeric equality**, not byte identity: the `PUT`
+  carries the whole document, and a stored `0.4500` or `4.5e-1` parses to a
+  float and serializes back as `0.45` regardless of intent. Byte identity would
+  be untestable through a JSON round trip and would fail on formatting that
+  changes nothing. What must hold is that the value is the same number.
 - **Entry order is drag-reorderable and its meaning is stated inline.** Order
   decides what a quantile maps to across a season boundary (§ Drawing a block),
   so the form says so — otherwise a well-meaning alphabetical sort silently
@@ -879,10 +905,19 @@ The form is where the real work is:
   weight is finite and non-negative**; every axis of every season has at least
   one positive weight; every season declares at least one unconstrained
   condition; every positive-weight temperature band has at least one eligible
-  condition; and **the climate's own `persistence` is finite and within
-  `[0, 1]`** — the same range rule the location field gets, which the editor
-  would otherwise leave to a backend failure. Each failure names the season and
-  the fix.
+  condition; **every `requires_temp` value names a temperature entry that
+  exists in the same season**; and **the climate's own `persistence` is finite
+  and within `[0, 1]`** — the same range rule the location field gets, which
+  the editor would otherwise leave to a backend failure. Each failure names the
+  season and the fix.
+
+  The dangling-`requires_temp` check earns its place: `requires_temp:
+  ["freezng"]` on a snow entry passes every other rule — the band `freezing`
+  exists and is made eligible by some other unconstrained condition — while
+  snow itself is filtered out of every draw it was ever weighted for. A
+  declared weight that can never be drawn is exactly the kind of silent
+  nothing this validation exists to catch. Renaming a temperature entry in the
+  editor updates the conditions that reference it, rather than orphaning them.
 
   The per-weight check is separate from the per-axis one on purpose:
   `{clear: 1, storm: −1}` satisfies "this axis has a positive weight" while
@@ -972,9 +1007,15 @@ is changed, per the decision that it belongs where you are already looking when
 you decide it should be raining:
 
 - Three selects, one per axis, each offering the entries of the **active
-  season's table** plus a *"leave to chance"* option that clears that axis
-  back to procedural. Per-axis, because narration usually constrains one axis
-  and not the others (§ Override store).
+  season's table** plus a *"leave to chance"* option. Per-axis, because
+  narration usually constrains one axis and not the others (§ Override store).
+
+  *"Leave to chance"* **clears that axis**, rather than merely omitting it from
+  the record being written. On save, every covering span that sets the axis has
+  it removed, and a span left setting nothing is deleted. Omitting would be the
+  simpler implementation and the wrong behaviour: a user who opens the popover
+  on an overridden axis and selects *leave to chance* means "stop overriding
+  this," and would otherwise watch the setting appear to do nothing.
 - A duration control: *this block* (the default), *this and the next N blocks*,
   or *until I clear it*. These map onto the span the store requires; the
   default matches the extractor's one-block default so the two paths behave
@@ -988,10 +1029,15 @@ you decide it should be raining:
 Deleting needs a contract the `PUT` cannot provide — its body carries axes and
 a duration, not an identity. So `current_weather` returns, alongside each
 axis's `source`, **the full stack of spans covering this moment** for that
-axis, winner first, each with its `id`. And there is a
-`DELETE /api/campaigns/{cid}/weather/{location}/{span_id}` (before the
-catch-all, like the others), keyed by location as well as span, matching how
-canonical ids are derived.
+axis, winner first, each with its `id` **and its storage key**. And there is a
+`DELETE /api/campaigns/{cid}/weather/{storage_key}/{span_id}` (before the
+catch-all, like the others), keyed by both, matching how canonical ids are
+derived.
+
+The storage key is not the scene's location and cannot be inferred from it: a
+covering span may live under `_default`, and its id is a hash rather than
+something the key can be recovered from. Returning the key with each span is
+what makes the delete callable at all.
 
 **Clear override deletes the whole covering stack, not just the winners.**
 Returning only the winning ids would be a trap: precedence explicitly permits
@@ -1002,11 +1048,9 @@ broken in the one case it most needs to work. That is also why the resolver
 returns the stack rather than a single provenance: the UI cannot clear what it
 cannot see.
 
-Note the asymmetry with *"leave to chance"*, which is easy to conflate: that
-option means "omit this axis from the span I am about to write," affecting only
-the new record. It does not retract an existing override, and a user who wants
-one axis to go back to procedural clears and re-sets rather than expecting the
-select to do it.
+**Clear override** is therefore the three-axis case of *"leave to chance"* — it
+clears all three at once rather than being a separate mechanism, and both route
+through the same stack-removal logic.
 
 Saving `PUT`s to the override endpoint with the scene's location, and the widget
 re-reads. The next turn's prompt picks it up through the ordinary weather
@@ -1038,11 +1082,14 @@ Backend, `backend/tests/test_weather.py`, store isolated with
   weather, which fails if the season is looked up from the queried moment
   rather than from the block's owning date.
 - Reference vectors: the tuples tabulated in § The construction, concretely
-  produce their documented `u` and `z`, and the end-to-end rows produce their
-  documented `g`, `Φ(g)` and drawn entry. Assert against the **values written
+  produce their documented `u`, `z` and `g` **exactly**, their `Φ(g)` within
+  tolerance, and their drawn entry exactly. Assert against the **values written
   in the spec**, never against a fixture regenerated from the implementation —
   a self-generated fixture passes while preserving exactly the drift it exists
   to detect.
+- Accumulation order: summing the filter descending in `k` produces a different
+  `g` from the documented one, so the test pins ascending order rather than
+  merely the formula.
 - Inverse-CDF boundaries: a quantile landing exactly on a cumulative boundary
   selects the following entry (`cum_{i−1} <= u < cum_i`), and a zero-weight
   entry is never selected at any `u`.
@@ -1158,7 +1205,16 @@ Frontend, from `frontend/` with `npx vitest run` and `npx tsc -b`:
   year gap, declares no unconstrained condition, has a temperature band with
   no eligible condition, or has an axis whose weights are all zero.
 - Round-tripping a climate through the editor — open, save, no edits — leaves
-  every season fraction byte-identical, including under a leap-year calendar.
+  every season fraction numerically equal, including under a leap-year
+  calendar, and including when an unrelated field on the climate was changed.
+- A `requires_temp` naming a temperature entry that does not exist in that
+  season is rejected inline; renaming a temperature entry updates the
+  conditions referencing it.
+- *"Leave to chance"* on an axis that currently has an override returns that
+  axis to procedural weather, rather than leaving the existing override in
+  place.
+- A covering span stored under `_default` is clearable from the HUD, which
+  requires its storage key to be present in the resolver's response.
 - The campaign settings control reads and writes the default climate, and the
   campaign wizard prefills it from the world's default.
 - An override saved as *"until I clear it"* stores `to: null` and matches
@@ -1201,6 +1257,9 @@ Frontend, from `frontend/` with `npx vitest run` and `npx tsc -b`:
   shipped climates are the place to tune this, not the algorithm.
 - Do weather edits join `changes.json`? `absorb._BROWSABLE_KINDS` currently
   gates this and weather is arguably too noisy to browse (#46's own note).
-- Should the campaign-wide default climate be copied into the campaign at
-  create-time (like `calendar.json`) or resolved by reference to the world?
-  Copy-on-create matches the established pattern but diverges silently.
+*(The campaign-default inheritance rule was open here and is now settled as
+copy-on-create in § Campaign default climate — matching `calendar.json`, which
+is copied by `calendars.copy_calendar` and likewise does not propagate later
+world edits. The two must not disagree: a planner cannot follow a settled
+design and an open question that contradicts it, and the alternatives differ
+observably once a world default changes after campaigns exist.)*
