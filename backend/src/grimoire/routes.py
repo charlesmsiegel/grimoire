@@ -45,7 +45,6 @@ class ConfigUpdate(BaseModel):
     quote_color: str | None = None
     user_label: str | None = None
     assistant_label: str | None = None
-    default_style_id: str | None = None
     active_connection_id: str | None = None
 
 
@@ -84,8 +83,14 @@ class StyleUpdate(BaseModel):
     body: str | None = None
 
 
-class StyleSelect(BaseModel):
-    style_id: str = ""
+class ResponseSettings(BaseModel):
+    response_preset: str | None = None
+    style_id: str | None = None
+    length_reply_words: str | None = None
+    length_blocks: str | None = None
+    length_paragraphs: str | None = None
+    length_speakers: str | None = None
+    length_blocks_per_speaker: str | None = None
 
 
 class ResponsePresetCreate(BaseModel):
@@ -450,7 +455,6 @@ def _public_config(cfg: dict[str, str]) -> dict:
             "quote_color": cfg.get("quote_color", "off"),
             "user_label": cfg.get("user_label", "You"),
             "assistant_label": cfg.get("assistant_label", "Grimoire"),
-            "default_style_id": cfg.get("default_style_id", ""),
             "active_connection_id": active["id"] if active else "",
             "active_connection": ({"id": active["id"], "kind": active["kind"], "name": active["name"]}
                                    if active else None),
@@ -850,6 +854,43 @@ def post_response_preset_duplicate(pid: str):
 @router.get("/response-presets/{pid}/usage")
 def get_response_preset_usage(pid: str):
     return {"affected": store.response_presets.usage(pid)}
+
+
+# ---- response bundle (scope endpoints) ----
+def _response_body(scene_meta: dict, campaign_meta: dict, cfg: dict, own: dict) -> dict:
+    """The shape every scope returns. `own` is that scope's raw frontmatter."""
+    resolved = store.response_presets.resolve(
+        scene_meta=scene_meta, campaign_meta=campaign_meta, config=cfg)
+    fields = {k: own.get(k, "") for k in store.scenes.RESPONSE_FIELDS}
+    # Global stores the style as default_style_id; normalize so the picker sees
+    # one spelling at every scope. The on-disk key is deliberately unchanged.
+    if not fields["style_id"]:
+        fields["style_id"] = own.get("default_style_id", "")
+    return {**fields,
+            "effective": {k: resolved[k] for k in ("style_id",) + store.lengths.KNOBS},
+            "provenance": resolved["provenance"]}
+
+
+def _write_response(setter, fields: dict, style_key: str = "style_id") -> None:
+    """Map the picker's style_id back onto the scope's own spelling."""
+    out = dict(fields)
+    if style_key != "style_id" and "style_id" in out:
+        out[style_key] = out.pop("style_id")
+    setter(out)
+
+
+@router.get("/response")
+def get_global_response():
+    cfg = store.read_config()
+    return _response_body({}, {}, cfg, cfg)
+
+
+@router.put("/response")
+def put_global_response(body: ResponseSettings):
+    fields = {k: v for k, v in _dump(body).items() if v is not None}
+    _write_response(lambda f: store.write_config(**f), fields,
+                    style_key="default_style_id")
+    return {"ok": True}
 
 
 @router.get("/length-presets")
@@ -2130,19 +2171,21 @@ def delete_campaign(cid: str):
     return {"ok": True}
 
 
-@router.get("/campaigns/{cid}/style")
-def get_campaign_style(cid: str):
+@router.get("/campaigns/{cid}/response")
+def get_campaign_response(cid: str):
     try:
-        meta = store.campaigns.read_campaign(cid)["meta"]
+        campaign_meta = store.campaigns.read_campaign(cid)["meta"]
     except store.campaigns.CampaignNotFound:
         raise HTTPException(status_code=404, detail="campaign not found")
-    return {"style_id": meta.get("style_id", "")}
+    cfg = store.read_config()
+    return _response_body({}, campaign_meta, cfg, campaign_meta)
 
 
-@router.put("/campaigns/{cid}/style")
-def put_campaign_style(cid: str, body: StyleSelect):
+@router.put("/campaigns/{cid}/response")
+def put_campaign_response(cid: str, body: ResponseSettings):
+    fields = {k: v for k, v in _dump(body).items() if v is not None}
     try:
-        store.campaigns.set_campaign_style(cid, body.style_id)
+        _write_response(lambda f: store.campaigns.set_campaign_response(cid, f), fields)
     except store.campaigns.CampaignNotFound:
         raise HTTPException(status_code=404, detail="campaign not found")
     return {"ok": True}
@@ -3091,16 +3134,22 @@ def put_scene_datetime(cid: str, sid: str, body: SceneDatetime):
     return {"ok": True, **result}
 
 
-@router.get("/campaigns/{cid}/scenes/{sid}/style")
-def get_scene_style(cid: str, sid: str):
+@router.get("/campaigns/{cid}/scenes/{sid}/response")
+def get_scene_response(cid: str, sid: str):
     scene = _require_scene(cid, sid)
-    return {"style_id": scene["meta"].get("style_id", "")}
+    try:
+        campaign_meta = store.campaigns.read_campaign(cid)["meta"]
+    except store.campaigns.CampaignNotFound:
+        raise HTTPException(status_code=404, detail="campaign not found")
+    cfg = store.read_config()
+    return _response_body(scene["meta"], campaign_meta, cfg, scene["meta"])
 
 
-@router.put("/campaigns/{cid}/scenes/{sid}/style")
-def put_scene_style(cid: str, sid: str, body: StyleSelect):
+@router.put("/campaigns/{cid}/scenes/{sid}/response")
+def put_scene_response(cid: str, sid: str, body: ResponseSettings):
     _require_scene(cid, sid)
-    store.scenes.set_style(cid, sid, body.style_id)
+    fields = {k: v for k, v in _dump(body).items() if v is not None}
+    _write_response(lambda f: store.scenes.set_response(cid, sid, f), fields)
     return {"ok": True}
 
 
