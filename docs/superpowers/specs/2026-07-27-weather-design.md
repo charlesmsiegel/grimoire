@@ -466,10 +466,13 @@ pinned down exactly:
    and expected, not a bug to chase.
 4. **Truncation.** `W = ceil(4 / ln(1/a))` for `a > 0`, else 0. The discarded
    tail is below any weight that could shift an inverse-CDF bucket. Cost is
-   O(W) per sample — 0 taps at `p = 0`, 38 at `p = 0.9`, 400 at `p = 0.99` —
-   still O(1) in campaign age, which is the property this construction exists
-   for.
-5. **Upper bound.** `persistence` is clamped to `0.998` (`W = 2000`, a
+   O(W) per sample — 0 taps at `p = 0`, **38** at `p = 0.9`, **398** at
+   `p = 0.99` — still O(1) in campaign age, which is the property this
+   construction exists for. Those counts are the formula's exact output, not
+   round numbers: an implementation that used 400 instead of 398 would include
+   two extra latent samples and could land in a different inverse-CDF bucket,
+   which is a determinism break rather than a rounding preference.
+5. **Upper bound.** `persistence` is clamped to `0.998` (`W = 1998`, a
    correlation length around a hundred days). A document may write `1`; it
    resolves to the clamp with a validation warning rather than an error.
    **There is no `persistence: 1` special case**, because an infinite-
@@ -700,6 +703,108 @@ it rather than reimplement the axis logic.
   out for free; the sweep exists to *name* the transitions for the digest, not
   to cause them.
 
+## Interface
+
+Three surfaces: authoring a climate, assigning one to a location, and reading
+and overriding the weather during play. The absorb review panel is a fourth but
+needs no new UI — extractor proposals ride the existing checklist in
+`CampaignView.tsx`.
+
+### Climate editor (#40)
+
+A record-list page, so it follows the mandatory two-pane pattern in `CLAUDE.md`
+— `.editor` wrapping `.editor-list` (a `+ New climate` button plus one `.row`
+per climate) and `.editor-body` with `mode: "view" | "edit"`, read-only by
+default, an explicit **Edit** step. The rail tags each entry `builtin` or
+`custom`; editing a builtin silently creates the custom copy described in
+§ Integration, and the rail re-tags it.
+
+**One deviation from the pattern, deliberately.** The canonical `.detail-view`
+renders `.detail-rendered` as the record's markdown body. A climate has no
+prose body — it is structured data — so `.detail-main` instead renders a
+generated read-only summary: each season as a heading with its span in *dates*,
+followed by its three tables as normalized percentages. `.detail-sidebar` keeps
+the pattern exactly: **Edit** in `.form-actions`, then `.side-section` blocks
+for persistence, season count, and a `chip` per location using this climate,
+clickable through to that location.
+
+The form is where the real work is:
+
+- **Weights are shown as percentages, always.** A weight of 4 renders as
+  `4 → 40%`, recomputed live as siblings change. Relative weights are the right
+  storage model and a terrible authoring model; nobody can read a column of
+  integers as a distribution. The percentage is display-only — the stored value
+  stays the integer.
+- **Season boundaries are edited as dates, stored as fractions.** Each boundary
+  shows the equivalent date in the campaign's current calendar and accepts a
+  date as input. `0.45` is not authorable by a human (§ Climate documents).
+- **Entry order is drag-reorderable and its meaning is stated inline.** Order
+  decides what a quantile maps to across a season boundary (§ Drawing a block),
+  so the form says so — otherwise a well-meaning alphabetical sort silently
+  makes every season transition arbitrary.
+- **`requires_temp`** is a multi-select on each condition row, offering exactly
+  the temperature bands declared in that season.
+- **Validation is inline and blocking on save**, covering the invariants the
+  resolver depends on: seasons cover the year without gaps, every season
+  declares at least one unconstrained condition, and every positive-weight
+  temperature band has at least one eligible condition. Each failure names the
+  season and the fix. These are the conditions that would otherwise surface at
+  runtime as a fallback sky nobody asked for.
+
+### Assigning a climate to a location
+
+`climate`, `persistence` and `weather_zone` become location fields, which means
+entries in **both** `entity_schema.FIELDS` and `ENTITY_FIELDS` in
+`frontend/src/api/client.ts` — the former has no `locations` key at all today,
+so `routes._check_fields` currently 400s on all three.
+
+`climate` wants to be a picker over the climate registry, but entity fields are
+text-only (`entity_schema.py`: ref-valued widgets are deferred to #221/#222).
+Rather than block on that, it ships as **a text field validated against the
+climate list on save**, rejecting an unknown id with the available ids in the
+message.
+
+The validation is the point, not a consolation. Weather resolution is
+deliberately lenient — an unknown climate falls back to the campaign default
+rather than raising, because raising would kill a turn. But that leniency makes
+a typo *invisible*: `temperate-costal` produces plausible weather from the wrong
+climate and reports nothing. Leniency is right in the turn loop and wrong at the
+authoring surface, where the user is present and can simply be told. When the
+ref-valued widget lands, the field becomes a picker and the validation stays.
+
+### Scene HUD widget (#195)
+
+**Reading.** One line in the existing always-visible inspector, beside the
+"When" and "Location" sections it depends on: *"Overcast and cold, wind
+rising."* Each axis carries its provenance from `current_weather` — an authored
+axis is marked and shows its `note` on hover, so a GM can tell at a glance which
+part of the sky they decided and which part the world did. When resolution
+returns `None` (no location or no moment yet, § Resolution) the widget renders
+nothing rather than a placeholder or an error, matching how the neighbouring
+widgets degrade.
+
+**Overriding.** Clicking the line opens a small popover — this is where weather
+is changed, per the decision that it belongs where you are already looking when
+you decide it should be raining:
+
+- Three selects, one per axis, each offering the entries of the **active
+  season's table** plus a *"leave to chance"* option that clears that axis
+  back to procedural. Per-axis, because narration usually constrains one axis
+  and not the others (§ Override store).
+- A duration control: *this block* (the default), *this and the next N blocks*,
+  or *until I clear it*. These map onto the span the store requires; the
+  default matches the extractor's one-block default so the two paths behave
+  alike.
+- A free-text `note`, which is what the prompt actually gets to work with —
+  "the Wintertide storm" tells the model more than `condition: storm` does.
+- **Clear override**, shown only when one is active on this location and
+  moment, which deletes rather than writing a counter-override, so the store
+  doesn't accumulate cancelling spans.
+
+Saving `PUT`s to the override endpoint with the scene's location, and the widget
+re-reads. The next turn's prompt picks it up through the ordinary weather
+section; nothing special-cases an override downstream.
+
 ## Testing
 
 Backend, `backend/tests/test_weather.py`, store isolated with
@@ -751,9 +856,14 @@ Backend, `backend/tests/test_weather.py`, store isolated with
   counterfactual is what actually catches the failure worth catching: an
   implementation that reseeds, offsets, or re-derives the sample when the
   active table changes.
-- Season-boundary continuity, separately: at high persistence the distribution
-  of change magnitude across a season boundary matches the distribution
-  mid-season.
+- Season-boundary continuity, separately, asserted on **the latent field and
+  not the rendered weather**: the distribution of `g(t) − g(t−1)` at boundary
+  indices matches its distribution at non-boundary indices. Rendered weather
+  cannot carry this test — two legal single-entry seasons (`freezing` then
+  `hot`) change at every boundary and never mid-season, so a rendered-change
+  assertion would reject a perfectly continuous field. The field is what the
+  design guarantees; the tables are free to make that continuity visible or
+  not.
 - Persistence clamp: a climate declaring `persistence: 1` loads, warns, and
   resolves at the clamp — it neither raises nor produces a constant sky. A
   single-entry table, by contrast, does produce a constant value at any
@@ -804,6 +914,26 @@ Backend, `backend/tests/test_weather.py`, store isolated with
   extractor beats procedural.
 
 Templates render via `scripts/verify_templates.py`.
+
+Frontend, from `frontend/` with `npx vitest run` and `npx tsc -b`:
+
+- Climate editor follows the list/detail contract, per the pattern's own test
+  requirements: clicking a row shows the read-only view with no `textarea`,
+  **Edit** reveals the form, `+ New climate` opens the form directly.
+- Editing a shipped preset creates a custom copy and re-tags the rail entry,
+  without a separate "duplicate" step by the user.
+- Weight percentages recompute live as sibling weights change, and reordering
+  entries does not alter them.
+- Save is blocked, with a message naming the season, when a season leaves a
+  year gap, declares no unconstrained condition, or has a temperature band with
+  no eligible condition.
+- A location saved with an unknown climate id is rejected with the available
+  ids, rather than accepted and silently falling back.
+- The HUD widget renders nothing when weather resolution returns `None`, and
+  marks authored axes distinctly from generated ones.
+- The override popover writes only the axes the user set, leaves *"leave to
+  chance"* axes procedural, and **Clear override** removes the span rather than
+  writing an opposing one.
 
 ## Deferred
 
