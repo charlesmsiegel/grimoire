@@ -10,11 +10,14 @@ vi.mock("../api/client", () => ({
   },
 }));
 vi.mock("../theme/ThemeProvider", () => ({ useTheme: () => ({ setTheme: vi.fn() }) }));
+vi.mock("../components/ResponsePresetPicker", () => ({
+  ResponsePresetPicker: () => <div data-testid="response-preset-picker" />,
+}));
 import { api } from "../api/client";
 
 const cfg = {
   theme: "codex", system_prompt: "", quote_color: "off", user_label: "You", assistant_label: "Grimoire",
-  default_style_id: "", active_connection_id: "openrouter",
+  active_connection_id: "openrouter",
   active_connection: { id: "openrouter", kind: "openrouter", name: "OpenRouter" }, ready: true,
 };
 const dataDir = {
@@ -57,13 +60,9 @@ test("saves the system prompt", async () => {
     expect.objectContaining({ system_prompt: "Never speak for the PC." })));
 });
 
-test("saves the default prose style", async () => {
+test("mounts the response preset picker for the global scope", async () => {
   renderView();
-  const sel = await screen.findByLabelText(/default prose style/i);
-  fireEvent.change(sel, { target: { value: "noir-detective" } });
-  fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
-  await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith(
-    expect.objectContaining({ default_style_id: "noir-detective" })));
+  expect(await screen.findByTestId("response-preset-picker")).toBeInTheDocument();
 });
 
 test("toggling quote color saves immediately", async () => {

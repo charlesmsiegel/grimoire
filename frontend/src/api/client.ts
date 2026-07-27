@@ -57,7 +57,7 @@ export type LLMConnectionDraft = {
 export type ModelsRefreshResult = { models: Model[]; fetched_at: string; rev: string };
 export type Config = {
   theme: string; system_prompt: string;
-  quote_color: string; user_label: string; assistant_label: string; default_style_id: string;
+  quote_color: string; user_label: string; assistant_label: string;
   active_connection_id: string;
   active_connection: { id: string; kind: LLMConnectionKind; name: string } | null;
   ready: boolean;
@@ -435,7 +435,7 @@ export const api = {
     }
     return configCache;
   },
-  putConfig: (body: Partial<{ theme: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string; default_style_id: string; active_connection_id: string }>) =>
+  putConfig: (body: Partial<{ theme: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string; active_connection_id: string }>) =>
     request<Config>("PUT", "/api/config", body).then((cfg) => {
       configCache = Promise.resolve(cfg); // the write's response is the fresh config
       return cfg;
@@ -744,16 +744,6 @@ export const api = {
     request<{ ok: boolean }>("PUT", `/api/styles/${sid}`, patch),
   deleteStyle: (sid: string) => request<{ ok: boolean }>("DELETE", `/api/styles/${sid}`),
   duplicateStyle: (sid: string) => request<{ id: string }>("POST", `/api/styles/${sid}/duplicate`),
-  // NOTE: the backend /campaigns/{cid}/style and /campaigns/{cid}/scenes/{sid}/style
-  // endpoints were removed when response presets shipped (superseded by the
-  // /response bundle below). getSceneStyle/setSceneStyle are kept ONLY because
-  // SceneInspector.tsx still calls them (Task 6 remounts it against
-  // getSceneResponse/setSceneResponse); calling them now 404s. Do not add new
-  // callers — use get/setSceneResponse instead.
-  getSceneStyle: (cid: string, sid: string) =>
-    request<{ style_id: string }>("GET", `/api/campaigns/${cid}/scenes/${sid}/style`),
-  setSceneStyle: (cid: string, sid: string, style_id: string) =>
-    request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/scenes/${sid}/style`, { style_id }),
 
   // response presets
   listResponsePresets: () => request<ResponsePresetSummary[]>("GET", "/api/response-presets"),
