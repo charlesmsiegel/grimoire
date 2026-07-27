@@ -271,3 +271,107 @@ def test_unreadable_preset_falls_through_instead_of_raising(tmp_path, monkeypatc
     got = rp.resolve(scene_meta=_scope(preset="broken"),
                      campaign_meta=_scope(preset="cinematic"))
     assert got["reply_words"] == 900          # kept walking to the campaign
+
+
+def test_create_read_update_delete_custom(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    pid = rp.create_preset("Slow Burn", "Gothic dread.", style_id="gothic-horror",
+                           length_preset="cinematic")
+    got = rp.read_preset(pid)["meta"]
+    assert got["name"] == "Slow Burn" and got["built_in"] is False
+    assert rp.supplies(got)["reply_words"] == 900
+
+    rp.update_preset(pid, length_preset="terse")
+    assert rp.supplies(rp.read_preset(pid)["meta"])["reply_words"] == 150
+
+    rp.delete_preset(pid)
+    with pytest.raises(rp.PresetNotFound):
+        rp.read_preset(pid)
+
+
+def test_create_with_explicit_knobs(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    pid = rp.create_preset("Clipped", knobs={"reply_words": 220, "speakers": 2})
+    supplied = rp.supplies(rp.read_preset(pid)["meta"])
+    assert supplied == {"reply_words": 220, "speakers": 2}
+
+
+def test_create_rejects_both_length_forms(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    with pytest.raises(ValueError):
+        rp.create_preset("Both", length_preset="terse", knobs={"reply_words": 220})
+
+
+def test_update_rejects_both_length_forms(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    pid = rp.create_preset("Named", length_preset="terse")
+    with pytest.raises(ValueError):
+        rp.update_preset(pid, knobs={"reply_words": 220})
+
+
+def test_switching_length_form_clears_the_other(tmp_path, monkeypatch):
+    """A record must never end up carrying both forms on disk — the tagged
+    union is validated on write, so switching form has to erase the old one."""
+    _isolate(tmp_path, monkeypatch)
+    pid = rp.create_preset("Switcher", length_preset="terse")
+    rp.update_preset(pid, length_preset="", knobs={"reply_words": 220})
+    meta = rp.read_preset(pid)["meta"]
+    assert meta["length_preset"] == ""
+    assert rp.supplies(meta) == {"reply_words": 220}
+
+
+def test_builtins_are_immutable(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    _write(tmp_path / "templates" / "response_presets", "terse",
+           name="Terse", length_preset="terse")
+    with pytest.raises(rp.BuiltInPresetImmutable):
+        rp.update_preset("terse", name="Nope")
+    with pytest.raises(rp.BuiltInPresetImmutable):
+        rp.delete_preset("terse")
+
+
+def test_validity_flags_an_unknown_length_preset(tmp_path, monkeypatch):
+    """Resolution fails open for these — which is right for generation, and
+    exactly why they need to be visible somewhere."""
+    _isolate(tmp_path, monkeypatch)
+    _write(tmp_path / "home" / "response_presets", "broken",
+           name="Broken", length_preset="nonesuch")
+    meta = rp.read_preset("broken")["meta"]
+    assert rp.supplies(meta) is None                    # unchanged: still fails open
+    v = rp.read_preset("broken")["validity"]
+    assert v["valid"] is False
+    assert any("nonesuch" in i for i in v["issues"])
+
+
+def test_validity_flags_malformed_knobs_without_invalidating(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    _write(tmp_path / "home" / "response_presets", "sloppy",
+           name="Sloppy", reply_words="lots", speakers="3")
+    got = rp.read_preset("sloppy")
+    assert rp.supplies(got["meta"]) == {"speakers": 3}  # unchanged
+    assert got["validity"]["valid"] is True             # usable, just partly ignored
+    assert any("reply_words" in i for i in got["validity"]["issues"])
+
+
+def test_a_clean_preset_reports_no_issues(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    pid = rp.create_preset("Fine", length_preset="terse")
+    assert rp.read_preset(pid)["validity"] == {"valid": True, "issues": []}
+
+
+def test_list_presets_carries_validity(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    _write(tmp_path / "home" / "response_presets", "broken",
+           name="Broken", length_preset="nonesuch")
+    row = [p for p in rp.list_presets() if p["id"] == "broken"][0]
+    assert row["validity"]["valid"] is False
+
+
+def test_duplicate_makes_an_editable_copy(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    _write(tmp_path / "templates" / "response_presets", "terse",
+           name="Terse", length_preset="terse")
+    pid = rp.duplicate_preset("terse")
+    assert rp.is_built_in(pid) is False
+    assert rp.read_preset(pid)["meta"]["name"] == "Terse (copy)"
+    assert rp.supplies(rp.read_preset(pid)["meta"])["reply_words"] == 150
