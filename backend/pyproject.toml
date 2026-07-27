@@ -9,8 +9,16 @@ requires-python = ">=3.11"
 # extra. See docs/android-architecture.md §6-7 and android/app/build.gradle.kts.
 dependencies = [
     "fastapi>=0.110",
+    # Declared explicitly though fastapi pulls it in: routes.py imports BaseModel
+    # directly. Deliberately unpinned across the v1/v2 split — the Android build
+    # pins the pure-python 1.10 line, and routes._dump keeps usage agnostic.
+    "pydantic>=1.10",
     "uvicorn>=0.29",
     "httpx>=0.27",
+    # Direct imports, not just transitive: certifi for the TLS bundle in the LLM
+    # clients and fetch/chub, markupsafe for escaping in export.py / epub.py.
+    "certifi",
+    "markupsafe>=2.0",
     "python-multipart>=0.0.9",
     "holidays>=0.40",
     "pyluach>=2.2",

@@ -79,6 +79,7 @@ chaquopy {
             install("jinja2>=3.1")
             install("markdown>=3.5")
             install("certifi")
+            install("markupsafe>=2.0")
         }
     }
     sourceSets {
