@@ -153,6 +153,27 @@ def test_validity_flags_malformed_knobs_without_invalidating(tmp_path, monkeypat
     assert any("reply_words" in i for i in got["validity"]["issues"])
 
 
+def test_validity_flags_a_dangling_style_reference(tmp_path, monkeypatch):
+    """resolve() skips a style that doesn't exist and keeps walking outward, so
+    the selection silently does nothing. Degraded, not invalid — the length
+    half still applies."""
+    _isolate(tmp_path, monkeypatch)
+    _write(tmp_path / "home" / "response_presets", "orphan",
+           name="Orphan", style_id="deleted-style", length_preset="terse")
+    got = rp.read_preset("orphan")
+    assert got["validity"]["valid"] is True
+    assert any("deleted-style" in i for i in got["validity"]["issues"])
+    assert rp.supplies(got["meta"])["reply_words"] == 150      # unchanged
+
+
+def test_validity_accepts_the_none_sentinel(tmp_path, monkeypatch):
+    """`none` is an explicit clear, not a dangling reference."""
+    _isolate(tmp_path, monkeypatch)
+    _write(tmp_path / "home" / "response_presets", "bare",
+           name="Bare", style_id="none", length_preset="terse")
+    assert rp.read_preset("bare")["validity"]["issues"] == []
+
+
 def test_a_clean_preset_reports_no_issues(tmp_path, monkeypatch):
     _isolate(tmp_path, monkeypatch)
     pid = rp.create_preset("Fine", length_preset="terse")
@@ -258,6 +279,8 @@ def validity(meta: dict) -> dict:
     a preset can look selected while supplying nothing, which is
     indistinguishable from ordinary inheritance.
     """
+    from . import styles
+
     issues: list[str] = []
     named = (meta.get("length_preset") or "").strip()
     if named and lengths.get(named) is None:
@@ -268,6 +291,17 @@ def validity(meta: dict) -> dict:
             raw = (meta.get(knob) or "").strip()
             if raw and lengths.coerce(raw) is None:
                 issues.append(f"{knob}: '{raw}' is not a positive whole number — ignored")
+    # A style id that names nothing is skipped by resolution and the cascade
+    # continues outward — correct for generation, invisible to the user. Without
+    # this, a preset whose style was deleted reports clean while its style
+    # selection quietly does nothing. Degraded, not invalid: the length half
+    # still applies.
+    style = (meta.get("style_id") or "").strip()
+    if style and style != _STYLE_CLEAR and not styles.exists(style):
+        issues.append(f"style '{style}' no longer exists — this preset supplies no style")
+    # valid=False means "supplies nothing at all" — only an unknown length
+    # preset does that (early return above). Everything else is usable with
+    # some fields ignored, which is what `issues` describes.
     return {"valid": True, "issues": issues}
 
 
@@ -794,7 +828,9 @@ git commit -m "feat(routes): /response scope endpoints replacing /style"
 
 **Interfaces:**
 - Produces: `<ResponsePresetPicker scope="global" | "campaign" | "scene" cid?: string sid?: string />`.
-- API client: `listResponsePresets`, `getResponsePreset`, `createResponsePreset`, `updateResponsePreset`, `deleteResponsePreset`, `duplicateResponsePreset`, `responsePresetUsage`, `listLengthPresets`, `getCampaignResponse`, `setCampaignResponse`, `getSceneResponse`, `setSceneResponse`. Remove `getCampaignStyle`, `setCampaignStyle`, `getSceneStyle`, `setSceneStyle`.
+- API client: `listResponsePresets`, `getResponsePreset`, `createResponsePreset`, `updateResponsePreset`, `deleteResponsePreset`, `duplicateResponsePreset`, `responsePresetUsage`, `listLengthPresets`, **`getGlobalResponse`, `setGlobalResponse`** (→ `/api/response`), `getCampaignResponse`, `setCampaignResponse`, `getSceneResponse`, `setSceneResponse`. Remove `getCampaignStyle`, `setCampaignStyle`, `getSceneStyle`, `setSceneStyle`.
+
+**All three scopes need a client pair.** `scope="global"` must route to `getGlobalResponse`/`setGlobalResponse`; without them the ConfigView-mounted picker has no read/write path at all, and the obvious wrong fix is to reach for the `/api/config` writer that Task 4 removes.
 
 Contains: a preset `<select>`; an **Overrides** `<details>` holding the style picker and five numeric inputs; and an effective-values readout naming the scope each value came from. Unset override inputs show the inherited value as `placeholder`, so an empty box reads as "inheriting 300" rather than blank.
 
@@ -843,6 +879,23 @@ it("saves a preset change", async () => {
   await userEvent.selectOptions(await screen.findByLabelText("Response preset"), "cinematic");
   await waitFor(() => expect(api.setSceneResponse).toHaveBeenCalledWith(
     "run", "s1", expect.objectContaining({ response_preset: "cinematic" })));
+});
+
+it("uses the global endpoints when scope is global", async () => {
+  (api.getGlobalResponse as any).mockResolvedValue({
+    response_preset: "brisk", style_id: "gothic-horror",
+    length_reply_words: "", length_blocks: "", length_paragraphs: "",
+    length_speakers: "", length_blocks_per_speaker: "",
+    effective: { style_id: "gothic-horror", reply_words: 300, blocks: 4,
+                 paragraphs: 2, speakers: 3, blocks_per_speaker: 1 },
+    provenance: { reply_words: { scope: "global" } },
+  });
+  render(<ResponsePresetPicker scope="global" />);
+  expect(await screen.findByLabelText("Response preset")).toHaveValue("brisk");
+  expect(api.getSceneResponse).not.toHaveBeenCalled();
+  await userEvent.selectOptions(screen.getByLabelText("Response preset"), "cinematic");
+  await waitFor(() => expect(api.setGlobalResponse).toHaveBeenCalledWith(
+    expect.objectContaining({ response_preset: "cinematic" })));
 });
 
 it("saves a single knob override without leaving the preset", async () => {
@@ -1018,8 +1071,10 @@ git commit -m "feat(frontend): response preset management view and save-as-prese
 ## Task 8: Per-turn override chip
 
 **Files:**
-- Modify: `backend/src/grimoire/routes.py`, `backend/src/grimoire/store/context.py`, `frontend/src/routes/CampaignView.tsx`
+- Modify: `backend/src/grimoire/routes.py`, `backend/src/grimoire/store/context.py`, `frontend/src/api/client.ts`, `frontend/src/routes/CampaignView.tsx`
 - Test: `backend/tests/test_routes.py`, `test_context.py`, `frontend/src/routes/CampaignView.test.tsx`
+
+**`client.ts` is in scope and its three generation calls all need the override.** Today `chat` sends only content, `retry` sends no body, and `regenerate` sends only guidance — none can carry a response override. Add an optional typed argument to all three. A frontend test that only asserts chip *text* will pass while the override is silently dropped from the request, so the tests below assert **request payloads**.
 
 **Interfaces:**
 - `ChatTurn` gains `response: dict | None = None` — a scope-shaped dict, unpersisted, exactly like the director note.
@@ -1111,7 +1166,42 @@ it("the length chip shows the resolved preset and reverts after send", async () 
   await userEvent.click(screen.getByRole("button", { name: /Send/ }));
   await waitFor(() => expect(chip).toHaveTextContent("Cinematic"));
 });
+
+it("sends the one-shot override in the chat request payload", async () => {
+  render(<CampaignView />);
+  await userEvent.click(await screen.findByRole("button", { name: /Response length/ }));
+  await userEvent.click(screen.getByRole("option", { name: "Terse" }));
+  await userEvent.type(screen.getByRole("textbox"), "Go on.");
+  await userEvent.click(screen.getByRole("button", { name: /Send/ }));
+  await waitFor(() => expect(api.chat).toHaveBeenCalledWith(
+    "run", "s1", "Go on.", expect.objectContaining({ response_preset: "terse" })));
+});
+
+it("a failed stream keeps the override, and retry carries it", async () => {
+  (api.chat as any).mockRejectedValueOnce(new Error("stream failed"));
+  render(<CampaignView />);
+  const chip = await screen.findByRole("button", { name: /Response length/ });
+  await userEvent.click(chip);
+  await userEvent.click(screen.getByRole("option", { name: "Terse" }));
+  await userEvent.click(screen.getByRole("button", { name: /Send/ }));
+  await waitFor(() => expect(chip).toHaveTextContent("Terse"));   // NOT cleared
+  await userEvent.click(screen.getByRole("button", { name: /Retry/ }));
+  await waitFor(() => expect(api.retry).toHaveBeenCalledWith(
+    "run", "s1", expect.objectContaining({ response_preset: "terse" })));
+});
+
+it("regenerate carries a pending override", async () => {
+  render(<CampaignView />);
+  await userEvent.click(await screen.findByRole("button", { name: /Response length/ }));
+  await userEvent.click(screen.getByRole("option", { name: "Terse" }));
+  await userEvent.click(screen.getByRole("button", { name: "Reroll" }));
+  await waitFor(() => expect(api.regenerate).toHaveBeenCalledWith(
+    "run", "s1", expect.anything(),
+    expect.objectContaining({ response_preset: "terse" })));
+});
 ```
+
+(Match the existing `api.chat` / `api.retry` / `api.regenerate` signatures in `client.ts` when placing the new argument — the assertions above show it last.)
 
 - [ ] **Step 2: Run tests to verify they fail**
 
