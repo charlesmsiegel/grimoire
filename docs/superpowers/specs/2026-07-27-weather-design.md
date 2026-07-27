@@ -331,8 +331,12 @@ hash-diffing of entity blobs is undisturbed.
 - **`id` is required**, and it is what makes the precedence backstop
   implementable — the rules below need a stable per-span identity that array
   position cannot supply. Writers generate one; a hand-authored entry missing an
-  `id` gets a canonical one derived by hashing `(from, to, source, axes)`, so
-  the backstop still holds for files edited outside the app.
+  `id` gets a canonical one derived by hashing **`(location_key, from, to,
+  source, axes)`**, so the backstop still holds for files edited outside the
+  app. The location key is part of the hash rather than an afterthought:
+  without it, the same span authored under two locations — a GM pinning the
+  same storm at the docks and at the lighthouse — derives the same id, and any
+  id-keyed operation would hit both records or the wrong one.
 - Axes are individually optional: an override may pin `condition` alone and let
   temperature and wind still be drawn, which is what narration usually gives us
   ("it was raining" says nothing about wind).
@@ -487,18 +491,50 @@ pinned down exactly:
    - **Digest**: BLAKE2b-256 of that key.
    - **Uniform**: the leading 53 bits of the digest, big-endian, divided by
      2⁵³ — giving `u ∈ [0, 1)` with exactly float64's mantissa precision.
-   - **Normal**: `z = Φ⁻¹(u)` by **Wichura's AS241** (Applied Statistics 37(3),
-     1988), using its published double-precision coefficients, with `u = 0`
-     mapped to the smallest representable `u` first so the tail is finite.
-     AS241 specifically, and not "whatever the standard library provides" —
-     `scipy.special.ndtri` is the Cephes implementation, not AS241, and the two
-     disagree in the last bits, which is enough to cross an inverse-CDF bucket
-     boundary. The vendored implementation is the normative one; the reference
-     vectors below are what pin it.
+   - **Normal**: `z = Φ⁻¹(u)` via **`statistics.NormalDist().inv_cdf`** from
+     the Python standard library, with `u = 0` mapped to `2⁻⁵³` first so the
+     tail is finite. That function *is* Wichura's AS241 (`statistics.py:1092`
+     cites it), so naming the stdlib and naming the algorithm agree — and it
+     is pure Python, which keeps it inside the Android base-dependency
+     constraint in `CLAUDE.md`. Not `scipy.special.ndtri`, which is the Cephes
+     implementation and disagrees in the last bits.
 
-   The test plan carries **reference vectors** — fixed `(cid, zone, axis, i)`
-   tuples with their expected `z` — so conformance is checkable rather than
-   asserted.
+   The **forward** transform needs pinning for the same reason, and did not
+   have it: `Φ(g)` is `statistics.NormalDist().cdf`. Its underlying `math.erf`
+   can defer to platform libm, so unlike `inv_cdf` this is not bit-identical
+   across every build in principle.
+
+   **Determinism is therefore scoped to this implementation**, deliberately and
+   explicitly. Grimoire has one backend; the guarantee that matters is that a
+   campaign's skies do not change under it — across processes, across restarts,
+   across upgrades. Cross-language reimplementation is not a goal, and claiming
+   it would be claiming something these two library calls cannot deliver.
+
+   What enforces that scoped guarantee is **reference vectors**, which the spec
+   now carries rather than merely promising:
+
+   | cid | zone | axis | i | u | z |
+   | --- | --- | --- | --- | --- | --- |
+   | `saltmarch-chronicle` | `saltmarch` | `temperature` | 0 | `0.45105387316006484` | `-0.12299918123991178` |
+   | `saltmarch-chronicle` | `saltmarch` | `condition` | 0 | `0.7615608961018518` | `0.7113325140777527` |
+   | `saltmarch-chronicle` | `saltmarch` | `wind` | 0 | `0.17774645354109264` | `-0.9239873403260146` |
+   | `saltmarch-chronicle` | `saltmarch` | `condition` | 1 | `0.9654995835326088` | `1.8184143093163614` |
+   | `saltmarch-chronicle` | `saltmarch` | `condition` | −1 | `0.9510130394641974` | `1.6547564014712368` |
+   | `saltmarch-chronicle` | `highreach` | `condition` | 0 | `0.21315957935313046` | `-0.7955061091380776` |
+
+   And end-to-end, through the filter and the wind table of the worked example
+   above (`calm 1, breeze 4, strong 3, gale 1`) at ordinal 0:
+
+   | persistence | W | taps | g(0) | Φ(g) | drawn |
+   | --- | --- | --- | --- | --- | --- |
+   | 0.0 | 0 | 1 | `-0.9239873403260146` | `0.1777464535410927` | breeze |
+   | 0.5 | 6 | 7 | `-1.6636640450077727` | `0.04808979266518426` | calm |
+   | 0.9 | 38 | 39 | `-0.6397550785578683` | `0.2611659206506862` | breeze |
+
+   The `p = 0` row is worth reading closely: `Φ(g)` comes back as
+   `0.1777464535410927` against a latent `u` of `0.17774645354109264`. The
+   round trip is not bit-exact, which is precisely why the forward direction
+   had to be named and why these vectors exist.
 2. **Smoothing.** The correlated field is a normalized **one-sided** (causal)
    exponential filter over the latent, with `a = persistence`, indexed by the
    **block ordinal** of § Blocks — never by the minute coordinate:
@@ -604,6 +640,17 @@ simulation.
 Given the block index *t* and the season it falls in (from the year fraction),
 each axis resolves independently of the blocks around it — the correlation
 lives in the noise field, not in a carry-forward step:
+
+`inverse_cdf` walks the table in array order accumulating normalized weights,
+and selects the **first entry whose running cumulative exceeds `u`** — buckets
+are half-open, `cum_{i−1} <= u < cum_i`, with the first starting at 0 and the
+last treated as closing at 1.0 so floating-point drift in the final sum cannot
+fall through. A zero-weight entry therefore spans an empty interval and can
+never be selected, which is what makes zeroing an entry a clean disable rather
+than a near-zero chance. The convention has to be stated because `u` is
+discrete and an author can declare weights whose boundary lands exactly on an
+emitted quantile; `<=` versus `<` then picks different weather from the same
+seed.
 
 1. **Temperature** = `inverse_cdf(season.temperature, Φ(noise_temp(t)))`.
 2. **Condition** = `inverse_cdf(season.conditions filtered by the resolved
@@ -831,8 +878,11 @@ The form is where the real work is:
   resolver depends on: seasons cover the year without gaps; **every individual
   weight is finite and non-negative**; every axis of every season has at least
   one positive weight; every season declares at least one unconstrained
-  condition; and every positive-weight temperature band has at least one
-  eligible condition. Each failure names the season and the fix.
+  condition; every positive-weight temperature band has at least one eligible
+  condition; and **the climate's own `persistence` is finite and within
+  `[0, 1]`** — the same range rule the location field gets, which the editor
+  would otherwise leave to a backend failure. Each failure names the season and
+  the fix.
 
   The per-weight check is separate from the per-axis one on purpose:
   `{clear: 1, storm: −1}` satisfies "this axis has a positive weight" while
@@ -867,6 +917,12 @@ the same position, so `GET`/`PUT /worlds/{wid}/climate` and its control belong
 in the same world-settings tab that issue proposes for the calendar — and if
 that tab is not built, the world default is dead weight and the wizard prefill
 should be dropped with it rather than reading a file nothing can write.
+
+The world `GET` needs declaring **before the generic world entity routes**, for
+the same reason its campaign twin does: `GET /worlds/{wid}/{kind}` is already
+registered at `routes.py:1965`, so a later-registered `/worlds/{wid}/climate`
+resolves as an entity-list request for kind `climate` and the settings control
+silently fails to load.
 
 ### Assigning a climate to a location
 
@@ -931,11 +987,20 @@ you decide it should be raining:
 
 Deleting needs a contract the `PUT` cannot provide — its body carries axes and
 a duration, not an identity. So `current_weather` returns, alongside each
-axis's `source`, the **`id` of the span that supplied it**, and there is a
-`DELETE /api/campaigns/{cid}/weather/{span_id}` (before the catch-all, like the
-others). **Clear override** deletes every distinct span id currently
-contributing at this location and moment — plural, because different axes can
-legitimately come from different records.
+axis's `source`, **the full stack of spans covering this moment** for that
+axis, winner first, each with its `id`. And there is a
+`DELETE /api/campaigns/{cid}/weather/{location}/{span_id}` (before the
+catch-all, like the others), keyed by location as well as span, matching how
+canonical ids are derived.
+
+**Clear override deletes the whole covering stack, not just the winners.**
+Returning only the winning ids would be a trap: precedence explicitly permits
+an older manual span or an extractor span to sit shadowed beneath the winner,
+so deleting the winner alone would *promote* the shadowed record — the sky
+would change rather than return to procedural, and the button would look
+broken in the one case it most needs to work. That is also why the resolver
+returns the stack rather than a single provenance: the UI cannot clear what it
+cannot see.
 
 Note the asymmetry with *"leave to chance"*, which is easy to conflate: that
 option means "omit this axis from the span I am about to write," affecting only
@@ -972,9 +1037,15 @@ Backend, `backend/tests/test_weather.py`, store isolated with
   boundary and a year boundary** — both moments must resolve to the same
   weather, which fails if the season is looked up from the queried moment
   rather than from the block's owning date.
-- Latent reference vectors: fixed `(cid, zone, axis, ordinal)` tuples produce
-  the documented `z` values, pinning the hash, serialization, uniform
-  derivation and normal transform against drift.
+- Reference vectors: the tuples tabulated in § The construction, concretely
+  produce their documented `u` and `z`, and the end-to-end rows produce their
+  documented `g`, `Φ(g)` and drawn entry. Assert against the **values written
+  in the spec**, never against a fixture regenerated from the implementation —
+  a self-generated fixture passes while preserving exactly the drift it exists
+  to detect.
+- Inverse-CDF boundaries: a quantile landing exactly on a cumulative boundary
+  selects the following entry (`cum_{i−1} <= u < cum_i`), and a zero-weight
+  entry is never selected at any `u`.
 - Override precedence: location beats `_default`, newer `set_at` beats older,
   and two spans differing only in array order resolve identically.
 - Span boundaries are half-open: at the shared endpoint of two adjacent
@@ -1099,6 +1170,12 @@ Frontend, from `frontend/` with `npx vitest run` and `npx tsc -b`:
   takes.
 - Individual weights: an axis containing a negative or non-finite weight is
   rejected inline even when a positive sibling is present.
+- Climate `persistence` of `2`, `-1` or `NaN` is rejected inline by the editor
+  rather than deferred to a backend save error.
+- **Clear override** with a shadowed second span beneath the winner returns the
+  axis to procedural weather, rather than promoting the shadowed override.
+- Two identical spans authored under different locations receive different
+  canonical ids, and deleting one leaves the other intact.
 - Table order survives a save/load round-trip through the JSON store unchanged,
   including a table whose entry names are numeric-looking strings.
 - The HUD widget renders nothing when weather resolution returns `None`, and
