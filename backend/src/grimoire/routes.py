@@ -804,6 +804,8 @@ def get_response_preset(pid: str):
         return store.response_presets.read_preset(pid)
     except store.response_presets.PresetNotFound:
         raise HTTPException(status_code=404, detail="response preset not found")
+    except (OSError, UnicodeDecodeError):
+        raise HTTPException(status_code=400, detail="response preset file could not be read")
 
 
 @router.put("/response-presets/{pid}")
@@ -817,6 +819,8 @@ def put_response_preset(pid: str, body: ResponsePresetUpdate):
     except store.response_presets.BuiltInPresetImmutable:
         raise HTTPException(status_code=400,
                             detail="built-in presets can't be edited — duplicate it first")
+    except (OSError, UnicodeDecodeError):
+        raise HTTPException(status_code=400, detail="response preset file could not be read")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"ok": True}
@@ -839,6 +843,8 @@ def post_response_preset_duplicate(pid: str):
         return {"id": store.response_presets.duplicate_preset(pid)}
     except store.response_presets.PresetNotFound:
         raise HTTPException(status_code=404, detail="response preset not found")
+    except (OSError, UnicodeDecodeError):
+        raise HTTPException(status_code=400, detail="response preset file could not be read")
 
 
 @router.get("/response-presets/{pid}/usage")
