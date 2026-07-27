@@ -272,6 +272,27 @@ button.plate-avatar, button.plate-name { cursor: pointer; }
   font-family: var(--fm); font-weight: 700; font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase;
 }
 .inputbar .send:disabled { color: var(--chrome-muted); cursor: default; }
+
+/* ---- response-length chip + dropdown (anchored to the input bar) ---- */
+.response-length-chip { position: relative; flex: none; display: flex; align-items: center;
+  border-left: var(--rw) solid var(--rule); }
+.chip-toggle {
+  background: none; border: none; height: 100%; padding: 0 16px; cursor: pointer;
+  font-family: var(--fm); font-size: 11px; letter-spacing: 0.04em; color: var(--page-muted); white-space: nowrap;
+}
+.chip-toggle:hover { color: var(--accent); }
+.chip-menu {
+  position: absolute; bottom: 100%; right: 0; margin-bottom: 8px; z-index: 5;
+  list-style: none; padding: 0; min-width: 170px;
+  background: var(--surface); border: var(--rw) solid var(--rule); box-shadow: var(--sh3);
+}
+.chip-menu li {
+  padding: 7px 12px; cursor: pointer; font-family: var(--fm); font-size: 12px; color: var(--ink);
+  border-bottom: 1px solid var(--rule-soft);
+}
+.chip-menu li:last-child { border-bottom: none; }
+.chip-menu li:hover { background: var(--panel2); }
+.chip-menu li[aria-selected="true"] { color: var(--accent); font-weight: 700; }
 button.primary { background: var(--accent); color: var(--on-accent); border: var(--rw2) solid var(--rule); padding: 8px 14px; cursor: pointer; font-family: var(--fm); font-weight: 700; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; }
 .banner { background: var(--banner-bg); border: var(--rw) solid var(--accent); color: var(--banner-ink); padding: 10px 16px; margin: 12px 22px; font-family: var(--fm); font-size: 11px; flex: none; }
 .banner a { color: var(--banner-ink); }

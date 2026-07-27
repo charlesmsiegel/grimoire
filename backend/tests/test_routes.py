@@ -3026,6 +3026,24 @@ def test_offscreen_chat_empty_note_sends_continue(client):
         [{"role": "user", "content": "Continue the scene."}]
 
 
+def test_offscreen_chat_carries_a_response_override(client):
+    # #post_chat's pcless branch passes turn.response into
+    # build_director_messages same as the normal-scene branch -- this drives
+    # that path specifically so a regression there can't hide behind only the
+    # PC-scene tests ever exercising the override.
+    _, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes",
+                      json={"title": "Cabal", "pcless": True}).json()["id"]
+    client.put("/api/llm-connections/openrouter", json={"api_key": "k"})
+    cap = CapturingOpenRouter()
+    client.app.dependency_overrides[routes.get_llm] = lambda: cap
+    with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/chat",
+                       json={"content": "the guard grows suspicious",
+                             "response": {"response_preset": "terse"}}) as r:
+        r.read()
+    assert "150 words" in cap.messages[0]["content"]
+
+
 def test_empty_chat_in_a_normal_scene_is_an_ephemeral_npc_round(client):
     _, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
