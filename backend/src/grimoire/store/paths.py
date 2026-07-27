@@ -105,6 +105,14 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def safe_part(part: str) -> bool:
+    """True when `part` is usable as a single path segment — no traversal, no
+    separators. The guard on every caller-supplied id that reaches the
+    filesystem; keep it in one place so a gap can't be fixed in only some of
+    them. (sheets._safe_part additionally rejects ':' for module-pack keys.)"""
+    return part not in ("", ".", "..") and "/" not in part and "\\" not in part
+
+
 def slugify(text: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
     return slug or "untitled"

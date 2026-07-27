@@ -7,12 +7,12 @@ Mirrors characters.py but with a simpler payload:
 
 from __future__ import annotations
 
-import hashlib
 import shutil
 from pathlib import Path
 
-from . import statcache
+from . import actor_files
 from .frontmatter import dump_frontmatter, parse_frontmatter
+from .paths import safe_part as _safe
 from .paths import slugify, uniquify
 
 PERSONA_FIELDS = ("name", "pronouns", "summary", "birthdate")  # frontmatter scalars; description is the body
@@ -24,10 +24,6 @@ class PCNotFound(Exception):
 
 class PCVersionNotFound(Exception):
     pass
-
-
-def _safe(part: str) -> bool:
-    return part not in ("", ".", "..") and "/" not in part and "\\" not in part
 
 
 def _pcs_dir(root: Path) -> Path:
@@ -178,21 +174,7 @@ def delete_pc(root: Path, pid: str) -> None:
 def version_hash(root: Path, pid: str, vid: str) -> str | None:
     if not _safe(pid) or not _safe(vid):
         return None
-    p = _version_path(root, pid, vid)
-    sig = statcache.signature(p)
-    if sig is None:
-        return None
-    return statcache.memo(
-        "pc_version_hash", sig,
-        lambda: hashlib.sha256(p.read_text(encoding="utf-8").encode("utf-8")).hexdigest())
-
-
-def _dir_hash_compute(files: list[Path]) -> str:
-    h = hashlib.sha256()
-    for p in files:
-        h.update(p.name.encode("utf-8"))
-        h.update(p.read_text(encoding="utf-8").encode("utf-8"))
-    return h.hexdigest()
+    return actor_files.file_hash(_version_path(root, pid, vid), "pc_version_hash")
 
 
 def dir_hash(root: Path, pid: str) -> str | None:
@@ -201,17 +183,12 @@ def dir_hash(root: Path, pid: str) -> str | None:
     if not _safe(pid) or not _meta_path(root, pid).exists():
         return None
     files = [_meta_path(root, pid)] + [_version_path(root, pid, v) for v in _version_ids(root, pid)]
-    return statcache.memo("pc_dir_hash", statcache.signature(*files),
-                          lambda: _dir_hash_compute(files))
+    return actor_files.files_hash(files, "pc_dir_hash")
 
 
 def pc_count(root: Path) -> int:
-    d = _pcs_dir(root)
-    return sum(1 for p in d.iterdir() if p.is_dir() and (p / "pc.md").exists()) if d.exists() else 0
+    return len(pc_refs(root))
 
 
 def pc_refs(root: Path) -> list[str]:
-    d = _pcs_dir(root)
-    if not d.exists():
-        return []
-    return sorted(p.name for p in d.iterdir() if p.is_dir() and (p / "pc.md").exists())
+    return actor_files.actor_ids(_pcs_dir(root), "pc.md")

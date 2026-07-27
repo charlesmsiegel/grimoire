@@ -13,13 +13,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from .paths import safe_part as _safe
+
 AVATAR = "avatar"
 FOCUS_FILE = "focus.json"
 _EXTS = {"png", "jpg", "jpeg", "gif", "webp"}
-
-
-def _safe(part: str) -> bool:
-    return part not in ("", ".", "..") and "/" not in part and "\\" not in part
 
 
 def _safe_name(name: str) -> bool:

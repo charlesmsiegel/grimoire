@@ -8,13 +8,13 @@ Unlike generic entities (one markdown file each), a character is a directory:
 
 from __future__ import annotations
 
-import hashlib
 import json
 import shutil
 from pathlib import Path
 
-from . import assets, cards, chub, fetch, lorebook, statcache, taglines
+from . import actor_files, assets, cards, chub, fetch, lorebook, statcache, taglines
 from .frontmatter import dump_frontmatter, parse_frontmatter
+from .paths import safe_part as _safe
 from .paths import slugify, uniquify
 
 
@@ -24,10 +24,6 @@ class CharacterNotFound(Exception):
 
 class VersionNotFound(Exception):
     pass
-
-
-def _safe(part: str) -> bool:
-    return part not in ("", ".", "..") and "/" not in part and "\\" not in part
 
 
 def _chars_dir(root: Path) -> Path:
@@ -279,21 +275,7 @@ def delete_character(root: Path, cid: str) -> None:
 def card_hash(root: Path, cid: str, vid: str) -> str | None:
     if not _safe(cid) or not _safe(vid):
         return None
-    p = _card_path(root, cid, vid)
-    sig = statcache.signature(p)
-    if sig is None:
-        return None
-    return statcache.memo(
-        "card_hash", sig,
-        lambda: hashlib.sha256(p.read_text(encoding="utf-8").encode("utf-8")).hexdigest())
-
-
-def _dir_hash_compute(files: list[Path]) -> str:
-    h = hashlib.sha256()
-    for p in files:
-        h.update(p.name.encode("utf-8"))
-        h.update(p.read_text(encoding="utf-8").encode("utf-8"))
-    return h.hexdigest()
+    return actor_files.file_hash(_card_path(root, cid, vid), "card_hash")
 
 
 def dir_hash(root: Path, cid: str) -> str | None:
@@ -302,21 +284,15 @@ def dir_hash(root: Path, cid: str) -> str | None:
     if not _safe(cid) or not _meta_path(root, cid).exists():
         return None
     files = [_meta_path(root, cid)] + [_card_path(root, cid, v) for v in _version_ids(root, cid)]
-    # the signature spans the whole file set, so adding/removing a version invalidates too
-    return statcache.memo("dir_hash", statcache.signature(*files),
-                          lambda: _dir_hash_compute(files))
+    return actor_files.files_hash(files, "dir_hash")
 
 
 def character_count(root: Path) -> int:
-    d = _chars_dir(root)
-    return sum(1 for p in d.iterdir() if p.is_dir() and (p / "character.md").exists()) if d.exists() else 0
+    return len(character_refs(root))
 
 
 def character_refs(root: Path) -> list[str]:
-    d = _chars_dir(root)
-    if not d.exists():
-        return []
-    return sorted(p.name for p in d.iterdir() if p.is_dir() and (p / "character.md").exists())
+    return actor_files.actor_ids(_chars_dir(root), "character.md")
 
 
 def find_unlinked_versions(root: Path) -> list[dict]:

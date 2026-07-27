@@ -15,15 +15,11 @@ from pathlib import Path
 
 from . import cards, characters, statcache
 from .frontmatter import dump_frontmatter, parse_frontmatter
-from .paths import natural_key, slugify, uniquify
+from .paths import natural_key, safe_part as _safe, slugify, uniquify
 
 
 class GreetingNotFound(Exception):
     pass
-
-
-def _safe(part: str) -> bool:
-    return part not in ("", ".", "..") and "/" not in part and "\\" not in part
 
 
 def _greetings_dir(root: Path) -> Path:
