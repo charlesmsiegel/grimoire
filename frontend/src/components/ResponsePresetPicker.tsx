@@ -89,6 +89,27 @@ export function ResponsePresetPicker(
     void persist({ ...fields, response_preset: id });
   }
 
+  async function saveAsPreset() {
+    if (!effective) return;
+    const name = window.prompt("Name this preset?")?.trim();
+    if (!name) return;
+    setError(null);
+    try {
+      const { id } = await api.createResponsePreset({
+        name,
+        style_id: effective.style_id,
+        knobs: {
+          reply_words: effective.reply_words, blocks: effective.blocks, paragraphs: effective.paragraphs,
+          speakers: effective.speakers, blocks_per_speaker: effective.blocks_per_speaker,
+        },
+      });
+      await api.listResponsePresets().then(setPresets).catch(() => {});
+      choosePreset(id);
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
+  }
+
   return (
     <div className="response-preset-picker">
       {error && <div className="banner">{error}</div>}
@@ -145,6 +166,7 @@ export function ResponsePresetPicker(
             </label>
           ))}
           <button className="primary" type="button" onClick={() => persist(fields)}>Save</button>
+          <button className="subtle" type="button" onClick={saveAsPreset}>Save as preset…</button>
           {saved && <span className="field-hint">Saved.</span>}
         </div>
       </details>
