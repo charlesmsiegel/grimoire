@@ -117,10 +117,27 @@ plugin and is never committed.
 - `from`/`to` are fractions of the year in `[0, 1)`. `from > to` wraps the year
   end (the winter above runs from 92% through 21%). Seasons must cover the year
   without gaps; overlaps resolve to the first match in document order.
+- **`from == to` means a full-year season.** Without this, a one-season
+  equatorial climate — a case this spec explicitly claims to support — has no
+  legal encoding: the range forbids `to: 1`, and `from: 0, to: 0` would
+  otherwise read as an empty interval and fail the coverage check.
 - A table entry is either a bare weight (`"clear": 2`) or an object with
   `weight` plus modifiers. Both forms parse to the same internal shape.
-- `persistence` is `[0, 1]`: 0 rerolls every block independently, 1 never
-  changes. Absent means 0.5.
+- **Every season must declare at least one condition with no `requires_temp`**,
+  validated at load. This is what makes the degenerate-table fallback safe
+  (§ Drawing a block) without letting it emit a constrained condition outside
+  its band.
+- `persistence` is `[0, 1]`: 0 rerolls every block independently, 1 holds the
+  underlying stream constant. Absent means 0.5.
+
+  Note what `1` does **not** mean. It cannot mean "the weather never changes,"
+  because the season table underneath it changes: a held value that no longer
+  exists in the new season's table, or a constant noise sample mapped through a
+  different inverse CDF, both yield different weather at a season boundary. The
+  guarantee is therefore scoped: **at `persistence: 1` weather is constant
+  within a season and may change only where the table changes.** That is also
+  the desirable reading — a climate whose sky is genuinely immutable across a
+  season change would be a bug, not a feature.
 
 ### Locations
 
@@ -132,6 +149,16 @@ climate: temperate-coastal
 persistence: "0.3"        # optional; overrides the climate's
 weather_zone: saltmarch   # optional; see below
 ```
+
+These three keys are **not reachable through the product today**, and adding
+them to the frontmatter is not enough to change that. `entity_schema.FIELDS`
+has no `locations` entry at all, so `field_keys("locations")` is empty and
+`routes._check_fields` 400s on every one of them; `ENTITY_FIELDS.locations` in
+`frontend/src/api/client.ts` is likewise `[]`, so `EntityEditor` never sends
+them. Both tables must gain location entries — the module docstring in
+`entity_schema.py` already requires keeping them in sync — or per-location
+climate is a hand-edit-the-Markdown feature, which for a decision this design
+puts at the location level is not acceptable.
 
 Lenient parsing throughout: an unknown `climate` falls back to the campaign
 default, an unparseable `persistence` falls back to the climate's. Weather never
@@ -156,6 +183,14 @@ is reported as a validation warning, not an error, because correlated-but-not-
 identical is sometimes exactly right — a sheltered valley and the exposed peak
 above it should share a front and not a temperature.
 
+The guarantee is also **procedural-scope only**. Overrides are keyed by location
+id and applied after the shared stream, so a manual or extractor override on one
+member diverges it from the rest of its zone regardless of configuration. That
+is the right default — GM fiat about the docks should not silently repaint the
+whole town — but it means "identical weather" describes the generated layer, not
+the resolved one. A zone-wide override is expressible by writing the same span
+to each member, or by keying it to `_default`.
+
 That is crude — it is co-location, not a storm front moving across a map — but
 it costs nothing now, covers the common case (six locations inside one town),
 and is the seam real spatial correlation slots into later: when a location
@@ -172,6 +207,7 @@ hash-diffing of entity blobs is undisturbed.
 {
   "saltmarch-docks": [
     {
+      "id": "ovr-3f2a91",
       "from": "1492-06-14T06:00",
       "to": "1492-06-17T18:00",
       "condition": "blizzard",
@@ -188,6 +224,15 @@ hash-diffing of entity blobs is undisturbed.
 - Keyed by location id; `_default` applies campaign-wide.
 - Each entry is a span, not a point — GM fiat is usually "it snows for three
   days," and per-block rows for that would be absurd.
+- **Spans are half-open: `from <= t < to`.** Adjacent overrides sharing an
+  endpoint must match exactly one record, or the precedence rules below decide
+  between two spans that were never meant to compete. This convention also
+  governs how writers merge, truncate, and round durations.
+- **`id` is required**, and it is what makes the precedence backstop
+  implementable — the rules below need a stable per-span identity that array
+  position cannot supply. Writers generate one; a hand-authored entry missing an
+  `id` gets a canonical one derived by hashing `(from, to, source, axes)`, so
+  the backstop still holds for files edited outside the app.
 - Axes are individually optional: an override may pin `condition` alone and let
   temperature and wind still be drawn, which is what narration usually gives us
   ("it was raining" says nothing about wind).
@@ -199,8 +244,16 @@ hash-diffing of entity blobs is undisturbed.
 Per #44's instruction to design the chain up front. One entry point:
 
 ```
-current_weather(croot, cid, location_id, native) -> dict
+current_weather(croot, cid, location_id, native) -> dict | None
 ```
+
+**It returns `None` when either input is missing**, and callers treat that as
+"no weather section." Both `scenes.get_location_history` and `get_time_history`
+document `Missing ⇒ []`, so a scene that has just been created legitimately has
+no location, no moment, or neither — and `context._assemble` runs while exactly
+such scenes are being opened and generated. Making only the Jinja section
+tolerant does not help: the exception would be raised computing the section's
+input, before any template is touched. The nullable return is the guard.
 
 1. Manual override covering this location and moment (`source: manual`)
 2. Extractor override covering it (`source: extractor`)
@@ -217,7 +270,7 @@ for each axis independently:
 1. **Specificity**: a span keyed by this location beats one keyed by `_default`.
 2. **Recency**: among equally specific spans, the newest `set_at` wins.
 3. **Determinism backstop**: if `set_at` ties too, the lexicographically
-   greatest span key wins, so the result never depends on file ordering.
+   greatest span `id` wins, so the result never depends on file ordering.
 
 Writers should merge or truncate an existing overlapping span rather than
 stacking a second one, but the resolver must not assume they did.
@@ -283,16 +336,30 @@ hash and the resolved location settings belong in the cache key, not just the
 year.
 
 **Option 2 — replace the chain with random-access correlated noise
-(recommended).** Instead of a Markov walk, each axis is a smooth value-noise
+(recommended).** Instead of a Markov walk, each axis is a correlated noise
 function over the block index, with correlation length derived from
 `persistence`, sampled through the season table's inverse CDF. Runs of weather
 emerge from the noise's correlation length rather than from carry-forward.
+
+**The marginal must be uniform before it reaches the table**, and this is a real
+trap rather than a detail. Inverse-CDF sampling reproduces the declared weights
+only when fed uniform quantiles, but conventional smooth value noise is not
+uniform — interpolation concentrates samples toward the middle of the range, so
+mapping it directly through the table would systematically under-draw the rare
+entries at the tails and over-draw the common middle ones, quietly violating the
+weights the whole data model is built on. Specify the process as **correlated
+Gaussian noise pushed through the standard normal CDF Φ** to obtain uniform
+marginals, and only then through the table's inverse CDF — a Gaussian copula.
+Any construction with provably uniform marginals is acceptable; an unstated one
+is not.
 
 This is a real pivot, but it dissolves three findings at once rather than
 patching them:
 
 - *No anchor, so no seam* — at any boundary, year or season. `persistence: 1`
-  becomes infinite correlation length, i.e. genuinely constant, as documented.
+  becomes infinite correlation length, holding the sample constant, which under
+  the scoped guarantee (§ Climate documents) means constant weather within a
+  season.
 - *No memoized walk, so nothing to invalidate* — the cache-coherence liability
   above simply does not exist, and determinism is structural rather than
   maintained.
@@ -308,6 +375,19 @@ instead of stepping. The cost is that runs are no longer geometrically
 distributed the way a Markov chain's are, and `persistence` becomes a
 correlation length rather than a carry-forward probability — a knob that needs
 recalibrating, not a knob that disappears.
+
+**It also costs the cheap accumulators**, which is the strongest argument
+against it. § Accumulators claims snowpack folds over "the same walk the
+resolver already performs" — true under Option 1, false here, because Option 2
+performs no walk. Answering "how deep is the snow on day 900" would mean
+replaying every prior block or storing checkpoints, reintroducing exactly the
+unbounded work or state this design exists to avoid. The bounded answer is a
+**windowed fold**: accumulate over the last *K* blocks only, K fixed per
+accumulator, which is O(K) random access and needs no state. That is defensible
+on the merits — snowpack and ground saturation have finite physical memory, and
+nothing that melted six months ago is still on the ground — but it is a genuine
+semantic narrowing from "true history," and multi-year drought would not be
+expressible this way. Option 1 gets accumulators for free; Option 2 buys them.
 
 ### Drawing a block
 
@@ -337,9 +417,14 @@ reading gets wrong:
   conditions that all require `freezing` is structurally valid but unresolvable.
   Guard on both sides: **validate at load** that every temperature band with
   positive weight has at least one eligible positive-weight condition, and
-  **at runtime** fall back to the highest-weight unfiltered entry (ties broken
-  by entry key) rather than raising. A malformed private climate degrades to a
-  boring sky; it never takes a turn down.
+  **at runtime** fall back rather than raising. The fallback is the
+  highest-weight **unconstrained** condition — the one every season is required
+  to declare (§ Climate documents) — ties broken by entry key. It must not be
+  the highest-weight *unfiltered* entry: that reintroduces `requires_temp`
+  violations by the back door, emitting snow at `mild` in exactly the case the
+  guard exists to handle, and contradicting the invariant the constraint test
+  asserts. A malformed private climate degrades to a boring sky; it never takes
+  a turn down, and never lies about the temperature.
 
 Seed: a stable hash of `(cid, zone, year)` for the anchor, advanced by the walk.
 Campaign id is in the seed per #44 — two campaigns in one world must not share
@@ -347,11 +432,19 @@ skies.
 
 ### Accumulators (later, not v1)
 
-Snowpack, ground saturation, and drought are folds over the same walk the
-resolver already performs: snow depth adds on snowfall blocks and subtracts on
-above-freezing ones. No new storage, still deterministic. This is what #104's
-"the snow at the pass has melted" actually needs, and the walk should be built
-so accumulators bolt on without redesigning it — but weather ships first.
+Snowpack, ground saturation, and drought are folds over the block sequence: snow
+depth adds on snowfall blocks and subtracts on above-freezing ones. No new
+storage, still deterministic. This is what #104's "the snow at the pass has
+melted" actually needs — but weather ships first.
+
+**How cheap this is depends on the open decision in § Anchoring.** Under
+Option 1 the resolver already walks the chain, so an accumulator is a fold over
+work that is happening anyway, over true history, at no extra cost. Under
+Option 2 there is no walk, so accumulation must be a bounded window over the
+last *K* blocks — still deterministic and still O(1)-ish, but a narrower
+semantics that cannot express multi-year drought. Whichever is chosen, the
+resolver should expose the block sequence it uses so accumulators consume it
+rather than reimplement it.
 
 ## Integration
 
@@ -375,9 +468,14 @@ so accumulators bolt on without redesigning it — but weather ships first.
   `@router.get("/campaigns/{cid}/{kind}")` sits at `routes.py:3783`, so a
   later-registered weather GET is captured as an entity-list request for kind
   `weather`.
-- **Extractor** (#46): a `weather_edits` key in `templates/absorb/system.j2`, a
-  `weather` branch in `absorb.materialize` (before = current resolved value,
-  after = narrated value) and in `apply_edits`, writing `source: extractor`.
+- **Extractor** (#46): a `weather_edits` key in `templates/absorb/system.j2`,
+  parsed and validated in **`absorb.parse_output`**, then a `weather` branch in
+  `absorb.materialize` (before = current resolved value, after = narrated value)
+  and in `apply_edits`, writing `source: extractor`. The `parse_output` step is
+  not optional plumbing: it rebuilds an explicit dict of known keys
+  (`absorb.py:127-142`) rather than passing the model's object through, so an
+  unlisted `weather_edits` is dropped on the floor and the materialize and
+  apply branches are unreachable no matter how well the prompt performs.
   Rides the existing review checklist in `CampaignView.tsx` — no new UI.
   Since every override record needs `from`/`to` but narration gives a value and
   not a span, the extractor needs a span rule: **default to the block containing
@@ -412,6 +510,17 @@ Backend, `backend/tests/test_weather.py`, store isolated with
   block; 03:59 and 04:01 do not.
 - Override precedence: location beats `_default`, newer `set_at` beats older,
   and two spans differing only in array order resolve identically.
+- Span boundaries are half-open: at the shared endpoint of two adjacent
+  overrides, exactly one matches.
+- Weight fidelity: over a long sample the observed frequency of each condition
+  matches its normalized weight, at several persistence settings — the test
+  that catches a non-uniform marginal reaching the inverse CDF.
+- Degenerate tables: a season whose conditions are all ineligible for a drawn
+  temperature yields the unconstrained fallback, and never a `requires_temp`
+  violation.
+- One-season climate: `from == to` covers every day of the year.
+- Empty scene state: a scene with no location, no moment, or neither resolves
+  to `None` and renders no section, without raising during `_assemble`.
 - Season fractions: a climate resolves to the same season names under a 365-day
   and a 400-day calendar.
 - Constraints: no `snow` draw ever co-occurs with a temperature band outside its
@@ -437,7 +546,11 @@ Templates render via `scripts/verify_templates.py`.
 ## Open questions
 
 - **Chain-from-epoch or correlated noise?** (§ Anchoring.) The one open
-  architectural decision; everything else in the spec holds either way.
+  architectural decision; everything else in the spec holds either way. The
+  trade has sharpened since it was first written: noise is cleaner at every
+  seam and needs no cache invalidation, but it gives up true-history
+  accumulators for a bounded window, which is a real loss for multi-year
+  drought and a real cost against #104.
 - Do weather edits join `changes.json`? `absorb._BROWSABLE_KINDS` currently
   gates this and weather is arguably too noisy to browse (#46's own note).
 - Should the campaign-wide default climate be copied into the campaign at
