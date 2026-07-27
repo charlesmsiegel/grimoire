@@ -128,6 +128,15 @@ plugin and is never committed.
   otherwise read as an empty interval and fail the coverage check.
 - A table entry is either a bare weight (`"clear": 2`) or an object with
   `weight` plus modifiers. Both forms parse to the same internal shape.
+- **Entry order is significant**, and tables are read in declared document
+  order when building the cumulative distribution. Order carries no meaning to
+  the draw itself — the weights alone decide frequencies — but it decides what
+  a quantile maps to, and therefore how weather transitions across a season
+  boundary (§ Drawing a block). Author each table **monotonically along its
+  natural axis**: calm → stormy for conditions, cold → hot for temperature,
+  still → gale for wind. The shipped presets do. A shuffled table is legal and
+  draws correctly; it just makes season transitions arbitrary instead of
+  continuous.
 - **Every season must declare at least one condition with no `requires_temp`**,
   validated at load. This is what makes the degenerate-table fallback safe
   (§ Drawing a block) without letting it emit a constrained condition outside
@@ -386,6 +395,42 @@ explicit remapping of held values at season boundaries. A field needs none of
 those: it is defined at every index, forward and backward, with nothing cached
 and nothing to invalidate.
 
+#### The construction, concretely
+
+"Correlated noise" is not a specification — many processes satisfy it while
+producing wildly different run lengths for the same `persistence`, which would
+make presets non-portable and `0.35` meaningless. The process is therefore
+pinned down exactly:
+
+1. **Latent field.** For each `(cid, zone, axis)` there is an i.i.d. standard
+   normal `z(i)` at every integer block index, drawn from a stable hash of
+   `(cid, zone, axis, i)`. This is the only source of randomness, it is defined
+   at negative indices, and it does **not** depend on `persistence`.
+2. **Smoothing.** The correlated field is a normalized exponential filter over
+   the latent:
+   `g(t) = Σ_k w_k · z(t+k) / sqrt(Σ_k w_k²)`, with `w_k = exp(−|k| / L)`
+   summed over `|k| ≤ W`. Normalization makes `g` standard normal, so Φ(g) is
+   uniform as § the copula rule requires.
+3. **Parameter mapping.** `L = −1 / ln(persistence)`, which makes
+   **`persistence` exactly the lag-1 autocorrelation** of `g` between adjacent
+   blocks — a definition that is measurable, portable, and interpretable:
+   `0.35` means "a block is 35% correlated with the one before it." `p → 0`
+   gives independent blocks; `p → 1` gives infinite correlation length.
+4. **Truncation.** `W = ceil(4L)`, capped at 2000, which bounds the discarded
+   tail below any weight that could change an inverse-CDF bucket. `p = 1`
+   is special-cased to a constant sample rather than an infinite filter.
+
+Cost is O(W) per sample — 38 taps at `p = 0.9`, 400 at `p = 0.99` — which is
+still O(1) in campaign age, the property this whole construction exists for.
+
+**Persistence is a filter over a shared latent, not a different field.** That is
+load-bearing for § Weather zones: two locations sharing a zone but disagreeing
+on `persistence` are two *smoothings of the same `z`*, so their weather stays
+genuinely correlated rather than merely equally-distributed. A construction that
+rescaled coordinates or redrew innovations as `L` changed would silently break
+the correlated-weather guarantee while passing every distribution test — which
+is why the latent is defined before, and independently of, `persistence`.
+
 **The marginal must be uniform before it reaches the table**, and this is a real
 trap rather than a detail. Inverse-CDF sampling reproduces the declared weights
 only when fed uniform quantiles, but conventional smooth value noise is not
@@ -453,10 +498,16 @@ implementation has to work for and which earlier drafts of this spec got wrong:
   a chain at `persistence: 1` carries a winter `freezing` into a summer table
   offering only `hot`, holding a value the active season does not contain. Here
   the sample is mapped through whichever table is active at *t*, so crossing a
-  season boundary remaps automatically — and, because the sample itself moves
-  continuously, it remaps to the *nearest* entry rather than jumping. This is
-  what makes the scoped `persistence: 1` guarantee (§ Climate documents) true
-  by construction rather than by enforcement.
+  season boundary remaps automatically. What is preserved across the boundary is
+  the **quantile**, not a "nearest" entry — categorical tables have no distance
+  metric, so nearness is undefined unless the ordering is. Since inverse-CDF
+  sampling walks entries in **declared document order** (§ Climate documents),
+  a sample sitting at quantile 0.8 of winter's conditions lands at quantile 0.8
+  of summer's, and an author who orders both tables monotonically gets
+  continuity for free — a stormy winter reading becomes the stormy end of
+  summer, not a coin flip. This is what makes the scoped `persistence: 1`
+  guarantee (§ Climate documents) true by construction rather than by
+  enforcement.
 - **The filtered table can be empty**, and normalizing an empty table is
   undefined. A climate whose season pairs a `mild` temperature band with
   conditions that all require `freezing` is structurally valid but unresolvable.
@@ -489,19 +540,43 @@ depth adds on snowfall blocks and subtracts on above-freezing ones. No new
 storage, still deterministic. This is what #104's "the snow at the pass has
 melted" actually needs — but weather ships first.
 
-**Accumulation is a bounded window**, not true history. Since resolution is
-random access, there is no walk to fold over for free: accumulating from the
-campaign's beginning would mean replaying every prior block, reintroducing the
-unbounded work this design exists to avoid. Each accumulator instead folds over
-the last *K* blocks, *K* fixed per accumulator — O(K) random access, no stored
-state, still fully deterministic.
+**Accumulation is a bounded fold**, not true history. Since resolution is random
+access, there is no walk to piggyback on: accumulating from the campaign's
+beginning would mean replaying every prior block, reintroducing the unbounded
+work this design exists to avoid.
 
-That is defensible on the merits rather than merely convenient: snowpack and
-ground saturation have finite physical memory, and nothing that melted six
-months ago is still on the ground. The honest limitation is that a multi-year
-drought cannot emerge this way. Long-horizon climate facts are authored as lore
-instead — which is where a GM would want them anyway, since a drought that the
-simulation wandered into is not a drought anyone can plan a story around.
+A fixed window alone does **not** solve this, and saying it did was wrong. Snow
+that fell before the window is still on the ground during a freeze longer than
+*K*; starting each fold at zero loses it, so old snowfall would vanish abruptly
+as the window slid, with no melt event to explain it. Truncation has to be
+*justified* by the dynamics, not merely declared.
+
+So every accumulator must satisfy two properties, and one that cannot is out of
+scope by construction rather than by preference:
+
+- **A strictly positive decay floor.** Each block multiplies the standing value
+  by at most `d < 1` before adding its own contribution. Physically this is
+  real — snowpack loses mass to sublimation and compaction even below freezing,
+  ground saturation drains even without sun — so it is a modelling constraint,
+  not a fudge.
+- **A saturating cap.** The value is clamped at some maximum, so a long
+  accumulation cannot make arbitrarily old blocks matter.
+
+Together these bound the truncation error: a block *K* back can contribute at
+most `dᴷ · cap`, so *K* is chosen per accumulator to put that under the
+resolution the value is reported at. The fold is then O(K) random access with no
+stored state, fully deterministic, and provably independent of anything older —
+which is what the fixed window only asserted.
+
+**Multi-year drought fails the first property** — it is precisely an absence
+that compounds without decay — and so is not expressible here. That is the
+honest cost of random access. Long-horizon climate facts are authored as lore
+instead, which is where a GM would want them anyway: a drought the simulation
+wandered into is not a drought anyone can plan a story around.
+
+The exact dynamics per accumulator (melt rates, caps, what counts as a snowfall
+block) belong to the accumulator work itself, which is deferred. What this spec
+fixes is the *shape* any accumulator must have to be implementable at all.
 
 The resolver should expose the block sequence it samples so accumulators consume
 it rather than reimplement the axis logic.
@@ -612,8 +687,19 @@ Backend, `backend/tests/test_weather.py`, store isolated with
   the climate's value; a campaign default naming a deleted climate falls back
   to the shipped preset rather than looping.
 - Season-boundary remap: at `persistence: 1`, a value absent from the new
-  season's table never survives the boundary — and the value it remaps to is
-  the nearest entry, not an arbitrary one.
+  season's table never survives the boundary, and the entry it remaps to sits
+  at the same quantile in the new table as the old value did in the old one.
+- Persistence calibration: the measured lag-1 autocorrelation of the latent
+  field is within tolerance of the configured `persistence`, across several
+  values — the test that makes a preset's `0.35` mean the same thing in any
+  implementation, which a "0.9 runs longer than 0.1" test cannot.
+- Cross-persistence zone coupling: two locations sharing a zone but configured
+  with *different* `persistence` still show correlated weather, since both are
+  smoothings of the same latent. This fails immediately if an implementation
+  reseeds or rescales the latent per correlation length.
+- Accumulator truncation: extending an accumulator's window well past its
+  chosen *K* changes the reported value by less than its reporting resolution,
+  including across a freeze longer than *K*.
 - Random access: resolving block *t* directly and resolving it after walking
   every block from 0 to *t* yield the same answer, at any *t*, including
   negative — the property that makes prequel scenes and multi-year jumps free.
