@@ -801,3 +801,147 @@ def test_reroll_still_refuses_a_roll_hidden_under_a_transition(monkeypatch, tmp_
         scenes.remove_trailing_assistant_run(cid, sid)
     assert len(scenes.read_scene(cid, sid)["messages"]) == 4
     assert scenes.get_turn_sizes(cid, sid) == [1]
+
+
+def _count_scene_writes(monkeypatch):
+    """Record every scene-file write, so a two-phase mutation is visible.
+
+    Transcript and turn_sizes must land in ONE write: a crash between two
+    writes leaves the boundary list describing a transcript that no longer
+    exists, and the next reroll trusts sizes[-1] and deletes blocks belonging
+    to an older generation — irreversible transcript loss.
+    """
+    from pathlib import Path
+    writes: list[str] = []
+    real = Path.write_text
+
+    def counting(self, *a, **kw):
+        if self.suffix == ".md":
+            writes.append(self.name)
+        return real(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "write_text", counting)
+    return writes
+
+
+def _turn_sizes_fit(cid, sid):
+    """sum(turn_sizes) never claims more model blocks than the scene holds."""
+    messages = scenes.read_scene(cid, sid)["messages"]
+    blocks = [m for m in messages
+              if m["role"] == "assistant" and m.get("speaker") not in scenes.SYNTHETIC_SPEAKERS]
+    return sum(scenes.get_turn_sizes(cid, sid)) <= len(blocks)
+
+
+def test_reroll_persists_transcript_and_boundary_in_one_write(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Atomic reroll")
+    scenes.append_message(cid, sid, "user", "Go on.")
+    scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "One."},
+                                   {"speaker": None, "content": "Two."}])
+    writes = _count_scene_writes(monkeypatch)
+    scenes.remove_trailing_assistant_run(cid, sid)
+    assert len(writes) == 1, f"expected a single scene write, got {writes}"
+    assert scenes.get_turn_sizes(cid, sid) == []
+    assert _turn_sizes_fit(cid, sid)
+
+
+def test_trim_continuation_persists_transcript_and_boundary_in_one_write(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Atomic trim")
+    scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "Kept."}])
+    scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "Crashed."},
+                                   {"speaker": None, "content": "Half-written."}])
+    writes = _count_scene_writes(monkeypatch)
+    scenes.trim_continuation(cid, sid, 1)
+    assert len(writes) == 1, f"expected a single scene write, got {writes}"
+    assert scenes.get_turn_sizes(cid, sid) == [1]
+    assert _turn_sizes_fit(cid, sid)
+
+
+def test_edit_message_persists_transcript_and_boundary_in_one_write(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Atomic edit")
+    scenes.append_message(cid, sid, "user", "Go on.")
+    scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "One thing."}])
+    writes = _count_scene_writes(monkeypatch)
+    scenes.edit_message(cid, sid, 1, "One thing.\n\n**Winifred:** And another.")
+    assert len(writes) == 1, f"expected a single scene write, got {writes}"
+    assert scenes.get_turn_sizes(cid, sid) == [2]
+    assert _turn_sizes_fit(cid, sid)
+
+
+def _hand_write_turn_sizes(cid, sid, raw):
+    """Corrupt turn_sizes out of band, as a hand-edit or a half-finished write
+    from an older build would."""
+    from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
+    p = campaigns.campaign_root(cid) / "scenes" / f"{sid}.md"
+    meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
+    meta["turn_sizes"] = raw
+    p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+
+
+def test_reroll_refuses_boundaries_that_do_not_fit_the_transcript(monkeypatch, tmp_path):
+    """A turn_sizes list claiming more blocks than exist must not authorize a
+    deletion — it would consume an earlier generation's blocks."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Desynced")
+    scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "one"}])
+    scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "two"}])
+    scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "three"}])
+    _hand_write_turn_sizes(cid, sid, "1,1,4")
+    with pytest.raises(scenes.TurnSizesDesynced):
+        scenes.remove_trailing_assistant_run(cid, sid)
+    assert [m["content"] for m in scenes.read_scene(cid, sid)["messages"]] == \
+        ["one", "two", "three"]
+
+
+def test_reroll_refuses_when_the_last_turn_is_not_at_the_tail(monkeypatch, tmp_path):
+    """The recorded generation must sit contiguously at the end. With a user
+    line spliced into what it claims, deleting sizes[-1] blocks reaches back
+    past the player's message into the previous generation."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Spliced")
+    scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "one"}])
+    scenes.append_message(cid, sid, "user", "I interrupt.")
+    scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "two"}])
+    _hand_write_turn_sizes(cid, sid, "1,2")
+    with pytest.raises(scenes.TurnSizesDesynced):
+        scenes.remove_trailing_assistant_run(cid, sid)
+    assert [m["content"] for m in scenes.read_scene(cid, sid)["messages"]] == \
+        ["one", "I interrupt.", "two"]
+
+
+def test_garbled_turn_sizes_are_no_tracking_at_all(monkeypatch, tmp_path):
+    """Dropping the bad token would invent a boundary list ([2, 1]) that
+    measurement then treats as authoritative and reroll uses destructively."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Garbled")
+    scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "one"}])
+    _hand_write_turn_sizes(cid, sid, "2,garbled,1")
+    assert scenes.get_turn_sizes(cid, sid) == []
+
+
+def test_a_zero_turn_invalidates_the_whole_field(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Zeroes")
+    scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "one"}])
+    _hand_write_turn_sizes(cid, sid, "2,0,1")
+    assert scenes.get_turn_sizes(cid, sid) == []
+    _hand_write_turn_sizes(cid, sid, "1,-2")
+    assert scenes.get_turn_sizes(cid, sid) == []
+    _hand_write_turn_sizes(cid, sid, "2,1")           # a valid list still parses
+    assert scenes.get_turn_sizes(cid, sid) == [2, 1]
+
+
+def test_reroll_on_garbled_boundaries_takes_the_untracked_path(monkeypatch, tmp_path):
+    """No tracking means the pre-boundary behaviour: the trailing assistant run
+    comes off, and the unusable field is cleared rather than half-trusted."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Garbled reroll")
+    scenes.append_message(cid, sid, "user", "Go on.")
+    scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "one"},
+                                   {"speaker": None, "content": "two"}])
+    _hand_write_turn_sizes(cid, sid, "2,garbled")
+    scenes.remove_trailing_assistant_run(cid, sid)
+    assert [m["content"] for m in scenes.read_scene(cid, sid)["messages"]] == ["Go on."]
+    assert scenes.get_turn_sizes(cid, sid) == []

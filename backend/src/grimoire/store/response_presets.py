@@ -38,6 +38,13 @@ class PresetNotFound(Exception):
     pass
 
 
+class PresetUnreadable(Exception):
+    """The preset file is there but can't be read or decoded. Distinct from
+    PresetNotFound: reading it degrades to a damaged ROW (so the management
+    view can show what's wrong), but copying it cannot — a duplicate of a file
+    we never read would silently be an empty preset."""
+
+
 class BuiltInPresetImmutable(Exception):
     pass
 
@@ -75,17 +82,42 @@ def _meta_dict(pid: str, meta: dict, built_in: bool) -> dict:
             "built_in": built_in}
 
 
+def _read_meta(p: Path) -> dict | None:
+    """A preset's frontmatter, or None when the file can't be read or decoded."""
+    try:
+        meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return None
+    return meta
+
+
+UNREADABLE_ISSUE = "this preset file could not be read — it supplies nothing"
+
+
+def _damaged(pid: str, built_in: bool) -> tuple[dict, dict]:
+    """The row shown for a preset whose file won't read, plus its validity.
+
+    Dropping the file instead would leave a scope configured to a preset that
+    no view lists and no picker offers — indistinguishable from ordinary
+    inheritance, with nothing anywhere explaining why it supplies nothing.
+    Resolution still fails open; this only makes the damage OBSERVABLE, which
+    is the entire reason validity() exists.
+    """
+    return _meta_dict(pid, {}, built_in), {"valid": False, "issues": [UNREADABLE_ISSUE]}
+
+
 def _list_dir(directory: Path, built_in: bool) -> list[dict]:
     out: list[dict] = []
     if not directory.exists():
         return out
     for p in sorted(directory.glob("*.md")):
-        try:
-            meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError):
-            continue  # a broken file is skipped, not fatal — as in styles.py
-        row = _meta_dict(p.stem, meta, built_in)
-        row["validity"] = validity(row)
+        meta = _read_meta(p)
+        if meta is None:
+            row, damage = _damaged(p.stem, built_in)
+            row["validity"] = damage
+        else:
+            row = _meta_dict(p.stem, meta, built_in)
+            row["validity"] = validity(row)
         out.append(row)
     return out
 
@@ -103,11 +135,17 @@ def is_built_in(pid: str) -> bool:
 
 
 def read_preset(pid: str) -> dict:
+    """The record, or — for a file that won't read — the same structured
+    damaged state the list shows, so the detail view can say what's wrong
+    instead of erroring out."""
     found = _find_path(pid)
     if found is None:
         raise PresetNotFound(pid)
     p, built_in = found
-    meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
+    meta = _read_meta(p)
+    if meta is None:
+        row, damage = _damaged(pid, built_in)
+        return {"meta": row, "validity": damage}
     row = _meta_dict(pid, meta, built_in)
     return {"meta": row, "validity": validity(row)}
 
@@ -319,18 +357,32 @@ def validity(meta: dict) -> dict:
                 issues.append(f"{knob}: '{raw}' is not a positive whole number — ignored")
     sid = _text(meta.get("style_id"))
     if sid and sid != STYLE_CLEAR and not styles.exists(sid):
-        issues.append(f"style '{sid}' does not exist — this selection is ignored")
+        # Damaged and missing are both ignored by resolution, but they are
+        # different problems: one is a corrupt file to restore, the other a
+        # stale id to repoint. Saying "does not exist" about a file sitting
+        # right there sends the user looking in the wrong place.
+        issues.append(f"style '{sid}' could not be read — this selection is ignored"
+                      if styles.is_damaged(sid)
+                      else f"style '{sid}' does not exist — this selection is ignored")
     return {"valid": valid, "issues": issues}
 
 
-def usage(pid: str) -> list[dict]:
-    """Every scope whose effective bundle would CHANGE if `pid` were deleted.
+def usage(pid: str) -> dict:
+    """{"affected": [...], "unevaluated": [...]} — the impact preview.
 
-    Diffs resolutions rather than scanning for references: a campaign-level
-    preset changes every scene that inherits it, and the global default can
-    change everything. Reporting only scopes that name the preset understates
-    the blast radius, and "they fall back to Standard" is false whenever a
-    broader scope still supplies something.
+    `affected` is every scope whose effective bundle would CHANGE if `pid` were
+    deleted. Diffs resolutions rather than scanning for references: a
+    campaign-level preset changes every scene that inherits it, and the global
+    default can change everything. Reporting only scopes that name the preset
+    understates the blast radius, and "they fall back to Standard" is false
+    whenever a broader scope still supplies something.
+
+    `unevaluated` is every scope the scan could not read. A skipped record must
+    be REPORTED, not silently dropped: this runs immediately before an
+    irreversible delete, and a partial list rendered as a complete one tells
+    the user "nothing else changes" when the scan actually failed partway.
+    That false preview is the stated reason this design keeps no tombstones —
+    it is exactly the failure it exists to avoid.
     """
     from . import campaigns, config, scenes
 
@@ -345,6 +397,7 @@ def usage(pid: str) -> list[dict]:
     cfg = config.read_config()
     keys = ("style_id",) + lengths.KNOBS
     out: list[dict] = []
+    unevaluated: list[dict] = []
 
     def add(scope: str, sid: str, cid: str, name: str, scene_meta: dict, campaign_meta: dict) -> None:
         before = resolved(scene_meta, campaign_meta, cfg, hide=False)
@@ -356,32 +409,48 @@ def usage(pid: str) -> list[dict]:
 
     # A single unreadable campaign or scene file must not take the whole preview
     # down: this runs immediately before an irreversible delete, and a 500 there
-    # leaves the user with no impact information at all. Broken records are
-    # skipped, exactly as _list_dir skips a broken preset file.
+    # leaves the user with no impact information at all. Each one is recorded in
+    # `unevaluated` rather than skipped, so the caller can say the list is
+    # incomplete instead of implying it is exhaustive.
     add("global", "", "", "Global default", {}, {})
     for c in campaigns.list_campaigns():
         cid = c["id"]
         try:
             cmeta = campaigns.read_campaign(cid)["meta"]
         except (campaigns.CampaignNotFound, OSError, UnicodeDecodeError):
+            unevaluated.append({"scope": "campaign", "id": cid, "name": c.get("name", cid),
+                                "reason": "this campaign could not be read"})
             continue
-        add("campaign", "", cid, cmeta.get("name", cid), {}, cmeta)
+        name = cmeta.get("name", cid)
+        add("campaign", "", cid, name, {}, cmeta)
         try:
             scene_rows = scenes.list_scenes(cid)
         except (campaigns.CampaignNotFound, OSError, UnicodeDecodeError):
+            unevaluated.append({"scope": "campaign", "id": cid, "name": name,
+                                "reason": "this campaign's scenes could not be listed"})
             continue   # the campaign row still stands; its scenes are unknown
         for s in scene_rows:
             sid = s["id"]
             try:
                 smeta = scenes.read_scene_meta(cid, sid)
             except (scenes.SceneNotFound, OSError, UnicodeDecodeError):
+                unevaluated.append({"scope": "scene", "id": sid, "name": s.get("title", sid),
+                                    "reason": f"a scene in {name} could not be read"})
                 continue
             add("scene", sid, cid, smeta.get("title", sid), smeta, cmeta)
-    return out
+    return {"affected": out, "unevaluated": unevaluated}
 
 
 def duplicate_preset(pid: str) -> str:
-    src = read_preset(pid)["meta"]
+    found = _find_path(pid)
+    if found is None:
+        raise PresetNotFound(pid)
+    meta = _read_meta(found[0])
+    if meta is None:
+        # read_preset degrades to a damaged row; copying one would mint a real
+        # preset out of a file nobody could read. Refuse instead.
+        raise PresetUnreadable(pid)
+    src = _meta_dict(pid, meta, found[1])
     knobs = {k: lengths.coerce(src.get(k, "")) for k in lengths.KNOBS}
     knobs = {k: v for k, v in knobs.items() if v is not None}
     return create_preset(f"{src['name']} (copy)", src.get("description", ""),

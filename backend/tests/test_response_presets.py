@@ -450,7 +450,7 @@ def test_usage_reports_indirectly_affected_scopes(tmp_path, monkeypatch):
     pid = rp.create_preset("Slow Burn", length_preset="cinematic")
     campaigns.set_campaign_response(cid, {"response_preset": pid})
 
-    affected = rp.usage(pid)
+    affected = rp.usage(pid)["affected"]
     kinds = [a["scope"] for a in affected]
     assert "campaign" in kinds
     assert kinds.count("scene") == 4          # every inheriting scene, not zero
@@ -466,7 +466,7 @@ def test_usage_shows_post_deletion_values_not_a_blanket_standard(tmp_path, monke
     pid = rp.create_preset("Scene Only", length_preset="terse")
     scenes.set_response(cid, sid, {"response_preset": pid})
 
-    after = {a["scope"] + ":" + a["id"]: a for a in rp.usage(pid)}
+    after = {a["scope"] + ":" + a["id"]: a for a in rp.usage(pid)["affected"]}
     scene_row = after[f"scene:{sid}"]
     assert scene_row["after"]["reply_words"] == 900        # inherits cinematic
     assert scene_row["before"]["reply_words"] == 150
@@ -475,7 +475,7 @@ def test_usage_shows_post_deletion_values_not_a_blanket_standard(tmp_path, monke
 def test_usage_is_empty_for_an_unused_preset(tmp_path, monkeypatch):
     _campaign_fixture(tmp_path, monkeypatch)
     pid = rp.create_preset("Unused", length_preset="terse")
-    assert rp.usage(pid) == []
+    assert rp.usage(pid)["affected"] == []
 
 
 def test_turn_scope_tolerates_non_string_values(tmp_path, monkeypatch):
@@ -503,3 +503,107 @@ def test_validity_reports_a_broken_length_preset_and_a_dangling_style_together(t
     assert len(v["issues"]) == 2
     assert any("nonesuch" in i for i in v["issues"])
     assert any("ghost-style" in i for i in v["issues"])
+
+
+def _corrupt(dir_path, stem):
+    """A file that exists but cannot be decoded, as a half-finished sync or a
+    truncated write leaves behind."""
+    dir_path.mkdir(parents=True, exist_ok=True)
+    (dir_path / f"{stem}.md").write_bytes(b"---\nname: \xff\xfe broken \xff\n---\n")
+
+
+def test_a_damaged_style_is_no_opinion_not_a_style(tmp_path, monkeypatch):
+    """A style file that merely EXISTS used to stop the cascade at that scope,
+    and read_style then failed and applied no style at all — suppressing the
+    valid broader style that should have been inherited."""
+    _isolate(tmp_path, monkeypatch)
+    _write(tmp_path / "templates" / "styles", "gothic-horror", name="Gothic Horror")
+    _corrupt(tmp_path / "home" / "styles", "smudged")
+    _write(tmp_path / "home" / "response_presets", "scene-preset",
+           name="Scene Preset", style_id="smudged", length_preset="terse")
+    got = rp.resolve(scene_meta=_scope(preset="scene-preset"),
+                     campaign_meta=_scope(style="gothic-horror"))
+    assert got["style_id"] == "gothic-horror"      # inherited, not wiped
+    assert got["reply_words"] == 150               # the length half still applies
+
+
+def test_validity_flags_a_damaged_style_reference(tmp_path, monkeypatch):
+    """Distinct from a missing one: 'does not exist' about a file sitting right
+    there sends the user looking in the wrong place."""
+    _isolate(tmp_path, monkeypatch)
+    _corrupt(tmp_path / "home" / "styles", "smudged")
+    _write(tmp_path / "home" / "response_presets", "scene-preset",
+           name="Scene Preset", style_id="smudged", length_preset="terse")
+    issues = rp.read_preset("scene-preset")["validity"]["issues"]
+    assert any("could not be read" in i and "smudged" in i for i in issues)
+    assert not any("does not exist" in i for i in issues)
+
+
+def test_an_unreadable_preset_is_listed_as_invalid_not_dropped(tmp_path, monkeypatch):
+    """A scope can stay configured to it; dropping the row leaves nothing
+    anywhere explaining why that scope supplies nothing."""
+    _isolate(tmp_path, monkeypatch)
+    _write(tmp_path / "home" / "response_presets", "fine", name="Fine", length_preset="terse")
+    _corrupt(tmp_path / "home" / "response_presets", "smudged")
+    rows = {r["id"]: r for r in rp.list_presets()}
+    assert "smudged" in rows
+    assert rows["smudged"]["validity"]["valid"] is False
+    assert any("could not be read" in i for i in rows["smudged"]["validity"]["issues"])
+    assert rows["fine"]["validity"]["valid"] is True
+
+
+def test_reading_an_unreadable_preset_exposes_the_damaged_state(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    _corrupt(tmp_path / "home" / "response_presets", "smudged")
+    got = rp.read_preset("smudged")
+    assert got["meta"]["id"] == "smudged"
+    assert got["validity"]["valid"] is False
+    assert rp.supplies(got["meta"]) == {}          # still fails open: supplies nothing
+
+
+def test_duplicating_an_unreadable_preset_refuses(tmp_path, monkeypatch):
+    """Copying a file we never read would mint an empty preset that looks real."""
+    _isolate(tmp_path, monkeypatch)
+    _corrupt(tmp_path / "home" / "response_presets", "smudged")
+    with pytest.raises(rp.PresetUnreadable):
+        rp.duplicate_preset("smudged")
+
+
+def test_usage_reports_an_unreadable_scene_as_unevaluated(tmp_path, monkeypatch):
+    """A skipped scope must be REPORTED. A partial list rendered as a complete
+    one tells the user 'nothing else changes' when the scan failed partway,
+    immediately before an irreversible delete."""
+    from grimoire.store import campaigns, scenes
+    cid, _sid = _campaign_fixture(tmp_path, monkeypatch)
+    pid = rp.create_preset("Slow Burn", length_preset="cinematic")
+    campaigns.set_campaign_response(cid, {"response_preset": pid})
+    bad = scenes.create_scene(cid, "Smudged")
+    (campaigns.campaign_root(cid) / "scenes" / f"{bad}.md").write_bytes(
+        b"\xff\xfe not valid utf-8 \x00\x01")
+
+    got = rp.usage(pid)
+    # the campaign row still stands; the scenes under it could not be evaluated
+    assert any(a["scope"] == "campaign" and a["id"] == cid for a in got["affected"])
+    assert [(u["scope"], u["id"]) for u in got["unevaluated"]] == [("campaign", cid)]
+    assert "scenes" in got["unevaluated"][0]["reason"]
+
+
+def test_usage_reports_an_unreadable_campaign_as_unevaluated(tmp_path, monkeypatch):
+    """A campaign whose record cannot be read (permissions, a concurrent
+    delete) is reported, not quietly omitted from the impact list."""
+    from grimoire.store import campaigns
+    cid, _sid = _campaign_fixture(tmp_path, monkeypatch)
+    pid = rp.create_preset("Slow Burn", length_preset="cinematic")
+
+    def boom(_cid):
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(campaigns, "read_campaign", boom)
+    got = rp.usage(pid)
+    assert [(u["scope"], u["id"]) for u in got["unevaluated"]] == [("campaign", cid)]
+
+
+def test_usage_on_a_clean_store_reports_nothing_unevaluated(tmp_path, monkeypatch):
+    _campaign_fixture(tmp_path, monkeypatch)
+    pid = rp.create_preset("Unused", length_preset="terse")
+    assert rp.usage(pid) == {"affected": [], "unevaluated": []}

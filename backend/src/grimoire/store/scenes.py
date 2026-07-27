@@ -332,7 +332,28 @@ def _append_block(body: str, block: str) -> str:
 
 
 def _parse_turn_sizes(raw: str) -> list[int]:
-    return [int(x) for x in raw.split(",") if x.strip().isdigit()]
+    """Parse the boundary list STRICTLY: every token must be a positive whole
+    number, or the whole field is discarded.
+
+    Dropping only the bad tokens invents boundaries. "2,garbled,1" would parse
+    to [2, 1] and a zero would pass through as a real turn — and both are then
+    treated as authoritative by measurement AND by reroll, which deletes
+    sizes[-1] blocks. A field that cannot be trusted end to end means "no
+    tracking": no metrics, and reroll takes the untracked path.
+    """
+    sizes: list[int] = []
+    for token in raw.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            n = int(token)
+        except ValueError:
+            return []
+        if n <= 0:
+            return []
+        sizes.append(n)
+    return sizes
 
 
 def get_turn_sizes(cid: str, sid: str) -> list[int]:
@@ -350,10 +371,19 @@ def get_turn_sizes(cid: str, sid: str) -> list[int]:
     return _parse_turn_sizes(parse_frontmatter_head(p).get("turn_sizes", ""))
 
 
-def _write_turn_sizes(p: Path, sizes: list[int]) -> None:
-    meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
-    meta["turn_sizes"] = ",".join(str(n) for n in sizes)
-    p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+def _set_turn_sizes(meta: dict, sizes: list[int]) -> None:
+    """Stage the boundary list into `meta` for the caller's single write.
+
+    Every mutation that touches both the transcript and its boundaries writes
+    them TOGETHER: a crash between two writes leaves turn_sizes describing a
+    transcript that no longer exists, and the next reroll then trusts sizes[-1]
+    and deletes blocks belonging to an older generation. Irreversible.
+
+    A scene with no tracking keeps none: writing an empty key would stamp
+    turn_sizes onto every legacy scene it touches for no gain.
+    """
+    if sizes or "turn_sizes" in meta:
+        meta["turn_sizes"] = ",".join(str(n) for n in sizes)
 
 
 def append_reply(cid: str, sid: str, segments: list[dict]) -> None:
@@ -455,6 +485,39 @@ def trailing_transitions(messages: list[dict]) -> int:
     return n
 
 
+class TurnSizesDesynced(Exception):
+    """The recorded boundaries can no longer describe the stored transcript.
+
+    Raised INSTEAD of deleting anything. turn_sizes is what tells reroll how
+    many blocks the last generation had; a list that doesn't fit the transcript
+    would have it count back through blocks belonging to earlier generations,
+    destroying transcript nobody asked to reroll. There is no safe guess to
+    fall back on — the untracked path eats every consecutive generation — so
+    the operation refuses and the scene is left exactly as it was.
+    """
+
+
+def _trailing_model_run(messages: list[dict]) -> int:
+    """How many messages at the tail are contiguous model blocks."""
+    n = 0
+    while n < len(messages) and messages[-1 - n]["role"] == "assistant" \
+            and messages[-1 - n].get("speaker") not in SYNTHETIC_SPEAKERS:
+        n += 1
+    return n
+
+
+def _tracked_suffix_fits(messages: list[dict], sizes: list[int]) -> bool:
+    """Whether `sizes` can still describe this transcript's trailing blocks.
+
+    Two ways it can't: the list claims more model blocks than exist at all, or
+    the last recorded generation isn't sitting contiguously at the tail (a user
+    line or a dice roll has been spliced into the middle of what it claims).
+    Either way the list is describing some other transcript.
+    """
+    return (sum(sizes) <= len(_model_blocks(messages))
+            and sizes[-1] <= _trailing_model_run(messages))
+
+
 def remove_trailing_assistant_run(cid: str, sid: str) -> None:
     """Drop the trailing run of assistant-side messages (one turn's output).
 
@@ -462,6 +525,8 @@ def remove_trailing_assistant_run(cid: str, sid: str) -> None:
     the generation removed is the last one beneath them. Stops at (and refuses
     to touch) a manual dice-roll line: rerolling must never delete a roll's
     transcript entry while it still lives in rolls.json.
+
+    Transcript and boundaries land in ONE write; see _set_turn_sizes.
     """
     p = _scene_path(cid, sid)
     if not _safe_id(sid) or not p.exists():
@@ -473,27 +538,27 @@ def remove_trailing_assistant_run(cid: str, sid: str) -> None:
     if (not messages or messages[-1]["role"] != "assistant"
             or messages[-1].get("speaker") in SYNTHETIC_SPEAKERS):
         raise IndexError("no trailing assistant reply")
-    sizes = get_turn_sizes(cid, sid)
+    meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
+    sizes = _parse_turn_sizes(meta.get("turn_sizes", ""))
     if sizes:
+        # Validate BEFORE deleting. Hand-edited or externally-corrupted
+        # boundaries must not authorize a deletion this large.
+        if not _tracked_suffix_fits(messages, sizes):
+            raise TurnSizesDesynced(sid)
         # Remove EXACTLY the last recorded generation. A role-based trailing-run
         # removal would eat every consecutive generation, because director turns
         # persist no user message to stop at — deleting more than the caller
         # asked to reroll, and desyncing turn_sizes permanently.
-        remaining = sizes[-1]
-        while remaining and messages and messages[-1]["role"] == "assistant" \
-                and messages[-1].get("speaker") not in SYNTHETIC_SPEAKERS:
-            messages.pop()
-            remaining -= 1
+        del messages[len(messages) - sizes[-1]:]
+        sizes = sizes[:-1]
     else:
-        while (messages and messages[-1]["role"] == "assistant"
-               and messages[-1].get("speaker") not in SYNTHETIC_SPEAKERS):
-            messages.pop()
-    meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
+        # Untracked (or unparseable, which means the same thing): the whole
+        # trailing model run comes off, as it did before boundaries existed.
+        del messages[len(messages) - _trailing_model_run(messages):]
     meta["updated"] = now_iso()
+    _set_turn_sizes(meta, sizes)
     p.write_text(dump_frontmatter(meta, _serialize_messages(messages + tail)),
                  encoding="utf-8")
-    if sizes:
-        _write_turn_sizes(p, sizes[:-1])
 
 
 def trim_continuation(cid: str, sid: str, from_index: int) -> None:
@@ -510,8 +575,6 @@ def trim_continuation(cid: str, sid: str, from_index: int) -> None:
     kept = messages[:from_index] + [
         m for m in messages[from_index:] if m.get("speaker") == ROLL_SPEAKER]
     meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
-    meta["updated"] = now_iso()
-    p.write_text(dump_frontmatter(meta, _serialize_messages(kept)), encoding="utf-8")
     # Trimming drops model blocks, so the tracked suffix must shrink to match or
     # segmentation is left describing blocks that no longer exist. Whole
     # generations come off: a partially-trimmed one is not a generation worth
@@ -522,12 +585,17 @@ def trim_continuation(cid: str, sid: str, from_index: int) -> None:
     # difference — 10 legacy blocks plus sizes [1, 2] trimmed back to the first
     # tracked turn still leaves 11 blocks, so a total-based comparison keeps the
     # stale 2 and segmentation then reads legacy messages as a turn.
-    sizes = get_turn_sizes(cid, sid)
+    #
+    # Body and boundaries go out in ONE write (see _set_turn_sizes): a crash
+    # between them would leave sizes describing blocks this call just deleted.
+    sizes = _parse_turn_sizes(meta.get("turn_sizes", ""))
     prefix = max(len(_model_blocks(messages)) - sum(sizes), 0)  # untracked legacy blocks
     tracked_after = max(len(_model_blocks(kept)) - prefix, 0)
     while sizes and sum(sizes) > tracked_after:
         sizes.pop()
-    _write_turn_sizes(p, sizes)
+    meta["updated"] = now_iso()
+    _set_turn_sizes(meta, sizes)
+    p.write_text(dump_frontmatter(meta, _serialize_messages(kept)), encoding="utf-8")
 
 
 class RollMessageImmutable(Exception):
@@ -539,23 +607,32 @@ def edit_message(cid: str, sid: str, index: int, content: str) -> None:
     p = _scene_path(cid, sid)
     if not _safe_id(sid) or not p.exists():
         raise SceneNotFound(sid)
-    meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
-    messages = read_scene(cid, sid)["messages"]
+    from . import appearances  # lazy: appearances lazily imports scenes too
+    players = frozenset(appearances.player_names(cid, sid))
+    meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
+    messages = _parse_messages(body, players)
     if index < 0 or index >= len(messages):
         raise IndexError(index)
     if messages[index].get("speaker") == ROLL_SPEAKER:
         raise RollMessageImmutable(index)
     before = _model_blocks(messages)
     messages[index]["content"] = content.strip()
+    # Re-parse the body we are about to store rather than reading it back after
+    # writing: the edited text is re-split at read time, so the new block count
+    # is only knowable from the serialized form — and body and boundaries have
+    # to go out together (see _set_turn_sizes).
+    new_body = _serialize_messages(messages)
+    after = _model_blocks(_parse_messages(new_body, players))
     meta["updated"] = now_iso()
-    p.write_text(dump_frontmatter(meta, _serialize_messages(messages)), encoding="utf-8")
-    _reconcile_turn_sizes(cid, sid, p, index, before)
+    _set_turn_sizes(meta, _reconciled_turn_sizes(
+        _parse_turn_sizes(meta.get("turn_sizes", "")), before, after, index))
+    p.write_text(dump_frontmatter(meta, new_body), encoding="utf-8")
 
 
-def _reconcile_turn_sizes(cid: str, sid: str, p: Path, index: int,
-                          before: list[int]) -> None:
-    """Keep turn_sizes describing the transcript's real trailing model blocks
-    after an edit changed how the body PARSES.
+def _reconciled_turn_sizes(sizes: list[int], before: list[int], after: list[int],
+                           index: int) -> list[int]:
+    """turn_sizes describing the transcript's real trailing model blocks after
+    an edit changed how the body PARSES.
 
     Stored content is re-split at read time on blank-line-preceded
     `**Speaker:**` markers, so editing a message can add model blocks (a marker
@@ -570,14 +647,12 @@ def _reconcile_turn_sizes(cid: str, sid: str, p: Path, index: int,
     trailing blocks. Dropping older entries is acceptable — they merely stop
     being measured. Keeping an entry that describes the wrong blocks is not.
     """
-    sizes = get_turn_sizes(cid, sid)
     if not sizes:
-        return                                   # untracked scene: nothing to keep in step
-    after = _model_blocks(read_scene(cid, sid)["messages"])
+        return sizes                             # untracked scene: nothing to keep in step
     delta = len(after) - len(before)
     if delta == 0:
-        return                                   # the ordinary edit: content only
-    recorded = list(sizes)
+        return sizes                             # the ordinary edit: content only
+    sizes = list(sizes)
     while sizes and sum(sizes) > len(before):
         sizes.pop(0)                             # hand-edited: claims blocks that never existed
     prefix = len(before) - sum(sizes)             # untracked pre-tracking blocks
@@ -603,8 +678,7 @@ def _reconcile_turn_sizes(cid: str, sid: str, p: Path, index: int,
     # tracked suffix still covers exactly the blocks it always did.
     while sizes and sum(sizes) > len(after):
         sizes.pop(0)
-    if sizes != recorded:
-        _write_turn_sizes(p, sizes)
+    return sizes
 
 
 def mark_absorbed(cid: str, sid: str, one_line: str, summary: str) -> None:
