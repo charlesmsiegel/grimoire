@@ -1,6 +1,8 @@
 # Weather: procedural generation, overrides, and time-advance
 
-Status: draft (brainstorm output; not yet through the spec → planning gate)
+Status: settled. Through four rounds of adversarial review (#229); the
+anchoring question that was open at merge is now resolved in favour of a
+correlated noise field. Ready for the planning stage.
 Issues: #44 (procedural generation), #45 (campaign-local manual override),
 #46 (extractor-driven override), #104 (weather changes across locations on
 advance), #195 (scene HUD widget), #40 (atmosphere config editor)
@@ -38,8 +40,8 @@ Settled during brainstorming, in the order they were decided.
    against), and open-ended custom axes (the #46 extractor cannot map narration
    onto axes it can't know in advance).
 3. **Time blocks, not days.** Weather resolves per block — dawn / morning /
-   afternoon / evening / night — and the persistence chain runs across
-   consecutive *blocks*, spanning day boundaries. One knob then produces both
+   afternoon / evening / night — and persistence correlates *consecutive
+   blocks*, spanning day boundaries. One knob then produces both
    observed behaviors: low persistence gives a coast that squalls and clears
    before noon, high gives a week of unbroken grey.
 4. **Persistence on both climate and location.** The climate sets the baseline
@@ -67,9 +69,12 @@ Decisions **not** put to the user, flagged for review: axis ordering and the
 `requires_temp` constraint (§ Drawing a block), and block boundary times
 (§ Blocks).
 
-Still open: how persistence survives a boundary without an unbounded walk
-(§ Anchoring). The first draft's answer was wrong; two candidate replacements
-are recorded there.
+9. **Persistence is a correlated noise field, not a Markov chain**
+   (§ The noise field). How persistence survives a year or season boundary
+   without an unbounded walk was the last open question in this design; it is
+   settled in favour of random-access noise. The rejected chain-based
+   alternatives are recorded there, because the obvious reading of "today
+   depends on yesterday" is a chain and two drafts of this spec tried it.
 
 ## Data model
 
@@ -178,7 +183,7 @@ configuration with campaign-local fiat would put authored spans and library
 defaults in one blob.
 
 ```json
-{ "default_climate": "temperate-coastal", "epoch": "1492-01-01" }
+{ "default_climate": "temperate-coastal" }
 ```
 
 Both fields are optional. When the file is absent, `default_climate` is unset,
@@ -189,8 +194,7 @@ unloadable case matters as much as the missing one: a configured default can
 name a malformed climate, or a custom-only climate the user has since deleted,
 and without this rule an untagged location has nowhere left to fall — and a
 location naming that same dead id would bounce to the campaign default and back.
-The shipped preset terminates the chain unconditionally. `epoch` is only
-meaningful under Option 1 (§ Anchoring), and is stored as a fixed day.
+The shipped preset terminates the chain unconditionally.
 
 ### Weather zones (the deferred-correlation hook)
 
@@ -277,8 +281,7 @@ hash-diffing of entity blobs is undisturbed.
   Gregorian-looking `1492-06-14` then either fails to parse under `hebrew` or
   silently maps to a different day. Native strings are for display and
   re-editing; the fixed coordinates are authoritative and survive a provider
-  change. Writers compute both. The same applies to Option 1's epoch, which is
-  stored as a fixed day rather than a native string.
+  change. Writers compute both.
 - **`id` is required**, and it is what makes the precedence backstop
   implementable — the rules below need a stable per-span identity that array
   position cannot supply. Writers generate one; a hand-authored entry missing an
@@ -360,65 +363,28 @@ is one contiguous interval and 22:00 does not land in a different block from
 reroll halfway through a single night — the one span most likely to hold a
 continuous scene.
 
-### Anchoring
+### The noise field
 
-Persistence means block *N* depends on block *N−1*, which naively means walking
-back to campaign day zero — unbounded work as a campaign ages.
+Weather is **not** a Markov chain over blocks. Each axis is a **correlated noise
+field** over the continuous block index, sampled directly at whatever index is
+asked for, with correlation length derived from `persistence`. Runs of weather
+emerge from the field's smoothness rather than from carrying a previous value
+forward, and any block resolves in O(1) regardless of how old the campaign is.
 
-**The year-anchor-plus-burn-in scheme in this spec's first draft was wrong**, and
-is recorded here because the reasoning generalizes. It seeded a fresh chain per
-`(campaign, zone, year)` and discarded 20 blocks of burn-in before the anchor.
-Burn-in makes the first retained state approach the correct *marginal*
-distribution, but it cannot correlate that state with the final block of the
-preceding year, because the preceding year's chain was never consulted. At
-`persistence: 1` each year is internally constant and still free to jump every
-New Year — directly contradicting "1 never changes," and failing the year-seam
-test this spec asks for. Fixing correlation across a boundary requires either
-crossing it or removing it.
-
-Two ways to do that. **This is the one open architectural decision in the spec.**
-
-**Option 1 — anchor at the campaign epoch, memoize each year's end state.**
-Keeps the Markov chain exactly as described; only the anchor moves. Year *N*
-starts from year *N−1*'s final block, computed lazily and cached, recursing back
-to the campaign's first year. Correlation is then genuinely continuous. Cost is
-O(years since epoch) on first touch and O(1) after — ~91k cheap RNG steps for a
-50-year span, which is milliseconds, and a jump to year +50 pays it once.
-Carries three liabilities. **Dates before the epoch need a construction the
-forward chain cannot supply** — a seeded Markov walk generates successors, not
-predecessors, and `set_datetime` permits arbitrary backward jumps, so a prequel
-scene set before the epoch has no defined sky. Two acceptable resolutions, and
-the spec must pick one rather than leave it to the implementer: run a second
-chain *backward* from the epoch state, using the same transition rule and a
-distinct seed, which stays deterministic and joins continuously at the epoch
-because it starts from that state; or reject pre-epoch dates outright and place
-the epoch a generous margin before the campaign's first recorded moment so the
-case effectively cannot arise. The backward chain is preferable — rejection
-turns a legal in-app action into an error the user cannot fix. Note that
-Option 2 has no such case: a noise field is defined at negative indices exactly
-as it is at positive ones.
-
-The per-year memo must be invalidated when climates or
-location settings change, or a long-running process will keep serving a stale
-walk while a restarted one computes something different — breaking the
-cross-process determinism this spec promises; the climate content hash and the
-resolved location settings therefore belong in the cache key, not just the year.
-
-And the epoch itself has to be **persisted and immutable**, which is why
-`climate.json` carries an `epoch` field. There is no in-game campaign start date
-to derive it from: `create_campaign` records only real-world `created`/`updated`
-stamps (`campaigns.py:81-87`), and scene native dates arrive later and can be
-edited or added in any order. Deriving the epoch from the earliest known scene
-would mean that adding a prequel scene silently rewrites every sky the campaign
-has ever shown — a determinism violation that would surface as "the weather
-changed in scenes I already played." Written once, on first weather resolution,
-and never recomputed.
-
-**Option 2 — replace the chain with random-access correlated noise
-(recommended).** Instead of a Markov walk, each axis is a correlated noise
-function over the block index, with correlation length derived from
-`persistence`, sampled through the season table's inverse CDF. Runs of weather
-emerge from the noise's correlation length rather than from carry-forward.
+**Why not a chain**, since a chain is the obvious reading of "today depends on
+yesterday" and two drafts of this spec tried it. A chain has to start somewhere,
+and every choice of anchor is either unbounded or discontinuous. Anchoring per
+year and discarding a burn-in — the first draft — fixes the *marginal*
+distribution at the anchor but cannot correlate it with the final block of the
+previous year, so at `persistence: 1` the sky is constant all year and still
+free to jump every New Year. Anchoring at a campaign epoch fixes that, but then
+needs a persisted immutable epoch (there is no in-game campaign start date to
+derive one from — `create_campaign` records only real-world stamps), a cache key
+carrying the climate content hash so a long-running process doesn't serve a
+stale walk, a second backward chain for prequel scenes set before the epoch, and
+explicit remapping of held values at season boundaries. A field needs none of
+those: it is defined at every index, forward and backward, with nothing cached
+and nothing to invalidate.
 
 **The marginal must be uniform before it reaches the table**, and this is a real
 trap rather than a detail. Inverse-CDF sampling reproduces the declared weights
@@ -426,81 +392,71 @@ only when fed uniform quantiles, but conventional smooth value noise is not
 uniform — interpolation concentrates samples toward the middle of the range, so
 mapping it directly through the table would systematically under-draw the rare
 entries at the tails and over-draw the common middle ones, quietly violating the
-weights the whole data model is built on. Specify the process as **correlated
+weights the whole data model is built on. The process is therefore **correlated
 Gaussian noise pushed through the standard normal CDF Φ** to obtain uniform
 marginals, and only then through the table's inverse CDF — a Gaussian copula.
 Any construction with provably uniform marginals is acceptable; an unstated one
 is not.
 
-This is a real pivot, but it dissolves three findings at once rather than
-patching them:
+Three properties follow structurally rather than by maintenance:
 
-- *No anchor, so no seam* — at any boundary, year or season. `persistence: 1`
-  becomes infinite correlation length, holding the sample constant, which under
-  the scoped guarantee (§ Climate documents) means constant weather within a
-  season.
-- *No memoized walk, so nothing to invalidate* — the cache-coherence liability
-  above simply does not exist, and determinism is structural rather than
-  maintained.
-- *Condition revalidation becomes automatic* — condition is always
+- **No seam at any boundary**, year or season. `persistence: 1` is infinite
+  correlation length, holding the sample constant, which under the scoped
+  guarantee (§ Climate documents) means constant weather within a season.
+- **Nothing to invalidate.** Determinism is a property of the construction, not
+  something a cache key has to preserve.
+- **Condition revalidation is automatic.** Condition is always
   `inverse_cdf(table filtered by temperature(t), noise(t))`, so when temperature
-  moves, the filtered table moves with it and an ineligible value cannot be
-  carried. The explicit revalidation rule above becomes a property instead of a
-  step.
+  moves the filtered table moves with it and an ineligible value cannot be
+  carried. The revalidation rules in § Drawing a block describe a property here,
+  not a step to implement.
 
-It also fixes something nobody flagged: at a season boundary the table changes
+It also buys something nobody asked for: at a season boundary the table changes
 while the noise value stays continuous, so weather *morphs* into the new season
-instead of stepping. The cost is that runs are no longer geometrically
-distributed the way a Markov chain's are, and `persistence` becomes a
-correlation length rather than a carry-forward probability — a knob that needs
-recalibrating, not a knob that disappears.
+instead of stepping.
 
-**It also costs the cheap accumulators**, which is the strongest argument
-against it. § Accumulators claims snowpack folds over "the same walk the
-resolver already performs" — true under Option 1, false here, because Option 2
-performs no walk. Answering "how deep is the snow on day 900" would mean
-replaying every prior block or storing checkpoints, reintroducing exactly the
-unbounded work or state this design exists to avoid. The bounded answer is a
-**windowed fold**: accumulate over the last *K* blocks only, K fixed per
-accumulator, which is O(K) random access and needs no state. That is defensible
-on the merits — snowpack and ground saturation have finite physical memory, and
-nothing that melted six months ago is still on the ground — but it is a genuine
-semantic narrowing from "true history," and multi-year drought would not be
-expressible this way. Option 1 gets accumulators for free; Option 2 buys them.
+**The costs, stated plainly.** Runs are no longer geometrically distributed the
+way a Markov chain's are, and `persistence` is a correlation length rather than
+a carry-forward probability — a knob that needs calibrating against play, not a
+knob that disappears. And accumulators get more expensive: with no walk to fold
+over, snow depth cannot be accumulated across true history without replaying
+every prior block. § Accumulators specifies a bounded window instead, which
+covers snowpack and ground saturation but cannot express multi-year drought.
+That was the one real argument for the chain, and it was judged worth paying:
+long-horizon climate facts are better authored as lore than stumbled into by a
+simulation.
 
 ### Drawing a block
 
-Given the season (from the year fraction) and the previous block's draw:
+Given the block index *t* and the season it falls in (from the year fraction),
+each axis resolves independently of the blocks around it — the correlation
+lives in the noise field, not in a carry-forward step:
 
-1. With probability `persistence`, carry the previous block's value for an axis
-   unchanged. Otherwise draw fresh from that axis's weighted table.
-2. Axes are drawn in order **temperature → condition → wind**, because
-   conditions can constrain on temperature. A condition entry's `requires_temp`
-   drops its weight to zero when the drawn band isn't listed — which is what
-   stops the tables from producing snow at high summer temperatures.
-3. Wind is independent of both.
+1. **Temperature** = `inverse_cdf(season.temperature, Φ(noise_temp(t)))`.
+2. **Condition** = `inverse_cdf(season.conditions filtered by the resolved
+   temperature, Φ(noise_cond(t)))`. A condition entry's `requires_temp` drops
+   its weight to zero when the resolved band isn't listed — which is what stops
+   the tables from producing snow at high summer temperatures. Temperature
+   resolves first precisely so this filter has something to apply.
+3. **Wind** = `inverse_cdf(season.wind, Φ(noise_wind(t)))`, independent of both.
 
-Two consequences of applying persistence per axis, both of which the naive
-reading gets wrong:
+Two properties this construction gives for free, both of which a carry-forward
+implementation has to work for and which earlier drafts of this spec got wrong:
 
-- **A carried condition is revalidated against the newly resolved
-  temperature.** `requires_temp` filters a freshly *drawn* condition, but a
+- **A held condition can never contradict its temperature.** In a chain, a
   block that carries `snow` forward while its temperature rerolls from
-  `freezing` to `mild` would emit exactly the combination the constraint
-  exists to prevent. Carrying forward is therefore conditional: if the held
-  value is ineligible under the new temperature, it is discarded and redrawn
-  from the filtered table. Persistence orders the axes, it does not exempt
-  them.
-- **A carried value is also revalidated when the season table changes.** The
-  same defect one boundary out: at `persistence: 1` under Option 1, carrying
-  every axis unchanged forever means a winter `freezing` temperature persists
-  into a summer table that offers only `hot`, and the sky holds a value the
-  active season does not contain. Whenever the active table changes, any held
-  value absent from the new table is remapped — by rank if the tables share an
-  ordering, otherwise redrawn. This is what makes the scoped `persistence: 1`
-  guarantee (§ Climate documents) true rather than aspirational under Option 1;
-  under Option 2 it is automatic, since the sample is remapped through the new
-  table by construction.
+  `freezing` to `mild` emits exactly the combination `requires_temp` exists to
+  prevent, so carrying has to be made conditional and the held value redrawn.
+  Here the condition is always read through the table *as filtered by the
+  temperature at that same index*, so an ineligible value is not representable.
+- **A held value can never outlive its season.** Same defect one boundary out:
+  a chain at `persistence: 1` carries a winter `freezing` into a summer table
+  offering only `hot`, holding a value the active season does not contain. Here
+  the sample is mapped through whichever table is active at *t*, so crossing a
+  season boundary remaps automatically — and, because the sample itself moves
+  continuously, it remaps to the *nearest* entry rather than jumping. This is
+  what makes the scoped `persistence: 1` guarantee (§ Climate documents) true
+  by construction rather than by enforcement.
 - **The filtered table can be empty**, and normalizing an empty table is
   undefined. A climate whose season pairs a `mild` temperature band with
   conditions that all require `freezing` is structurally valid but unresolvable.
@@ -515,18 +471,15 @@ reading gets wrong:
   asserts. A malformed private climate degrades to a boring sky; it never takes
   a turn down, and never lies about the temperature.
 
-Seeding depends on which option § Anchoring resolves to, and the two are not
-interchangeable:
+**Seeding**: a stable hash of `(cid, zone, axis)` parameterizes each noise
+field, which is then sampled at the continuous block index. There is **no
+per-year or per-season component in the seed**, and adding one would be a
+regression, not a refinement — it would decorrelate the samples either side of
+the boundary and reintroduce exactly the seam this construction exists to
+remove. The three axes take distinct seeds so temperature, condition and wind
+do not move in lockstep.
 
-- **Option 1**: a stable hash of `(cid, zone, epoch)` seeds the chain once, then
-  the walk advances it. Per-year seeding is what the discarded first draft did
-  and is exactly what reintroduces the New Year seam.
-- **Option 2**: a stable hash of `(cid, zone)` parameterizes the noise field,
-  which is then sampled at the continuous block index. There is no per-year
-  seed at all — introducing one would decorrelate the samples either side of
-  New Year and recreate the seam the option exists to remove.
-
-Either way the campaign id is in the seed per #44 — two campaigns in one world
+The campaign id is in the seed per #44 — two campaigns in one world
 must not share skies.
 
 ### Accumulators (later, not v1)
@@ -536,14 +489,22 @@ depth adds on snowfall blocks and subtracts on above-freezing ones. No new
 storage, still deterministic. This is what #104's "the snow at the pass has
 melted" actually needs — but weather ships first.
 
-**How cheap this is depends on the open decision in § Anchoring.** Under
-Option 1 the resolver already walks the chain, so an accumulator is a fold over
-work that is happening anyway, over true history, at no extra cost. Under
-Option 2 there is no walk, so accumulation must be a bounded window over the
-last *K* blocks — still deterministic and still O(1)-ish, but a narrower
-semantics that cannot express multi-year drought. Whichever is chosen, the
-resolver should expose the block sequence it uses so accumulators consume it
-rather than reimplement it.
+**Accumulation is a bounded window**, not true history. Since resolution is
+random access, there is no walk to fold over for free: accumulating from the
+campaign's beginning would mean replaying every prior block, reintroducing the
+unbounded work this design exists to avoid. Each accumulator instead folds over
+the last *K* blocks, *K* fixed per accumulator — O(K) random access, no stored
+state, still fully deterministic.
+
+That is defensible on the merits rather than merely convenient: snowpack and
+ground saturation have finite physical memory, and nothing that melted six
+months ago is still on the ground. The honest limitation is that a multi-year
+drought cannot emerge this way. Long-horizon climate facts are authored as lore
+instead — which is where a GM would want them anyway, since a drought that the
+simulation wandered into is not a drought anyone can plan a story around.
+
+The resolver should expose the block sequence it samples so accumulators consume
+it rather than reimplement the axis logic.
 
 ## Integration
 
@@ -620,11 +581,12 @@ Backend, `backend/tests/test_weather.py`, store isolated with
   `0.1`, over a sampled year.
 - Year seam: the distribution of change-events across the year boundary matches
   the distribution mid-year, **and** at `persistence: 1` the value is identical
-  either side of a New Year — the assertion the first draft's burn-in would
-  have failed. Scope the equality to a climate whose season does *not* boundary
-  at fraction 0, or assert on the underlying correlated sample instead: a season
-  change at New Year is licensed to change the weather by the scoped guarantee,
-  so an unconditional assertion would reject a conforming implementation.
+  either side of a New Year. Scope that equality to a climate whose season does
+  *not* boundary at fraction 0, or assert on the underlying sample instead — a
+  season change at New Year is licensed to change the weather by the scoped
+  guarantee, so an unconditional assertion would reject a conforming
+  implementation. This is the assertion every chain-with-an-anchor design in
+  this spec's history failed, and it is the reason for the noise field.
 - Season seam: likewise across a season boundary, where the table changes but
   the underlying stream should not jump.
 - Block identity: 23:00 and 01:00 the following morning resolve to the same
@@ -649,8 +611,12 @@ Backend, `backend/tests/test_weather.py`, store isolated with
 - Config leniency: `persistence` of `"2"`, `"-1"` and `"NaN"` each fall back to
   the climate's value; a campaign default naming a deleted climate falls back
   to the shipped preset rather than looping.
-- Season-boundary carry: at `persistence: 1`, a held value absent from the new
-  season's table is remapped rather than retained.
+- Season-boundary remap: at `persistence: 1`, a value absent from the new
+  season's table never survives the boundary — and the value it remaps to is
+  the nearest entry, not an arbitrary one.
+- Random access: resolving block *t* directly and resolving it after walking
+  every block from 0 to *t* yield the same answer, at any *t*, including
+  negative — the property that makes prequel scenes and multi-year jumps free.
 - Weight fidelity: over a long sample the observed frequency of each condition
   matches its normalized weight, at several persistence settings — the test
   that catches a non-uniform marginal reaching the inverse CDF.
@@ -677,19 +643,17 @@ Templates render via `scripts/verify_templates.py`.
 
 - **Spatial correlation** — storms sweeping across adjacent locations. Needs a
   location hierarchy. Hook left at § Weather zones.
-- **Accumulators** — snowpack, saturation, drought. Design the walk to permit
-  them; build later.
+- **Accumulators** — snowpack and ground saturation, as bounded windows over the
+  sampled block sequence. Drought is out of scope by construction (§ Accumulators).
 - **LLM-authored flavor** — #44's Option B, as a "reroll with AI" garnish on top
   of the procedural draw rather than a replacement for it.
 
 ## Open questions
 
-- **Chain-from-epoch or correlated noise?** (§ Anchoring.) The one open
-  architectural decision; everything else in the spec holds either way. The
-  trade has sharpened since it was first written: noise is cleaner at every
-  seam and needs no cache invalidation, but it gives up true-history
-  accumulators for a bounded window, which is a real loss for multi-year
-  drought and a real cost against #104.
+- **What `persistence` values actually feel like at the table.** It is now a
+  correlation length rather than a carry-forward probability, so the presets
+  ship with values calibrated by eye and will need adjusting against play. The
+  shipped climates are the place to tune this, not the algorithm.
 - Do weather edits join `changes.json`? `absorb._BROWSABLE_KINDS` currently
   gates this and weather is arguably too noisy to browse (#46's own note).
 - Should the campaign-wide default climate be copied into the campaign at
