@@ -338,7 +338,7 @@ def usage(pid: str) -> list[dict]:
         add("campaign", "", cid, cmeta.get("name", cid), {}, cmeta)
         for s in scenes.list_scenes(cid):
             sid = s["id"]
-            smeta = scenes.read_scene(cid, sid)["meta"]
+            smeta = scenes.read_scene_meta(cid, sid)
             add("scene", sid, cid, smeta.get("title", sid), smeta, cmeta)
     return out
 

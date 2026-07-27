@@ -35,6 +35,22 @@ def test_unknown_scene_raises(monkeypatch, tmp_path):
         scenes.read_scene(cid, "nope")
 
 
+def test_read_scene_meta_is_frontmatter_only(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Frontmatter Only")
+    scenes.append_message(cid, sid, "user", "This transcript content must not be needed.")
+    meta = scenes.read_scene_meta(cid, sid)
+    assert meta["id"] == sid
+    assert meta["title"] == "Frontmatter Only"
+    assert "messages" not in meta
+
+
+def test_read_scene_meta_unknown_scene_raises(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    with pytest.raises(scenes.SceneNotFound):
+        scenes.read_scene_meta(cid, "nope")
+
+
 def test_create_in_missing_campaign_raises(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     with pytest.raises(campaigns.CampaignNotFound):
