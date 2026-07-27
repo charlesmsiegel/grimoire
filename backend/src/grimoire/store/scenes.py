@@ -288,14 +288,20 @@ def set_style(cid: str, sid: str, style_id: str) -> None:
     p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
 
 
-def set_response_preset(cid: str, sid: str, preset_id: str) -> None:
-    """The scene-scope response preset. Loose per-knob overrides use the
-    `length_*` frontmatter keys and are written by the same routes."""
+RESPONSE_FIELDS = ("response_preset", "style_id", "length_reply_words", "length_blocks",
+                   "length_paragraphs", "length_speakers", "length_blocks_per_speaker")
+
+
+def set_response(cid: str, sid: str, fields: dict) -> None:
+    """Write scene-scope response settings. An empty value clears the field
+    (inherit); a key that is absent from `fields` is left untouched."""
     p = _scene_path(cid, sid)
     if not _safe_id(sid) or not p.exists():
         raise SceneNotFound(sid)
     meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
-    meta["response_preset"] = preset_id
+    for key in RESPONSE_FIELDS:
+        if key in fields:
+            meta[key] = str(fields[key] or "")
     p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
 
 

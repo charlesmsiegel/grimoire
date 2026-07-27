@@ -300,6 +300,49 @@ def validity(meta: dict) -> dict:
     return {"valid": True, "issues": issues}
 
 
+def usage(pid: str) -> list[dict]:
+    """Every scope whose effective bundle would CHANGE if `pid` were deleted.
+
+    Diffs resolutions rather than scanning for references: a campaign-level
+    preset changes every scene that inherits it, and the global default can
+    change everything. Reporting only scopes that name the preset understates
+    the blast radius, and "they fall back to Standard" is false whenever a
+    broader scope still supplies something.
+    """
+    from . import campaigns, config, scenes
+
+    def resolved(scene_meta: dict, campaign_meta: dict, cfg: dict, hide: bool) -> dict:
+        def strip(meta: dict) -> dict:
+            if hide and (meta.get("response_preset") or "") == pid:
+                return {**meta, "response_preset": ""}
+            return meta
+        return resolve(scene_meta=strip(scene_meta), campaign_meta=strip(campaign_meta),
+                       config=strip(cfg))
+
+    cfg = config.read_config()
+    keys = ("style_id",) + lengths.KNOBS
+    out: list[dict] = []
+
+    def add(scope: str, sid: str, cid: str, name: str, scene_meta: dict, campaign_meta: dict) -> None:
+        before = resolved(scene_meta, campaign_meta, cfg, hide=False)
+        after = resolved(scene_meta, campaign_meta, cfg, hide=True)
+        if any(before[k] != after[k] for k in keys):
+            out.append({"scope": scope, "id": sid or cid or "", "name": name,
+                        "before": {k: before[k] for k in keys},
+                        "after": {k: after[k] for k in keys}})
+
+    add("global", "", "", "Global default", {}, {})
+    for c in campaigns.list_campaigns():
+        cid = c["id"]
+        cmeta = campaigns.read_campaign(cid)["meta"]
+        add("campaign", "", cid, cmeta.get("name", cid), {}, cmeta)
+        for s in scenes.list_scenes(cid):
+            sid = s["id"]
+            smeta = scenes.read_scene(cid, sid)["meta"]
+            add("scene", sid, cid, smeta.get("title", sid), smeta, cmeta)
+    return out
+
+
 def duplicate_preset(pid: str) -> str:
     src = read_preset(pid)["meta"]
     knobs = {k: lengths.coerce(src.get(k, "")) for k in lengths.KNOBS}

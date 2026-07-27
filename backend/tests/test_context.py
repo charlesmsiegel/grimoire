@@ -970,7 +970,7 @@ def test_budget_section_renders_with_resolved_numbers(monkeypatch, tmp_path):
 
 def test_budget_follows_the_scene_override(monkeypatch, tmp_path):
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
-    scenes.set_response_preset(cid, sid, "terse")
+    scenes.set_response(cid, sid, {"response_preset": "terse"})
     text = context.build_messages(cid, sid)[0]["content"]
     assert "150 words" in text
     assert "do not return to a character you have already written" in text
@@ -978,7 +978,7 @@ def test_budget_follows_the_scene_override(monkeypatch, tmp_path):
 
 def test_repeats_allowed_wording(monkeypatch, tmp_path):
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
-    scenes.set_response_preset(cid, sid, "cinematic")
+    scenes.set_response(cid, sid, {"response_preset": "cinematic"})
     text = context.build_messages(cid, sid)[0]["content"]
     assert "No character takes more than 2 blocks." in text
 
@@ -1021,7 +1021,7 @@ def test_no_corrective_on_a_fresh_scene(monkeypatch, tmp_path):
 
 def test_no_corrective_while_replies_are_compliant(monkeypatch, tmp_path):
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
-    scenes.set_response_preset(cid, sid, "cinematic")   # 900-word budget
+    scenes.set_response(cid, sid, {"response_preset": "cinematic"})   # 900-word budget
     _bloat(cid, sid, turns=3, words=200)
     messages = context.build_messages(cid, sid)
     assert not any("run long" in m["content"] for m in messages)
@@ -1029,7 +1029,7 @@ def test_no_corrective_while_replies_are_compliant(monkeypatch, tmp_path):
 
 def test_corrective_lands_in_the_last_message(monkeypatch, tmp_path):
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
-    scenes.set_response_preset(cid, sid, "terse")       # 150-word budget
+    scenes.set_response(cid, sid, {"response_preset": "terse"})       # 150-word budget
     _bloat(cid, sid, turns=3, words=600)
     messages = context.build_messages(cid, sid)
     last = messages[-1]
@@ -1041,7 +1041,7 @@ def test_corrective_lands_in_the_last_message(monkeypatch, tmp_path):
 
 def test_trim_tier_wording(monkeypatch, tmp_path):
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
-    scenes.set_response_preset(cid, sid, "terse")       # 150 -> trim band 188..262
+    scenes.set_response(cid, sid, {"response_preset": "terse"})       # 150 -> trim band 188..262
     _bloat(cid, sid, turns=3, words=220)
     text = context.build_messages(cid, sid)[-1]["content"]
     assert "Trim toward the budget" in text
@@ -1050,7 +1050,7 @@ def test_trim_tier_wording(monkeypatch, tmp_path):
 
 def test_structural_lines_appear_only_when_violated(monkeypatch, tmp_path):
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
-    scenes.set_response_preset(cid, sid, "terse")       # speakers 2, repeats 1
+    scenes.set_response(cid, sid, {"response_preset": "terse"})       # speakers 2, repeats 1
     scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "Short."},
                                    {"speaker": "Mara", "content": "Again."}])
     text = context.build_messages(cid, sid)[-1]["content"]
@@ -1063,7 +1063,7 @@ def test_transition_between_replies_does_not_fire_a_false_block_violation(monkey
     """A budget-compliant reply followed by a scene transition must not
     measure as one over-cap turn."""
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
-    scenes.set_response_preset(cid, sid, "brisk")       # blocks cap 4
+    scenes.set_response(cid, sid, {"response_preset": "brisk"})       # blocks cap 4
     croot = campaigns.campaign_root(cid)
     entities.create_entity(croot, "locations", "Saltmarch Docks", "Wet rope.")
     entities.create_entity(croot, "locations", "The Long Stair", "Down.")
@@ -1080,7 +1080,7 @@ def test_transition_between_replies_does_not_fire_a_false_block_violation(monkey
 
 def test_corrective_rides_alone_when_cards_have_no_post_history(monkeypatch, tmp_path):
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
-    scenes.set_response_preset(cid, sid, "terse")
+    scenes.set_response(cid, sid, {"response_preset": "terse"})
     _bloat(cid, sid, turns=3, words=600)
     messages = context.build_messages(cid, sid)
     assert messages[-1]["role"] == "system"
@@ -1097,7 +1097,7 @@ def test_speaker_canonicalization_survives_a_cast_departure(monkeypatch, tmp_pat
     characters.create_character(croot, "Winifred Vance", "default",
                                 characters.blank_card("Winifred Vance"))
     ap.appear(cid, sid, "characters", "winifred-vance", "default", "npc")
-    scenes.set_response_preset(cid, sid, "terse")   # speakers 2, blocks_per_speaker 1
+    scenes.set_response(cid, sid, {"response_preset": "terse"})   # speakers 2, blocks_per_speaker 1
     scenes.append_reply(cid, sid, [{"speaker": "Winifred", "content": "One."},
                                    {"speaker": "Winifred Vance", "content": "Two."}])
     ap.leave(cid, sid, "characters", "winifred-vance")
@@ -1118,7 +1118,7 @@ def test_unrelated_world_character_does_not_poison_canonicalization(monkeypatch,
     characters.create_character(worlds.world_root(wid), "Winifred Vale", "default",
                                 characters.blank_card("Winifred Vale"))
     ap.appear(cid, sid, "characters", "winifred-vance", "default", "npc")
-    scenes.set_response_preset(cid, sid, "terse")   # blocks_per_speaker 1
+    scenes.set_response(cid, sid, {"response_preset": "terse"})   # blocks_per_speaker 1
     scenes.append_reply(cid, sid, [{"speaker": "Winifred", "content": "One."},
                                    {"speaker": "Winifred Vance", "content": "Two."}])
     text = context.build_messages(cid, sid)[-1]["content"]

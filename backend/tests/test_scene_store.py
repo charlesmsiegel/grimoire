@@ -669,3 +669,15 @@ def test_append_reply_persists_blocks_and_boundary_in_one_write(monkeypatch, tmp
     assert len(writes) == 1, f"expected a single scene write, got {writes}"
     assert scenes.get_turn_sizes(cid, sid) == [3]
     assert len(scenes.read_scene(cid, sid)["messages"]) == 3
+
+
+def test_set_response_writes_and_clears_bundle_fields(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Bundle")
+    scenes.set_response(cid, sid, {"response_preset": "terse", "length_speakers": "3"})
+    meta = scenes.read_scene(cid, sid)["meta"]
+    assert meta["response_preset"] == "terse" and meta["length_speakers"] == "3"
+    scenes.set_response(cid, sid, {"length_speakers": ""})       # clear one field
+    meta = scenes.read_scene(cid, sid)["meta"]
+    assert meta["length_speakers"] == ""
+    assert meta["response_preset"] == "terse"                    # untouched

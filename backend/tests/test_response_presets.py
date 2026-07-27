@@ -404,3 +404,49 @@ def test_duplicate_makes_an_editable_copy(tmp_path, monkeypatch):
     assert rp.is_built_in(pid) is False
     assert rp.read_preset(pid)["meta"]["name"] == "Terse (copy)"
     assert rp.supplies(rp.read_preset(pid)["meta"])["reply_words"] == 150
+
+
+def _campaign_fixture(tmp_path, monkeypatch):
+    from grimoire.store import campaigns, scenes, worlds
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Realm")
+    cid = campaigns.create_campaign("Saltmarch", wid)
+    return cid, scenes.create_scene(cid, "The Long Dark")
+
+
+def test_usage_reports_indirectly_affected_scopes(tmp_path, monkeypatch):
+    """A campaign-level preset changes every scene that inherits it. Reporting
+    only scopes that NAME the preset understates the blast radius."""
+    from grimoire.store import campaigns, scenes
+    cid, sid = _campaign_fixture(tmp_path, monkeypatch)
+    for n in range(3):
+        scenes.create_scene(cid, f"Scene {n}")
+    pid = rp.create_preset("Slow Burn", length_preset="cinematic")
+    campaigns.set_campaign_response(cid, {"response_preset": pid})
+
+    affected = rp.usage(pid)
+    kinds = [a["scope"] for a in affected]
+    assert "campaign" in kinds
+    assert kinds.count("scene") == 4          # every inheriting scene, not zero
+
+
+def test_usage_shows_post_deletion_values_not_a_blanket_standard(tmp_path, monkeypatch):
+    """Deletion RE-RESOLVES; a scene may inherit a campaign preset rather than
+    falling back to standard. A false preview before an irreversible delete is
+    worse than none."""
+    from grimoire.store import campaigns, scenes
+    cid, sid = _campaign_fixture(tmp_path, monkeypatch)
+    campaigns.set_campaign_response(cid, {"response_preset": "cinematic"})
+    pid = rp.create_preset("Scene Only", length_preset="terse")
+    scenes.set_response(cid, sid, {"response_preset": pid})
+
+    after = {a["scope"] + ":" + a["id"]: a for a in rp.usage(pid)}
+    scene_row = after[f"scene:{sid}"]
+    assert scene_row["after"]["reply_words"] == 900        # inherits cinematic
+    assert scene_row["before"]["reply_words"] == 150
+
+
+def test_usage_is_empty_for_an_unused_preset(tmp_path, monkeypatch):
+    _campaign_fixture(tmp_path, monkeypatch)
+    pid = rp.create_preset("Unused", length_preset="terse")
+    assert rp.usage(pid) == []
