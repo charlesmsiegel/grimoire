@@ -62,9 +62,11 @@ Do not rebuild these — read them first:
 
 **Interfaces:**
 - Consumes: `_custom_dir`, `_find_path`, `is_built_in`, `read_preset`, `PresetNotFound`, `supplies` (all exist).
-- Produces: `BuiltInPresetImmutable`, `create_preset(name, description="", style_id="", length_preset="", knobs=None) -> str`, `update_preset(pid, *, name=None, description=None, style_id=None, length_preset=None, knobs=None) -> None`, `delete_preset(pid) -> None`, `duplicate_preset(pid) -> str`.
+- Produces: `BuiltInPresetImmutable`, `create_preset(name, description="", style_id="", length_preset="", knobs=None) -> str`, `update_preset(pid, *, name=None, description=None, style_id=None, length_preset=None, knobs=None) -> None`, `delete_preset(pid) -> None`, `duplicate_preset(pid) -> str`, `validity(meta) -> dict`.
 
 Mirrors `store/styles.py`'s CRUD exactly, including `uniquify(slugify(name), exists)` for ids.
+
+**`validity` is what makes fail-open behaviour observable.** Resolution deliberately degrades: an unknown `length_preset` makes a record supply nothing, and a malformed knob is treated as absent. That is correct for generation — one corrupt file must not take a scene down — but it means a preset can sit there looking selected while supplying nothing at all, and the user cannot tell that apart from ordinary inheritance. `validity` returns `{"valid": bool, "issues": [str]}` describing exactly what was ignored, and `read_preset` / `list_presets` include it so the management view (Task 7) can surface it. This does not change resolution at all.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -126,6 +128,43 @@ def test_builtins_are_immutable(tmp_path, monkeypatch):
         rp.update_preset("terse", name="Nope")
     with pytest.raises(rp.BuiltInPresetImmutable):
         rp.delete_preset("terse")
+
+
+def test_validity_flags_an_unknown_length_preset(tmp_path, monkeypatch):
+    """Resolution fails open for these — which is right for generation, and
+    exactly why they need to be visible somewhere."""
+    _isolate(tmp_path, monkeypatch)
+    _write(tmp_path / "home" / "response_presets", "broken",
+           name="Broken", length_preset="nonesuch")
+    meta = rp.read_preset("broken")["meta"]
+    assert rp.supplies(meta) is None                    # unchanged: still fails open
+    v = rp.read_preset("broken")["validity"]
+    assert v["valid"] is False
+    assert any("nonesuch" in i for i in v["issues"])
+
+
+def test_validity_flags_malformed_knobs_without_invalidating(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    _write(tmp_path / "home" / "response_presets", "sloppy",
+           name="Sloppy", reply_words="lots", speakers="3")
+    got = rp.read_preset("sloppy")
+    assert rp.supplies(got["meta"]) == {"speakers": 3}  # unchanged
+    assert got["validity"]["valid"] is True             # usable, just partly ignored
+    assert any("reply_words" in i for i in got["validity"]["issues"])
+
+
+def test_a_clean_preset_reports_no_issues(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    pid = rp.create_preset("Fine", length_preset="terse")
+    assert rp.read_preset(pid)["validity"] == {"valid": True, "issues": []}
+
+
+def test_list_presets_carries_validity(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    _write(tmp_path / "home" / "response_presets", "broken",
+           name="Broken", length_preset="nonesuch")
+    row = [p for p in rp.list_presets() if p["id"] == "broken"][0]
+    assert row["validity"]["valid"] is False
 
 
 def test_duplicate_makes_an_editable_copy(tmp_path, monkeypatch):
@@ -212,6 +251,26 @@ def delete_preset(pid: str) -> None:
     p.unlink()
 
 
+def validity(meta: dict) -> dict:
+    """What this record's fields were understood to mean — {"valid", "issues"}.
+
+    Reporting only; resolution's fail-open behaviour is unchanged. Without this
+    a preset can look selected while supplying nothing, which is
+    indistinguishable from ordinary inheritance.
+    """
+    issues: list[str] = []
+    named = (meta.get("length_preset") or "").strip()
+    if named and lengths.get(named) is None:
+        return {"valid": False,
+                "issues": [f"unknown length preset '{named}' — this preset supplies nothing"]}
+    if not named:
+        for knob in lengths.KNOBS:
+            raw = (meta.get(knob) or "").strip()
+            if raw and lengths.coerce(raw) is None:
+                issues.append(f"{knob}: '{raw}' is not a positive whole number — ignored")
+    return {"valid": True, "issues": issues}
+
+
 def duplicate_preset(pid: str) -> str:
     src = read_preset(pid)["meta"]
     knobs = {k: lengths.coerce(src.get(k, "")) for k in lengths.KNOBS}
@@ -221,16 +280,21 @@ def duplicate_preset(pid: str) -> str:
                          knobs or None)
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 4: Surface validity from the read paths**
+
+`read_preset` returns `{"meta": …, "validity": validity(meta)}`; `_list_dir` adds
+`"validity": validity(meta)` to each row. Neither changes `supplies` or `resolve`.
+
+- [ ] **Step 5: Run test to verify it passes**
 
 Run: `backend/.venv/Scripts/python.exe -m pytest backend/tests/test_response_presets.py -q`
-Expected: PASS
+Expected: PASS — note the part-1 tests that read `read_preset(pid)["meta"]` keep working unchanged.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add backend/src/grimoire/store/response_presets.py backend/tests/test_response_presets.py
-git commit -m "feat(response-presets): create/update/delete/duplicate with union validation"
+git commit -m "feat(response-presets): write operations and validity reporting"
 ```
 
 ---
@@ -580,10 +644,17 @@ git commit -m "feat(routes): response preset CRUD, duplicate, usage, and length 
 - Test: `backend/tests/test_routes.py`
 
 **Interfaces:**
-- Produces: `GET/PUT /api/campaigns/{cid}/response`, `GET/PUT /api/campaigns/{cid}/scenes/{sid}/response`; the six bundle keys added to the config GET payload and `ConfigUpdate`.
-- **Removes:** `GET/PUT /api/campaigns/{cid}/style`, `GET/PUT /api/campaigns/{cid}/scenes/{sid}/style`.
+- Produces: `GET/PUT /api/response` (global), `GET/PUT /api/campaigns/{cid}/response`, `GET/PUT /api/campaigns/{cid}/scenes/{sid}/response` — **all three returning the identical body shape**.
+- **Removes:** `GET/PUT /api/campaigns/{cid}/style`, `GET/PUT /api/campaigns/{cid}/scenes/{sid}/style`, and `default_style_id` from `ConfigUpdate` / `_public_config`.
 
 `style_id` becomes one field of the bundle; two endpoints writing one field invites divergence. Safe to remove outright — backend and frontend ship as one artifact (`main.py` serves the built frontend from `dist_dir()`; the APK packages both), so there are no version-skewed clients, and a repo search finds no non-frontend callers.
+
+**The global scope gets a real endpoint, not raw keys on `/api/config`.** Two reasons, and both are the difference between the picker working and the picker lying:
+
+1. The picker's effective-values readout needs server-computed `effective` and `provenance` at *every* scope. If global returned only its own raw keys, the frontend would have to re-implement the cascade in TypeScript to show what actually resolves — a second implementation that would drift from `resolve()` on exactly the cases that took four review rounds to get right: invalid presets, unknown style ids, the `none` sentinel, and the `standard` fallback.
+2. The global style key is spelled **`default_style_id`**, not `style_id`. `_response_body` normalizes it so all three scopes hand the picker one spelling; without that the component needs a per-scope special case.
+
+`default_style_id` keeps its spelling **on disk** (renaming it would break every existing install's global style) and is normalized only in the API layer.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -609,14 +680,39 @@ def test_campaign_response_roundtrip(client):
     assert client.get(f"/api/campaigns/{cid}/response").json()["effective"]["reply_words"] == 900
 
 
-def test_global_response_settings_ride_the_config_payload(client):
-    assert client.put("/api/config", json={"response_preset": "brisk"}).status_code == 200
-    assert client.get("/api/config").json()["response_preset"] == "brisk"
+def test_global_response_roundtrip_has_the_same_shape(client):
+    """The picker needs identical effective/provenance at every scope, or the
+    frontend has to re-implement the cascade for global alone."""
+    assert client.put("/api/response", json={"response_preset": "brisk"}).status_code == 200
+    body = client.get("/api/response").json()
+    assert body["response_preset"] == "brisk"
+    assert body["effective"]["reply_words"] == 300
+    assert body["provenance"]["reply_words"]["scope"] == "global"
+    assert set(body) == {*store.scenes.RESPONSE_FIELDS, "effective", "provenance"}
 
 
-def test_old_style_endpoints_are_gone(client):
+def test_global_style_is_normalized_to_style_id(client):
+    """Stored as default_style_id (renaming it would break existing installs),
+    exposed as style_id so the picker has one spelling everywhere."""
+    client.post("/api/styles", json={"name": "Gothic Horror", "description": "",
+                                     "tags": [], "body": "Atmosphere first."})
+    sid_style = client.get("/api/styles").json()[0]["id"]
+    assert client.put("/api/response", json={"style_id": sid_style}).status_code == 200
+    assert client.get("/api/response").json()["style_id"] == sid_style
+    assert store.read_config()["default_style_id"] == sid_style      # on disk
+
+
+def test_global_invalid_preset_still_reports_a_usable_effective(client):
+    assert client.put("/api/response", json={"response_preset": "ghost"}).status_code == 200
+    body = client.get("/api/response").json()
+    assert body["effective"]["reply_words"] == 550        # falls through to standard
+    assert body["provenance"]["reply_words"]["scope"] == "default"
+
+
+def test_old_style_endpoints_and_config_key_are_gone(client):
     _wid, cid = _campaign(client)
     assert client.get(f"/api/campaigns/{cid}/style").status_code == 404
+    assert "default_style_id" not in client.get("/api/config").json()
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -626,18 +722,54 @@ Expected: FAIL
 
 - [ ] **Step 3: Write the routes**
 
-Add a `ResponseSettings` model with the six optional string fields, then:
+Add a `ResponseSettings` model with the six optional string fields, then one body
+builder used by all three scopes:
 
 ```python
 def _response_body(scene_meta: dict, campaign_meta: dict, cfg: dict, own: dict) -> dict:
+    """The shape every scope returns. `own` is that scope's raw frontmatter."""
     resolved = store.response_presets.resolve(
         scene_meta=scene_meta, campaign_meta=campaign_meta, config=cfg)
-    return {**{k: own.get(k, "") for k in store.scenes.RESPONSE_FIELDS},
+    fields = {k: own.get(k, "") for k in store.scenes.RESPONSE_FIELDS}
+    # Global stores the style as default_style_id; normalize so the picker sees
+    # one spelling at every scope. The on-disk key is deliberately unchanged.
+    if not fields["style_id"]:
+        fields["style_id"] = own.get("default_style_id", "")
+    return {**fields,
             "effective": {k: resolved[k] for k in ("style_id",) + store.lengths.KNOBS},
             "provenance": resolved["provenance"]}
+
+
+def _write_response(setter, fields: dict, style_key: str = "style_id") -> None:
+    """Map the picker's style_id back onto the scope's own spelling."""
+    out = dict(fields)
+    if style_key != "style_id" and "style_id" in out:
+        out[style_key] = out.pop("style_id")
+    setter(out)
 ```
 
-`GET`/`PUT` for both scopes use it; the campaign GET passes `scene_meta={}`. Delete the four `/style` routes and the `StyleSelect` model if nothing else uses it. Add the six keys to `ConfigUpdate` and to `_public_config`'s returned dict.
+Global routes:
+
+```python
+@router.get("/response")
+def get_global_response():
+    cfg = store.read_config()
+    return _response_body({}, {}, cfg, cfg)
+
+
+@router.put("/response")
+def put_global_response(body: ResponseSettings):
+    fields = {k: v for k, v in _dump(body).items() if v is not None}
+    _write_response(lambda f: store.write_config(**f), fields,
+                    style_key="default_style_id")
+    return {"ok": True}
+```
+
+Campaign and scene GET/PUT use the same builder (campaign GET passes
+`scene_meta={}`). Delete the four `/style` routes, the `StyleSelect` model if
+nothing else uses it, and `default_style_id` from `ConfigUpdate` and
+`_public_config` — the global bundle endpoint owns that field now, and leaving a
+second writer is the divergence this task exists to remove.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -795,6 +927,8 @@ git commit -m "feat(frontend): mount the response preset picker at all three sco
 
 Built on the CLAUDE.md list/detail pattern — `.editor` containing `.editor-list` (a `+ New preset` button plus one `.row` per preset) and `.editor-body` showing a read-only `.detail-view` by default with an explicit **Edit** step. Built-ins show **Duplicate** instead of **Edit**.
 
+The detail view renders `validity.issues` when non-empty. This is the only place a hand-corrupted preset ever becomes visible: generation deliberately fails open, so without it a preset can read as selected while supplying nothing, and the user has no way to tell that from ordinary inheritance. A record with `valid: false` reads as broken; one with issues but `valid: true` reads as usable-with-ignored-fields.
+
 - [ ] **Step 1: Write the failing test**
 
 ```tsx
@@ -823,6 +957,26 @@ it("a built-in offers Duplicate instead of Edit", async () => {
   await userEvent.click(await screen.findByRole("button", { name: "Terse" }));
   expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Duplicate" })).toBeInTheDocument();
+});
+
+it("flags a broken preset in the detail view", async () => {
+  (api.getResponsePreset as any).mockResolvedValue({
+    meta: { id: "broken", name: "Broken", built_in: false },
+    validity: { valid: false, issues: ["unknown length preset 'nonesuch' — this preset supplies nothing"] },
+  });
+  render(<ResponsePresetsView />);
+  await userEvent.click(await screen.findByRole("button", { name: "Broken" }));
+  expect(await screen.findByText(/supplies nothing/)).toBeInTheDocument();
+});
+
+it("flags an ignored malformed knob without calling the preset broken", async () => {
+  (api.getResponsePreset as any).mockResolvedValue({
+    meta: { id: "sloppy", name: "Sloppy", built_in: false },
+    validity: { valid: true, issues: ["reply_words: 'lots' is not a positive whole number — ignored"] },
+  });
+  render(<ResponsePresetsView />);
+  await userEvent.click(await screen.findByRole("button", { name: "Sloppy" }));
+  expect(await screen.findByText(/ignored/)).toBeInTheDocument();
 });
 
 it("delete confirmation lists affected scopes and their post-deletion values", async () => {
@@ -869,9 +1023,14 @@ git commit -m "feat(frontend): response preset management view and save-as-prese
 
 **Interfaces:**
 - `ChatTurn` gains `response: dict | None = None` — a scope-shaped dict, unpersisted, exactly like the director note.
+- **`RegenerateBody` gains the same field, and `post_retry` gains a `RetryBody | None = None` body** — it currently takes no body at all.
 - `context.build_messages(cid, sid, turn=None)` and `build_director_messages(cid, sid, note, turn=None)` thread it into `_assemble` → `resolve(turn=…)`.
 
 `resolve` already accepts `turn`; nothing passes one yet.
+
+**All three generation entry points must carry it, not just chat.** The chip promises "this applies to the next reply", and the UI holds the selection until a reply actually lands. But if streaming fails after the user message is persisted, the user's next action is **retry** — which today takes no body, so the retry would generate with inherited settings while the chip still displays the override. The promise breaks precisely when a dependency fails, which is when surprising behaviour is least welcome. Same for regenerate.
+
+Note the route variables: `post_chat` has `turn: ChatTurn`, `post_regenerate` has `body: RegenerateBody | None`, and `post_retry` will have `body: RetryBody | None`. Read the field off the right one in each — there is no `turn` variable in the regenerate or retry routes.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -890,6 +1049,54 @@ def test_turn_override_is_not_persisted(monkeypatch, tmp_path):
     assert scenes.read_scene(cid, sid)["meta"]["response_preset"] == "cinematic"
     assert "900 words" in context.build_messages(cid, sid)[0]["content"]
 ```
+
+And in `backend/tests/test_routes.py`, the failure path the chip's promise depends on:
+
+```python
+def test_retry_carries_a_pending_one_shot_override(client):
+    """If streaming fails, the user's next action is retry — and the chip still
+    shows the override, so retry must honour it rather than silently reverting
+    to inherited settings."""
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    client.put(f"/api/campaigns/{cid}/scenes/{sid}/response",
+               json={"response_preset": "cinematic"})
+    store.scenes.append_message(cid, sid, "user", "Go on.")
+    captured = {}
+    _capture_prompt(client, captured)          # existing helper pattern in this file
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/retry",
+                json={"response": {"response_preset": "terse"}})
+    assert "150 words" in captured["system"]
+
+
+def test_regenerate_carries_a_pending_one_shot_override(client):
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    client.put(f"/api/campaigns/{cid}/scenes/{sid}/response",
+               json={"response_preset": "cinematic"})
+    store.scenes.append_message(cid, sid, "user", "Go on.")
+    store.scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "Too long."}])
+    captured = {}
+    _capture_prompt(client, captured)
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
+                json={"response": {"response_preset": "terse"}})
+    assert "150 words" in captured["system"]
+
+
+def test_retry_without_an_override_uses_inherited_settings(client):
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    client.put(f"/api/campaigns/{cid}/scenes/{sid}/response",
+               json={"response_preset": "cinematic"})
+    store.scenes.append_message(cid, sid, "user", "Go on.")
+    captured = {}
+    _capture_prompt(client, captured)
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/retry")
+    assert "900 words" in captured["system"]
+```
+
+(`_capture_prompt` stands for whatever this file already uses to inspect the
+messages handed to the mocked LLM — reuse it rather than inventing a new hook.)
 
 Frontend:
 
@@ -913,7 +1120,11 @@ Expected: FAIL — `build_messages() got an unexpected keyword argument 'turn'`
 
 - [ ] **Step 3: Thread the turn scope through**
 
-Add `turn: dict | None = None` to `_assemble`, `build_messages`, `build_director_messages`, and `_system_text`'s caller; pass it to `resolve(turn=turn or {}, …)`. In `post_chat` and the regenerate route, pass `turn.response`. In `CampaignView`, add the chip beside Send, hold the one-shot value in state, send it with the request, and clear it once the reply lands.
+Add `turn: dict | None = None` to `_assemble`, `build_messages`, `build_director_messages`, and `_system_text`'s caller; pass it to `resolve(turn=turn or {}, …)`.
+
+Add `response: dict | None = None` to `ChatTurn` and `RegenerateBody`, and a new `RetryBody` with the same field (`post_retry` currently declares no body — give it `body: RetryBody | None = None`). Each route reads the field off **its own** request object: `turn.response` in `post_chat`, `body.response if body else None` in `post_regenerate` and `post_retry`.
+
+In `CampaignView`, add the chip beside Send, hold the one-shot value in state, send it with the chat request **and with retry/regenerate while it is still pending**, and clear it only once a reply lands.
 
 - [ ] **Step 4: Run both suites**
 
