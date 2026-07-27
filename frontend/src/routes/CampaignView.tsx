@@ -5,7 +5,7 @@ import remarkGfm from "remark-gfm";
 import {
   api, type Actor, type SceneMeta, type Message, type RosterEntry, type SceneAbsorb,
   type SceneDatetime, type StagedEdit, type ProposalRecord, type SceneCheckActor,
-  type ResponsePresetSummary, type ResponseOverride,
+  type ResponsePresetSummary, type ResponseOverride, type ResponseBundle,
 } from "../api/client";
 import type { ChatEvent } from "../api/stream";
 import { EditableRow } from "../components/EditableRow";
@@ -27,8 +27,10 @@ import { quotePlugin } from "../markdown/quotePlugin";
 // unaffected.
 const ROLL_SPEAKER = "⁣Roll";
 // Marks a scene transition line — join/leave, location change, time advance
-// (backend: scenes.TRANSITION_SPEAKER). No model wrote it, so it can't be
-// rerolled; same invisible-separator prefix as ROLL_SPEAKER.
+// (backend: scenes.TRANSITION_SPEAKER); same invisible-separator prefix as
+// ROLL_SPEAKER. Purely internal metadata: drift measurement uses it as a turn
+// separator and reroll steps over it, but it is NEVER displayed — a transition
+// renders as the unlabelled narration it was before the tag existed.
 const TRANSITION_SPEAKER = "⁣Scene";
 
 // The scene rail lists scenes most-recently-edited first, but the displayed
@@ -38,6 +40,19 @@ const TRANSITION_SPEAKER = "⁣Scene";
 function sceneNumber(id: string, fallback: number): number {
   const m = /^(\d+)--/.exec(id);
   return m ? parseInt(m[1], 10) : fallback;
+}
+
+// Where a resolved response field came from, for the composer chip. Mirrors
+// ResponsePresetPicker's scopeLabel, shortened for a chip's worth of space.
+function responseScopeLabel(scope: string | undefined): string {
+  switch (scope) {
+    case "turn": return "this turn";
+    case "scene": return "this scene";
+    case "campaign": return "this campaign";
+    case "global": return "global";
+    case "default": return "built-in default";
+    default: return "inherited";
+  }
 }
 
 type SceneSort = "updated" | "date" | "order";
@@ -126,6 +141,11 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   // retry/reroll still honour it (see runStream/send/retry/reroll below).
   const [responsePresets, setResponsePresets] = useState<ResponsePresetSummary[]>([]);
   const [sceneResponsePreset, setSceneResponsePreset] = useState("");
+  // The server's resolved bundle for this scene — the ONLY source of truth for
+  // what the next reply is actually budgeted at. The cascade (turn → scene →
+  // campaign → global → built-in default) is deliberately not re-implemented
+  // here; a campaign-scope preset is invisible to the scene's own frontmatter.
+  const [sceneResponse, setSceneResponse] = useState<ResponseBundle | null>(null);
   const [pendingResponse, setPendingResponse] = useState<ResponseOverride | null>(null);
   const [responseChipOpen, setResponseChipOpen] = useState(false);
   const streamRef = useRef<HTMLDivElement>(null);
@@ -187,15 +207,29 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     () => scenes.find((s) => s.id === activeId)?.pcless ?? false,
     [scenes, activeId]);
 
-  // the response-length chip: a pending one-shot pick beats the scene's own
-  // saved preset, which beats the built-in default's name.
+  // The response-length chip. A pending one-shot pick beats the scene's own
+  // saved preset; with neither, the label comes from what the SERVER resolved
+  // (api.getSceneResponse), because a preset set at campaign or global scope
+  // names nothing the scene knows about. Claiming "Standard" in that case is
+  // simply false whenever a broader scope supplies something else — so with no
+  // preset to name we report the effective budget and where it came from.
   const responseChipPresetId = pendingResponse?.response_preset || sceneResponsePreset;
+  const responseChipPending = !!pendingResponse?.response_preset;
+  const presetName = (id: string) =>
+    responsePresets.find((p) => p.id === id)?.name ?? id;
   const responseChipLabel = responseChipPresetId
-    ? (responsePresets.find((p) => p.id === responseChipPresetId)?.name ?? responseChipPresetId)
-    : (responsePresets.find((p) => p.id === "standard")?.name ?? "Standard");
+    ? presetName(responseChipPresetId)
+    : sceneResponse
+      ? `${sceneResponse.effective.reply_words} words · ${
+          responseScopeLabel(sceneResponse.provenance.reply_words?.scope)}`
+      : "Inherited";
 
   function chooseResponseOverride(id: string) {
     setPendingResponse({ response_preset: id });
+    setResponseChipOpen(false);
+  }
+  function clearResponseOverride() {
+    setPendingResponse(null);
     setResponseChipOpen(false);
   }
   const responseChipRef = useRef<HTMLDivElement>(null);
@@ -249,6 +283,12 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       r.record && r.record.status !== "superseded" && r.record.status !== "narrated"
         && r.record.status !== "declined" ? r.record : null,
     )).catch(() => setProposal(null));
+    // Re-read on every selectScene, refresh included: the inspector's picker
+    // calls onSceneChanged after a save, so this is what keeps the chip from
+    // showing a preset the scene no longer has.
+    Promise.resolve(api.getSceneResponse?.(cid, id))
+      .then((r) => setSceneResponse(r ?? null))
+      .catch(() => setSceneResponse(null));
     const scene = await api.getScene(cid, id);
     setMessages(scene.messages);
     setSceneResponsePreset(scene.meta.response_preset ?? "");
@@ -382,11 +422,14 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     if (!activeId || busy || rolling) return;
     const guidance = (rerollPrompt ?? "").trim();
     setRerollPrompt(null);
-    // one turn is a run of assistant posts — drop the whole trailing run
+    // one turn is a run of assistant posts — drop the whole trailing run, but
+    // keep any trailing transition lines, which the backend also preserves
     setMessages((m) => {
       let end = m.length;
+      const kept: Message[] = [];
+      while (end > 0 && m[end - 1].speaker === TRANSITION_SPEAKER) kept.unshift(m[--end]);
       while (end > 0 && m[end - 1].role === "assistant") end--;
-      return m.slice(0, end);
+      return [...m.slice(0, end), ...kept];
     });
     // omit trailing arguments entirely for a plain reroll (an explicit
     // undefined would change the call shape) — but a pending one-shot
@@ -522,17 +565,28 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   }
 
   // rerolling regenerates the trailing assistant run; a run that reaches the
-  // first message is the opener and is not rerollable. A manual dice roll
-  // (backend tags it speaker "Roll") is never part of that run — its entry
-  // lives on in rolls.json, so reroll must not be offered while one trails.
-  const canReroll = messages.length > 0 &&
-    messages[messages.length - 1].role === "assistant" &&
-    messages[messages.length - 1].speaker !== ROLL_SPEAKER &&
-    messages[messages.length - 1].speaker !== TRANSITION_SPEAKER &&
+  // first message is the opener and is not rerollable. Trailing scene
+  // transitions are stepped OVER (they are not model output and the backend
+  // preserves them), so the reroll affordance hangs off the last generated
+  // message beneath them rather than off the true last message. A manual dice
+  // roll (backend tags it speaker "Roll") still blocks reroll outright — its
+  // entry lives on in rolls.json and the line must stay in lockstep.
+  const rerollIndex = (() => {
+    let i = messages.length - 1;
+    while (i >= 0 && messages[i].speaker === TRANSITION_SPEAKER) i--;
+    return i;
+  })();
+  const canReroll = rerollIndex >= 0 &&
+    messages[rerollIndex].role === "assistant" &&
+    messages[rerollIndex].speaker !== ROLL_SPEAKER &&
     messages.some((x) => x.role === "user");
 
+  // The transition tag is internal drift metadata, never a speaker: a
+  // transition renders as the unlabelled narration it was before the tag
+  // existed, so tagged and pre-existing untagged transitions look the same.
   const speakerOf = (m: Message) =>
-    m.speaker ?? (m.role === "user" ? playerName ?? labels.user : labels.assistant);
+    (m.speaker === TRANSITION_SPEAKER ? undefined : m.speaker)
+    ?? (m.role === "user" ? playerName ?? labels.user : labels.assistant);
 
   // A speaker label names a cast member if it matches exactly (case-insensitive)
   // or is a word-boundary prefix of exactly one name — "Winifred" is Winifred
@@ -675,7 +729,8 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
         )}
         {showStyle && (
           <div className="panel-slot">
-            <ResponsePresetPicker scope="campaign" cid={cid} />
+            <ResponsePresetPicker scope="campaign" cid={cid}
+                                  onChanged={() => activeId && selectScene(activeId)} />
           </div>
         )}
         {showChanges && <ChangesPanel cid={cid} />}
@@ -870,7 +925,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
                   <span className="msg-gutter">
                     {editing?.index !== index && !busy && (
                       <span className="gutter-icons">
-                        {index === messages.length - 1 && canReroll && (
+                        {index === rerollIndex && canReroll && (
                           <button className="msg-edit" title="Reroll" aria-label="Reroll"
                                   disabled={rolling} onClick={() => setRerollPrompt("")}>↻</button>
                         )}
@@ -881,7 +936,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
                       </span>
                     )}
                     {rerollPrompt !== null && !busy &&
-                     index === messages.length - 1 && canReroll && (
+                     index === rerollIndex && canReroll && (
                       <span className="reroll-pop">
                         <input
                           autoFocus
@@ -1050,7 +1105,17 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
                     aria-expanded={responseChipOpen}
                     onClick={() => setResponseChipOpen((v) => !v)}>
               Response length: {responseChipLabel}
+              {/* A one-shot pick and an inherited setting read identically
+                  without this — and they mean very different things: one is
+                  spent by the next reply, the other is the scene's standing
+                  answer. */}
+              {responseChipPending && <span className="chip-oneshot">next reply only</span>}
             </button>
+            {responseChipPending && (
+              <button type="button" className="chip-clear" title="Cancel the one-shot pick"
+                      aria-label="Cancel the one-shot response length"
+                      onClick={clearResponseOverride}>×</button>
+            )}
             {responseChipOpen && (
               <ul className="chip-menu" role="listbox" aria-label="Response length options">
                 {responsePresets.map((p) => (

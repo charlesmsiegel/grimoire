@@ -281,6 +281,16 @@ button.plate-avatar, button.plate-name { cursor: pointer; }
   font-family: var(--fm); font-size: 11px; letter-spacing: 0.04em; color: var(--page-muted); white-space: nowrap;
 }
 .chip-toggle:hover { color: var(--accent); }
+/* one-shot badge: a pending per-turn pick must not read as a standing setting */
+.chip-oneshot {
+  margin-left: 7px; padding: 1px 5px; border: var(--rw) solid var(--accent);
+  color: var(--accent); font-size: 9px; letter-spacing: 0.06em; text-transform: uppercase;
+}
+.chip-clear {
+  background: none; border: none; padding: 0 10px 0 0; cursor: pointer;
+  font-family: var(--fm); font-size: 13px; line-height: 1; color: var(--page-muted);
+}
+.chip-clear:hover { color: var(--accent); }
 .chip-menu {
   position: absolute; bottom: 100%; right: 0; margin-bottom: 8px; z-index: 5;
   list-style: none; padding: 0; min-width: 170px;

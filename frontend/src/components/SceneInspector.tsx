@@ -295,7 +295,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
       </SideSection>
 
       <SideSection id="style" title="Response preset" collapsed={!!collapsed.style} onToggle={toggleSection}>
-        <ResponsePresetPicker scope="scene" cid={cid} sid={sid} />
+        <ResponsePresetPicker scope="scene" cid={cid} sid={sid} onChanged={onSceneChanged} />
       </SideSection>
 
       <SideSection id="when" title="When" collapsed={!!collapsed.when} onToggle={toggleSection}>
