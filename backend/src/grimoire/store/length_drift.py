@@ -9,13 +9,17 @@ from __future__ import annotations
 
 import re
 
-from . import scenes
+from . import fence, scenes
 
 WINDOW = 3          # turns measured; a constant, deliberately not a setting
 _TRIM = 1.25        # below this, nothing renders
 _CUT = 1.75
 
-_ROLL_FENCE = re.compile(r"```[ \t]*roll\b.*?(?:```|\Z)", re.IGNORECASE | re.DOTALL)
+# The fence grammar is owned by store/fence.py; a second copy of the opener here
+# would silently diverge the day that one changes. Only the closing half is
+# ours — word counting has to span the whole fence, not just its opener.
+_ROLL_FENCE = re.compile(fence.OPENER.pattern + r".*?(?:```|\Z)",
+                         re.IGNORECASE | re.DOTALL)
 
 
 def _is_model_block(m: dict) -> bool:
@@ -69,6 +73,11 @@ def measure(messages: list[dict], turn_sizes: list[int], cast_names,
             budget: dict, window: int = WINDOW) -> dict | None:
     """Per-turn metrics plus the render signals, or None if nothing to measure.
 
+    `cast_names` may be a sequence or a zero-argument callable returning one.
+    The callable form exists because building the roster opens one card file per
+    campaign actor, and the common case — a scene with no recorded turns — bails
+    out before a single name is needed.
+
     EVERY signal is "any turn in the window violated it" — including the word
     signal, which uses the window MAXIMUM. A mean oscillates: at a 100-word
     budget, 130/130/130 corrects at 1.30x, one compliant turn clears it at
@@ -79,6 +88,7 @@ def measure(messages: list[dict], turn_sizes: list[int], cast_names,
     turns = segment(messages, turn_sizes)[-window:]
     if not turns:
         return None
+    cast_names = cast_names() if callable(cast_names) else cast_names
 
     totals, ratios = [], []
     over_blocks = over_paras = over_speakers = over_repeats = False

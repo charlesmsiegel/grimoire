@@ -132,6 +132,13 @@ def start_from_greeting(cid: str, sid: str, gid: str) -> str:
     # generated, but it is the strongest length anchor the model has at the
     # start of a scene and it WILL be matched, so it records a turn like any
     # other model output.
-    scenes.append_reply(cid, sid, [{"speaker": None, "content": text}])
+    #
+    # Split on the SAME marker grammar routes._persist_reply uses. Storing a
+    # multi-block greeting as one segment records turn_sizes [1] while
+    # _parse_messages re-splits it into N messages at read time; drift
+    # segmentation would then measure only the trailing block of the very turn
+    # that sets the scene's length anchor.
+    scenes.append_reply(cid, sid, scenes.split_reply(
+        text, frozenset(appearances.player_names(cid, sid))))
     # retitle last: any earlier failure leaves the caller's sid valid for cleanup
     return scenes.rename_scene(cid, sid, g["name"])

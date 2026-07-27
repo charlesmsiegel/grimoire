@@ -717,18 +717,18 @@ def test_prose_style_resolves_scene_then_campaign_then_global(monkeypatch, tmp_p
     text = context.build_messages(cid, sid)[0]["content"]
     assert "Prose style: Gothic Horror" in text
 
-    campaigns.set_campaign_style(cid, "noir-detective")
+    campaigns.set_campaign_response(cid, {"style_id": "noir-detective"})
     text = context.build_messages(cid, sid)[0]["content"]
     assert "Prose style: Noir Detective" in text
     assert "Gothic Horror" not in text
 
-    scenes.set_style(cid, sid, "pulp-adventure")
+    scenes.set_response(cid, sid, {"style_id": "pulp-adventure"})
     text = context.build_messages(cid, sid)[0]["content"]
     assert "Prose style: Pulp Adventure" in text
     assert "Noir Detective" not in text
 
     # a stale/unknown scene override falls back to the campaign default
-    scenes.set_style(cid, sid, "does-not-exist")
+    scenes.set_response(cid, sid, {"style_id": "does-not-exist"})
     text = context.build_messages(cid, sid)[0]["content"]
     assert "Prose style: Noir Detective" in text
 
@@ -1003,7 +1003,7 @@ def test_legacy_style_id_still_resolves_identically(monkeypatch, tmp_path):
     resolve the same style it does today, now through the new cascade."""
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     _user_style(tmp_path, "gothic-horror", "Gothic Horror", "Atmosphere first.")
-    campaigns.set_campaign_style(cid, "gothic-horror")
+    campaigns.set_campaign_response(cid, {"style_id": "gothic-horror"})
     text = context.build_messages(cid, sid)[0]["content"]
     assert "Atmosphere first." in text
 
@@ -1011,8 +1011,8 @@ def test_legacy_style_id_still_resolves_identically(monkeypatch, tmp_path):
 def test_stale_scene_style_falls_back_to_campaign(monkeypatch, tmp_path):
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     _user_style(tmp_path, "gothic-horror", "Gothic Horror", "Atmosphere first.")
-    campaigns.set_campaign_style(cid, "gothic-horror")
-    scenes.set_style(cid, sid, "deleted-style")
+    campaigns.set_campaign_response(cid, {"style_id": "gothic-horror"})
+    scenes.set_response(cid, sid, {"style_id": "deleted-style"})
     text = context.build_messages(cid, sid)[0]["content"]
     assert "Atmosphere first." in text
 
@@ -1139,3 +1139,25 @@ def test_unrelated_world_character_does_not_poison_canonicalization(monkeypatch,
     text = context.build_messages(cid, sid)[-1]["content"]
     assert "give each character at most 1" in text   # still one character
     assert "speaking characters" not in text         # not two
+
+
+def test_drift_roster_is_not_built_for_a_scene_with_nothing_to_measure(monkeypatch, tmp_path):
+    """Building the roster opens one card file per campaign actor. A scene with
+    no recorded turns is not measured at all, so that work must not happen —
+    it is pure I/O on the hot path of every single generation."""
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    scenes.append_message(cid, sid, "user", "hello")
+    calls = []
+    real = context._drift_roster
+
+    def counted(*args):
+        calls.append(args)
+        return real(*args)
+
+    monkeypatch.setattr(context, "_drift_roster", counted)
+    context.build_messages(cid, sid)
+    assert calls == []
+    # once a generation has been recorded there IS something to measure
+    scenes.append_reply(cid, sid, [{"speaker": None, "content": "A reply."}])
+    context.build_messages(cid, sid)
+    assert len(calls) == 1

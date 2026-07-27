@@ -149,7 +149,7 @@ def _override_key(field: str, scope: str) -> str:
 def _supplied_by_preset(meta: dict) -> dict:
     """What the preset named by this scope supplies. A scope naming a missing
     or invalid preset supplies nothing and the walk continues."""
-    pid = (meta.get("response_preset") or "").strip()
+    pid = _text(meta.get("response_preset"))
     if not pid:
         return {}
     try:
@@ -163,8 +163,15 @@ def _supplied_by_preset(meta: dict) -> dict:
     return supplies(record["meta"]) or {}
 
 
+def _text(value) -> str:
+    """A scope value as a trimmed string. Frontmatter is all strings, but a
+    turn-scope dict arrives from a request body — a non-string there must
+    degrade, not raise AttributeError in the middle of a generation."""
+    return "" if value is None else str(value).strip()
+
+
 def _override(meta: dict, field: str, scope: str):
-    raw = (meta.get(_override_key(field, scope)) or "").strip()
+    raw = _text(meta.get(_override_key(field, scope)))
     if not raw:
         return None
     if field == "style_id":
@@ -285,19 +292,24 @@ def validity(meta: dict) -> dict:
     from . import styles  # lazy: matches resolve()'s import, avoids an import cycle
 
     issues: list[str] = []
-    named = (meta.get("length_preset") or "").strip()
+    valid = True
+    named = _text(meta.get("length_preset"))
     if named and lengths.get(named) is None:
-        return {"valid": False,
-                "issues": [f"unknown length preset '{named}' — this preset supplies nothing"]}
-    if not named:
+        # Fatal for the record (it supplies nothing), but NOT a reason to stop
+        # looking: a broken length preset and a dangling style are independent
+        # problems, and reporting only the first sends the user back for a
+        # second round of "why is this still wrong".
+        issues.append(f"unknown length preset '{named}' — this preset supplies nothing")
+        valid = False
+    elif not named:
         for knob in lengths.KNOBS:
-            raw = (meta.get(knob) or "").strip()
+            raw = _text(meta.get(knob))
             if raw and lengths.coerce(raw) is None:
                 issues.append(f"{knob}: '{raw}' is not a positive whole number — ignored")
-    sid = (meta.get("style_id") or "").strip()
+    sid = _text(meta.get("style_id"))
     if sid and sid != _STYLE_CLEAR and not styles.exists(sid):
         issues.append(f"style '{sid}' does not exist — this selection is ignored")
-    return {"valid": True, "issues": issues}
+    return {"valid": valid, "issues": issues}
 
 
 def usage(pid: str) -> list[dict]:
@@ -331,14 +343,28 @@ def usage(pid: str) -> list[dict]:
                         "before": {k: before[k] for k in keys},
                         "after": {k: after[k] for k in keys}})
 
+    # A single unreadable campaign or scene file must not take the whole preview
+    # down: this runs immediately before an irreversible delete, and a 500 there
+    # leaves the user with no impact information at all. Broken records are
+    # skipped, exactly as _list_dir skips a broken preset file.
     add("global", "", "", "Global default", {}, {})
     for c in campaigns.list_campaigns():
         cid = c["id"]
-        cmeta = campaigns.read_campaign(cid)["meta"]
+        try:
+            cmeta = campaigns.read_campaign(cid)["meta"]
+        except (campaigns.CampaignNotFound, OSError, UnicodeDecodeError):
+            continue
         add("campaign", "", cid, cmeta.get("name", cid), {}, cmeta)
-        for s in scenes.list_scenes(cid):
+        try:
+            scene_rows = scenes.list_scenes(cid)
+        except (campaigns.CampaignNotFound, OSError, UnicodeDecodeError):
+            continue   # the campaign row still stands; its scenes are unknown
+        for s in scene_rows:
             sid = s["id"]
-            smeta = scenes.read_scene_meta(cid, sid)
+            try:
+                smeta = scenes.read_scene_meta(cid, sid)
+            except (scenes.SceneNotFound, OSError, UnicodeDecodeError):
+                continue
             add("scene", sid, cid, smeta.get("title", sid), smeta, cmeta)
     return out
 

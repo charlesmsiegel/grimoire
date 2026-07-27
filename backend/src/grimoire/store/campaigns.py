@@ -246,15 +246,6 @@ def rename_campaign(cid: str, name: str) -> None:
     mp.write_text(dump_frontmatter(meta, body), encoding="utf-8")
 
 
-def set_campaign_style(cid: str, style_id: str) -> None:
-    mp = campaign_meta_path(cid)
-    if not mp.exists():
-        raise CampaignNotFound(cid)
-    meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
-    meta["style_id"] = style_id
-    mp.write_text(dump_frontmatter(meta, body), encoding="utf-8")
-
-
 def set_campaign_response(cid: str, fields: dict) -> None:
     """Campaign-scope response settings; same semantics as scenes.set_response."""
     from . import scenes  # lazy: scenes imports campaigns, so avoid a module cycle

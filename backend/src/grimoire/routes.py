@@ -30,6 +30,19 @@ def _dump(model: BaseModel) -> dict:
     return dump() if dump is not None else model.dict()
 
 
+def _turn_override(body) -> dict | None:
+    """A request body's one-shot per-turn response override as a plain dict.
+
+    The wire type is `ResponseSettings`, like every other response write path,
+    so a malformed payload is rejected at the boundary instead of reaching
+    response_presets.resolve mid-generation. Unset fields are dropped: a scope
+    dict means "these fields have an opinion", and a None would read as one.
+    """
+    if body is None or getattr(body, "response", None) is None:
+        return None
+    return {k: v for k, v in _dump(body.response).items() if v is not None}
+
+
 def get_llm() -> LLMClient:
     return _llm
 
@@ -111,11 +124,11 @@ class ResponsePresetUpdate(BaseModel):
 
 class RegenerateBody(BaseModel):
     guidance: str | None = None
-    response: dict | None = None
+    response: ResponseSettings | None = None
 
 
 class RetryBody(BaseModel):
-    response: dict | None = None
+    response: ResponseSettings | None = None
 
 
 class NameBody(BaseModel):
@@ -359,7 +372,7 @@ class ChronicleSave(BaseModel):
 
 class ChatTurn(BaseModel):
     content: str = ""
-    response: dict | None = None
+    response: ResponseSettings | None = None
 
 
 class Appear(BaseModel):
@@ -859,7 +872,14 @@ def post_response_preset_duplicate(pid: str):
 
 @router.get("/response-presets/{pid}/usage")
 def get_response_preset_usage(pid: str):
-    return {"affected": store.response_presets.usage(pid)}
+    # usage() already skips individual unreadable campaigns/scenes; this is the
+    # backstop for a store-wide read failure. It must be a handled error, not a
+    # 500 — the caller renders this immediately before an irreversible delete
+    # and has to be able to tell "no impact" from "impact unknown".
+    try:
+        return {"affected": store.response_presets.usage(pid)}
+    except (OSError, UnicodeDecodeError):
+        raise HTTPException(status_code=400, detail="preset usage could not be computed")
 
 
 # ---- response bundle (scope endpoints) ----
@@ -2514,7 +2534,8 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, client: LLMClient = Depends(ge
         # ephemeral turn, never stored: a director note steering one generation
         # (pcless), or — in any scene — an empty send meaning "next NPC round"
         note = turn.content.strip() or prompts.render("scene/director_note.j2")
-        messages = store.context.build_director_messages(cid, sid, note, turn=turn.response)
+        messages = store.context.build_director_messages(
+            cid, sid, note, turn=_turn_override(turn))
         return _chat_stream(cid, sid, messages, conn, client)
     names = store.appearances.player_names(cid, sid)
     speaker = names[0] if len(names) == 1 else None
@@ -2525,7 +2546,7 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, client: LLMClient = Depends(ge
     content = store.context.expand_macros(
         turn.content, store.context.scene_substitutions(cid, sid), cid, sid)
     store.scenes.append_message(cid, sid, "user", content, speaker=speaker)
-    messages = store.context.build_messages(cid, sid, turn=turn.response)
+    messages = store.context.build_messages(cid, sid, turn=_turn_override(turn))
     return _chat_stream(cid, sid, messages, conn, client)
 
 
@@ -2538,8 +2559,7 @@ def post_retry(cid: str, sid: str, body: RetryBody | None = None,
     store.proposals.supersede(cid, sid)  # a fresh generation retires the old decision
     if not scene["messages"]:
         raise HTTPException(status_code=400, detail="nothing to retry")
-    turn = body.response if body else None
-    messages = store.context.build_messages(cid, sid, turn=turn)
+    messages = store.context.build_messages(cid, sid, turn=_turn_override(body))
     return _chat_stream(cid, sid, messages, conn, client)
 
 
@@ -2554,16 +2574,17 @@ def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
     msgs = scene["messages"]
     if not msgs:
         raise HTTPException(status_code=400, detail="nothing to regenerate")
-    if msgs[-1]["role"] == "assistant":
-        if all(m["role"] == "assistant" for m in msgs):
+    # Trailing scene transitions are stepped over, not consumed: reroll targets
+    # the last generation BENEATH them, and every check below has to look at
+    # that generation rather than at the transition line sitting on top of it.
+    core = msgs[:len(msgs) - store.scenes.trailing_transitions(msgs)]
+    if core and core[-1]["role"] == "assistant":
+        if all(m["role"] == "assistant" for m in core):
             raise HTTPException(status_code=400, detail="cannot regenerate the opening post")
-        if msgs[-1].get("speaker") == store.scenes.ROLL_SPEAKER:
+        if core[-1].get("speaker") == store.scenes.ROLL_SPEAKER:
             raise HTTPException(status_code=400, detail="cannot regenerate past a manual dice roll")
-        if msgs[-1].get("speaker") == store.scenes.TRANSITION_SPEAKER:
-            raise HTTPException(status_code=400,
-                                detail="cannot regenerate past a scene transition")
         store.scenes.remove_trailing_assistant_run(cid, sid)
-    messages = store.context.build_messages(cid, sid, turn=body.response if body else None)
+    messages = store.context.build_messages(cid, sid, turn=_turn_override(body))
     guidance = (body.guidance or "").strip() if body else ""
     if guidance:
         messages.append({

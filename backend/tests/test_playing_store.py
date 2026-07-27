@@ -317,3 +317,36 @@ def test_start_from_greeting_refuses_campaign_purged_version(monkeypatch, tmp_pa
         playing.start_from_greeting(cid, sid, g)
     # the purged version was not resurrected in the campaign copy
     assert characters.card_hash(root, char_id, "corrupted") is None
+
+
+def test_start_from_greeting_records_one_turn_per_parsed_block(monkeypatch, tmp_path):
+    """A greeting written as several **Name:** blocks reads back as several
+    messages, so the turn it records must have that many blocks. Storing it as
+    one unsplit segment claims turn_sizes [1] while the file parses as three —
+    and drift then measures only the trailing block of the very turn that sets
+    the scene's length anchor."""
+    wid = _world(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    characters.create_character(wroot, "Seraphine", "default", characters.blank_card("Seraphine"))
+    characters.create_character(wroot, "Mara", "default", characters.blank_card("Mara"))
+    body = ('The hall is cold.\n\n'
+            '**Seraphine:** "You came."\n\n'
+            '**Mara:** "I did."')
+    g = greetings.create_greeting(wroot, "Open", "seraphine", "default",
+                                  present=["mara"], body=body)
+    cid, sid = _campaign_after_seed(wid)
+    sid = playing.start_from_greeting(cid, sid, g)
+    messages = scenes.read_scene(cid, sid)["messages"]
+    assert [m.get("speaker") for m in messages] == [None, "Seraphine", "Mara"]
+    assert scenes.get_turn_sizes(cid, sid) == [len(messages)] == [3]
+
+
+def test_start_from_greeting_keeps_a_single_block_greeting_at_one(monkeypatch, tmp_path):
+    wid = _world(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    characters.create_character(wroot, "Seraphine", "default", characters.blank_card("Seraphine"))
+    g = greetings.create_greeting(wroot, "Open", "seraphine", "default",
+                                  body="The hall is cold.")
+    cid, sid = _campaign_after_seed(wid)
+    sid = playing.start_from_greeting(cid, sid, g)
+    assert scenes.get_turn_sizes(cid, sid) == [1]

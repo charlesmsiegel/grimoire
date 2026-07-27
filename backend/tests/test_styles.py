@@ -89,18 +89,3 @@ def test_a_malformed_custom_file_is_skipped_without_crashing_the_list(tmp_path, 
     ids = {s["id"] for s in styles.list_styles()}
     assert ids == {"fine"}
 
-
-def test_resolve_style_falls_back_scene_then_campaign_then_default(tmp_path, monkeypatch):
-    _isolate(tmp_path, monkeypatch)
-    _write(tmp_path / "templates" / "styles", "noir", "Noir", body="noir text")
-    _write(tmp_path / "templates" / "styles", "pulp", "Pulp", body="pulp text")
-
-    r = styles.resolve_style(scene_style_id="noir", campaign_style_id="pulp", default_style_id="pulp")
-    assert r["meta"]["id"] == "noir"
-    r = styles.resolve_style(scene_style_id="", campaign_style_id="pulp", default_style_id="noir")
-    assert r["meta"]["id"] == "pulp"
-    r = styles.resolve_style(scene_style_id="", campaign_style_id="", default_style_id="noir")
-    assert r["meta"]["id"] == "noir"
-    r = styles.resolve_style(scene_style_id="ghost", campaign_style_id="pulp", default_style_id="noir")
-    assert r["meta"]["id"] == "pulp"
-    assert styles.resolve_style() is None
