@@ -13,7 +13,7 @@ import { NewSceneChooser } from "../components/NewSceneChooser";
 import { ChangesPanel } from "../components/ChangesPanel";
 import { CalendarConfig } from "../components/CalendarConfig";
 import MechanicsConfig from "../components/MechanicsConfig";
-import { StyleConfig } from "../components/StyleConfig";
+import { ResponsePresetPicker } from "../components/ResponsePresetPicker";
 import { Portrait } from "../components/Portrait";
 import { RecordDrawer, type DrawerTarget } from "../components/RecordDrawer";
 import { SceneInspector } from "../components/SceneInspector";
@@ -585,8 +585,8 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
             </button>
           )}
           <button className="rail-date" onClick={() => setShowStyle((v) => !v)}
-                  title="Prose style settings">
-            Prose style
+                  title="Response preset and length settings">
+            Response
           </button>
         </div>
       </aside>
@@ -604,7 +604,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
         )}
         {showStyle && (
           <div className="panel-slot">
-            <StyleConfig cid={cid} />
+            <ResponsePresetPicker scope="campaign" cid={cid} />
           </div>
         )}
         {showChanges && <ChangesPanel cid={cid} />}
