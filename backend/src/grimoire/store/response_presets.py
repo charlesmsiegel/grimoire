@@ -20,7 +20,18 @@ from . import lengths
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import home, natural_key, slugify, uniquify
 
-_STYLE_CLEAR = "none"
+# The explicit "clear whatever a broader scope supplies" marker, as opposed to
+# "" which means "this record has no opinion". Prefixed with U+2063 (invisible
+# separator) so it can never collide with a real style id: paths.slugify
+# reserves nothing, so a user style genuinely named "None" slugs to `none`, and
+# a bare-"none" sentinel would clear the style instead of applying it (and show
+# two same-valued options in the picker). Same trick, for the same reason, as
+# scenes.ROLL_SPEAKER / scenes.TRANSITION_SPEAKER.
+#
+# A legacy bare "none" left in frontmatter now reads as an ordinary style id;
+# no such style exists, so it resolves to "no opinion" and the cascade walks
+# outward — a safe degradation, not a crash.
+STYLE_CLEAR = "⁣none"
 
 
 class PresetNotFound(Exception):
@@ -106,7 +117,7 @@ def supplies(meta: dict) -> dict | None:
 
     Keys are drawn from lengths.KNOBS plus "style_id". A key's ABSENCE means
     "no opinion", which is materially different from a falsy value: a supplied
-    style_id of "" is an explicit clear (the `none` sentinel).
+    style_id of "" is an explicit clear (the STYLE_CLEAR sentinel).
     """
     named = (meta.get("length_preset") or "").strip()
     out: dict = {}
@@ -123,7 +134,7 @@ def supplies(meta: dict) -> dict | None:
                 out[knob] = value
 
     style = (meta.get("style_id") or "").strip()
-    if style == _STYLE_CLEAR:
+    if style == STYLE_CLEAR:
         out["style_id"] = ""
     elif style:
         out["style_id"] = style
@@ -175,7 +186,7 @@ def _override(meta: dict, field: str, scope: str):
     if not raw:
         return None
     if field == "style_id":
-        return "" if raw == _STYLE_CLEAR else raw
+        return "" if raw == STYLE_CLEAR else raw
     return lengths.coerce(raw)
 
 
@@ -307,7 +318,7 @@ def validity(meta: dict) -> dict:
             if raw and lengths.coerce(raw) is None:
                 issues.append(f"{knob}: '{raw}' is not a positive whole number — ignored")
     sid = _text(meta.get("style_id"))
-    if sid and sid != _STYLE_CLEAR and not styles.exists(sid):
+    if sid and sid != STYLE_CLEAR and not styles.exists(sid):
         issues.append(f"style '{sid}' does not exist — this selection is ignored")
     return {"valid": valid, "issues": issues}
 

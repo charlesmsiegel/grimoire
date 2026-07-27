@@ -70,8 +70,31 @@ def test_malformed_knob_is_absent_not_defaulted(tmp_path, monkeypatch):
 def test_style_none_sentinel_clears(tmp_path, monkeypatch):
     _isolate(tmp_path, monkeypatch)
     _write(tmp_path / "home" / "response_presets", "bare",
-           name="Bare", style_id="none", length_preset="terse")
+           name="Bare", style_id=rp.STYLE_CLEAR, length_preset="terse")
     assert rp.supplies(rp.read_preset("bare")["meta"])["style_id"] == ""
+
+
+def test_the_clear_sentinel_cannot_collide_with_a_style_id(tmp_path, monkeypatch):
+    """slugify reserves nothing, so a plain "none" sentinel IS a reachable
+    style id — U+2063-prefixed like scenes.ROLL_SPEAKER, it cannot be."""
+    from grimoire.store.paths import slugify
+    assert rp.STYLE_CLEAR.startswith("⁣")
+    assert slugify("None") == "none" != rp.STYLE_CLEAR
+
+
+def test_a_style_actually_called_none_is_applied_not_a_clear(tmp_path, monkeypatch):
+    """A user style named "None" slugs to `none`; referencing it must apply it,
+    not silently clear the style the record was meant to select."""
+    from grimoire.store import styles
+    _isolate(tmp_path, monkeypatch)
+    assert styles.create_style("None") == "none"
+    _write(tmp_path / "home" / "response_presets", "nihil",
+           name="Nihil", style_id="none", length_preset="terse")
+    assert rp.supplies(rp.read_preset("nihil")["meta"])["style_id"] == "none"
+    assert rp.read_preset("nihil")["validity"]["issues"] == []
+    # …and through the cascade, from a preset and from a loose override alike
+    assert rp.resolve(scene_meta=_scope(preset="nihil"))["style_id"] == "none"
+    assert rp.resolve(scene_meta=_scope(style="none"))["style_id"] == "none"
 
 
 def test_empty_style_is_no_opinion(tmp_path, monkeypatch):
@@ -207,10 +230,13 @@ def test_none_sentinel_clears_a_broader_style(tmp_path, monkeypatch):
     _isolate(tmp_path, monkeypatch)
     _write(tmp_path / "templates" / "styles", "gothic-horror", name="Gothic Horror")
     _write(tmp_path / "home" / "response_presets", "bare",
-           name="Bare", style_id="none", length_preset="terse")
+           name="Bare", style_id=rp.STYLE_CLEAR, length_preset="terse")
     got = rp.resolve(scene_meta=_scope(preset="bare"),
                      campaign_meta=_scope(style="gothic-horror"))
     assert got["style_id"] == ""
+    # …and the same sentinel as a loose override, which walks a different path
+    assert rp.resolve(scene_meta=_scope(style=rp.STYLE_CLEAR),
+                      campaign_meta=_scope(style="gothic-horror"))["style_id"] == ""
 
 
 def test_unknown_style_id_continues_outward(tmp_path, monkeypatch):
@@ -381,10 +407,10 @@ def test_validity_flags_a_dangling_style_reference(tmp_path, monkeypatch):
 
 
 def test_validity_accepts_the_none_sentinel(tmp_path, monkeypatch):
-    """`none` is an explicit clear, not a dangling reference."""
+    """The clear sentinel is an explicit clear, not a dangling reference."""
     _isolate(tmp_path, monkeypatch)
     _write(tmp_path / "home" / "response_presets", "bare",
-           name="Bare", style_id="none", length_preset="terse")
+           name="Bare", style_id=rp.STYLE_CLEAR, length_preset="terse")
     assert rp.read_preset("bare")["validity"]["issues"] == []
 
 
