@@ -51,6 +51,7 @@ vi.mock("../api/client", async () => {
       getCalendarConfig: vi.fn(), setCalendarConfig: vi.fn(), getCalendarProviders: vi.fn(),
       getSceneDatetime: vi.fn(), setSceneDatetime: vi.fn(), getCalendarMonths: vi.fn(),
       listStyles: vi.fn(),
+      listResponsePresets: vi.fn(),
       listCharacters: vi.fn(), listPCs: vi.fn(), listCampaignPCs: vi.fn(),
       campaignChanges: vi.fn(),
       listAppearances: vi.fn(), listEntityImages: vi.fn(), listEntities: vi.fn(),
@@ -64,6 +65,15 @@ import { api } from "../api/client";
 import { getModels } from "../api/models";
 
 const ONE_SCENE = [{ id: "s1", title: "Old", model: "", created: "", updated: "" }];
+
+// The built-ins response_presets.py ships (templates/response_presets/*.md) —
+// the chip's dropdown lists whatever listResponsePresets returns.
+const RESPONSE_PRESETS = [
+  { id: "standard", name: "Standard", built_in: true },
+  { id: "brisk", name: "Brisk", built_in: true },
+  { id: "cinematic", name: "Cinematic", built_in: true },
+  { id: "terse", name: "Terse", built_in: true },
+];
 
 beforeEach(() => {
   localStorage.clear();
@@ -116,6 +126,7 @@ beforeEach(() => {
     applied: [], sheet_failures: [] });
   (api.getChronicle as any).mockResolvedValue([]);
   (api.campaignChanges as any).mockResolvedValue([]);
+  (api.listResponsePresets as any).mockResolvedValue([]);
 });
 
 function renderCampaign() {
@@ -320,6 +331,57 @@ test("Shift+Enter does not send", async () => {
   expect(api.chat).not.toHaveBeenCalled();
 });
 
+test("the response length chip shows the scene's preset and reverts after a successful send", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({
+    meta: { id: "s1", title: "Old", response_preset: "cinematic" }, messages: [] });
+  (api.listResponsePresets as any).mockResolvedValue(RESPONSE_PRESETS);
+  renderCampaign();
+  const chip = await screen.findByRole("button", { name: /Response length/ });
+  expect(chip).toHaveTextContent("Cinematic");
+  fireEvent.click(chip);
+  fireEvent.click(screen.getByRole("option", { name: "Terse" }));
+  expect(chip).toHaveTextContent("Terse");
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "Go on." } });
+  fireEvent.click(screen.getByRole("button", { name: /Send/ }));
+  // the chip's promise is "the next reply" — once it lands, the one-shot
+  // pick is spent and the chip falls back to the scene's own setting.
+  await waitFor(() => expect(chip).toHaveTextContent("Cinematic"));
+});
+
+test("sends the one-shot override in the chat request payload", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({
+    meta: { id: "s1", title: "Old", response_preset: "cinematic" }, messages: [] });
+  (api.listResponsePresets as any).mockResolvedValue(RESPONSE_PRESETS);
+  renderCampaign();
+  const chip = await screen.findByRole("button", { name: /Response length/ });
+  fireEvent.click(chip);
+  fireEvent.click(screen.getByRole("option", { name: "Terse" }));
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "Go on." } });
+  fireEvent.click(screen.getByRole("button", { name: /Send/ }));
+  await waitFor(() => expect(api.chat).toHaveBeenCalledWith(
+    "run", "s1", "Go on.", expect.any(Function), { response_preset: "terse" }));
+});
+
+test("a failed stream keeps the override, and retry carries it", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({
+    meta: { id: "s1", title: "Old", response_preset: "cinematic" }, messages: [] });
+  (api.listResponsePresets as any).mockResolvedValue(RESPONSE_PRESETS);
+  (api.chat as any).mockRejectedValueOnce(new Error("stream failed"));
+  renderCampaign();
+  const chip = await screen.findByRole("button", { name: /Response length/ });
+  fireEvent.click(chip);
+  fireEvent.click(screen.getByRole("option", { name: "Terse" }));
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "Go on." } });
+  fireEvent.click(screen.getByRole("button", { name: /Send/ }));
+  await waitFor(() => expect(chip).toHaveTextContent("Terse")); // NOT cleared by the failure
+  fireEvent.click(screen.getByRole("button", { name: /Retry/ }));
+  await waitFor(() => expect(api.retry).toHaveBeenCalledWith(
+    "run", "s1", expect.any(Function), { response_preset: "terse" }));
+});
+
 test("sending with no scene creates one first", async () => {
   (api.listScenes as any).mockResolvedValue([]);
   renderCampaign();
@@ -474,6 +536,24 @@ test("Escape closes the reroll popover without firing", async () => {
   fireEvent.keyDown(screen.getByPlaceholderText(/guide the reroll/i), { key: "Escape" });
   expect(screen.queryByPlaceholderText(/guide the reroll/i)).toBeNull();
   expect(api.regenerate).not.toHaveBeenCalled();
+});
+
+test("regenerate carries a pending override", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({
+    meta: { id: "s1", title: "Old", response_preset: "cinematic" },
+    messages: [{ role: "user", content: "hi" }, { role: "assistant", content: "old reply" }],
+  });
+  (api.listResponsePresets as any).mockResolvedValue(RESPONSE_PRESETS);
+  renderCampaign();
+  await screen.findByText("old reply");
+  const chip = await screen.findByRole("button", { name: /Response length/ });
+  fireEvent.click(chip);
+  fireEvent.click(screen.getByRole("option", { name: "Terse" }));
+  fireEvent.click(screen.getByTitle("Reroll"));
+  fireEvent.click(screen.getByRole("button", { name: /reroll ▸/i })); // empty guidance = plain reroll
+  await waitFor(() => expect(api.regenerate).toHaveBeenCalledWith(
+    "run", "s1", expect.any(Function), undefined, { response_preset: "terse" }));
 });
 
 test("no Reroll when a manual dice roll trails the assistant reply", async () => {

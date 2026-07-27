@@ -111,6 +111,11 @@ class ResponsePresetUpdate(BaseModel):
 
 class RegenerateBody(BaseModel):
     guidance: str | None = None
+    response: dict | None = None
+
+
+class RetryBody(BaseModel):
+    response: dict | None = None
 
 
 class NameBody(BaseModel):
@@ -354,6 +359,7 @@ class ChronicleSave(BaseModel):
 
 class ChatTurn(BaseModel):
     content: str = ""
+    response: dict | None = None
 
 
 class Appear(BaseModel):
@@ -2508,7 +2514,7 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, client: LLMClient = Depends(ge
         # ephemeral turn, never stored: a director note steering one generation
         # (pcless), or — in any scene — an empty send meaning "next NPC round"
         note = turn.content.strip() or prompts.render("scene/director_note.j2")
-        messages = store.context.build_director_messages(cid, sid, note)
+        messages = store.context.build_director_messages(cid, sid, note, turn=turn.response)
         return _chat_stream(cid, sid, messages, conn, client)
     names = store.appearances.player_names(cid, sid)
     speaker = names[0] if len(names) == 1 else None
@@ -2519,19 +2525,21 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, client: LLMClient = Depends(ge
     content = store.context.expand_macros(
         turn.content, store.context.scene_substitutions(cid, sid), cid, sid)
     store.scenes.append_message(cid, sid, "user", content, speaker=speaker)
-    messages = store.context.build_messages(cid, sid)
+    messages = store.context.build_messages(cid, sid, turn=turn.response)
     return _chat_stream(cid, sid, messages, conn, client)
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/retry")
-def post_retry(cid: str, sid: str, client: LLMClient = Depends(get_llm)):
+def post_retry(cid: str, sid: str, body: RetryBody | None = None,
+               client: LLMClient = Depends(get_llm)):
     scene = _require_scene(cid, sid)
     conn = _require_connection()
     _heal_current_proposal(cid, sid)     # retirement paths heal first (invariant)
     store.proposals.supersede(cid, sid)  # a fresh generation retires the old decision
     if not scene["messages"]:
         raise HTTPException(status_code=400, detail="nothing to retry")
-    messages = store.context.build_messages(cid, sid)
+    turn = body.response if body else None
+    messages = store.context.build_messages(cid, sid, turn=turn)
     return _chat_stream(cid, sid, messages, conn, client)
 
 
@@ -2555,7 +2563,7 @@ def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
             raise HTTPException(status_code=400,
                                 detail="cannot regenerate past a scene transition")
         store.scenes.remove_trailing_assistant_run(cid, sid)
-    messages = store.context.build_messages(cid, sid)
+    messages = store.context.build_messages(cid, sid, turn=body.response if body else None)
     guidance = (body.guidance or "").strip() if body else ""
     if guidance:
         messages.append({
