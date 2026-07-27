@@ -64,6 +64,32 @@ it("uses the global endpoints when scope is global", async () => {
     expect.objectContaining({ response_preset: "cinematic" })));
 });
 
+it("saves the currently-resolved values as a new preset and selects it at this scope", async () => {
+  const originalPrompt = window.prompt;
+  window.prompt = () => "Slow Burn";
+  (api.createResponsePreset as any).mockResolvedValue({ id: "slow-burn" });
+  render(<ResponsePresetPicker scope="scene" cid="run" sid="s1" />);
+  await userEvent.click(await screen.findByText("Overrides"));
+  await userEvent.click(screen.getByRole("button", { name: "Save as preset…" }));
+  await waitFor(() => expect(api.createResponsePreset).toHaveBeenCalledWith({
+    name: "Slow Burn", style_id: "",
+    knobs: { reply_words: 150, blocks: 3, paragraphs: 1, speakers: 3, blocks_per_speaker: 1 },
+  }));
+  await waitFor(() => expect(api.setSceneResponse).toHaveBeenCalledWith(
+    "run", "s1", expect.objectContaining({ response_preset: "slow-burn" })));
+  window.prompt = originalPrompt;
+});
+
+it("does nothing when the Save as preset… prompt is cancelled", async () => {
+  const originalPrompt = window.prompt;
+  window.prompt = () => null;
+  render(<ResponsePresetPicker scope="scene" cid="run" sid="s1" />);
+  await userEvent.click(await screen.findByText("Overrides"));
+  await userEvent.click(screen.getByRole("button", { name: "Save as preset…" }));
+  expect(api.createResponsePreset).not.toHaveBeenCalled();
+  window.prompt = originalPrompt;
+});
+
 it("saves a single knob override without leaving the preset", async () => {
   render(<ResponsePresetPicker scope="scene" cid="run" sid="s1" />);
   await userEvent.click(await screen.findByText("Overrides"));

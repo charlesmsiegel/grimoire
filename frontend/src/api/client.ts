@@ -204,6 +204,10 @@ export type ResponsePresetDraft = {
 export type LengthPreset = {
   reply_words: number; blocks: number; paragraphs: number; speakers: number; blocks_per_speaker: number;
 };
+export type ResponsePresetUsageEntry = {
+  scope: "global" | "campaign" | "scene"; id: string; name: string;
+  before: Partial<ResponseEffective>; after: Partial<ResponseEffective>;
+};
 export type ResponseFields = {
   response_preset: string; style_id: string;
   length_reply_words: string; length_blocks: string; length_paragraphs: string;
@@ -756,7 +760,7 @@ export const api = {
   duplicateResponsePreset: (pid: string) =>
     request<{ id: string }>("POST", `/api/response-presets/${pid}/duplicate`),
   responsePresetUsage: (pid: string) =>
-    request<{ affected: unknown[] }>("GET", `/api/response-presets/${pid}/usage`),
+    request<{ affected: ResponsePresetUsageEntry[] }>("GET", `/api/response-presets/${pid}/usage`),
   listLengthPresets: () => request<Record<string, LengthPreset>>("GET", "/api/length-presets"),
 
   // response bundle (scoped preset + overrides + resolution), all three scopes
