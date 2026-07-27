@@ -1,6 +1,6 @@
 import pytest
 
-from grimoire.store import campaigns, chronicle, worlds
+from grimoire.store import campaigns, chronicle, scenes, worlds
 
 
 def _campaign(monkeypatch, tmp_path):
@@ -60,3 +60,36 @@ def test_transcript_text_prefers_speakers():
         {"role": "user", "content": "hi", "speaker": "Elara Vane"},
         {"role": "assistant", "content": "yo"}])
     assert "**Elara Vane:** hi" in text and "**Grimoire:** yo" in text
+
+
+def test_transcript_text_hides_transition_tag():
+    """The transition tag is internal drift metadata, never a speaker an LLM
+    prompt should see — a tagged transition must render identically to the
+    same content untagged (spec: never expose ⁣Scene to a prompt)."""
+    tagged = chronicle.transcript_text([
+        {"role": "assistant", "content": "*Time passes. It is now dusk.*",
+         "speaker": scenes.TRANSITION_SPEAKER}])
+    untagged = chronicle.transcript_text([
+        {"role": "assistant", "content": "*Time passes. It is now dusk.*"}])
+    assert tagged == untagged
+    assert "⁣" not in tagged
+    assert "Scene:" not in tagged
+    assert "**Grimoire:** *Time passes. It is now dusk.*" in tagged
+
+
+def test_transcript_text_keeps_roll_label():
+    """Manual dice-roll lines are genuine transcript content; their existing
+    labelling is intentional and long-standing and must not be stripped."""
+    text = chronicle.transcript_text([
+        {"role": "assistant", "content": "Rolled 1d20: 14",
+         "speaker": scenes.ROLL_SPEAKER}])
+    assert f"**{scenes.ROLL_SPEAKER}:** Rolled 1d20: 14" in text
+
+
+def test_transcript_text_no_transition_marker_leaks():
+    text = chronicle.transcript_text([
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "*The scene moves to the docks.*",
+         "speaker": scenes.TRANSITION_SPEAKER},
+        {"role": "assistant", "content": "hello"}])
+    assert "⁣" not in text
