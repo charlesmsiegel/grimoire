@@ -3666,40 +3666,61 @@ def test_duplicate_style_creates_an_editable_copy(client):
     assert client.put(f"/api/styles/{new_id}", json={"body": "edited"}).status_code == 200
 
 
-def test_config_default_style_roundtrip(client):
-    r = client.put("/api/config", json={"default_style_id": "gothic-horror"})
-    assert r.json()["default_style_id"] == "gothic-horror"
-    assert client.get("/api/config").json()["default_style_id"] == "gothic-horror"
+# ---- response scope endpoints (replacing /style) ----
+def test_scene_response_roundtrip(client):
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    assert client.put(f"/api/campaigns/{cid}/scenes/{sid}/response",
+                      json={"response_preset": "terse",
+                            "length_speakers": "3"}).status_code == 200
+    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/response").json()
+    assert body["response_preset"] == "terse"
+    assert body["length_speakers"] == "3"
+    assert body["effective"]["reply_words"] == 150
+    assert body["effective"]["speakers"] == 3
+    assert body["provenance"]["speakers"]["scope"] == "scene"
 
 
-def test_campaign_style_roundtrip(client):
-    wid, cid = _campaign(client)
-    assert client.get(f"/api/campaigns/{cid}/style").json() == {"style_id": ""}
-    r = client.put(f"/api/campaigns/{cid}/style", json={"style_id": "noir-detective"})
-    assert r.status_code == 200
-    assert client.get(f"/api/campaigns/{cid}/style").json() == {"style_id": "noir-detective"}
-    # visible on the campaign meta too, for free
-    assert client.get(f"/api/campaigns/{cid}").json()["meta"]["style_id"] == "noir-detective"
+def test_campaign_response_roundtrip(client):
+    _wid, cid = _campaign(client)
+    assert client.put(f"/api/campaigns/{cid}/response",
+                      json={"response_preset": "cinematic"}).status_code == 200
+    assert client.get(f"/api/campaigns/{cid}/response").json()["effective"]["reply_words"] == 900
 
 
-def test_campaign_style_unknown_campaign_404(client):
-    assert client.get("/api/campaigns/nope/style").status_code == 404
-    assert client.put("/api/campaigns/nope/style", json={"style_id": "noir-detective"}).status_code == 404
+def test_global_response_roundtrip_has_the_same_shape(client):
+    """The picker needs identical effective/provenance at every scope, or the
+    frontend has to re-implement the cascade for global alone."""
+    assert client.put("/api/response", json={"response_preset": "brisk"}).status_code == 200
+    body = client.get("/api/response").json()
+    assert body["response_preset"] == "brisk"
+    assert body["effective"]["reply_words"] == 300
+    assert body["provenance"]["reply_words"]["scope"] == "global"
+    assert set(body) == {*store.scenes.RESPONSE_FIELDS, "effective", "provenance"}
 
 
-def test_scene_style_roundtrip(client):
-    wid, cid = _campaign(client)
-    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Opening"}).json()["id"]
-    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/style").json() == {"style_id": ""}
-    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/style", json={"style_id": "pulp-adventure"})
-    assert r.status_code == 200
-    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/style").json() == {"style_id": "pulp-adventure"}
+def test_global_style_is_normalized_to_style_id(client):
+    """Stored as default_style_id (renaming it would break existing installs),
+    exposed as style_id so the picker has one spelling everywhere."""
+    client.post("/api/styles", json={"name": "Gothic Horror", "description": "",
+                                     "tags": [], "body": "Atmosphere first."})
+    sid_style = client.get("/api/styles").json()[0]["id"]
+    assert client.put("/api/response", json={"style_id": sid_style}).status_code == 200
+    assert client.get("/api/response").json()["style_id"] == sid_style
+    assert store.read_config()["default_style_id"] == sid_style      # on disk
 
 
-def test_scene_style_unknown_scene_404(client):
-    wid, cid = _campaign(client)
-    assert client.get(f"/api/campaigns/{cid}/scenes/nope/style").status_code == 404
-    assert client.put(f"/api/campaigns/{cid}/scenes/nope/style", json={"style_id": "pulp-adventure"}).status_code == 404
+def test_global_invalid_preset_still_reports_a_usable_effective(client):
+    assert client.put("/api/response", json={"response_preset": "ghost"}).status_code == 200
+    body = client.get("/api/response").json()
+    assert body["effective"]["reply_words"] == 550        # falls through to standard
+    assert body["provenance"]["reply_words"]["scope"] == "default"
+
+
+def test_old_style_endpoints_and_config_key_are_gone(client):
+    _wid, cid = _campaign(client)
+    assert client.get(f"/api/campaigns/{cid}/style").status_code == 404
+    assert "default_style_id" not in client.get("/api/config").json()
 
 
 # ---- sheets (#161) ----
