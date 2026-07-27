@@ -198,6 +198,27 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     setPendingResponse({ response_preset: id });
     setResponseChipOpen(false);
   }
+  const responseChipRef = useRef<HTMLDivElement>(null);
+  // matches the reroll popover / roll form: Escape closes it; this dropdown
+  // additionally closes on an outside click, since (unlike those) it has no
+  // focused input to anchor a keydown handler to.
+  useEffect(() => {
+    if (!responseChipOpen) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setResponseChipOpen(false);
+    }
+    function onPointerDown(e: MouseEvent) {
+      if (responseChipRef.current && !responseChipRef.current.contains(e.target as Node)) {
+        setResponseChipOpen(false);
+      }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("mousedown", onPointerDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("mousedown", onPointerDown);
+    };
+  }, [responseChipOpen]);
   const [directorNote, setDirectorNote] = useState<string | null>(null);
 
   async function selectScene(id: string) {
@@ -1024,7 +1045,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onKeyDown}
           />
-          <div className="response-length-chip">
+          <div className="response-length-chip" ref={responseChipRef}>
             <button type="button" className="chip-toggle" aria-haspopup="listbox"
                     aria-expanded={responseChipOpen}
                     onClick={() => setResponseChipOpen((v) => !v)}>

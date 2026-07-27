@@ -349,6 +349,19 @@ test("the response length chip shows the scene's preset and reverts after a succ
   await waitFor(() => expect(chip).toHaveTextContent("Cinematic"));
 });
 
+test("Escape closes the response length dropdown", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({
+    meta: { id: "s1", title: "Old", response_preset: "cinematic" }, messages: [] });
+  (api.listResponsePresets as any).mockResolvedValue(RESPONSE_PRESETS);
+  renderCampaign();
+  const chip = await screen.findByRole("button", { name: /Response length/ });
+  fireEvent.click(chip);
+  expect(screen.getByRole("listbox")).toBeInTheDocument();
+  fireEvent.keyDown(document, { key: "Escape" });
+  expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+});
+
 test("sends the one-shot override in the chat request payload", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({
