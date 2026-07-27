@@ -432,6 +432,15 @@ def split_reply(text: str, players: frozenset[str]) -> list[dict]:
     return segments
 
 
+def _model_blocks(messages: list[dict]) -> list[int]:
+    """Indices of the messages that count as MODEL blocks — assistant-role and
+    not synthetically authored (dice rolls, scene transitions). turn_sizes is
+    expressed in these, so everything that reads or repairs it counts the same
+    way."""
+    return [i for i, m in enumerate(messages)
+            if m["role"] == "assistant" and m.get("speaker") not in SYNTHETIC_SPEAKERS]
+
+
 def trailing_transitions(messages: list[dict]) -> int:
     """How many messages at the tail are scene-transition lines.
 
@@ -513,13 +522,9 @@ def trim_continuation(cid: str, sid: str, from_index: int) -> None:
     # difference — 10 legacy blocks plus sizes [1, 2] trimmed back to the first
     # tracked turn still leaves 11 blocks, so a total-based comparison keeps the
     # stale 2 and segmentation then reads legacy messages as a turn.
-    def _blocks(msgs: list[dict]) -> int:
-        return sum(1 for m in msgs if m["role"] == "assistant"
-                   and m.get("speaker") not in SYNTHETIC_SPEAKERS)
-
     sizes = get_turn_sizes(cid, sid)
-    prefix = max(_blocks(messages) - sum(sizes), 0)   # untracked legacy blocks
-    tracked_after = max(_blocks(kept) - prefix, 0)
+    prefix = max(len(_model_blocks(messages)) - sum(sizes), 0)  # untracked legacy blocks
+    tracked_after = max(len(_model_blocks(kept)) - prefix, 0)
     while sizes and sum(sizes) > tracked_after:
         sizes.pop()
     _write_turn_sizes(p, sizes)
@@ -540,9 +545,66 @@ def edit_message(cid: str, sid: str, index: int, content: str) -> None:
         raise IndexError(index)
     if messages[index].get("speaker") == ROLL_SPEAKER:
         raise RollMessageImmutable(index)
+    before = _model_blocks(messages)
     messages[index]["content"] = content.strip()
     meta["updated"] = now_iso()
     p.write_text(dump_frontmatter(meta, _serialize_messages(messages)), encoding="utf-8")
+    _reconcile_turn_sizes(cid, sid, p, index, before)
+
+
+def _reconcile_turn_sizes(cid: str, sid: str, p: Path, index: int,
+                          before: list[int]) -> None:
+    """Keep turn_sizes describing the transcript's real trailing model blocks
+    after an edit changed how the body PARSES.
+
+    Stored content is re-split at read time on blank-line-preceded
+    `**Speaker:**` markers, so editing a message can add model blocks (a marker
+    typed into the text) or remove one (a legacy `**Grimoire (Name):**` label
+    is re-saved as plain `**Name:**`, which parses as a user line when Name is
+    a seated player). turn_sizes knows nothing of either: left alone, reroll
+    consumes sizes[-1] blocks of a reply that is no longer that long, and drift
+    segmentation takes the last sum(sizes) blocks from the wrong place.
+
+    The invariant restored: sum(turn_sizes) is the number of model blocks the
+    tracked turns actually cover, and those turns are the transcript's true
+    trailing blocks. Dropping older entries is acceptable — they merely stop
+    being measured. Keeping an entry that describes the wrong blocks is not.
+    """
+    sizes = get_turn_sizes(cid, sid)
+    if not sizes:
+        return                                   # untracked scene: nothing to keep in step
+    after = _model_blocks(read_scene(cid, sid)["messages"])
+    delta = len(after) - len(before)
+    if delta == 0:
+        return                                   # the ordinary edit: content only
+    recorded = list(sizes)
+    while sizes and sum(sizes) > len(before):
+        sizes.pop(0)                             # hand-edited: claims blocks that never existed
+    prefix = len(before) - sum(sizes)             # untracked pre-tracking blocks
+    starts, at = [], prefix                       # each tracked turn's first block position
+    for n in sizes:
+        starts.append(at)
+        at += n
+
+    pos = before.index(index) if index in before else None
+    if pos is None:
+        # Not a model block itself, but its text can still splice one in or out.
+        # Before the tracked suffix that changes nothing (the suffix is anchored
+        # at the end); inside it, keep only the turns lying wholly after the edit.
+        blocks_before = sum(1 for i in before if i < index)
+        if blocks_before > prefix:
+            sizes = [n for n, s in zip(sizes, starts) if s >= blocks_before]
+    elif pos >= prefix:
+        turn = max(i for i, s in enumerate(starts) if s <= pos)
+        sizes[turn] += delta
+        if sizes[turn] <= 0:
+            sizes = sizes[turn + 1:]              # conservative: never misattribute
+    # pos < prefix: the edit landed in the untracked legacy prefix and the
+    # tracked suffix still covers exactly the blocks it always did.
+    while sizes and sum(sizes) > len(after):
+        sizes.pop(0)
+    if sizes != recorded:
+        _write_turn_sizes(p, sizes)
 
 
 def mark_absorbed(cid: str, sid: str, one_line: str, summary: str) -> None:
