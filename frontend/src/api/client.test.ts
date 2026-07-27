@@ -277,7 +277,7 @@ test("greeting marks and version picks POST to their campaign routes", async () 
 // ---- request coalescing ----
 const CFG = {
   theme: "t", system_prompt: "", quote_color: "off", user_label: "You", assistant_label: "Grimoire",
-  default_style_id: "", active_connection_id: "openrouter",
+  active_connection_id: "openrouter",
   active_connection: { id: "openrouter", kind: "openrouter" as const, name: "OpenRouter" }, ready: true,
 };
 

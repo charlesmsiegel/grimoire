@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { ApiError, api, type Config, type DataDirInfo, type LLMConnection, type Style } from "../api/client";
+import { ApiError, api, type Config, type DataDirInfo, type LLMConnection } from "../api/client";
+import { ResponsePresetPicker } from "../components/ResponsePresetPicker";
 import { themeList } from "../theme/themes";
 import { useTheme } from "../theme/ThemeProvider";
 
@@ -10,8 +11,6 @@ export default function ConfigView() {
   const [connections, setConnections] = useState<LLMConnection[]>([]);
   const [activeConnectionId, setActiveConnectionId] = useState("");
   const [systemPrompt, setSystemPrompt] = useState("");
-  const [defaultStyleId, setDefaultStyleId] = useState("");
-  const [styleOptions, setStyleOptions] = useState<Style[]>([]);
   const [userLabel, setUserLabel] = useState("");
   const [assistantLabel, setAssistantLabel] = useState("");
   const [saved, setSaved] = useState(false);
@@ -27,13 +26,11 @@ export default function ConfigView() {
       setSystemPrompt(c.system_prompt);
       setUserLabel(c.user_label);
       setAssistantLabel(c.assistant_label);
-      setDefaultStyleId(c.default_style_id);
     });
     api.getDataDir().then((d) => {
       setDataDir(d);
       setDataDirInput(d.data_dir);
     });
-    api.listStyles().then(setStyleOptions).catch(() => setStyleOptions([]));
     api.listConnections().then(setConnections).catch(() => setConnections([]));
   }, []);
 
@@ -52,7 +49,7 @@ export default function ConfigView() {
 
   if (!config) return <div className="page page-narrow config">Loading…</div>;
 
-  async function save(fields: Partial<{ theme: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string; default_style_id: string; active_connection_id: string }>) {
+  async function save(fields: Partial<{ theme: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string; active_connection_id: string }>) {
     const next = await api.putConfig(fields);
     setConfig(next);
     setSaved(true);
@@ -136,15 +133,8 @@ export default function ConfigView() {
         onChange={(e) => setSystemPrompt(e.target.value)}
       />
 
-      <div className="section-label">Default prose style</div>
-      <select
-        aria-label="Default prose style"
-        value={defaultStyleId}
-        onChange={(e) => setDefaultStyleId(e.target.value)}
-      >
-        <option value="">— none —</option>
-        {styleOptions.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-      </select>
+      <div className="section-label">Default response preset</div>
+      <ResponsePresetPicker scope="global" />
 
       <div className="section-label">Transcript</div>
       <label className="checkbox-row">
@@ -188,7 +178,6 @@ export default function ConfigView() {
           onClick={() => save({
             system_prompt: systemPrompt,
             user_label: userLabel, assistant_label: assistantLabel,
-            default_style_id: defaultStyleId,
           })}
         >
           Save

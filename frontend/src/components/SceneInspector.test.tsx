@@ -13,7 +13,6 @@ vi.mock("../api/client", async () => {
       getSceneDatetime: vi.fn(), setSceneDatetime: vi.fn(), getCalendarMonths: vi.fn(),
       listAppearances: vi.fn(), listEntityImages: vi.fn(),
       listEntities: vi.fn(), setSceneLocation: vi.fn(),
-      getSceneStyle: vi.fn(), setSceneStyle: vi.fn(), listStyles: vi.fn(),
       addToCast: vi.fn(), removeFromCast: vi.fn(),
       campaignImageUrl: () => "/img",
       entityImageUrl: () => "/loc-img",
@@ -21,6 +20,11 @@ vi.mock("../api/client", async () => {
   };
 });
 vi.mock("../api/models", () => ({ getModels: vi.fn() }));
+vi.mock("./ResponsePresetPicker", () => ({
+  ResponsePresetPicker: ({ scope, cid, sid }: any) => (
+    <div data-testid="response-preset-picker" data-scope={scope} data-cid={cid} data-sid={sid} />
+  ),
+}));
 import { api } from "../api/client";
 import { getModels } from "../api/models";
 
@@ -73,12 +77,6 @@ beforeEach(() => {
   (api.listEntityImages as any).mockResolvedValue([]);
   (api.listEntities as any).mockResolvedValue([]);
   (api.setSceneLocation as any).mockResolvedValue({ ok: true, moved: true, name: "" });
-  (api.getSceneStyle as any).mockResolvedValue({ style_id: "" });
-  (api.setSceneStyle as any).mockResolvedValue({ ok: true });
-  (api.listStyles as any).mockResolvedValue([
-    { id: "gothic-horror", name: "Gothic Horror", description: "", tags: [], built_in: true },
-    { id: "noir-detective", name: "Noir Detective", description: "", tags: [], built_in: true },
-  ]);
 });
 
 function renderInspector(onSceneChanged: () => void = () => {}) {
@@ -240,11 +238,12 @@ test("offscreen scene shows the offscreen side-section", async () => {
   expect(screen.getByText(/no player character/i)).toBeInTheDocument();
 });
 
-test("picking a scene prose style saves it immediately", async () => {
-  render(<SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={vi.fn()} />);
-  const sel = await screen.findByLabelText("Prose style");
-  fireEvent.change(sel, { target: { value: "noir-detective" } });
-  await waitFor(() => expect(api.setSceneStyle).toHaveBeenCalledWith("c", "s", "noir-detective"));
+test("mounts the response preset picker scoped to this scene", async () => {
+  renderInspector();
+  const picker = await screen.findByTestId("response-preset-picker");
+  expect(picker).toHaveAttribute("data-scope", "scene");
+  expect(picker).toHaveAttribute("data-cid", "c");
+  expect(picker).toHaveAttribute("data-sid", "s");
 });
 
 test("clicking a section header collapses its body and toggles aria-expanded", async () => {

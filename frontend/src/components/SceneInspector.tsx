@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   api, type Actor, type SceneContext, type SceneLocation, type ChronicleEntry,
-  type CalendarConfig, type RosterEntry, type SceneDatetime, type Style,
+  type CalendarConfig, type RosterEntry, type SceneDatetime,
   type CharacterSummary, type PCSummary,
 } from "../api/client";
 import { getModels, type Model } from "../api/models";
 import { Portrait } from "./Portrait";
 import { RecordDrawer, type DrawerTarget } from "./RecordDrawer";
 import { CalendarDatePicker } from "./CalendarDatePicker";
+import { ResponsePresetPicker } from "./ResponsePresetPicker";
 
 const SECTIONS_KEY = "grimoire.inspector.sections";
 
@@ -56,8 +57,6 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   const [dateInput, setDateInput] = useState("");
   const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
   const [locPick, setLocPick] = useState("");
-  const [styleId, setStyleId] = useState("");
-  const [styleOptions, setStyleOptions] = useState<Style[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(loadSectionCollapse);
   const toggleSection = useCallback((id: string) => {
@@ -81,7 +80,6 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
       .then((ls) => setLocations(ls.map((l) => ({ id: l.id, name: l.name }))))
       .catch(() => setLocations([]));
     api.getCalendarProviders().then((r) => setCalendars(r.providers)).catch(() => setCalendars([]));
-    api.listStyles().then(setStyleOptions).catch(() => setStyleOptions([]));
   }, [cid]);
 
   const [chars, setChars] = useState<CharacterSummary[]>([]);
@@ -135,9 +133,6 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   const reloadCfg = useCallback(
     () => api.getCalendarConfig(cid).then(setCfg).catch(() => setCfg(null)),
     [cid]);
-  const reloadStyle = useCallback(
-    () => api.getSceneStyle(cid, sid).then((r) => setStyleId(r.style_id)).catch(() => setStyleId("")),
-    [cid, sid]);
   const reloadCast = useCallback(
     () => api.getCast(cid, sid).then(setCast).catch(() => setCast([])),
     [cid, sid]);
@@ -150,8 +145,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
     api.getChronicle(cid).then(setRecap).catch(() => setRecap([]));
     reloadWhen();
     reloadCfg();
-    reloadStyle();
-  }, [cid, sid, refreshKey, reloadWhen, reloadCfg, reloadStyle, reloadCast]);
+  }, [cid, sid, refreshKey, reloadWhen, reloadCfg, reloadCast]);
 
   // the location section shows the primary image when the store has one
   useEffect(() => {
@@ -169,16 +163,6 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
       await api.setCalendarConfig(cid, {
         ...cfg, primary: { ...cfg.primary, provider }, confirmed: true });
       await reloadCfg();
-    } catch (err: any) {
-      setError(err.detail ?? String(err));
-    }
-  }
-
-  async function chooseStyle(value: string) {
-    setStyleId(value);
-    setError(null);
-    try {
-      await api.setSceneStyle(cid, sid, value);
     } catch (err: any) {
       setError(err.detail ?? String(err));
     }
@@ -310,11 +294,8 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
         )}
       </SideSection>
 
-      <SideSection id="style" title="Prose style" collapsed={!!collapsed.style} onToggle={toggleSection}>
-        <select aria-label="Prose style" value={styleId} onChange={(e) => chooseStyle(e.target.value)}>
-          <option value="">— use campaign default —</option>
-          {styleOptions.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-        </select>
+      <SideSection id="style" title="Response preset" collapsed={!!collapsed.style} onToggle={toggleSection}>
+        <ResponsePresetPicker scope="scene" cid={cid} sid={sid} />
       </SideSection>
 
       <SideSection id="when" title="When" collapsed={!!collapsed.when} onToggle={toggleSection}>

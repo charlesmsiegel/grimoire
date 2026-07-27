@@ -50,7 +50,7 @@ vi.mock("../api/client", async () => {
       addToCast: vi.fn(), removeFromCast: vi.fn(),
       getCalendarConfig: vi.fn(), setCalendarConfig: vi.fn(), getCalendarProviders: vi.fn(),
       getSceneDatetime: vi.fn(), setSceneDatetime: vi.fn(), getCalendarMonths: vi.fn(),
-      listStyles: vi.fn(), getSceneStyle: vi.fn(), setSceneStyle: vi.fn(),
+      listStyles: vi.fn(),
       listCharacters: vi.fn(), listPCs: vi.fn(), listCampaignPCs: vi.fn(),
       campaignChanges: vi.fn(),
       listAppearances: vi.fn(), listEntityImages: vi.fn(), listEntities: vi.fn(),
@@ -82,7 +82,7 @@ beforeEach(() => {
   (api.resolveProposal as any).mockResolvedValue(undefined);
   (api.getSceneChecks as any).mockResolvedValue({ actors: [] });
   (api.rollCheck as any).mockResolvedValue({ ok: true, resolution: {}, message: "" });
-  (api.getConfig as any).mockResolvedValue({ theme: "codex", system_prompt: "", quote_color: "off", user_label: "You", assistant_label: "Grimoire", default_style_id: "", active_connection_id: "openrouter", active_connection: { id: "openrouter", kind: "openrouter", name: "OpenRouter" }, ready: true });
+  (api.getConfig as any).mockResolvedValue({ theme: "codex", system_prompt: "", quote_color: "off", user_label: "You", assistant_label: "Grimoire", active_connection_id: "openrouter", active_connection: { id: "openrouter", kind: "openrouter", name: "OpenRouter" }, ready: true });
   (api.editMessage as any).mockResolvedValue({ ok: true });
   (api.getCast as any).mockResolvedValue([]);
   (api.addToCast as any).mockResolvedValue({ ok: true });
@@ -97,7 +97,6 @@ beforeEach(() => {
   ] });
   (api.getSceneDatetime as any).mockResolvedValue({ current: null, history: [] });
   (api.listStyles as any).mockResolvedValue([]);
-  (api.getSceneStyle as any).mockResolvedValue({ style_id: "" });
   (api.listCharacters as any).mockResolvedValue([]);
   (api.listPCs as any).mockResolvedValue([]);
   (api.listCampaignPCs as any).mockResolvedValue([]);
@@ -186,7 +185,7 @@ test("scene rail is sortable by last updated, scene date, or order", async () =>
 test("groups consecutive posts under one speaker plate", async () => {
   (api.getConfig as any).mockResolvedValue({
     theme: "codex", system_prompt: "", quote_color: "off", user_label: "Kestrel", assistant_label: "Grimoire",
-    default_style_id: "", active_connection_id: "openrouter",
+    active_connection_id: "openrouter",
     active_connection: { id: "openrouter", kind: "openrouter", name: "OpenRouter" }, ready: true,
   });
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
