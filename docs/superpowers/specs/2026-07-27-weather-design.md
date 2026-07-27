@@ -164,8 +164,22 @@ Lenient parsing throughout: an unknown `climate` falls back to the campaign
 default, an unparseable `persistence` falls back to the climate's. Weather never
 raises into a turn.
 
-A campaign-wide default climate lives beside `calendar.json` in the campaign
-directory, so a world that hasn't tagged its locations still gets weather.
+A campaign-wide default climate lives in **`campaigns/<cid>/climate.json`**,
+beside `calendar.json` and copied at create time the same way, so a world that
+hasn't tagged its locations still gets weather. It needs its own file and its
+own name: `weather.json` is already the override store, and conflating
+configuration with campaign-local fiat would put authored spans and library
+defaults in one blob.
+
+```json
+{ "default_climate": "temperate-coastal", "epoch": "1492-01-01" }
+```
+
+Both fields are optional. When the file is absent or `default_climate` is
+unset, the fallback is the shipped `temperate-interior` preset — a named,
+committed default rather than an implicit one, so an untagged world and a
+missing file resolve identically. `epoch` is only meaningful under Option 1
+(§ Anchoring).
 
 ### Weather zones (the deferred-correlation hook)
 
@@ -189,7 +203,10 @@ member diverges it from the rest of its zone regardless of configuration. That
 is the right default — GM fiat about the docks should not silently repaint the
 whole town — but it means "identical weather" describes the generated layer, not
 the resolved one. A zone-wide override is expressible by writing the same span
-to each member, or by keying it to `_default`.
+to each member. Not by keying it to `_default`: that key is campaign-wide, so in
+any campaign with more than one zone it would repaint every location on the map.
+A zone-keyed override representation would be the clean fix if this proves
+tedious in practice; it is not in v1.
 
 That is crude — it is co-location, not a storm front moving across a map — but
 it costs nothing now, covers the common case (six locations inside one town),
@@ -215,7 +232,7 @@ hash-diffing of entity blobs is undisturbed.
       "wind": "gale",
       "note": "the Wintertide storm",
       "source": "manual",
-      "set_at": "1492-06-14T05:12"
+      "set_at": "2026-07-27T18:22:04Z"
     }
   ]
 }
@@ -228,6 +245,16 @@ hash-diffing of entity blobs is undisturbed.
   endpoint must match exactly one record, or the precedence rules below decide
   between two spans that were never meant to compete. This convention also
   governs how writers merge, truncate, and round durations.
+- **Comparison happens on the fixed-day axis, never on the stored strings.**
+  `from`, `to`, and the queried moment are each parsed through the campaign's
+  primary provider to `(fixed_day, minute)` before any ordering test. Native
+  date strings are not lexicographically ordered under every provider — the
+  shipped Hebrew calendar formats as `{year}-{token}-{day}` with a month *name*
+  token (`hebrew.py:70`), so `5784-nisan-01` and `5784-tishrei-01` sort
+  alphabetically into the wrong order. String comparison would silently match
+  the wrong spans rather than fail loudly. An endpoint with no clock takes
+  minute 0 for `from` and end-of-day for `to`, so a date-only span covers the
+  whole day it names.
 - **`id` is required**, and it is what makes the precedence backstop
   implementable — the rules below need a stable per-span identity that array
   position cannot supply. Writers generate one; a hand-authored entry missing an
@@ -269,6 +296,12 @@ for each axis independently:
 
 1. **Specificity**: a span keyed by this location beats one keyed by `_default`.
 2. **Recency**: among equally specific spans, the newest `set_at` wins.
+   `set_at` is a **wall-clock write timestamp** (`now_iso()`), deliberately not
+   an in-game moment. Since `set_datetime` permits moving a scene backward in
+   time, an in-world stamp would let a freshly authored override lose to one
+   written weeks ago, and the GM's most recent instruction is what should win.
+   It is the only field in the record on the real-world clock; `from` and `to`
+   remain native campaign moments.
 3. **Determinism backstop**: if `set_at` ties too, the lexicographically
    greatest span `id` wins, so the result never depends on file ordering.
 
@@ -327,13 +360,22 @@ starts from year *N−1*'s final block, computed lazily and cached, recursing ba
 to the campaign's first year. Correlation is then genuinely continuous. Cost is
 O(years since epoch) on first touch and O(1) after — ~91k cheap RNG steps for a
 50-year span, which is milliseconds, and a jump to year +50 pays it once.
-Carries two liabilities: backward time travel before the epoch needs the chain
-extended backward, and the per-year memo must be invalidated when climates or
+Carries three liabilities. Backward time travel before the epoch needs the chain
+extended backward. The per-year memo must be invalidated when climates or
 location settings change, or a long-running process will keep serving a stale
 walk while a restarted one computes something different — breaking the
-cross-process determinism this spec promises. That means the climate content
-hash and the resolved location settings belong in the cache key, not just the
-year.
+cross-process determinism this spec promises; the climate content hash and the
+resolved location settings therefore belong in the cache key, not just the year.
+
+And the epoch itself has to be **persisted and immutable**, which is why
+`climate.json` carries an `epoch` field. There is no in-game campaign start date
+to derive it from: `create_campaign` records only real-world `created`/`updated`
+stamps (`campaigns.py:81-87`), and scene native dates arrive later and can be
+edited or added in any order. Deriving the epoch from the earliest known scene
+would mean that adding a prequel scene silently rewrites every sky the campaign
+has ever shown — a determinism violation that would surface as "the weather
+changed in scenes I already played." Written once, on first weather resolution,
+and never recomputed.
 
 **Option 2 — replace the chain with random-access correlated noise
 (recommended).** Instead of a Markov walk, each axis is a correlated noise
@@ -426,9 +468,19 @@ reading gets wrong:
   asserts. A malformed private climate degrades to a boring sky; it never takes
   a turn down, and never lies about the temperature.
 
-Seed: a stable hash of `(cid, zone, year)` for the anchor, advanced by the walk.
-Campaign id is in the seed per #44 — two campaigns in one world must not share
-skies.
+Seeding depends on which option § Anchoring resolves to, and the two are not
+interchangeable:
+
+- **Option 1**: a stable hash of `(cid, zone, epoch)` seeds the chain once, then
+  the walk advances it. Per-year seeding is what the discarded first draft did
+  and is exactly what reintroduces the New Year seam.
+- **Option 2**: a stable hash of `(cid, zone)` parameterizes the noise field,
+  which is then sampled at the continuous block index. There is no per-year
+  seed at all — introducing one would decorrelate the samples either side of
+  New Year and recreate the seam the option exists to remove.
+
+Either way the campaign id is in the seed per #44 — two campaigns in one world
+must not share skies.
 
 ### Accumulators (later, not v1)
 
@@ -483,6 +535,16 @@ rather than reimplement it.
   for narration that states one ("the rain set in for three days"), mapped to
   whole blocks by rounding outward. Narration that implies onset rather than
   extent ("rain begins") takes the default — one block, re-narratable next turn.
+- **Climate editor** (#40): `GET /api/climates` (the merged list, each entry
+  tagged `builtin` or `custom`), `GET /api/climates/{id}`, and
+  `PUT /api/climates/{id}`. The write path needs a rule the spec cannot leave
+  implicit: shipped presets live inside the installed backend package and must
+  never be written, so **editing a preset copies it to
+  `<GRIMOIRE_HOME>/climates/{id}.json` and edits the copy** — same
+  copy-on-write shape the codebase already uses for campaigns diverging from
+  worlds. Lookup precedence follows: a custom climate shadows a shipped one of
+  the same id. Deleting a custom climate reverts to the preset rather than
+  removing the id, and an id with no preset behind it simply disappears.
 - **On advance** (#104): `sweep(cid, sid, prev_native, now_native)`. The previous
   moment and the scene are both required: `scenes.set_datetime` permits
   arbitrary jumps, including backward ones, and keeps a separate history per
@@ -503,7 +565,10 @@ Backend, `backend/tests/test_weather.py`, store isolated with
 - Year seam: the distribution of change-events across the year boundary matches
   the distribution mid-year, **and** at `persistence: 1` the value is identical
   either side of a New Year — the assertion the first draft's burn-in would
-  have failed.
+  have failed. Scope the equality to a climate whose season does *not* boundary
+  at fraction 0, or assert on the underlying correlated sample instead: a season
+  change at New Year is licensed to change the weather by the scoped guarantee,
+  so an unconditional assertion would reject a conforming implementation.
 - Season seam: likewise across a season boundary, where the table changes but
   the underlying stream should not jump.
 - Block identity: 23:00 and 01:00 the following morning resolve to the same
@@ -512,6 +577,15 @@ Backend, `backend/tests/test_weather.py`, store isolated with
   and two spans differing only in array order resolve identically.
 - Span boundaries are half-open: at the shared endpoint of two adjacent
   overrides, exactly one matches.
+- Span comparison under a non-lexicographic provider: under `hebrew`, spans
+  whose native strings sort the wrong way round still match by real
+  chronology — the test that fails if comparison is done on raw strings.
+- Precedence under backward time travel: an override written later in wall-clock
+  time wins over one written earlier, even when the scene has since moved
+  backward in-world.
+- Climate editing: writing a shipped preset creates a custom copy under
+  `<GRIMOIRE_HOME>/climates/` and leaves the installed file untouched;
+  deleting the copy restores the preset.
 - Weight fidelity: over a long sample the observed frequency of each condition
   matches its normalized weight, at several persistence settings — the test
   that catches a non-uniform marginal reaching the inverse CDF.
