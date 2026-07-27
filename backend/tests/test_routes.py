@@ -1523,6 +1523,26 @@ def test_regenerate_past_a_trailing_roll_returns_400(client):
     assert len(msgs) == 3
 
 
+def test_regenerate_with_desynced_turn_boundaries_returns_400(client):
+    """turn_sizes that no longer fits the transcript must not authorize a
+    deletion — it would consume blocks from an earlier generation. The refusal
+    is a handled 400, and every message survives."""
+    from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "a reply"}])
+    p = store.campaigns.campaign_root(cid) / "scenes" / f"{sid}.md"
+    meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
+    meta["turn_sizes"] = "5"
+    p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
+    assert resp.status_code == 400
+    assert len(client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]) == 2
+
+
 def test_regenerate_missing_key_returns_409(client):
     _wid, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
@@ -4987,14 +5007,24 @@ def _corrupt_preset_file(tmp_path, pid):
         b"---\nname: \xff\xfe broken \xff\n---\n")
 
 
-def test_get_unreadable_preset_is_a_clean_400(client, tmp_path):
-    """A corrupt/undecodable preset file must fail open with a handled 400,
-    not a 500 -- matching list_presets()/_supplied_by_preset()'s degrade-not-
-    crash contract for the same store module."""
+def test_get_unreadable_preset_returns_the_damaged_record(client, tmp_path):
+    """A corrupt/undecodable preset must be OBSERVABLE, not an error: a scope
+    can still be configured to it, and the management view has to be able to
+    show the row and say why it supplies nothing. (This used to 400, which left
+    the damage invisible everywhere.)"""
     pid = client.post("/api/response-presets", json={"name": "Slow Burn"}).json()["id"]
     _corrupt_preset_file(tmp_path, pid)
     r = client.get(f"/api/response-presets/{pid}")
-    assert r.status_code == 400
+    assert r.status_code == 200
+    assert r.json()["validity"]["valid"] is False
+    assert any("could not be read" in i for i in r.json()["validity"]["issues"])
+
+
+def test_unreadable_preset_is_listed_with_its_damage(client, tmp_path):
+    pid = client.post("/api/response-presets", json={"name": "Slow Burn"}).json()["id"]
+    _corrupt_preset_file(tmp_path, pid)
+    rows = {p["id"]: p for p in client.get("/api/response-presets").json()}
+    assert rows[pid]["validity"]["valid"] is False
 
 
 def test_put_unreadable_preset_is_a_clean_400(client, tmp_path):

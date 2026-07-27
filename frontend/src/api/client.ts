@@ -215,6 +215,15 @@ export type ResponsePresetUsageEntry = {
   scope: "global" | "campaign" | "scene"; id: string; name: string;
   before: Partial<ResponseEffective>; after: Partial<ResponseEffective>;
 };
+/** A scope the impact scan could not read. Rendering the affected list without
+ * these turns a partial answer into a confident "nothing else changes" — the
+ * one thing a preview shown before an irreversible delete must never do. */
+export type ResponsePresetUsageSkip = {
+  scope: "campaign" | "scene"; id: string; name: string; reason: string;
+};
+export type ResponsePresetUsage = {
+  affected: ResponsePresetUsageEntry[]; unevaluated?: ResponsePresetUsageSkip[];
+};
 export type ResponseFields = {
   response_preset: string; style_id: string;
   length_reply_words: string; length_blocks: string; length_paragraphs: string;
@@ -780,7 +789,7 @@ export const api = {
   duplicateResponsePreset: (pid: string) =>
     request<{ id: string }>("POST", `/api/response-presets/${pid}/duplicate`),
   responsePresetUsage: (pid: string) =>
-    request<{ affected: ResponsePresetUsageEntry[] }>("GET", `/api/response-presets/${pid}/usage`),
+    request<ResponsePresetUsage>("GET", `/api/response-presets/${pid}/usage`),
   listLengthPresets: () => request<Record<string, LengthPreset>>("GET", "/api/length-presets"),
 
   // response bundle (scoped preset + overrides + resolution), all three scopes

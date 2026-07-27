@@ -823,12 +823,13 @@ def post_response_preset(body: ResponsePresetCreate):
 
 @router.get("/response-presets/{pid}")
 def get_response_preset(pid: str):
+    # An unreadable file comes back as a damaged RECORD (validity.valid false),
+    # not an error: a scope can still be configured to it, and the view has to
+    # be able to show the row and say why it supplies nothing.
     try:
         return store.response_presets.read_preset(pid)
     except store.response_presets.PresetNotFound:
         raise HTTPException(status_code=404, detail="response preset not found")
-    except (OSError, UnicodeDecodeError):
-        raise HTTPException(status_code=400, detail="response preset file could not be read")
 
 
 @router.put("/response-presets/{pid}")
@@ -866,18 +867,19 @@ def post_response_preset_duplicate(pid: str):
         return {"id": store.response_presets.duplicate_preset(pid)}
     except store.response_presets.PresetNotFound:
         raise HTTPException(status_code=404, detail="response preset not found")
-    except (OSError, UnicodeDecodeError):
+    except (store.response_presets.PresetUnreadable, OSError, UnicodeDecodeError):
         raise HTTPException(status_code=400, detail="response preset file could not be read")
 
 
 @router.get("/response-presets/{pid}/usage")
 def get_response_preset_usage(pid: str):
-    # usage() already skips individual unreadable campaigns/scenes; this is the
+    # usage() reports individual unreadable campaigns/scenes in `unevaluated`
+    # (the caller must not render a partial list as a complete one); this is the
     # backstop for a store-wide read failure. It must be a handled error, not a
     # 500 — the caller renders this immediately before an irreversible delete
     # and has to be able to tell "no impact" from "impact unknown".
     try:
-        return {"affected": store.response_presets.usage(pid)}
+        return store.response_presets.usage(pid)
     except (OSError, UnicodeDecodeError):
         raise HTTPException(status_code=400, detail="preset usage could not be computed")
 
@@ -2583,7 +2585,16 @@ def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
             raise HTTPException(status_code=400, detail="cannot regenerate the opening post")
         if core[-1].get("speaker") == store.scenes.ROLL_SPEAKER:
             raise HTTPException(status_code=400, detail="cannot regenerate past a manual dice roll")
-        store.scenes.remove_trailing_assistant_run(cid, sid)
+        try:
+            store.scenes.remove_trailing_assistant_run(cid, sid)
+        except store.scenes.TurnSizesDesynced:
+            # Refusing beats guessing: the recorded turn boundaries don't fit
+            # the transcript, so any deletion could take blocks from an earlier
+            # generation. Nothing has been changed on disk.
+            raise HTTPException(
+                status_code=400,
+                detail="this scene's recorded turn boundaries no longer match its "
+                       "transcript — delete the last reply manually to regenerate")
     messages = store.context.build_messages(cid, sid, turn=_turn_override(body))
     guidance = (body.guidance or "").strip() if body else ""
     if guidance:

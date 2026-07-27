@@ -93,10 +93,35 @@ def is_built_in(sid: str) -> bool:
 
 
 def exists(sid: str) -> bool:
-    """Whether `sid` names a readable style. Resolution treats an id that
-    doesn't as 'no opinion' and keeps walking outward, matching the
-    long-standing skip-and-fall-back behaviour of style resolution."""
-    return _find_path(sid) is not None
+    """Whether `sid` names a style that can actually be READ. Resolution treats
+    an id that doesn't as 'no opinion' and keeps walking outward, matching the
+    long-standing skip-and-fall-back behaviour of style resolution.
+
+    Presence is not enough. A damaged file that merely exists stops the cascade
+    at that scope — it looks like a real style — and then context._assemble's
+    read_style fails and applies NO style at all, suppressing the perfectly good
+    broader style that should have been inherited. Checking readability here
+    makes an unreadable style mean 'no opinion', which is how every other
+    damaged record degrades.
+    """
+    found = _find_path(sid)
+    return found is not None and _read(found[0]) is not None
+
+
+def is_damaged(sid: str) -> bool:
+    """A style file that is PRESENT but cannot be read. Resolution ignores it
+    either way; the management views need the distinction because 'the file is
+    corrupt' and 'you renamed it' call for different fixes."""
+    found = _find_path(sid)
+    return found is not None and _read(found[0]) is None
+
+
+def _read(p: Path) -> tuple[dict, str] | None:
+    """(meta, body), or None when the file can't be read or decoded."""
+    try:
+        return parse_frontmatter(p.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return None
 
 
 def read_style(sid: str) -> dict:

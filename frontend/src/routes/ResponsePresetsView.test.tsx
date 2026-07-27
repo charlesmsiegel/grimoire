@@ -121,6 +121,58 @@ it("warns that the impact is unknown when the usage lookup fails", async () => {
   expect(screen.getByRole("button", { name: /confirm delete/i })).toBeInTheDocument();
 });
 
+it("warns that the impact list is incomplete when part of the scan failed", async () => {
+  // A partial list rendered as a complete one is the same false reassurance as
+  // a failed lookup rendered as "nothing else changes", just quieter.
+  (api.responsePresetUsage as any).mockResolvedValue({
+    affected: [],
+    unevaluated: [{ scope: "campaign", id: "saltmarch", name: "Saltmarch",
+                    reason: "this campaign's scenes could not be listed" }],
+  });
+  render(<ResponsePresetsView />);
+  await userEvent.click(await screen.findByRole("button", { name: "Slow Burn" }));
+  await userEvent.click(screen.getByRole("button", { name: "Edit" }));
+  await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent(/incomplete/i);
+  expect(screen.getByText(/could not be listed/)).toBeInTheDocument();
+  expect(screen.queryByText(/nothing else changes/i)).not.toBeInTheDocument();
+});
+
+it("still lists the affected scopes alongside an incompleteness warning", async () => {
+  (api.responsePresetUsage as any).mockResolvedValue({
+    affected: [{ scope: "campaign", id: "saltmarch", name: "Saltmarch",
+                 before: { reply_words: 900 }, after: { reply_words: 550 } }],
+    unevaluated: [{ scope: "scene", id: "s1", name: "The Long Dark",
+                    reason: "this scene could not be read" }],
+  });
+  render(<ResponsePresetsView />);
+  await userEvent.click(await screen.findByRole("button", { name: "Slow Burn" }));
+  await userEvent.click(screen.getByRole("button", { name: "Edit" }));
+  await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent(/incomplete/i);
+  expect(screen.getByText(/550/)).toBeInTheDocument();
+});
+
+it("shows an unreadable preset in the rail and explains it in the detail view", async () => {
+  // A dropped row leaves a scope configured to a preset nothing explains —
+  // indistinguishable from ordinary inheritance.
+  const issue = "this preset file could not be read — it supplies nothing";
+  (api.listResponsePresets as any).mockResolvedValue([
+    ...PRESETS,
+    { id: "smudged", name: "smudged", built_in: false,
+      validity: { valid: false, issues: [issue] } },
+  ]);
+  (api.getResponsePreset as any).mockResolvedValue({
+    meta: { id: "smudged", name: "smudged", built_in: false },
+    validity: { valid: false, issues: [issue] },
+  });
+  render(<ResponsePresetsView />);
+  const row = await screen.findByRole("button", { name: "smudged" });
+  expect(row).toHaveTextContent("broken");
+  await userEvent.click(row);
+  expect(await screen.findByText(issue)).toBeInTheDocument();
+});
+
 it("offers the clear sentinel as a style option distinct from inherit", async () => {
   render(<ResponsePresetsView />);
   await userEvent.click(await screen.findByRole("button", { name: "Slow Burn" }));

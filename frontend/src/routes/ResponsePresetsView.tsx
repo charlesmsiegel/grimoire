@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   api, STYLE_CLEAR, type LengthPreset, type ResponsePresetSummary,
-  type ResponsePresetUsageEntry, type Style,
+  type ResponsePresetUsageEntry, type ResponsePresetUsageSkip, type Style,
 } from "../api/client";
 import { Field } from "../components/Field";
 
@@ -81,6 +81,9 @@ export default function ResponsePresetsView() {
   // "nothing else changes" immediately before an irreversible delete.
   const [affected, setAffected] =
     useState<ResponsePresetUsageEntry[] | "failed" | null>(null);
+  // Scopes the scan couldn't read. A partial list rendered as a complete one is
+  // the same false reassurance as "failed" rendered as [], just quieter.
+  const [unevaluated, setUnevaluated] = useState<ResponsePresetUsageSkip[]>([]);
 
   const reload = useCallback(() => api.listResponsePresets().then(setPresets).catch(() => setPresets([])), []);
   useEffect(() => {
@@ -96,6 +99,7 @@ export default function ResponsePresetsView() {
     setForm(BLANK);
     setConfirmingDelete(false);
     setAffected(null);
+    setUnevaluated([]);
     setError(null);
     setMode("edit");
   }
@@ -104,6 +108,7 @@ export default function ResponsePresetsView() {
     setError(null);
     setConfirmingDelete(false);
     setAffected(null);
+    setUnevaluated([]);
     let detail;
     try {
       detail = await api.getResponsePreset(id);
@@ -191,14 +196,16 @@ export default function ResponsePresetsView() {
     if (!pid) return;
     setConfirmingDelete(true);
     setAffected(null);
+    setUnevaluated([]);
     api.responsePresetUsage(pid)
-      .then((r) => setAffected(r.affected ?? []))
+      .then((r) => { setAffected(r.affected ?? []); setUnevaluated(r.unevaluated ?? []); })
       .catch(() => setAffected("failed"));
   }
 
   function cancelDelete() {
     setConfirmingDelete(false);
     setAffected(null);
+    setUnevaluated([]);
   }
 
   async function confirmDelete() {
@@ -225,6 +232,12 @@ export default function ResponsePresetsView() {
             <button key={p.id} className={"row" + (pid === p.id ? " active" : "")} onClick={() => select(p.id)}>
               {p.name}
               {p.built_in && <span className="mark-badge" aria-hidden="true">built-in</span>}
+              {/* A damaged record still occupies a scope's setting; the rail is
+                  where a user notices it supplies nothing. aria-hidden keeps the
+                  row's accessible name the preset's name. */}
+              {p.validity && !p.validity.valid && (
+                <span className="mark-badge" aria-hidden="true">broken</span>
+              )}
             </button>
           ))}
         </div>
@@ -283,20 +296,42 @@ export default function ResponsePresetsView() {
                   The impact of this delete could not be checked — campaigns or scenes
                   that inherit this preset may change, and this list is unknown.
                 </div>
-              ) : affected.length === 0 ? (
-                <div className="field-hint">No campaigns or scenes inherit this preset — nothing else changes.</div>
               ) : (
-                <div className="side-section">
-                  <h4>This will change:</h4>
-                  <ul>
-                    {affected.slice(0, AFFECTED_CAP).map((a, i) => (
-                      <li key={i}>{scopeNoun(a.scope)} <strong>{a.name}</strong>: {describeChange(a)}</li>
-                    ))}
-                  </ul>
-                  {affected.length > AFFECTED_CAP && (
-                    <div className="field-hint">…and {affected.length - AFFECTED_CAP} more.</div>
+                <>
+                  {/* An incomplete scan must never be rendered as a complete
+                      answer: the list below is a floor, not the impact. */}
+                  {unevaluated.length > 0 && (
+                    <div className="banner error-banner" role="alert">
+                      This impact list is incomplete — {unevaluated.length}{" "}
+                      {unevaluated.length === 1 ? "scope" : "scopes"} could not be checked,
+                      so more may change than is shown:
+                      <ul>
+                        {unevaluated.slice(0, AFFECTED_CAP).map((u, i) => (
+                          <li key={i}>{scopeNoun(u.scope)} <strong>{u.name}</strong>: {u.reason}</li>
+                        ))}
+                      </ul>
+                    </div>
                   )}
-                </div>
+                  {affected.length === 0 ? (
+                    unevaluated.length === 0 && (
+                      <div className="field-hint">
+                        No campaigns or scenes inherit this preset — nothing else changes.
+                      </div>
+                    )
+                  ) : (
+                    <div className="side-section">
+                      <h4>This will change:</h4>
+                      <ul>
+                        {affected.slice(0, AFFECTED_CAP).map((a, i) => (
+                          <li key={i}>{scopeNoun(a.scope)} <strong>{a.name}</strong>: {describeChange(a)}</li>
+                        ))}
+                      </ul>
+                      {affected.length > AFFECTED_CAP && (
+                        <div className="field-hint">…and {affected.length - AFFECTED_CAP} more.</div>
+                      )}
+                    </div>
+                  )}
+                </>
               )}
               <div className="form-actions">
                 <button className="subtle" onClick={cancelDelete}>Cancel</button>
