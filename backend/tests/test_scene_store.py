@@ -697,3 +697,43 @@ def test_set_response_writes_and_clears_bundle_fields(monkeypatch, tmp_path):
     meta = scenes.read_scene(cid, sid)["meta"]
     assert meta["length_speakers"] == ""
     assert meta["response_preset"] == "terse"                    # untouched
+
+
+def test_reroll_steps_over_trailing_transitions_and_keeps_them(monkeypatch, tmp_path):
+    """A transition that lands AFTER the reply (a location change, a time
+    advance, someone leaving) must not block reroll: the generation beneath it
+    is regenerated and the transition survives, in order."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Transitions")
+    scenes.append_message(cid, sid, "user", "Go on.")
+    scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "First try."},
+                                   {"speaker": None, "content": "She waits."}])
+    scenes.append_message(cid, sid, "assistant", "*The scene moves to the Salt Cathedral.*",
+                          speaker=scenes.TRANSITION_SPEAKER)
+    scenes.append_message(cid, sid, "assistant", "*Time passes. It is now dusk.*",
+                          speaker=scenes.TRANSITION_SPEAKER)
+    scenes.remove_trailing_assistant_run(cid, sid)
+    messages = scenes.read_scene(cid, sid)["messages"]
+    assert [m["content"] for m in messages] == [
+        "Go on.",
+        "*The scene moves to the Salt Cathedral.*",
+        "*Time passes. It is now dusk.*",
+    ]
+    assert [m.get("speaker") for m in messages[1:]] == [scenes.TRANSITION_SPEAKER] * 2
+    assert scenes.get_turn_sizes(cid, sid) == []
+
+
+def test_reroll_still_refuses_a_roll_hidden_under_a_transition(monkeypatch, tmp_path):
+    """Stepping over transitions must not step over a dice roll behind one —
+    the roll's transcript line stays in lockstep with its rolls.json entry."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Rolls")
+    scenes.append_message(cid, sid, "user", "Go on.")
+    scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "A reply."}])
+    scenes.append_message(cid, sid, "assistant", "\U0001F3B2 2d6 = 7", speaker=scenes.ROLL_SPEAKER)
+    scenes.append_message(cid, sid, "assistant", "*Time passes. It is now dusk.*",
+                          speaker=scenes.TRANSITION_SPEAKER)
+    with pytest.raises(IndexError):
+        scenes.remove_trailing_assistant_run(cid, sid)
+    assert len(scenes.read_scene(cid, sid)["messages"]) == 4
+    assert scenes.get_turn_sizes(cid, sid) == [1]

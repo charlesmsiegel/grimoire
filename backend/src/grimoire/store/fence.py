@@ -10,7 +10,9 @@ from __future__ import annotations
 import json
 import re
 
-_OPENER = re.compile(r"```[ \t]*roll\b", re.IGNORECASE)
+# Public: store/length_drift.py builds its whole-fence pattern from this, so the
+# opener grammar has exactly one definition in the codebase.
+OPENER = re.compile(r"```[ \t]*roll\b", re.IGNORECASE)
 # A buffer suffix that could still grow into an opener: 1-3 backticks,
 # then (only after all 3) optional spaces/tabs and a prefix of "roll".
 _OPENER_PREFIX = re.compile(r"(`{1,2}|`{3}[ \t]*(r(o(l(l)?)?)?)?)$", re.IGNORECASE)
@@ -41,14 +43,14 @@ class FenceWatcher:
             self._try_close()
             return ""
         self._buf += chunk
-        m = _OPENER.search(self._buf)
+        m = OPENER.search(self._buf)
         if m and m.end() < len(self._buf):
             return self._commit(m)
         # A match ending exactly at the buffer end is deferred: its \b was
         # satisfied only by end-of-string, and the next chunk could extend
         # the word ("```rollback" is not an opener). The prefix-state
         # holdback withholds the trailing "```roll" meanwhile; the next
-        # chunk either lets _OPENER match for real or flushes it.
+        # chunk either lets OPENER match for real or flushes it.
         #
         # prefix-state holdback: withhold the longest suffix that could
         # still extend into an opener (backticks + optional spaces/tabs +
@@ -89,7 +91,7 @@ class FenceWatcher:
         if not self._open:
             # End of stream is a word boundary: a deferred opener held at
             # the buffer end (see feed) is a real opener after all.
-            m = _OPENER.search(self._buf)
+            m = OPENER.search(self._buf)
             if m:
                 out = self._commit(m)
         if self._open:

@@ -126,8 +126,15 @@ def _chapter(cid: str, provider, sid: str, number: int, images: Images, prefix: 
         except entities.EntityNotFound:
             pass  # deleted location: header line silently omitted
     cast = [a["name"] for a in appearances.scene_cast(cid, sid)]
-    messages = [{"role": m["role"], "speaker": m.get("speaker"),
-                "content": rewrite_images(m["content"], cid, images, prefix)}
+    # The transition tag is internal metadata (drift measurement treats these as
+    # turn separators); it is never a speaker the reader should see. Dropping it
+    # here keeps HTML, plain text and EPUB — all of which build from collect() —
+    # rendering a transition as the unlabelled narration it has always been, and
+    # makes pre-tag and post-tag transitions look identical in a book.
+    messages = [{"role": m["role"],
+                 "speaker": None if m.get("speaker") == scenes.TRANSITION_SPEAKER
+                            else m.get("speaker"),
+                 "content": rewrite_images(m["content"], cid, images, prefix)}
                 for m in scene["messages"]]
     return {"sid": sid, "number": number, "title": title, "date": date, "location": location,
             "cast": cast, "epigraph": meta.get("one_line") or None, "messages": messages}

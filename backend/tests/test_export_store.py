@@ -195,3 +195,34 @@ def test_export_unknown_campaign(monkeypatch, tmp_path):
         export.build_text("nope")
     with pytest.raises(campaigns.CampaignNotFound):
         export.build_json("nope")
+
+
+def test_transitions_export_as_unlabelled_narration(monkeypatch, tmp_path):
+    """The transition tag is internal drift metadata, never a speaker. HTML and
+    plain text must render a transition exactly as they did before it was
+    tagged — and identically to an untagged (pre-existing) transition line."""
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Arrival")
+    scenes.append_message(cid, sid, "assistant", "The docks reek.")
+    scenes.append_message(cid, sid, "assistant", "*Time passes. It is now dusk.*",
+                          speaker=scenes.TRANSITION_SPEAKER)
+    chapter = export.collect(cid)["chapters"][0]
+    assert [m["speaker"] for m in chapter["messages"]] == [None, None]
+    html = export.build_html(cid)[0].decode()
+    assert scenes.TRANSITION_SPEAKER not in html
+    assert "Scene</span>" not in html
+    assert "Time passes. It is now dusk." in html
+    txt = export.build_text(cid)[0].decode()
+    assert scenes.TRANSITION_SPEAKER not in txt
+    assert "Time passes. It is now dusk." in txt
+
+
+def test_json_export_keeps_the_transition_tag(monkeypatch, tmp_path):
+    """build_json is the nearest-to-disk dump; the tag is real stored metadata
+    and must survive there even though no rendered surface shows it."""
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Arrival")
+    scenes.append_message(cid, sid, "assistant", "*Time passes.*",
+                          speaker=scenes.TRANSITION_SPEAKER)
+    payload = json.loads(export.build_json(cid)[0].decode())
+    assert payload["scenes"][0]["messages"][0]["speaker"] == scenes.TRANSITION_SPEAKER

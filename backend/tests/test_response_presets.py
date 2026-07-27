@@ -214,8 +214,8 @@ def test_none_sentinel_clears_a_broader_style(tmp_path, monkeypatch):
 
 
 def test_unknown_style_id_continues_outward(tmp_path, monkeypatch):
-    """styles.resolve_style skips unresolvable ids so a stale reference never
-    breaks generation -- the new cascade must not regress that."""
+    """An unresolvable style id is skipped so a stale reference never breaks
+    generation; the walk continues outward instead of stopping on it."""
     _isolate(tmp_path, monkeypatch)
     _write(tmp_path / "templates" / "styles", "gothic-horror", name="Gothic Horror")
     got = rp.resolve(scene_meta=_scope(style="deleted-style"),
@@ -450,3 +450,30 @@ def test_usage_is_empty_for_an_unused_preset(tmp_path, monkeypatch):
     _campaign_fixture(tmp_path, monkeypatch)
     pid = rp.create_preset("Unused", length_preset="terse")
     assert rp.usage(pid) == []
+
+
+def test_turn_scope_tolerates_non_string_values(tmp_path, monkeypatch):
+    """The turn scope is a REQUEST BODY, not frontmatter. A non-string knob
+    must degrade to a coerced value (or be ignored), never raise mid-generation
+    — a 500 there loses the player's turn."""
+    _isolate(tmp_path, monkeypatch)
+    got = rp.resolve(turn={"length_blocks": 4, "length_reply_words": 210,
+                           "response_preset": None, "style_id": None})
+    assert got["blocks"] == 4
+    assert got["reply_words"] == 210
+    # a value that isn't a positive whole number is simply not an opinion
+    assert rp.resolve(turn={"length_speakers": {"nope": 1}})["speakers"] == \
+        rp.resolve()["speakers"]
+
+
+def test_validity_reports_a_broken_length_preset_and_a_dangling_style_together(tmp_path, monkeypatch):
+    """Two independent problems, two issues — reporting only the first sends
+    the user back for a second round of 'why is this still wrong'."""
+    _isolate(tmp_path, monkeypatch)
+    _write(tmp_path / "home" / "response_presets", "broken",
+           name="Broken", length_preset="nonesuch", style_id="ghost-style")
+    v = rp.read_preset("broken")["validity"]
+    assert v["valid"] is False
+    assert len(v["issues"]) == 2
+    assert any("nonesuch" in i for i in v["issues"])
+    assert any("ghost-style" in i for i in v["issues"])

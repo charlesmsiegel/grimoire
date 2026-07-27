@@ -4891,9 +4891,10 @@ def test_module_rule_route(client):
     assert client.get("/api/modules/ghost/rules/omen").status_code == 404
 
 
-def test_regenerate_past_a_scene_transition_is_a_clean_400(client):
-    """A trailing join/leave/location/time line is not model output, so reroll
-    must refuse it with a handled error rather than a 500."""
+def test_regenerate_rerolls_past_a_trailing_scene_transition(client):
+    """A trailing join/leave/location/time line is not model output: reroll
+    steps OVER it, regenerates the reply beneath, and leaves the transition
+    standing (previously this was refused outright with a 400)."""
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
     _wid, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
@@ -4902,8 +4903,29 @@ def test_regenerate_past_a_scene_transition_is_a_clean_400(client):
     store.scenes.append_message(cid, sid, "assistant", "*Time passes. It is now dusk.*",
                                 speaker=store.scenes.TRANSITION_SPEAKER)
     r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
+    assert r.status_code == 200
+    msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    contents = [m["content"] for m in msgs]
+    assert "A reply." not in contents                       # the old take is gone
+    assert "*Time passes. It is now dusk.*" in contents     # the transition is not
+    assert store.scenes.get_turn_sizes(cid, sid) == [1]     # the fresh reply's turn
+
+
+def test_regenerate_past_a_dice_roll_under_a_transition_is_a_clean_400(client):
+    """Stepping over transitions must not step over a dice roll behind one."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "Go on.")
+    store.scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "A reply."}])
+    store.scenes.append_message(cid, sid, "assistant", "🎲 2d6 = 7",
+                                speaker=store.scenes.ROLL_SPEAKER)
+    store.scenes.append_message(cid, sid, "assistant", "*Time passes. It is now dusk.*",
+                                speaker=store.scenes.TRANSITION_SPEAKER)
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
     assert r.status_code == 400
-    assert "transition" in r.json()["detail"].lower()
+    assert "dice roll" in r.json()["detail"].lower()
+    assert len(client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]) == 4
 
 
 def test_response_preset_crud_roundtrip(client):
@@ -4972,3 +4994,67 @@ def test_duplicate_unreadable_preset_is_a_clean_400(client, tmp_path):
     _corrupt_preset_file(tmp_path, pid)
     r = client.post(f"/api/response-presets/{pid}/duplicate")
     assert r.status_code == 400
+
+
+def test_response_preset_usage_survives_an_unreadable_scene_file(client):
+    """The usage preview runs immediately before an irreversible delete. One
+    corrupt scene file must not turn it into a 500 — the campaign it belongs to
+    is still reported, and only the unreadable part is skipped."""
+    _wid, cid = _campaign(client, name="Saltmarch Run")
+    client.put(f"/api/campaigns/{cid}/response", json={"response_preset": "terse"})
+    bad_sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Corrupt"}).json()["id"]
+    (store.campaigns.campaign_root(cid) / "scenes" / f"{bad_sid}.md").write_bytes(
+        b"\xff\xfe not valid utf-8 \x00\x01")
+
+    r = client.get("/api/response-presets/terse/usage")
+    assert r.status_code == 200
+    assert any(a["scope"] == "campaign" and a["name"] == "Saltmarch Run"
+               for a in r.json()["affected"])
+
+
+def test_response_preset_usage_reports_a_store_wide_read_failure_as_400(client):
+    """An impact preview that cannot be computed must say so with a handled
+    error; a 500 leaves the delete confirmation with no information at all."""
+    _wid, cid = _campaign(client, name="Broken Run")
+    store.campaigns.campaign_meta_path(cid).write_bytes(b"\xff\xfe \x00\x01")
+    r = client.get("/api/response-presets/terse/usage")
+    assert r.status_code == 400
+
+
+def test_turn_override_with_a_non_string_value_never_500s(client):
+    """ChatTurn.response is typed like every other response write path, so a
+    malformed override is rejected at the boundary instead of raising inside
+    the cascade mid-generation."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    for path, payload in (
+            ("chat", {"content": "hi", "response": {"length_blocks": {"nope": 1}}}),
+            ("retry", {"response": {"length_blocks": {"nope": 1}}}),
+            ("regenerate", {"response": {"length_blocks": {"nope": 1}}}),
+    ):
+        r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/{path}", json=payload)
+        assert r.status_code != 500, (path, r.text)
+
+
+def test_turn_override_still_reaches_the_cascade(client):
+    """The typing change must not quietly stop the override from applying."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    captured = {}
+    real = store.context.build_messages
+
+    def spy(cid_, sid_, turn=None):
+        captured["turn"] = turn
+        return real(cid_, sid_, turn=turn)
+
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["ok"])
+    import grimoire.routes as routes_mod
+    routes_mod.store.context.build_messages = spy
+    try:
+        client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat",
+                    json={"content": "hi", "response": {"response_preset": "terse"}})
+    finally:
+        routes_mod.store.context.build_messages = real
+    assert captured["turn"] == {"response_preset": "terse"}

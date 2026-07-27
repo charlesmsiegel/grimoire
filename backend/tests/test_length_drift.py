@@ -123,3 +123,28 @@ def test_user_messages_are_not_part_of_turns():
             _msg("Mara", 40)]
     got = length_drift.measure(msgs, [1], CAST, BUDGET)
     assert got["totals"] == [40]
+
+
+def test_roll_fence_pattern_is_derived_from_the_fence_module():
+    """One definition of the opener grammar, not two. A second copy here would
+    silently stop matching the day store/fence.py's opener changes."""
+    from grimoire.store import fence
+
+    assert length_drift._ROLL_FENCE.pattern.startswith(fence.OPENER.pattern)
+    # and it still spans the whole fence, opener through closer
+    msgs = [{"role": "assistant", "speaker": "Mara",
+             "content": "She throws.\n\n``` ROLL\n" + "x " * 200 + "\n```"}]
+    assert length_drift.measure(msgs, [1], CAST, BUDGET)["totals"] == [2]
+
+
+def test_cast_names_may_be_a_thunk_and_is_not_called_when_unmeasured():
+    calls = []
+
+    def roster():
+        calls.append(1)
+        return CAST
+
+    assert length_drift.measure([_msg("Mara", 40)], [], roster, BUDGET) is None
+    assert calls == []
+    got = length_drift.measure([_msg("Winifred", 40)], [1], roster, BUDGET)
+    assert calls == [1] and got["totals"] == [40]

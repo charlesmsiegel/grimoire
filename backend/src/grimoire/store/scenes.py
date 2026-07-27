@@ -30,9 +30,16 @@ ROLL_SPEAKER = "⁣Roll"
 # SEPARATORS rather than counting them as model prose — untagged, a transition
 # between two replies merges them into one apparently-oversized turn. Same
 # U+2063 prefix as ROLL_SPEAKER, for the same anti-collision reason.
+#
+# It is INTERNAL METADATA and is never displayed: the app transcript, HTML and
+# plain-text export and the EPUB all drop it, so a tagged transition renders as
+# the unlabelled narration it was before tagging — identical to the untagged
+# ones already sitting in every existing campaign.
 TRANSITION_SPEAKER = "⁣Scene"
 # Speakers that mark a message as not-model-output. Both are excluded from
-# drift metrics, and neither may be consumed by reroll.
+# drift metrics and neither is ever consumed by reroll — a roll BLOCKS reroll
+# (its transcript line must stay in lockstep with rolls.json), a trailing
+# transition is stepped over and preserved.
 SYNTHETIC_SPEAKERS = (ROLL_SPEAKER, TRANSITION_SPEAKER)
 _MARKER = re.compile(r"^\*\*([^*\n]{1,64}?)(?: \(([^)\n]+)\))?:\*\*[ ]?", re.MULTILINE)
 _SAFE_LABEL = re.compile(r"^[^*\n]{1,64}$")
@@ -289,15 +296,6 @@ def set_pcless(cid: str, sid: str) -> None:
     p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
 
 
-def set_style(cid: str, sid: str, style_id: str) -> None:
-    p = _scene_path(cid, sid)
-    if not _safe_id(sid) or not p.exists():
-        raise SceneNotFound(sid)
-    meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
-    meta["style_id"] = style_id
-    p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
-
-
 RESPONSE_FIELDS = ("response_preset", "style_id", "length_reply_words", "length_blocks",
                    "length_paragraphs", "length_speakers", "length_blocks_per_speaker")
 
@@ -434,15 +432,35 @@ def split_reply(text: str, players: frozenset[str]) -> list[dict]:
     return segments
 
 
+def trailing_transitions(messages: list[dict]) -> int:
+    """How many messages at the tail are scene-transition lines.
+
+    Reroll steps OVER these: a join/leave/location/time line is a record of
+    something the player did, not model output, so it survives a reroll of the
+    reply beneath it (whereas a manual dice roll blocks reroll outright — its
+    entry lives on in rolls.json and the transcript line must stay in lockstep).
+    """
+    n = 0
+    while n < len(messages) and messages[-1 - n].get("speaker") == TRANSITION_SPEAKER:
+        n += 1
+    return n
+
+
 def remove_trailing_assistant_run(cid: str, sid: str) -> None:
     """Drop the trailing run of assistant-side messages (one turn's output).
-    Stops at (and refuses to touch) a manual dice-roll line — rerolling must
-    never delete a roll's transcript entry while it still lives in
-    rolls.json."""
+
+    Trailing scene-transition lines are stepped over and PRESERVED in order —
+    the generation removed is the last one beneath them. Stops at (and refuses
+    to touch) a manual dice-roll line: rerolling must never delete a roll's
+    transcript entry while it still lives in rolls.json.
+    """
     p = _scene_path(cid, sid)
     if not _safe_id(sid) or not p.exists():
         raise SceneNotFound(sid)
     messages = read_scene(cid, sid)["messages"]
+    keep = len(messages) - trailing_transitions(messages)
+    tail = messages[keep:]          # transitions, preserved verbatim and in order
+    messages = messages[:keep]
     if (not messages or messages[-1]["role"] != "assistant"
             or messages[-1].get("speaker") in SYNTHETIC_SPEAKERS):
         raise IndexError("no trailing assistant reply")
@@ -463,7 +481,8 @@ def remove_trailing_assistant_run(cid: str, sid: str) -> None:
             messages.pop()
     meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
     meta["updated"] = now_iso()
-    p.write_text(dump_frontmatter(meta, _serialize_messages(messages)), encoding="utf-8")
+    p.write_text(dump_frontmatter(meta, _serialize_messages(messages + tail)),
+                 encoding="utf-8")
     if sizes:
         _write_turn_sizes(p, sizes[:-1])
 

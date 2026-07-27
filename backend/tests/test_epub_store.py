@@ -247,3 +247,18 @@ def test_no_appendix_no_divider(monkeypatch, tmp_path):
     nav = z.read("nav.xhtml").decode()
     assert "Scenes" not in nav          # no empty Scenes <ol> in a zero-scene book
     ET.fromstring(nav)                  # nav stays well-formed XML
+
+
+def test_epub_renders_transitions_without_a_speaker_plate(monkeypatch, tmp_path):
+    """A scene transition is unlabelled narration in the book — the internal
+    drift tag must never reach a chapter's XHTML."""
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Arrival")
+    scenes.append_message(cid, sid, "assistant", "The docks reek.")
+    scenes.append_message(cid, sid, "assistant", "*Time passes. It is now dusk.*",
+                          speaker=scenes.TRANSITION_SPEAKER)
+    z = _open(epub.build_epub(cid)[0])
+    ch = z.read("text/chapter-001.xhtml").decode()
+    assert scenes.TRANSITION_SPEAKER not in ch
+    assert "Scene</span>" not in ch
+    assert "Time passes. It is now dusk." in ch

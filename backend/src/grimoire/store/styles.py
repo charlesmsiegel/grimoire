@@ -94,8 +94,8 @@ def is_built_in(sid: str) -> bool:
 
 def exists(sid: str) -> bool:
     """Whether `sid` names a readable style. Resolution treats an id that
-    doesn't as 'no opinion' and keeps walking outward, matching resolve_style's
-    long-standing skip-and-fall-back behaviour."""
+    doesn't as 'no opinion' and keeps walking outward, matching the
+    long-standing skip-and-fall-back behaviour of style resolution."""
     return _find_path(sid) is not None
 
 
@@ -152,17 +152,3 @@ def duplicate_style(sid: str) -> str:
     return create_style(f"{src['meta']['name']} (copy)", src["meta"]["description"],
                         src["meta"]["tags"], src["body"])
 
-
-def resolve_style(*, scene_style_id: str = "", campaign_style_id: str = "",
-                  default_style_id: str = "") -> dict | None:
-    """scene override -> campaign default -> global default -> None. An id that
-    doesn't resolve (deleted style, stale reference) is skipped silently and
-    resolution falls back up the chain — never breaks generation."""
-    for sid in (scene_style_id, campaign_style_id, default_style_id):
-        if not sid:
-            continue
-        try:
-            return read_style(sid)
-        except StyleNotFound:
-            continue
-    return None

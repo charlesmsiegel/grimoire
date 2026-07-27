@@ -544,9 +544,10 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     cfg = config.read_config()
     campaign_meta = campaigns.read_campaign(cid)["meta"]
     # One per-field cascade resolves BOTH the prose style and the length budget
-    # over turn -> scene -> campaign -> global. It subsumes styles.resolve_style:
-    # with no response presets set anywhere (every pre-existing install) it walks
-    # the same style_id keys in the same order, so the migration is a no-op.
+    # over turn -> scene -> campaign -> global. It subsumes the old style-only
+    # resolver: with no response presets set anywhere (every pre-existing
+    # install) it walks the same style_id keys in the same order, so the
+    # migration is a no-op.
     budget = response_presets.resolve(turn=turn or {}, scene_meta=scene["meta"],
                                       campaign_meta=campaign_meta, config=cfg)
     try:
@@ -580,8 +581,11 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         "mechanics_checks": mech["mechanics_checks"],
     }
 
+    # The roster is passed as a thunk: it opens one card file per campaign actor,
+    # and measure() bails out immediately on a scene with no recorded turns —
+    # which is every scene until its first tracked generation lands.
     drift = length_drift.measure(history, scenes.get_turn_sizes(cid, sid),
-                                 _drift_roster(cid, npc_names, player_names),
+                                 lambda: _drift_roster(cid, npc_names, player_names),
                                  {k: budget[k] for k in lengths.KNOBS})
     length_correction = (prompts.render("scene/length_correction.j2",
                                         drift=drift,
