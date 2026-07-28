@@ -163,7 +163,7 @@ from grimoire.store import appearances as ap  # noqa: E402
 from grimoire.store import (audit, calendars, campaigns, characters, checks, config,  # noqa: E402
                             dossiers as dstore, entities, groupstate, length_drift, lengths, modules, pcs,
                             playstate, plot, response_presets, scenes, sheets, styles,
-                            taglines as tstore, worlds)
+                            taglines as tstore, weather as wstore, worlds)
 
 config.write_config(system_prompt="Global GM rules: be vivid, be fair.")
 
@@ -409,6 +409,16 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
                  "holidays_today": facts["holidays_today"], "upcoming": facts["upcoming"],
                  "cast": context.cast_datetime_facts(cid, scene_id, time_history[-1])}
 
+    # Mirrors context._weather_data. Derived rather than fixtured: a constant
+    # would disagree with the real assembly for every scene that has no
+    # location or no moment, which is most of the scenarios below.
+    weather_now = None
+    location_history = scenes.get_location_history(cid, scene_id)
+    if location_history and time_history:
+        got = wstore.current_weather(cid, location_history[-1], time_history[-1])
+        if got:
+            weather_now = {k: got[k] for k in ("condition", "temperature", "wind")}
+
     present_chars = {a["id"] for a in cast if a["kind"] == "characters"}
     roster = ap.roster(cid)
     roster_ids = {a["id"] for a in roster if a["kind"] == "characters"}
@@ -448,6 +458,7 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
             "states": states, "relationship_lines": relationship_lines, "players": players,
             "ref_names": ref_names, "refs": refs, "story_entries": story_entries,
             "plot_lines": plot.render_open(cid, with_id=False), "today": today,
+            "weather": weather_now,
             "current_setting": current_setting, "world_info_bodies": world_info_bodies,
             "group_states": group_states,
             "offscene_active": offscene_active, "offscene_known": offscene_known,
