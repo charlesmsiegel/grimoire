@@ -344,12 +344,20 @@ hash-diffing of entity blobs is undisturbed.
 - **`id` is required**, and it is what makes the precedence backstop
   implementable — the rules below need a stable per-span identity that array
   position cannot supply. Writers generate one; a hand-authored entry missing an
-  `id` gets a canonical one derived by hashing **`(location_key, from, to,
-  source, axes)`**, so the backstop still holds for files edited outside the
-  app. The location key is part of the hash rather than an afterthought:
-  without it, the same span authored under two locations — a GM pinning the
-  same storm at the docks and at the lighthouse — derives the same id, and any
-  id-keyed operation would hit both records or the wrong one.
+  `id` gets a canonical one derived by hashing the **location key together with
+  every field of the record except `id` itself** — bounds, source, axes, note
+  and `set_at` alike — so the backstop still holds for files edited outside the
+  app.
+
+  Hashing a chosen subset does not work, and two subsets were tried before this
+  one. Omitting the location key makes the same storm pinned at the docks and
+  at the lighthouse derive one id. Omitting `set_at` and `note` makes two
+  hand-authored records that differ only in when they were written — which
+  precedence explicitly contemplates, since recency is a tiebreak — derive one
+  id, so the delete contract cannot address either of them. Hashing everything
+  is the only rule with no such gap. Two records identical in *every* field are
+  genuinely indistinguishable, and are deduplicated on load rather than kept as
+  a pair nothing can tell apart.
 - Axes are individually optional: an override may pin `condition` alone and let
   temperature and wind still be drawn, which is what narration usually gives us
   ("it was raining" says nothing about wind).
@@ -512,16 +520,25 @@ pinned down exactly:
      constraint in `CLAUDE.md`. Not `scipy.special.ndtri`, which is the Cephes
      implementation and disagrees in the last bits.
 
-   The **forward** transform needs pinning for the same reason, and did not
-   have it: `Φ(g)` is `statistics.NormalDist().cdf`. Its underlying `math.erf`
-   can defer to platform libm, so unlike `inv_cdf` this is not bit-identical
-   across every build in principle.
+   - **Forward**: `Φ(g) = 0.5 · erfc(−g / √2)`, with **`erfc` vendored** into
+     the codebase as a pure-Python rational approximation, not taken from
+     `math.erfc`.
 
-   **Determinism is therefore scoped to this implementation**, deliberately and
-   explicitly. Grimoire has one backend; the guarantee that matters is that a
-   campaign's skies do not change under it — across processes, across restarts,
-   across upgrades. Cross-language reimplementation is not a goal, and claiming
-   it would be claiming something these two library calls cannot deliver.
+   The forward transform has to be vendored, and the earlier argument for
+   leaving it to the stdlib was wrong. `math.erf`/`math.erfc` defer to platform
+   libm on most builds, and two environments during review returned
+   `0.04808979266518426` and `0.04808979266518429` for the same input — a real
+   divergence, not a hypothetical one. The reasoning that followed ("an ulp
+   cannot cross a bucket boundary") holds only for the worked example's table,
+   whose boundaries sit at 0.111, 0.556 and 0.889. A private climate may
+   legally place a cumulative boundary *between* those two values, and then the
+   same campaign and block draws different weather on different builds.
+   Quantizing the quantile would shrink that window rather than close it. Only
+   a deterministic `erfc` closes it.
+
+   `Φ⁻¹` needs no vendoring — `statistics` is pure Python — so only one
+   function is added, and it stays inside the Android base-dependency
+   constraint.
 
    What enforces that scoped guarantee is **reference vectors**, which the spec
    now carries rather than merely promising:
@@ -544,21 +561,22 @@ pinned down exactly:
    | 0.5 | 6 | 7 | `-1.6636640450077727` | 0.04808979266518 | calm |
    | 0.9 | 38 | 39 | `-0.6397550785578683` | 0.26116592065069 | breeze |
 
-   **`u`, `z` and `g` are asserted exactly; `Φ(g)` is asserted to a tolerance
-   and the drawn entry exactly.** The asymmetry is deliberate and was measured,
-   not assumed: `u` and `z` come from BLAKE2b and AS241, both pure Python and
-   bit-reproducible, and `g` follows once the accumulation order above is
-   pinned. `Φ(g)` goes through `math.erf`, which may defer to platform libm —
-   two environments evaluating `Φ(-1.6636640450077727)` during review returned
-   `0.04808979266518426` and `0.04808979266518429`. That is a last-bit
-   disagreement between real builds, not a hypothetical.
+   `u`, `z` and `g` above are exact and final — BLAKE2b and AS241 are pure
+   Python, and `g` follows once the accumulation order is pinned.
 
-   It cannot change the drawn entry: bucket boundaries here sit at 0.111, 0.556
-   and 0.889, and a quantile would have to land within an ulp of one to be
-   affected. So the *weather* is stable across builds even where the last
-   digit of the quantile is not, which is exactly the guarantee worth testing
-   for — and exactly why asserting `Φ(g)` bit-exactly would have made the
-   reference-vector test fail on a conforming implementation.
+   **The `Φ(g)` column is provisional.** Those values were computed with
+   `statistics.NormalDist().cdf`, which is the implementation this spec has
+   just rejected. They are shown to three fewer digits than they were computed
+   to, precisely because their last digits are the ones under dispute. Once the
+   vendored `erfc` lands, `Φ(g)` must be **recomputed against it and re-pinned
+   here to full precision**, at which point all four columns are asserted
+   exactly. Carrying provisional numbers as though they were normative is how
+   a reference-vector test ends up enshrining the bug it exists to catch, so
+   the provisional status is part of the spec rather than a footnote.
+
+   The drawn entries are stable regardless — this table's boundaries sit at
+   0.111, 0.556 and 0.889, nowhere near the disputed digits — so they can be
+   asserted now.
 2. **Smoothing.** The correlated field is a normalized **one-sided** (causal)
    exponential filter over the latent, with `a = persistence`, indexed by the
    **block ordinal** of § Blocks — never by the minute coordinate:
@@ -760,11 +778,14 @@ as the window slid, with no melt event to explain it. Truncation has to be
 So every accumulator must satisfy two properties, and one that cannot is out of
 scope by construction rather than by preference:
 
-- **A strictly positive decay floor.** Each block multiplies the standing value
-  by at most `d < 1` before adding its own contribution. Physically this is
-  real — snowpack loses mass to sublimation and compaction even below freezing,
-  ground saturation drains even without sun — so it is a modelling constraint,
-  not a fudge.
+- **A bounded, non-negative decay factor.** Each block multiplies the standing
+  value by a factor in `[0, d]` with `d < 1` before adding its own
+  contribution. Both ends of that range are load-bearing: "at most `d`" alone
+  is satisfied by a large negative multiplier, which amplifies old state
+  instead of forgetting it and destroys the error bound below. Physically the
+  constraint is real — snowpack loses mass to sublimation and compaction even
+  below freezing, ground saturation drains even without sun — so it is a
+  modelling constraint rather than a fudge.
 - **A saturating cap.** The value is clamped at some maximum, so a long
   accumulation cannot make arbitrarily old blocks matter.
 
@@ -876,6 +897,22 @@ the pattern exactly: **Edit** in `.form-actions`, then `.side-section` blocks
 for persistence, season count, and a `chip` per location using this climate,
 clickable through to that location.
 
+The sidebar also carries a **Delete** action for custom climates, labelled
+**Revert to preset** when the climate shadows a builtin — without it the
+`DELETE` route and the revert behaviour it enables are unreachable from the
+product, and a preset edited by accident could never be undone. Builtins with
+no custom copy show no such action, since there is nothing to remove. Deleting
+a climate that locations still reference warns and names them, using the same
+chips the sidebar already lists.
+
+**Ids.** `+ New climate` generates the registry id by slugifying the name and
+uniquifying it against both tiers — the `slugify`/`uniquify` pair
+`campaigns.create_campaign` already uses — and shows it, since the id is what
+locations and `climate.json` will reference. It is **immutable after
+creation**: renaming a climate changes its display name only. `PUT` rejects a
+body whose `id` disagrees with the path, so a document can never be stored
+under one registry key while advertising another.
+
 The form is where the real work is:
 
 - **Weights are shown as percentages, always.** A weight of 4 renders as
@@ -919,11 +956,23 @@ The form is where the real work is:
   one positive weight; every season declares at least one unconstrained
   condition; every positive-weight temperature band has at least one eligible
   condition; **entry names are unique within each axis**; **each axis's weight
-  total is finite**; **every `requires_temp` value names a temperature entry
-  that exists in the same season**; and **the climate's own `persistence` is finite
+  total is finite**; **every `requires_temp` names a temperature entry that
+  exists in the same season *and* every positive-weight constrained condition
+  names at least one temperature entry whose own weight is positive**; and
+  **the climate's own `persistence` is finite
   and within `[0, 1]`** — the same range rule the location field gets, which
-  the editor would otherwise leave to a backend failure. Each failure names the
-  season and the fix.
+  the editor would otherwise leave to a backend failure. An empty
+  `requires_temp` array is rejected rather than read as "unconstrained", since
+  the two are visually identical and mean opposite things. Each failure names
+  the season and the fix.
+
+  The positive-weight half of the `requires_temp` rule is a second silent-zero
+  case, one step past the dangling-name one: `freezing: 0, mild: 1` with `snow`
+  requiring `freezing` passes every other check — the name resolves, the axis
+  has positive weight, and an unconstrained `clear` keeps the band eligible —
+  while `snow` is filtered out of every draw it was ever weighted for. Both
+  rules exist to catch the same shape of mistake, a declared weight that can
+  never be drawn.
 
   The dangling-`requires_temp` check earns its place: `requires_temp:
   ["freezng"]` on a snow entry passes every other rule — the band `freezing`
@@ -1121,11 +1170,16 @@ Backend, `backend/tests/test_weather.py`, store isolated with
   weather, which fails if the season is looked up from the queried moment
   rather than from the block's owning date.
 - Reference vectors: the tuples tabulated in § The construction, concretely
-  produce their documented `u`, `z` and `g` **exactly**, their `Φ(g)` within
-  tolerance, and their drawn entry exactly. Assert against the **values written
-  in the spec**, never against a fixture regenerated from the implementation —
-  a self-generated fixture passes while preserving exactly the drift it exists
-  to detect.
+  produce their documented `u`, `z`, `g` and drawn entry **exactly**. `Φ(g)` is
+  asserted exactly too, **once its column has been recomputed against the
+  vendored `erfc` and re-pinned** — it is provisional until then and must not
+  be asserted against the values currently written, which came from the
+  rejected stdlib implementation. Assert against the **values in the spec**,
+  never against a fixture regenerated from the implementation: a self-generated
+  fixture passes while preserving exactly the drift it exists to detect.
+- Vendored `erfc`: agrees with a high-precision reference to within the
+  documented tolerance across the range, and — the point of vendoring — returns
+  identical bits on two machines with different libm.
 - Accumulation order: summing the filter descending in `k` produces a different
   `g` from the documented one, so the test pins ascending order rather than
   merely the formula.
@@ -1269,6 +1323,12 @@ Frontend, from `frontend/` with `npx vitest run` and `npx tsc -b`:
 - Individual weights: an axis containing a negative or non-finite weight is
   rejected inline even when a positive sibling is present.
 - Duplicate entry names within one axis are rejected inline.
+- A constrained condition whose `requires_temp` names only zero-weight
+  temperature entries is rejected, as is an empty `requires_temp`.
+- Deleting a custom climate that shadows a builtin restores the preset and the
+  rail re-tags it; deleting one that locations reference warns and names them.
+- A climate's id is generated from its name, stays fixed across a rename, and a
+  `PUT` whose body id disagrees with the path is rejected.
 - An axis of two `1e308` weights is rejected rather than silently resolving to
   its last entry, and a table of large-but-summable weights still produces its
   declared distribution.
