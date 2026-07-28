@@ -512,13 +512,9 @@ pinned down exactly:
    - **Digest**: BLAKE2b-256 of that key.
    - **Uniform**: the leading 53 bits of the digest, big-endian, divided by
      2⁵³ — giving `u ∈ [0, 1)` with exactly float64's mantissa precision.
-   - **Normal**: `z = Φ⁻¹(u)` via **`statistics.NormalDist().inv_cdf`** from
-     the Python standard library, with `u = 0` mapped to `2⁻⁵³` first so the
-     tail is finite. That function *is* Wichura's AS241 (`statistics.py:1092`
-     cites it), so naming the stdlib and naming the algorithm agree — and it
-     is pure Python, which keeps it inside the Android base-dependency
-     constraint in `CLAUDE.md`. Not `scipy.special.ndtri`, which is the Cephes
-     implementation and disagrees in the last bits.
+   - **Normal**: `z = Φ⁻¹(u)` by **Wichura's AS241, vendored** with its
+     published double-precision coefficients, with `u = 0` mapped to `2⁻⁵³`
+     first so the tail is finite.
 
    - **Forward**: `Φ(g) = 0.5 · erfc(−g / √2)`, with **`erfc` vendored** into
      the codebase as a pure-Python rational approximation, not taken from
@@ -536,9 +532,18 @@ pinned down exactly:
    Quantizing the quantile would shrink that window rather than close it. Only
    a deterministic `erfc` closes it.
 
-   `Φ⁻¹` needs no vendoring — `statistics` is pure Python — so only one
-   function is added, and it stays inside the Android base-dependency
-   constraint.
+   **Both** transforms are vendored, and exempting `Φ⁻¹` was an inconsistency
+   rather than a saving. `statistics.NormalDist().inv_cdf` does document AS241
+   in CPython 3.11's `statistics.py`, but it delegates to the
+   `_statistics._normal_dist_inv_cdf` C accelerator where available and by 3.14
+   does so unconditionally — and the *public* API guarantees neither AS241 nor
+   bit-stability across this repository's open-ended `Python >=3.11`. A runtime
+   upgrade could then move `z`, `g`, and a boundary draw while every
+   implementation still followed this document. That is the same failure mode
+   vendoring `erfc` exists to prevent, so it gets the same treatment.
+
+   Two vendored functions, both pure Python, both inside the Android
+   base-dependency constraint in `CLAUDE.md`.
 
    What enforces that scoped guarantee is **reference vectors**, which the spec
    now carries rather than merely promising:
@@ -561,21 +566,22 @@ pinned down exactly:
    | 0.5 | 6 | 7 | `-1.6636640450077727` | 0.04808979266518 | calm |
    | 0.9 | 38 | 39 | `-0.6397550785578683` | 0.26116592065069 | breeze |
 
-   `u`, `z` and `g` above are exact and final — BLAKE2b and AS241 are pure
-   Python, and `g` follows once the accumulation order is pinned.
+   **Only the `u` column is final. Everything downstream of it is
+   provisional.** `u` comes from BLAKE2b alone, which is bit-stable by
+   specification. `z` was computed through the stdlib `inv_cdf` and `Φ(g)`
+   through the stdlib `cdf` — both now rejected in favour of vendored
+   implementations — and `g` inherits `z`'s provisionality.
 
-   **The `Φ(g)` column is provisional.** Those values were computed with
-   `statistics.NormalDist().cdf`, which is the implementation this spec has
-   just rejected. They are shown to three fewer digits than they were computed
-   to, precisely because their last digits are the ones under dispute. Once the
-   vendored `erfc` lands, `Φ(g)` must be **recomputed against it and re-pinned
-   here to full precision**, at which point all four columns are asserted
-   exactly. Carrying provisional numbers as though they were normative is how
-   a reference-vector test ends up enshrining the bug it exists to catch, so
-   the provisional status is part of the spec rather than a footnote.
+   AS241 is a fixed algorithm with published coefficients, so the vendored
+   `Φ⁻¹` is expected to reproduce these `z` values exactly; `erfc` is a fresh
+   implementation and `Φ(g)` may well move. Either way the rule is the same:
+   **recompute every column against the vendored functions and re-pin the table
+   before enabling the reference-vector test.** Asserting provisional numbers is
+   how a conformance test ends up enshrining the behaviour it exists to police,
+   so the provisional status is part of the spec rather than a footnote.
 
    The drawn entries are stable regardless — this table's boundaries sit at
-   0.111, 0.556 and 0.889, nowhere near the disputed digits — so they can be
+   0.111, 0.556 and 0.889, far from any last-digit dispute — so they can be
    asserted now.
 2. **Smoothing.** The correlated field is a normalized **one-sided** (causal)
    exponential filter over the latent, with `a = persistence`, indexed by the
@@ -616,8 +622,19 @@ pinned down exactly:
    equality. Stating the exact finite form matters because an implementer who
    measures `0.8997` against a documented `0.9` needs to know that is correct
    and expected, not a bug to chase.
-4. **Truncation.** `W` is the **maximum lag**, `W = ceil(4 / ln(1/a))` for
-   `a > 0`, else 0. Since the sum runs `k = 0..W` inclusive, the number of taps
+4. **Truncation.** `W` is the **maximum lag**: the smallest `k` for which
+   `a^k <= 0.01831563888873418` (that is, `e⁻⁴`), computed by **repeated
+   multiplication** — `w = 1.0; k = 0; while w > threshold: w *= a; k += 1` —
+   and `0` when `a = 0`.
+
+   Not `ceil(4 / ln(1/a))`. That form is right in exact arithmetic and wrong in
+   floating point: for a persistence near `exp(-4/n)` the quotient lands on an
+   integer, so a one-ulp difference in a platform `log` flips `ceil` from 38 to
+   39 — changing the tap count, the normalization, and potentially the drawn
+   entry across machines. `0.9000876262522592` is such a value. IEEE
+   multiplication is correctly rounded and therefore identical everywhere,
+   which the transcendental is not, so the loop is the specification and the
+   closed form is only an aid to reading it. Since the sum runs `k = 0..W` inclusive, the number of taps
    evaluated is **`W + 1`**: 1 tap at `p = 0` (just `z(t)`), 39 at `p = 0.9`
    (`W = 38`), 399 at `p = 0.99` (`W = 398`). Cost is O(W) per sample, still
    O(1) in campaign age, which is the property this construction exists for.
@@ -786,8 +803,12 @@ scope by construction rather than by preference:
   constraint is real — snowpack loses mass to sublimation and compaction even
   below freezing, ground saturation drains even without sun — so it is a
   modelling constraint rather than a fudge.
-- **A saturating cap.** The value is clamped at some maximum, so a long
-  accumulation cannot make arbitrarily old blocks matter.
+- **A two-sided clamp.** State is confined to `[0, cap]` after every block, not
+  merely capped above. An upper cap alone bounds nothing when contributions can
+  be negative: melt subtracted from an already-empty snowpack drives the value
+  arbitrarily negative, `cap` stops bounding the omitted pre-window state, and
+  the error bound below stops following. Clamping at zero is also the
+  physically correct reading — there is no negative snow.
 
 Together these bound the truncation error: a block *K* back can contribute at
 most `dᴷ · cap`, so *K* is chosen per accumulator to put that under the
@@ -1081,12 +1102,25 @@ you decide it should be raining:
   season's table** plus a *"leave to chance"* option. Per-axis, because
   narration usually constrains one axis and not the others (§ Override store).
 
-  *"Leave to chance"* **clears that axis**, rather than merely omitting it from
-  the record being written. On save, every covering span that sets the axis has
-  it removed, and a span left setting nothing is deleted. Omitting would be the
+  *"Leave to chance"* **clears that axis over the selected duration**, rather
+  than merely omitting it from the record being written. Omitting would be the
   simpler implementation and the wrong behaviour: a user who opens the popover
   on an overridden axis and selects *leave to chance* means "stop overriding
   this," and would otherwise watch the setting appear to do nothing.
+
+  The duration applies to clearing exactly as it does to setting. Clearing one
+  block inside a three-day storm splits that span in two and leaves the rest
+  standing; it does not erase the axis across the whole record, which would
+  silently rewrite scenes on either side that the user never had in view.
+
+  **The select also offers the currently authored value**, even when the active
+  season's table has no such entry. Overrides are deliberately not constrained
+  to the table — this spec's own example stores `condition: "blizzard"` for a
+  climate with no `blizzard` row, and the #46 extractor writes whatever the
+  narration invented. Without this, opening the popover on such an override
+  shows a blank, and saving an unrelated axis quietly discards the authored
+  one. Values not in the table are marked as authored so the distinction stays
+  visible.
 - A duration control: *this block* (the default), *this and the next N blocks*,
   or *until I clear it*. These map onto the span the store requires; the
   default matches the extractor's one-block default so the two paths behave
@@ -1124,8 +1158,13 @@ clears all three at once rather than being a separate mechanism, and both route
 through the same operation:
 
 ```
-POST /api/campaigns/{cid}/weather/clear   { location, at, axes: [...] }
+POST /api/campaigns/{cid}/weather/clear   { location, from, to, axes: [...] }
 ```
+
+It takes a **range**, not a single moment, because the popover's duration
+control applies to clearing as much as to setting. The server truncates or
+splits spans that only partly intersect the range, rather than stripping the
+axis from the whole record.
 
 **Clearing is one atomic server-side call, not client-orchestrated edits.**
 Removing a single axis from a span that sets several means *mutating* that
@@ -1134,8 +1173,9 @@ client has only whole-record `DELETE` and a create-shaped `PUT` to work with,
 so it would have to delete and recreate, losing exactly the fields precedence
 depends on. Worse, it would have to do that across a stack of spans
 non-atomically, leaving a half-cleared state if anything failed midway. The
-server walks the covering stack, strips the named axes from each span, deletes
-any span left setting nothing, and returns the new resolved weather.
+server walks the covering stack, removes the named axes over the requested
+range — splitting a span whose remainder still applies outside it — deletes any
+span left setting nothing, and returns the new resolved weather.
 
 `DELETE .../{storage_key}/{span_id}` stays, for removing a specific record
 outright rather than clearing an axis of it.
@@ -1177,9 +1217,13 @@ Backend, `backend/tests/test_weather.py`, store isolated with
   rejected stdlib implementation. Assert against the **values in the spec**,
   never against a fixture regenerated from the implementation: a self-generated
   fixture passes while preserving exactly the drift it exists to detect.
-- Vendored `erfc`: agrees with a high-precision reference to within the
-  documented tolerance across the range, and — the point of vendoring — returns
-  identical bits on two machines with different libm.
+- Vendored `erfc` and `Φ⁻¹`: each agrees with a high-precision reference to
+  within the documented tolerance across the range, and — the point of
+  vendoring — returns identical bits independent of libm and of the Python
+  version in the supported range.
+- Truncation length: `W` is computed by repeated multiplication and is stable
+  for a persistence sitting on an integer boundary of the closed form, such as
+  `0.9000876262522592`, where a platform `log` would flip it between 38 and 39.
 - Accumulation order: summing the filter descending in `k` produces a different
   `g` from the documented one, so the test pins ascending order rather than
   merely the formula.
@@ -1311,6 +1355,11 @@ Frontend, from `frontend/` with `npx vitest run` and `npx tsc -b`:
   the world default it was prefilled from.
 - A covering span stored under `_default` is clearable from the HUD, which
   requires its storage key to be present in the resolver's response.
+- Clearing one block inside a multi-day override splits it, leaving the blocks
+  either side overridden as before.
+- An override holding a value absent from the active season's table — the
+  `blizzard` case — renders in the popover as the selected value rather than a
+  blank, and survives a save that touches only another axis.
 - The campaign settings control reads and writes the default climate, and the
   campaign wizard prefills it from the world's default.
 - An override saved as *"until I clear it"* stores `to: null` and matches
