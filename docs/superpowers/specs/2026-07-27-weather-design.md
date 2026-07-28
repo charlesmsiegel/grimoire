@@ -413,6 +413,14 @@ current_weather(croot, cid, location_id, native) -> dict | None
 **It returns `None` when either input is missing**, and callers treat that as
 "no weather section."
 
+**A stored moment that no longer parses returns `None` too.** Changing a
+campaign's primary calendar can leave `time_history` entries that the new
+provider rejects — the same hazard this spec already handles for override
+spans by storing fixed coordinates. Resolution needs the moment's fixed day to
+get a block ordinal and a season, so an uncaught `CalendarError` would break
+`_assemble`; the existing datetime path returns no data in exactly this case
+rather than raising. Weather does the same.
+
 **A location id that no longer resolves is not a missing input**, and must not
 raise. Deleting a location does not clean up the scene histories referencing
 it, so `get_location_history` keeps returning a perfectly non-empty id for an
@@ -1044,8 +1052,7 @@ The sidebar also carries a **Delete** action for custom climates, labelled
 product, and a preset edited by accident could never be undone. Builtins with
 no custom copy show no such action, since there is nothing to remove. Deleting
 a climate that is still referenced warns and names the referrers — **locations
-that name it, campaigns whose `climate.json` defaults to it, and worlds whose
-default is it**. Locations alone would miss the worst case: a custom-only
+that name it and campaigns whose `climate.json` defaults to it**. Locations alone would miss the worst case: a custom-only
 climate used purely as a campaign default has no location naming it, so the
 warning would report nothing, deletion would proceed, and every untagged
 location in that campaign would quietly switch to `temperate-interior`.
@@ -1123,7 +1130,15 @@ The form is where the real work is:
 
   Season intervals are half-open in the year exactly as override spans are in
   time: `[from, to)`. A boundary edited to a given date makes that date the
-  first day of the incoming season.
+  first day of the incoming season — **from its dawn block onward**.
+
+  The qualification is not pedantry. A block's season is looked up from the
+  date the block *starts* on (§ Blocks), and the 00:00–03:59 stretch of any
+  date belongs to the previous date's `night`. So a scene at 02:00 on the
+  boundary date still sits in the outgoing season, correctly — it is the tail
+  of the night before. The editor's hint says "from dawn" for this reason, and
+  the conversion test asserts a dawn moment rather than a midnight one, which
+  would otherwise be ambiguous by design.
 
   **Crucially, the stored fraction is only recomputed for a boundary the user
   actually edited.** A boundary the user did not touch is written back as the
@@ -1188,7 +1203,7 @@ The form is where the real work is:
 default every untagged location falls back to is hand-editing the store or
 tagging every location one at a time.
 
-**Both default setters validate the id against the registry**, rejecting an
+**The default setter validates the id against the registry**, rejecting an
 unknown one with the available ids exactly as the location field does. A
 misspelled default is the same invisible typo one level up, and worse in blast
 radius: it silently moves *every* untagged location in the campaign to
@@ -1202,11 +1217,20 @@ campaign's settings alongside the calendar config it sits beside on disk
 where it belongs long-term). This route needs declaring before the generic
 `/{kind}` entity routes.
 
-**A world-level default exists too**, in `worlds/<wid>/climate.json` with the
-same one-field shape, copied into the campaign at create time exactly as
-`calendars.copy_calendar` copies the calendar. Without it the campaign wizard
-has nothing to prefill from — a world author would have to set the default
-again for every campaign, or tag every location individually.
+**There is no world-level default climate**, and this is a scope decision
+rather than an omission. An earlier draft had `worlds/<wid>/climate.json` with
+routes, copy-on-create, dependency warnings and a wizard prefill — then said
+the settings control belonged to #40 and the whole thing should be dropped if
+that tab were not built. That is two incompatible plans in one paragraph, and a
+planner cannot follow both.
+
+Cutting it is the cheaper resolution. The campaign default plus the wizard's
+select already cover the need; a world default would add a file, two routes, a
+copy path, another dependency-warning source and another way to go dangling —
+and, since no UI would exist to set it, would be hand-edit-only in exchange.
+The wizard prefills from the shipped preset. If world-scoped defaults are
+wanted later, #40 is where they belong, alongside the world calendar editor
+that has the same gap today.
 
 **`create_campaign` takes a `climate` argument**, alongside the `calendar` one
 it already has, and the wizard passes the user's selection through it. It
@@ -1215,26 +1239,8 @@ as the two default setters do and for the same reason — `create_campaign`
 already resolves its `calendar` argument up front so an unknown provider fails
 before anything is written, and an unknown climate should fail the same way
 rather than producing a campaign whose every untagged location silently reads
-`temperate-interior`. Copying
-the world file unconditionally would make the wizard's control a lie: it would
-render an editable prefilled choice and then discard whatever the user chose.
-The world file is the default *for* that argument, not a substitute for it —
-same shape as `calendar`, which the wizard also prefills and the caller can
-also override.
-
-This inherits a gap rather than inventing one: #40 records that the *calendar*
-is world-scoped on disk with no world-side read/write route and no UI, settable
-only by hand-editing before the first campaign exists. Climate lands in exactly
-the same position, so `GET`/`PUT /worlds/{wid}/climate` and its control belong
-in the same world-settings tab that issue proposes for the calendar — and if
-that tab is not built, the world default is dead weight and the wizard prefill
-should be dropped with it rather than reading a file nothing can write.
-
-The world `GET` needs declaring **before the generic world entity routes**, for
-the same reason its campaign twin does: `GET /worlds/{wid}/{kind}` is already
-registered at `routes.py:1965`, so a later-registered `/worlds/{wid}/climate`
-resolves as an entity-list request for kind `climate` and the settings control
-silently fails to load.
+`temperate-interior`. It is the wizard's choice that is written, so the
+control is honest — an argument the caller supplies, exactly like `calendar`.
 
 ### Assigning a climate to a location
 
@@ -1391,13 +1397,21 @@ campaign-wide override for everyone is then a separate, explicit act — issuing
 the clear against `_default` itself — rather than something a user does by
 accident while adjusting one harbour.
 
-**Suppression is a tombstone: it terminates resolution for that axis across
-every lower-precedence record, not merely the one it shadows.** Specificity is
-otherwise compared within a source rank, so a location-scoped suppression that
-only outranked the manual `_default` would expose the extractor `_default`
-beneath it — reinstating exactly the shadow-promotion that clearing the whole
-stack exists to prevent, and doing it one rank down where nobody would look.
-A covering suppression means the axis is procedural here, full stop.
+**Suppression is a record like any other, and it participates in precedence.**
+It carries `source: manual`, a `seq`, and its storage key, and is ordered by
+the ordinary specificity-then-`seq` rules. What is special about it is only
+what happens when it *wins*: it terminates resolution for that axis across
+every record **below** it, rather than deferring to the next one down.
+
+Both halves matter. Terminating downward is what stops a location-scoped
+suppression from merely shadowing the manual `_default` and exposing the
+extractor `_default` beneath it — the same shadow-promotion that clearing the
+whole stack exists to prevent, one rank down where nobody would look. But
+ordering it normally is what lets a **newer** local override beat it: a GM who
+clears an inherited storm and then, later, pins a local drizzle expects the
+drizzle. Read as an unconditional "covering suppression means procedural, full
+stop", the axis would stay procedural forever and the second instruction would
+vanish.
 
 `suppress` is a **separate field listing axis names**, not a reserved value in
 the axis fields themselves. A sentinel string like `condition: "procedural"`
@@ -1408,8 +1422,13 @@ point selecting it as an override would suppress the weather instead of setting
 it. Structure cannot collide with content; a reserved string always can.
 
 The HUD renders a suppressed axis as generated — but the popover must still
-offer **Resume inheriting**, shown when a suppression span covers this location
-and moment, which deletes that span. Without it the clear is a one-way door:
+offer **Resume inheriting**, shown per axis when a suppression covers this
+location and moment. It is **axis-aware**: it removes that axis from the
+covering suppression's list and deletes the record only when the list empties.
+Deleting the whole span would restore inheritance for every axis it names, so
+a user resuming wind would silently re-enable an inherited condition override
+they meant to keep suppressed — and a single span routinely names several
+axes, since clearing all three at once produces exactly that. Without it the clear is a one-way door:
 the axis looks procedural, so **Clear override** does not appear, and setting a
 concrete value only writes another local exception rather than restoring the
 campaign-wide one. Suppression is state the user created and must be state the
@@ -1472,15 +1491,15 @@ Backend, `backend/tests/test_weather.py`, store isolated with
   on load, leaving both records separately addressable.
 - A climate containing an entry literally named `procedural` still works: an
   override selecting it sets that value, and does not suppress the axis.
-- A default-climate `PUT` naming an unknown id is rejected at both the campaign
-  and world routes, while a default that goes dangling later still resolves to
-  the shipped preset rather than raising.
+- A default-climate `PUT` naming an unknown id is rejected, while a default
+  that goes dangling later still resolves to the shipped preset rather than
+  raising.
 - Override precedence: location beats `_default`, higher `seq` beats lower,
   a record with no `seq` reads as 0 and loses to anything written since, and
   two spans differing only in array order resolve identically.
-- Suppression is a tombstone: a location-scoped suppression covering a
-  `_default` stack that holds both a manual and an extractor span returns the
-  axis to procedural weather, rather than exposing the extractor span beneath.
+- Suppression is a tombstone downward but ordered normally: it returns the axis
+  to procedural over a `_default` stack holding both a manual and an extractor
+  span, and a *later* local override for the same axis still wins over it.
 - Span boundaries are half-open: at the shared endpoint of two adjacent
   overrides, exactly one matches.
 - Span comparison under a non-lexicographic provider: under `hebrew`, spans
@@ -1614,6 +1633,9 @@ to invent the deferred feature in order to test it.)*
   deleted location resolves weather from the campaign default, keyed on that
   id as its zone, and does not raise — matching how `context.py:535-539`
   already degrades the setting block.
+- Unparseable moment: a scene whose stored `time_history` entry no longer
+  parses under the campaign's current provider resolves to `None` rather than
+  raising `CalendarError` during `_assemble`.
 - Season fractions: a climate resolves to the same season names under a 365-day
   and a 400-day calendar.
 - Constraints: no `snow` draw ever co-occurs with a temperature band outside its
@@ -1650,7 +1672,7 @@ Frontend, from `frontend/` with `npx vitest run` and `npx tsc -b`:
   place — and when that override also sets other axes, those survive with
   their `source`, `note` and `set_at` intact rather than being recreated.
 - The campaign wizard's selected climate is what the created campaign has, not
-  the world default it was prefilled from.
+  the shipped preset it was prefilled with.
 - A covering span stored under `_default` is clearable from the HUD, which
   requires its storage key to be present in the resolver's response.
 - Clearing one block inside a multi-day override splits it, leaving the blocks
@@ -1658,19 +1680,22 @@ Frontend, from `frontend/` with `npx vitest run` and `npx tsc -b`:
 - Clearing at one location that inherits a `_default` override returns that
   location to procedural weather and leaves every other location in the
   campaign still overridden.
-- Deleting a climate used only as a campaign or world default warns and names
-  that campaign or world, rather than reporting no referrers.
+- Deleting a climate used only as a campaign default warns and names that
+  campaign, rather than reporting no referrers.
 - In a season containing any `requires_temp`, **every** condition row renders
   per-band odds — including unconstrained ones, whose probability also moves
   when a constrained sibling is filtered out.
 - Season boundary conversion round-trips: a boundary edited to a date reads
-  back as that date, and the resolver treats that date as the first day of the
-  incoming season.
+  back as that date, and the resolver puts that date's **dawn** block in the
+  incoming season — while 02:00 that morning, belonging to the previous date's
+  night, remains in the outgoing one.
+- **Resume inheriting** on one axis of a multi-axis suppression restores only
+  that axis, leaving the others suppressed.
 - An override holding a value absent from the active season's table — the
   `blizzard` case — renders in the popover as the selected value rather than a
   blank, and survives a save that touches only another axis.
 - The campaign settings control reads and writes the default climate, and the
-  campaign wizard prefills it from the world's default.
+  campaign wizard prefills it with the shipped preset.
 - An override saved as *"until I clear it"* stores `to: null` and matches
   arbitrarily far-future moments; clearing it truncates it at the clear range,
   so re-reading a scene from before that point still shows the override, while
@@ -1741,6 +1766,6 @@ begun to describe both.)*
 *(The campaign-default inheritance rule was open here and is now settled as
 copy-on-create in § Campaign default climate — matching `calendar.json`, which
 is copied by `calendars.copy_calendar` and likewise does not propagate later
-world edits. The two must not disagree: a planner cannot follow a settled
-design and an open question that contradicts it, and the alternatives differ
-observably once a world default changes after campaigns exist.)*
+world edits. With the world-level default cut from scope entirely
+(§ Campaign default climate), the question is moot: there is nothing above the
+campaign for it to inherit from.)*
