@@ -177,10 +177,13 @@ plugin and is never committed.
   still → gale for wind. The shipped presets do. A shuffled table is legal and
   draws correctly; it just makes season transitions arbitrary instead of
   continuous.
-- **Every season must declare at least one condition with no `requires_temp`**,
-  validated at load. This is what makes the degenerate-table fallback safe
-  (§ Drawing a block) without letting it emit a constrained condition outside
-  its band.
+- **Every season must declare at least one condition with no `requires_temp`
+  and a strictly positive weight**, validated at load. Positive matters as much
+  as unconstrained: an unconstrained entry weighted zero satisfies the letter
+  of the rule while leaving the degenerate-table fallback (§ Drawing a block)
+  nothing to fall back to but a disabled row — breaking the never-draw-a-zero
+  guarantee in exactly the malformed-data path the fallback exists to make
+  safe.
 - `persistence` is the **lag-1 autocorrelation between adjacent blocks**. The
   **accepted** range is `[0, 1]` — a document declaring `1` is valid and loads;
   the **effective** range is `[0, 0.998]`, since values are clamped (§ The
@@ -360,12 +363,20 @@ hash-diffing of entity blobs is undisturbed.
   shipped Hebrew calendar formats as `{year}-{token}-{day}` with a month *name*
   token (`hebrew.py:70`), so `5784-nisan-01` and `5784-tishrei-01` sort
   alphabetically into the wrong order. String comparison would silently match
-  the wrong spans rather than fail loudly. An endpoint with no clock takes
-  minute 0 for `from`, and for `to` **the following fixed day at minute 0** —
-  not end-of-day. Native times validate only through 23:59
-  (`calendars.minutes_of`), so an end-of-day `to` under `t < to` would exclude
-  the final minute and `from: 1492-06-14, to: 1492-06-14` would cover nothing
-  at all rather than the whole day it names.
+  the wrong spans rather than fail loudly. **A date-only endpoint is resolved in
+  blocks, not minutes**: `from: D` means D's first owned block (its dawn) and
+  `to: D` means D's last owned block (its night), inclusive — so
+  `from: D, to: D` covers exactly the five blocks date D owns.
+
+  Stating it in minutes does not work, which two earlier attempts showed.
+  Midnight-to-midnight plus outward block rounding expands backwards into
+  D−1's night (which begins at 21:00 the previous evening) and forwards to
+  D+1 04:00, so a one-day span silently covers parts of three dates; refusing
+  the forward tail would then have to cut D's own night in half, which is the
+  very thing block-aligned matching exists to prevent. In wall-clock terms a
+  date-only span for D therefore runs from D 04:00 to D+1 04:00. That is not
+  "the calendar day", and the spec says so rather than pretending otherwise —
+  it is D's night, and D's night ends after midnight.
 - **Records store resolved coordinates, not just native strings.** Each span
   carries `from_fixed` / `to_fixed` as `(fixed_day, minute)` pairs alongside the
   human-readable native strings, and those are what resolution compares.
@@ -390,11 +401,16 @@ hash-diffing of entity blobs is undisturbed.
   load means the derivation only has to be deterministic within a single run,
   which any reasonable implementation manages, and the id never moves again.
 
-  **Ids match `[A-Za-z0-9._-]+`.** They appear as a path segment in the
+  **Ids match `[A-Za-z0-9._-]+` and must contain at least one character other
+  than `.`.** They appear as a path segment in the
   `DELETE` route, and a hand-authored id containing `/` would be unaddressable
-  there even URL-encoded, leaving an accepted span that nothing can remove. An
-  explicit id outside the grammar is replaced by a generated one on load, in
-  the same pass that fills in missing ones.
+  there even URL-encoded, leaving an accepted span that nothing can remove. The
+  dot exclusion is the same problem in a subtler form: `.` and `..` satisfy the
+  character class but URL parsers normalize those segments away — including
+  their percent-encoded spellings — before the request is sent, so the route
+  would lose the segment or resolve to its parent. An explicit id outside the
+  grammar is replaced by a generated one on load, in the same pass that fills
+  in missing ones.
 
   **Explicit ids are checked for uniqueness per storage key on load**, and a
   collision is resolved by re-deriving both records' ids canonically. The
@@ -511,7 +527,15 @@ for each axis independently:
    It is the only field in the record on the real-world clock; `from` and `to`
    remain native campaign moments.
 3. **Determinism backstop**: if `set_at` ties too, the lexicographically
-   greatest span `id` wins, so the result never depends on file ordering.
+   greatest **`tiebreak`** wins, so the result never depends on file ordering.
+
+   `tiebreak` is a stored string, set to the record's `id` when the record is
+   first created and **carried unchanged through splits**. It is deliberately
+   not the `id` itself, which splitting reassigns: a fragment given a fresh id
+   would take a fresh position in this ordering, so clearing a range in the
+   middle of one span could flip which override wins in a range the user never
+   touched. Addressing and precedence want different keys — one must be unique
+   per record, the other must be stable across surgery on it.
 
 Writers should merge or truncate an existing overlapping span rather than
 stacking a second one, but the resolver must not assume they did.
@@ -898,9 +922,9 @@ implementation has to work for and which earlier drafts of this spec got wrong:
   Guard on both sides: **validate at load** that every temperature band with
   positive weight has at least one eligible positive-weight condition, and
   **at runtime** fall back rather than raising. The fallback is the
-  highest-weight **unconstrained** condition — the one every season is required
-  to declare (§ Climate documents) — **ties broken by array position, earliest
-  first**. Not "by entry key": tables are arrays of objects and have no key, a
+  highest-weight **unconstrained, positive-weight** condition — the one every
+  season is required to declare (§ Climate documents) — **ties broken by array
+  position, earliest first**. Not "by entry key": tables are arrays of objects and have no key, a
   leftover from when they were name-keyed maps, and an implementation following
   it literally would look for a field that does not exist. It must not be
   the highest-weight *unfiltered* entry: that reintroduces `requires_temp`
@@ -1004,7 +1028,12 @@ it rather than reimplement the axis logic.
   and lets the popover disagree with the weather displayed beside it.
 - **Manual override** (#45): `PUT /api/campaigns/{cid}/weather`, with the target
   in the **request body** — `{location, from, to, condition?, temperature?,
-  wind?, note?}`, where `location` accepts `_default`. The campaign id alone
+  wind?, note?}`, where `location` accepts `_default`. **At least one axis is
+  required**: a body with none is rejected rather than writing a span that sets
+  nothing. Such a record would be unreachable as well as useless — the resolver
+  returns covering stacks per axis, so a span setting no axis appears in no
+  stack, its generated id is discoverable nowhere, and repeated calls would
+  quietly accumulate rows in `weather.json` that no client can see or delete. The campaign id alone
   cannot say what is being overridden: `weather.json` holds the target only as
   an outer object key and the span record itself has no location field, so a
   handler given just `cid` has nothing to key the write by. The body carries it
@@ -1411,7 +1440,9 @@ span left setting nothing, and returns the new resolved weather.
 
 **When a split produces two fragments, the earlier one keeps the original
 `id` and each further fragment gets a freshly generated one**, persisted as
-part of the same atomic write. Copying the id onto both halves would leave two
+part of the same atomic write. Every fragment keeps the original's `tiebreak`
+and `seq`, so a clear in the middle of a span cannot change which override
+wins on either side of it. Copying the id onto both halves would leave two
 records sharing a `DELETE` address until some later load happened to
 canonicalize them; regenerating both would invalidate an id the client may
 have just been handed. Earlier-keeps-it is arbitrary but it has to be written
@@ -1558,8 +1589,10 @@ Backend, `backend/tests/test_weather.py`, store isolated with
 - Climate editing: writing a shipped preset creates a custom copy under
   `<GRIMOIRE_HOME>/climates/` and leaves the installed file untouched;
   deleting the copy restores the preset.
-- Date-only spans: `from: <day>, to: <day>` covers every minute of that day,
-  including 23:59, and does not bleed into the next.
+- Date-only spans: `from: D, to: D` covers exactly the five blocks D owns —
+  its dawn through its night — which in wall-clock is D 04:00 to D+1 04:00. It
+  does not reach D−1's night, and does not cut D's own night short at
+  midnight.
 - Provider swap: overrides written under `gregorian` resolve to the same real
   moments after the campaign's primary calendar is changed.
 - Config leniency: `persistence` of `"2"`, `"-1"` and `"NaN"` each fall back to
@@ -1603,7 +1636,7 @@ Backend, `backend/tests/test_weather.py`, store isolated with
   cross-midnight night span. This is the test that catches the minute
   coordinate being passed to the filter, which would leave every block
   independent while every distribution still looked correct.
-- Unit variance: the sampled field has variance 1 at several persistence
+- Unit variance: the sampled field has variance 1 at the fixture's persistence
   values including the clamp, so `Φ(g)` is genuinely uniform and the
   weight-fidelity test is measuring the table rather than the filter.
 - Cross-persistence zone coupling, asserted on the **latent** field: two
@@ -1637,11 +1670,11 @@ to invent the deferred feature in order to test it.)*
   campaign-wide weather.
 - Splitting a span by a mid-range clear leaves the earlier fragment holding the
   original id and the later one holding a fresh id, both separately deletable.
-- Weight fidelity, against a climate **with no `requires_temp` anywhere**:
-  over a long sample the observed frequency of each condition matches its
-  normalized weight **within the stated tolerance**, at several persistence
-  settings — the test that catches a non-uniform marginal reaching the inverse
-  CDF. Tolerance, not equality: the latent is `2⁵²` discrete atoms passed
+- Weight fidelity, against the **named fixture below** — which has no
+  `requires_temp` anywhere: each condition's observed frequency matches its
+  normalized weight **within the stated tolerance**, at each of the fixture's
+  persistence values — the test that catches a non-uniform marginal reaching
+  the inverse CDF. Tolerance, not equality: the latent is `2⁵²` discrete atoms passed
   through a finite-precision `Φ⁻¹`, so exact uniformity is unavailable in
   principle and asserting it would fail every conforming implementation.
 
@@ -1651,9 +1684,15 @@ to invent the deferred feature in order to test it.)*
   attached is not a testable claim — it permits an arbitrarily permissive
   bound.
 
-  The seed set is **named, not merely "distinct"**: campaign id
-  `fidelity-check`, zones `fidelity-00000` through `fidelity-99999`, block
-  ordinal `0`. Leaving the implementation to pick 100,000 zone strings would
+  **The whole fixture is named, not merely its size.** Campaign id
+  `fidelity-check`; zones `fidelity-00000` through `fidelity-99999`; block
+  ordinal `0`; a single-season climate whose conditions are
+  `[clear 2, overcast 5, light rain 4, storm 1]` with no `requires_temp`
+  anywhere; and persistence values `0.0`, `0.5` and `0.9`. The tables and the
+  persistence set are as much an input as the seeds — they determine both `p`
+  and where the bucket edges fall, so leaving them to the implementer would
+  leave the pass/fail verdict to the implementer too, most sharply for the
+  narrow buckets this spec explicitly permits. Leaving the implementation to pick 100,000 zone strings would
   make the sample itself an implementation choice, and against a finite `3σ`
   bound a correct distribution can pass on one set and fail on another — a
   conformance test whose verdict depends on an input nobody wrote down.
@@ -1748,9 +1787,14 @@ Frontend, from `frontend/` with `npx vitest run` and `npx tsc -b`:
 - **Resume inheriting** on one axis of a multi-axis suppression restores only
   that axis, leaving the others suppressed — and the suppression record itself
   survives until its last axis is resumed.
-- A span whose `id` is missing, or contains a character outside
-  `[A-Za-z0-9._-]`, is given a conforming id on load and the file is rewritten,
-  so the id returned by a later read is the one `DELETE` accepts.
+- A span whose `id` is missing, contains a character outside `[A-Za-z0-9._-]`,
+  or consists only of dots, is given a conforming id on load and the file is
+  rewritten, so the id returned by a later read is the one `DELETE` accepts.
+- Splitting a span leaves the winner unchanged where two equally ranked spans
+  overlap outside the cleared range — the fragments carry the original's
+  `tiebreak`, so a fresh address id cannot reorder them.
+- A `PUT` body setting no axis at all is rejected rather than persisting an
+  unreachable span.
 - An override written with date-only endpoints matches every moment of the
   blocks it covers, including 23:00 of the preceding evening where that shares
   a `night` ordinal with the following midnight.
