@@ -818,6 +818,10 @@ export const api = {
     request<{ climate: Climate; builtin: boolean; custom: boolean }>("GET", `/api/climates/${id}`),
   saveClimate: (id: string, doc: Climate) =>
     request<{ climate: Climate }>("PUT", `/api/climates/${id}`, doc),
+  climateReferrers: (id: string) =>
+    request<{ campaigns: { id: string; name: string }[];
+              locations: { campaign: string; id: string; name: string }[] }>(
+      "GET", `/api/climates/${id}/referrers`),
   deleteClimate: (id: string) =>
     request<{ ok: boolean; reverted_to_preset: boolean }>("DELETE", `/api/climates/${id}`),
   getCalendarMonths: (scope: CalendarScope, year: number) =>
