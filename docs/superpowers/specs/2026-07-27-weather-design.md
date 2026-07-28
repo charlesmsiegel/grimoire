@@ -314,11 +314,17 @@ hash-diffing of entity blobs is undisturbed.
   with no upper bound, and `to_fixed` is `null` alongside it. This is the
   storage for the HUD's *"until I clear it"* duration (§ Interface), which
   otherwise has no representation and would force implementers to invent a
-  sentinel far-future date. Clearing such an override **deletes the record**
-  rather than setting `to` to the current moment: a deleted span leaves no
-  trace in the resolution chain, while a closed one would keep shadowing lower-
-  precedence overrides for its historical range, so re-reading an old scene
-  would show weather the GM had already retracted.
+  sentinel far-future date. Clearing an open-ended span **truncates it at the
+  clear range**, exactly as clearing a bounded span does — there is no
+  open-ended special case.
+
+  An earlier draft had clearing delete such a record outright so that earlier
+  scenes reverted to procedural. That was wrong twice over: it contradicted the
+  range semantics of the clear operation, and it is the wrong fiction. "Storm
+  until I say otherwise," set on day 10 and cleared on day 15, means it stormed
+  for five days — re-reading day 12 should still show the storm. Retracting
+  weather that scenes were played under is what `DELETE` is for, deliberately a
+  separate and more emphatic action.
 - **Comparison happens on the fixed-day axis, never on the stored strings.**
   `from`, `to`, and the queried moment are each parsed through the campaign's
   primary provider to `(fixed_day, minute)` before any ordering test. Native
@@ -510,15 +516,30 @@ pinned down exactly:
      decimal and `-` for negatives. Unit separators, so no id containing a
      dash or colon can collide with another key.
    - **Digest**: BLAKE2b-256 of that key.
-   - **Uniform**: the leading 53 bits of the digest, big-endian, divided by
-     2⁵³ — giving `u ∈ [0, 1)` with exactly float64's mantissa precision.
-   - **Normal**: `z = Φ⁻¹(u)` by **Wichura's AS241, vendored** with its
-     published double-precision coefficients, with `u = 0` mapped to `2⁻⁵³`
-     first so the tail is finite.
+   - **Uniform**: take `n`, the leading 53 bits of the digest big-endian, and
+     use the **midpoint quantile** `u = (n + 0.5) / 2⁵³`. Midpoints rather than
+     `n / 2⁵³`: that form emits `u = 0`, which `Φ⁻¹` cannot transform, and the
+     obvious repair of remapping `0 → 2⁻⁵³` collides with the value `n = 1`
+     already produces — leaving zero mass at the bottom of the range and double
+     mass one step up. A table whose first cumulative boundary landed there
+     would see its first entry doubled or made unreachable, breaking the
+     weight-fidelity guarantee at exactly the place nobody would look. The
+     midpoint map is one-to-one and lands strictly inside `(0, 1)`, so no
+     special case is needed at either end.
+   - **Normal**: `z = Φ⁻¹(u)` by **Wichura's AS241, vendored** — Applied
+     Statistics 37(3), 1988, algorithm `PPND16`, using its published
+     double-precision coefficient sets for the three branches (`|q| <= 0.425`,
+     the intermediate tail, and `r > 5`), evaluated by Horner in the order the
+     paper prints them.
 
-   - **Forward**: `Φ(g) = 0.5 · erfc(−g / √2)`, with **`erfc` vendored** into
-     the codebase as a pure-Python rational approximation, not taken from
-     `math.erfc`.
+   - **Forward**: `Φ(g) = 0.5 · erfc(−g / √2)`, with **`erfc` vendored** as
+     **W. J. Cody's rational Chebyshev approximation** — Math. Comp. 22 (1969),
+     as implemented in `CALERF`/ACM Algorithm 715 — using its published
+     coefficient arrays for the three branches (`|x| <= 0.46875`,
+     `0.46875 < |x| <= 4`, `|x| > 4`) and the paper's evaluation order. Not
+     `math.erfc`, and not "some rational approximation": naming only the shape
+     would leave coefficients, branch thresholds and Horner order open, which
+     is the same gap as naming no algorithm at all.
 
    The forward transform has to be vendored, and the earlier argument for
    leaving it to the stdlib was wrong. `math.erf`/`math.erfc` defer to platform
@@ -548,41 +569,40 @@ pinned down exactly:
    What enforces that scoped guarantee is **reference vectors**, which the spec
    now carries rather than merely promising:
 
-   | cid | zone | axis | i | u | z |
-   | --- | --- | --- | --- | --- | --- |
-   | `saltmarch-chronicle` | `saltmarch` | `temperature` | 0 | `0.45105387316006484` | `-0.12299918123991178` |
-   | `saltmarch-chronicle` | `saltmarch` | `condition` | 0 | `0.7615608961018518` | `0.7113325140777527` |
-   | `saltmarch-chronicle` | `saltmarch` | `wind` | 0 | `0.17774645354109264` | `-0.9239873403260146` |
-   | `saltmarch-chronicle` | `saltmarch` | `condition` | 1 | `0.9654995835326088` | `1.8184143093163614` |
-   | `saltmarch-chronicle` | `saltmarch` | `condition` | −1 | `0.9510130394641974` | `1.6547564014712368` |
-   | `saltmarch-chronicle` | `highreach` | `condition` | 0 | `0.21315957935313046` | `-0.7955061091380776` |
+   | cid | zone | axis | i | u |
+   | --- | --- | --- | --- | --- |
+   | `saltmarch-chronicle` | `saltmarch` | `temperature` | 0 | `0.4510538731600649` |
+   | `saltmarch-chronicle` | `saltmarch` | `condition` | 0 | `0.7615608961018518` |
+   | `saltmarch-chronicle` | `saltmarch` | `wind` | 0 | `0.1777464535410927` |
+   | `saltmarch-chronicle` | `saltmarch` | `condition` | 1 | `0.9654995835326088` |
+   | `saltmarch-chronicle` | `saltmarch` | `condition` | −1 | `0.9510130394641974` |
+   | `saltmarch-chronicle` | `highreach` | `condition` | 0 | `0.2131595793531305` |
 
    And end-to-end, through the filter and the wind table of the worked example
    above (`calm 1, breeze 4, strong 3, gale 1`) at ordinal 0:
 
-   | persistence | W | taps | g(0) | Φ(g) ≈ | drawn |
+   | persistence | W | taps | g(0) | Φ(g) | drawn |
    | --- | --- | --- | --- | --- | --- |
-   | 0.0 | 0 | 1 | `-0.9239873403260146` | 0.17774645354109 | breeze |
-   | 0.5 | 6 | 7 | `-1.6636640450077727` | 0.04808979266518 | calm |
-   | 0.9 | 38 | 39 | `-0.6397550785578683` | 0.26116592065069 | breeze |
+   | 0.0 | 0 | 1 | *(to pin)* | *(to pin)* | breeze |
+   | 0.5 | 6 | 7 | *(to pin)* | *(to pin)* | calm |
+   | 0.9 | 38 | 39 | *(to pin)* | *(to pin)* | breeze |
 
-   **Only the `u` column is final. Everything downstream of it is
-   provisional.** `u` comes from BLAKE2b alone, which is bit-stable by
-   specification. `z` was computed through the stdlib `inv_cdf` and `Φ(g)`
-   through the stdlib `cdf` — both now rejected in favour of vendored
-   implementations — and `g` inherits `z`'s provisionality.
+   `u` is final: BLAKE2b is bit-stable by specification and the midpoint map is
+   plain arithmetic. The `z`, `g` and `Φ(g)` columns have been **removed rather
+   than left provisional** — they were computed through the stdlib transforms
+   this spec now rejects, and a table of numbers that look normative but are
+   not is worse than an absent one.
 
-   AS241 is a fixed algorithm with published coefficients, so the vendored
-   `Φ⁻¹` is expected to reproduce these `z` values exactly; `erfc` is a fresh
-   implementation and `Φ(g)` may well move. Either way the rule is the same:
-   **recompute every column against the vendored functions and re-pin the table
-   before enabling the reference-vector test.** Asserting provisional numbers is
-   how a conformance test ends up enshrining the behaviour it exists to police,
-   so the provisional status is part of the spec rather than a footnote.
+   **Completing the table is an implementation-time task with a rule attached:
+   the vectors must be validated against an independent high-precision
+   computation — `mpmath` at 50 digits — and not merely read out of the vendored
+   code.** Otherwise the first implementation defines its own expected output
+   and the conformance test degenerates into asserting that the code does what
+   the code does. Pin the validated values here, then enable the test.
 
-   The drawn entries are stable regardless — this table's boundaries sit at
-   0.111, 0.556 and 0.889, far from any last-digit dispute — so they can be
-   asserted now.
+   The drawn entries in the end-to-end table are stable regardless — its
+   boundaries sit at 0.111, 0.556 and 0.889, far from any last-digit dispute —
+   so those can be asserted before the numeric columns are filled in.
 2. **Smoothing.** The correlated field is a normalized **one-sided** (causal)
    exponential filter over the latent, with `a = persistence`, indexed by the
    **block ordinal** of § Blocks — never by the minute coordinate:
@@ -923,8 +943,12 @@ The sidebar also carries a **Delete** action for custom climates, labelled
 `DELETE` route and the revert behaviour it enables are unreachable from the
 product, and a preset edited by accident could never be undone. Builtins with
 no custom copy show no such action, since there is nothing to remove. Deleting
-a climate that locations still reference warns and names them, using the same
-chips the sidebar already lists.
+a climate that is still referenced warns and names the referrers — **locations
+that name it, campaigns whose `climate.json` defaults to it, and worlds whose
+default is it**. Locations alone would miss the worst case: a custom-only
+climate used purely as a campaign default has no location naming it, so the
+warning would report nothing, deletion would proceed, and every untagged
+location in that campaign would quietly switch to `temperate-interior`.
 
 **Ids.** `+ New climate` generates the registry id by slugifying the name and
 uniquifying it against both tiers — the `slugify`/`uniquify` pair
@@ -941,6 +965,15 @@ The form is where the real work is:
   storage model and a terrible authoring model; nobody can read a column of
   integers as a distribution. The percentage is display-only — the stored value
   stays the integer.
+
+  **A constrained condition shows its conditional odds, not that share.** A
+  single percentage normalized across all sibling conditions is not `snow`'s
+  probability: it is zero outside `freezing`, and renormalized against the
+  eligible subset when `freezing` is drawn. Presenting one number would tell an
+  author their snow falls 14% of the time when the truth is "never, except on
+  freezing blocks, where it is 22%." Constrained rows therefore render per
+  eligible band — `22% when freezing` — and unconstrained rows keep the simple
+  share.
 - **Season boundaries are edited as dates, stored as fractions**, since `0.45`
   is not authorable by a human (§ Climate documents). The conversion needs a
   fixed reference or it is not stable: 1 March is a different fraction in a
@@ -951,8 +984,23 @@ The form is where the real work is:
   So: the display provider is the calendar of the campaign the editor was
   opened from, falling back to `gregorian` when there is none, and the
   reference year is that provider's `RULE_REFERENCE_YEAR` — already the
-  convention for calendar-relative rules in `calendars/base.py`. Dates round
-  to the day.
+  convention for calendar-relative rules in `calendars/base.py`.
+
+  Both directions are pinned, because "round to the day" leaves three choices
+  open and the editor and the resolver disagreeing by one day moves weather:
+
+  - **Day index is zero-based**: the first day of the reference year is index
+    `0`, so `fraction = day_index / year_length` and the year's first day is
+    fraction `0` exactly.
+  - **Fraction → day** uses `floor(fraction * year_length)`, matching how the
+    resolver locates a season, so the editor shows the day the resolver would
+    actually use.
+  - **Day → fraction** emits the day's own start, `day_index / year_length`,
+    never a midpoint or an end.
+
+  Season intervals are half-open in the year exactly as override spans are in
+  time: `[from, to)`. A boundary edited to a given date makes that date the
+  first day of the incoming season.
 
   **Crucially, the stored fraction is only recomputed for a boundary the user
   actually edited.** A boundary the user did not touch is written back as the
@@ -1177,6 +1225,21 @@ server walks the covering stack, removes the named axes over the requested
 range — splitting a span whose remainder still applies outside it — deletes any
 span left setting nothing, and returns the new resolved weather.
 
+**It only mutates spans stored under the requested location.** A `_default`
+span covering the moment is inherited by every location in the campaign, so
+truncating it to clear the docks would clear the lighthouse and everywhere else
+too; skipping it would leave the docks overridden and the button ineffective.
+Neither is acceptable, so an inherited span is **suppressed rather than
+edited**: the server writes a location-scoped span setting that axis to the
+sentinel **`procedural`**, which resolves as "no override here" and outranks
+`_default` by the specificity rule already in § Resolution. Clearing a
+campaign-wide override for everyone is then a separate, explicit act — issuing
+the clear against `_default` itself — rather than something a user does by
+accident while adjusting one harbour.
+
+`procedural` is a legal axis value in the store for exactly this purpose, and
+the HUD renders such an axis as generated, showing no authored marker.
+
 `DELETE .../{storage_key}/{span_id}` stays, for removing a specific record
 outright rather than clearing an axis of it.
 
@@ -1357,14 +1420,25 @@ Frontend, from `frontend/` with `npx vitest run` and `npx tsc -b`:
   requires its storage key to be present in the resolver's response.
 - Clearing one block inside a multi-day override splits it, leaving the blocks
   either side overridden as before.
+- Clearing at one location that inherits a `_default` override returns that
+  location to procedural weather and leaves every other location in the
+  campaign still overridden.
+- Deleting a climate used only as a campaign or world default warns and names
+  that campaign or world, rather than reporting no referrers.
+- A constrained condition's odds render per eligible band, not as a share of
+  all sibling conditions.
+- Season boundary conversion round-trips: a boundary edited to a date reads
+  back as that date, and the resolver treats that date as the first day of the
+  incoming season.
 - An override holding a value absent from the active season's table — the
   `blizzard` case — renders in the popover as the selected value rather than a
   blank, and survives a save that touches only another axis.
 - The campaign settings control reads and writes the default climate, and the
   campaign wizard prefills it from the world's default.
 - An override saved as *"until I clear it"* stores `to: null` and matches
-  arbitrarily far-future moments; clearing it removes the record rather than
-  closing it, so a re-read of an earlier scene shows procedural weather.
+  arbitrarily far-future moments; clearing it truncates it at the clear range,
+  so re-reading a scene from before that point still shows the override, while
+  `DELETE` on the span removes it from history entirely.
 - A location saved with an unknown climate id is rejected with the available
   ids, rather than accepted and silently falling back — asserted **through the
   API as well as the form**, since the API path is the one a script or importer
