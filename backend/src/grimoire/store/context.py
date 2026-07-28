@@ -16,7 +16,8 @@ import re
 from .. import prompts
 from . import (appearances, calendars, campaigns, characters, checks, chronicle,
                config, dice, dossiers, entities, groupstate, length_drift, lengths, modules, overlay,
-               pcs, playstate, plot, relationships, response_presets, scenes, sheets, styles)
+               pcs, playstate, plot, relationships, response_presets, scenes, sheets, styles,
+               weather)
 
 
 def activate(entries: list[dict], recent_text: str, present: frozenset = frozenset()) -> list[dict]:
@@ -318,6 +319,22 @@ def _today_data(cid: str, sid: str, croot) -> dict | None:
             "cast": cast_datetime_facts(cid, sid, history[-1])}
 
 
+def _weather_data(cid: str, sid: str) -> dict | None:
+    """The sky at the scene's current location and moment, or None.
+
+    Tolerant by construction — `current_weather` returns None rather than
+    raising for a missing location, a missing moment, or a stored moment the
+    campaign's calendar can no longer parse.
+    """
+    locations = scenes.get_location_history(cid, sid)
+    moments = scenes.get_time_history(cid, sid)
+    got = weather.current_weather(cid, locations[-1] if locations else None,
+                                  moments[-1] if moments else None)
+    if not got:
+        return None
+    return {k: got[k] for k in ("condition", "temperature", "wind")}
+
+
 def _character_states(croot, cast) -> list[dict]:
     try:
         out = []
@@ -572,6 +589,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         "story_entries": _story_entries(cid, depth=full_recap or None, full=bool(full_recap)),
         "plot_lines": plot.render_open(cid, with_id=False),
         "today": _today_data(cid, sid, croot),
+        "weather": _weather_data(cid, sid),
         "current_setting": current_setting,
         "world_info_bodies": [e["body"] for e in activated_wi],
         "group_states": _group_states(cid, croot, activated_wi),
@@ -657,6 +675,7 @@ _SECTIONS = [
     ("Story so far", "scene/sections/story_so_far/compact.j2", False),
     ("Plot threads", "scene/sections/plot_threads.j2", False),
     ("Today", "scene/sections/today.j2", False),
+    ("Weather", "scene/sections/weather.j2", False),
     ("Current setting", "scene/sections/current_setting.j2", False),
     ("World info", "scene/sections/world_info.j2", False),
     ("Group state", "scene/sections/group_state.j2", False),

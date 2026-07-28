@@ -1,0 +1,4 @@
+{#- The current sky. Vars: weather (None, or {condition, temperature, wind}). -#}
+{%- if weather -%}
+Weather: {{ weather.condition }}, {{ weather.temperature }}, wind {{ weather.wind }}.
+{%- endif -%}
