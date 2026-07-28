@@ -1,0 +1,140 @@
+{
+  "season": {
+    "name": "winter",
+    "from": 0.0,
+    "to": 0.0,
+    "temperature": [
+      {
+        "name": "freezing",
+        "weight": 2
+      },
+      {
+        "name": "mild",
+        "weight": 8
+      }
+    ],
+    "conditions": [
+      {
+        "name": "clear",
+        "weight": 5
+      },
+      {
+        "name": "snow",
+        "weight": 5,
+        "requires_temp": [
+          "freezing"
+        ]
+      }
+    ],
+    "wind": [
+      {
+        "name": "calm",
+        "weight": 1
+      },
+      {
+        "name": "breeze",
+        "weight": 4
+      },
+      {
+        "name": "strong",
+        "weight": 3
+      },
+      {
+        "name": "gale",
+        "weight": 1
+      }
+    ]
+  },
+  "rows": [
+    {
+      "cid": "saltmarch-chronicle",
+      "zone": "saltmarch",
+      "ordinal": 0,
+      "persistence": 0.0,
+      "u": 0.761560896101852,
+      "z": 0.7113325140777531,
+      "g": 0.7113325140777531,
+      "phi": 0.761560896101852,
+      "drawn": {
+        "temperature": "mild",
+        "condition": "clear",
+        "wind": "breeze"
+      }
+    },
+    {
+      "cid": "saltmarch-chronicle",
+      "zone": "saltmarch",
+      "ordinal": 0,
+      "persistence": 0.5,
+      "u": 0.761560896101852,
+      "z": 0.7113325140777531,
+      "g": 1.462190488136164,
+      "phi": 0.9281554912748535,
+      "drawn": {
+        "temperature": "mild",
+        "condition": "clear",
+        "wind": "calm"
+      }
+    },
+    {
+      "cid": "saltmarch-chronicle",
+      "zone": "saltmarch",
+      "ordinal": 0,
+      "persistence": 0.9,
+      "u": 0.761560896101852,
+      "z": 0.7113325140777531,
+      "g": 0.6166883331732982,
+      "phi": 0.7312798409938372,
+      "drawn": {
+        "temperature": "mild",
+        "condition": "clear",
+        "wind": "breeze"
+      }
+    },
+    {
+      "cid": "saltmarch-chronicle",
+      "zone": "highreach",
+      "ordinal": 137,
+      "persistence": 0.35,
+      "u": 0.3414930054987352,
+      "z": -0.408391856662772,
+      "g": -0.0821468496376932,
+      "phi": 0.4672649691814702,
+      "drawn": {
+        "temperature": "freezing",
+        "condition": "clear",
+        "wind": "strong"
+      }
+    },
+    {
+      "cid": "saltmarch-chronicle",
+      "zone": "saltmarch",
+      "ordinal": -42,
+      "persistence": 0.75,
+      "u": 0.220319960305433,
+      "z": -0.7711130592439754,
+      "g": -1.102411493803982,
+      "phi": 0.13514140844570782,
+      "drawn": {
+        "temperature": "mild",
+        "condition": "clear",
+        "wind": "strong"
+      }
+    },
+    {
+      "cid": "saltmarch-chronicle",
+      "zone": "saltmarch",
+      "ordinal": 34,
+      "persistence": 0.6,
+      "u": 0.8616514547988482,
+      "z": 1.0877690173625145,
+      "g": 0.285260236082146,
+      "phi": 0.6122776126304628,
+      "drawn": {
+        "temperature": "freezing",
+        "condition": "snow",
+        "wind": "breeze"
+      }
+    }
+  ]
+}
