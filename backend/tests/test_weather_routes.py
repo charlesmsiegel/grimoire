@@ -307,3 +307,73 @@ def test_clearing_one_block_of_an_open_ended_span_ends_it(client):
     assert src("2026-06-14T09:00") == "procedural"
     assert src("2026-06-14T13:00") == "procedural"   # never resumes
     assert src("2027-01-01T09:00") == "procedural"
+
+
+# ---- from Codex review of #232 ----
+
+def test_an_unknown_axis_is_a_400(client):
+    cid, sid, lid = scene(client)
+    r = client.post(f"/api/campaigns/{cid}/weather/clear",
+                    json={"location": lid, "start": "2026-06-14", "axes": ["to_fixed"]})
+    assert r.status_code == 400 and "to_fixed" in r.json()["detail"]
+
+
+def test_a_block_bounded_put_keeps_its_suppression(client):
+    # put_ordinals used to drop suppress, so a suppression-only request passed
+    # validation and stored a record setting nothing.
+    cid, sid, lid = scene(client)
+    client.put(f"/api/campaigns/{cid}/weather",
+               json={"location": "_default", "start": "2026-06-14", "condition": "storm"})
+    r = client.put(f"/api/campaigns/{cid}/weather",
+                   json={"location": lid, "start": "2026-06-14T09:00", "blocks": 1,
+                         "suppress": ["condition"]})
+    assert r.status_code == 200 and r.json().get("suppress") == ["condition"]
+    got = client.get(f"/api/campaigns/{cid}/scenes/{sid}/weather").json()
+    assert got["source"]["condition"] == "procedural"
+
+
+def test_the_scene_read_carries_the_block_ordinal(client):
+    cid, sid, lid = scene(client)
+    assert isinstance(client.get(f"/api/campaigns/{cid}/scenes/{sid}/weather").json()["ordinal"], int)
+
+
+def test_advancing_time_reports_the_weather_changes(client):
+    # The sweep was unreachable in production: nothing called it.
+    cid, sid, lid = scene(client)
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/datetime",
+                   json={"datetime": "2026-12-14T09:00"})
+    assert r.status_code == 200
+    changes = r.json()["weather_changes"]
+    assert isinstance(changes, list) and changes
+    assert {"location", "axis", "before", "after"} == set(changes[0])
+    assert all(c["before"] != c["after"] for c in changes)
+
+
+def test_the_campaign_default_climate_is_readable_and_settable(client):
+    # Create-time was the only writer, so the default was immutable afterwards.
+    cid, sid, lid = scene(client)
+    assert client.get(f"/api/campaigns/{cid}/climate").json()["default_climate"] == "temperate-interior"
+    assert client.put(f"/api/campaigns/{cid}/climate",
+                      json={"default_climate": "high-desert"}).status_code == 200
+    assert client.get(f"/api/campaigns/{cid}/climate").json()["default_climate"] == "high-desert"
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/weather").json()["climate"] == "high-desert"
+
+
+def test_setting_an_unknown_campaign_default_is_rejected(client):
+    cid, sid, lid = scene(client)
+    assert client.put(f"/api/campaigns/{cid}/climate",
+                      json={"default_climate": "no-such"}).status_code == 400
+
+
+def test_the_override_note_reaches_the_prompt(client):
+    # The note exists to give the model context beyond a bare `storm`; if no
+    # prompt path reads it, storing it is decoration.
+    from grimoire.store import context
+    cid, sid, lid = scene(client)
+    client.put(f"/api/campaigns/{cid}/weather",
+               json={"location": lid, "start": "2026-06-14", "condition": "blizzard",
+                     "note": "the Wintertide storm"})
+    data = context._assemble(cid, sid)["data"]
+    assert data["weather"]["notes"] == ["the Wintertide storm"]
+    from grimoire import prompts
+    assert "the Wintertide storm" in prompts.render("scene/system.j2", **data)

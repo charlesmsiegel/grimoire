@@ -24,6 +24,8 @@ const CLIMATE = {
 };
 
 beforeEach(() => {
+  // Call history is not auto-cleared here, and one test asserts "not called".
+  vi.clearAllMocks();
   vi.mocked(api.listClimates).mockResolvedValue({ climates: [
     { id: "temperate-interior", name: "Temperate Interior", builtin: true, custom: false },
     { id: "saltmarch-fens", name: "Fens", builtin: false, custom: true },
@@ -124,4 +126,42 @@ test("saving sends the route id even for a renamed climate", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(api.saveClimate).toHaveBeenCalledWith(
     "temperate-interior", expect.objectContaining({ id: "temperate-interior", name: "Mine" })));
+});
+
+test("clearing a temperature requirement omits the key rather than sending []", async () => {
+  // The validator rejects an empty requires_temp and wants the key omitted, so
+  // sending [] makes the constraint impossible to remove — Save always fails.
+  render(<ClimateEditor />);
+  fireEvent.click(await screen.findByText("Temperate Interior"));
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  fireEvent.change(screen.getByLabelText("Conditions requires 2"), { target: { value: "" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.saveClimate).toHaveBeenCalled());
+  const calls = vi.mocked(api.saveClimate).mock.calls;
+  const sent = calls[calls.length - 1][1];
+  expect("requires_temp" in sent.seasons[0].conditions[1]).toBe(false);
+});
+
+test("renaming a temperature rewrites the conditions that require it", async () => {
+  // Otherwise the next save is rejected as a dangling requirement and the
+  // author has to find every dependent condition by hand.
+  render(<ClimateEditor />);
+  fireEvent.click(await screen.findByText("Temperate Interior"));
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  fireEvent.change(screen.getByLabelText("Temperature name 1"), { target: { value: "bitter" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.saveClimate).toHaveBeenCalled());
+  const calls = vi.mocked(api.saveClimate).mock.calls;
+  const sent = calls[calls.length - 1][1];
+  expect(sent.seasons[0].conditions[1].requires_temp).toEqual(["bitter"]);
+});
+
+test("a new climate cannot silently overwrite an existing custom id", async () => {
+  render(<ClimateEditor />);
+  fireEvent.click(await screen.findByRole("button", { name: "+ New climate" }));
+  fireEvent.change(await screen.findByLabelText("Id"), { target: { value: "saltmarch-fens" } });
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Mine" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  expect(await screen.findByText(/already exists/)).toBeInTheDocument();
+  expect(api.saveClimate).not.toHaveBeenCalled();
 });

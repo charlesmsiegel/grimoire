@@ -418,6 +418,7 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
         got = wstore.current_weather(cid, location_history[-1], time_history[-1])
         if got:
             weather_now = {k: got[k] for k in ("condition", "temperature", "wind")}
+            weather_now["notes"] = got.get("notes") or []
 
     present_chars = {a["id"] for a in cast if a["kind"] == "characters"}
     roster = ap.roster(cid)

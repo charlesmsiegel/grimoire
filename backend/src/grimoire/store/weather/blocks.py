@@ -41,3 +41,18 @@ def ordinal(fixed_day: int, minutes: int | None) -> int:
     """The block's index in the noise field. Consecutive blocks differ by 1."""
     day, position = block_of(fixed_day, minutes)
     return 5 * day + position
+
+
+def at_block_start(minutes: int | None) -> bool:
+    """True when a clock time lands exactly on a block boundary.
+
+    Endpoints round *outward* to whole blocks, and an exclusive end already on
+    a boundary must not be pushed a block further — that would extend the span
+    past what was asked for.
+    """
+    return minutes is not None and any(minutes == start for start, _ in _DAY_BLOCKS)
+
+
+def next_ordinal(fixed_day: int, minutes: int | None) -> int:
+    """One block past the block containing this moment."""
+    return ordinal(fixed_day, minutes) + 1

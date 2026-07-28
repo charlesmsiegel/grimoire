@@ -55,6 +55,12 @@ export function ClimateEditor() {
     const target = (id ?? form.id).trim();
     if (!target || !form.name.trim()) return;
     setError(null);
+    if (!id && climates.some((c) => c.id === target && c.custom)) {
+      // The PUT would overwrite the existing JSON without warning. Only the
+      // explicit-edit path may write over a climate that already exists.
+      setError(`A climate with the id '${target}' already exists. Open it to edit, or choose another id.`);
+      return;
+    }
     try {
       await api.saveClimate(target, { ...form, id: target });
       await reload();
@@ -85,8 +91,42 @@ export function ClimateEditor() {
 
   function patchEntry(n: number, axis: typeof AXES[number]["key"], e: number, patch: Partial<ClimateEntry>) {
     patchSeason(n, {
-      [axis]: form.seasons[n][axis].map((x, i) => (i === e ? { ...x, ...patch } : x)),
+      [axis]: form.seasons[n][axis].map((x, i) => {
+        if (i !== e) return x;
+        const next = { ...x, ...patch } as ClimateEntry;
+        // The validator rejects an empty requires_temp and wants the key
+        // omitted for an unconstrained condition, so clearing the field has to
+        // delete the property — otherwise Save fails and the constraint can
+        // never be removed.
+        if (Array.isArray(next.requires_temp) && next.requires_temp.length === 0) {
+          delete next.requires_temp;
+        }
+        return next;
+      }),
     } as Partial<ClimateSeason>);
+  }
+
+  /** Rename a temperature and rewrite every condition that requires it.
+   *
+   *  One state update, not two. Renaming and patching separately would each
+   *  read the same captured `form`, so the second would overwrite the first
+   *  and the rename would appear to do nothing.
+   *
+   *  Without the rewrite a plain rename leaves `requires_temp` pointing at a
+   *  name that no longer exists, the next save is rejected as a dangling
+   *  requirement, and the author has to hunt down each dependent condition. */
+  function renameTemperature(n: number, e: number, from: string, to: string) {
+    setForm({
+      ...form,
+      seasons: form.seasons.map((s, i) => (i !== n ? s : {
+        ...s,
+        temperature: s.temperature.map((x, j) => (j === e ? { ...x, name: to } : x)),
+        conditions: s.conditions.map((c) => (
+          c.requires_temp?.includes(from)
+            ? { ...c, requires_temp: c.requires_temp.map((r) => (r === from ? to : r)) }
+            : c)),
+      })),
+    });
   }
 
   function addEntry(n: number, axis: typeof AXES[number]["key"]) {
@@ -216,7 +256,13 @@ export function ClimateEditor() {
                     {s[axis.key].map((e, i) => (
                       <div key={i} className="chips">
                         <input aria-label={`${axis.label} name ${i + 1}`} value={e.name}
-                               onChange={(ev) => patchEntry(n, axis.key, i, { name: ev.target.value })} />
+                               onChange={(ev) => {
+                                 if (axis.key === "temperature" && e.name) {
+                                   renameTemperature(n, i, e.name, ev.target.value);
+                                 } else {
+                                   patchEntry(n, axis.key, i, { name: ev.target.value });
+                                 }
+                               }} />
                         <input aria-label={`${axis.label} weight ${i + 1}`} type="number" min={0} step={1}
                                value={e.weight}
                                onChange={(ev) => patchEntry(n, axis.key, i, { weight: Number(ev.target.value) })} />

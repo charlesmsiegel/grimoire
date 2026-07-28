@@ -22,6 +22,10 @@ vi.mock("../api/client", () => ({
     startFromGreeting: vi.fn(),
     opener: vi.fn(),
     getCalendarProviders: vi.fn(),
+    listClimates: vi.fn(() => Promise.resolve({ climates: [
+      { id: "temperate-interior", name: "Temperate Interior", builtin: true, custom: false },
+      { id: "high-desert", name: "High Desert", builtin: true, custom: false },
+    ] })),
     listModules: vi.fn(),
   },
 }));
@@ -80,7 +84,7 @@ test("Create campaign commits the full sequence in order", async () => {
   fireEvent.change(screen.getByLabelText(/location name/i), { target: { value: "The Tavern" } });
   fireEvent.click(screen.getByRole("button", { name: /create campaign/i }));
 
-  await waitFor(() => expect(api.createCampaign).toHaveBeenCalledWith("Run One", "w1", "US", "gregorian", undefined));
+  await waitFor(() => expect(api.createCampaign).toHaveBeenCalledWith("Run One", "w1", "US", "gregorian", undefined, "temperate-interior"));
   expect(api.createCampaignPC).toHaveBeenCalledWith("run", expect.objectContaining({
     name: "Mara", tags: [], persona: expect.objectContaining({ name: "Mara" }),
   }));
@@ -104,7 +108,7 @@ test("module picker defaults to inherit and passes the chosen module", async () 
   fireEvent.click(screen.getByRole("button", { name: /next/i }));
   fireEvent.click(screen.getByRole("button", { name: /create campaign/i }));
   await waitFor(() => expect(api.createCampaign).toHaveBeenCalledWith(
-    "Run One", "w1", "US", "gregorian", "pool-basic"));
+    "Run One", "w1", "US", "gregorian", "pool-basic", "temperate-interior"));
 });
 
 test("step 1 shows the calendar select alongside holidays", async () => {
@@ -124,7 +128,7 @@ test("selecting a holidays region passes it to createCampaign", async () => {
   fireEvent.change(screen.getByLabelText(/character name/i), { target: { value: "Mara" } });
   fireEvent.click(screen.getByRole("button", { name: /next/i }));
   fireEvent.click(screen.getByRole("button", { name: /create campaign/i }));
-  await waitFor(() => expect(api.createCampaign).toHaveBeenCalledWith("Run One", "w1", "GB", "gregorian", undefined));
+  await waitFor(() => expect(api.createCampaign).toHaveBeenCalledWith("Run One", "w1", "GB", "gregorian", undefined, "temperate-interior"));
 });
 
 test("choosing a custom (user-authored) calendar hides the Holidays select and creates with no region", async () => {
@@ -138,7 +142,7 @@ test("choosing a custom (user-authored) calendar hides the Holidays select and c
   fireEvent.change(screen.getByLabelText(/character name/i), { target: { value: "Mara" } });
   fireEvent.click(screen.getByRole("button", { name: /next/i }));
   fireEvent.click(screen.getByRole("button", { name: /create campaign/i }));
-  await waitFor(() => expect(api.createCampaign).toHaveBeenCalledWith("FR", "w1", undefined, "my-custom-calendar", undefined));
+  await waitFor(() => expect(api.createCampaign).toHaveBeenCalledWith("FR", "w1", undefined, "my-custom-calendar", undefined, "temperate-interior"));
 });
 
 test("choosing Hebrew and Israel passes the observance region to createCampaign", async () => {
@@ -152,7 +156,7 @@ test("choosing Hebrew and Israel passes the observance region to createCampaign"
   fireEvent.change(screen.getByLabelText(/character name/i), { target: { value: "Mara" } });
   fireEvent.click(screen.getByRole("button", { name: /next/i }));
   fireEvent.click(screen.getByRole("button", { name: /create campaign/i }));
-  await waitFor(() => expect(api.createCampaign).toHaveBeenCalledWith("H", "w1", "IL", "hebrew", undefined));
+  await waitFor(() => expect(api.createCampaign).toHaveBeenCalledWith("H", "w1", "IL", "hebrew", undefined, "temperate-interior"));
 });
 
 test("Finish on the opener step navigates to the campaign", async () => {
@@ -209,4 +213,19 @@ test("a world without PCs shows no existing-character section", async () => {
   fireEvent.click(screen.getByRole("button", { name: /next/i }));
   expect(screen.getByLabelText(/character name/i)).toBeInTheDocument();
   expect(screen.queryByText(/play an existing character/i)).toBeNull();
+});
+
+test("the chosen climate is passed to createCampaign", async () => {
+  // Without this the API's climate parameter has no caller, and every campaign
+  // created through the product silently gets the fallback.
+  renderWizard();
+  await screen.findByText("Realm");
+  fireEvent.change(screen.getByLabelText(/campaign name/i), { target: { value: "Run One" } });
+  fireEvent.change(screen.getByLabelText("Climate"), { target: { value: "high-desert" } });
+  fireEvent.click(screen.getByRole("button", { name: /next/i }));
+  fireEvent.change(screen.getByLabelText(/character name/i), { target: { value: "Mara" } });
+  fireEvent.click(screen.getByRole("button", { name: /next/i }));
+  fireEvent.click(screen.getByRole("button", { name: /create campaign/i }));
+  await waitFor(() => expect(api.createCampaign).toHaveBeenCalledWith(
+    "Run One", "w1", "US", "gregorian", undefined, "high-desert"));
 });

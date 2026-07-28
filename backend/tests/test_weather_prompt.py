@@ -29,7 +29,7 @@ def test_section_is_empty_without_weather():
 def test_assemble_carries_weather(monkeypatch, tmp_path):
     cid, sid = scene_at(monkeypatch, tmp_path)
     data = context._assemble(cid, sid)["data"]
-    assert set(data["weather"]) == {"condition", "temperature", "wind"}
+    assert set(data["weather"]) == {"condition", "temperature", "wind", "notes"}
 
 
 def test_assemble_omits_weather_without_a_location(monkeypatch, tmp_path):
