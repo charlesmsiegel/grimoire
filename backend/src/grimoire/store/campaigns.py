@@ -7,7 +7,7 @@ import json
 import shutil
 from pathlib import Path
 
-from . import assets, calendars, characters, entities, greetings, pcs, worlds
+from . import assets, atomic, calendars, characters, entities, greetings, pcs, worlds
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import ensure_home, home, now_iso, slugify, uniquify
 
@@ -41,7 +41,7 @@ def read_manifest(cid: str) -> dict[str, str]:
 
 
 def write_manifest(cid: str, manifest: dict[str, str]) -> None:
-    _manifest_path(cid).write_text(dump_frontmatter(manifest, ""), encoding="utf-8")
+    atomic.write_text(_manifest_path(cid), dump_frontmatter(manifest, ""))
 
 
 def list_campaigns() -> list[dict]:
@@ -85,18 +85,14 @@ def create_campaign(name: str, world_id: str, region: str | None = None,
     root.mkdir(parents=True)
     (root / "scenes").mkdir()
     now = now_iso()
-    campaign_meta_path(cid).write_text(
-        dump_frontmatter({"name": name, "world": world_id, "created": now, "updated": now,
+    atomic.write_text(campaign_meta_path(cid), dump_frontmatter({"name": name, "world": world_id, "created": now, "updated": now,
                           "world_copy": "overlay",
-                          **({"module": module} if module else {})}, ""),
-        encoding="utf-8",
-    )
+                          **({"module": module} if module else {})}, ""))
     # copy-on-write: nothing is copied up front; records materialize on divergence
     # (store/overlay.py) and sync.md tracks bases for materialized records only
     write_manifest(cid, {})
     calendars.copy_calendar(worlds.world_root(world_id), root)
-    (root / "climate.json").write_text(
-        json.dumps({"default_climate": wanted_climate}), encoding="utf-8")
+    atomic.write_text(root / "climate.json", json.dumps({"default_climate": wanted_climate}))
     from . import sheets
     sheets.seed(cid)
     if region is not None or calendar is not None:
@@ -181,7 +177,7 @@ def ensure_campaign_slim(cid: str) -> None:
     _tombstone_deleted_copied_assets(cid, root, wroot, copied)
     _prune_duplicate_files(root, wroot)
     meta["world_copy"] = "overlay"
-    mp.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+    atomic.write_text(mp, dump_frontmatter(meta, body))
 
 
 def _tombstone_deleted_copied_assets(cid: str, root: Path, wroot: Path, copied: set[str]) -> None:
@@ -251,7 +247,7 @@ def rename_campaign(cid: str, name: str) -> None:
     meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
     meta["name"] = name
     meta["updated"] = now_iso()
-    mp.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+    atomic.write_text(mp, dump_frontmatter(meta, body))
 
 
 def set_campaign_response(cid: str, fields: dict) -> None:
@@ -265,7 +261,7 @@ def set_campaign_response(cid: str, fields: dict) -> None:
     for key in scenes.RESPONSE_FIELDS:
         if key in fields:
             meta[key] = str(fields[key] or "")
-    mp.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+    atomic.write_text(mp, dump_frontmatter(meta, body))
 
 
 def touch(cid: str) -> None:
@@ -274,7 +270,7 @@ def touch(cid: str) -> None:
         raise CampaignNotFound(cid)
     meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
     meta["updated"] = now_iso()
-    mp.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+    atomic.write_text(mp, dump_frontmatter(meta, body))
 
 
 def delete_campaign(cid: str) -> None:

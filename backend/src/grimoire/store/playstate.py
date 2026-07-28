@@ -13,6 +13,7 @@ from pathlib import Path
 
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import now_iso
+from . import atomic
 
 
 _HEADERS = {"current state": "current_state", "knows": "knows", "suspects": "suspects"}
@@ -79,5 +80,4 @@ def read_state(root: Path, cid: str) -> dict | None:
 def write_state(root: Path, cid: str, body: str) -> None:
     p = state_path(root, cid)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(dump_frontmatter({"updated": now_iso()}, body.strip() + "\n"),
-                 encoding="utf-8")
+    atomic.write_text(p, dump_frontmatter({"updated": now_iso()}, body.strip() + "\n"))

@@ -301,7 +301,8 @@ def test_atomic_write_failure_leaves_no_tmp_file(tmp_path, monkeypatch):
     def boom(*a, **kw):
         raise OSError("disk full")
 
-    monkeypatch.setattr(sheets.os, "replace", boom)
+    # sheets writes through store.atomic since #233; patch the replace there
+    monkeypatch.setattr(sheets.atomic.os, "replace", boom)
     with pytest.raises(OSError):
         sheets._atomic_write_json(p, {"sheet_type": "medium", "fields": {}})
     assert not p.exists()

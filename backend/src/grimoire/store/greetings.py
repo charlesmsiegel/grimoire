@@ -13,7 +13,7 @@ import json
 import re
 from pathlib import Path
 
-from . import cards, characters, statcache
+from . import atomic, cards, characters, statcache
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import natural_key, slugify, uniquify
 
@@ -115,7 +115,7 @@ def create_greeting(root: Path, name: str, character: str, version: str, body: s
     # time -- scene-time substitution is ambiguous once more than one NPC is
     # present, so it's never resolved there.
     body = cards.bake_char_token(body, char_name(root, character, version))
-    _greeting_path(root, gid).write_text(dump_frontmatter(meta, body), encoding="utf-8")
+    atomic.write_text(_greeting_path(root, gid), dump_frontmatter(meta, body))
     return gid
 
 
@@ -162,7 +162,7 @@ def update_greeting(root: Path, gid: str, *, name: str | None = None, body: str 
         body = cards.bake_char_token(
             body, char_name(root, meta.get("character", ""), meta.get("version", "")))
     new_body = cur_body if body is None else body
-    p.write_text(dump_frontmatter(meta, new_body), encoding="utf-8")
+    atomic.write_text(p, dump_frontmatter(meta, new_body))
 
 
 def read_plotmap(root: Path) -> dict:
@@ -183,7 +183,7 @@ def plotmap_hash(root: Path) -> str | None:
 
 
 def _write_plotmap(root: Path, data: dict) -> None:
-    _plotmap_path(root).write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    atomic.write_text(_plotmap_path(root), json.dumps(data, indent=2, sort_keys=True) + "\n")
 
 
 def edges_of(plotmap: dict, gid: str) -> dict:

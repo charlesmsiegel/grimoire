@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import appearances, campaigns, characters, context, greetings, overlay, pcs, scenes
+from . import appearances, atomic, campaigns, characters, context, greetings, overlay, pcs, scenes
 
 
 class PlayError(Exception):
@@ -32,7 +32,7 @@ def read_marks(cid: str) -> dict[str, set[str]]:
 
 def _write_marks(cid: str, marks: dict[str, set[str]]) -> None:
     payload = {k: sorted(marks[k]) for k in _MARK_KEYS}
-    _marks_path(cid).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    atomic.write_text(_marks_path(cid), json.dumps(payload, indent=2) + "\n")
 
 
 def read_played(cid: str) -> set[str]:

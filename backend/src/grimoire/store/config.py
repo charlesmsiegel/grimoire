@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import ensure_home, home
+from . import atomic
 
 DEFAULT_MODEL = "anthropic/claude-opus-4.1"
 DEFAULT_THEME = "codex"
@@ -38,7 +39,7 @@ def read_config() -> dict[str, str]:
                 "default_style_id": "", "active_connection_id": "",
                 **{k: "" for k in _LENGTH_KEYS}}
     if not path.exists():
-        path.write_text(dump_frontmatter(defaults, ""), encoding="utf-8")
+        atomic.write_text(path, dump_frontmatter(defaults, ""))
         return defaults
     meta, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
     return {k: meta.get(k, default) for k, default in defaults.items()}
@@ -59,5 +60,5 @@ def write_config(**fields: str) -> dict[str, str]:
     for key, value in fields.items():
         if key in _CONFIG_KEYS and value is not None:
             raw[key] = value
-    path.write_text(dump_frontmatter(raw, ""), encoding="utf-8")
+    atomic.write_text(path, dump_frontmatter(raw, ""))
     return read_config()

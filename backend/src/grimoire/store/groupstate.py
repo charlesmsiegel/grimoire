@@ -12,6 +12,7 @@ from pathlib import Path
 
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import now_iso
+from . import atomic
 
 LABELS: dict[str, str] = {
     "goals": "Goals", "resources": "Resources", "focus": "Focus",
@@ -76,5 +77,4 @@ def read_state(root: Path, gid: str) -> dict | None:
 def write_state(root: Path, gid: str, body: str) -> None:
     p = state_path(root, gid)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(dump_frontmatter({"updated": now_iso()}, body.strip() + "\n"),
-                 encoding="utf-8")
+    atomic.write_text(p, dump_frontmatter({"updated": now_iso()}, body.strip() + "\n"))

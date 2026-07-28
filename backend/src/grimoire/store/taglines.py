@@ -12,6 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .. import prompts
+from . import atomic
 
 
 def tagline_path(root: Path, cid: str) -> Path:
@@ -26,7 +27,7 @@ def read(root: Path, cid: str) -> str:
 def write(root: Path, cid: str, text: str) -> None:
     p = tagline_path(root, cid)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(text.strip() + "\n", encoding="utf-8")
+    atomic.write_text(p, text.strip() + "\n")
 
 
 def build_prompt(card_data: dict) -> list[dict]:

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import slugify, uniquify
+from . import atomic
 
 
 class TagNotFound(Exception):
@@ -25,7 +26,7 @@ def read_tags(root: Path) -> dict[str, str]:
 
 
 def _write(root: Path, vocab: dict[str, str]) -> None:
-    _path(root).write_text(dump_frontmatter(vocab, ""), encoding="utf-8")
+    atomic.write_text(_path(root), dump_frontmatter(vocab, ""))
 
 
 def has_tag(root: Path, tag_id: str) -> bool:

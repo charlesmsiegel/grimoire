@@ -10,7 +10,7 @@ import difflib
 import json
 from pathlib import Path
 
-from . import campaigns
+from . import atomic, campaigns
 
 
 def line_diff(before: str, after: str) -> list[dict]:
@@ -54,7 +54,7 @@ def record(cid: str, sid: str, changes: dict[str, list[dict]]) -> None:
     data = read(cid)
     for ref, fields in changes.items():
         data[ref] = {"scene": sid, "fields": fields}
-    _path(cid).write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    atomic.write_text(_path(cid), json.dumps(data, indent=2, sort_keys=True) + "\n")
 
 
 def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
@@ -66,4 +66,4 @@ def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
             rec["scene"] = mapping[rec["scene"]]
             hit = True
     if hit:
-        _path(cid).write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        atomic.write_text(_path(cid), json.dumps(data, indent=2, sort_keys=True) + "\n")
