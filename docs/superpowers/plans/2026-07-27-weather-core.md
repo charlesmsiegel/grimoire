@@ -64,6 +64,8 @@ Plan 1 therefore implements only the **procedural** branch of `current_weather`.
 | --- | --- |
 | `backend/src/grimoire/store/entity_schema.py` | Add `locations` field descriptors |
 | `frontend/src/api/client.ts` | Mirror them in `ENTITY_FIELDS.locations` |
+| `backend/src/grimoire/routes.py` | `_check_fields` also runs per-field value validators |
+| `scripts/verify_templates.py` | Add `weather` to its StrictUndefined fixture |
 | `backend/src/grimoire/store/context.py` | `_weather_data()`, add to `_assemble` dict and `_SECTIONS` |
 | `templates/scene/system.j2` | Include `weather.j2` in the hard-coded chain |
 
@@ -1467,14 +1469,15 @@ def test_weight_fidelity_over_independent_zones(persistence):
     to the raw latent, so a broken normalization or copula mapping in the
     smoothing path would never be exercised.
 
-    N is 20,000 rather than the spec's 100,000 — the 3-sigma bound scales with
-    N, so the assertion stays sound, and 100k at persistence 0.9 costs ~6s per
-    value against ~1.2s here. The zone ids and campaign id follow the spec.
+    N, the zone ids and the campaign id are the spec's fixed fixture and must
+    not be reduced: the 3-sigma bound widens as N shrinks, so a smaller sample
+    lets a real copula or normalization bias pass. Measured cost for all three
+    persistences together is ~7s.
     """
     table = [{"name": "clear", "weight": 2}, {"name": "overcast", "weight": 5},
              {"name": "light rain", "weight": 4}, {"name": "storm", "weight": 1}]
     s = season(temperature=[{"name": "mild", "weight": 1}], conditions=table)
-    n = 20_000
+    n = 100_000
     counts = {e["name"]: 0 for e in table}
     for i in range(n):
         counts[draw("fidelity-check", f"fidelity-{i:05d}", s, persistence, 0)["condition"]] += 1
@@ -1805,6 +1808,42 @@ def test_locations_accept_weather_fields():
     assert entity_schema.invalid_keys(
         "locations", {"climate": "temperate-interior", "persistence": "0.3",
                       "weather_zone": "saltmarch"}) == []
+
+
+def test_valid_location_weather_values_pass(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    from grimoire.store import entity_schema
+    assert entity_schema.invalid_values(
+        "locations", {"climate": "temperate-interior", "persistence": "0.3",
+                      "weather_zone": "anything-goes"}) == []
+
+
+def test_unknown_climate_is_rejected_at_save(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    from grimoire.store import entity_schema
+    assert entity_schema.invalid_values(
+        "locations", {"climate": "temperate-costal"}) == ["climate"]
+
+
+def test_out_of_range_persistence_is_rejected_at_save(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    from grimoire.store import entity_schema
+    for bad in ("2", "-1", "NaN", "wet"):
+        assert entity_schema.invalid_values("locations", {"persistence": bad}) == ["persistence"], bad
+
+
+def test_empty_values_are_treated_as_clears_not_rejections(monkeypatch, tmp_path):
+    # EntityEditor sends "" for a field the user cleared or never set, and the
+    # store drops empties only after route validation.
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    from grimoire.store import entity_schema
+    assert entity_schema.invalid_values(
+        "locations", {"climate": "", "persistence": ""}) == []
+
+
+def test_other_kinds_are_unaffected():
+    from grimoire.store import entity_schema
+    assert entity_schema.invalid_values("items", {"item_type": "anything"}) == []
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -1812,7 +1851,14 @@ def test_locations_accept_weather_fields():
 Run: `backend/.venv/Scripts/python.exe -m pytest backend/tests/test_weather_settings.py backend/tests/test_entity_schema.py -q`
 Expected: FAIL — `ModuleNotFoundError` for `settings`, and `invalid_keys` returning all three field names.
 
-- [ ] **Step 3: Add the field descriptors**
+- [ ] **Step 3: Add the field descriptors and their value validators**
+
+Exposing these fields without validating their *values* would ship the silent
+failure the spec is most emphatic about: `routes._check_fields` calls only
+`entity_schema.invalid_keys`, which checks names, so `climate:
+"temperate-costal"` saves cleanly, the resolver falls back, and the user gets
+plausible weather from a climate they did not choose with nothing anywhere
+saying so. Leniency is right in the turn loop and wrong at the save boundary.
 
 In `backend/src/grimoire/store/entity_schema.py`, add a `locations` entry to `FIELDS` as the first key:
 
@@ -1824,6 +1870,60 @@ FIELDS: dict[str, tuple[dict[str, str], ...]] = {
         {"key": "weather_zone", "label": "Weather zone", "widget": "text"},
     ),
     "items": (
+```
+
+Then add value validation to the same module, below `invalid_keys`:
+
+```python
+def _valid_climate(value: str) -> bool:
+    from . import climates  # imported lazily: climates imports paths, not this
+    return climates.get(value) is not None
+
+
+def _valid_persistence(value: str) -> bool:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(parsed) and 0.0 <= parsed <= 1.0
+
+
+# Per-field value checks. Names are validated for every kind by invalid_keys;
+# only fields listed here have their contents checked as well.
+VALIDATORS: dict[str, dict[str, "Callable[[str], bool]"]] = {
+    "locations": {"climate": _valid_climate, "persistence": _valid_persistence},
+}
+
+
+def invalid_values(kind: str, fields: dict) -> list[str]:
+    """Field keys whose values fail their check.
+
+    An empty string is "clear this field", not a value: `EntityEditor` sends
+    `""` for a field the user never set, and `entities.update_entity` removes
+    empties — but only *after* route validation, so they must be skipped here
+    or every ordinary location save is rejected.
+    """
+    checks = VALIDATORS.get(kind, {})
+    bad = []
+    for key, value in (fields or {}).items():
+        if value is None or value == "":
+            continue
+        check = checks.get(key)
+        if check and not check(value):
+            bad.append(key)
+    return sorted(bad)
+```
+
+Add `import math` and `from typing import Callable` at the top of the module.
+
+In `backend/src/grimoire/routes.py`, extend `_check_fields` (line 1810) so it
+runs after the name check:
+
+```python
+    bad_values = store.entity_schema.invalid_values(kind, fields or {})
+    if bad_values:
+        raise HTTPException(status_code=400,
+                            detail=f"invalid values for {kind}: {', '.join(bad_values)}")
 ```
 
 In `frontend/src/api/client.ts`, replace `locations: [],` in `ENTITY_FIELDS`:
@@ -1930,7 +2030,7 @@ Expected: no errors
 
 ```bash
 git add backend/src/grimoire/store/weather/settings.py backend/src/grimoire/store/entity_schema.py \
-        frontend/src/api/client.ts backend/tests/test_weather_settings.py backend/tests/test_entity_schema.py
+        backend/src/grimoire/routes.py frontend/src/api/client.ts backend/tests/test_weather_settings.py backend/tests/test_entity_schema.py
 git commit -m "feat(weather): resolve per-location climate, zone and persistence"
 ```
 
@@ -2682,10 +2782,10 @@ Expected: FAIL — only `temperate-interior` is present
         { "name": "hot", "weight": 3 }
       ],
       "conditions": [
+        { "name": "clear", "weight": 1 },
         { "name": "overcast", "weight": 4 },
         { "name": "downpour", "weight": 7 },
-        { "name": "storm", "weight": 3 },
-        { "name": "clear", "weight": 1 }
+        { "name": "storm", "weight": 3 }
       ],
       "wind": [
         { "name": "still", "weight": 2 },
