@@ -415,3 +415,49 @@ def test_slim_keeps_diverged_actor_and_ref(monkeypatch, tmp_path):
     assert (croot / "characters" / aid / "character.md").exists()
     assert (croot / "characters" / aid / f"{vid}.json").exists()
     assert ref in campaigns.read_manifest(cid)
+
+
+def test_create_campaign_writes_the_default_climate(monkeypatch, tmp_path):
+    home(monkeypatch, tmp_path)
+    import json
+
+    from grimoire.store import climates
+    worlds.create_world("Realm")
+    cid = campaigns.create_campaign("Saltmarch Chronicle", "realm",
+                                    climate=climates.FALLBACK_ID)
+    written = json.loads((campaigns.campaign_root(cid) / "climate.json").read_text())
+    assert written == {"default_climate": climates.FALLBACK_ID}
+
+
+def test_create_campaign_defaults_the_climate_when_omitted(monkeypatch, tmp_path):
+    home(monkeypatch, tmp_path)
+    import json
+
+    from grimoire.store import climates
+    worlds.create_world("Realm")
+    cid = campaigns.create_campaign("Saltmarch Chronicle", "realm")
+    written = json.loads((campaigns.campaign_root(cid) / "climate.json").read_text())
+    assert written == {"default_climate": climates.FALLBACK_ID}
+
+
+def test_create_campaign_rejects_an_unknown_climate_before_creating_anything(monkeypatch, tmp_path):
+    home(monkeypatch, tmp_path)
+    from grimoire.store import climates
+    worlds.create_world("Realm")
+    # list_campaigns() returns dicts, so compare ids rather than the rows.
+    before = {c["id"] for c in campaigns.list_campaigns()}
+    with pytest.raises(climates.ClimateError):
+        campaigns.create_campaign("Saltmarch Chronicle", "realm", climate="no-such-climate")
+    assert {c["id"] for c in campaigns.list_campaigns()} == before
+
+
+def test_the_written_default_is_what_the_resolver_reads_back(monkeypatch, tmp_path):
+    # The file is only worth writing if settings.resolve honours it; this pins
+    # the two halves together rather than trusting the shape of the JSON.
+    home(monkeypatch, tmp_path)
+    from grimoire.store import climates
+    from grimoire.store.weather import settings
+    worlds.create_world("Realm")
+    cid = campaigns.create_campaign("Saltmarch Chronicle", "realm",
+                                    climate=climates.FALLBACK_ID)
+    assert settings.resolve(cid, None)["climate"]["id"] == climates.FALLBACK_ID
