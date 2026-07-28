@@ -411,7 +411,20 @@ current_weather(croot, cid, location_id, native) -> dict | None
 ```
 
 **It returns `None` when either input is missing**, and callers treat that as
-"no weather section." Both `scenes.get_location_history` and `get_time_history`
+"no weather section."
+
+**A location id that no longer resolves is not a missing input**, and must not
+raise. Deleting a location does not clean up the scene histories referencing
+it, so `get_location_history` keeps returning a perfectly non-empty id for an
+entity that is gone — the `None` guard never fires, and reading its `climate`
+field would raise `EntityNotFound` in the middle of `context._assemble`.
+`context.py:535-539` already wraps exactly this read in a `try/except` that
+omits the setting block, so weather raising where the setting degrades would
+make a deleted location break turn assembly for a scene that currently just
+loses one section. An unresolvable location therefore resolves its climate and
+persistence from the campaign default, and keeps the id as its weather zone —
+the id is still a stable seed whether or not an entity stands behind it, so
+the sky stays continuous rather than blanking. Both `scenes.get_location_history` and `get_time_history`
 document `Missing ⇒ []`, so a scene that has just been created legitimately has
 no location, no moment, or neither — and `context._assemble` runs while exactly
 such scenes are being opened and generated. Making only the Jinja section
@@ -846,7 +859,10 @@ implementation has to work for and which earlier drafts of this spec got wrong:
   positive weight has at least one eligible positive-weight condition, and
   **at runtime** fall back rather than raising. The fallback is the
   highest-weight **unconstrained** condition — the one every season is required
-  to declare (§ Climate documents) — ties broken by entry key. It must not be
+  to declare (§ Climate documents) — **ties broken by array position, earliest
+  first**. Not "by entry key": tables are arrays of objects and have no key, a
+  leftover from when they were name-keyed maps, and an implementation following
+  it literally would look for a field that does not exist. It must not be
   the highest-weight *unfiltered* entry: that reintroduces `requires_temp`
   violations by the back door, emitting snow at `mild` in exactly the case the
   guard exists to handle, and contradicting the invariant the constraint test
@@ -1563,15 +1579,26 @@ to invent the deferred feature in order to test it.)*
   through a finite-precision `Φ⁻¹`, so exact uniformity is unavailable in
   principle and asserting it would fail every conforming implementation.
 
-  **The protocol is fixed, not left to the implementer**: one climate, one
-  fixed campaign id and zone, `N = 100_000` consecutive block ordinals, and
-  each entry's observed frequency asserted within `3 · sqrt(p(1−p)/N)` of its
-  declared `p`. A stated tolerance with no number attached is not a testable
-  claim — it permits an arbitrarily permissive bound. Note the test is not
-  statistically flaky despite looking like a sampling test: generation is
-  deterministic, so the sample is fixed and the result is a stable pass or
-  fail. The `3σ` bound is a sanity margin against a genuinely wrong
-  distribution, not protection against random variation. The
+  **The protocol is fixed, not left to the implementer**: one climate,
+  `N = 100_000` samples, each entry's observed frequency asserted within
+  `3 · sqrt(p(1−p)/N)` of its declared `p`. A stated tolerance with no number
+  attached is not a testable claim — it permits an arbitrarily permissive
+  bound.
+
+  **The samples come from `N` distinct zone seeds at one ordinal, not from `N`
+  consecutive ordinals of one zone.** Consecutive blocks are autocorrelated by
+  construction — that is the entire point of `persistence` — so a run of
+  100,000 of them carries far less information than 100,000 independent draws,
+  and severely so near the `0.998` clamp. The binomial standard error would
+  understate the real spread and a conforming implementation would fail the
+  bound. Fixing the seed makes such a failure reproducible, not correct.
+  Sampling across independent streams tests the marginal distribution, which is
+  what weight fidelity is a claim about.
+
+  So bounded this way the test is not statistically flaky: generation is
+  deterministic, the sample set is fixed, and the result is a stable pass or
+  fail. The `3σ` margin guards against a genuinely wrong distribution rather
+  than against random variation. The
   unconstrained climate is required, not incidental: under `requires_temp` an
   entry is filtered out whenever its band is absent and the survivors are
   renormalized, so a conforming resolver's unconditional frequencies
@@ -1583,6 +1610,10 @@ to invent the deferred feature in order to test it.)*
 - One-season climate: `from == to` covers every day of the year.
 - Empty scene state: a scene with no location, no moment, or neither resolves
   to `None` and renders no section, without raising during `_assemble`.
+- Deleted-location state: a scene whose `location_history` still names a
+  deleted location resolves weather from the campaign default, keyed on that
+  id as its zone, and does not raise — matching how `context.py:535-539`
+  already degrades the setting block.
 - Season fractions: a climate resolves to the same season names under a 365-day
   and a 400-day calendar.
 - Constraints: no `snow` draw ever co-occurs with a temperature band outside its
