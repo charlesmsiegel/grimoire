@@ -1,0 +1,25 @@
+{
+  "id": "equatorial",
+  "name": "Equatorial",
+  "persistence": 0.45,
+  "seasons": [
+    {
+      "name": "all year", "from": 0.0, "to": 0.0,
+      "temperature": [
+        { "name": "warm", "weight": 6 },
+        { "name": "hot", "weight": 4 }
+      ],
+      "conditions": [
+        { "name": "clear", "weight": 3 },
+        { "name": "overcast", "weight": 4 },
+        { "name": "afternoon rain", "weight": 5 },
+        { "name": "storm", "weight": 2 }
+      ],
+      "wind": [
+        { "name": "still", "weight": 5 },
+        { "name": "breeze", "weight": 4 },
+        { "name": "strong", "weight": 1 }
+      ]
+    }
+  ]
+}

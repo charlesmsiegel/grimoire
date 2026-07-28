@@ -1,0 +1,43 @@
+{
+  "id": "boreal",
+  "name": "Boreal",
+  "persistence": 0.75,
+  "seasons": [
+    {
+      "name": "long winter", "from": 0.8, "to": 0.35,
+      "temperature": [
+        { "name": "bitter", "weight": 6 },
+        { "name": "freezing", "weight": 4 },
+        { "name": "cold", "weight": 1 }
+      ],
+      "conditions": [
+        { "name": "clear", "weight": 3 },
+        { "name": "overcast", "weight": 4 },
+        { "name": "snow", "weight": 5, "requires_temp": ["bitter", "freezing"] },
+        { "name": "blizzard", "weight": 1, "requires_temp": ["bitter"] }
+      ],
+      "wind": [
+        { "name": "still", "weight": 3 },
+        { "name": "breeze", "weight": 3 },
+        { "name": "cutting wind", "weight": 4 }
+      ]
+    },
+    {
+      "name": "brief summer", "from": 0.35, "to": 0.8,
+      "temperature": [
+        { "name": "cold", "weight": 5 },
+        { "name": "mild", "weight": 5 }
+      ],
+      "conditions": [
+        { "name": "clear", "weight": 4 },
+        { "name": "overcast", "weight": 4 },
+        { "name": "light rain", "weight": 3 }
+      ],
+      "wind": [
+        { "name": "still", "weight": 4 },
+        { "name": "breeze", "weight": 4 },
+        { "name": "cutting wind", "weight": 1 }
+      ]
+    }
+  ]
+}
