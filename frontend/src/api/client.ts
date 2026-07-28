@@ -299,8 +299,12 @@ export type SceneWeather = {
   season?: string;
   location: string | null;
   native: string | null;
-  /** The block ordinal, so the popover can count the blocks left in the day. */
+  /** The block ordinal. */
   ordinal?: number;
+  /** Blocks from here to the end of the displayed date. Server-computed: the
+   *  ordinal alone cannot distinguish 01:00 (the previous date's night, with a
+   *  whole day ahead) from an ordinary 22:00 night. */
+  blocks_left_today?: number;
   /** The active season's entries, per axis. Server-supplied: the client cannot
    *  derive them without reimplementing the climate fallback chain and the
    *  calendar's year-fraction arithmetic. */
@@ -311,6 +315,8 @@ export type WeatherOverrideBody = {
   location: string; start: string; end?: string | null;
   condition?: string; temperature?: string; wind?: string;
   note?: string; suppress?: string[]; clear?: boolean; blocks?: number | null;
+  /** Which moment `blocks` is counted from, when not `start`. */
+  blocks_from?: string;
 };
 
 export type WeatherRangeBody = {
@@ -807,6 +813,9 @@ export const api = {
   },
   setWeatherOverride: (cid: string, body: WeatherOverrideBody) =>
     request<WeatherSpan | { cleared: number }>("PUT", `/api/campaigns/${cid}/weather`, body),
+  replaceWeatherOverride: (cid: string, storageKey: string, spanId: string,
+                           body: WeatherOverrideBody) =>
+    request<WeatherSpan>("PUT", `/api/campaigns/${cid}/weather/${storageKey}/${spanId}`, body),
   deleteWeatherOverride: (cid: string, storageKey: string, spanId: string) =>
     request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}/weather/${storageKey}/${spanId}`),
   clearWeather: (cid: string, body: WeatherRangeBody) =>

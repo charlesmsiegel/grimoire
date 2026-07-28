@@ -440,3 +440,69 @@ def test_a_nonpositive_block_count_is_rejected(client):
     r = client.post(f"/api/campaigns/{cid}/weather/clear",
                     json={"location": lid, "start": "2026-06-14", "blocks": 0})
     assert r.status_code == 400
+
+
+def test_setting_and_suppressing_one_axis_is_rejected(client):
+    # Resolution checks suppression first, so this would report a successful
+    # authored value for an axis that stays procedural.
+    cid, sid, lid = scene(client)
+    r = client.put(f"/api/campaigns/{cid}/weather",
+                   json={"location": lid, "start": "2026-06-14",
+                         "condition": "rain", "suppress": ["condition"]})
+    assert r.status_code == 400 and "condition" in r.json()["detail"]
+
+
+def test_replacing_a_span_is_atomic_and_keeps_its_identity(client):
+    cid, sid, lid = scene(client)
+    made = client.put(f"/api/campaigns/{cid}/weather",
+                      json={"location": lid, "start": "2026-06-10",
+                            "condition": "storm", "note": "old"}).json()
+    r = client.put(f"/api/campaigns/{cid}/weather/{lid}/{made['id']}",
+                   json={"location": lid, "start": "2026-06-10",
+                         "condition": "storm", "note": "the Wintertide storm"})
+    assert r.status_code == 200
+    assert r.json()["id"] == made["id"] and r.json()["seq"] == made["seq"]
+    stack = client.get(f"/api/campaigns/{cid}/scenes/{sid}/weather").json()["stack"]
+    assert len(stack) == 1 and stack[0]["note"] == "the Wintertide storm"
+
+
+def test_a_failed_replace_leaves_the_original_standing(client):
+    # The delete-then-create pair would have destroyed it before failing.
+    cid, sid, lid = scene(client)
+    made = client.put(f"/api/campaigns/{cid}/weather",
+                      json={"location": lid, "start": "2026-06-10",
+                            "condition": "storm"}).json()
+    r = client.put(f"/api/campaigns/{cid}/weather/{lid}/{made['id']}",
+                   json={"location": lid, "start": "not-a-date", "condition": "storm"})
+    assert r.status_code == 400
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/weather"
+                      ).json()["weather"]["condition"] == "storm"
+
+
+def test_replace_counts_blocks_from_the_moment_being_viewed(client):
+    # A span that began days ago given "this block" here should end after this
+    # block, keeping what it already covered.
+    cid, sid, lid = scene(client)
+    made = client.put(f"/api/campaigns/{cid}/weather",
+                      json={"location": lid, "start": "2026-06-10",
+                            "condition": "storm"}).json()
+    client.put(f"/api/campaigns/{cid}/weather/{lid}/{made['id']}",
+               json={"location": lid, "start": "2026-06-10", "condition": "storm",
+                     "blocks": 1, "blocks_from": "2026-06-14T09:00"})
+    src = lambda t: client.get(f"/api/campaigns/{cid}/scenes/{sid}/weather",
+                               params={"native": t}).json()["source"]["condition"]
+    assert src("2026-06-12T09:00") == "manual"    # earlier coverage kept
+    assert src("2026-06-14T09:00") == "manual"
+    assert src("2026-06-14T13:00") == "procedural"
+
+
+def test_blocks_left_today_counts_a_post_midnight_moment_correctly(client):
+    # At 01:00 the block is the previous date's night, whose position is
+    # indistinguishable from an ordinary 22:00 night — the client cannot tell
+    # a whole day still lies ahead.
+    cid, sid, lid = scene(client)
+    at = lambda t: client.get(f"/api/campaigns/{cid}/scenes/{sid}/weather",
+                              params={"native": t}).json()["blocks_left_today"]
+    assert at("2026-06-14T09:00") == 4    # morning: afternoon, evening, night left
+    assert at("2026-06-14T22:00") == 1    # night: just itself
+    assert at("2026-06-15T01:00") == 6    # that same night, plus all of the 15th
