@@ -46,6 +46,9 @@ vi.mock("../api/client", async () => {
       absorbScene: vi.fn(), saveChronicle: vi.fn(), getChronicle: vi.fn(), retryAudit: vi.fn(),
       // consumed by the embedded SceneInspector
       getCast: vi.fn(), getSceneLocation: vi.fn(), getSceneContext: vi.fn(),
+      // Resolves to "no weather" so the widget renders nothing: these suites
+      // assert on the rest of the inspector, not the sky.
+      getSceneWeather: vi.fn(() => Promise.resolve({ weather: null, location: null, native: null })),
       getCastDetail: vi.fn(), readEntity: vi.fn(),
       addToCast: vi.fn(), removeFromCast: vi.fn(),
       getCalendarConfig: vi.fn(), setCalendarConfig: vi.fn(), getCalendarProviders: vi.fn(),

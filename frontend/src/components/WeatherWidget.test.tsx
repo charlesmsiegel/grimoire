@@ -1,0 +1,174 @@
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { WeatherWidget } from "./WeatherWidget";
+import { api } from "../api/client";
+
+vi.mock("../api/client", async () => {
+  const actual = await vi.importActual<typeof import("../api/client")>("../api/client");
+  return { ...actual, api: {
+    getSceneWeather: vi.fn(),
+    setWeatherOverride: vi.fn(),
+    clearWeather: vi.fn(),
+    resumeWeather: vi.fn(),
+    deleteWeatherOverride: vi.fn(),
+  } };
+});
+
+const BASE = {
+  weather: { condition: "overcast", temperature: "cold", wind: "breeze" },
+  source: { condition: "procedural", temperature: "procedural", wind: "procedural" },
+  procedural: { condition: "overcast", temperature: "cold", wind: "breeze" },
+  stack: [],
+  climate: "temperate-interior",
+  season: "winter",
+  location: "saltmarch-docks",
+  native: "2026-06-14T09:00",
+  tables: {
+    condition: ["clear", "overcast", "light rain"],
+    temperature: ["freezing", "cold", "mild"],
+    wind: ["calm", "breeze", "gale"],
+  },
+};
+
+beforeEach(() => {
+  // Call history is not auto-cleared here, and two of these tests assert on
+  // "was not called" / "the first call" — both of which read a previous test's
+  // calls without this.
+  vi.clearAllMocks();
+  vi.mocked(api.getSceneWeather).mockResolvedValue(BASE as never);
+  vi.mocked(api.setWeatherOverride).mockResolvedValue({ id: "ovr-1" } as never);
+  vi.mocked(api.clearWeather).mockResolvedValue({ cleared: 1 });
+  vi.mocked(api.resumeWeather).mockResolvedValue({ resumed: 1 });
+});
+
+test("reads as one line of the three axes", async () => {
+  render(<WeatherWidget cid="c" sid="s" />);
+  expect(await screen.findByText(/overcast, cold, wind breeze/)).toBeInTheDocument();
+});
+
+test("renders nothing when there is no location or moment", async () => {
+  // Matches how the neighbouring When and Location widgets degrade — no
+  // placeholder, no error.
+  vi.mocked(api.getSceneWeather).mockResolvedValue(
+    { weather: null, location: null, native: null } as never);
+  const { container } = render(<WeatherWidget cid="c" sid="s" />);
+  await waitFor(() => expect(container).toBeEmptyDOMElement());
+});
+
+test("marks an authored axis and shows its note on hover", async () => {
+  vi.mocked(api.getSceneWeather).mockResolvedValue({
+    ...BASE,
+    weather: { ...BASE.weather, condition: "blizzard" },
+    source: { ...BASE.source, condition: "manual" },
+    stack: [{ id: "ovr-1", location: "saltmarch-docks", from: "2026-06-14", to: null,
+              condition: "blizzard", note: "the Wintertide storm" }],
+  } as never);
+  render(<WeatherWidget cid="c" sid="s" />);
+  const chip = await screen.findByTitle("the Wintertide storm");
+  expect(chip).toHaveTextContent("Condition set");
+});
+
+test("the popover offers the active season's entries per axis", async () => {
+  render(<WeatherWidget cid="c" sid="s" />);
+  fireEvent.click(await screen.findByRole("button", { name: /Weather/ }));
+  const select = await screen.findByLabelText("Condition");
+  expect([...select.querySelectorAll("option")].map((o) => o.textContent))
+    .toEqual(["leave to chance", "clear", "overcast", "light rain"]);
+});
+
+test("an authored value off the table is still offered, marked as authored", async () => {
+  // Overrides are deliberately not confined to the table, and the extractor
+  // writes whatever the narration invented. Without this the select shows
+  // blank and saving another axis quietly discards this one.
+  vi.mocked(api.getSceneWeather).mockResolvedValue({
+    ...BASE,
+    weather: { ...BASE.weather, condition: "blizzard" },
+    source: { ...BASE.source, condition: "manual" },
+    stack: [{ id: "ovr-1", location: "saltmarch-docks", from: "2026-06-14",
+              to: null, condition: "blizzard" }],
+  } as never);
+  render(<WeatherWidget cid="c" sid="s" />);
+  fireEvent.click(await screen.findByRole("button", { name: /Weather/ }));
+  const select = await screen.findByLabelText("Condition");
+  expect([...select.querySelectorAll("option")].map((o) => o.textContent))
+    .toContain("blizzard (authored)");
+  expect(select).toHaveValue("blizzard");
+});
+
+test("saving an axis writes an override for the chosen duration", async () => {
+  render(<WeatherWidget cid="c" sid="s" />);
+  fireEvent.click(await screen.findByRole("button", { name: /Weather/ }));
+  fireEvent.change(await screen.findByLabelText("Condition"), { target: { value: "light rain" } });
+  fireEvent.change(screen.getByLabelText("For"), { target: { value: "1" } });
+  fireEvent.change(screen.getByLabelText("Note"), { target: { value: "the squall" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.setWeatherOverride).toHaveBeenCalledWith("c",
+    expect.objectContaining({ location: "saltmarch-docks", start: "2026-06-14T09:00",
+                              blocks: 5, condition: "light rain", note: "the squall" })));
+});
+
+test("leave to chance clears that axis rather than omitting it", async () => {
+  // A user selecting it on an overridden axis means "stop overriding this";
+  // omitting would let the setting appear to do nothing.
+  vi.mocked(api.getSceneWeather).mockResolvedValue({
+    ...BASE,
+    weather: { ...BASE.weather, condition: "blizzard" },
+    source: { ...BASE.source, condition: "manual" },
+    stack: [{ id: "ovr-1", location: "saltmarch-docks", from: "2026-06-14",
+              to: null, condition: "blizzard" }],
+  } as never);
+  render(<WeatherWidget cid="c" sid="s" />);
+  fireEvent.click(await screen.findByRole("button", { name: /Weather/ }));
+  fireEvent.change(await screen.findByLabelText("Condition"), { target: { value: "__chance__" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.clearWeather).toHaveBeenCalledWith("c",
+    expect.objectContaining({ axes: ["condition"], blocks: 1 })));
+  expect(api.setWeatherOverride).not.toHaveBeenCalled();
+});
+
+test("Clear override appears only when something is authored", async () => {
+  render(<WeatherWidget cid="c" sid="s" />);
+  fireEvent.click(await screen.findByRole("button", { name: /Weather/ }));
+  expect(screen.queryByRole("button", { name: "Clear override" })).not.toBeInTheDocument();
+});
+
+test("Clear override clears all three axes through the same operation", async () => {
+  // Deleting only the winners would promote a shadowed span, so the sky would
+  // change rather than return to generated.
+  vi.mocked(api.getSceneWeather).mockResolvedValue({
+    ...BASE, source: { ...BASE.source, condition: "manual" },
+    stack: [{ id: "ovr-1", location: "saltmarch-docks", from: "2026-06-14",
+              to: null, condition: "blizzard" }],
+  } as never);
+  render(<WeatherWidget cid="c" sid="s" />);
+  fireEvent.click(await screen.findByRole("button", { name: /Weather/ }));
+  fireEvent.click(await screen.findByRole("button", { name: "Clear override" }));
+  await waitFor(() => expect(api.clearWeather).toHaveBeenCalledWith("c",
+    expect.objectContaining({ location: "saltmarch-docks", blocks: 1 })));
+  expect(vi.mocked(api.clearWeather).mock.calls[0][1].axes).toBeUndefined();
+});
+
+test("a suppressed axis offers Resume inheriting", async () => {
+  // Without it the clear is a one-way door: the axis looks generated, so
+  // Clear override does not appear, and setting a value only writes another
+  // local exception rather than restoring the campaign-wide one.
+  vi.mocked(api.getSceneWeather).mockResolvedValue({
+    ...BASE,
+    stack: [{ id: "ovr-1", location: "saltmarch-docks", from: "2026-06-14",
+              to: null, suppress: ["condition"] }],
+  } as never);
+  render(<WeatherWidget cid="c" sid="s" />);
+  fireEvent.click(await screen.findByRole("button", { name: /Weather/ }));
+  fireEvent.click(await screen.findByRole("button", { name: "Resume inheriting" }));
+  await waitFor(() => expect(api.resumeWeather).toHaveBeenCalledWith("c",
+    expect.objectContaining({ axes: ["condition"] })));
+});
+
+test("a save failure surfaces the reason and keeps the popover open", async () => {
+  vi.mocked(api.setWeatherOverride).mockRejectedValue({ detail: "unparseable moment" });
+  render(<WeatherWidget cid="c" sid="s" />);
+  fireEvent.click(await screen.findByRole("button", { name: /Weather/ }));
+  fireEvent.change(await screen.findByLabelText("Condition"), { target: { value: "clear" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  expect(await screen.findByText("unparseable moment")).toBeInTheDocument();
+  expect(screen.getByRole("dialog")).toBeInTheDocument();
+});

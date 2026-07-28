@@ -308,7 +308,14 @@ export type SceneWeather = {
 export type WeatherOverrideBody = {
   location: string; start: string; end?: string | null;
   condition?: string; temperature?: string; wind?: string;
-  note?: string; suppress?: string[]; clear?: boolean;
+  note?: string; suppress?: string[]; clear?: boolean; blocks?: number | null;
+};
+
+export type WeatherRangeBody = {
+  location: string; start: string; end?: string | null; axes?: WeatherAxis[];
+  /** A block count instead of an `end`. Server-side so the client never has to
+   *  reimplement the calendar's month lengths. */
+  blocks?: number | null;
 };
 
 export type ClimateSummary = { id: string; name: string; builtin: boolean; custom: boolean };
@@ -798,8 +805,12 @@ export const api = {
   },
   setWeatherOverride: (cid: string, body: WeatherOverrideBody) =>
     request<WeatherSpan | { cleared: number }>("PUT", `/api/campaigns/${cid}/weather`, body),
-  deleteWeatherOverride: (cid: string, spanId: string) =>
-    request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}/weather/${spanId}`),
+  deleteWeatherOverride: (cid: string, storageKey: string, spanId: string) =>
+    request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}/weather/${storageKey}/${spanId}`),
+  clearWeather: (cid: string, body: WeatherRangeBody) =>
+    request<{ cleared: number }>("POST", `/api/campaigns/${cid}/weather/clear`, body),
+  resumeWeather: (cid: string, body: WeatherRangeBody) =>
+    request<{ resumed: number }>("POST", `/api/campaigns/${cid}/weather/resume`, body),
   listClimates: () => request<{ climates: ClimateSummary[] }>("GET", "/api/climates"),
   readClimate: (id: string) =>
     request<{ climate: Climate; builtin: boolean; custom: boolean }>("GET", `/api/climates/${id}`),
