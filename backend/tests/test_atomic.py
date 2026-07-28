@@ -115,10 +115,14 @@ def test_the_target_keeps_its_mode(tmp_path):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="mode bits are vestigial on Windows")
-def test_a_new_record_is_not_created_owner_only(tmp_path):
+def test_a_new_record_gets_the_umask_default_not_0600(tmp_path):
+    """Asserting the read bits directly would be wrong: under a legitimate
+    umask of 0o077 the correct answer IS 0600. Compare against what the umask
+    actually implies, so the test rejects mkstemp's 0600 without also
+    rejecting a strict-umask environment."""
     p = tmp_path / "fresh.md"
     atomic.write_text(p, "new")
-    assert stat.S_IMODE(os.stat(p).st_mode) & 0o044, "new record is not readable"
+    assert stat.S_IMODE(os.stat(p).st_mode) == 0o666 & ~atomic._UMASK
 
 
 def test_the_mode_carried_over_is_the_targets(tmp_path, monkeypatch):
@@ -145,7 +149,7 @@ def test_a_new_record_does_not_inherit_the_0600_temp_mode(tmp_path, monkeypatch)
 
     atomic.write_text(tmp_path / "fresh.md", "new")
 
-    assert chmodded and chmodded[0] & 0o044, f"created owner-only: {chmodded!r}"
+    assert chmodded == [0o666 & ~atomic._UMASK], f"not the umask default: {chmodded!r}"
 
 
 def test_transient_sharing_violation_is_retried(tmp_path, monkeypatch):
@@ -192,18 +196,47 @@ def test_permanent_permission_error_is_not_retried(tmp_path, monkeypatch):
     assert p.read_text(encoding="utf-8") == PRIOR
 
 
-def test_data_is_flushed_before_the_replace(tmp_path, monkeypatch):
-    """The fsync is what makes the new bytes complete if the rename lands.
-    Asserting the order catches a refactor that moves the replace earlier."""
+def test_the_full_publish_order_holds(tmp_path, monkeypatch):
+    """write -> fsync -> close -> chmod -> replace. Asserting only
+    fsync-before-replace (as this first did) would miss a refactor that
+    published while the flushed handle was still open, or that chmod'd after
+    the file was already visible under its real name."""
     order = []
-    real_fsync, real_replace = atomic.os.fsync, atomic.os.replace
+    real = {n: getattr(atomic.os, n) for n in ("fsync", "close", "chmod", "replace")}
 
-    monkeypatch.setattr(atomic.os, "fsync", lambda fd: (order.append("fsync"), real_fsync(fd))[1])
-    monkeypatch.setattr(atomic.os, "replace",
-                        lambda s, d: (order.append("replace"), real_replace(s, d))[1])
+    def trace(name):
+        def wrapper(*a, **kw):
+            order.append(name)
+            return real[name](*a, **kw)
+        return wrapper
+
+    for n in real:
+        monkeypatch.setattr(atomic.os, n, trace(n))
     atomic.write_text(tmp_path / "rec.md", "body")
 
-    assert order == ["fsync", "replace"]
+    # os.close also fires for the mkstemp descriptor before any write happens,
+    # so assert on the tail: the flush, its close, the mode, then publication.
+    assert order[-4:] == ["fsync", "close", "chmod", "replace"], order
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="creating symlinks on Windows needs elevation")
+def test_a_symlinked_record_is_replaced_not_written_through(tmp_path):
+    """Documents a real semantic change rather than pretending to prevent it:
+    Path.write_text follows a leaf symlink and writes to its target, while
+    os.replace swaps the link itself. Nothing in grimoire creates linked
+    records, but if that ever changes, this test says what happens."""
+    target = tmp_path / "real.md"
+    target.write_text("original\n", encoding="utf-8")
+    link = tmp_path / "link.md"
+    link.symlink_to(target)
+
+    atomic.write_text(link, "new content\n")
+
+    assert not link.is_symlink(), "the symlink survived; behavior changed"
+    assert link.read_text(encoding="utf-8") == "new content\n"
+    assert target.read_text(encoding="utf-8") == "original\n", \
+        "the link's target was written through, which is the OLD behavior"
 
 
 def test_concurrent_readers_never_see_a_partial_record(tmp_path):
@@ -220,3 +253,21 @@ def test_concurrent_readers_never_see_a_partial_record(tmp_path):
     observed.append(p.read_text(encoding="utf-8"))      # after publish
 
     assert observed == [PRIOR, new]
+
+
+def test_reading_the_umask_does_not_race_other_threads(tmp_path):
+    """There is no getter for the umask -- you set it to read it -- so doing
+    that per-write would briefly expose a 0 umask to every other thread
+    creating a file. It must be sampled once, at import."""
+    import inspect
+
+    src = inspect.getsource(atomic._carry_mode)
+    assert "os.umask" not in src, "umask is being read inside a write call"
+    assert isinstance(atomic._UMASK, int)
+
+    before = os.umask(0o022)
+    os.umask(before)
+    atomic.write_text(tmp_path / "rec.md", "body")
+    after = os.umask(0o022)
+    os.umask(after)
+    assert before == after, "a write mutated the process umask"
