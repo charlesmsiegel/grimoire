@@ -68,7 +68,7 @@ def capture_baseline(cid: str, sid: str) -> None:
     """Snapshot every campaign sheet at scene creation. Never raises -- a
     capture failure must not fail scene creation."""
     try:
-        with locks.campaign_lock(cid):          # consistent multi-file snapshot
+        with locks.campaign_lock(cid):     # consistent multi-file snapshot
             # resolve INSIDE the lock: rebinds publish under this same lock
             # (see sheets.write), so a concurrent rebind can't interleave
             # between resolving the module and snapshotting sheets under it.
