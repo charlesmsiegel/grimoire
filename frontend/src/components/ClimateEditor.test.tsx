@@ -9,6 +9,7 @@ vi.mock("../api/client", async () => {
     readClimate: vi.fn(),
     saveClimate: vi.fn(),
     deleteClimate: vi.fn(),
+    climateReferrers: vi.fn(),
   } };
 });
 
@@ -34,6 +35,7 @@ beforeEach(() => {
     { climate: CLIMATE, builtin: true, custom: false });
   vi.mocked(api.saveClimate).mockResolvedValue({ climate: CLIMATE });
   vi.mocked(api.deleteClimate).mockResolvedValue({ ok: true, reverted_to_preset: true });
+  vi.mocked(api.climateReferrers).mockResolvedValue({ campaigns: [], locations: [] });
 });
 
 test("lists every climate in the rail", async () => {
@@ -164,4 +166,24 @@ test("a new climate cannot silently overwrite an existing custom id", async () =
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   expect(await screen.findByText(/already exists/)).toBeInTheDocument();
   expect(api.saveClimate).not.toHaveBeenCalled();
+});
+
+test("deleting a standalone climate discloses the campaigns defaulting to it", async () => {
+  // A campaign default is the widest effect and the one a locations-only
+  // warning never mentions: every untagged location there falls back.
+  vi.mocked(api.readClimate).mockResolvedValue(
+    { climate: { ...CLIMATE, id: "saltmarch-fens", name: "Fens" }, builtin: false, custom: true });
+  vi.mocked(api.climateReferrers).mockResolvedValue({
+    campaigns: [{ id: "saltmarch-chronicle", name: "Saltmarch Chronicle" }],
+    locations: [{ campaign: "saltmarch-chronicle", id: "docks", name: "Saltmarch Docks" }] });
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  render(<ClimateEditor />);
+  fireEvent.click(await screen.findByText("Fens"));
+  fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+  await waitFor(() => expect(confirm).toHaveBeenCalled());
+  const message = confirm.mock.calls[0][0] as string;
+  expect(message).toContain("Saltmarch Chronicle");
+  expect(message).toContain("Saltmarch Docks");
+  expect(api.deleteClimate).not.toHaveBeenCalled();  // declined
+  confirm.mockRestore();
 });

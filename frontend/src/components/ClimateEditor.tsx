@@ -75,9 +75,28 @@ export function ClimateEditor() {
   async function revertOrDelete() {
     if (!id || !flags.custom) return;
     const reverting = flags.builtin;
-    const ok = window.confirm(reverting
+    let message = reverting
       ? `Discard your changes to '${form.name}' and go back to the shipped preset?`
-      : `Delete climate '${form.name}'? Locations using it fall back to the campaign default.`);
+      : `Delete climate '${form.name}'?`;
+    if (!reverting) {
+      // Deleting a custom-only climate used as a *campaign default* silently
+      // moves every untagged location in that campaign to the fallback — the
+      // widest effect, and the one a locations-only warning never mentions.
+      const refs = await api.climateReferrers(id).catch(() => null);
+      const campaigns = refs?.campaigns ?? [];
+      const locations = refs?.locations ?? [];
+      if (campaigns.length) {
+        message += `\n\nIt is the default climate for: ${campaigns.map((c) => c.name).join(", ")}.`
+          + " Every location there that doesn't name its own climate falls back.";
+      }
+      if (locations.length) {
+        message += `\n\n${locations.length} location(s) name it directly: `
+          + `${locations.slice(0, 5).map((l) => l.name).join(", ")}`
+          + `${locations.length > 5 ? ", …" : ""}.`;
+      }
+      if (!campaigns.length && !locations.length) message += " Nothing is using it.";
+    }
+    const ok = window.confirm(message);
     if (!ok) return;
     const got = await api.deleteClimate(id);
     await reload();
