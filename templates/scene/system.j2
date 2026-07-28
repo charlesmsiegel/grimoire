@@ -65,6 +65,9 @@
 {%- set s -%}{%- include "scene/sections/today.j2" -%}{%- endset -%}
 {%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
 
+{%- set s -%}{%- include "scene/sections/weather.j2" -%}{%- endset -%}
+{%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
+
 {%- set s -%}{%- include "scene/sections/current_setting.j2" -%}{%- endset -%}
 {%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
 
