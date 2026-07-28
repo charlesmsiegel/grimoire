@@ -114,8 +114,15 @@ processes on one synced store.
 first atomic write would silently narrow every previously group/world-readable
 record to owner-only — a real regression on Linux, macOS, and the Android build.
 So: `os.chmod(tmp, stat.S_IMODE(os.stat(path).st_mode))` when the target exists,
-otherwise the process umask default (`0o666 & ~umask`). This is a no-op on
-Windows, where the mode bits are vestigial.
+otherwise the process umask default (`0o666 & ~umask`). The chmod happens
+*before* the replace, so the file is never briefly visible under its real name
+with the temp's `0600`. This is a no-op on Windows, where the mode bits are
+vestigial.
+
+The umask must be sampled **once at import**, not per write: there is no getter
+— you set it to read it — so doing that inside a request thread would briefly
+expose a `0` umask to every other thread creating a file, making their files
+world-writable. (Found by the implementation-stage review.)
 
 What is *not* preserved, and is accepted: on Windows the surviving file is the
 temp, so a target's explicit (non-inherited) DACL, alternate data streams, and
@@ -215,7 +222,17 @@ store from CRLF to LF on its next save, churning a synced folder for nothing.
   and the sort hands back the stale `.png`. So `image_path` also gains a
   newest-`st_mtime` tie-break, which makes the transient two-extension state
   resolve to the correct image and makes a failed sibling-unlink self-healing
-  instead of permanently wrong.
+  instead of permanently wrong. The tie-break tolerates a sibling vanishing
+  between the glob and the stat — the cleanup below is exactly such a deleter,
+  and the old `sorted(...)[0]` never stat'd, so raising there would be a
+  regression rather than a new check.
+
+  The cleanup must snapshot its siblings **before** writing and delete only
+  those. Globbing afterwards instead lets two concurrent `put_image` calls
+  delete each other's brand-new file — A writes `.jpg`, B writes `.png`, each
+  cleanup removes the other's — leaving no image at all, which is strictly
+  worse than the delete-first ordering being replaced. (Found by the
+  implementation-stage review.)
 - **`sheets.seed` (`sheets.py:547`) — `shutil.copy2` into the live campaign
   sheets directory.** Routed through the helper, so a partial copy can never
   appear under a real sheet name.
