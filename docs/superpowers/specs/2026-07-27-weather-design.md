@@ -254,13 +254,24 @@ random *stream*.
 
 A shared stream is only a shared *sky* when the zone's members also agree on
 climate and persistence — the same random values mapped through different
-weighted tables, or advanced at different carry-forward rates, produce different
-weather. Since locations may independently set both, the guarantee is stated
-precisely: **members of a zone that agree on climate and persistence get
-identical weather; members that disagree get correlated weather.** Disagreement
-is reported as a validation warning, not an error, because correlated-but-not-
-identical is sometimes exactly right — a sheltered valley and the exposed peak
-above it should share a front and not a temperature.
+weighted tables produce different weather. Since locations may independently set
+both, the guarantee is stated precisely, and at the level it actually holds:
+
+- Members agreeing on climate and persistence get **identical weather**.
+- Members that disagree share a **correlated latent field** — the same `z`,
+  differently filtered. Their *rendered* weather is correlated only to the
+  extent their tables are comparably ordered.
+
+The second clause has to be about the latent rather than the sky, because
+nothing forces two climates' tables to be commensurable: one member may use a
+single-entry table, whose output is constant and therefore uncorrelated with
+anything, and two tables with reversed entry order map the same quantile to
+opposite conditions. Promising correlated *weather* would be promising something
+the data model permits authors to break.
+
+Disagreement is a validation warning, not an error, because
+correlated-but-not-identical is sometimes exactly right — a sheltered valley and
+the exposed peak above it should share a front and not a temperature.
 
 The guarantee is also **procedural-scope only**. Overrides are keyed by location
 id and applied after the shared stream, so a manual or extractor override on one
@@ -411,9 +422,15 @@ rank-equal matches, and array order must not be the tiebreak. Within a rank,
 for each axis independently:
 
 1. **Specificity**: a span keyed by this location beats one keyed by `_default`.
-2. **Recency**: among equally specific spans, the newest `set_at` wins.
-   `set_at` is a **wall-clock write timestamp** (`now_iso()`), deliberately not
-   an in-game moment. Since `set_datetime` permits moving a scene backward in
+2. **Recency**: among equally specific spans, the newest wins — ordered by a
+   **monotonic per-storage-key `seq`**, not by `set_at`. `set_at` is a
+   wall-clock write timestamp, deliberately not an in-game moment, but
+   `now_iso()` formats only to whole seconds (`paths.py:104`), so two spans
+   written in the same second tie and fall through to the id backstop — which
+   can hand the argument to the *earlier* instruction. A GM adjusting an
+   override twice in quick succession is exactly when recency matters most.
+   `seq` increments on every write to that storage key and is what precedence
+   compares; `set_at` is retained for display and provenance. Since `set_datetime` permits moving a scene backward in
    time, an in-world stamp would let a freshly authored override lose to one
    written weeks ago, and the GM's most recent instruction is what should win.
    It is the only field in the record on the real-world clock; `from` and `to`
@@ -542,45 +559,23 @@ pinned down exactly:
      so `n = 2⁵³ − 1` rounds to exactly `1.0` — outside AS241's domain — while
      `2⁵³ − 2` and `2⁵³ − 3` both round to `0.9999999999999998`. Dropping one
      bit is what makes the midpoint exact rather than approximately exact.
-   - **Normal**: `z = Φ⁻¹(u)` by **Wichura's AS241, vendored** — Applied
-     Statistics 37(3), 1988, algorithm `PPND16`, using its published
-     double-precision coefficient sets for the three branches (`|q| <= 0.425`,
-     the intermediate tail, and `r > 5`), evaluated by Horner in the order the
-     paper prints them.
+   - **Normal**: `z = Φ⁻¹(u)` via **`statistics.NormalDist().inv_cdf`**, which
+     is Wichura's AS241 (`statistics.py:1092` cites it).
 
-   - **Forward**: `Φ(g) = 0.5 · erfc(−g / √2)`, with **`erfc` vendored** as
-     **W. J. Cody's rational Chebyshev approximation** — Math. Comp. 22 (1969),
-     as implemented in `CALERF`/ACM Algorithm 715 — using its published
-     coefficient arrays for the three branches (`|x| <= 0.46875`,
-     `0.46875 < |x| <= 4`, `|x| > 4`) and the paper's evaluation order. Not
-     `math.erfc`, and not "some rational approximation": naming only the shape
-     would leave coefficients, branch thresholds and Horner order open, which
-     is the same gap as naming no algorithm at all.
+   - **Forward**: `Φ(g)` via **`statistics.NormalDist().cdf`**.
 
-   The forward transform has to be vendored, and the earlier argument for
-   leaving it to the stdlib was wrong. `math.erf`/`math.erfc` defer to platform
-   libm on most builds, and two environments during review returned
-   `0.04808979266518426` and `0.04808979266518429` for the same input — a real
-   divergence, not a hypothetical one. The reasoning that followed ("an ulp
-   cannot cross a bucket boundary") holds only for the worked example's table,
-   whose boundaries sit at 0.111, 0.556 and 0.889. A private climate may
-   legally place a cumulative boundary *between* those two values, and then the
-   same campaign and block draws different weather on different builds.
-   Quantizing the quantile would shrink that window rather than close it. Only
-   a deterministic `erfc` closes it.
+   Both come from `statistics`, which is where the installation-scoped
+   determinism decision lands (§ Determinism scope). Worth knowing what is
+   given up: `NormalDist.cdf` goes through `math.erf`, which defers to platform
+   libm, and two environments during review returned `0.04808979266518426` and
+   `0.04808979266518429` for the same input. Within one installation that value
+   does not move; across a libm change it can, and if a climate's cumulative
+   boundary sits between two such values, one block's draw changes with it.
 
-   **Both** transforms are vendored, and exempting `Φ⁻¹` was an inconsistency
-   rather than a saving. `statistics.NormalDist().inv_cdf` does document AS241
-   in CPython 3.11's `statistics.py`, but it delegates to the
-   `_statistics._normal_dist_inv_cdf` C accelerator where available and by 3.14
-   does so unconditionally — and the *public* API guarantees neither AS241 nor
-   bit-stability across this repository's open-ended `Python >=3.11`. A runtime
-   upgrade could then move `z`, `g`, and a boundary draw while every
-   implementation still followed this document. That is the same failure mode
-   vendoring `erfc` exists to prevent, so it gets the same treatment.
-
-   Two vendored functions, both pure Python, both inside the Android
-   base-dependency constraint in `CLAUDE.md`.
+   **Determinism is scoped to an installation** — see § Determinism scope for
+   the decision and how to reverse it. Within one, weather is stable across
+   processes, restarts, and upgrades of grimoire itself, which is the property
+   play actually depends on.
 
    What enforces that scoped guarantee is **reference vectors**, which the spec
    now carries rather than merely promising:
@@ -599,58 +594,51 @@ pinned down exactly:
 
    | persistence | W | taps | g(0) | Φ(g) | drawn |
    | --- | --- | --- | --- | --- | --- |
-   | 0.0 | 0 | 1 | *(to pin)* | *(to pin)* | breeze |
-   | 0.5 | 6 | 7 | *(to pin)* | *(to pin)* | calm |
-   | 0.9 | 38 | 39 | *(to pin)* | *(to pin)* | breeze |
+   | 0.0 | 0 | 1 | *(fixture)* | *(fixture)* | breeze |
+   | 0.5 | 6 | 7 | *(fixture)* | *(fixture)* | calm |
+   | 0.9 | 38 | 39 | *(fixture)* | *(fixture)* | breeze |
 
-   `u` is final: BLAKE2b is bit-stable by specification and the midpoint map is
-   plain arithmetic. The `z`, `g` and `Φ(g)` columns have been **removed rather
-   than left provisional** — they were computed through the stdlib transforms
-   this spec now rejects, and a table of numbers that look normative but are
-   not is worse than an absent one.
+   `u` is final: BLAKE2b is bit-stable by specification and the mapping is
+   exact arithmetic. The `z`, `g` and `Φ(g)` columns are filled in during
+   implementation and committed as a **regression fixture** — generated once
+   from the implementation, reviewed for plausibility, and asserted thereafter.
 
-   **Completing the table is an implementation-time task with a rule attached:
-   the vectors must be validated against an independent high-precision
-   computation — `mpmath` at 50 digits — and not merely read out of the vendored
-   code.** Otherwise the first implementation defines its own expected output
-   and the conformance test degenerates into asserting that the code does what
-   the code does. Pin the validated values here, then enable the test.
+   That is the right shape of test for installation-scoped determinism: it
+   catches an accidental change to the algorithm, the seeding, or the
+   evaluation order, which is what would silently move a user's weather. It
+   does not attempt cross-implementation conformance, which this spec no longer
+   promises (§ Determinism scope). The fixture should carry a comment saying
+   so, since a bare table of magic numbers invites someone to "fix" it later.
 
-   The drawn entries in the end-to-end table are stable regardless — its
-   boundaries sit at 0.111, 0.556 and 0.889, far from any last-digit dispute —
-   so those can be asserted before the numeric columns are filled in.
+#### Determinism scope
 
-#### What bit-identity across machines costs
+**Decided: determinism is scoped to an installation.** The same campaign, block
+and climate yield the same weather across processes, restarts, and grimoire
+upgrades on a given machine. They are *not* guaranteed to match on a different
+machine or a different Python.
 
-Everything in the preceding subsection serves one goal: the same campaign, block
-and climate yield the same weather on **any machine and any supported Python**,
-not merely on one installation. That is a stronger promise than the design
-originally set out to make, and it was arrived at one reasonable finding at a
-time rather than chosen. Its price, gathered in one place so it can be judged as
-a whole:
+This is recorded as a decision rather than a preference because six review
+rounds pushed the other way, one reasonable finding at a time, and the
+accumulated cost of the stronger promise was: two numerical functions vendored
+with their coefficients normative, `W` computed by a hand-rolled multiplication
+loop rather than a closed form, the filter's power generation and `sqrt` and
+division individually pinned, and a reference table that could not be completed
+until implementation and then had to be validated against `mpmath` rather than
+against the code. None of that is wrong; it is simply a large amount of
+machinery for a property this tool does not appear to need.
 
-- two numerical functions vendored (`erfc` by Cody, `Φ⁻¹` by AS241) with their
-  coefficients and branch structure treated as normative;
-- `W` computed by a hand-rolled multiplication loop instead of
-  `ceil(4 / ln(1/a))`;
-- the filter's power generation, accumulation order, `sqrt` and division all
-  specified;
-- a reference-vector table that cannot be completed until implementation, and
-  must then be validated against `mpmath` rather than against the code.
+What the weaker scope gives up, precisely: if a user's Python or libm changes
+*and* a climate's cumulative table boundary sits within an ulp of a drawn
+quantile, one block in one campaign may render differently than it did before.
+Nothing else in this spec depends on the difference.
 
-**The cheaper alternative is determinism scoped to an installation**: use
-`math.erfc` and `statistics.NormalDist`, the closed form for `W`, and the plain
-formula. Everything else in this spec is unaffected. A campaign's skies would
-still be stable across processes, restarts and upgrades of grimoire itself; the
-promise lost is stability across a Python or libm change, which could shift one
-block's weather in one campaign, only where a table boundary sits within an ulp
-of a drawn quantile.
-
-For a single-user tool whose library lives in `~/.grimoire` and is shared by
-file sync rather than by protocol, that trade looks reasonable. **This is an
-open decision, and the items above are written to be struck as a unit** — the
-recommendation is to take the cheap version unless cross-machine reproducibility
-turns out to matter for a reason not yet identified.
+**To reverse this**, restore in the construction above: vendored `erfc` (Cody,
+Math. Comp. 22 1969 / CALERF) and `Φ⁻¹` (Wichura AS241 `PPND16`), both with
+published coefficients and branch structure; `W` as the smallest `k` with
+`a^k <= e⁻⁴` by repeated multiplication; explicit `sqrt` and division
+semantics; and reference vectors validated against `mpmath` at 50 digits
+instead of captured as a regression fixture. Those four items are the whole of
+the difference and were written to be restored as a unit.
 2. **Smoothing.** The correlated field is a normalized **one-sided** (causal)
    exponential filter over the latent, with `a = persistence`, indexed by the
    **block ordinal** of § Blocks — never by the minute coordinate:
@@ -677,10 +665,9 @@ turns out to matter for a reason not yet identified.
    that is a property of representing continuous distributions in float64, not
    something this design can promise away.
 
-   **Every floating-point step is pinned**, because ascending addition alone is
-   not enough: computing `a^k` by `pow` and by repeated multiplication give
-   different bits, as does accumulating the denominator separately. One pass,
-   ascending in `k`:
+   Evaluate as one ascending pass with carried powers — `a**k` and repeated
+   multiplication differ in their last bits, and consistency here keeps a
+   store's weather stable when the module is refactored:
 
    ```
    w = 1.0; num = 0.0; den = 0.0
@@ -688,9 +675,8 @@ turns out to matter for a reason not yet identified.
    g = num / sqrt(den)
    ```
 
-   Powers come from carrying `w`, never from `a**k`; numerator and denominator
-   accumulate in the same ascending pass; `sqrt` is IEEE-754's correctly-rounded
-   square root, and the final division is a single IEEE operation.
+   Powers come from carrying `w`; numerator and denominator accumulate in the
+   same ascending pass.
 
    The filter is one-sided on purpose. For two-sided weights `a^{|k|}` the
    lag-1 autocorrelation works out to `2a / (1 + a²)`, not `a` — so `a = 0.35`
@@ -711,26 +697,11 @@ turns out to matter for a reason not yet identified.
    equality. Stating the exact finite form matters because an implementer who
    measures `0.8997` against a documented `0.9` needs to know that is correct
    and expected, not a bug to chase.
-4. **Truncation.** `W` is the **maximum lag**: the smallest `k` for which
-   `a^k <= 0.01831563888873418` (that is, `e⁻⁴`), computed by **repeated
-   multiplication** — `w = 1.0; k = 0; while w > threshold: w *= a; k += 1` —
-   and `0` when `a = 0`.
-
-   Not `ceil(4 / ln(1/a))`. That form is right in exact arithmetic and wrong in
-   floating point: for a persistence near `exp(-4/n)` the quotient lands on an
-   integer, so a one-ulp difference in a platform `log` flips `ceil` from 38 to
-   39 — changing the tap count, the normalization, and potentially the drawn
-   entry across machines. `0.9000876262522592` is such a value. IEEE
-   multiplication is correctly rounded and therefore identical everywhere,
-   which the transcendental is not, so the loop is the specification and the
-   closed form is only an aid to reading it. Since the sum runs `k = 0..W` inclusive, the number of taps
-   evaluated is **`W + 1`**: 1 tap at `p = 0` (just `z(t)`), 39 at `p = 0.9`
-   (`W = 38`), 399 at `p = 0.99` (`W = 398`). Cost is O(W) per sample, still
-   O(1) in campaign age, which is the property this construction exists for.
-   The exact counts matter — an implementation that evaluated a different
-   number of taps would normalize differently and could land in a different
-   inverse-CDF bucket, which is a determinism break rather than a rounding
-   preference.
+4. **Truncation.** `W` is the **maximum lag**, `W = ceil(4 / ln(1/a))` for
+   `a > 0`, else 0. Since the sum runs `k = 0..W` inclusive, the tap count is
+   `W + 1`: 1 tap at `p = 0`, 39 at `p = 0.9` (`W = 38`), 399 at `p = 0.99`
+   (`W = 398`). Cost is O(W) per sample, still O(1) in campaign age, which is
+   the property this construction exists for.
 5. **Upper bound.** `persistence` is clamped to `0.998` (`W = 1998`, 1999 taps,
    a correlation length around a hundred days). A document may write `1`; it
    resolves to the clamp with a validation warning rather than an error.
@@ -798,12 +769,20 @@ each axis resolves independently of the blocks around it — the correlation
 lives in the noise field, not in a carry-forward step:
 
 `inverse_cdf` walks the table in array order accumulating normalized weights,
-and selects the **first entry whose running cumulative exceeds `u`** — buckets
-are half-open, `cum_{i−1} <= u < cum_i`, with the first starting at 0 and the
-last treated as closing at 1.0 so floating-point drift in the final sum cannot
-fall through. A zero-weight entry therefore spans an empty interval and can
-never be selected, which is what makes zeroing an entry a clean disable rather
-than a near-zero chance. The convention has to be stated because `u` is
+**skipping zero-weight entries entirely**, and selects the first remaining entry
+whose running cumulative exceeds `u` — buckets are half-open,
+`cum_{i−1} <= u < cum_i`, with the first starting at 0 and **the last
+positive-weight entry** treated as closing at 1.0 so floating-point drift in the
+final sum cannot fall through.
+
+Skipping zero-weight rows is not merely tidy. Closing on the *physical* last
+entry lets rounding hand the draw to a disabled row: with weights `[1, 9, 0]`
+the second entry's cumulative comes out as `0.9999999999999999`, which is
+exactly the largest quantile this latent can produce, so the strict comparison
+falls past it and the forced-last rule returns the zero-weight third entry. If
+that zero came from `requires_temp` filtering, the result is an ineligible
+condition — the precise outcome the constraint exists to prevent, reached
+through arithmetic rather than through the tables. The convention has to be stated because `u` is
 discrete and an author can declare weights whose boundary lands exactly on an
 emitted quantile; `<=` versus `<` then picks different weather from the same
 seed.
@@ -1035,14 +1014,17 @@ The form is where the real work is:
   integers as a distribution. The percentage is display-only — the stored value
   stays the integer.
 
-  **A constrained condition shows its conditional odds, not that share.** A
-  single percentage normalized across all sibling conditions is not `snow`'s
-  probability: it is zero outside `freezing`, and renormalized against the
-  eligible subset when `freezing` is drawn. Presenting one number would tell an
-  author their snow falls 14% of the time when the truth is "never, except on
-  freezing blocks, where it is 22%." Constrained rows therefore render per
-  eligible band — `22% when freezing` — and unconstrained rows keep the simple
-  share.
+  **Where any condition is constrained, every condition row shows per-band
+  odds** — not just the constrained ones. Filtering `snow` out on a non-freezing
+  block renormalizes the *whole* surviving table, so an unconstrained row's
+  probability moves too: in the worked table `clear` is `2/14 = 14.3%` on
+  freezing blocks and `2/12 = 16.7%` everywhere else. A single number per row
+  would be wrong for every row, not only the constrained ones.
+
+  So: a season with no `requires_temp` anywhere shows one simple share per row;
+  a season with any constraint shows a small per-band breakdown for all rows.
+  Anything in between — one number for unconstrained rows and a breakdown for
+  constrained ones — presents two incompatible quantities in one column.
 - **Season boundaries are edited as dates, stored as fractions**, since `0.45`
   is not authorable by a human (§ Climate documents). The conversion needs a
   fixed reference or it is not stable: 1 March is a different fraction in a
@@ -1061,9 +1043,13 @@ The form is where the real work is:
   - **Day index is zero-based**: the first day of the reference year is index
     `0`, so `fraction = day_index / year_length` and the year's first day is
     fraction `0` exactly.
-  - **Fraction → day** uses `floor(fraction * year_length)`, matching how the
-    resolver locates a season, so the editor shows the day the resolver would
-    actually use.
+  - **Fraction → day** uses `ceil(fraction * year_length)` — the smallest day
+    whose own start fraction reaches the boundary. Not `floor`: with half-open
+    seasons the incoming season begins on the first day at or after the
+    boundary, so for a 365-day year and `from: 0.45`, day 164 has fraction
+    `164/365 < 0.45` and still belongs to the outgoing season. `floor` would
+    display 164 and the resolver would use 165, showing every existing
+    fractional boundary a day early.
   - **Day → fraction** emits the day's own start, `day_index / year_length`,
     never a midpoint or an end.
 
@@ -1370,21 +1356,17 @@ Backend, `backend/tests/test_weather.py`, store isolated with
   boundary and a year boundary** — both moments must resolve to the same
   weather, which fails if the season is looked up from the queried moment
   rather than from the block's owning date.
-- Reference vectors: the tuples tabulated in § The construction, concretely
-  produce their documented `u`, `z`, `g` and drawn entry **exactly**. `Φ(g)` is
-  asserted exactly too, **once its column has been recomputed against the
-  vendored `erfc` and re-pinned** — it is provisional until then and must not
-  be asserted against the values currently written, which came from the
-  rejected stdlib implementation. Assert against the **values in the spec**,
-  never against a fixture regenerated from the implementation: a self-generated
-  fixture passes while preserving exactly the drift it exists to detect.
-- Vendored `erfc` and `Φ⁻¹`: each agrees with a high-precision reference to
-  within the documented tolerance across the range, and — the point of
-  vendoring — returns identical bits independent of libm and of the Python
-  version in the supported range.
-- Truncation length: `W` is computed by repeated multiplication and is stable
-  for a persistence sitting on an integer boundary of the closed form, such as
-  `0.9000876262522592`, where a platform `log` would flip it between 38 and 39.
+- Reference vectors: `u` is asserted against the values tabulated in § The
+  construction, concretely, which are final. `z`, `g`, `Φ(g)` and the drawn
+  entry are captured once as a **regression fixture** and asserted thereafter,
+  so an accidental change to the algorithm, the seeding or the evaluation order
+  is caught — the failure that would silently move a user's existing weather.
+  The fixture is scoped to this installation and does not claim
+  cross-implementation conformance (§ Determinism scope).
+- Zero-weight rows are skipped by `inverse_cdf` and the last *positive-weight*
+  entry closes the range — asserted with weights `[1, 9, 0]` at the largest
+  representable quantile, where closing on the physical last entry would return
+  the disabled row.
 - Accumulation order: summing the filter descending in `k` produces a different
   `g` from the documented one, so the test pins ascending order rather than
   merely the formula.
@@ -1463,10 +1445,17 @@ Backend, `backend/tests/test_weather.py`, store isolated with
 - Unit variance: the sampled field has variance 1 at several persistence
   values including the clamp, so `Φ(g)` is genuinely uniform and the
   weight-fidelity test is measuring the table rather than the filter.
-- Cross-persistence zone coupling: two locations sharing a zone but configured
-  with *different* `persistence` still show correlated weather, since both are
-  smoothings of the same latent. This fails immediately if an implementation
-  reseeds or rescales the latent per correlation length.
+- Cross-persistence zone coupling, asserted on the **latent** field: two
+  locations sharing a zone but configured with different `persistence` sample a
+  correlated `g`, since both are smoothings of the same `z`. Assert on `g` and
+  not on rendered weather — a zone member using a single-entry table renders
+  constant output, which correlates with nothing while the field underneath is
+  perfectly correlated. This fails immediately if an implementation reseeds or
+  rescales the latent per correlation length.
+- Recency under sub-second writes: two spans written within the same second
+  resolve in write order, which `set_at` alone cannot express.
+- Boundary display: for a 365-day year and `from: 0.45`, the editor shows day
+  165 — the first day the resolver assigns to the incoming season — not 164.
 - Accumulator truncation: extending an accumulator's window well past its
   chosen *K* changes the reported value by less than its reporting resolution,
   including across a freeze longer than *K*.
@@ -1546,8 +1535,9 @@ Frontend, from `frontend/` with `npx vitest run` and `npx tsc -b`:
   campaign still overridden.
 - Deleting a climate used only as a campaign or world default warns and names
   that campaign or world, rather than reporting no referrers.
-- A constrained condition's odds render per eligible band, not as a share of
-  all sibling conditions.
+- In a season containing any `requires_temp`, **every** condition row renders
+  per-band odds — including unconstrained ones, whose probability also moves
+  when a constrained sibling is filtered out.
 - Season boundary conversion round-trips: a boundary edited to a date reads
   back as that date, and the resolver treats that date as the first day of the
   incoming season.
@@ -1601,11 +1591,11 @@ Frontend, from `frontend/` with `npx vitest run` and `npx tsc -b`:
 
 ## Open questions
 
-- **Bit-identity across machines, or determinism within an installation?**
-  (§ What bit-identity across machines costs.) The stronger promise is what
-  the vendored transforms, the hand-rolled `W` loop, the pinned floating-point
-  evaluation and the unfinished reference table are all for. Recommendation is
-  to drop to the cheaper scope.
+*(Determinism scope was open here and is now decided as installation-scoped in
+§ Determinism scope, which also records exactly what to restore if the stronger
+cross-machine promise is ever wanted. Decided rather than left open because a
+planner cannot implement two incompatible constructions, and the document had
+begun to describe both.)*
 - **What `persistence` values actually feel like at the table.** It is now a
   correlation length rather than a carry-forward probability, so the presets
   ship with values calibrated by eye and will need adjusting against play. The
