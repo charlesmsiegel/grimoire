@@ -11,6 +11,7 @@ import WorldView from "./routes/WorldView";
 import ModulesView from "./routes/ModulesView";
 import StyleGuidesView from "./routes/StyleGuidesView";
 import ResponsePresetsView from "./routes/ResponsePresetsView";
+import ClimatesView from "./routes/ClimatesView";
 import ConnectionsView from "./routes/ConnectionsView";
 import ConfigView from "./routes/ConfigView";
 
@@ -72,6 +73,9 @@ export default function App() {
           <NavLink to="/response-presets" className={({ isActive }) => "nav-btn" + (isActive ? " active" : "")}>
             Response Presets
           </NavLink>
+          <NavLink to="/climates" className={({ isActive }) => "nav-btn" + (isActive ? " active" : "")}>
+            Climates
+          </NavLink>
           <NavLink to="/connections" className={({ isActive }) => "nav-btn" + (isActive ? " active" : "")}>
             Connections
           </NavLink>
@@ -97,6 +101,7 @@ export default function App() {
         <Route path="/modules" element={<ModulesView />} />
         <Route path="/styles" element={<StyleGuidesView />} />
         <Route path="/response-presets" element={<ResponsePresetsView />} />
+        <Route path="/climates" element={<ClimatesView />} />
         <Route path="/connections" element={<ConnectionsView />} />
         <Route path="/config" element={<ConfigView />} />
       </Routes>

@@ -276,6 +276,48 @@ export function splitNativeDate(native: string): { date: string; time: string | 
 }
 
 export type CalendarConfig = { primary: CalendarBlock; secondary: CalendarBlock | null; confirmed: boolean };
+
+// ---- weather (#45, #195) and climates (#40) ----
+export const WEATHER_AXES = ["condition", "temperature", "wind"] as const;
+export type WeatherAxis = (typeof WEATHER_AXES)[number];
+export type WeatherAxes = Record<WeatherAxis, string>;
+/** "procedural" means drawn, not authored — the HUD marks the other two. */
+export type WeatherSource = Record<WeatherAxis, "procedural" | "manual" | "extractor">;
+
+export type WeatherSpan = {
+  id: string; location?: string; from: string; to: string | null;
+  condition?: string; temperature?: string; wind?: string;
+  note?: string; source?: string; seq?: number; set_at?: string; suppress?: string[];
+};
+
+export type SceneWeather = {
+  weather: WeatherAxes | null;
+  source?: WeatherSource;
+  procedural?: WeatherAxes;
+  stack?: WeatherSpan[];
+  climate?: string;
+  season?: string;
+  location: string | null;
+  native: string | null;
+  /** The active season's entries, per axis. Server-supplied: the client cannot
+   *  derive them without reimplementing the climate fallback chain and the
+   *  calendar's year-fraction arithmetic. */
+  tables?: Record<WeatherAxis, string[]>;
+};
+
+export type WeatherOverrideBody = {
+  location: string; start: string; end?: string | null;
+  condition?: string; temperature?: string; wind?: string;
+  note?: string; suppress?: string[]; clear?: boolean;
+};
+
+export type ClimateSummary = { id: string; name: string; builtin: boolean; custom: boolean };
+export type ClimateEntry = { name: string; weight: number; requires_temp?: string[] };
+export type ClimateSeason = {
+  name: string; from: number; to: number;
+  temperature: ClimateEntry[]; conditions: ClimateEntry[]; wind: ClimateEntry[];
+};
+export type Climate = { id: string; name: string; persistence: number; seasons: ClimateSeason[] };
 export type ContextSection = { label: string; text: string; tokens: number };
 export type SceneContext = { model: string; total_tokens: number; sections: ContextSection[] };
 export type CastDetail = { kind: "characters" | "pcs"; id: string; name: string; version: string; body: string };
@@ -745,6 +787,26 @@ export const api = {
     request<CalendarConfig>("GET", `/api/campaigns/${cid}/calendar`),
   getCalendarProviders: () =>
     request<{ providers: { id: string; name: string }[] }>("GET", "/api/calendars/providers"),
+
+  // ---- weather (#45, #195) and climates (#40) ----
+  getSceneWeather: (cid: string, sid: string, opts?: { location?: string; native?: string }) => {
+    const q = new URLSearchParams();
+    if (opts?.location) q.set("location", opts.location);
+    if (opts?.native) q.set("native", opts.native);
+    const tail = q.toString() ? `?${q}` : "";
+    return request<SceneWeather>("GET", `/api/campaigns/${cid}/scenes/${sid}/weather${tail}`);
+  },
+  setWeatherOverride: (cid: string, body: WeatherOverrideBody) =>
+    request<WeatherSpan | { cleared: number }>("PUT", `/api/campaigns/${cid}/weather`, body),
+  deleteWeatherOverride: (cid: string, spanId: string) =>
+    request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}/weather/${spanId}`),
+  listClimates: () => request<{ climates: ClimateSummary[] }>("GET", "/api/climates"),
+  readClimate: (id: string) =>
+    request<{ climate: Climate; builtin: boolean; custom: boolean }>("GET", `/api/climates/${id}`),
+  saveClimate: (id: string, doc: Climate) =>
+    request<{ climate: Climate }>("PUT", `/api/climates/${id}`, doc),
+  deleteClimate: (id: string) =>
+    request<{ ok: boolean; reverted_to_preset: boolean }>("DELETE", `/api/climates/${id}`),
   getCalendarMonths: (scope: CalendarScope, year: number) =>
     request<{ months: CalendarMonth[] }>(
       "GET",
