@@ -1,0 +1,187 @@
+import importlib
+
+import pytest
+from fastapi.testclient import TestClient
+
+from grimoire import routes, store
+from grimoire.main import create_app
+
+
+@pytest.fixture
+def client(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    importlib.reload(store)
+    return TestClient(create_app())
+
+
+def scene(client, when="2026-06-14T09:00"):
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    cid = client.post("/api/campaigns", json={"name": "Saltmarch Chronicle",
+                                              "world": wid}).json()["id"]
+    lid = client.post(f"/api/campaigns/{cid}/locations",
+                      json={"name": "Saltmarch Docks", "body": "A place"}).json()["id"]
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Arrival"}).json()["id"]
+    client.put(f"/api/campaigns/{cid}/scenes/{sid}/location", json={"location": lid})
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/datetime", json={"datetime": when})
+    sid = r.json().get("id", sid)  # set_datetime renames the scene file on first set
+    return cid, sid, lid
+
+
+# ---- GET ----
+
+def test_scene_weather_resolves_from_the_scene(client):
+    cid, sid, lid = scene(client)
+    got = client.get(f"/api/campaigns/{cid}/scenes/{sid}/weather").json()
+    assert set(got["weather"]) == {"condition", "temperature", "wind"}
+    assert got["location"] == lid
+    assert got["climate"] and got["season"]
+
+
+def test_scene_weather_carries_the_active_seasons_tables(client):
+    # The popover's selects need these, and the client cannot derive them: the
+    # climate may be inherited or fallen back, and the season needs calendar
+    # arithmetic.
+    cid, sid, lid = scene(client)
+    tables = client.get(f"/api/campaigns/{cid}/scenes/{sid}/weather").json()["tables"]
+    assert set(tables) == {"temperature", "condition", "wind"}
+    assert all(tables[k] for k in tables)
+    got = client.get(f"/api/campaigns/{cid}/scenes/{sid}/weather").json()
+    for axis, key in (("condition", "condition"), ("temperature", "temperature"),
+                      ("wind", "wind")):
+        assert got["weather"][axis] in tables[key]
+
+
+def test_scene_weather_reports_per_axis_provenance(client):
+    cid, sid, lid = scene(client)
+    got = client.get(f"/api/campaigns/{cid}/scenes/{sid}/weather").json()
+    assert set(got["source"].values()) == {"procedural"}
+
+
+def test_scene_weather_accepts_a_preview_moment(client):
+    cid, sid, lid = scene(client)
+    a = client.get(f"/api/campaigns/{cid}/scenes/{sid}/weather").json()
+    b = client.get(f"/api/campaigns/{cid}/scenes/{sid}/weather",
+                   params={"native": "2026-12-25T09:00"}).json()
+    assert b["native"] == "2026-12-25T09:00"
+    assert b["season"] != a["season"] or b["weather"] != a["weather"]
+
+
+def test_scene_weather_is_null_without_a_moment(client):
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    cid = client.post("/api/campaigns", json={"name": "C", "world": wid}).json()["id"]
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Arrival"}).json()["id"]
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/weather").json()["weather"] is None
+
+
+def test_scene_weather_404s_for_an_unknown_scene(client):
+    cid, sid, lid = scene(client)
+    assert client.get(f"/api/campaigns/{cid}/scenes/nope/weather").status_code == 404
+
+
+def test_the_weather_route_is_not_captured_by_the_entity_catch_all(client):
+    # `@router.get("/campaigns/{cid}/{kind}")` would swallow a later-registered
+    # weather GET as an entity-list request for kind "weather".
+    cid, sid, lid = scene(client)
+    r = client.get(f"/api/campaigns/{cid}/scenes/{sid}/weather")
+    assert r.status_code == 200
+    assert isinstance(r.json(), dict) and "weather" in r.json()
+
+
+# ---- PUT ----
+
+def test_put_override_pins_one_axis(client):
+    cid, sid, lid = scene(client)
+    base = client.get(f"/api/campaigns/{cid}/scenes/{sid}/weather").json()
+    r = client.put(f"/api/campaigns/{cid}/weather",
+                   json={"location": lid, "start": "2026-06-14", "condition": "blizzard"})
+    assert r.status_code == 200 and r.json()["id"]
+    got = client.get(f"/api/campaigns/{cid}/scenes/{sid}/weather").json()
+    assert got["weather"]["condition"] == "blizzard"
+    assert got["source"]["condition"] == "manual"
+    assert got["weather"]["wind"] == base["weather"]["wind"]
+
+
+def test_put_override_accepts_the_campaign_default_target(client):
+    cid, sid, lid = scene(client)
+    r = client.put(f"/api/campaigns/{cid}/weather",
+                   json={"location": "_default", "start": "2026-06-14", "condition": "fog"})
+    assert r.status_code == 200
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/weather"
+                      ).json()["weather"]["condition"] == "fog"
+
+
+def test_put_override_with_no_axes_is_rejected(client):
+    # Such a span appears in no covering stack, so its id is discoverable
+    # nowhere and repeated calls accumulate rows no client can see or delete.
+    cid, sid, lid = scene(client)
+    r = client.put(f"/api/campaigns/{cid}/weather",
+                   json={"location": lid, "start": "2026-06-14"})
+    assert r.status_code == 400
+
+
+def test_put_override_rejects_an_unparseable_moment(client):
+    cid, sid, lid = scene(client)
+    r = client.put(f"/api/campaigns/{cid}/weather",
+                   json={"location": lid, "start": "not-a-date", "condition": "fog"})
+    assert r.status_code == 400
+
+
+def test_an_open_ended_override_needs_no_end(client):
+    cid, sid, lid = scene(client)
+    client.put(f"/api/campaigns/{cid}/weather",
+               json={"location": lid, "start": "2026-06-14", "condition": "storm"})
+    got = client.get(f"/api/campaigns/{cid}/scenes/{sid}/weather",
+                     params={"native": "2031-01-01T09:00"}).json()
+    assert got["weather"]["condition"] == "storm"
+
+
+def test_clearing_a_range_returns_it_to_procedural(client):
+    cid, sid, lid = scene(client)
+    base = client.get(f"/api/campaigns/{cid}/scenes/{sid}/weather").json()
+    client.put(f"/api/campaigns/{cid}/weather",
+               json={"location": lid, "start": "2026-06-10", "condition": "storm"})
+    r = client.put(f"/api/campaigns/{cid}/weather",
+                   json={"location": lid, "start": "2026-06-14", "end": "2026-06-14",
+                         "clear": True})
+    assert r.status_code == 200 and r.json()["cleared"] == 1
+    got = client.get(f"/api/campaigns/{cid}/scenes/{sid}/weather").json()
+    assert got["weather"]["condition"] == base["weather"]["condition"]
+
+
+# ---- DELETE ----
+
+def test_delete_retracts_a_span(client):
+    cid, sid, lid = scene(client)
+    base = client.get(f"/api/campaigns/{cid}/scenes/{sid}/weather").json()
+    made = client.put(f"/api/campaigns/{cid}/weather",
+                      json={"location": lid, "start": "2026-06-14",
+                            "condition": "blizzard"}).json()
+    assert client.delete(f"/api/campaigns/{cid}/weather/{made['id']}").status_code == 200
+    got = client.get(f"/api/campaigns/{cid}/scenes/{sid}/weather").json()
+    assert got["weather"]["condition"] == base["weather"]["condition"]
+
+
+def test_delete_404s_for_an_unknown_span(client):
+    cid, sid, lid = scene(client)
+    assert client.delete(f"/api/campaigns/{cid}/weather/nope").status_code == 404
+
+
+def test_the_generated_id_is_addressable_in_the_delete_route(client):
+    # The id is a path segment; `/` or a dot-only id would be unaddressable.
+    cid, sid, lid = scene(client)
+    made = client.put(f"/api/campaigns/{cid}/weather",
+                      json={"location": lid, "start": "2026-06-14",
+                            "condition": "blizzard"}).json()
+    assert "/" not in made["id"] and made["id"].strip(".")
+    assert client.delete(f"/api/campaigns/{cid}/weather/{made['id']}").status_code == 200
+
+
+def test_the_covering_stack_is_reported_for_the_hud(client):
+    cid, sid, lid = scene(client)
+    client.put(f"/api/campaigns/{cid}/weather",
+               json={"location": "_default", "start": "2026-06-14", "condition": "clear"})
+    client.put(f"/api/campaigns/{cid}/weather",
+               json={"location": lid, "start": "2026-06-14", "condition": "fog"})
+    stack = client.get(f"/api/campaigns/{cid}/scenes/{sid}/weather").json()["stack"]
+    assert [s["condition"] for s in stack] == ["fog", "clear"]
+    assert stack[0]["location"] == lid

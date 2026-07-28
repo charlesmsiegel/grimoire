@@ -165,6 +165,26 @@ class NewCampaign(BaseModel):
     climate: str | None = None
 
 
+class WeatherOverride(BaseModel):
+    """One override span, or a clear of the range it names.
+
+    `start`/`end` rather than the spec's `from`/`to`: `from` is a Python
+    keyword, and reaching it would need `Field(alias=...)`, which this codebase
+    forbids to stay pydantic v1/v2-agnostic for Chaquopy (CLAUDE.md). `end` is
+    None for an open-ended span — the storage behind the HUD's "until I clear
+    it" duration.
+    """
+    location: str = "_default"
+    start: str
+    end: str | None = None
+    condition: str | None = None
+    temperature: str | None = None
+    wind: str | None = None
+    note: str | None = None
+    suppress: list[str] | None = None
+    clear: bool = False
+
+
 class ModuleCreate(BaseModel):
     name: str
 
@@ -2531,6 +2551,102 @@ def _require_scene(cid: str, sid: str) -> dict:
         return store.scenes.read_scene(cid, sid)
     except store.scenes.SceneNotFound:
         raise HTTPException(status_code=404, detail="scene not found")
+
+
+# ---- weather (#45, #195) ----
+#
+# Declared here, well before `@router.get("/campaigns/{cid}/{kind}")` at the
+# bottom of this module. A weather GET registered after it is captured as an
+# entity-list request for kind "weather" — and that applies to every route in
+# this block, not just the ones with a {kind}-shaped path.
+
+def _weather_now(cid: str, sid: str, location: str | None, native: str | None):
+    """The scene's current location and moment, or the caller's preview pair."""
+    scene = _require_scene(cid, sid)
+    if location is None:
+        history = store.scenes.get_location_history(cid, sid)
+        location = history[-1] if history else None
+    if native is None:
+        moments = store.scenes.get_time_history(cid, sid)
+        native = moments[-1] if moments else None
+    return scene, location, native
+
+
+@router.get("/campaigns/{cid}/scenes/{sid}/weather")
+def get_scene_weather(cid: str, sid: str, location: str | None = None, native: str | None = None):
+    """Resolved weather for one scene, with the popover's source data.
+
+    The scene id is load-bearing rather than decorative: location and moment
+    live per scene in location_history / time_history, so a campaign has as
+    many "current moments" as it has scenes, and resolving from cid alone would
+    return an arbitrary scene's sky.
+    """
+    _, location, native = _weather_now(cid, sid, location, native)
+    got = store.weather.resolve(cid, location, native)
+    if got is None:
+        return {"weather": None, "location": location, "native": native}
+    season = got["tables"]
+    return {
+        "weather": {a: got[a] for a in store.weather.AXES},
+        "source": got["source"], "procedural": got["procedural"],
+        "stack": got["stack"], "climate": got["climate"], "season": got["season"],
+        "location": location, "native": native,
+        # The tables come from the server because the client cannot determine
+        # them: the climate may be inherited from the campaign default or
+        # fallen back from a dangling id, and the season depends on
+        # year-fraction arithmetic over the campaign's calendar. Deriving them
+        # client-side means reimplementing the fallback chain and the calendar
+        # maths, and lets the popover disagree with the weather beside it.
+        "tables": {
+            "temperature": [e["name"] for e in season.get("temperature", []) if e["weight"] > 0],
+            "condition": [e["name"] for e in season.get("conditions", []) if e["weight"] > 0],
+            "wind": [e["name"] for e in season.get("wind", []) if e["weight"] > 0],
+        },
+    }
+
+
+@router.put("/campaigns/{cid}/weather")
+def put_weather(cid: str, body: WeatherOverride):
+    """Set or clear an override span.
+
+    The target is in the body rather than the route: weather.json holds it only
+    as an outer object key and the span record has no location field, so a
+    handler given just `cid` has nothing to key the write by. One endpoint
+    therefore covers both a location and the campaign-wide default.
+    """
+    _campaign_root_or_404(cid)
+    try:
+        cfg = store.calendars.read_calendar(store.campaigns.campaign_root(cid))
+        provider = store.calendars.get_provider(cfg["primary"])
+        store.weather.overrides.resolve_endpoint(provider, body.start, end=False)
+        if body.end is not None:
+            store.weather.overrides.resolve_endpoint(provider, body.end, end=True)
+    except (store.calendars.CalendarError, KeyError, TypeError, AttributeError) as e:
+        raise HTTPException(status_code=400, detail=f"unparseable moment: {e}")
+
+    if body.clear:
+        n = store.weather.overrides.clear(cid, provider, body.location, body.start, body.end)
+        return {"cleared": n}
+
+    axes = {a: getattr(body, a) for a in store.weather.AXES}
+    if not any(axes.values()) and not body.suppress:
+        # A span setting no axis appears in no covering stack, so its generated
+        # id is discoverable nowhere and repeated calls would quietly accumulate
+        # rows no client can see or delete.
+        raise HTTPException(status_code=400, detail="at least one axis is required")
+    record = store.weather.overrides.put(
+        cid, provider, body.location, body.start, body.end, axes,
+        note=body.note or "", source="manual", suppress=body.suppress)
+    return record
+
+
+@router.delete("/campaigns/{cid}/weather/{span_id}")
+def delete_weather(cid: str, span_id: str):
+    """Retract a span, as if it had never been set — unlike clearing a range."""
+    _campaign_root_or_404(cid)
+    if not store.weather.overrides.delete(cid, span_id):
+        raise HTTPException(status_code=404, detail="override not found")
+    return {"ok": True}
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/chat")
