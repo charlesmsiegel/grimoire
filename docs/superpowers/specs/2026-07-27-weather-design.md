@@ -345,6 +345,14 @@ hash-diffing of entity blobs is undisturbed.
   for five days — re-reading day 12 should still show the storm. Retracting
   weather that scenes were played under is what `DELETE` is for, deliberately a
   separate and more emphatic action.
+- **Spans match on block ordinals, and their endpoints round outward to whole
+  blocks on write.** Matching on raw minutes splits blocks: a date-only
+  override beginning at midnight would apply at 01:00 but not at 23:00 the
+  previous evening, even though both moments share one `night` ordinal — so
+  the same block would return two different skies depending on which minute
+  inside it was asked about, defeating the entire reason for giving the
+  post-midnight hours to the preceding date. Rounding outward is the same rule
+  the extractor already uses for narrated durations.
 - **Comparison happens on the fixed-day axis, never on the stored strings.**
   `from`, `to`, and the queried moment are each parsed through the campaign's
   primary provider to `(fixed_day, minute)` before any ordering test. Native
@@ -370,10 +378,23 @@ hash-diffing of entity blobs is undisturbed.
 - **`id` is required**, and it is what makes the precedence backstop
   implementable — the rules below need a stable per-span identity that array
   position cannot supply. Writers generate one; a hand-authored entry missing an
-  `id` gets a canonical one derived by hashing the **location key together with
-  every field of the record except `id` itself** — bounds, source, axes, note
-  and `set_at` alike — so the backstop still holds for files edited outside the
-  app.
+  `id` gets one generated on load and **written back to the file**, so it is
+  derived exactly once and is thereafter a stored fact rather than a
+  recomputation.
+
+  Persisting sidesteps a problem that specifying a derivation does not.
+  "Hash every field" leaves the digest, the field order, the separators and the
+  JSON number encoding open, so a loader refactor could quietly produce a
+  different `DELETE` address for the same record — and, where `seq` and
+  `set_at` tie, reverse the id-based precedence winner. Persisting on first
+  load means the derivation only has to be deterministic within a single run,
+  which any reasonable implementation manages, and the id never moves again.
+
+  **Ids match `[A-Za-z0-9._-]+`.** They appear as a path segment in the
+  `DELETE` route, and a hand-authored id containing `/` would be unaddressable
+  there even URL-encoded, leaving an accepted span that nothing can remove. An
+  explicit id outside the grammar is replaced by a generated one on load, in
+  the same pass that fills in missing ones.
 
   **Explicit ids are checked for uniqueness per storage key on load**, and a
   collision is resolved by re-deriving both records' ids canonically. The
@@ -382,15 +403,15 @@ hash-diffing of entity blobs is undisturbed.
   differing in bounds or axes — occupying one `DELETE` address, and
   indistinguishable to the id tiebreak when their other precedence fields tie.
 
-  Hashing a chosen subset does not work, and two subsets were tried before this
-  one. Omitting the location key makes the same storm pinned at the docks and
-  at the lighthouse derive one id. Omitting `set_at` and `note` makes two
-  hand-authored records that differ only in when they were written — which
-  precedence explicitly contemplates, since recency is a tiebreak — derive one
-  id, so the delete contract cannot address either of them. Hashing everything
-  is the only rule with no such gap. Two records identical in *every* field are
-  genuinely indistinguishable, and are deduplicated on load rather than kept as
-  a pair nothing can tell apart.
+  Generated ids must be unique per storage key, which is the whole requirement
+  — with persistence there is no need to derive them from content at all, and
+  two earlier attempts to do so both collided. Hashing a subset that omitted
+  the location key gave the same storm pinned at the docks and at the
+  lighthouse one id; a subset that omitted `set_at` and `note` collided for two
+  hand-authored records differing only in when they were written, which
+  precedence explicitly contemplates since recency is a tiebreak. Records
+  identical in *every* field are genuinely indistinguishable and are
+  deduplicated on load rather than kept as a pair nothing can tell apart.
 - Axes are individually optional: an override may pin `condition` alone and let
   temperature and wind still be drawn, which is what narration usually gives us
   ("it was raining" says nothing about wind).
@@ -430,9 +451,20 @@ field would raise `EntityNotFound` in the middle of `context._assemble`.
 omits the setting block, so weather raising where the setting degrades would
 make a deleted location break turn assembly for a scene that currently just
 loses one section. An unresolvable location therefore resolves its climate and
-persistence from the campaign default, and keeps the id as its weather zone —
-the id is still a stable seed whether or not an entity stands behind it, so
-the sky stays continuous rather than blanking. Both `scenes.get_location_history` and `get_time_history`
+persistence from the campaign default, and keeps the id as its weather zone.
+
+**The latent stream survives; the mapping may not.** Keeping the id as the zone
+means the underlying `z` is unchanged, so the weather stays coherent rather
+than blanking or jumping to an unrelated stream. But a location that had
+declared its own `climate`, `persistence` or `weather_zone` loses those on
+deletion, and every historical scene still naming it will render differently
+than it did — a different table, a different correlation length, or a
+different stream entirely if the zone was explicit. That is an accepted
+consequence of deleting a location rather than a guarantee this design can
+keep: preserving it would mean persisting resolved settings into scene history
+or keeping location tombstones, which is exactly the stored state the whole
+design exists to avoid. Deleting a location that scenes still reference is a
+destructive act, and this is part of what it destroys. Both `scenes.get_location_history` and `get_time_history`
 document `Missing ⇒ []`, so a scene that has just been created legitimately has
 no location, no moment, or neither — and `context._assemble` runs while exactly
 such scenes are being opened and generated. Making only the Jinja section
@@ -1434,6 +1466,21 @@ concrete value only writes another local exception rather than restoring the
 campaign-wide one. Suppression is state the user created and must be state the
 user can remove.
 
+Resuming inheritance is its mirror, and needs its own endpoint for the same
+reason clearing did — none of the others can express it. `DELETE` removes a
+whole record and so restores every axis it suppressed; the clear endpoint
+*creates* suppression; the `PUT` writes a concrete override:
+
+```
+POST /api/campaigns/{cid}/weather/resume   { location, from, to, axes: [...] }
+```
+
+The server removes the named axes from each covering suppression over the
+range, splitting where the remainder still applies outside it, deletes any
+suppression left naming nothing, and returns the new resolved weather —
+exactly the clear operation's shape, run against the `suppress` list instead of
+the axis values.
+
 `DELETE .../{storage_key}/{span_id}` stays, for removing a specific record
 outright rather than clearing an axis of it.
 
@@ -1604,6 +1651,13 @@ to invent the deferred feature in order to test it.)*
   attached is not a testable claim — it permits an arbitrarily permissive
   bound.
 
+  The seed set is **named, not merely "distinct"**: campaign id
+  `fidelity-check`, zones `fidelity-00000` through `fidelity-99999`, block
+  ordinal `0`. Leaving the implementation to pick 100,000 zone strings would
+  make the sample itself an implementation choice, and against a finite `3σ`
+  bound a correct distribution can pass on one set and fail on another — a
+  conformance test whose verdict depends on an input nobody wrote down.
+
   **The samples come from `N` distinct zone seeds at one ordinal, not from `N`
   consecutive ordinals of one zone.** Consecutive blocks are autocorrelated by
   construction — that is the entire point of `persistence` — so a run of
@@ -1632,7 +1686,9 @@ to invent the deferred feature in order to test it.)*
 - Deleted-location state: a scene whose `location_history` still names a
   deleted location resolves weather from the campaign default, keyed on that
   id as its zone, and does not raise — matching how `context.py:535-539`
-  already degrades the setting block.
+  already degrades the setting block. The latent stream is unchanged; a
+  location that had declared its own climate does render differently, which the
+  test asserts rather than treats as a defect.
 - Unparseable moment: a scene whose stored `time_history` entry no longer
   parses under the campaign's current provider resolves to `None` rather than
   raising `CalendarError` during `_assemble`.
@@ -1690,7 +1746,14 @@ Frontend, from `frontend/` with `npx vitest run` and `npx tsc -b`:
   incoming season — while 02:00 that morning, belonging to the previous date's
   night, remains in the outgoing one.
 - **Resume inheriting** on one axis of a multi-axis suppression restores only
-  that axis, leaving the others suppressed.
+  that axis, leaving the others suppressed — and the suppression record itself
+  survives until its last axis is resumed.
+- A span whose `id` is missing, or contains a character outside
+  `[A-Za-z0-9._-]`, is given a conforming id on load and the file is rewritten,
+  so the id returned by a later read is the one `DELETE` accepts.
+- An override written with date-only endpoints matches every moment of the
+  blocks it covers, including 23:00 of the preceding evening where that shares
+  a `night` ordinal with the following midnight.
 - An override holding a value absent from the active season's table — the
   `blizzard` case — renders in the popover as the selected value rather than a
   blank, and survives a save that touches only another axis.
