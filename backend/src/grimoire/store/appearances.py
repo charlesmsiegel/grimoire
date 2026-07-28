@@ -162,7 +162,8 @@ def import_version(cid: str, kind: str, actor_id: str, version_id: str) -> None:
     ext = _version_ext(kind)
     d = croot / kind / actor_id
     d.mkdir(parents=True, exist_ok=True)
-    atomic.write_text(d / f"{version_id}.{ext}", (wroot / kind / actor_id / f"{version_id}.{ext}").read_text(encoding="utf-8"))
+    atomic.write_text(d / f"{version_id}.{ext}",
+                      (wroot / kind / actor_id / f"{version_id}.{ext}").read_text(encoding="utf-8"))
     _set_default(croot, kind, actor_id, version_id)
     old = rec["version"]
     if old != version_id and (d / f"{old}.{ext}").exists():
