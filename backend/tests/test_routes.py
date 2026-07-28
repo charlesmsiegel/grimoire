@@ -1112,6 +1112,18 @@ def test_campaign_missing_world_400(client):
     assert client.post("/api/campaigns", json={"name": "X", "world": "nope"}).status_code == 400
 
 
+def test_location_bad_weather_values_are_400_not_500(client):
+    # `fields` is an untyped dict, so these reach the validator as real Python
+    # ints/bools. Each one used to escape as an unhandled exception or save
+    # cleanly and never take effect.
+    wid = _world(client)
+    for bad in ({"persistence": 10 ** 1000}, {"persistence": True},
+                {"persistence": "wet"}, {"climate": "temperate-costal"}):
+        r = client.post(f"/api/worlds/{wid}/locations",
+                        json={"name": "Saltmarch Docks", "body": "A place", "fields": bad})
+        assert r.status_code == 400, (bad, r.status_code)
+
+
 def test_campaign_accepts_a_climate(client):
     from grimoire.store import climates
     wid = _world(client)

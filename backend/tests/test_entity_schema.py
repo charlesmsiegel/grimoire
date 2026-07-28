@@ -84,3 +84,28 @@ def test_boundary_persistence_values_are_accepted(monkeypatch, tmp_path):
 def test_other_kinds_are_unaffected():
     from grimoire.store import entity_schema
     assert entity_schema.invalid_values("items", {"item_type": "anything"}) == []
+
+
+def test_a_bignum_persistence_is_rejected_not_an_overflow(monkeypatch, tmp_path):
+    # `fields` is an untyped dict, so a JSON integer this large reaches the
+    # validator as a Python int with no float value. Uncaught that is a 500.
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    from grimoire.store import entity_schema
+    assert entity_schema.invalid_values(
+        "locations", {"persistence": 10 ** 1000}) == ["persistence"]
+
+
+def test_a_boolean_persistence_is_rejected(monkeypatch, tmp_path):
+    # float(True) is 1.0, so this would validate — but the store writes it back
+    # as the string "True", which the resolver cannot parse, so the setting
+    # silently never takes effect.
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    from grimoire.store import entity_schema
+    for bad in (True, False):
+        assert entity_schema.invalid_values("locations", {"persistence": bad}) == ["persistence"], bad
+
+
+def test_a_non_string_climate_is_rejected(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    from grimoire.store import entity_schema
+    assert entity_schema.invalid_values("locations", {"climate": ["temperate-interior"]}) == ["climate"]
