@@ -114,15 +114,27 @@ processes on one synced store.
 first atomic write would silently narrow every previously group/world-readable
 record to owner-only — a real regression on Linux, macOS, and the Android build.
 So: `os.chmod(tmp, stat.S_IMODE(os.stat(path).st_mode))` when the target exists,
-otherwise the process umask default (`0o666 & ~umask`). The chmod happens
-*before* the replace, so the file is never briefly visible under its real name
-with the temp's `0600`. This is a no-op on Windows, where the mode bits are
-vestigial.
+otherwise the process umask default (`0o666 & ~umask`). This is **best-effort,
+not guaranteed**: a `stat` that fails for any reason is treated as "no target"
+and a failing `chmod` is swallowed, so a pathological filesystem can still
+publish with the umask default rather than the target's mode. Failing the whole
+write over a mode bit would trade a cosmetic problem for a data-loss one.
+
+The chmod happens *before* the replace, so the file is never briefly visible
+under its real name carrying the temp's `0600`. All of this is a no-op on
+Windows, where the mode bits are vestigial.
 
 The umask must be sampled **once at import**, not per write: there is no getter
 — you set it to read it — so doing that inside a request thread would briefly
 expose a `0` umask to every other thread creating a file, making their files
 world-writable. (Found by the implementation-stage review.)
+
+Two consequences accepted rather than solved: a umask changed *after* import is
+ignored, so records keep the mode implied at import time; and the
+"import happens while single-threaded" assumption is a convention, not an
+enforced invariant — a lazy import from a worker thread would reintroduce the
+same one-shot window. Neither is reachable in grimoire, which never changes its
+umask and imports `store` at startup.
 
 What is *not* preserved, and is accepted: on Windows the surviving file is the
 temp, so a target's explicit (non-inherited) DACL, alternate data streams, and
@@ -136,7 +148,8 @@ same treatment. Documented as a known limitation rather than fixed.
 symlink and rewrites its target, and updates the shared inode behind every hard
 link. `os.replace` replaces the *directory entry*, breaking both. Grimoire has no
 feature that creates linked records, so this is declared unsupported and covered
-by a test that documents the behavior rather than one that pretends to prevent it.
+by two POSIX-only tests — one per link kind — that document the behavior rather
+than pretend to prevent it.
 
 **fsync before replace.** Makes the new bytes complete-if-the-rename-lands, per
 the guarantee section. Measured on this machine (NVMe, local NTFS, 4 KB record):
@@ -211,7 +224,7 @@ store from CRLF to LF on its next save, churning a synced folder for nothing.
 
 ### Writers that are not `write_text` calls
 
-- **`assets.put_image` (`assets.py:112-114`) — an ordering bug, not just a torn
+- **`assets.put_image` (`assets.py:122-147`) — an ordering bug, not just a torn
   write.** It unlinks every prior-extension file *before* writing the new one,
   so a crash after the unlink loses the image outright; atomicity alone does not
   help. Reordered to write first, then unlink stale siblings.
@@ -220,9 +233,13 @@ store from CRLF to LF on its next save, churning a synced folder for nothing.
   returns `sorted(d.glob(f"{name}.*"))[0]` — the *first alphabetically*. Writing
   `avatar.webp` over an existing `avatar.png` leaves both files for a moment,
   and the sort hands back the stale `.png`. So `image_path` also gains a
-  newest-`st_mtime` tie-break, which makes the transient two-extension state
-  resolve to the correct image and makes a failed sibling-unlink self-healing
-  instead of permanently wrong. The tie-break tolerates a sibling vanishing
+  newest-`st_mtime` tie-break, which resolves the transient two-extension state
+  to the new image in the normal case and makes a failed sibling-unlink
+  self-healing rather than permanently wrong. Two honest limits: on a
+  filesystem with coarse timestamp resolution the two siblings can tie, and
+  the name tiebreak may then pick the stale one; and the helper treats *any*
+  `OSError` from `stat` as "gone", so a momentarily unstatable fresh file
+  could lose to an older sibling. The tie-break tolerates a sibling vanishing
   between the glob and the stat — the cleanup below is exactly such a deleter,
   and the old `sorted(...)[0]` never stat'd, so raising there would be a
   regression rather than a new check.
@@ -233,6 +250,13 @@ store from CRLF to LF on its next save, churning a synced folder for nothing.
   cleanup removes the other's — leaving no image at all, which is strictly
   worse than the delete-first ordering being replaced. (Found by the
   implementation-stage review.)
+
+  The residue of that choice, accepted: if both writers snapshot before either
+  publishes, neither snapshot contains the other's file and *both* extensions
+  survive, so `list_images` reports a duplicate logical name until the next
+  `put_image` cleans up. Preferring a stale duplicate over a vanished image is
+  the right trade, and closing it properly needs the per-record lock this spec
+  lists as a non-goal.
 - **`sheets.seed` (`sheets.py:547`) — `shutil.copy2` into the live campaign
   sheets directory.** Routed through the helper, so a partial copy can never
   appear under a real sheet name.
@@ -253,10 +277,15 @@ store from CRLF to LF on its next save, churning a synced folder for nothing.
 ### The guard test
 
 An AST check, not a grep — a textual scan silently misses calls split across
-lines. It walks every `.py` under `store/`, collecting `Call` nodes for the
-write APIs actually used in this package: `.write_text(`, `.write_bytes(`,
-`open(..., "w"|"wb"|"a")`, `io.open`, and `os.write`. Each hit must be inside
-`atomic.py` or carry an `# atomic-ok: <reason>` marker.
+lines. It walks every `.py` under `backend/src/grimoire/` — the **whole
+package**, not just `store/`, because `routes.py` turned out to write a
+campaign's climate record directly, which a `store/`-only scan missed entirely.
+Recognised calls: `.write_text(`, `.write_bytes(`, `open()` / `io.open` /
+`Path.open` in any write-capable mode, `os.write`, and `os.fdopen`. Modes are
+tested for the characters that make them writable (`w`, `a`, `x`, `+`) rather
+than matched against a list of literals, which missed `open(p, "x")`, `"w+b"`
+and `"a+"`. Each hit must be inside `atomic.py` or carry an
+`# atomic-ok: <reason>` marker.
 
 Described honestly: this is a **regression check over known write APIs**, not a
 proof that every writer uses one mechanism. A determined writer can still reach
@@ -282,7 +311,10 @@ instead of sitting unnoticed for a year.
   without burning retries.
 - The temp name stays within the 255-character component limit for a long
   target name.
-- Ordering is asserted explicitly: write → flush → fsync → close → replace.
+- Ordering is asserted on the OS calls the helper itself makes: `fsync` →
+  `close` → `chmod` → `replace`. The caller's own `write`/flush happen
+  inside a `TextIOWrapper` the test does not instrument, so the assertion
+  covers publication order, not the full byte-level sequence.
 
 **Guard test:** the AST scan described above.
 
