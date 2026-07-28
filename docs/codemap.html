@@ -666,8 +666,8 @@ sequenceDiagram
 <div class="callout warn">
   <strong>The route layer performs filesystem I/O.</strong> Besides the <em>climate.json</em> pair above, <code>backend/src/grimoire/routes.py:785-794</code> opens a raw file descriptor and unlinks a temp file for module import. These are the only places the HTTP layer touches the disk directly; everything else goes through <code>store</code>. Small in volume, but they are precedent — and the <em>climate.json</em> read is exactly the campaign-root-direct-read pattern the overlay design exists to prevent.
 </div>
-<div class="callout warn">
-  <strong>The lock that governs all campaign mutation lives in the sheets module.</strong> <code>sheets.lock_for(cid)</code> (<code>backend/src/grimoire/store/sheets.py:618-627</code>) is the single serialization point for sheet writes, proposal transitions, audit application and module publication. Both <code>backend/src/grimoire/store/proposals.py:28-34</code> and <code>backend/src/grimoire/store/module_edit.py:4-10</code> document borrowing it and explain why the domains must be unified. The reasoning is sound; the placement means a reader looking for the app's concurrency model has no reason to open <code>backend/src/grimoire/store/sheets.py</code> to find it.
+<div class="callout good">
+  <strong>The lock that governs all campaign mutation has its own module.</strong> <code>locks.campaign_lock(cid)</code> (<code>backend/src/grimoire/store/locks.py</code>) is the single serialization point for sheet writes, proposal transitions, audit application and module publication; <code>sheets.py</code>, <code>proposals.py</code>, <code>audit.py</code>, <code>checks.py</code>, <code>context.py</code>, <code>module_edit.py</code> and <code>routes.py</code> all import it. The module docstring carries the membership list and the two ordering rules (campaign lock before audit baseline lock; module-edit lock before campaign locks), so the concurrency model is discoverable from the module that owns it. Fixed in #245 — this was previously filed under <code>sheets.lock_for()</code>.
 </div>
 
 <h2>What the three import cycles actually mean</h2>
@@ -840,8 +840,8 @@ sequenceDiagram
 <div class="callout warn">
   <strong><code>backend/src/grimoire/store/playing.py</code> is not about playing a scene.</strong> Despite sitting next to <code>backend/src/grimoire/store/playstate.py</code>, it owns greeting availability and the played/completed/skipped marks (<code>backend/src/grimoire/store/playing.py:1-3</code>). The actual play path is <code>backend/src/grimoire/store/context.py</code> plus the chat routes. The <code>playing</code>/<code>playstate</code> pair is the one place in the codebase where adjacent names imply a relationship that does not exist.
 </div>
-<div class="callout warn">
-  <strong><code>sheets.lock_for()</code> is the app's general campaign lock, not a sheet lock.</strong> Named for its original scope, it now serializes proposals, audits and module publication as well (<code>backend/src/grimoire/store/sheets.py:618-627</code>). The borrowing modules each explain this in their own docstrings, which is the tell that the name is working against them.
+<div class="callout good">
+  <strong>The general campaign lock is now named and filed as one.</strong> What was <code>sheets.lock_for()</code> — named for its original scope, but serializing proposals, audits and module publication as well — moved to <code>locks.campaign_lock()</code> in <code>store/locks.py</code> (#245). The borrowing modules no longer have to explain the borrowing in their own docstrings.
 </div>
 <div class="callout good">
   <strong>Everything else lines up.</strong> Store module names match the domain nouns they own, route paths match store modules, and the frontend components are named for the records they edit (<code>GreetingEditor</code>, <code>EntityEditor</code>, <code>CharacterEditor</code>). For a codebase this size, three naming problems total is a good result.

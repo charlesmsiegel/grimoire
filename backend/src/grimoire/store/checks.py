@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 
 from . import (appearances, campaigns, characters, dice, entities, expressions,
-               modules, overlay, pcs, sheets)
+               locks, modules, overlay, pcs, sheets)
 
 
 class CheckError(Exception):
@@ -112,7 +112,7 @@ def _actor_label(cid: str, kind: str, eid: str) -> str:
 
 def resolve_check(cid: str, check_id: str, actor_ref: str, difficulty: int | None = None,
                   modifier: int = 0, seed: int | None = None) -> dict:
-    with sheets.lock_for(cid):
+    with locks.campaign_lock(cid):
         mid = modules.resolve(cid)
         if mid is None:
             raise CheckError("no mechanics module is bound to this campaign")

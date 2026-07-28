@@ -72,7 +72,7 @@ def test_concurrent_capture_and_repoint_both_land(cid_with_sheet):
     aren't sheet mutations) -- that's the real race the baseline lock
     guards against. Racing two captures on the *same* cid (the old version
     of this test) can't exercise it: both captures serialize on the shared
-    per-cid sheets.lock_for(cid) before either touches the baseline lock."""
+    per-cid locks.campaign_lock(cid) before either touches the baseline lock."""
     cid = cid_with_sheet
     s1 = scenes.create_scene(cid, "One")    # both captures already ran via
     s2 = scenes.create_scene(cid, "Two")    # the create_scene hook

@@ -4,7 +4,8 @@ Part 1: scene-start sheet baselines at <campaign>/sheet_baselines.json --
 {"<sid>": {"module", "schema": {"hash","mtime"}, "sheets": {"kind--eid":
 {"sheet_type","gen","fields"}}}}. Validity = module id + schema stamp +
 per-sheet gen + type; no cross-store invalidation hooks (gen self-invalidates).
-Lock ordering: sheet lock -> baseline lock, never reversed.
+Lock ordering: campaign lock (locks.campaign_lock) -> baseline lock,
+never reversed.
 Spec: docs/superpowers/specs/2026-07-12-mechanics-phase5-absorb-validation-design.md
 """
 
@@ -17,7 +18,7 @@ import threading
 from pathlib import Path
 
 from .. import prompts
-from . import appearances, campaigns, entities, modules, overlay, rolls, scenes, sheets
+from . import appearances, campaigns, entities, locks, modules, overlay, rolls, scenes, sheets
 
 _LOCKS: dict[str, threading.Lock] = {}
 _LOCKS_GUARD = threading.Lock()
@@ -67,7 +68,7 @@ def capture_baseline(cid: str, sid: str) -> None:
     """Snapshot every campaign sheet at scene creation. Never raises -- a
     capture failure must not fail scene creation."""
     try:
-        with sheets.lock_for(cid):          # consistent multi-file snapshot
+        with locks.campaign_lock(cid):          # consistent multi-file snapshot
             # resolve INSIDE the lock: rebinds publish under this same lock
             # (see sheets.write), so a concurrent rebind can't interleave
             # between resolving the module and snapshotting sheets under it.
@@ -299,7 +300,7 @@ def apply_delta(cid: str, sid: str, edit: dict) -> None:
     field_key = payload.get("field")
     if not (isinstance(kind, str) and isinstance(eid, str) and isinstance(field_key, str)):
         raise sheets.SheetError("malformed sheet edit")
-    with sheets.lock_for(cid):
+    with locks.campaign_lock(cid):
         mid = modules.resolve(cid)                       # once, inside the lock
         if mid is None:
             raise sheets.SheetError("no module resolved for this campaign")
