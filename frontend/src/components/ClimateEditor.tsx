@@ -71,9 +71,11 @@ export function ClimateEditor() {
     const target = (id ?? form.id).trim();
     if (!target || !form.name.trim()) return;
     setError(null);
-    if (!id && climates.some((c) => c.id === target && c.custom)) {
-      // The PUT would overwrite the existing JSON without warning. Only the
-      // explicit-edit path may write over a climate that already exists.
+    if (!id && climates.some((c) => c.id === target)) {
+      // Every registry entry, not just custom ones: entering a shipped
+      // preset's id here would submit the blank form under that id and create
+      // a custom document shadowing the preset. Copy-on-write belongs to the
+      // explicit Edit flow, where the form is seeded from the preset.
       setError(`A climate with the id '${target}' already exists. Open it to edit, or choose another id.`);
       return;
     }

@@ -251,3 +251,59 @@ test("a metadata-only save does not localize an inherited axis", async () => {
   expect(body.condition).toBe("blizzard");
   expect(body.wind).toBeUndefined();  // still inherited from _default
 });
+
+test("a note-only edit replaces the span instead of layering a duplicate", async () => {
+  // A create-shaped PUT would leave the original standing, so the old note
+  // returns in the next block and any shorter duration lets it resume.
+  vi.mocked(api.getSceneWeather).mockResolvedValue({
+    ...BASE,
+    weather: { ...BASE.weather, condition: "blizzard" },
+    source: { ...BASE.source, condition: "manual" },
+    stack: [{ id: "ovr-1", location: "saltmarch-docks", from: "2026-06-10", to: null,
+              condition: "blizzard", note: "old note" }],
+  } as never);
+  vi.mocked(api.deleteWeatherOverride).mockResolvedValue({ ok: true });
+  render(<WeatherWidget cid="c" sid="s" />);
+  fireEvent.click(await screen.findByRole("button", { name: /Weather/ }));
+  fireEvent.change(screen.getByLabelText("Note"), { target: { value: "the Wintertide storm" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.setWeatherOverride).toHaveBeenCalled());
+  expect(api.deleteWeatherOverride).toHaveBeenCalledWith("c", "saltmarch-docks", "ovr-1");
+  const body = vi.mocked(api.setWeatherOverride).mock.calls[0][1] as Record<string, unknown>;
+  // Its own bounds are kept: the duration select was not touched, so an
+  // open-ended override stays open-ended rather than becoming one block.
+  expect(body.start).toBe("2026-06-10");
+  expect(body.end).toBeNull();
+  expect(body.blocks).toBeUndefined();
+  expect(body.note).toBe("the Wintertide storm");
+});
+
+test("changing the duration of an existing span re-bounds it", async () => {
+  vi.mocked(api.getSceneWeather).mockResolvedValue({
+    ...BASE,
+    weather: { ...BASE.weather, condition: "blizzard" },
+    source: { ...BASE.source, condition: "manual" },
+    stack: [{ id: "ovr-1", location: "saltmarch-docks", from: "2026-06-10", to: null,
+              condition: "blizzard" }],
+  } as never);
+  vi.mocked(api.deleteWeatherOverride).mockResolvedValue({ ok: true });
+  render(<WeatherWidget cid="c" sid="s" />);
+  fireEvent.click(await screen.findByRole("button", { name: /Weather/ }));
+  fireEvent.change(screen.getByLabelText("For"), { target: { value: "0" } });  // this block
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.setWeatherOverride).toHaveBeenCalled());
+  const body = vi.mocked(api.setWeatherOverride).mock.calls[0][1] as Record<string, unknown>;
+  expect(body.blocks).toBe(1);
+  expect(api.deleteWeatherOverride).toHaveBeenCalled();
+});
+
+test("a brand-new override is created, not treated as a replacement", async () => {
+  render(<WeatherWidget cid="c" sid="s" />);
+  fireEvent.click(await screen.findByRole("button", { name: /Weather/ }));
+  fireEvent.change(await screen.findByLabelText("Condition"), { target: { value: "light rain" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.setWeatherOverride).toHaveBeenCalled());
+  expect(api.deleteWeatherOverride).not.toHaveBeenCalled();
+  const body = vi.mocked(api.setWeatherOverride).mock.calls[0][1] as Record<string, unknown>;
+  expect(body.start).toBe("2026-06-14T09:00");
+});
