@@ -296,3 +296,105 @@ def test_the_stack_lists_covering_spans_strongest_first(monkeypatch, tmp_path):
     rows = overrides.stack(overrides.read(cid), "saltmarch-docks",
                            ordinal(p, "2026-06-14T09:00"))
     assert [r["condition"] for r in rows] == ["fog", "clear"]
+
+
+# ---- axis-aware clear and resume ----
+
+def test_clearing_one_axis_leaves_the_others_on_the_same_span(monkeypatch, tmp_path):
+    # Removing one axis from a span that sets several must mutate that record
+    # while preserving its source, note and range — not delete and recreate it.
+    cid, p = setup(monkeypatch, tmp_path)
+    overrides.put(cid, p, "saltmarch-docks", "2026-06-14", None,
+                  {"condition": "storm", "wind": "gale"}, note="the Wintertide storm")
+    overrides.clear(cid, p, "saltmarch-docks", "2026-06-14", None, axes=["condition"])
+    data = overrides.read(cid)
+    o = ordinal(p, "2026-06-14T09:00")
+    assert overrides.winner(data, "saltmarch-docks", o, "condition") is None
+    got = overrides.winner(data, "saltmarch-docks", o, "wind")
+    assert got[1]["wind"] == "gale"
+    assert got[1]["note"] == "the Wintertide storm"
+
+
+def test_a_span_left_setting_nothing_is_dropped(monkeypatch, tmp_path):
+    cid, p = setup(monkeypatch, tmp_path)
+    overrides.put(cid, p, "saltmarch-docks", "2026-06-14", None, {"condition": "storm"})
+    overrides.clear(cid, p, "saltmarch-docks", "2026-06-14", None, axes=["condition"])
+    assert overrides.read(cid).get("saltmarch-docks", []) == []
+
+
+def test_clearing_at_a_location_suppresses_an_inherited_default(monkeypatch, tmp_path):
+    # Truncating the _default span would clear every other location too;
+    # skipping it would leave the docks overridden and the button ineffective.
+    cid, p = setup(monkeypatch, tmp_path)
+    overrides.put(cid, p, overrides.DEFAULT_KEY, "2026-06-14", None, {"condition": "storm"})
+    overrides.clear(cid, p, "saltmarch-docks", "2026-06-14", None, axes=["condition"])
+    data = overrides.read(cid)
+    o = ordinal(p, "2026-06-14T09:00")
+    kind, _ = overrides.winner(data, "saltmarch-docks", o, "condition")
+    assert kind == "suppress"
+    # Everywhere else still inherits it.
+    assert overrides.winner(data, "lighthouse", o, "condition")[1]["condition"] == "storm"
+
+
+def test_suppression_terminates_resolution_downward(monkeypatch, tmp_path):
+    # Otherwise a local suppression merely shadows the manual _default and
+    # exposes the extractor one beneath it — shadow-promotion one rank down.
+    cid, p = setup(monkeypatch, tmp_path)
+    overrides.put(cid, p, overrides.DEFAULT_KEY, "2026-06-14", None, {"condition": "drizzle"},
+                  source="extractor")
+    overrides.put(cid, p, overrides.DEFAULT_KEY, "2026-06-14", None, {"condition": "storm"})
+    overrides.clear(cid, p, "saltmarch-docks", "2026-06-14", None, axes=["condition"])
+    kind, _ = overrides.winner(overrides.read(cid), "saltmarch-docks",
+                               ordinal(p, "2026-06-14T09:00"), "condition")
+    assert kind == "suppress"
+
+
+def test_a_newer_local_override_beats_an_earlier_suppression(monkeypatch, tmp_path):
+    # A GM who clears an inherited storm and later pins a local drizzle expects
+    # the drizzle; an unconditional "suppressed means procedural" would make
+    # the second instruction vanish.
+    cid, p = setup(monkeypatch, tmp_path)
+    overrides.put(cid, p, overrides.DEFAULT_KEY, "2026-06-14", None, {"condition": "storm"})
+    overrides.clear(cid, p, "saltmarch-docks", "2026-06-14", None, axes=["condition"])
+    overrides.put(cid, p, "saltmarch-docks", "2026-06-14", None, {"condition": "drizzle"})
+    got = overrides.winner(overrides.read(cid), "saltmarch-docks",
+                           ordinal(p, "2026-06-14T09:00"), "condition")
+    assert got[0] == "set" and got[1]["condition"] == "drizzle"
+
+
+def test_resume_restores_one_axis_and_leaves_the_rest_suppressed(monkeypatch, tmp_path):
+    # A single span routinely names several axes, since clearing all three at
+    # once produces exactly that; deleting it would restore inheritance for
+    # every axis the user meant to keep suppressed.
+    cid, p = setup(monkeypatch, tmp_path)
+    overrides.put(cid, p, overrides.DEFAULT_KEY, "2026-06-14", None,
+                  {"condition": "storm", "wind": "gale"})
+    overrides.clear(cid, p, "saltmarch-docks", "2026-06-14", None)
+    overrides.resume(cid, p, "saltmarch-docks", "2026-06-14", None, axes=["wind"])
+    data = overrides.read(cid)
+    o = ordinal(p, "2026-06-14T09:00")
+    assert overrides.winner(data, "saltmarch-docks", o, "wind")[1]["wind"] == "gale"
+    assert overrides.winner(data, "saltmarch-docks", o, "condition")[0] == "suppress"
+
+
+def test_a_suppression_naming_nothing_is_dropped(monkeypatch, tmp_path):
+    cid, p = setup(monkeypatch, tmp_path)
+    overrides.put(cid, p, overrides.DEFAULT_KEY, "2026-06-14", None, {"condition": "storm"})
+    overrides.clear(cid, p, "saltmarch-docks", "2026-06-14", None, axes=["condition"])
+    overrides.resume(cid, p, "saltmarch-docks", "2026-06-14", None, axes=["condition"])
+    assert overrides.read(cid).get("saltmarch-docks", []) == []
+    assert overrides.winner(overrides.read(cid), "saltmarch-docks",
+                            ordinal(p, "2026-06-14T09:00"), "condition")[1]["condition"] == "storm"
+
+
+def test_a_split_keeps_the_original_id_on_the_earlier_fragment(monkeypatch, tmp_path):
+    # The client holds ids from the response it is acting on, so regenerating
+    # both would invalidate one it was just handed.
+    cid, p = setup(monkeypatch, tmp_path)
+    made = overrides.put(cid, p, "saltmarch-docks", "2026-06-10", "2026-06-20",
+                         {"condition": "storm"})
+    overrides.clear(cid, p, "saltmarch-docks", "2026-06-14", "2026-06-15")
+    records = sorted(overrides.read(cid)["saltmarch-docks"],
+                     key=lambda r: overrides.ordinal_of(r["from_fixed"]))
+    assert records[0]["id"] == made["id"]
+    assert records[1]["id"] != made["id"]
