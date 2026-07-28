@@ -167,6 +167,13 @@ def test_requires_temp_naming_only_zero_weight_band_rejected():
                         {"name": "snow", "weight": 2, "requires_temp": ["cold"]}])]))
 
 
+def test_non_string_requires_temp_element_rejected():
+    with pytest.raises(ClimateError, match="requires_temp"):
+        validate(climate(seasons=[season(
+            conditions=[{"name": "clear", "weight": 1},
+                        {"name": "snow", "weight": 2, "requires_temp": [{}]}])]))
+
+
 def test_empty_requires_temp_rejected():
     with pytest.raises(ClimateError, match="requires_temp"):
         validate(climate(seasons=[season(
@@ -420,6 +427,12 @@ def validate(doc: dict) -> dict:
                 raise ClimateError(
                     f"{where}: requires_temp on {c['name']!r} must be a non-empty array "
                     "(omit the key entirely for an unconstrained condition)")
+            if not all(isinstance(r, str) for r in req):
+                # Elements as well as the array: a dict element would raise
+                # `TypeError: unhashable` at the set intersection below, which
+                # a direct caller of validate() sees instead of a ClimateError.
+                raise ClimateError(
+                    f"{where}: requires_temp on {c['name']!r} must contain only strings")
             unknown = [r for r in req if r not in temp_names]
             if unknown:
                 raise ClimateError(
@@ -451,7 +464,7 @@ def validate(doc: dict) -> dict:
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `backend/.venv/Scripts/python.exe -m pytest backend/tests/test_climate_schema.py -q`
-Expected: PASS (27 tests)
+Expected: PASS (28 tests)
 
 - [ ] **Step 5: Commit**
 
@@ -2026,6 +2039,13 @@ def test_the_season_does_change_at_the_boundary_dawn(monkeypatch, tmp_path):
     assert weather.current_weather(cid, lid, "2026-07-02T06:00")["season"] == "second"
 
 
+def test_a_malformed_calendar_config_does_not_raise(monkeypatch, tmp_path):
+    # read_calendar catches JSONDecodeError but not a valid-JSON non-object.
+    cid, lid = setup(monkeypatch, tmp_path)
+    (campaigns.campaign_root(cid) / "calendar.json").write_text("[]", encoding="utf-8")
+    assert weather.current_weather(cid, lid, "2026-06-14T09:00") is None
+
+
 def test_a_moment_at_the_calendar_lower_bound_does_not_raise(monkeypatch, tmp_path):
     # 0001-01-01T01:00 parses, but its block belongs to the previous date, and
     # `date.fromordinal(0)` raises. Weather must degrade, not take the turn down.
@@ -2099,12 +2119,15 @@ def current_weather(cid: str, location_id: str | None, native: str | None) -> di
     if not location_id or not native:
         return None
 
-    cfg = calendars.read_calendar(campaigns.campaign_root(cid))
+    # read_calendar is inside the guard: it catches JSONDecodeError but not a
+    # valid-JSON non-object, so a hand-edited `calendar.json` containing `[]`
+    # reaches `raw.get(...)` and raises AttributeError.
     try:
+        cfg = calendars.read_calendar(campaigns.campaign_root(cid))
         provider = calendars.get_provider(cfg["primary"])
         fixed = calendars.fixed_of(provider, native)
         minutes = calendars.minutes_of(native)
-    except (calendars.CalendarError, KeyError, TypeError):
+    except (calendars.CalendarError, KeyError, TypeError, AttributeError, OSError):
         return None
 
     owning_day, _ = blocks.block_of(fixed, minutes)
@@ -2133,7 +2156,7 @@ def current_weather(cid: str, location_id: str | None, native: str | None) -> di
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `backend/.venv/Scripts/python.exe -m pytest backend/tests/test_weather_resolve.py -q`
-Expected: PASS (13 tests)
+Expected: PASS (14 tests)
 
 - [ ] **Step 5: Commit**
 
@@ -2279,7 +2302,21 @@ In `templates/scene/system.j2`, add immediately after the `today.j2` block:
 {%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
 ```
 
-- [ ] **Step 6: Run tests to verify they pass**
+- [ ] **Step 6: Update the template verifier's fixture**
+
+`scripts/verify_templates.py` renders with `StrictUndefined` (line 32) and
+builds its **own** data dict (around line 450) rather than calling
+`context._assemble`. Adding the include without adding the key makes the
+verifier raise `UndefinedError` for every system-template scenario — including
+the run mandated in the next step.
+
+Beside `"plot_lines": ..., "today": today,` add:
+
+```python
+            "weather": {"condition": "overcast", "temperature": "cold", "wind": "breeze"},
+```
+
+- [ ] **Step 7: Run tests to verify they pass**
 
 Run: `backend/.venv/Scripts/python.exe -m pytest backend/tests/test_weather_prompt.py -q`
 Expected: PASS (7 tests)
@@ -2290,11 +2327,12 @@ Expected: PASS — no regressions in `test_context.py`
 Run: `backend/.venv/Scripts/python.exe scripts/verify_templates.py`
 Expected: all templates render
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add templates/scene/sections/weather.j2 templates/scene/system.j2 \
-        backend/src/grimoire/store/context.py backend/tests/test_weather_prompt.py
+        backend/src/grimoire/store/context.py scripts/verify_templates.py \
+        backend/tests/test_weather_prompt.py
 git commit -m "feat(weather): render the weather section into scene prompts"
 ```
 
