@@ -64,3 +64,48 @@ def get(climate_id: str) -> dict | None:
     if not isinstance(climate_id, str) or not climate_id:
         return None
     return _scan(_custom_dir()).get(climate_id) or _scan(_PRESETS).get(climate_id)
+
+
+def is_builtin(climate_id: str) -> bool:
+    return climate_id in _scan(_PRESETS)
+
+
+def custom_path(climate_id: str) -> Path:
+    return _custom_dir() / f"{climate_id}.json"
+
+
+def save(doc: dict) -> dict:
+    """Validate and write a climate to the private tier.
+
+    Shipped presets live inside the installed backend package and must never be
+    written, so editing one **copies it to `<GRIMOIRE_HOME>/climates/{id}.json`
+    and edits the copy** — the same copy-on-write shape campaigns already use
+    when diverging from a world. Lookup precedence does the rest: a custom
+    climate shadows a shipped one of the same id.
+
+    Raises `ClimateError` for an invalid document, so the caller can report it
+    rather than writing a file the registry would silently skip.
+    """
+    doc = validate(doc)
+    _custom_dir().mkdir(parents=True, exist_ok=True)
+    custom_path(doc["id"]).write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    return doc
+
+
+def remove(climate_id: str) -> bool:
+    """Delete the private copy. Returns whether one existed.
+
+    A custom climate that shadows a preset reverts to the preset rather than
+    vanishing; one with no preset behind it simply disappears. That asymmetry
+    is why `list_climates` reports both tier flags rather than a single
+    `custom` label — the editor cannot otherwise tell *Revert to preset* from
+    *Delete*, or know whether deleting frees the id.
+    """
+    if not isinstance(climate_id, str) or not climate_id:
+        return False
+    path = custom_path(climate_id)
+    try:
+        path.unlink()
+        return True
+    except (OSError, ValueError):
+        return False
