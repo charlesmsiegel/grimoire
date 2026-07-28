@@ -201,6 +201,29 @@ def test_two_seasons_covering_the_year_pass():
     assert len(validate(climate(seasons=[a, b]))["seasons"]) == 2
 
 
+def test_overlapping_seasons_that_still_cover_the_year_pass():
+    # Overlaps are legal — the spec resolves them by array order. Only *gaps*
+    # are an error, so exact tiling must not be required.
+    a = season(name="long", **{"from": 0.0, "to": 0.6})
+    b = season(name="late", **{"from": 0.5, "to": 0.0})
+    assert len(validate(climate(seasons=[a, b]))["seasons"]) == 2
+
+
+def test_non_object_document_rejected():
+    with pytest.raises(ClimateError, match="object"):
+        validate([{"id": "x"}])
+
+
+def test_non_object_season_rejected():
+    with pytest.raises(ClimateError, match="object"):
+        validate(climate(seasons=[None]))
+
+
+def test_non_object_table_entry_rejected():
+    with pytest.raises(ClimateError, match="object"):
+        validate(climate(seasons=[season(wind=["calm"])]))
+
+
 def test_climate_id_with_slash_rejected():
     with pytest.raises(ClimateError, match="id"):
         validate(climate(id="a/b"))
@@ -247,6 +270,8 @@ class ClimateError(Exception):
 def _weights(entries: list[dict], where: str) -> list[float]:
     out = []
     for e in entries:
+        if not isinstance(e, dict):
+            raise ClimateError(f"{where}: each entry must be a JSON object")
         name = e.get("name")
         if not isinstance(name, str) or not name.strip():
             raise ClimateError(f"{where}: every entry needs a non-empty name")
@@ -259,25 +284,49 @@ def _weights(entries: list[dict], where: str) -> list[float]:
         raise ClimateError(f"{where}: duplicate entry names")
     if not any(w > 0 for w in out):
         raise ClimateError(f"{where}: needs at least one entry with a positive weight")
-    if not math.isfinite(math.fsum(out)):
+    # Plain sum, not math.fsum: fsum *raises* OverflowError on an intermediate
+    # overflow, which would escape as something other than a ClimateError.
+    # sum() saturates to inf, which is exactly the condition being tested for.
+    if not math.isfinite(sum(out)):
         raise ClimateError(f"{where}: weights sum to a non-finite total")
     return out
 
 
+def _intervals(seasons: list[dict]) -> list[tuple[float, float]]:
+    """Seasons as plain [start, end) intervals on [0, 1), wraps unrolled."""
+    out: list[tuple[float, float]] = []
+    for s in seasons:
+        a, b = float(s["from"]), float(s["to"])
+        if a == b:
+            return [(0.0, 1.0)]  # a single season spanning the whole year
+        if a < b:
+            out.append((a, b))
+        else:
+            out.append((a, 1.0))
+            out.append((0.0, b))
+    return out
+
+
 def _covers_year(seasons: list[dict]) -> bool:
-    """True when the seasons tile [0, 1) with no gap."""
-    if len(seasons) == 1 and seasons[0]["from"] == seasons[0]["to"]:
-        return True
-    edges = sorted({float(s["from"]) for s in seasons})
-    for i, start in enumerate(edges):
-        end = edges[(i + 1) % len(edges)]
-        match = [s for s in seasons if float(s["from"]) == start]
-        if not match or float(match[0]["to"]) != end:
+    """True when the seasons leave no *gap*.
+
+    Overlaps are legal — the spec resolves them by array order — so this sweeps
+    for uncovered intervals rather than demanding an exact tiling. Requiring
+    each season to start exactly where the last ended would reject
+    ``[0.0, 0.6)`` followed by ``[0.5, 0.0)``, which covers the year perfectly
+    well.
+    """
+    reach = 0.0
+    for start, end in sorted(_intervals(seasons)):
+        if start > reach:
             return False
-    return True
+        reach = max(reach, end)
+    return reach >= 1.0
 
 
 def validate(doc: dict) -> dict:
+    if not isinstance(doc, dict):
+        raise ClimateError("a climate document must be a JSON object")
     cid = doc.get("id")
     if not isinstance(cid, str) or not _ID.match(cid) or not cid.strip("."):
         raise ClimateError(f"climate id must match [A-Za-z0-9._-]+ and not be dots only: {cid!r}")
@@ -291,6 +340,8 @@ def validate(doc: dict) -> dict:
         raise ClimateError("a climate needs at least one season")
 
     for s in seasons:
+        if not isinstance(s, dict):
+            raise ClimateError(f"each season must be a JSON object, got {type(s).__name__}")
         where = f"season {s.get('name', '?')!r}"
         for edge in ("from", "to"):
             v = s.get(edge)
@@ -490,10 +541,18 @@ _PRESETS = Path(__file__).parent / "presets"
 
 
 def _read(path: Path) -> dict | None:
-    """A climate document, or None if the file is unreadable or invalid."""
+    """A climate document, or None if the file is unreadable or invalid.
+
+    Catches broadly on purpose. `validate` translates the shapes it anticipates
+    into `ClimateError`, but a hand-edited file can be malformed in ways it does
+    not reach — and one bad private file must never abort the registry scan and
+    take prompt generation down with it. Skipped, not fatal, retried next call.
+    """
     try:
         return validate(json.loads(path.read_text(encoding="utf-8")))
     except (OSError, json.JSONDecodeError, ClimateError):
+        return None
+    except Exception:  # malformed beyond what validate anticipates
         return None
 
 
@@ -1191,15 +1250,24 @@ def test_different_zones_are_uncorrelated():
 
 
 def test_no_seam_at_an_arbitrary_boundary():
-    # Nothing distinguishes one ordinal from another: the lag-1 correlation
-    # across a chosen "boundary" matches the correlation everywhere else.
-    xs = series(0.9, n=40_000)
-    everywhere = lag1(xs)
-    across = [(xs[i], xs[i + 1]) for i in range(0, len(xs) - 1, 1825)]
-    mean = sum(xs) / len(xs)
-    var = sum((x - mean) ** 2 for x in xs) / len(xs)
-    seam = sum((a - mean) * (b - mean) for a, b in across) / (len(across) * var)
-    assert seam == pytest.approx(everywhere, abs=0.1)
+    # Nothing distinguishes one ordinal from another: the correlation across a
+    # chosen "boundary" ordinal matches the correlation everywhere else.
+    #
+    # One pair from each of many *independent* zones, not many pairs strided
+    # along one series. Striding gives only a couple of dozen samples whose
+    # noisy covariance is then normalized by the global variance, which
+    # measures ~1.32 against a true 0.90 — a test that fails against a correct
+    # implementation. Independent zones make each pair a fresh draw.
+    boundary = 1825
+    pairs = [(field("realm", f"seam-{n:04d}", "condition", boundary, 0.9),
+              field("realm", f"seam-{n:04d}", "condition", boundary + 1, 0.9))
+             for n in range(4000)]
+    a = [p[0] for p in pairs]
+    b = [p[1] for p in pairs]
+    ma, mb = sum(a) / len(a), sum(b) / len(b)
+    cov = sum((x - ma) * (y - mb) for x, y in pairs)
+    norm = math.sqrt(sum((x - ma) ** 2 for x in a) * sum((y - mb) ** 2 for y in b))
+    assert cov / norm == pytest.approx(0.9, abs=0.05)
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -1418,10 +1486,103 @@ def draw(cid: str, zone: str, season: dict, persistence: float, ordinal: int) ->
 Run: `backend/.venv/Scripts/python.exe -m pytest backend/tests/test_weather_draw.py -q`
 Expected: PASS (10 tests)
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Capture the end-to-end regression fixture**
+
+`latent_u` is pinned to spec vectors, but everything downstream of it —
+`inv_cdf`, the filter's evaluation order, `Φ(g)`, the inverse-CDF draw — is
+covered only by distribution and correlation tests, which a change can move
+without breaking. That change would silently move every existing campaign's
+weather. The spec asks for `z`, `g`, `Φ(g)` and the drawn entry to be
+fixtured; this is that.
+
+Write `backend/tests/fixtures/generate_weather_vectors.py`:
+
+```python
+"""Regenerate the weather regression fixture. Run deliberately, never in CI.
+
+Regenerating after an intentional algorithm change is correct. Regenerating to
+make a red test go green destroys the only thing protecting a user's existing
+weather from silently moving.
+"""
+
+import json
+import pathlib
+
+from grimoire.store.weather.draw import draw
+from grimoire.store.weather.noise import field, latent_u, latent_z, quantile
+
+SEASON = {
+    "name": "winter", "from": 0.0, "to": 0.0,
+    "temperature": [{"name": "freezing", "weight": 2}, {"name": "mild", "weight": 8}],
+    "conditions": [{"name": "clear", "weight": 5},
+                   {"name": "snow", "weight": 5, "requires_temp": ["freezing"]}],
+    "wind": [{"name": "calm", "weight": 1}, {"name": "breeze", "weight": 4},
+             {"name": "strong", "weight": 3}, {"name": "gale", "weight": 1}],
+}
+CASES = [("saltmarch-chronicle", "saltmarch", 0, 0.0),
+         ("saltmarch-chronicle", "saltmarch", 0, 0.5),
+         ("saltmarch-chronicle", "saltmarch", 0, 0.9),
+         ("saltmarch-chronicle", "highreach", 137, 0.35),
+         ("saltmarch-chronicle", "saltmarch", -42, 0.75)]
+
+rows = []
+for cid, zone, i, p in CASES:
+    rows.append({
+        "cid": cid, "zone": zone, "ordinal": i, "persistence": p,
+        "u": latent_u(cid, zone, "condition", i),
+        "z": latent_z(cid, zone, "condition", i),
+        "g": field(cid, zone, "condition", i, p),
+        "phi": quantile(cid, zone, "condition", i, p),
+        "drawn": draw(cid, zone, SEASON, p, i),
+    })
+
+out = pathlib.Path(__file__).parent / "weather_vectors.json"
+out.write_text(json.dumps({"season": SEASON, "rows": rows}, indent=2), encoding="utf-8")
+print(f"wrote {len(rows)} rows to {out}")
+```
+
+Run it once and inspect the output before committing:
 
 ```bash
-git add backend/src/grimoire/store/weather/draw.py backend/tests/test_weather_draw.py
+cd backend && PYTHONPATH=src python -m tests.fixtures.generate_weather_vectors
+```
+
+Sanity-check the result by eye: every `u` and `phi` strictly inside (0, 1),
+`z` and `g` of order ±3, `drawn.condition` never `snow` unless
+`drawn.temperature` is `freezing`. Then append to `backend/tests/test_weather_draw.py`:
+
+```python
+def test_end_to_end_regression_fixture():
+    """Pins the whole chain: hash, inv_cdf, filter order, phi, inverse CDF.
+
+    Scoped to this installation (spec: Determinism scope) — it detects an
+    accidental change to the algorithm, not cross-implementation conformance.
+    If this fails, weather in every existing campaign has moved. Regenerate the
+    fixture only when that was the intent.
+    """
+    import json
+    import pathlib
+    from grimoire.store.weather.noise import field, latent_u, latent_z, quantile
+
+    data = json.loads((pathlib.Path(__file__).parent / "fixtures" /
+                       "weather_vectors.json").read_text(encoding="utf-8"))
+    for row in data["rows"]:
+        cid, zone, i, p = row["cid"], row["zone"], row["ordinal"], row["persistence"]
+        assert latent_u(cid, zone, "condition", i) == row["u"]
+        assert latent_z(cid, zone, "condition", i) == row["z"]
+        assert field(cid, zone, "condition", i, p) == row["g"]
+        assert quantile(cid, zone, "condition", i, p) == row["phi"]
+        assert draw(cid, zone, data["season"], p, i) == row["drawn"]
+```
+
+Run: `backend/.venv/Scripts/python.exe -m pytest backend/tests/test_weather_draw.py -q`
+Expected: PASS
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add backend/src/grimoire/store/weather/draw.py backend/tests/test_weather_draw.py \
+        backend/tests/fixtures/generate_weather_vectors.py backend/tests/fixtures/weather_vectors.json
 git commit -m "feat(weather): inverse-CDF draw across the three axes"
 ```
 
@@ -1732,11 +1893,63 @@ def test_one_night_block_is_stable_across_midnight(monkeypatch, tmp_path):
 
 
 def test_a_night_spanning_a_season_boundary_stays_in_one_season(monkeypatch, tmp_path):
+    # The boundary must actually fall on the crossed date, or the test passes
+    # even when the season is (wrongly) looked up per queried moment. The
+    # shipped fallback's winter wraps the year end, so 31 Dec / 1 Jan are both
+    # winter and would prove nothing. 182/365 puts the boundary on 2 July.
+    import json
     cid, lid = setup(monkeypatch, tmp_path)
-    late = weather.current_weather(cid, lid, "2026-12-31T23:00")
-    early = weather.current_weather(cid, lid, "2027-01-01T01:00")
-    assert late["season"] == early["season"]
+    (tmp_path / "climates").mkdir(exist_ok=True)
+    (tmp_path / "climates" / "split-year.json").write_text(json.dumps({
+        "id": "split-year", "name": "Split Year", "persistence": 0.5,
+        "seasons": [
+            {"name": "first", "from": 0.0, "to": 182 / 365,
+             "temperature": [{"name": "mild", "weight": 1}],
+             "conditions": [{"name": "clear", "weight": 1}],
+             "wind": [{"name": "calm", "weight": 1}]},
+            {"name": "second", "from": 182 / 365, "to": 0.0,
+             "temperature": [{"name": "hot", "weight": 1}],
+             "conditions": [{"name": "dry", "weight": 1}],
+             "wind": [{"name": "still", "weight": 1}]},
+        ]}), encoding="utf-8")
+    (campaigns.campaign_root(cid) / "climate.json").write_text(
+        json.dumps({"default_climate": "split-year"}), encoding="utf-8")
+
+    late = weather.current_weather(cid, lid, "2026-07-01T23:00")
+    early = weather.current_weather(cid, lid, "2026-07-02T01:00")
+    assert late["season"] == "first"      # 1 July's night, owned by 1 July
+    assert early["season"] == "first"     # the same block, not 2 July's season
     assert late == early
+
+
+def test_the_season_does_change_at_the_boundary_dawn(monkeypatch, tmp_path):
+    # The mirror of the test above: the boundary is real, it just takes effect
+    # at the first block the new date owns rather than at midnight.
+    import json
+    cid, lid = setup(monkeypatch, tmp_path)
+    (tmp_path / "climates").mkdir(exist_ok=True)
+    (tmp_path / "climates" / "split-year.json").write_text(json.dumps({
+        "id": "split-year", "name": "Split Year", "persistence": 0.5,
+        "seasons": [
+            {"name": "first", "from": 0.0, "to": 182 / 365,
+             "temperature": [{"name": "mild", "weight": 1}],
+             "conditions": [{"name": "clear", "weight": 1}],
+             "wind": [{"name": "calm", "weight": 1}]},
+            {"name": "second", "from": 182 / 365, "to": 0.0,
+             "temperature": [{"name": "hot", "weight": 1}],
+             "conditions": [{"name": "dry", "weight": 1}],
+             "wind": [{"name": "still", "weight": 1}]},
+        ]}), encoding="utf-8")
+    (campaigns.campaign_root(cid) / "climate.json").write_text(
+        json.dumps({"default_climate": "split-year"}), encoding="utf-8")
+    assert weather.current_weather(cid, lid, "2026-07-02T06:00")["season"] == "second"
+
+
+def test_a_moment_at_the_calendar_lower_bound_does_not_raise(monkeypatch, tmp_path):
+    # 0001-01-01T01:00 parses, but its block belongs to the previous date, and
+    # `date.fromordinal(0)` raises. Weather must degrade, not take the turn down.
+    cid, lid = setup(monkeypatch, tmp_path)
+    assert weather.current_weather(cid, lid, "0001-01-01T01:00") is None
 
 
 def test_different_blocks_can_differ(monkeypatch, tmp_path):
@@ -1821,7 +2034,16 @@ def current_weather(cid: str, location_id: str | None, native: str | None) -> di
     # Season comes from the block's owning date, not the queried moment: a
     # night spans midnight and may span a season boundary, and one block must
     # not render two different skies depending which minute inside it is asked.
-    season = seasons.season_for(climate, seasons.year_fraction(provider, owning_day))
+    #
+    # ValueError is in the net because the owning date can fall one day below
+    # the provider's range: 0001-01-01T01:00 parses fine, but its block is the
+    # previous date's night, and `gregorian.describe` calls `date.fromordinal`,
+    # which rejects day 0. Rare, but it would raise inside prompt assembly.
+    try:
+        fraction = seasons.year_fraction(provider, owning_day)
+    except (calendars.CalendarError, ValueError, OverflowError):
+        return None
+    season = seasons.season_for(climate, fraction)
 
     axes = _draw.draw(cid, resolved["zone"], season, resolved["persistence"], ordinal)
     return {**axes, "climate": climate["id"], "season": season["name"]}
@@ -2054,7 +2276,17 @@ Expected: FAIL — `TypeError: create_campaign() got an unexpected keyword argum
 
 - [ ] **Step 3: Extend create_campaign**
 
-In `backend/src/grimoire/store/campaigns.py`, change the signature:
+In `backend/src/grimoire/store/campaigns.py`, add `json` to the imports — the
+module currently imports only `filecmp`, `shutil` and `Path`, so the write
+below would raise `NameError` *after* the campaign directory exists:
+
+```python
+import filecmp
+import json
+import shutil
+```
+
+Change the signature:
 
 ```python
 def create_campaign(name: str, world_id: str, region: str | None = None,
