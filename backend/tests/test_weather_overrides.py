@@ -462,7 +462,7 @@ def test_a_failed_authoring_write_raises_rather_than_reporting_success(monkeypat
     import pytest
     def boom(*a, **k):
         raise OSError("read-only file system")
-    monkeypatch.setattr(overrides.Path, "write_text", boom)
+    monkeypatch.setattr(overrides.atomic, "write_text", boom)
     with pytest.raises(overrides.OverrideWriteError):
         overrides.put(cid, p, "saltmarch-docks", "2026-06-14", None, {"condition": "fog"})
 
@@ -474,13 +474,13 @@ def test_load_repair_still_tolerates_an_unwritable_store(monkeypatch, tmp_path):
         {"from": "2026-06-14", "to": None,
          "from_fixed": [calendars.fixed_of(p, "2026-06-14"), 0], "to_fixed": None,
          "condition": "fog", "source": "manual"}]})
-    real = overrides.Path.write_text
-    def boom(self, *a, **k):
+    real = overrides.atomic.write_text
+    def boom(*a, **k):
         raise OSError("read-only file system")
-    monkeypatch.setattr(overrides.Path, "write_text", boom)
+    monkeypatch.setattr(overrides.atomic, "write_text", boom)
     got = overrides.read(cid)
     assert got["saltmarch-docks"][0]["condition"] == "fog"
-    monkeypatch.setattr(overrides.Path, "write_text", real)
+    monkeypatch.setattr(overrides.atomic, "write_text", real)
 
 
 def test_put_ordinals_carries_a_suppression(monkeypatch, tmp_path):

@@ -20,7 +20,7 @@ import json
 import re
 from pathlib import Path
 
-from .. import calendars, campaigns
+from .. import atomic, calendars, campaigns
 from ..paths import now_iso
 from . import blocks
 
@@ -210,7 +210,7 @@ def _write(cid: str, data: dict[str, list[dict]], *, best_effort: bool = False) 
     next reload with nothing having said so.
     """
     try:
-        path(cid).write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        atomic.write_text(path(cid), json.dumps(data, indent=2) + "\n")
     except OSError as e:
         if best_effort:
             return

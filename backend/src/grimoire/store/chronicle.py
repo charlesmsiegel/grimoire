@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import campaigns
+from . import atomic, campaigns
 from .paths import now_iso
 
 
@@ -41,8 +41,7 @@ def absorb(cid: str, record: dict) -> dict:
     data = read_chronicle(cid)
     stored = {**record, "absorbed": now_iso()}
     data[record["id"]] = stored
-    _chronicle_path(cid).write_text(
-        json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    atomic.write_text(_chronicle_path(cid), json.dumps(data, indent=2, sort_keys=True) + "\n")
     return stored
 
 
@@ -56,8 +55,7 @@ def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
         if rec.get("id") in mapping:
             rec = {**rec, "id": mapping[rec["id"]]}
         out[mapping.get(k, k)] = rec
-    _chronicle_path(cid).write_text(
-        json.dumps(out, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    atomic.write_text(_chronicle_path(cid), json.dumps(out, indent=2, sort_keys=True) + "\n")
 
 
 def recent(cid: str, n: int) -> list[dict]:
@@ -75,7 +73,7 @@ def append_timeline(cid: str, events: list[dict]) -> None:
     existing = p.read_text(encoding="utf-8") if p.exists() else "# Timeline\n"
     lines = [f"- **{e.get('date', '')}** {e.get('text', '').strip()}".rstrip()
              for e in events]
-    p.write_text(existing.rstrip() + "\n" + "\n".join(lines) + "\n", encoding="utf-8")
+    atomic.write_text(p, existing.rstrip() + "\n" + "\n".join(lines) + "\n")
 
 
 def scene_facts(cid: str, sid: str) -> dict:

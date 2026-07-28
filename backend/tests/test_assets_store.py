@@ -129,3 +129,45 @@ def test_list_images_version_token_tracks_content(tmp_path):
     os.utime(p, ns=(p.stat().st_atime_ns, p.stat().st_mtime_ns + 1_000_000))
     second = assets.list_images(tmp_path, "c", "v1")
     assert second[0]["v"] != first[0]["v"]
+
+
+def test_a_failed_image_write_keeps_the_previous_image(tmp_path, monkeypatch):
+    """put_image used to unlink prior-extension files BEFORE writing the new
+    one, so anything that failed in between lost the image outright -- a bug no
+    amount of write atomicity can fix, because the delete came first (#233)."""
+    from grimoire.store import atomic
+    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"original", "png")
+
+    def boom(*a, **kw):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(atomic, "write_bytes", boom)
+    with pytest.raises(OSError):
+        assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"new", "jpg")
+
+    p = assets.image_path(tmp_path, "sera", "default", assets.AVATAR)
+    assert p is not None and p.read_bytes() == b"original"
+
+
+def test_a_stale_sibling_extension_does_not_win_the_lookup(tmp_path):
+    """Writing before unlinking leaves both extensions present for a moment.
+    image_path used to return sorted(...)[0], which hands back the STALE file
+    whenever the old extension sorts first (jpg < png)."""
+    d = tmp_path / "characters" / "sera" / "assets" / "default"
+    d.mkdir(parents=True)
+    (d / "avatar.jpg").write_bytes(b"stale")
+    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"fresh", "png")
+
+    p = assets.image_path(tmp_path, "sera", "default", assets.AVATAR)
+    assert p is not None and p.read_bytes() == b"fresh"
+
+
+def test_an_orphaned_sibling_still_resolves_to_the_newest(tmp_path, monkeypatch):
+    """If the stale-sibling unlink ever fails, the wrong image must not become
+    permanently sticky -- the mtime tie-break makes that state self-healing."""
+    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"old", "jpg")
+    monkeypatch.setattr("pathlib.Path.unlink", lambda self, **kw: None)
+    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"new", "png")
+
+    p = assets.image_path(tmp_path, "sera", "default", assets.AVATAR)
+    assert p is not None and p.read_bytes() == b"new"

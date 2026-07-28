@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from . import atomic
 
 AVATAR = "avatar"
 FOCUS_FILE = "focus.json"
@@ -43,7 +44,14 @@ def image_path(root: Path, cid: str, vid: str, name: str, base: str = "character
     if not d.exists():
         return None
     matches = sorted(d.glob(f"{name}.*"))
-    return matches[0] if matches else None
+    if not matches:
+        return None
+    # Newest wins, not alphabetically-first. put_image writes the new file
+    # before unlinking stale other-extension siblings (so a crash can't lose
+    # the image), which leaves both present for a moment -- and a plain
+    # sorted()[0] would hand back the stale one. Also self-heals if that
+    # unlink ever fails.
+    return max(matches, key=lambda p: (p.stat().st_mtime_ns, p.name))
 
 
 def list_images(root: Path, cid: str, vid: str, base: str = "characters") -> list[dict]:
@@ -88,8 +96,7 @@ def write_focus(root: Path, cid: str, vid: str, focus: int, base: str = "charact
         raise ValueError("unsafe image id")
     d = _dir(root, cid, vid, base)
     d.mkdir(parents=True, exist_ok=True)
-    (d / FOCUS_FILE).write_text(json.dumps({AVATAR: max(0, min(100, int(focus)))}),
-                                encoding="utf-8")
+    atomic.write_text(d / FOCUS_FILE, json.dumps({AVATAR: max(0, min(100, int(focus)))}))
 
 
 def clear_focus(root: Path, cid: str, vid: str, base: str = "characters") -> None:
@@ -109,9 +116,15 @@ def put_image(root: Path, cid: str, vid: str, name: str, data: bytes, ext: str,
         raise ValueError("unsupported image type")
     d = _dir(root, cid, vid, base)
     d.mkdir(parents=True, exist_ok=True)
-    for p in d.glob(f"{name}.*"):  # drop any prior-ext file of this name
-        p.unlink()
-    (d / f"{name}.{ext}").write_bytes(data)
+    # Write BEFORE dropping prior-extension files. The reverse order (which
+    # this used to do) loses the image outright if anything fails between the
+    # unlink and the write -- atomicity alone cannot fix an ordering bug.
+    # image_path() breaks the resulting momentary tie by mtime.
+    written = d / f"{name}.{ext}"
+    atomic.write_bytes(written, data)
+    for p in d.glob(f"{name}.*"):
+        if p != written:
+            p.unlink()
     if name == AVATAR:
         clear_focus(root, cid, vid, base)
     return ext

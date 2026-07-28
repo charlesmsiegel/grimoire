@@ -14,11 +14,10 @@ Spec: docs/superpowers/specs/2026-07-12-mechanics-phase4-play-integration-design
 from __future__ import annotations
 
 import json
-import os
 import uuid
 from contextlib import contextmanager
 
-from . import campaigns, locks
+from . import atomic, campaigns, locks
 from .paths import now_iso
 
 NON_TERMINAL = ("pending", "resolving", "resolved", "declined")
@@ -52,10 +51,7 @@ def _read(cid: str) -> dict:
 
 
 def _write(cid: str, data: dict) -> None:
-    p = _path(cid)
-    tmp = p.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    os.replace(tmp, p)
+    atomic.write_text(_path(cid), json.dumps(data, indent=2) + "\n")
 
 
 def new(cid: str, sid: str, payload: dict) -> dict:

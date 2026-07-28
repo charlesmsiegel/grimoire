@@ -731,18 +731,9 @@ def test_append_reply_persists_blocks_and_boundary_in_one_write(monkeypatch, tmp
     segment separately leaves untracked blocks at the tail if persistence is
     interrupted, and reroll then counts sizes[-1] blocks back THROUGH them into
     the previous completed reply."""
-    from pathlib import Path
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "Atomic")
-    writes = []
-    real = Path.write_text
-
-    def counting(self, *a, **kw):
-        if self.suffix == ".md":
-            writes.append(self.name)
-        return real(self, *a, **kw)
-
-    monkeypatch.setattr(Path, "write_text", counting)
+    writes = _count_scene_writes(monkeypatch)
     scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "One."},
                                    {"speaker": None, "content": "Two."},
                                    {"speaker": "Winifred Vance", "content": "Three."}])
@@ -811,16 +802,18 @@ def _count_scene_writes(monkeypatch):
     exists, and the next reroll trusts sizes[-1] and deletes blocks belonging
     to an older generation — irreversible transcript loss.
     """
-    from pathlib import Path
+    from grimoire.store import atomic
     writes: list[str] = []
-    real = Path.write_text
+    real = atomic.write_text
 
-    def counting(self, *a, **kw):
-        if self.suffix == ".md":
-            writes.append(self.name)
-        return real(self, *a, **kw)
+    # Counts at store.atomic, the single seam every record write goes through
+    # since #233 -- patching Path.write_text here would silently count zero.
+    def counting(path, text):
+        if path.suffix == ".md":
+            writes.append(path.name)
+        return real(path, text)
 
-    monkeypatch.setattr(Path, "write_text", counting)
+    monkeypatch.setattr(atomic, "write_text", counting)
     return writes
 
 
@@ -945,3 +938,30 @@ def test_reroll_on_garbled_boundaries_takes_the_untracked_path(monkeypatch, tmp_
     scenes.remove_trailing_assistant_run(cid, sid)
     assert [m["content"] for m in scenes.read_scene(cid, sid)["messages"]] == ["Go on."]
     assert scenes.get_turn_sizes(cid, sid) == []
+
+
+def test_a_failed_append_leaves_the_whole_transcript_readable(monkeypatch, tmp_path):
+    """The #233 case: a scene transcript is the one piece of user data that
+    cannot be regenerated. A write that dies mid-flight must leave every
+    earlier message intact rather than a truncated file."""
+    from grimoire.store import atomic
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Durable")
+    scenes.append_message(cid, sid, "user", "First message.")
+    scenes.append_message(cid, sid, "assistant", "Second message.")
+
+    real = atomic.os.replace
+
+    def boom(src, dst):
+        raise OSError("crash mid-publish")
+
+    monkeypatch.setattr(atomic.os, "replace", boom)
+    with pytest.raises(OSError):
+        scenes.append_message(cid, sid, "user", "Third message, lost.")
+    monkeypatch.setattr(atomic.os, "replace", real)  # not undo(): that also
+    # reverts the GRIMOIRE_HOME setenv the campaign fixture depends on
+
+    messages = scenes.read_scene(cid, sid)["messages"]
+    assert [m["content"] for m in messages] == ["First message.", "Second message."]
+    scene_dir = campaigns.campaign_root(cid) / "scenes"
+    assert list(scene_dir.glob("*.tmp")) == [], "a temp file was left behind"

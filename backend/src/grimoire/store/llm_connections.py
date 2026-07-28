@@ -11,7 +11,7 @@ import json
 import secrets
 from pathlib import Path
 
-from . import config
+from . import atomic, config
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import home, now_iso, slugify, uniquify
 
@@ -45,7 +45,7 @@ def _write_raw(id: str, **fields: str) -> None:
     meta["rev"] = secrets.token_hex(8)
     _dir().mkdir(parents=True, exist_ok=True)
     _sidecar_path(id).unlink(missing_ok=True)
-    _path(id).write_text(dump_frontmatter(meta, ""), encoding="utf-8")
+    atomic.write_text(_path(id), dump_frontmatter(meta, ""))
 
 
 def _read(id: str) -> dict | None:
@@ -185,7 +185,7 @@ def set_cached_models(id: str, models: list[dict], rev: str) -> None:
     fetch that produced `models` — staleness is judged later, on read, by
     cached_models(), not here."""
     payload = {"models": models, "fetched_at": now_iso(), "rev": rev}
-    _sidecar_path(id).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    atomic.write_text(_sidecar_path(id), json.dumps(payload, indent=2) + "\n")
 
 
 def ensure_migrated() -> None:
@@ -225,4 +225,4 @@ def ensure_migrated() -> None:
         # seeding, leaving a brand-new install with no active connection.
         active = "openrouter" if meta.get("provider", "openrouter") == "openrouter" else "claude"
         config.write_config(active_connection_id=active)
-    marker.write_text("1", encoding="utf-8")
+    atomic.write_text(marker, "1")

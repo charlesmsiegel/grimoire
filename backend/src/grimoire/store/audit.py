@@ -13,12 +13,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import threading
 from pathlib import Path
 
 from .. import prompts
-from . import appearances, campaigns, entities, locks, modules, overlay, rolls, scenes, sheets
+from . import (appearances, atomic, campaigns, entities, locks, modules, overlay, rolls,
+               scenes, sheets)
 
 _LOCKS: dict[str, threading.Lock] = {}
 _LOCKS_GUARD = threading.Lock()
@@ -45,10 +45,7 @@ def read_baselines(cid: str) -> dict:
 
 
 def _write(cid: str, data: dict) -> None:
-    p = _path(cid)
-    tmp = p.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    os.replace(tmp, p)
+    atomic.write_text(_path(cid), json.dumps(data, indent=2, sort_keys=True) + "\n")
 
 
 def schema_stamp(mid: str) -> dict:

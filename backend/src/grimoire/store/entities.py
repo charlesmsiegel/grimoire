@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from . import statcache
+from . import atomic, statcache
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import slugify, uniquify
 
@@ -88,7 +88,7 @@ def create_entity(root: Path, kind: str, name: str, body: str = "", keys: str = 
     for k, v in (fields or {}).items():
         if v:
             meta[k] = v
-    _entity_path(root, kind, eid).write_text(dump_frontmatter(meta, body), encoding="utf-8")
+    atomic.write_text(_entity_path(root, kind, eid), dump_frontmatter(meta, body))
     return eid
 
 
@@ -116,7 +116,7 @@ def update_entity(
         else:
             meta.pop(k, None)
     new_body = cur_body if body is None else body
-    p.write_text(dump_frontmatter(meta, new_body), encoding="utf-8")
+    atomic.write_text(p, dump_frontmatter(meta, new_body))
 
 
 def delete_entity(root: Path, kind: str, eid: str) -> None:

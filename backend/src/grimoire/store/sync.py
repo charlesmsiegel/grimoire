@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import appearances, campaigns, characters, entities, greetings, overlay, pcs, worlds
+from . import appearances, atomic, campaigns, characters, entities, greetings, overlay, pcs, worlds
 
 
 def _world_id(cid: str) -> str:
@@ -154,7 +154,7 @@ def _advance_actor(cid: str, kind: str, actor_id: str, *, copy: bool) -> bool:
         src = wroot / kind / actor_id / f"{vid}.{ext}"
         dst = croot / kind / actor_id / f"{vid}.{ext}"
         dst.parent.mkdir(parents=True, exist_ok=True)
-        dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+        atomic.write_text(dst, src.read_text(encoding="utf-8"))
     appearances.set_base(cid, kind, actor_id, world_h)
     return True
 

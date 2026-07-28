@@ -13,6 +13,7 @@ from pathlib import Path
 
 from .schema import ClimateError, validate  # noqa: F401  (re-exported)
 from ..paths import home
+from .. import atomic
 
 FALLBACK_ID = "temperate-interior"
 
@@ -96,7 +97,7 @@ def save(doc: dict) -> dict:
     """
     doc = validate(doc)
     _custom_dir().mkdir(parents=True, exist_ok=True)
-    custom_path(doc["id"]).write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    atomic.write_text(custom_path(doc["id"]), json.dumps(doc, indent=2) + "\n")
     return doc
 
 

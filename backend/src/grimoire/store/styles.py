@@ -16,6 +16,7 @@ from pathlib import Path
 from .. import prompts
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import home, natural_key, slugify, uniquify
+from . import atomic
 
 
 class StyleNotFound(Exception):
@@ -141,7 +142,7 @@ def create_style(name: str, description: str = "", tags: list[str] | None = None
 
     sid = uniquify(slugify(name), exists)
     meta = {"name": name, "description": description, "tags": ",".join(tags or [])}
-    _custom_path(sid).write_text(dump_frontmatter(meta, body), encoding="utf-8")
+    atomic.write_text(_custom_path(sid), dump_frontmatter(meta, body))
     return sid
 
 
@@ -160,7 +161,7 @@ def update_style(sid: str, *, name: str | None = None, description: str | None =
     if tags is not None:
         meta["tags"] = ",".join(tags)
     new_body = cur_body if body is None else body
-    p.write_text(dump_frontmatter(meta, new_body), encoding="utf-8")
+    atomic.write_text(p, dump_frontmatter(meta, new_body))
 
 
 def delete_style(sid: str) -> None:

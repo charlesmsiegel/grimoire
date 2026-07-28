@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .. import prompts
+from . import atomic
 
 
 def dossier_path(croot: Path, cid: str) -> Path:
@@ -24,7 +25,7 @@ def read(croot: Path, cid: str) -> str:
 def write(croot: Path, cid: str, text: str) -> None:
     p = dossier_path(croot, cid)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(text.strip() + "\n", encoding="utf-8")
+    atomic.write_text(p, text.strip() + "\n")
 
 
 def build_prompt(name: str, prior: str, transcript: str) -> list[dict]:

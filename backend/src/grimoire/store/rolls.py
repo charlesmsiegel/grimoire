@@ -8,19 +8,21 @@ changes.py; entries are never rewritten or deleted, so ids are positional.
 
 Every writer (`append`, `find_by_proposal`, `find_or_append_by_proposal`, and
 the existing `repoint_scenes`) takes the same module-local per-campaign lock
-(the `_LOCKS`/`_LOCKS_GUARD` pattern from proposals.py) and writes atomically
-via temp-file + `os.replace`, so concurrent writers can't lose entries or race
-each other's read-modify-write. `replay` is read-only and needs no lock.
+(the `_LOCKS`/`_LOCKS_GUARD` pattern from proposals.py). **That lock** is what
+keeps concurrent writers from losing entries or racing each other's
+read-modify-write; the crash-safe write via `store.atomic` is a separate
+property and does not serialize anything on its own (#233 — this docstring used
+to credit the temp file for the lock's job). `replay` is read-only and needs no
+lock.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import threading
 from pathlib import Path
 
-from . import campaigns, dice
+from . import atomic, campaigns, dice
 from .paths import now_iso
 
 
@@ -53,10 +55,7 @@ def read(cid: str) -> list[dict]:
 
 
 def _write(cid: str, entries: list[dict]) -> None:
-    p = _path(cid)
-    tmp = p.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(entries, indent=2) + "\n", encoding="utf-8")
-    os.replace(tmp, p)
+    atomic.write_text(_path(cid), json.dumps(entries, indent=2) + "\n")
 
 
 def append(cid: str, scene: str | None, label: str | None, result: dict,

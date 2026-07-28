@@ -13,12 +13,12 @@ unreferenced.
 from __future__ import annotations
 
 import hashlib
-import os
 from pathlib import Path
 
 from PIL import Image
 
 from .paths import home
+from . import atomic
 
 QUALITY = 80
 
@@ -46,9 +46,11 @@ def thumbnail(src: Path, width: int) -> Path | None:
                 im = im.convert("RGBA")
             im.thumbnail((width, width))  # in-place, preserves aspect, no upscale
             out.parent.mkdir(parents=True, exist_ok=True)
-            tmp = out.with_name(f"{key}.{os.getpid()}.tmp")
-            im.save(tmp, format="WEBP", quality=QUALITY)
-            tmp.replace(out)  # atomic: concurrent generators just overwrite equal bytes
+            # concurrent generators just overwrite equal bytes; the shared
+            # helper's random temp name also stops two threads in one process
+            # colliding, which the old pid-based name did not
+            with atomic.tempfile_for(out) as tmp:
+                im.save(tmp, format="WEBP", quality=QUALITY)
     except Exception:  # noqa: BLE001 — undecodable/corrupt image: no thumb, caller serves original
         return None
     return out

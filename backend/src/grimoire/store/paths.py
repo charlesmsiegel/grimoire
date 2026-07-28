@@ -8,6 +8,7 @@ import re
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
+from . import atomic
 
 DEFAULT_HOME = Path.home() / ".grimoire"
 
@@ -73,7 +74,7 @@ def set_data_dir(path: str | Path | None) -> Path:
 
     if not path or not str(path).strip():
         data.pop("data_dir", None)
-        pointer.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        atomic.write_text(pointer, json.dumps(data, indent=2) + "\n")
         return ensure_home()
 
     resolved = Path(str(path).strip()).expanduser()
@@ -83,7 +84,7 @@ def set_data_dir(path: str | Path | None) -> Path:
 
     data["data_dir"] = str(resolved)
     pointer.parent.mkdir(parents=True, exist_ok=True)
-    pointer.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    atomic.write_text(pointer, json.dumps(data, indent=2) + "\n")
     return ensure_home()
 
 

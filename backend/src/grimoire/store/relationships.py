@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import campaigns, characters, overlay, pcs
+from . import atomic, campaigns, characters, overlay, pcs
 
 
 def _path(cid: str) -> Path:
@@ -25,7 +25,7 @@ def read(cid: str) -> dict:
 
 
 def _write(cid: str, data: dict) -> None:
-    _path(cid).write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    atomic.write_text(_path(cid), json.dumps(data, indent=2, sort_keys=True) + "\n")
 
 
 def feeling_key(a: str, b: str) -> str:
