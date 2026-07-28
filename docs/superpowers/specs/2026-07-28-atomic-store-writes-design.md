@@ -23,6 +23,12 @@ everywhere at once and adds a test that keeps it closed.
   file; a crash between them still leaves the pair inconsistent. Each file is
   individually valid, which is what this spec buys. Transactional grouping is a
   much larger change and is not attempted.
+- **`assets.promote_image` (`assets.py:141-144`).** The avatar swap is a
+  three-rename sequence through `promote-tmp<ext>`. Each rename is atomic, but
+  the *sequence* is not: a crash between them strands the temp and leaves the
+  avatar missing. Fixing it needs a recovery journal or a documented restart
+  protocol — a different problem from a torn write, and out of scope here. Filed
+  as a follow-up.
 - **Append-only reworking of `scenes.append_message`.** It stays a whole-file
   read-modify-write (O(n) per message). Making it a true append is a separate
   performance concern, not a durability one.
@@ -121,6 +127,46 @@ is corrected to credit the lock.
 No call site changes behavior: same bytes, same exceptions, same
 `FileNotFoundError` on a missing parent.
 
+### Writers that are not `write_text` calls
+
+A grep for `.write_text(` alone would miss these, so they are named explicitly:
+
+- **`assets.put_image` (`assets.py:112-114`) — an ordering bug, not just a torn
+  write.** It unlinks every prior-extension file *before* writing the new one,
+  so a crash after the unlink loses the image entirely; making the write atomic
+  does not help. Reordered: write the new file atomically first, then unlink the
+  now-stale siblings of other extensions.
+- **`sheets.seed` (`sheets.py:547`) — `shutil.copy2` into the live campaign
+  sheets directory.** Copied through the helper instead, so a partial copy can
+  never appear under a real sheet name.
+- **`thumbs` (`thumbs.py:50-51`) — PIL `im.save(tmp)` then `tmp.replace(out)`.**
+  Moves onto `tempfile_for`, which also removes its pid-based temp name (two
+  threads in one process collide on it today).
+- **`module_edit` zip extraction (`module_edit.py:213`)** writes members with a
+  bare `write_bytes`, but into an *unpublished staging directory* that is later
+  published by a single `staging.rename(dest)` (`module_edit.py:68`). It is
+  already crash-safe at the granularity that matters, and per-member temp+fsync
+  would slow large module imports for nothing. Left as-is, with a marker
+  comment (see below).
+- `shutil.copytree`/`rmtree` in `module_edit` write into staging or delete
+  whole trees; neither can tear a live record. Unchanged.
+- No `json.dump(..., fp)` or `extractall` sites exist under `store/`.
+
+### The guard test needs reviewed exceptions, not a blanket ban
+
+A flat "no `.write_text(` in `store/`" rule would flag the staged zip extraction
+above, and the honest fix for that is an exception, not a contortion. So the
+guard allows a site when it carries an explicit trailing marker:
+
+```python
+dest.write_bytes(z.read(i))  # atomic-ok: staging dir, published by rename at L68
+```
+
+The guard asserts every `.write_text(` / `.write_bytes(` under `store/` is
+either inside `atomic.py` or carries an `# atomic-ok:` marker with a reason.
+Exceptions stay possible but become visible and reviewable, which is the
+property the issue actually wants — the original bug was invisible drift.
+
 ## Testing
 
 **Helper unit tests** (`backend/tests/test_atomic.py`):
@@ -137,11 +183,19 @@ No call site changes behavior: same bytes, same exceptions, same
   every time surfaces the error after the bounded retries.
 
 **Guard test:** scans every `.py` under `backend/src/grimoire/store/` for
-`.write_text(` / `.write_bytes(` and asserts `atomic.py` is the only hit. This
-is the piece that prevents the recurrence the issue describes.
+`.write_text(` / `.write_bytes(` and asserts each hit is either in `atomic.py`
+or carries an `# atomic-ok:` marker. This is the piece that prevents the
+recurrence the issue describes. The test also asserts the marker list itself is
+short and each marker has a non-empty reason, so `# atomic-ok:` cannot become a
+rubber stamp.
 
-**Integration test:** `scenes.append_message` with `os.replace` patched to raise
-— the prior transcript still parses and still holds every earlier message.
+**Integration tests:**
+
+- `scenes.append_message` with `os.replace` patched to raise — the prior
+  transcript still parses and still holds every earlier message.
+- `assets.put_image` with the write patched to raise — the *previous* image is
+  still present, which fails against the current delete-then-write ordering and
+  passes after the reorder.
 
 ## Risks
 
