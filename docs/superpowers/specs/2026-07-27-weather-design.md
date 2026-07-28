@@ -619,25 +619,78 @@ pinned down exactly:
    The drawn entries in the end-to-end table are stable regardless — its
    boundaries sit at 0.111, 0.556 and 0.889, far from any last-digit dispute —
    so those can be asserted before the numeric columns are filled in.
+
+#### What bit-identity across machines costs
+
+Everything in the preceding subsection serves one goal: the same campaign, block
+and climate yield the same weather on **any machine and any supported Python**,
+not merely on one installation. That is a stronger promise than the design
+originally set out to make, and it was arrived at one reasonable finding at a
+time rather than chosen. Its price, gathered in one place so it can be judged as
+a whole:
+
+- two numerical functions vendored (`erfc` by Cody, `Φ⁻¹` by AS241) with their
+  coefficients and branch structure treated as normative;
+- `W` computed by a hand-rolled multiplication loop instead of
+  `ceil(4 / ln(1/a))`;
+- the filter's power generation, accumulation order, `sqrt` and division all
+  specified;
+- a reference-vector table that cannot be completed until implementation, and
+  must then be validated against `mpmath` rather than against the code.
+
+**The cheaper alternative is determinism scoped to an installation**: use
+`math.erfc` and `statistics.NormalDist`, the closed form for `W`, and the plain
+formula. Everything else in this spec is unaffected. A campaign's skies would
+still be stable across processes, restarts and upgrades of grimoire itself; the
+promise lost is stability across a Python or libm change, which could shift one
+block's weather in one campaign, only where a table boundary sits within an ulp
+of a drawn quantile.
+
+For a single-user tool whose library lives in `~/.grimoire` and is shared by
+file sync rather than by protocol, that trade looks reasonable. **This is an
+open decision, and the items above are written to be struck as a unit** — the
+recommendation is to take the cheap version unless cross-machine reproducibility
+turns out to matter for a reason not yet identified.
 2. **Smoothing.** The correlated field is a normalized **one-sided** (causal)
    exponential filter over the latent, with `a = persistence`, indexed by the
    **block ordinal** of § Blocks — never by the minute coordinate:
 
    `g(t) = Σ_{k=0}^{W} a^k · z(t − k) / sqrt( Σ_{k=0}^{W} a^{2k} )`
 
-   **Accumulate ascending in `k`, from 0 to `W`, term by term.** Floating-point
-   addition is not associative, and summing the same terms in descending order
-   gives a result one ulp away — `-1.6636640450077729` against
-   `-1.6636640450077727` for the worked example below. One ulp cannot change a
-   drawn entry unless the quantile sits on a bucket boundary, but the reference
-   vectors are asserted exactly, so the order is part of the specification
-   rather than an implementation detail.
+   Floating-point addition is not associative — summing the same terms
+   descending gives a result one ulp away — so the evaluation is pinned in full
+   below rather than left to the formula.
 
-   Normalization is by the **finite** sum, not by `sqrt(1 − a²)`. The infinite
-   form gives `Var(g) = 1 − a^{2(W+1)}` once truncated, so `Φ(g)` would not be
-   exactly uniform and the weight-fidelity guarantee — the whole reason for the
-   copula — would hold only approximately. Dividing by the actual sum of the
-   weights used makes the variance exactly 1 for any `W`.
+   Normalization is by the **finite** sum, not by `sqrt(1 − a²)`: the infinite
+   form leaves `Var(g) = 1 − a^{2(W+1)}` once truncated, a systematic error that
+   grows as persistence falls.
+
+   **This makes the marginal uniform to a tolerance, not exactly.** Three
+   departures survive by construction and no formula removes them: `z` is drawn
+   from `2⁵²` discrete atoms rather than a continuous normal; AS241 is a
+   finite-precision approximation, so those atoms are not the exact quantiles
+   they stand for; and a weighted sum of non-normal values is not normal, so
+   `Φ` of it is not exactly uniform. The guarantee is therefore that observed
+   frequencies match declared weights **within a stated tolerance**, and the
+   weight-fidelity test asserts that rather than equality. A legal table with a
+   bucket narrow enough to sit inside the residual error can still deviate —
+   that is a property of representing continuous distributions in float64, not
+   something this design can promise away.
+
+   **Every floating-point step is pinned**, because ascending addition alone is
+   not enough: computing `a^k` by `pow` and by repeated multiplication give
+   different bits, as does accumulating the denominator separately. One pass,
+   ascending in `k`:
+
+   ```
+   w = 1.0; num = 0.0; den = 0.0
+   for k in 0..W:  num += w * z(t - k);  den += w * w;  w *= a
+   g = num / sqrt(den)
+   ```
+
+   Powers come from carrying `w`, never from `a**k`; numerator and denominator
+   accumulate in the same ascending pass; `sqrt` is IEEE-754's correctly-rounded
+   square root, and the final division is a single IEEE operation.
 
    The filter is one-sided on purpose. For two-sided weights `a^{|k|}` the
    lag-1 autocorrelation works out to `2a / (1 + a²)`, not `a` — so `a = 0.35`
@@ -1249,6 +1302,14 @@ server walks the covering stack, removes the named axes over the requested
 range — splitting a span whose remainder still applies outside it — deletes any
 span left setting nothing, and returns the new resolved weather.
 
+**When a split produces two fragments, the earlier one keeps the original
+`id` and each further fragment gets a freshly generated one**, persisted as
+part of the same atomic write. Copying the id onto both halves would leave two
+records sharing a `DELETE` address until some later load happened to
+canonicalize them; regenerating both would invalidate an id the client may
+have just been handed. Earlier-keeps-it is arbitrary but it has to be written
+down, since the client holds ids from the response it is acting on.
+
 **It only mutates spans stored under the requested location.** A `_default`
 span covering the moment is inherited by every location in the campaign, so
 truncating it to clear the docks would clear the lighthouse and everywhere else
@@ -1269,7 +1330,13 @@ climate may perfectly well contain a condition called `procedural` — at which
 point selecting it as an override would suppress the weather instead of setting
 it. Structure cannot collide with content; a reserved string always can.
 
-The HUD renders a suppressed axis as generated, with no authored marker.
+The HUD renders a suppressed axis as generated — but the popover must still
+offer **Resume inheriting**, shown when a suppression span covers this location
+and moment, which deletes that span. Without it the clear is a one-way door:
+the axis looks procedural, so **Clear override** does not appear, and setting a
+concrete value only writes another local exception rather than restoring the
+campaign-wide one. Suppression is state the user created and must be state the
+user can remove.
 
 `DELETE .../{storage_key}/{span_id}` stays, for removing a specific record
 outright rather than clearing an axis of it.
@@ -1406,10 +1473,22 @@ Backend, `backend/tests/test_weather.py`, store isolated with
 - Random access: resolving block *t* directly and resolving it after walking
   every block from 0 to *t* yield the same answer, at any *t*, including
   negative — the property that makes prequel scenes and multi-year jumps free.
+- Filter evaluation: `g` matches a reference computed with carried powers and a
+  single ascending pass, and differs from one computed with `a**k` or a
+  separately accumulated denominator — the test that pins the arithmetic rather
+  than only the formula.
+- Suppression is removable: after clearing an inherited `_default` override at
+  one location, **Resume inheriting** is offered there and restores the
+  campaign-wide weather.
+- Splitting a span by a mid-range clear leaves the earlier fragment holding the
+  original id and the later one holding a fresh id, both separately deletable.
 - Weight fidelity, against a climate **with no `requires_temp` anywhere**:
-  over a long sample the observed frequency of each condition
-  matches its normalized weight, at several persistence settings — the test
-  that catches a non-uniform marginal reaching the inverse CDF. The
+  over a long sample the observed frequency of each condition matches its
+  normalized weight **within the stated tolerance**, at several persistence
+  settings — the test that catches a non-uniform marginal reaching the inverse
+  CDF. Tolerance, not equality: the latent is `2⁵²` discrete atoms passed
+  through a finite-precision `Φ⁻¹`, so exact uniformity is unavailable in
+  principle and asserting it would fail every conforming implementation. The
   unconstrained climate is required, not incidental: under `requires_temp` an
   entry is filtered out whenever its band is absent and the survivors are
   renormalized, so a conforming resolver's unconditional frequencies
@@ -1522,6 +1601,11 @@ Frontend, from `frontend/` with `npx vitest run` and `npx tsc -b`:
 
 ## Open questions
 
+- **Bit-identity across machines, or determinism within an installation?**
+  (§ What bit-identity across machines costs.) The stronger promise is what
+  the vendored transforms, the hand-rolled `W` loop, the pinned floating-point
+  evaluation and the unfinished reference table are all for. Recommendation is
+  to drop to the cheaper scope.
 - **What `persistence` values actually feel like at the table.** It is now a
   correlation length rather than a carry-forward probability, so the presets
   ship with values calibrated by eye and will need adjusting against play. The
