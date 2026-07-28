@@ -156,14 +156,14 @@ def test_delete_retracts_a_span(client):
     made = client.put(f"/api/campaigns/{cid}/weather",
                       json={"location": lid, "start": "2026-06-14",
                             "condition": "blizzard"}).json()
-    assert client.delete(f"/api/campaigns/{cid}/weather/{made['id']}").status_code == 200
+    assert client.delete(f"/api/campaigns/{cid}/weather/{lid}/{made['id']}").status_code == 200
     got = client.get(f"/api/campaigns/{cid}/scenes/{sid}/weather").json()
     assert got["weather"]["condition"] == base["weather"]["condition"]
 
 
 def test_delete_404s_for_an_unknown_span(client):
     cid, sid, lid = scene(client)
-    assert client.delete(f"/api/campaigns/{cid}/weather/nope").status_code == 404
+    assert client.delete(f"/api/campaigns/{cid}/weather/{lid}/nope").status_code == 404
 
 
 def test_the_generated_id_is_addressable_in_the_delete_route(client):
@@ -173,7 +173,7 @@ def test_the_generated_id_is_addressable_in_the_delete_route(client):
                       json={"location": lid, "start": "2026-06-14",
                             "condition": "blizzard"}).json()
     assert "/" not in made["id"] and made["id"].strip(".")
-    assert client.delete(f"/api/campaigns/{cid}/weather/{made['id']}").status_code == 200
+    assert client.delete(f"/api/campaigns/{cid}/weather/{lid}/{made['id']}").status_code == 200
 
 
 def test_the_covering_stack_is_reported_for_the_hud(client):
@@ -185,3 +185,125 @@ def test_the_covering_stack_is_reported_for_the_hud(client):
     stack = client.get(f"/api/campaigns/{cid}/scenes/{sid}/weather").json()["stack"]
     assert [s["condition"] for s in stack] == ["fog", "clear"]
     assert stack[0]["location"] == lid
+
+
+# ---- clear / resume ----
+
+def test_clearing_one_axis_leaves_the_others(client):
+    cid, sid, lid = scene(client)
+    client.put(f"/api/campaigns/{cid}/weather",
+               json={"location": lid, "start": "2026-06-14",
+                     "condition": "storm", "wind": "gale"})
+    r = client.post(f"/api/campaigns/{cid}/weather/clear",
+                    json={"location": lid, "start": "2026-06-14", "axes": ["condition"]})
+    assert r.status_code == 200 and r.json()["cleared"] == 1
+    got = client.get(f"/api/campaigns/{cid}/scenes/{sid}/weather").json()
+    assert got["source"]["condition"] == "procedural"
+    assert got["weather"]["wind"] == "gale"
+
+
+def test_clearing_at_a_location_leaves_other_locations_inheriting(client):
+    # Truncating the _default span would clear everywhere; an inherited span is
+    # suppressed at the one location instead.
+    cid, sid, lid = scene(client)
+    client.put(f"/api/campaigns/{cid}/weather",
+               json={"location": "_default", "start": "2026-06-14", "condition": "storm"})
+    client.post(f"/api/campaigns/{cid}/weather/clear",
+                json={"location": lid, "start": "2026-06-14", "axes": ["condition"]})
+    here = client.get(f"/api/campaigns/{cid}/scenes/{sid}/weather").json()
+    assert here["source"]["condition"] == "procedural"
+    elsewhere = client.get(f"/api/campaigns/{cid}/scenes/{sid}/weather",
+                           params={"location": "lighthouse"}).json()
+    assert elsewhere["weather"]["condition"] == "storm"
+
+
+def test_resume_restores_inheritance_for_one_axis(client):
+    cid, sid, lid = scene(client)
+    client.put(f"/api/campaigns/{cid}/weather",
+               json={"location": "_default", "start": "2026-06-14",
+                     "condition": "storm", "wind": "gale"})
+    client.post(f"/api/campaigns/{cid}/weather/clear",
+                json={"location": lid, "start": "2026-06-14"})
+    r = client.post(f"/api/campaigns/{cid}/weather/resume",
+                    json={"location": lid, "start": "2026-06-14", "axes": ["wind"]})
+    assert r.status_code == 200 and r.json()["resumed"] == 1
+    got = client.get(f"/api/campaigns/{cid}/scenes/{sid}/weather").json()
+    assert got["weather"]["wind"] == "gale"
+    assert got["source"]["condition"] == "procedural"
+
+
+def test_clearing_the_whole_stack_does_not_promote_a_shadowed_span(client):
+    # Deleting only the winner would promote the record beneath it: the sky
+    # would change rather than return to procedural.
+    cid, sid, lid = scene(client)
+    base = client.get(f"/api/campaigns/{cid}/scenes/{sid}/weather").json()
+    client.put(f"/api/campaigns/{cid}/weather",
+               json={"location": lid, "start": "2026-06-14", "condition": "drizzle"})
+    client.put(f"/api/campaigns/{cid}/weather",
+               json={"location": lid, "start": "2026-06-14", "condition": "storm"})
+    client.post(f"/api/campaigns/{cid}/weather/clear",
+                json={"location": lid, "start": "2026-06-14", "axes": ["condition"]})
+    got = client.get(f"/api/campaigns/{cid}/scenes/{sid}/weather").json()
+    assert got["weather"]["condition"] == base["weather"]["condition"]
+    assert got["source"]["condition"] == "procedural"
+
+
+def test_each_stack_entry_carries_its_storage_key_for_delete(client):
+    # The key is not the scene's location — a covering span may live under
+    # _default — so the delete is uncallable without it.
+    cid, sid, lid = scene(client)
+    client.put(f"/api/campaigns/{cid}/weather",
+               json={"location": "_default", "start": "2026-06-14", "condition": "storm"})
+    span = client.get(f"/api/campaigns/{cid}/scenes/{sid}/weather").json()["stack"][0]
+    assert span["location"] == "_default"
+    assert client.delete(
+        f"/api/campaigns/{cid}/weather/{span['location']}/{span['id']}").status_code == 200
+
+
+def test_a_block_count_bounds_the_span_without_client_calendar_maths(client):
+    # "this block" and "the rest of today" are block counts; turning them into
+    # native strings client-side means reimplementing month lengths.
+    #
+    # Asserted on provenance, not the value: the procedural draw at this moment
+    # is itself "storm", so comparing values cannot tell an override from a
+    # coincidence.
+    cid, sid, lid = scene(client)
+    client.put(f"/api/campaigns/{cid}/weather",
+               json={"location": lid, "start": "2026-06-14T09:00",
+                     "condition": "storm", "blocks": 1})
+    src = lambda t: client.get(f"/api/campaigns/{cid}/scenes/{sid}/weather",
+                               params={"native": t}).json()["source"]["condition"]
+    assert src("2026-06-14T09:00") == "manual"
+    assert src("2026-06-14T13:00") == "procedural"
+
+
+def test_a_block_count_can_clear_exactly_one_block(client):
+    cid, sid, lid = scene(client)
+    client.put(f"/api/campaigns/{cid}/weather",
+               json={"location": lid, "start": "2026-06-10", "end": "2026-06-20",
+                     "condition": "storm"})
+    client.post(f"/api/campaigns/{cid}/weather/clear",
+                json={"location": lid, "start": "2026-06-14T09:00", "blocks": 1,
+                      "axes": ["condition"]})
+    src = lambda t: client.get(f"/api/campaigns/{cid}/scenes/{sid}/weather",
+                               params={"native": t}).json()["source"]["condition"]
+    assert src("2026-06-14T09:00") == "procedural"   # the one block cleared
+    assert src("2026-06-14T13:00") == "manual"       # the rest of the span stands
+    assert src("2026-06-12T09:00") == "manual"
+
+
+def test_clearing_one_block_of_an_open_ended_span_ends_it(client):
+    # Truncate and discard, never split: a fresh open-ended fragment a block
+    # later would resume the storm immediately and run forever.
+    cid, sid, lid = scene(client)
+    client.put(f"/api/campaigns/{cid}/weather",
+               json={"location": lid, "start": "2026-06-10", "condition": "storm"})
+    client.post(f"/api/campaigns/{cid}/weather/clear",
+                json={"location": lid, "start": "2026-06-14T09:00", "blocks": 1,
+                      "axes": ["condition"]})
+    src = lambda t: client.get(f"/api/campaigns/{cid}/scenes/{sid}/weather",
+                               params={"native": t}).json()["source"]["condition"]
+    assert src("2026-06-12T09:00") == "manual"       # history is not retracted
+    assert src("2026-06-14T09:00") == "procedural"
+    assert src("2026-06-14T13:00") == "procedural"   # never resumes
+    assert src("2027-01-01T09:00") == "procedural"

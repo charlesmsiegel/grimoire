@@ -313,11 +313,19 @@ def put(cid: str, provider, location_id: str, frm: str, to: str | None,
     return record
 
 
-def delete(cid: str, span_id: str) -> bool:
-    """Retract a span outright, as if it had never been set."""
+def delete(cid: str, span_id: str, storage_key: str | None = None) -> bool:
+    """Retract a span outright, as if it had never been set.
+
+    ``storage_key`` narrows the search. Ids are unique across the file, so it
+    is not needed for correctness, but the caller knows which key it read the
+    span from and a mismatch is a bug worth reporting as a 404 rather than
+    silently deleting a span somewhere else.
+    """
     data = read(cid)
     found = False
     for key, records in list(data.items()):
+        if storage_key is not None and key != storage_key:
+            continue
         kept = [r for r in records if r.get("id") != span_id]
         if len(kept) != len(records):
             found = True
@@ -330,60 +338,180 @@ def delete(cid: str, span_id: str) -> bool:
     return found
 
 
-def clear(cid: str, provider, location_id: str, frm: str, to: str | None) -> int:
-    """Return a range to procedural. Returns the number of spans affected.
+def _upper(provider, lo: int, to: str | None, blocks: int | None) -> int | None:
+    """The exclusive upper bound: a block count, a native endpoint, or open.
 
-    An open-ended span is **truncated at the start of the clear range and
-    everything after is discarded** — it is not split. Splitting `[day 10,
-    null)` on day 15 would leave a historical fragment and a *fresh open-ended
-    fragment* starting a block later, so the storm would resume immediately and
-    run forever, the opposite of what "clear it" means. An open-ended span is
-    an instruction that runs until stopped; stopping it is an ending, not a
-    hole.
-
-    Clearing does not retract history. "Storm until I say otherwise," set on
-    day 10 and cleared on day 15, means it stormed for five days — re-reading
-    day 12 still shows the storm. Retracting weather that scenes were played
-    under is what `delete` is for, deliberately more emphatic.
+    A count wins when given. The duration control offers "this block" and "the
+    rest of today" as block counts, and turning those into native strings
+    client-side would mean reimplementing the calendar's month lengths — the
+    same reason the season tables come from the server.
     """
-    key = location_id or DEFAULT_KEY
-    data = read(cid)
-    lo = ordinal_of(resolve_endpoint(provider, frm, end=False))
-    hi = (ordinal_of(resolve_endpoint(provider, to, end=True))
-          if to is not None else None)
+    if blocks is not None:
+        return lo + max(1, int(blocks))
+    if to is None:
+        return None
+    return ordinal_of(resolve_endpoint(provider, to, end=True))
 
+
+def _split_axes(record: dict, axes: tuple[str, ...], field: str) -> dict:
+    """A copy of ``record`` with ``axes`` removed from ``field``."""
+    out = dict(record)
+    if field == "suppress":
+        out["suppress"] = [a for a in (record.get("suppress") or []) if a not in axes]
+    else:
+        for axis in axes:
+            out.pop(axis, None)
+    return out
+
+
+def _sets_anything(record: dict) -> bool:
+    return any(record.get(a) for a in AXES) or bool(record.get("suppress"))
+
+
+def _cut(cid: str, key: str, data: dict, lo: int, hi: int | None,
+         axes: tuple[str, ...], field: str) -> int:
+    """Remove ``axes`` from every span under ``key`` intersecting [lo, hi).
+
+    Splits a span whose remainder still applies outside the range. The earlier
+    fragment keeps the original id and each later one gets a fresh id: copying
+    the id onto both leaves two records sharing a DELETE address until some
+    later load canonicalizes them, and regenerating both invalidates an id the
+    client may have just been handed. Every fragment keeps the original's
+    `tiebreak` and `seq`, so a clear in the middle of a span cannot change
+    which override wins on either side of it.
+    """
     out: list[dict] = []
     touched = 0
+    taken = {r["id"] for rs in data.values() for r in rs}
     for record in data.get(key, []):
         start = ordinal_of(record.get("from_fixed"))
         end = ordinal_of(record.get("to_fixed")) if record.get("to_fixed") is not None else None
-        if start is None or (end is not None and end <= lo) or (hi is not None and start >= hi):
-            out.append(record)          # untouched, entirely outside the range
+        outside = (start is None or (end is not None and end <= lo)
+                   or (hi is not None and start >= hi))
+        relevant = (any(record.get(a) for a in axes) if field != "suppress"
+                    else bool(set(axes) & set(record.get("suppress") or [])))
+        if outside or not relevant:
+            out.append(record)
             continue
         touched += 1
-        if start < lo:
+        if start < lo:                       # head: untouched, keeps the id
             head = dict(record)
             head["to_fixed"] = [lo // 5, lo % 5]
-            head["to"] = frm
-            out.append(head)            # keeps its seq and tiebreak: one instruction, cut
-        if end is None:
-            continue                    # open-ended: truncated, never resumed
-        if hi is not None and end > hi:
+            out.append(head)
+        if end is None and hi is not None:
+            # An open-ended span cut by a *bounded* range is truncated and
+            # everything after is discarded, never split. Splitting would leave
+            # a fresh open-ended fragment starting a block later, so the storm
+            # would resume immediately and run forever — the opposite of "clear
+            # it". An instruction that runs until stopped ends when stopped; a
+            # user who wants a gap sets a new override after the clear.
+            #
+            # An open-ended *range* has no "after" to discard, so it falls
+            # through and edits the span in place instead. Discarding there
+            # would drop the record whole and take its other axes with it.
+            continue
+        middle = _split_axes(record, axes, field)
+        middle["from_fixed"] = [max(start, lo) // 5, max(start, lo) % 5]
+        if hi is not None and (end is None or end > hi):
+            middle["to_fixed"] = [hi // 5, hi % 5]
+        if _sets_anything(middle):
+            if start < lo:                   # a fresh id: the head kept the original
+                middle["id"] = _generated_id(key, len(out), taken)
+                taken.add(middle["id"])
+            out.append(middle)
+        if hi is not None and (end is None or end > hi):
             tail = dict(record)
             tail["from_fixed"] = [hi // 5, hi % 5]
-            tail["from"] = to
-            tail["id"] = _generated_id(key, len(out),
-                                       {r["id"] for rs in data.values() for r in rs})
-            out.append(tail)            # fresh id to address, original tiebreak to order
+            tail["id"] = _generated_id(key, len(out), taken)
+            taken.add(tail["id"])
+            out.append(tail)
     if touched:
         if out:
             data[key] = out
         else:
             data.pop(key, None)
+    return touched
+
+
+def clear(cid: str, provider, location_id: str, frm: str, to: str | None,
+          axes: tuple[str, ...] | list[str] | None = None, blocks: int | None = None) -> int:
+    """Return axes to procedural over a range. One atomic write.
+
+    Only spans stored under ``location_id`` are mutated. A `_default` span is
+    inherited by every location in the campaign, so truncating it to clear the
+    docks would clear everywhere else too, and skipping it would leave the
+    docks overridden and the button ineffective. Neither is acceptable, so an
+    inherited span is **suppressed rather than edited**: a location-scoped
+    record naming the axis in its `suppress` list resolves as "no override
+    here" and outranks `_default` by the ordinary specificity rule. Clearing a
+    campaign-wide override for everyone is then a separate, explicit act —
+    issuing the clear against `_default` itself.
+
+    Clearing does not retract history. A storm set on day 10 and cleared on
+    day 15 did storm for five days, and re-reading day 12 still shows it;
+    `delete` is the more emphatic action for taking that back.
+    """
+    axes = tuple(axes) if axes else AXES
+    key = location_id or DEFAULT_KEY
+    data = read(cid)
+    lo = ordinal_of(resolve_endpoint(provider, frm, end=False))
+    if lo is None:
+        return 0
+    hi = _upper(provider, lo, to, blocks)
+
+    touched = _cut(cid, key, data, lo, hi, axes, field="axes")
+
+    if key != DEFAULT_KEY:
+        # Anything still inherited over this range needs suppressing, or the
+        # clear looks like it did nothing at the one place it was aimed.
+        inherited = tuple(
+            a for a in axes
+            if any(covers(r, lo) and r.get(a) for r in data.get(DEFAULT_KEY, [])))
+        if inherited:
+            record = {
+                "id": _generated_id(key, len(data.get(key, [])),
+                                    {r["id"] for rs in data.values() for r in rs}),
+                "from": frm, "to": to,
+                "from_fixed": [lo // 5, lo % 5],
+                "to_fixed": None if hi is None else [hi // 5, hi % 5],
+                "suppress": list(inherited), "note": "", "source": "manual",
+                "seq": next_seq(data, key), "set_at": now_iso(),
+            }
+            record["tiebreak"] = record["id"]
+            data.setdefault(key, []).append(record)
+            touched += 1
+
+    if touched:
         _write(cid, data)
     return touched
 
 
+def resume(cid: str, provider, location_id: str, frm: str, to: str | None,
+           axes: tuple[str, ...] | list[str] | None = None, blocks: int | None = None) -> int:
+    """Undo suppression, restoring an inherited override over a range.
+
+    Axis-aware rather than a whole-record delete: one suppression routinely
+    names several axes, since clearing all three at once produces exactly that,
+    and dropping the record would restore inheritance for every axis it names —
+    so resuming wind would silently re-enable an inherited condition override
+    the user meant to keep suppressed.
+
+    Without this the clear is a one-way door. A suppressed axis renders as
+    generated, so *Clear override* does not appear for it, and setting a
+    concrete value writes another local exception rather than restoring the
+    campaign-wide one.
+    """
+    axes = tuple(axes) if axes else AXES
+    key = location_id or DEFAULT_KEY
+    data = read(cid)
+    lo = ordinal_of(resolve_endpoint(provider, frm, end=False))
+    if lo is None:
+        return 0
+    hi = _upper(provider, lo, to, blocks)
+    touched = _cut(cid, key, data, lo, hi, axes, field="suppress")
+    if touched:
+        _write(cid, data)
+    return touched
 def put_ordinals(cid: str, location_id: str, native: str, start: int, end: int | None,
                  axes: dict, note: str = "", source: str = "manual") -> dict:
     """Write a span whose bounds are already block ordinals.

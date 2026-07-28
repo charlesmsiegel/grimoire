@@ -183,6 +183,19 @@ class WeatherOverride(BaseModel):
     note: str | None = None
     suppress: list[str] | None = None
     clear: bool = False
+    # A block count instead of an `end`. The duration control offers "this
+    # block" and "the rest of today"; turning those into native strings
+    # client-side means reimplementing the calendar's month lengths.
+    blocks: int | None = None
+
+
+class WeatherRange(BaseModel):
+    """A location, a span, and the axes to act on — for clear and resume."""
+    location: str = "_default"
+    start: str
+    end: str | None = None
+    axes: list[str] | None = None
+    blocks: int | None = None
 
 
 class ModuleCreate(BaseModel):
@@ -2675,7 +2688,8 @@ def put_weather(cid: str, body: WeatherOverride):
         raise HTTPException(status_code=400, detail=f"unparseable moment: {e}")
 
     if body.clear:
-        n = store.weather.overrides.clear(cid, provider, body.location, body.start, body.end)
+        n = store.weather.overrides.clear(cid, provider, body.location, body.start, body.end,
+                                          blocks=body.blocks)
         return {"cleared": n}
 
     axes = {a: getattr(body, a) for a in store.weather.AXES}
@@ -2684,17 +2698,75 @@ def put_weather(cid: str, body: WeatherOverride):
         # id is discoverable nowhere and repeated calls would quietly accumulate
         # rows no client can see or delete.
         raise HTTPException(status_code=400, detail="at least one axis is required")
+    if body.blocks is not None:
+        start = store.weather.overrides.ordinal_of(
+            list(store.weather.overrides.resolve_endpoint(provider, body.start, end=False)))
+        return store.weather.overrides.put_ordinals(
+            cid, body.location, body.start, start, start + max(1, body.blocks), axes,
+            note=body.note or "", source="manual")
     record = store.weather.overrides.put(
         cid, provider, body.location, body.start, body.end, axes,
         note=body.note or "", source="manual", suppress=body.suppress)
     return record
 
 
-@router.delete("/campaigns/{cid}/weather/{span_id}")
-def delete_weather(cid: str, span_id: str):
-    """Retract a span, as if it had never been set — unlike clearing a range."""
+def _weather_provider(cid: str):
+    try:
+        cfg = store.calendars.read_calendar(store.campaigns.campaign_root(cid))
+        return store.calendars.get_provider(cfg["primary"])
+    except (store.calendars.CalendarError, KeyError, TypeError, AttributeError) as e:
+        raise HTTPException(status_code=400, detail=f"unreadable calendar: {e}")
+
+
+@router.post("/campaigns/{cid}/weather/clear")
+def post_weather_clear(cid: str, body: WeatherRange):
+    """Return named axes to procedural over a range, atomically.
+
+    One server-side operation rather than client-orchestrated edits. Removing a
+    single axis from a span that sets several means *mutating* that record
+    while preserving its source, note, set_at and range — and the client has
+    only a whole-record DELETE and a create-shaped PUT, so it would delete and
+    recreate, losing exactly the fields precedence depends on, across a stack
+    of spans non-atomically.
+    """
     _campaign_root_or_404(cid)
-    if not store.weather.overrides.delete(cid, span_id):
+    provider = _weather_provider(cid)
+    try:
+        n = store.weather.overrides.clear(cid, provider, body.location, body.start,
+                                          body.end, axes=body.axes, blocks=body.blocks)
+    except store.calendars.CalendarError as e:
+        raise HTTPException(status_code=400, detail=f"unparseable moment: {e}")
+    return {"cleared": n}
+
+
+@router.post("/campaigns/{cid}/weather/resume")
+def post_weather_resume(cid: str, body: WeatherRange):
+    """Undo suppression, restoring an inherited override over a range.
+
+    Axis-aware: one suppression routinely names several axes, since clearing
+    all three at once produces exactly that, so dropping the record would
+    restore inheritance for axes the user meant to keep suppressed.
+    """
+    _campaign_root_or_404(cid)
+    provider = _weather_provider(cid)
+    try:
+        n = store.weather.overrides.resume(cid, provider, body.location, body.start,
+                                           body.end, axes=body.axes, blocks=body.blocks)
+    except store.calendars.CalendarError as e:
+        raise HTTPException(status_code=400, detail=f"unparseable moment: {e}")
+    return {"resumed": n}
+
+
+@router.delete("/campaigns/{cid}/weather/{storage_key}/{span_id}")
+def delete_weather(cid: str, storage_key: str, span_id: str):
+    """Retract a span outright — unlike clearing, which takes a range.
+
+    Keyed by storage key as well as id. The key is not the scene's location and
+    cannot be inferred from it: a covering span may live under `_default`,
+    which is why the read route returns each span's key alongside its id.
+    """
+    _campaign_root_or_404(cid)
+    if not store.weather.overrides.delete(cid, span_id, storage_key):
         raise HTTPException(status_code=404, detail="override not found")
     return {"ok": True}
 

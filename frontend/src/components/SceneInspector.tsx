@@ -8,6 +8,7 @@ import { getModels, type Model } from "../api/models";
 import { Portrait } from "./Portrait";
 import { RecordDrawer, type DrawerTarget } from "./RecordDrawer";
 import { CalendarDatePicker } from "./CalendarDatePicker";
+import { WeatherWidget } from "./WeatherWidget";
 import { ResponsePresetPicker } from "./ResponsePresetPicker";
 
 const SECTIONS_KEY = "grimoire.inspector.sections";
@@ -331,6 +332,12 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
             </div>
           </>
         )}
+      </SideSection>
+
+      <SideSection id="weather" title="Weather" collapsed={!!collapsed.weather} onToggle={toggleSection}>
+        {/* Renders nothing when there is no location or moment yet, the same
+            way the When and Location sections above it degrade. */}
+        <WeatherWidget cid={cid} sid={sid} refreshKey={refreshKey} />
       </SideSection>
 
       <SideSection id="context" title="Context" collapsed={!!collapsed.context} onToggle={toggleSection}
