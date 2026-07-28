@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from . import (
     absorb, appearances, assets, audit, campaigns, cards, changes, characters, checks, chronicle,
-    chub, context, dice, dossiers, entities, entity_schema, epub, export, fence, fetch, greetings, groupstate,
+    chub, climates, context, dice, dossiers, entities, entity_schema, epub, export, fence, fetch, greetings, groupstate,
     image_subjects, length_drift, lengths, llm_connections, localize, lorebook, migrations, module_edit, modules, overlay, pcs, playing,
     playstate, plot, proposals, relationships, response_presets, rolls, scene_ids, scene_refs, scenes, sheets,
     styles, suggest,

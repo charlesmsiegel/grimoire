@@ -162,6 +162,7 @@ class NewCampaign(BaseModel):
     region: str | None = None
     calendar: str | None = None
     module: str | None = None
+    climate: str | None = None
 
 
 class ModuleCreate(BaseModel):
@@ -2109,10 +2110,12 @@ def post_campaign(body: NewCampaign):
     try:
         return {"id": store.campaigns.create_campaign(body.name, body.world,
                                                       body.region, body.calendar,
-                                                      body.module)}
+                                                      body.module, body.climate)}
     except store.worlds.WorldNotFound:
         raise HTTPException(status_code=400, detail="world not found")
     except store.calendars.CalendarError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except store.climates.ClimateError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except store.modules.ModuleNotFound:
         raise HTTPException(status_code=404, detail="module not found")

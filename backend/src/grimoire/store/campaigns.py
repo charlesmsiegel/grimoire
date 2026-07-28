@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import filecmp
+import json
 import shutil
 from pathlib import Path
 
@@ -65,12 +66,17 @@ def list_campaigns() -> list[dict]:
 
 
 def create_campaign(name: str, world_id: str, region: str | None = None,
-                     calendar: str | None = None, module: str | None = None) -> str:
+                     calendar: str | None = None, module: str | None = None,
+                     climate: str | None = None) -> str:
     ensure_home()
     if not worlds.world_meta_path(world_id).exists():
         raise worlds.WorldNotFound(world_id)
     if calendar is not None:
         calendars.get_provider({"provider": calendar})  # unknown id -> CalendarError before anything is created
+    from . import climates
+    wanted_climate = climate or climates.FALLBACK_ID
+    if climates.get(wanted_climate) is None:  # unknown id -> fail before anything is created
+        raise climates.ClimateError(f"unknown climate: {wanted_climate!r}")
     if module and module != "none":  # "none" = explicitly mechanics-free, always legal
         from . import modules
         modules.pack_root(module)  # raises ModuleNotFound before creating anything
@@ -89,6 +95,8 @@ def create_campaign(name: str, world_id: str, region: str | None = None,
     # (store/overlay.py) and sync.md tracks bases for materialized records only
     write_manifest(cid, {})
     calendars.copy_calendar(worlds.world_root(world_id), root)
+    (root / "climate.json").write_text(
+        json.dumps({"default_climate": wanted_climate}), encoding="utf-8")
     from . import sheets
     sheets.seed(cid)
     if region is not None or calendar is not None:
