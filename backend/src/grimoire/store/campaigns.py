@@ -85,9 +85,10 @@ def create_campaign(name: str, world_id: str, region: str | None = None,
     root.mkdir(parents=True)
     (root / "scenes").mkdir()
     now = now_iso()
-    atomic.write_text(campaign_meta_path(cid), dump_frontmatter({"name": name, "world": world_id, "created": now, "updated": now,
-                          "world_copy": "overlay",
-                          **({"module": module} if module else {})}, ""))
+    atomic.write_text(campaign_meta_path(cid), dump_frontmatter(
+        {"name": name, "world": world_id, "created": now, "updated": now,
+         "world_copy": "overlay",
+         **({"module": module} if module else {})}, ""))
     # copy-on-write: nothing is copied up front; records materialize on divergence
     # (store/overlay.py) and sync.md tracks bases for materialized records only
     write_manifest(cid, {})
