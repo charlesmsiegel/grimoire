@@ -227,3 +227,27 @@ test("an untouched popover saves nothing", async () => {
   expect(api.setWeatherOverride).not.toHaveBeenCalled();
   expect(api.clearWeather).not.toHaveBeenCalled();
 });
+
+test("a metadata-only save does not localize an inherited axis", async () => {
+  // Axes can come from different spans, and the PUT is location-scoped:
+  // including an inherited _default wind would copy it into a new local
+  // override and quietly stop campaign-wide wind changes reaching here.
+  vi.mocked(api.getSceneWeather).mockResolvedValue({
+    ...BASE,
+    weather: { condition: "blizzard", temperature: "cold", wind: "gale" },
+    source: { condition: "manual", temperature: "procedural", wind: "manual" },
+    stack: [
+      { id: "local", location: "saltmarch-docks", from: "2026-06-14", to: null,
+        condition: "blizzard", note: "old note" },
+      { id: "inherited", location: "_default", from: "2026-06-14", to: null, wind: "gale" },
+    ],
+  } as never);
+  render(<WeatherWidget cid="c" sid="s" />);
+  fireEvent.click(await screen.findByRole("button", { name: /Weather/ }));
+  fireEvent.change(screen.getByLabelText("Note"), { target: { value: "the Wintertide storm" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.setWeatherOverride).toHaveBeenCalled());
+  const body = vi.mocked(api.setWeatherOverride).mock.calls[0][1] as Record<string, unknown>;
+  expect(body.condition).toBe("blizzard");
+  expect(body.wind).toBeUndefined();  // still inherited from _default
+});

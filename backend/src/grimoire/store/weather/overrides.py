@@ -32,6 +32,7 @@ DEFAULT_KEY = "_default"
 # normalized away by URL parsers before the request is sent — both leave an
 # accepted span that nothing can remove.
 _ID = re.compile(r"[A-Za-z0-9._-]+")
+_SAFE_KEY = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 def _valid_id(value) -> bool:
@@ -51,10 +52,15 @@ def _generated_id(key: str, n: int, taken: set[str]) -> str:
     collided for hand-authored records differing only in when they were
     written, which precedence explicitly treats as a tiebreak.
     """
-    candidate = f"ovr-{key}-{n}"
+    # The key is sanitized rather than used raw: a location id containing `/`
+    # would produce `ovr-foo/bar-0`, which fails `_valid_id`, cannot be passed
+    # through the DELETE route as one path segment, and gets regenerated into
+    # the same invalid form on every read.
+    safe = _SAFE_KEY.sub("-", key) or "loc"
+    candidate = f"ovr-{safe}-{n}"
     suffix = 2
     while candidate in taken:
-        candidate = f"ovr-{key}-{n}-{suffix}"
+        candidate = f"ovr-{safe}-{n}-{suffix}"
         suffix += 1
     return candidate
 
@@ -108,6 +114,20 @@ def _repair_key(key: str, records: list, taken_ids: set[str]) -> tuple[list[dict
         if not isinstance(record.get("tiebreak"), str) or not record["tiebreak"]:
             record["tiebreak"] = record["id"]
             changed = True
+
+        # `suppress` is read as a container during resolution, so a truthy
+        # non-list like `"suppress": 1` raises TypeError out of the weather GET
+        # and out of prompt assembly — past the loader's malformed-file
+        # tolerance. Normalized to known axes here, and dropped when empty.
+        if "suppress" in record:
+            raw = record["suppress"]
+            clean = ([a for a in raw if a in AXES] if isinstance(raw, (list, tuple)) else [])
+            if clean != raw:
+                changed = True
+            if clean:
+                record["suppress"] = clean
+            else:
+                record.pop("suppress", None)
 
         if not isinstance(record.get("seq"), int) or isinstance(record.get("seq"), bool):
             # Every legacy and hand-authored record reads as 0, which needs no
@@ -387,8 +407,13 @@ def _only_axes(axes) -> tuple[str, ...]:
     `to_fixed` would strip that span's own bounds — turning a bounded override
     into an open-ended one. Filtering here means no caller, route or otherwise,
     can reach span metadata through an axis list.
+
+    Only ``None`` means "all axes". An explicitly empty list is a selection of
+    nothing and stays empty: treating it as all three would let a client with
+    no axes selected clear every override, or resume every inherited axis,
+    instead of doing nothing.
     """
-    if not axes:
+    if axes is None:
         return AXES
     wanted = set(axes)
     return tuple(a for a in AXES if a in wanted)

@@ -115,3 +115,28 @@ def test_a_saved_climate_is_usable_as_a_campaign_default(client):
     r = client.post("/api/campaigns", json={"name": "Saltmarch Chronicle", "world": wid,
                                             "climate": "saltmarch-fens"})
     assert r.status_code == 200
+
+
+# ---- from the second Codex review of #232 ----
+
+def test_a_file_whose_id_does_not_match_its_name_is_skipped(client, tmp_path):
+    # Registering it under the document id, while custom_path and deletion
+    # address <id>.json, leaves a climate that lists as custom, opens as
+    # non-custom, and cannot be removed.
+    (tmp_path / "climates").mkdir(exist_ok=True)
+    (tmp_path / "climates" / "wrong-name.json").write_text(
+        json.dumps(doc("saltmarch-fens")), encoding="utf-8")
+    ids = {r["id"] for r in client.get("/api/climates").json()["climates"]}
+    assert "saltmarch-fens" not in ids
+    assert client.get("/api/climates/saltmarch-fens").status_code == 404
+
+
+def test_a_failed_delete_is_a_500_not_a_404(client, monkeypatch):
+    # "no custom climate to delete" for a climate that still exists tells the
+    # user the opposite of what happened.
+    import pathlib
+    client.put("/api/climates/saltmarch-fens", json=doc())
+    def boom(self, *a, **k):
+        raise OSError("read-only file system")
+    monkeypatch.setattr(pathlib.Path, "unlink", boom)
+    assert client.delete("/api/climates/saltmarch-fens").status_code == 500

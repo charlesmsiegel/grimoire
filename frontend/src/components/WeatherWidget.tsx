@@ -94,9 +94,18 @@ export function WeatherWidget({ cid, sid, refreshKey }:
       const chosen = DURATIONS[duration];
       const clearing = WEATHER_AXES.filter((a) => draft[a] === CHANCE);
       // An axis is written when the user picked it, or when they changed the
-      // note/duration on an axis that is already authored.
+      // note/duration *of the span being edited*.
+      //
+      // Scoped to that one span rather than to every authored axis. Axes can
+      // come from different spans — a local condition and an inherited
+      // `_default` wind — and the PUT is location-scoped, so including the
+      // inherited wind would copy it into a new local override and quietly
+      // stop later campaign-wide wind changes reaching this location.
+      const editing = stack[0];
+      const editingHere = editing?.location === (data.location ?? "_default");
       const setting = WEATHER_AXES.filter((a) => draft[a] && draft[a] !== CHANCE
-        && (touched.has(a) || (metaDirty && source[a] !== "procedural")));
+        && (touched.has(a)
+            || (metaDirty && editingHere && Boolean((editing as Record<string, unknown>)[a]))));
       // "Leave to chance" clears the axis over the selected duration rather
       // than merely omitting it from the record: a user selecting it on an
       // overridden axis means "stop overriding this", and omitting would let

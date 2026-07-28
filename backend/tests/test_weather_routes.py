@@ -377,3 +377,22 @@ def test_the_override_note_reaches_the_prompt(client):
     assert data["weather"]["notes"] == ["the Wintertide storm"]
     from grimoire import prompts
     assert "the Wintertide storm" in prompts.render("scene/system.j2", **data)
+
+
+def test_a_reversed_range_is_rejected(client):
+    # Both endpoints parse, so the span persists with to <= from, covers no
+    # block, and appears in no stack — success for an override that can never
+    # apply.
+    cid, sid, lid = scene(client)
+    r = client.put(f"/api/campaigns/{cid}/weather",
+                   json={"location": lid, "start": "2026-06-16", "end": "2026-06-14",
+                         "condition": "storm"})
+    assert r.status_code == 400 and "ends before" in r.json()["detail"]
+
+
+def test_an_empty_timed_range_is_rejected(client):
+    cid, sid, lid = scene(client)
+    r = client.put(f"/api/campaigns/{cid}/weather",
+                   json={"location": lid, "start": "2026-06-14T08:00",
+                         "end": "2026-06-14T08:00", "condition": "storm"})
+    assert r.status_code == 400
