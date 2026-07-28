@@ -382,3 +382,32 @@ def clear(cid: str, provider, location_id: str, frm: str, to: str | None) -> int
             data.pop(key, None)
         _write(cid, data)
     return touched
+
+
+def put_ordinals(cid: str, location_id: str, native: str, start: int, end: int | None,
+                 axes: dict, note: str = "", source: str = "manual") -> dict:
+    """Write a span whose bounds are already block ordinals.
+
+    The extractor works this way: narration gives a moment and sometimes a
+    duration in blocks, never a pair of native endpoints, and round-tripping
+    ordinals back through native strings just to re-parse them would lose the
+    block alignment this store exists to keep.
+    """
+    key = location_id or DEFAULT_KEY
+    data = read(cid)
+    record = {
+        "id": _generated_id(key, len(data.get(key, [])),
+                            {r["id"] for rs in data.values() for r in rs}),
+        "from": native, "to": None,
+        "from_fixed": [start // 5, start % 5],
+        "to_fixed": None if end is None else [end // 5, end % 5],
+        "note": note, "source": source,
+        "seq": next_seq(data, key), "set_at": now_iso(),
+    }
+    record["tiebreak"] = record["id"]
+    for axis in AXES:
+        if axes.get(axis):
+            record[axis] = axes[axis]
+    data.setdefault(key, []).append(record)
+    _write(cid, data)
+    return record

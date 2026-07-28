@@ -139,6 +139,13 @@ def parse_output(text: str) -> dict:
         "new_characters": new_characters,
         "new_locations": new_locations,
         "new_lore": new_lore,
+        # Listed explicitly because this function rebuilds a dict of known keys
+        # rather than passing the model's object through: an unlisted key is
+        # dropped on the floor here, and the materialize and apply branches
+        # below become unreachable no matter how well the prompt performs.
+        "weather_edits": _list("weather_edits",
+                               ("location", "condition", "temperature", "wind",
+                                "duration_blocks", "note")),
     }
 
 
@@ -407,6 +414,52 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
                         "before": "", "after": body, "authored": False,
                         "payload": payload})
 
+    out.extend(_weather_edits(cid, sid, parsed))
+    return out
+
+
+def _weather_edits(cid: str, sid: str, parsed: dict) -> list[dict]:
+    """Narrated weather as staged before/after rows, one per changed axis.
+
+    Narration gives a value, not a span, so the span rule is: **default to the
+    block containing the narrated moment**, and honour an explicit duration
+    when the narration states one ("the rain set in for three days"), rounded
+    outward to whole blocks. Narration that implies onset rather than extent
+    ("rain begins") takes the default — one block, re-narratable next turn.
+    """
+    rows = parsed.get("weather_edits") or []
+    if not rows:
+        return []
+    from . import scenes, weather as weather_store
+    moments = scenes.get_time_history(cid, sid)
+    native = moments[-1] if moments else None
+    if not native:
+        return []  # no moment means no block to pin the span to
+    history = scenes.get_location_history(cid, sid)
+    scene_location = history[-1] if history else None
+
+    out = []
+    for e in rows:
+        location = (e.get("location") or "").strip() or scene_location
+        if not location:
+            continue
+        resolved = weather_store.current_weather(cid, location, native)
+        if resolved is None:
+            continue  # unparseable moment: the same case the resolver declines
+        for axis in weather_store.AXES:
+            after = (e.get(axis) or "").strip()
+            if not after or after == resolved[axis]:
+                continue
+            out.append({
+                "id": f"weather:{location}:{axis}", "kind": "weather",
+                "target": {"kind": "weather", "id": location},
+                "label": f"Weather at {location} — {axis}",
+                "field": axis, "before": resolved[axis], "after": after,
+                "authored": False,
+                "payload": {"location": location, "axis": axis, "native": native,
+                            "duration_blocks": e.get("duration_blocks", ""),
+                            "note": e.get("note", "")},
+            })
     return out
 
 
@@ -436,6 +489,38 @@ def _new_character_dossier(name: str, payload: dict) -> str:
     if open_questions:
         parts.append(f"Open questions: {open_questions}")
     return " ".join(parts)
+
+
+def _apply_weather(cid: str, edit: dict, after: str) -> None:
+    """Write one narrated axis as an `extractor` override span.
+
+    The span covers the block containing the narrated moment, extended by an
+    explicit `duration_blocks` when the narration stated an extent. Endpoints
+    round outward to whole blocks, which `overrides.put` does by resolving them
+    through the block grid rather than through raw minutes.
+    """
+    from . import calendars, weather as weather_store
+    payload = edit.get("payload") or {}
+    native, axis = payload.get("native"), edit.get("field")
+    location = payload.get("location")
+    if not native or axis not in weather_store.AXES or not location:
+        return
+    try:
+        cfg = calendars.read_calendar(campaigns.campaign_root(cid))
+        provider = calendars.get_provider(cfg["primary"])
+        fixed = calendars.fixed_of(provider, native)
+        minutes = calendars.minutes_of(native)
+    except (calendars.CalendarError, KeyError, TypeError, AttributeError, OSError):
+        return
+    start = weather_store.blocks.ordinal(fixed, minutes)
+    try:
+        span = max(1, int(payload.get("duration_blocks") or 1))
+    except (TypeError, ValueError):
+        span = 1
+    end = start + span
+    weather_store.overrides.put_ordinals(
+        cid, location, native, start, end, {axis: after},
+        note=str(payload.get("note") or ""), source="extractor")
 
 
 def apply_edits(cid: str, edits: list[dict],
@@ -478,7 +563,9 @@ def apply_edits(cid: str, edits: list[dict],
         try:
             kind, target, after = e["kind"], e["target"], e.get("after", "")
             extra_fields: list[dict] = []
-            if kind == "character_state":
+            if kind == "weather":
+                _apply_weather(cid, e, after)
+            elif kind == "character_state":
                 playstate.write_state(croot, target["id"], after)
             elif kind == "group_state":
                 groupstate.write_state(croot, target["id"], after)
