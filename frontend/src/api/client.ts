@@ -98,7 +98,11 @@ export type EntityScope = { kind: "world" | "campaign"; id: string };
 
 // Mirrors backend/src/grimoire/store/entity_schema.py — keep in sync.
 export const ENTITY_FIELDS: Record<EntityKind, { key: string; label: string }[]> = {
-  locations: [],
+  locations: [
+    { key: "climate", label: "Climate" },
+    { key: "persistence", label: "Weather persistence" },
+    { key: "weather_zone", label: "Weather zone" },
+  ],
   lore: [],
   items: [{ key: "item_type", label: "Type" }, { key: "rarity", label: "Rarity" }],
   groups: [{ key: "group_type", label: "Type" }],
