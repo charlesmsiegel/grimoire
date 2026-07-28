@@ -40,12 +40,20 @@ def _custom_dir() -> Path:
 
 
 def _scan(directory: Path) -> dict[str, dict]:
+    """Every valid document in a tier, keyed by id.
+
+    A file whose `id` differs from its filename is skipped. Registering it
+    under the document id while `custom_path`, the tier flags and deletion all
+    address `<id>.json` leaves a climate that lists as custom, opens as
+    non-custom, and cannot be removed through the API — and two mismatched
+    files can shadow each other by filename order.
+    """
     if not directory.is_dir():
         return {}
     out: dict[str, dict] = {}
     for path in sorted(directory.glob("*.json")):
         doc = _read(path)
-        if doc is not None:
+        if doc is not None and doc["id"] == path.stem:
             out[doc["id"]] = doc
     return out
 
@@ -103,9 +111,11 @@ def remove(climate_id: str) -> bool:
     """
     if not isinstance(climate_id, str) or not climate_id:
         return False
-    path = custom_path(climate_id)
     try:
-        path.unlink()
+        custom_path(climate_id).unlink()
         return True
-    except (OSError, ValueError):
+    except (FileNotFoundError, ValueError):
         return False
+    # Any other OSError — a read-only directory, an I/O failure — propagates.
+    # Reporting "no custom climate to delete" for a climate that still exists
+    # tells the user the opposite of what happened.

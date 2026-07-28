@@ -491,3 +491,57 @@ def test_put_ordinals_carries_a_suppression(monkeypatch, tmp_path):
                            {}, suppress=["condition"])
     kind, _ = overrides.winner(overrides.read(cid), "saltmarch-docks", start, "condition")
     assert kind == "suppress"
+
+
+# ---- from the second Codex review of #232 ----
+
+def test_a_non_list_suppression_does_not_raise_into_resolution(monkeypatch, tmp_path):
+    # `axis in 1` is a TypeError, past the loader's malformed-file tolerance.
+    cid, p = setup(monkeypatch, tmp_path)
+    write_raw(cid, {"saltmarch-docks": [
+        {"id": "odd", "from": "2026-06-14", "to": None,
+         "from_fixed": [calendars.fixed_of(p, "2026-06-14"), 0], "to_fixed": None,
+         "condition": "fog", "source": "manual", "suppress": 1}]})
+    got = overrides.winner(overrides.read(cid), "saltmarch-docks",
+                           ordinal(p, "2026-06-14T09:00"), "condition")
+    assert got[1]["condition"] == "fog"
+    assert "suppress" not in got[1]
+
+
+def test_an_unknown_axis_in_a_suppression_is_dropped(monkeypatch, tmp_path):
+    cid, p = setup(monkeypatch, tmp_path)
+    write_raw(cid, {"saltmarch-docks": [
+        {"id": "odd", "from": "2026-06-14", "to": None,
+         "from_fixed": [calendars.fixed_of(p, "2026-06-14"), 0], "to_fixed": None,
+         "source": "manual", "suppress": ["condition", "to_fixed"]}]})
+    assert overrides.read(cid)["saltmarch-docks"][0]["suppress"] == ["condition"]
+
+
+def test_a_location_key_with_a_slash_still_gets_an_addressable_id(monkeypatch, tmp_path):
+    # `ovr-foo/bar-0` fails _valid_id, cannot be one DELETE path segment, and
+    # would be regenerated into the same invalid form on every read.
+    cid, p = setup(monkeypatch, tmp_path)
+    made = overrides.put(cid, p, "foo/bar", "2026-06-14", None, {"condition": "fog"})
+    assert "/" in "foo/bar" and "/" not in made["id"]
+    assert overrides._valid_id(made["id"])
+    # Stable across reloads rather than re-derived each time.
+    assert overrides.read(cid)["foo/bar"][0]["id"] == made["id"]
+
+
+def test_an_explicitly_empty_axis_list_does_nothing(monkeypatch, tmp_path):
+    # A client with nothing selected must not clear every override.
+    cid, p = setup(monkeypatch, tmp_path)
+    overrides.put(cid, p, "saltmarch-docks", "2026-06-14", None,
+                  {"condition": "storm", "wind": "gale"})
+    assert overrides.clear(cid, p, "saltmarch-docks", "2026-06-14", None, axes=[]) == 0
+    got = overrides.winner(overrides.read(cid), "saltmarch-docks",
+                           ordinal(p, "2026-06-14T09:00"), "condition")
+    assert got[1]["condition"] == "storm"
+
+
+def test_omitting_axes_still_means_all_of_them(monkeypatch, tmp_path):
+    cid, p = setup(monkeypatch, tmp_path)
+    overrides.put(cid, p, "saltmarch-docks", "2026-06-14", None,
+                  {"condition": "storm", "wind": "gale"})
+    assert overrides.clear(cid, p, "saltmarch-docks", "2026-06-14", None) == 1
+    assert overrides.read(cid).get("saltmarch-docks", []) == []
