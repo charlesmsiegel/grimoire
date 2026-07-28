@@ -15,7 +15,8 @@ import re
 
 from .. import prompts
 from . import (appearances, calendars, campaigns, characters, checks, chronicle,
-               config, dice, dossiers, entities, groupstate, length_drift, lengths, modules, overlay,
+               config, dice, dossiers, entities, groupstate, length_drift, lengths, locks,
+               modules, overlay,
                pcs, playstate, plot, relationships, response_presets, scenes, sheets, styles,
                weather)
 
@@ -410,7 +411,7 @@ def _mechanics(cid: str, sid: str, cast, recent_text: str) -> dict:
     always -> sheet_types -> keys, keys capped at 6), compact sheet summaries
     for sheeted cast + the current location, and the available-checks table.
     All empty when no module resolves (modules.resolve)."""
-    with sheets.lock_for(cid):
+    with locks.campaign_lock(cid):
         mid = modules.resolve(cid)
         if mid is None:
             return {"mechanics_rules": [], "mechanics_sheets": [], "mechanics_checks": []}

@@ -1031,7 +1031,7 @@ def put_world_module(wid: str, body: ModuleSetting):
         )
         with contextlib.ExitStack() as stack:
             for c in all_cids:                   # sole multi-lock holder; sorted order
-                stack.enter_context(store.sheets.lock_for(c))
+                stack.enter_context(store.locks.campaign_lock(c))
             store.modules.set_world_module(wid, body.module.strip())
             for c in all_cids:
                 try:
@@ -2538,7 +2538,7 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
     def finalize(watcher) -> list[str]:
         frames: list[str] = []
         if watcher.complete or watcher.truncated:
-            with store.sheets.lock_for(cid):
+            with store.locks.campaign_lock(cid):
                 payload = _make_proposal(cid, sid, watcher)
                 _heal_current_proposal(cid, sid)  # new() erases the recovery handle
                 rec = store.proposals.new(cid, sid, payload)
@@ -2567,7 +2567,7 @@ def _continuation_stream(cid: str, sid: str, pid: str, messages: list[dict],
         frames: list[str] = []
         persist = lambda: _persist_reply(cid, sid, watcher.narration)  # noqa: E731
         if watcher.complete or watcher.truncated:
-            with store.sheets.lock_for(cid):
+            with store.locks.campaign_lock(cid):
                 if store.proposals.commit_narration(cid, sid, pid, persist):
                     payload = _make_proposal(cid, sid, watcher)
                     # the lock is reentrant, so healing (projection) is safe
@@ -3809,7 +3809,7 @@ def _continuation_rule_bodies(cid: str, resolution: dict) -> tuple[list[str], li
     docs (the continuation's mechanical grounding)."""
     on_roll_docs: list[str] = []
     check_docs: list[str] = []
-    with store.sheets.lock_for(cid):
+    with store.locks.campaign_lock(cid):
         mid = store.modules.resolve(cid)
         if mid is None:
             return on_roll_docs, check_docs
@@ -3983,7 +3983,7 @@ def get_campaign_module(cid: str):
 @router.put("/campaigns/{cid}/module")
 def put_campaign_module(cid: str, body: ModuleSetting):
     try:
-        with store.sheets.lock_for(cid):
+        with store.locks.campaign_lock(cid):
             store.modules.set_campaign_module(cid, body.module.strip())
             store.audit.clear_baselines(cid)
     except store.campaigns.CampaignNotFound:

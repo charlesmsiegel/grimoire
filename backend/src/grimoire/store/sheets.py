@@ -15,11 +15,11 @@ import json
 import os
 import shutil
 import tempfile
-import threading
 import uuid
 from pathlib import Path
 
 from . import campaigns, characters, entities, expressions, modules, overlay, pcs, worlds
+from .locks import campaign_lock
 
 
 class SheetError(Exception):
@@ -308,7 +308,7 @@ def write(cid: str, kind: str, eid: str, sheet_type: str,
     ``expected`` is mandatory whole-sheet CAS: the caller's last-read
     {"sheet_type", "fields", "gen"} snapshot, or None to assert no sheet
     exists yet -- raises SheetConflict on mismatch."""
-    with lock_for(cid):
+    with campaign_lock(cid):
         # resolve INSIDE the lock: rebinds publish under this same lock, so a
         # writer can never resolve module A, lose the CPU to a rebind to B,
         # and then validate/write under A after B is visible.
@@ -326,7 +326,7 @@ def delete(cid: str, kind: str, eid: str, *, expected_gen: str | None) -> bool:
     yet). A missing file is False, never a conflict."""
     if kind not in FILE_KINDS or not _safe_part(eid):
         return False
-    with lock_for(cid):
+    with campaign_lock(cid):
         p = _campaign_path(cid, kind, eid)
         stored = _stored_snapshot(p)
         if stored is None:
@@ -473,7 +473,7 @@ def _checked_creation_write(path: Path, mid: str, file_kind: str, eid: str,
 def write_creation(cid: str, kind: str, eid: str, sheet_type: str,
                    spends: dict[str, dict[str, int]], *, expected: dict | None) -> None:
     """``expected`` is mandatory whole-sheet CAS -- see write()."""
-    with lock_for(cid):
+    with campaign_lock(cid):
         # resolve INSIDE the lock -- see write()'s rebind-serialization note.
         mid = modules.resolve(cid)
         if mid is None:
@@ -609,24 +609,6 @@ def world_coverage(wid: str, mid: str) -> dict:
     return out
 
 
-# ---- per-campaign sheet lock (#164, Phase 5): every sheet mutator serializes here ----
-
-_registry_guard = threading.Lock()
-_campaign_locks: dict[str, threading.RLock] = {}
-
-
-def lock_for(cid: str) -> threading.RLock:
-    """Get-or-create the per-campaign sheet lock atomically -- a plain
-    `if cid not in _campaign_locks: ...` is a check-then-act race that can
-    hand two concurrent first-ever callers different Lock objects. Public:
-    every campaign-sheet mutator (write, write_creation, delete, advance),
-    audit.capture_baseline, audit.apply_delta, and the module-rebind routes
-    serialize on this. RLock so apply_delta can compose set_field under an
-    already-held lock."""
-    with _registry_guard:
-        return _campaign_locks.setdefault(cid, threading.RLock())
-
-
 # ---- advancement (#164, Phase 7): single resource pool, formula-priced raises ----
 
 
@@ -654,7 +636,7 @@ def _advancement_cost(sheets_def: dict, type_id: str, field_key: str,
 
 
 def advance(cid: str, kind: str, eid: str, field_key: str) -> dict:
-    with lock_for(cid):
+    with campaign_lock(cid):
         mid = modules.resolve(cid)
         if mid is None:
             raise SheetError("no module resolved for this campaign")
@@ -732,7 +714,7 @@ def canonical_field_value(fdef: dict, value, live):
 
 def _set_field_locked(mid: str, cid: str, kind: str, eid: str,
                       field_key: str, value, expect) -> None:
-    """Body of set_field; caller holds lock_for(cid) and resolved mid once."""
+    """Body of set_field; caller holds campaign_lock(cid) and resolved mid once."""
     if kind not in FILE_KINDS:
         raise SheetError(f"unknown sheet kind {kind!r}")
     if not _safe_part(eid):
@@ -772,7 +754,7 @@ def set_field(cid: str, kind: str, eid: str, field_key: str, value, expect) -> N
     doesn't equal the canonicalized ``expect`` -- including when it already
     equals the canonicalized ``value`` (a duplicate/independent apply must be
     reported, not silently accepted as a no-op)."""
-    with lock_for(cid):
+    with campaign_lock(cid):
         # resolve INSIDE the lock -- see write()'s rebind-serialization note.
         mid = modules.resolve(cid)
         if mid is None:

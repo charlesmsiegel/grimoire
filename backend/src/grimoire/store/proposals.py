@@ -15,30 +15,25 @@ from __future__ import annotations
 
 import json
 import os
-import threading
 import uuid
 from contextlib import contextmanager
 
 from . import campaigns
+from .locks import campaign_lock
 from .paths import now_iso
 
 NON_TERMINAL = ("pending", "resolving", "resolved", "declined")
 
 
-def _lock(cid: str) -> threading.RLock:
-    """Unified per-campaign lock domain (mechanics Phase 8): proposals share
-    sheets.lock_for so a module edit holding the campaign locks excludes
-    proposal creation/transition — a proposal derived from the old pack can
-    never persist after a check rename/delete swapped it away."""
-    from . import sheets  # function-level: avoid import cycles
-    return sheets.lock_for(cid)
-
-
 @contextmanager
 def locked(cid: str):
     """Reentrant per-campaign lock; the route's projection sequence runs
-    inside this so concurrent resolved-retries serialize."""
-    with _lock(cid):
+    inside this so concurrent resolved-retries serialize. Shared with every
+    other campaign-scoped mutator (see ``locks.campaign_lock``) so a module
+    edit holding the campaign excludes proposal creation/transition — a
+    proposal derived from the old pack can never persist after a check
+    rename/delete swapped it away."""
+    with campaign_lock(cid):
         yield
 
 
@@ -68,7 +63,7 @@ def new(cid: str, sid: str, payload: dict) -> dict:
     """Create a fresh pending proposal for the scene, superseding whatever
     non-terminal record (if any) was already there — a new send always
     retires the old one."""
-    with _lock(cid):
+    with campaign_lock(cid):
         data = _read(cid)
         rec = {"id": f"pr-{uuid.uuid4().hex}", "status": "pending",
                "payload": payload, "created": now_iso(), "resolution": None}
@@ -88,7 +83,7 @@ def transition(cid: str, sid: str, pid: str, from_states, to: str,
     exactly this id and its status is in ``from_states``. Every state
     change goes through here; a lost transition means another actor moved
     the record (e.g. a supersede mid-resolve) and the caller must stop."""
-    with _lock(cid):
+    with campaign_lock(cid):
         data = _read(cid)
         rec = data.get(sid)
         if (not isinstance(rec, dict) or rec.get("id") != pid
@@ -124,7 +119,7 @@ def update_resolution(cid: str, sid: str, pid: str, resolution: dict) -> bool:
     ``superseded`` record is terminal — no CAS can target it — so its metadata
     is written directly.
     """
-    with _lock(cid):
+    with campaign_lock(cid):
         if transition(cid, sid, pid, ("resolved",), "resolved", resolution):
             return True
         data = _read(cid)
@@ -139,7 +134,7 @@ def update_resolution(cid: str, sid: str, pid: str, resolution: dict) -> bool:
 
 def supersede(cid: str, sid: str) -> None:
     """A new send or a newer fence retires any non-narrated proposal."""
-    with _lock(cid):
+    with campaign_lock(cid):
         data = _read(cid)
         rec = data.get(sid)
         if isinstance(rec, dict) and rec.get("status") in NON_TERMINAL:
@@ -162,7 +157,7 @@ def commit_narration(cid: str, sid: str, pid: str, persist) -> bool:
     is ever trimmed.
     """
     from . import scenes  # function-level: avoid import-order surprises
-    with _lock(cid):
+    with campaign_lock(cid):
         data = _read(cid)
         rec = data.get(sid)
         if (not isinstance(rec, dict) or rec.get("id") != pid

@@ -5,7 +5,7 @@ import zipfile
 
 import pytest
 
-from grimoire.store import campaigns, module_edit, modules, sheets, worlds
+from grimoire.store import campaigns, locks, module_edit, modules, sheets, worlds
 from grimoire.store.frontmatter import parse_frontmatter
 
 
@@ -169,7 +169,7 @@ def test_edit_excludes_campaign_locked_consumer(monkeypatch, tmp_path):
                                  version="", dice="", notes="")
         order.append("edit-done")
 
-    with sheets.lock_for(cid):
+    with locks.campaign_lock(cid):
         t = threading.Thread(target=edit)
         t.start()
         t.join(timeout=0.3)
@@ -781,7 +781,7 @@ def test_create_module_staged_and_locked_delete(monkeypatch, tmp_path):
     wid = worlds.create_world("Realm")
     cid = campaigns.create_campaign("Saltmarch Run", wid)
     done = []
-    with sheets.lock_for(cid):        # an LLM flow is mid-computation
+    with locks.campaign_lock(cid):        # an LLM flow is mid-computation
         t = threading.Thread(target=lambda: (module_edit.delete_module(mid),
                                              done.append(1)))
         t.start()
@@ -921,13 +921,13 @@ def test_delete_module_rejects_builtin_before_campaign_locks(monkeypatch, tmp_pa
 
 def test_llm_consumers_hold_campaign_lock(monkeypatch, tmp_path):
     """An edit holding the campaign locks excludes context assembly (proxy
-    for all R2 consumers — they share the lock_for domain)."""
+    for all R2 consumers — they share the campaign_lock domain)."""
     from grimoire.store import context, proposals
     mid = _mk_schema(monkeypatch, tmp_path)
     wid, cid = _bound_campaign(mid)
-    # proposals lock domain is unified: taking lock_for(cid) blocks proposals.new
+    # proposals lock domain is unified: campaign_lock(cid) blocks proposals.new
     hit = []
-    with sheets.lock_for(cid):
+    with locks.campaign_lock(cid):
         t = threading.Thread(target=lambda: (proposals.new(cid, "s1", {}), hit.append(1)))
         t.start()
         t.join(timeout=0.3)
@@ -947,12 +947,12 @@ def test_proposal_derivation_excluded_by_edit_lock(monkeypatch, tmp_path):
 
     def derive_and_persist():
         # mirrors the route's shape: lock, read the pack's check, persist
-        with sheets.lock_for(cid):
+        with locks.campaign_lock(cid):
             pack = modules.load_pack(mid)
             assert "brawl" in pack["checks"]
             derived_under_lock.append(proposals.new(cid, "s1", {"check": "brawl"}))
 
-    with sheets.lock_for(cid):
+    with locks.campaign_lock(cid):
         t = threading.Thread(target=derive_and_persist)
         t.start()
         t.join(timeout=0.3)
@@ -971,15 +971,15 @@ def test_proposal_route_sites_locked():
     src = inspect.getsource(routes_mod)
     for line_marker in ("proposals.new(",):
         # every proposals.new call site in routes.py sits inside a
-        # `with store.sheets.lock_for(` block — enforced by review, smoke-
+        # `with store.locks.campaign_lock(` block — enforced by review, smoke-
         # checked here: the file must contain at least one such wrap.
-        assert "sheets.lock_for(" in src
+        assert "locks.campaign_lock(" in src
 
 
-def test_r2_consumers_reference_lock_for():
+def test_r2_consumers_reference_campaign_lock():
     import inspect
     from grimoire.store import checks as checks_mod, context as context_mod
     from grimoire import routes as routes_mod
-    assert "lock_for" in inspect.getsource(checks_mod.resolve_check)
-    assert "lock_for" in inspect.getsource(context_mod._mechanics)
-    assert "lock_for" in inspect.getsource(routes_mod._continuation_rule_bodies)
+    assert "campaign_lock" in inspect.getsource(checks_mod.resolve_check)
+    assert "campaign_lock" in inspect.getsource(context_mod._mechanics)
+    assert "campaign_lock" in inspect.getsource(routes_mod._continuation_rule_bodies)
