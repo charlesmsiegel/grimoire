@@ -6,9 +6,10 @@ running timeline. The recap read-forward reads from here.
              "location","date","absorbed"}}
 <campaign>/timeline.md — append-only dated lines.
 
-Pure file IO. The extraction prompt/parse now lives in absorb.py; the LLM call lives
-in the route layer (mirrors briefs.py). No module-load import of scenes/appearances/
-entities (cycle-free).
+Pure file IO. The extraction prompt/parse now lives in absorb.py; the LLM call lives in
+the route layer — the split every LLM-backed store module follows (see absorb.py,
+suggest.py, dossiers.py). No module-load import of scenes/appearances/entities
+(cycle-free).
 """
 
 from __future__ import annotations
