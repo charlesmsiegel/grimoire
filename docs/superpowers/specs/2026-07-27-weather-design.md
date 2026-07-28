@@ -355,6 +355,13 @@ hash-diffing of entity blobs is undisturbed.
   and `set_at` alike — so the backstop still holds for files edited outside the
   app.
 
+  **Explicit ids are checked for uniqueness per storage key on load**, and a
+  collision is resolved by re-deriving both records' ids canonically. The
+  canonical rule only covers records that *omit* an id, so two hand-authored
+  records under one key can otherwise carry the same explicit `id` while
+  differing in bounds or axes — occupying one `DELETE` address, and
+  indistinguishable to the id tiebreak when their other precedence fields tie.
+
   Hashing a chosen subset does not work, and two subsets were tried before this
   one. Omitting the location key makes the same storm pinned at the docks and
   at the lighthouse derive one id. Omitting `set_at` and `note` makes two
@@ -367,6 +374,11 @@ hash-diffing of entity blobs is undisturbed.
 - Axes are individually optional: an override may pin `condition` alone and let
   temperature and wind still be drawn, which is what narration usually gives us
   ("it was raining" says nothing about wind).
+- An optional **`suppress`** list names axes this span forces back to
+  procedural, used to shadow an inherited `_default` override at one location
+  (§ Interface). It is a field of its own rather than a reserved value inside
+  an axis, so it cannot be confused with an authored condition that happens to
+  share its name.
 - `source` distinguishes `manual` (#45) from `extractor` (#46), which sets the
   resolution order and lets the UI show provenance.
 
@@ -516,16 +528,20 @@ pinned down exactly:
      decimal and `-` for negatives. Unit separators, so no id containing a
      dash or colon can collide with another key.
    - **Digest**: BLAKE2b-256 of that key.
-   - **Uniform**: take `n`, the leading 53 bits of the digest big-endian, and
-     use the **midpoint quantile** `u = (n + 0.5) / 2⁵³`. Midpoints rather than
-     `n / 2⁵³`: that form emits `u = 0`, which `Φ⁻¹` cannot transform, and the
-     obvious repair of remapping `0 → 2⁻⁵³` collides with the value `n = 1`
-     already produces — leaving zero mass at the bottom of the range and double
-     mass one step up. A table whose first cumulative boundary landed there
-     would see its first entry doubled or made unreachable, breaking the
-     weight-fidelity guarantee at exactly the place nobody would look. The
-     midpoint map is one-to-one and lands strictly inside `(0, 1)`, so no
-     special case is needed at either end.
+   - **Uniform**: take `n`, the leading **52** bits of the digest big-endian,
+     and set `u = (2n + 1) / 2⁵³`. The numerator is an odd integer below `2⁵³`,
+     so it is exactly representable and the division by a power of two is
+     exact: the map is injective and lands strictly inside `(0, 1)` with no
+     special case at either end.
+
+     Two simpler forms fail, both silently. `u = n / 2⁵³` emits `u = 0`, which
+     `Φ⁻¹` cannot transform, and remapping `0 → 2⁻⁵³` collides with what
+     `n = 1` already produces — no mass at the bottom, double mass one step up.
+     The obvious repair, midpoints over the full 53 bits (`(n + 0.5) / 2⁵³`),
+     is worse than it looks: `n + 0.5` is not representable at that magnitude,
+     so `n = 2⁵³ − 1` rounds to exactly `1.0` — outside AS241's domain — while
+     `2⁵³ − 2` and `2⁵³ − 3` both round to `0.9999999999999998`. Dropping one
+     bit is what makes the midpoint exact rather than approximately exact.
    - **Normal**: `z = Φ⁻¹(u)` by **Wichura's AS241, vendored** — Applied
      Statistics 37(3), 1988, algorithm `PPND16`, using its published
      double-precision coefficient sets for the three branches (`|q| <= 0.425`,
@@ -571,12 +587,12 @@ pinned down exactly:
 
    | cid | zone | axis | i | u |
    | --- | --- | --- | --- | --- |
-   | `saltmarch-chronicle` | `saltmarch` | `temperature` | 0 | `0.4510538731600649` |
-   | `saltmarch-chronicle` | `saltmarch` | `condition` | 0 | `0.7615608961018518` |
-   | `saltmarch-chronicle` | `saltmarch` | `wind` | 0 | `0.1777464535410927` |
-   | `saltmarch-chronicle` | `saltmarch` | `condition` | 1 | `0.9654995835326088` |
-   | `saltmarch-chronicle` | `saltmarch` | `condition` | −1 | `0.9510130394641974` |
-   | `saltmarch-chronicle` | `highreach` | `condition` | 0 | `0.2131595793531305` |
+   | `saltmarch-chronicle` | `saltmarch` | `temperature` | 0 | `0.45105387316006496` |
+   | `saltmarch-chronicle` | `saltmarch` | `condition` | 0 | `0.761560896101852` |
+   | `saltmarch-chronicle` | `saltmarch` | `wind` | 0 | `0.17774645354109275` |
+   | `saltmarch-chronicle` | `saltmarch` | `condition` | 1 | `0.9654995835326089` |
+   | `saltmarch-chronicle` | `saltmarch` | `condition` | −1 | `0.9510130394641975` |
+   | `saltmarch-chronicle` | `highreach` | `condition` | 0 | `0.21315957935313057` |
 
    And end-to-end, through the filter and the wind table of the worked example
    above (`calm 1, breeze 4, strong 3, gale 1`) at ordinal 0:
@@ -1065,6 +1081,14 @@ The form is where the real work is:
 default every untagged location falls back to is hand-editing the store or
 tagging every location one at a time.
 
+**Both default setters validate the id against the registry**, rejecting an
+unknown one with the available ids exactly as the location field does. A
+misspelled default is the same invisible typo one level up, and worse in blast
+radius: it silently moves *every* untagged location in the campaign to
+`temperate-interior`. Resolver leniency stays for files that go dangling later
+— a climate deleted after the fact must not break a turn — but nothing should
+be able to write a dangling reference through an API in the first place.
+
 `GET`/`PUT /api/campaigns/{cid}/climate`, rendered as a single select in the
 campaign's settings alongside the calendar config it sits beside on disk
 (`CalendarConfig.tsx` is the model, and #73's per-campaign settings tabs are
@@ -1230,15 +1254,22 @@ span covering the moment is inherited by every location in the campaign, so
 truncating it to clear the docks would clear the lighthouse and everywhere else
 too; skipping it would leave the docks overridden and the button ineffective.
 Neither is acceptable, so an inherited span is **suppressed rather than
-edited**: the server writes a location-scoped span setting that axis to the
-sentinel **`procedural`**, which resolves as "no override here" and outranks
+edited**: the server writes a location-scoped span naming that axis in a
+**`suppress` list**, which resolves as "no override here" and outranks
 `_default` by the specificity rule already in § Resolution. Clearing a
 campaign-wide override for everyone is then a separate, explicit act — issuing
 the clear against `_default` itself — rather than something a user does by
 accident while adjusting one harbour.
 
-`procedural` is a legal axis value in the store for exactly this purpose, and
-the HUD renders such an axis as generated, showing no authored marker.
+`suppress` is a **separate field listing axis names**, not a reserved value in
+the axis fields themselves. A sentinel string like `condition: "procedural"`
+would be indistinguishable from an authored value: entry names are
+unrestricted, overrides are explicitly not confined to the active table, and a
+climate may perfectly well contain a condition called `procedural` — at which
+point selecting it as an override would suppress the weather instead of setting
+it. Structure cannot collide with content; a reserved string always can.
+
+The HUD renders a suppressed axis as generated, with no authored marker.
 
 `DELETE .../{storage_key}/{span_id}` stays, for removing a specific record
 outright rather than clearing an axis of it.
@@ -1293,6 +1324,17 @@ Backend, `backend/tests/test_weather.py`, store isolated with
 - Inverse-CDF boundaries: a quantile landing exactly on a cumulative boundary
   selects the following entry (`cum_{i−1} <= u < cum_i`), and a zero-weight
   entry is never selected at any `u`.
+- Latent quantile mapping: `u` is strictly inside `(0, 1)` and injective across
+  the extremes of the digest range — specifically at `n = 0` and
+  `n = 2⁵² − 1`, and for adjacent `n` near the top, where the discarded
+  53-bit-midpoint form produced `1.0` and duplicate values.
+- Duplicate explicit span ids under one storage key are re-derived canonically
+  on load, leaving both records separately addressable.
+- A climate containing an entry literally named `procedural` still works: an
+  override selecting it sets that value, and does not suppress the axis.
+- A default-climate `PUT` naming an unknown id is rejected at both the campaign
+  and world routes, while a default that goes dangling later still resolves to
+  the shipped preset rather than raising.
 - Override precedence: location beats `_default`, newer `set_at` beats older,
   and two spans differing only in array order resolve identically.
 - Span boundaries are half-open: at the shared endpoint of two adjacent
