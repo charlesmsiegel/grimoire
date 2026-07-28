@@ -47,9 +47,19 @@ def _valid_climate(value: str) -> bool:
 
 
 def _valid_persistence(value: str) -> bool:
+    # bool first: `float(True)` is 1.0, so a JSON `true` would validate, but the
+    # store writes it back as the string "True", which the resolver cannot parse
+    # and silently replaces with the climate's own persistence. That is a save
+    # that reports success and never takes effect — the exact failure this
+    # boundary exists to prevent.
+    if isinstance(value, bool):
+        return False
     try:
         parsed = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError: `fields` is an untyped dict, so a JSON integer like
+        # 10**1000 arrives as a Python int with no float value. Uncaught it
+        # escapes _check_fields as a 500 instead of the 400 it is.
         return False
     return math.isfinite(parsed) and 0.0 <= parsed <= 1.0
 
