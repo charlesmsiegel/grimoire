@@ -1976,6 +1976,56 @@ def get_calendar_providers():
     return {"providers": store.calendars.list_providers()}
 
 
+# ---- climates (#40) ----
+
+@router.get("/climates")
+def get_climates():
+    """The merged list, each entry carrying *both* tier flags.
+
+    `builtin` and `custom` rather than one label: a single `custom` tag cannot
+    distinguish a custom climate that shadows a preset from one that stands
+    alone, and the editor needs that to choose between *Revert to preset* and
+    *Delete*, and to know whether deleting frees the id.
+    """
+    return {"climates": store.climates.list_climates()}
+
+
+@router.get("/climates/{climate_id}")
+def get_climate(climate_id: str):
+    doc = store.climates.get(climate_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="climate not found")
+    return {"climate": doc, "builtin": store.climates.is_builtin(climate_id),
+            "custom": store.climates.custom_path(climate_id).exists()}
+
+
+@router.put("/climates/{climate_id}")
+def put_climate(climate_id: str, body: dict):
+    """Write a climate to the private tier, copying a preset on first edit.
+
+    Validation is strict here on purpose. The resolver is lenient so a bad
+    document can never take a turn down, which makes this the only place a
+    mistake can be reported at all.
+    """
+    doc = dict(body or {})
+    doc["id"] = climate_id  # the route is authoritative; a mismatched body id
+                            # would write to a file the editor cannot reopen
+    try:
+        return {"climate": store.climates.save(doc)}
+    except store.climates.ClimateError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"could not write climate: {e}")
+
+
+@router.delete("/climates/{climate_id}")
+def delete_climate(climate_id: str):
+    """Drop the private copy, reverting to the preset if there is one."""
+    if not store.climates.remove(climate_id):
+        raise HTTPException(status_code=404, detail="no custom climate to delete")
+    return {"ok": True, "reverted_to_preset": store.climates.is_builtin(climate_id)}
+
+
 @router.get("/worlds/{wid}/calendar/months")
 def get_world_calendar_months(wid: str, year: int):
     if not store.worlds.world_meta_path(wid).exists():
