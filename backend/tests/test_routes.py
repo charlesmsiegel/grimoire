@@ -1112,6 +1112,25 @@ def test_campaign_missing_world_400(client):
     assert client.post("/api/campaigns", json={"name": "X", "world": "nope"}).status_code == 400
 
 
+def test_campaign_accepts_a_climate(client):
+    from grimoire.store import climates
+    wid = _world(client)
+    r = client.post("/api/campaigns",
+                    json={"name": "Run", "world": wid, "climate": climates.FALLBACK_ID})
+    assert r.status_code == 200
+    cid = r.json()["id"]
+    assert client.get(f"/api/campaigns/{cid}").status_code == 200
+
+
+def test_campaign_unknown_climate_400(client):
+    # The store raises before creating anything; without the handler this is a
+    # 500 and the caller cannot tell a typo from a broken server.
+    wid = _world(client)
+    r = client.post("/api/campaigns", json={"name": "X", "world": wid, "climate": "no-such"})
+    assert r.status_code == 400
+    assert "no-such" in r.json()["detail"]
+
+
 # ---- sync ----
 def test_incoming_and_accept_flow(client):
     wid = _world(client)
