@@ -2102,7 +2102,11 @@ def get_climate_referrers(climate_id: str):
 def delete_climate(climate_id: str):
     """Drop the private copy, reverting to the preset if there is one."""
     referrers = _climate_referrers(climate_id)
-    if not store.climates.remove(climate_id):
+    try:
+        removed = store.climates.remove(climate_id)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"could not delete climate: {e}")
+    if not removed:
         raise HTTPException(status_code=404, detail="no custom climate to delete")
     return {"ok": True, "reverted_to_preset": store.climates.is_builtin(climate_id),
             "referrers": referrers}
@@ -2753,11 +2757,20 @@ def put_weather(cid: str, body: WeatherOverride):
     try:
         cfg = store.calendars.read_calendar(store.campaigns.campaign_root(cid))
         provider = store.calendars.get_provider(cfg["primary"])
-        store.weather.overrides.resolve_endpoint(provider, body.start, end=False)
+        start = store.weather.overrides.ordinal_of(
+            list(store.weather.overrides.resolve_endpoint(provider, body.start, end=False)))
+        end = None
         if body.end is not None:
-            store.weather.overrides.resolve_endpoint(provider, body.end, end=True)
+            end = store.weather.overrides.ordinal_of(
+                list(store.weather.overrides.resolve_endpoint(provider, body.end, end=True)))
     except (store.calendars.CalendarError, KeyError, TypeError, AttributeError) as e:
         raise HTTPException(status_code=400, detail=f"unparseable moment: {e}")
+    if end is not None and end <= start:
+        # Such a span covers no block, so it appears in no covering stack and
+        # its id is discoverable nowhere — success reported for an override
+        # that can never apply.
+        raise HTTPException(status_code=400,
+                            detail="the override range ends before it starts")
 
     if body.clear:
         n = store.weather.overrides.clear(cid, provider, body.location, body.start, body.end,
