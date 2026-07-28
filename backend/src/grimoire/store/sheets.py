@@ -12,14 +12,11 @@ Spec: docs/superpowers/specs/2026-07-12-mechanics-phase3-sheets-design.md.
 from __future__ import annotations
 
 import json
-import os
-import shutil
-import tempfile
 import uuid
 from pathlib import Path
 
-from . import (campaigns, characters, entities, expressions, locks, modules, overlay, pcs,
-               worlds)
+from . import (atomic, campaigns, characters, entities, expressions, locks, modules, overlay,
+               pcs, worlds)
 
 
 class SheetError(Exception):
@@ -49,20 +46,10 @@ def _next_gen(path: Path, sheet_type: str) -> str:
 
 
 def _atomic_write_json(path: Path, data: dict) -> None:
-    """Write JSON via a same-directory temp file + os.replace, so a crash
-    mid-write can never leave a half-written sheet file."""
+    """Write a sheet through the shared crash-safe writer (store.atomic), which
+    keeps the mkdir this module has always done before it."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(json.dumps(data, indent=2))
-        os.replace(tmp_name, path)
-    except BaseException:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        raise
+    atomic.write_text(path, json.dumps(data, indent=2))
 
 
 def sheet_kind(kind: str) -> str:
@@ -544,7 +531,9 @@ def seed(cid: str) -> int:
     dst.mkdir(parents=True, exist_ok=True)
     n = 0
     for p in sorted(src.glob("*.json")):
-        shutil.copy2(p, dst / p.name)
+        # through the helper, not shutil.copy2: a partial copy must never
+        # appear under a real sheet name
+        atomic.write_bytes(dst / p.name, p.read_bytes())
         n += 1
     return n
 

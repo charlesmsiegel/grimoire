@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from . import calendars, campaigns, overlay, scene_ids, scene_refs
+from . import atomic, calendars, campaigns, overlay, scene_ids, scene_refs
 from .frontmatter import dump_frontmatter, parse_frontmatter, parse_frontmatter_head
 from .llm_connections import get_active as _get_active_connection
 from .paths import now_iso, slugify, uniquify
@@ -158,7 +158,7 @@ def create_scene(cid: str, title: str, suggested_date: str | None = None,
             meta["suggested_date"] = calendars.normalize(provider, suggested_date)
         except (calendars.CalendarError, KeyError):
             pass  # only a hint — a bad one is dropped, never an error
-    _scene_path(cid, sid).write_text(dump_frontmatter(meta, ""), encoding="utf-8")
+    atomic.write_text(_scene_path(cid, sid), dump_frontmatter(meta, ""))
     from . import audit  # lazy: audit imports campaigns/sheets, scenes must not cycle
     audit.capture_baseline(cid, sid)
     return sid
@@ -240,7 +240,7 @@ def rename_scene(cid: str, sid: str, title: str) -> str:
     else:  # legacy (pre-migration) id: keep the old created-date prefix scheme
         base = f"{meta.get('created', now_iso())[:10]}-{slugify(title)}"
     new_sid = uniquify(base, lambda c: c != sid and _scene_path(cid, c).exists())
-    p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+    atomic.write_text(p, dump_frontmatter(meta, body))
     if new_sid != sid:
         p.rename(_scene_path(cid, new_sid))
         # a scene's id is its filename: carry every store's references across
@@ -273,7 +273,7 @@ def add_dismissed(cid: str, sid: str, char_id: str) -> None:
     if char_id not in current:
         current.append(char_id)
     meta["dismissed"] = ",".join(current)
-    p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+    atomic.write_text(p, dump_frontmatter(meta, body))
 
 
 def stamp_greeting(cid: str, sid: str, gid: str) -> None:
@@ -283,7 +283,7 @@ def stamp_greeting(cid: str, sid: str, gid: str) -> None:
         raise SceneNotFound(sid)
     meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
     meta["greeting"] = gid
-    p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+    atomic.write_text(p, dump_frontmatter(meta, body))
 
 
 def set_pcless(cid: str, sid: str) -> None:
@@ -293,7 +293,7 @@ def set_pcless(cid: str, sid: str) -> None:
         raise SceneNotFound(sid)
     meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
     meta["pcless"] = "true"
-    p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+    atomic.write_text(p, dump_frontmatter(meta, body))
 
 
 RESPONSE_FIELDS = ("response_preset", "style_id", "length_reply_words", "length_blocks",
@@ -310,7 +310,7 @@ def set_response(cid: str, sid: str, fields: dict) -> None:
     for key in RESPONSE_FIELDS:
         if key in fields:
             meta[key] = str(fields[key] or "")
-    p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+    atomic.write_text(p, dump_frontmatter(meta, body))
 
 
 def append_message(cid: str, sid: str, role: str, content: str, speaker: str | None = None) -> None:
@@ -320,7 +320,7 @@ def append_message(cid: str, sid: str, role: str, content: str, speaker: str | N
     meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
     body = _append_block(body, _block(role, speaker, content))
     meta["updated"] = now_iso()
-    p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+    atomic.write_text(p, dump_frontmatter(meta, body))
 
 
 def _block(role: str, speaker: str | None, content: str) -> str:
@@ -415,7 +415,7 @@ def append_reply(cid: str, sid: str, segments: list[dict]) -> None:
     sizes = _parse_turn_sizes(meta.get("turn_sizes", "")) + [len(kept)]
     meta["turn_sizes"] = ",".join(str(n) for n in sizes)
     meta["updated"] = now_iso()
-    p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+    atomic.write_text(p, dump_frontmatter(meta, body))
 
 
 def _serialize_messages(messages: list[dict]) -> str:
@@ -439,7 +439,7 @@ def stamp_user_speaker(cid: str, sid: str, name: str) -> None:
     if not stamped:
         return
     meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
-    p.write_text(dump_frontmatter(meta, _serialize_messages(messages)), encoding="utf-8")
+    atomic.write_text(p, dump_frontmatter(meta, _serialize_messages(messages)))
 
 
 def split_reply(text: str, players: frozenset[str]) -> list[dict]:
@@ -557,8 +557,7 @@ def remove_trailing_assistant_run(cid: str, sid: str) -> None:
         del messages[len(messages) - _trailing_model_run(messages):]
     meta["updated"] = now_iso()
     _set_turn_sizes(meta, sizes)
-    p.write_text(dump_frontmatter(meta, _serialize_messages(messages + tail)),
-                 encoding="utf-8")
+    atomic.write_text(p, dump_frontmatter(meta, _serialize_messages(messages + tail)))
 
 
 def trim_continuation(cid: str, sid: str, from_index: int) -> None:
@@ -595,7 +594,7 @@ def trim_continuation(cid: str, sid: str, from_index: int) -> None:
         sizes.pop()
     meta["updated"] = now_iso()
     _set_turn_sizes(meta, sizes)
-    p.write_text(dump_frontmatter(meta, _serialize_messages(kept)), encoding="utf-8")
+    atomic.write_text(p, dump_frontmatter(meta, _serialize_messages(kept)))
 
 
 class RollMessageImmutable(Exception):
@@ -626,7 +625,7 @@ def edit_message(cid: str, sid: str, index: int, content: str) -> None:
     meta["updated"] = now_iso()
     _set_turn_sizes(meta, _reconciled_turn_sizes(
         _parse_turn_sizes(meta.get("turn_sizes", "")), before, after, index))
-    p.write_text(dump_frontmatter(meta, new_body), encoding="utf-8")
+    atomic.write_text(p, dump_frontmatter(meta, new_body))
 
 
 def _reconciled_turn_sizes(sizes: list[int], before: list[int], after: list[int],
@@ -691,7 +690,7 @@ def mark_absorbed(cid: str, sid: str, one_line: str, summary: str) -> None:
     meta["summary"] = summary
     meta["done"] = "true"
     meta["updated"] = now_iso()
-    p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+    atomic.write_text(p, dump_frontmatter(meta, body))
 
 
 def get_location_history(cid: str, sid: str) -> list[str]:
@@ -725,7 +724,7 @@ def set_location(cid: str, sid: str, eid: str) -> dict:
     meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
     history.append(eid)
     meta["location_history"] = ",".join(history)
-    p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+    atomic.write_text(p, dump_frontmatter(meta, body))
     return {"moved": moved, "name": name}
 
 
@@ -770,7 +769,7 @@ def set_datetime(cid: str, sid: str, native: str) -> dict:
     meta.pop("suggested_date", None)  # the hint is stale once a real date exists
     history.append(canonical)
     meta["time_history"] = ",".join(history)
-    p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+    atomic.write_text(p, dump_frontmatter(meta, body))
     if not advanced:
         sid = _stamp_start_date(cid, sid, canonical)
     return {"advanced": advanced, "friendly": friendly, "id": sid}

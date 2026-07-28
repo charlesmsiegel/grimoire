@@ -13,7 +13,7 @@ import json
 import re
 from pathlib import Path
 
-from . import campaigns, characters, overlay, pcs, worlds
+from . import atomic, campaigns, characters, overlay, pcs, worlds
 from .frontmatter import dump_frontmatter, parse_frontmatter
 
 ACTOR_KINDS = ("characters", "pcs")
@@ -44,7 +44,7 @@ def record(cid: str) -> dict:
 
 
 def _write(cid: str, data: dict) -> None:
-    _path(cid).write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    atomic.write_text(_path(cid), json.dumps(data, indent=2, sort_keys=True) + "\n")
 
 
 def set_base(cid: str, kind: str, actor_id: str, base: str) -> None:
@@ -79,14 +79,14 @@ def _copy_actor(wroot: Path, croot: Path, kind: str, actor_id: str, vid: str) ->
     dst_dir = croot / kind / actor_id
     dst_dir.mkdir(parents=True, exist_ok=True)
     ext = _version_ext(kind)
-    (dst_dir / f"{vid}.{ext}").write_text((src_dir / f"{vid}.{ext}").read_text(encoding="utf-8"), encoding="utf-8")
+    atomic.write_text(dst_dir / f"{vid}.{ext}", (src_dir / f"{vid}.{ext}").read_text(encoding="utf-8"))
     # container meta so campaign-side reads work; default_version points at the copied
     # version. An existing campaign meta is kept (its tag/name edits win) — callers
     # that lock re-point default_version themselves.
     if not (dst_dir / _meta_name(kind)).exists():
         meta, _ = parse_frontmatter((src_dir / _meta_name(kind)).read_text(encoding="utf-8"))
         meta["default_version"] = vid
-        (dst_dir / _meta_name(kind)).write_text(dump_frontmatter(meta, ""), encoding="utf-8")
+        atomic.write_text(dst_dir / _meta_name(kind), dump_frontmatter(meta, ""))
 
 
 def _purge_other_versions(croot: Path, kind: str, actor_id: str, keep: str) -> None:
@@ -162,9 +162,7 @@ def import_version(cid: str, kind: str, actor_id: str, version_id: str) -> None:
     ext = _version_ext(kind)
     d = croot / kind / actor_id
     d.mkdir(parents=True, exist_ok=True)
-    (d / f"{version_id}.{ext}").write_text(
-        (wroot / kind / actor_id / f"{version_id}.{ext}").read_text(encoding="utf-8"),
-        encoding="utf-8")
+    atomic.write_text(d / f"{version_id}.{ext}", (wroot / kind / actor_id / f"{version_id}.{ext}").read_text(encoding="utf-8"))
     _set_default(croot, kind, actor_id, version_id)
     old = rec["version"]
     if old != version_id and (d / f"{old}.{ext}").exists():

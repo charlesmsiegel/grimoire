@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 from .base import CalendarError, get_provider
+from .. import atomic
 
 
 def _blank(region: str = "US") -> dict:
@@ -48,7 +49,7 @@ def write_calendar(root: Path, cfg: dict) -> None:
     out = {"primary": _normalize_block(cfg.get("primary")) or _blank(),
            "secondary": _normalize_block(cfg.get("secondary")),
            "confirmed": bool(cfg.get("confirmed", False))}
-    _path(root).write_text(json.dumps(out, indent=2) + "\n", encoding="utf-8")
+    atomic.write_text(_path(root), json.dumps(out, indent=2) + "\n")
 
 
 def copy_calendar(wroot: Path, croot: Path) -> None:

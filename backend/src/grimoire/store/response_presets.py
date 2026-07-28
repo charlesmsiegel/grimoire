@@ -16,7 +16,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .. import prompts
-from . import lengths
+from . import atomic, lengths
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import home, natural_key, slugify, uniquify
 
@@ -296,7 +296,7 @@ def create_preset(name: str, description: str = "", style_id: str = "",
     pid = uniquify(slugify(name), exists)
     meta = {"name": name, "description": description, "style_id": style_id,
             **_length_fields(length_preset, knobs)}
-    (_custom_dir() / f"{pid}.md").write_text(dump_frontmatter(meta, ""), encoding="utf-8")
+    atomic.write_text(_custom_dir() / f"{pid}.md", dump_frontmatter(meta, ""))
     return pid
 
 
@@ -319,7 +319,7 @@ def update_preset(pid: str, *, name: str | None = None, description: str | None 
         meta.update(_length_fields(
             length_preset if length_preset is not None else meta.get("length_preset", ""),
             knobs))
-    p.write_text(dump_frontmatter(meta, ""), encoding="utf-8")
+    atomic.write_text(p, dump_frontmatter(meta, ""))
 
 
 def delete_preset(pid: str) -> None:

@@ -15,7 +15,7 @@ import re
 import shutil
 from pathlib import Path
 
-from . import dice, entities, expressions, module_display
+from . import atomic, dice, entities, expressions, module_display
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import home, slugify, uniquify
 
@@ -757,11 +757,8 @@ def create_module(name: str) -> str:
                    or (builtin_dir() / i / "module.md").exists())
     d = user_dir() / mid
     d.mkdir(parents=True)
-    (d / "module.md").write_text(
-        dump_frontmatter({"name": name, "description": "", "version": "0.1"}, ""),
-        encoding="utf-8")
-    (d / "sheets.json").write_text(
-        '{\n  "groups": {},\n  "sheet_types": {}\n}\n', encoding="utf-8")
+    atomic.write_text(d / "module.md", dump_frontmatter({"name": name, "description": "", "version": "0.1"}, ""))
+    atomic.write_text(d / "sheets.json", '{\n  "groups": {},\n  "sheet_types": {}\n}\n')
     return mid
 
 
@@ -783,7 +780,7 @@ def _write_key(meta_path, key: str, value: str) -> None:
         meta[key] = value
     else:
         meta.pop(key, None)
-    meta_path.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+    atomic.write_text(meta_path, dump_frontmatter(meta, body))
 
 
 def set_world_module(wid: str, mid: str) -> None:

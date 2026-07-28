@@ -11,7 +11,7 @@ import hashlib
 import shutil
 from pathlib import Path
 
-from . import statcache
+from . import atomic, statcache
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import slugify, uniquify
 
@@ -72,10 +72,7 @@ def _read_meta(root: Path, pid: str) -> dict:
 
 
 def _write_meta(root: Path, pid: str, name: str, tags: list[str], default_version: str) -> None:
-    _meta_path(root, pid).write_text(
-        dump_frontmatter({"name": name, "tags": ",".join(tags), "default_version": default_version}, ""),
-        encoding="utf-8",
-    )
+    atomic.write_text(_meta_path(root, pid), dump_frontmatter({"name": name, "tags": ",".join(tags), "default_version": default_version}, ""))
 
 
 def _tags_of(meta: dict) -> list[str]:
@@ -88,7 +85,7 @@ def create_pc(root: Path, name: str, tags: list[str], version_name: str = "defau
     pid = uniquify(slugify(name), lambda c: _pc_dir(root, c).exists() or (taken and taken(c)))
     _pc_dir(root, pid).mkdir(parents=True)
     vid = slugify(version_name)
-    _version_path(root, pid, vid).write_text(_dump_persona(persona or blank_persona(name)), encoding="utf-8")
+    atomic.write_text(_version_path(root, pid, vid), _dump_persona(persona or blank_persona(name)))
     _write_meta(root, pid, name, tags, vid)
     return pid, vid
 
@@ -96,7 +93,7 @@ def create_pc(root: Path, name: str, tags: list[str], version_name: str = "defau
 def create_version(root: Path, pid: str, version_name: str, persona: dict) -> str:
     _require_pc(root, pid)
     vid = uniquify(slugify(version_name), lambda v: _version_path(root, pid, v).exists())
-    _version_path(root, pid, vid).write_text(_dump_persona(persona), encoding="utf-8")
+    atomic.write_text(_version_path(root, pid, vid), _dump_persona(persona))
     return vid
 
 
@@ -105,7 +102,7 @@ def update_version(root: Path, pid: str, vid: str, persona: dict) -> None:
     p = _version_path(root, pid, vid)
     if not _safe(vid) or not p.exists():
         raise PCVersionNotFound(vid)
-    p.write_text(_dump_persona(persona), encoding="utf-8")
+    atomic.write_text(p, _dump_persona(persona))
 
 
 def set_default_version(root: Path, pid: str, vid: str) -> None:

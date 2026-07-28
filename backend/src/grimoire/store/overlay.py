@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import assets, campaigns, cards, characters, entities, greetings, groupstate, pcs, taglines, worlds
+from . import assets, atomic, campaigns, cards, characters, entities, greetings, groupstate, pcs, taglines, worlds
 from .paths import natural_key
 
 
@@ -56,8 +56,7 @@ def deleted(cid: str) -> set[str]:
 
 
 def add_deleted(cid: str, ref: str) -> None:
-    _deleted_path(cid).write_text(
-        json.dumps(sorted(deleted(cid) | {ref}), indent=2) + "\n", encoding="utf-8")
+    atomic.write_text(_deleted_path(cid), json.dumps(sorted(deleted(cid) | {ref}), indent=2) + "\n")
 
 
 # ---- flat records (locations / lore; greetings + plotmap join in Task 2) ----
@@ -83,7 +82,7 @@ def _materialize_flat(cid: str, kind: str, eid: str) -> bool:
         return False
     dst = _flat_path(croot, kind, eid)
     dst.parent.mkdir(parents=True, exist_ok=True)
-    dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+    atomic.write_text(dst, src.read_text(encoding="utf-8"))
     manifest = campaigns.read_manifest(cid)
     manifest[_flat_ref(kind, eid)] = entities.entity_hash(wroot, kind, eid) or ""
     campaigns.write_manifest(cid, manifest)
@@ -245,7 +244,7 @@ def materialize_plotmap(cid: str) -> None:
     src = wroot / "plotmap.json"
     if not src.exists():
         return   # nothing to copy; set_edges will create a fresh campaign map
-    (croot / "plotmap.json").write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+    atomic.write_text(croot / "plotmap.json", src.read_text(encoding="utf-8"))
     manifest = campaigns.read_manifest(cid)
     manifest["plotmap"] = greetings.plotmap_hash(wroot) or ""
     campaigns.write_manifest(cid, manifest)
@@ -299,9 +298,9 @@ def materialize_actor(cid: str, kind: str, aid: str) -> None:
     dst.mkdir(parents=True, exist_ok=True)
     ext = "json" if kind == "characters" else "md"
     for p in sorted(src.glob(f"*.{ext}")):
-        (dst / p.name).write_text(p.read_text(encoding="utf-8"), encoding="utf-8")
+        atomic.write_text(dst / p.name, p.read_text(encoding="utf-8"))
     meta_src = src / _actor_meta(kind)
-    (dst / meta_src.name).write_text(meta_src.read_text(encoding="utf-8"), encoding="utf-8")
+    atomic.write_text(dst / meta_src.name, meta_src.read_text(encoding="utf-8"))
     base = (characters.dir_hash if kind == "characters" else pcs.dir_hash)(wroot, aid)
     manifest = campaigns.read_manifest(cid)
     manifest[_flat_ref(kind, aid)] = base or ""

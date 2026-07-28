@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import campaigns
+from . import atomic, campaigns
 
 STATUSES = ("open", "advanced", "closed")
 
@@ -25,7 +25,7 @@ def read(cid: str) -> dict:
 
 
 def _write(cid: str, data: dict) -> None:
-    _path(cid).write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    atomic.write_text(_path(cid), json.dumps(data, indent=2, sort_keys=True) + "\n")
 
 
 def get(cid: str, pid: str) -> dict | None:

@@ -13,7 +13,7 @@ import json
 import shutil
 from pathlib import Path
 
-from . import assets, cards, chub, fetch, lorebook, statcache, taglines
+from . import assets, atomic, cards, chub, fetch, lorebook, statcache, taglines
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import slugify, uniquify
 
@@ -88,10 +88,8 @@ def create_character(root: Path, name: str, version_name: str = "default", card:
     vid = slugify(version_name)
     card = card or blank_card(name)
     cards.bake_char_name(card)  # #137: {{char}} is always self-reference, baked at write time
-    _card_path(root, cid, vid).write_text(_dumps(card), encoding="utf-8")
-    _meta_path(root, cid).write_text(
-        dump_frontmatter({"name": name, "default_version": vid}, ""), encoding="utf-8"
-    )
+    atomic.write_text(_card_path(root, cid, vid), _dumps(card))
+    atomic.write_text(_meta_path(root, cid), dump_frontmatter({"name": name, "default_version": vid}, ""))
     return cid, vid
 
 
@@ -99,7 +97,7 @@ def create_version(root: Path, cid: str, version_name: str, card: dict) -> str:
     _require_char(root, cid)
     vid = uniquify(slugify(version_name), lambda v: _card_path(root, cid, v).exists())
     cards.bake_char_name(card)  # #137: {{char}} is always self-reference, baked at write time
-    _card_path(root, cid, vid).write_text(_dumps(card), encoding="utf-8")
+    atomic.write_text(_card_path(root, cid, vid), _dumps(card))
     return vid
 
 
@@ -109,7 +107,7 @@ def update_version(root: Path, cid: str, vid: str, card: dict) -> None:
     if not _safe(vid) or not p.exists():
         raise VersionNotFound(vid)
     cards.bake_char_name(card)  # #137: {{char}} is always self-reference, baked at write time
-    p.write_text(_dumps(card), encoding="utf-8")
+    atomic.write_text(p, _dumps(card))
 
 
 def set_default_version(root: Path, cid: str, vid: str) -> None:
@@ -118,14 +116,14 @@ def set_default_version(root: Path, cid: str, vid: str) -> None:
         raise VersionNotFound(vid)
     meta, _ = parse_frontmatter(_meta_path(root, cid).read_text(encoding="utf-8"))
     meta["default_version"] = vid
-    _meta_path(root, cid).write_text(dump_frontmatter(meta, ""), encoding="utf-8")
+    atomic.write_text(_meta_path(root, cid), dump_frontmatter(meta, ""))
 
 
 def set_birthdate(root: Path, cid: str, birthdate: str) -> None:
     _require_char(root, cid)
     meta, _ = parse_frontmatter(_meta_path(root, cid).read_text(encoding="utf-8"))
     meta["birthdate"] = birthdate
-    _meta_path(root, cid).write_text(dump_frontmatter(meta, ""), encoding="utf-8")
+    atomic.write_text(_meta_path(root, cid), dump_frontmatter(meta, ""))
 
 
 def set_chub_source(root: Path, cid: str, vid: str, full_path: str) -> None:
@@ -268,7 +266,7 @@ def delete_version(root: Path, cid: str, vid: str) -> None:
     meta, _ = parse_frontmatter(_meta_path(root, cid).read_text(encoding="utf-8"))
     if meta.get("default_version") == vid:
         meta["default_version"] = _version_ids(root, cid)[0]
-        _meta_path(root, cid).write_text(dump_frontmatter(meta, ""), encoding="utf-8")
+        atomic.write_text(_meta_path(root, cid), dump_frontmatter(meta, ""))
 
 
 def delete_character(root: Path, cid: str) -> None:

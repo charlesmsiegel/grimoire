@@ -5,7 +5,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from . import characters, entities, greetings, pcs
+from . import atomic, characters, entities, greetings, pcs
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import ensure_home, home, now_iso, slugify, uniquify
 
@@ -59,10 +59,7 @@ def create_world(name: str) -> str:
     wid = uniquify(slugify(name), lambda c: world_root(c).exists())
     world_root(wid).mkdir(parents=True)
     now = now_iso()
-    world_meta_path(wid).write_text(
-        dump_frontmatter({"name": name, "created": now, "updated": now}, ""),
-        encoding="utf-8",
-    )
+    atomic.write_text(world_meta_path(wid), dump_frontmatter({"name": name, "created": now, "updated": now}, ""))
     return wid
 
 
@@ -94,7 +91,7 @@ def rename_world(wid: str, name: str) -> None:
     meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
     meta["name"] = name
     meta["updated"] = now_iso()
-    mp.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+    atomic.write_text(mp, dump_frontmatter(meta, body))
 
 
 def delete_world(wid: str) -> None:

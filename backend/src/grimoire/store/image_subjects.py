@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import assets, characters
+from . import assets, atomic, characters
 
 SUBJECTS_FILE = "subjects.json"
 _BASE = "greetings"
@@ -66,7 +66,7 @@ def write_subjects(root: Path, gid: str, subjects: dict[str, list[str]]) -> None
     trimmed = {n: list(subs) for n, subs in subjects.items()}
     p = subjects_path(root, gid)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(trimmed, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    atomic.write_text(p, json.dumps(trimmed, indent=2, sort_keys=True) + "\n")
 
 
 def set_image_subjects(root: Path, gid: str, name: str, cids: list[str]) -> None:

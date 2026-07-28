@@ -22,7 +22,7 @@ import zipfile
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
-from . import campaigns, locks, modules, proposals, sheets, worlds
+from . import atomic, campaigns, locks, modules, proposals, sheets, worlds
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import home, slugify, uniquify
 
@@ -86,7 +86,7 @@ def duplicate_module(mid: str, name: str) -> str:
                 manifest = staging / "module.md"
                 meta, body = parse_frontmatter(manifest.read_text(encoding="utf-8"))
                 meta["name"] = name
-                manifest.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+                atomic.write_text(manifest, dump_frontmatter(meta, body))
             return _publish(staging, new)
         finally:
             shutil.rmtree(base, ignore_errors=True)
@@ -104,11 +104,9 @@ def create_module(name: str) -> str:
         try:
             staging = base / mid
             staging.mkdir(parents=True)
-            (staging / "module.md").write_text(
-                dump_frontmatter({"name": clean, "description": "",
-                                  "version": "0.1"}, ""), encoding="utf-8")
-            (staging / "sheets.json").write_text(
-                '{\n  "groups": {},\n  "sheet_types": {}\n}\n', encoding="utf-8")
+            atomic.write_text(staging / "module.md", dump_frontmatter({"name": clean, "description": "",
+                                  "version": "0.1"}, ""))
+            atomic.write_text(staging / "sheets.json", '{\n  "groups": {},\n  "sheet_types": {}\n}\n')
             return _publish(staging, mid)
         finally:
             shutil.rmtree(base, ignore_errors=True)
@@ -210,6 +208,9 @@ def import_module(path: Path) -> str:
                         raise modules.ModuleError(f"unsafe zip entry: {i.filename}")
                     try:
                         dest.parent.mkdir(parents=True, exist_ok=True)
+                        # atomic-ok: unpublished staging tree, published as a
+                        # unit by _publish's single rename; a per-member
+                        # temp+fsync would only slow large imports
                         dest.write_bytes(z.read(i))
                     except (OSError, RuntimeError, NotImplementedError,
                             zipfile.BadZipFile):
@@ -359,9 +360,7 @@ def _migrate_file(p: Path, mig: dict) -> bool | None:
     if changed:
         data["fields"] = fields
         data["gen"] = uuid.uuid4().hex
-        tmp = p.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        tmp.replace(p)
+        atomic.write_text(p, json.dumps(data, indent=2))
     return changed
 
 
@@ -576,9 +575,8 @@ def _apply(mid: str, mutate, *, dry_run: bool = False,
                         return {"ok": False, "errors": blockers,
                                 "display_errors": list(pack["display_errors"])}
                 jp = _staging_root() / f"{nonce}.journal.json"
-                jp.write_text(json.dumps(
-                    {"mid": mid, "nonce": nonce, "migration": migration}),
-                    encoding="utf-8")
+                atomic.write_text(jp, json.dumps(
+                    {"mid": mid, "nonce": nonce, "migration": migration}))
                 trash = base / "trash" / mid
                 trash.parent.mkdir(parents=True)
                 live.rename(trash)
@@ -610,8 +608,7 @@ def set_manifest(mid: str, *, name: str, description: str, version: str,
             meta["version"] = version
         if dice:
             meta["dice"] = dice
-        (root / "module.md").write_text(
-            dump_frontmatter(meta, notes), encoding="utf-8")
+        atomic.write_text(root / "module.md", dump_frontmatter(meta, notes))
     return _apply(mid, mutate, dry_run=dry_run)
 
 
@@ -630,7 +627,7 @@ def _read_json(root: Path, name: str) -> dict:
 
 
 def _write_json(root: Path, name: str, data: dict) -> None:
-    (root / name).write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    atomic.write_text(root / name, json.dumps(data, indent=2) + "\n")
 
 
 def _read_sheets(root: Path) -> dict:
@@ -1039,7 +1036,7 @@ def rename(mid: str, kind: str, address: dict, to: str, *,
                     if isinstance(stat, dict) and stat.get("sheet_type") in in_scope \
                             and isinstance(stat.get("fields"), dict):
                         _rename_map_key(stat["fields"], old, to)
-                        sc.write_text(json.dumps(stat, indent=2) + "\n", encoding="utf-8")
+                        atomic.write_text(sc, json.dumps(stat, indent=2) + "\n")
             if layout_json:
                 layout_json = _specialize_layout(
                     layout_json, in_scope, _layout_name_edit(old, to, "name"))
@@ -1056,7 +1053,7 @@ def rename(mid: str, kind: str, address: dict, to: str, *,
                     flags = [v.strip() for v in (meta.get("sheet_types") or "").split(",") if v.strip()]
                     if old in flags:
                         meta["sheet_types"] = ", ".join(to if f == old else f for f in flags)
-                        p.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+                        atomic.write_text(p, dump_frontmatter(meta, body))
             if isinstance(layout_json.get("sheet_types"), dict):
                 _rename_map_key(layout_json["sheet_types"], old, to)
                 _write_json(root, "layout.json", layout_json)
@@ -1069,7 +1066,7 @@ def rename(mid: str, kind: str, address: dict, to: str, *,
                         continue
                     if isinstance(stat, dict) and stat.get("sheet_type") == old:
                         stat["sheet_type"] = to
-                        sc.write_text(json.dumps(stat, indent=2) + "\n", encoding="utf-8")
+                        atomic.write_text(sc, json.dumps(stat, indent=2) + "\n")
 
         elif kind == "check":
             _rename_map_key(checks_json, old, to)
@@ -1106,7 +1103,7 @@ def rename(mid: str, kind: str, address: dict, to: str, *,
                                     stat["fields"][k] = nv
                                     changed = True
                         if changed:
-                            sc.write_text(json.dumps(stat, indent=2) + "\n", encoding="utf-8")
+                            atomic.write_text(sc, json.dumps(stat, indent=2) + "\n")
 
         _write_json(root, "sheets.json", sheets_json)
         if checks_json or (root / "checks.json").exists():
@@ -1223,8 +1220,7 @@ def upsert_rule(mid: str, slug: str, flags: dict, body: str, *,
         return {"ok": False, "errors": [f"bad rules slug {slug!r}"], "display_errors": []}
     def mutate(root: Path) -> None:
         (root / "rules").mkdir(exist_ok=True)
-        (root / "rules" / f"{slug}.md").write_text(
-            dump_frontmatter(_rule_meta(flags or {}), body), encoding="utf-8")
+        atomic.write_text(root / "rules" / f"{slug}.md", dump_frontmatter(_rule_meta(flags or {}), body))
     return _apply(mid, mutate, dry_run=dry_run)
 
 
@@ -1252,7 +1248,7 @@ def upsert_content(mid: str, kind: str, content_id: str, *, name: str,
         for k, v in (fields or {}).items():
             if k not in ("name", "keys") and isinstance(v, str):
                 meta[k] = v
-        (d / f"{content_id}.md").write_text(dump_frontmatter(meta, body), encoding="utf-8")
+        atomic.write_text(d / f"{content_id}.md", dump_frontmatter(meta, body))
         sidecar = d / f"{content_id}.sheet.json"
         if sheet:
             _write_json(root, f"content/{kind}/{content_id}.sheet.json",

@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import (appearances, campaigns, cards, characters, entities, greetings, overlay,
-               scene_ids, scene_refs, scenes, worlds)
+from . import appearances, atomic, campaigns, cards, characters, entities, greetings, overlay, scene_ids, scene_refs, scenes, worlds
 from .frontmatter import parse_frontmatter
 from .paths import home, slugify, uniquify
 
@@ -80,7 +79,7 @@ def bake_char_macros() -> None:
             _bake_greeting(wroot, wroot, g)  # world greetings are self-contained
     for c in campaigns.list_campaigns():
         _bake_campaign(c["id"])
-    marker.write_text("", encoding="utf-8")
+    atomic.write_text(marker, "")
 
 
 def _bake_campaign(cid: str) -> None:
