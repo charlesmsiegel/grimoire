@@ -22,6 +22,22 @@ function pct(fraction: number) {
   return `${Math.round(fraction * 1000) / 10}%`;
 }
 
+/** An entry's share of its table, as a percentage.
+ *
+ *  Weights are relative, so `×1` and `×4` alone do not tell an author they
+ *  configured 20% and 80% — the number they actually care about. Zero-weight
+ *  rows are excluded from the total, matching how the draw skips them. */
+function share(entries: ClimateEntry[], entry: ClimateEntry) {
+  const total = entries.reduce((sum, e) => sum + (e.weight > 0 ? e.weight : 0), 0);
+  if (!total || entry.weight <= 0) return null;
+  return `${Math.round((entry.weight / total) * 1000) / 10}%`;
+}
+
+/** The conditions a given temperature band can actually draw. */
+function eligible(conditions: ClimateEntry[], temp: string) {
+  return conditions.filter((c) => !c.requires_temp || c.requires_temp.includes(temp));
+}
+
 export function ClimateEditor() {
   const [climates, setClimates] = useState<ClimateSummary[]>([]);
   const [id, setId] = useState<string | null>(null); // null = new
@@ -82,9 +98,19 @@ export function ClimateEditor() {
       // Deleting a custom-only climate used as a *campaign default* silently
       // moves every untagged location in that campaign to the fallback — the
       // widest effect, and the one a locations-only warning never mentions.
-      const refs = await api.climateReferrers(id).catch(() => null);
-      const campaigns = refs?.campaigns ?? [];
-      const locations = refs?.locations ?? [];
+      let refs;
+      try {
+        refs = await api.climateReferrers(id);
+      } catch {
+        // Fail closed. Treating a failed lookup as an empty one would tell the
+        // user "Nothing is using it" and still delete — presenting an unknown
+        // impact as no impact, which is the one thing this warning exists to
+        // prevent.
+        setError("Could not check what is using this climate. Not deleting — try again.");
+        return;
+      }
+      const campaigns = refs.campaigns ?? [];
+      const locations = refs.locations ?? [];
       if (campaigns.length) {
         message += `\n\nIt is the default climate for: ${campaigns.map((c) => c.name).join(", ")}.`
           + " Every location there that doesn't name its own climate falls back.";
@@ -153,7 +179,33 @@ export function ClimateEditor() {
   }
 
   function removeEntry(n: number, axis: typeof AXES[number]["key"], e: number) {
-    patchSeason(n, { [axis]: form.seasons[n][axis].filter((_, i) => i !== e) } as Partial<ClimateSeason>);
+    const season = form.seasons[n];
+    if (axis !== "temperature") {
+      patchSeason(n, { [axis]: season[axis].filter((_, i) => i !== e) } as Partial<ClimateSeason>);
+      return;
+    }
+    // Removing a temperature drops it from every condition that required it,
+    // in the same update. Left behind, the reference is a dangling requirement
+    // the backend rejects, so the remove button could not complete a normal
+    // deletion without the author hunting down each dependent condition. A
+    // condition left requiring nothing becomes unconstrained — the validator
+    // wants the key absent rather than an empty array.
+    const gone = season.temperature[e]?.name;
+    setForm({
+      ...form,
+      seasons: form.seasons.map((s, i) => (i !== n ? s : {
+        ...s,
+        temperature: s.temperature.filter((_, j) => j !== e),
+        conditions: s.conditions.map((c) => {
+          if (!c.requires_temp?.includes(gone)) return c;
+          const kept = c.requires_temp.filter((r) => r !== gone);
+          const next = { ...c } as ClimateEntry;
+          if (kept.length) next.requires_temp = kept;
+          else delete next.requires_temp;
+          return next;
+        }),
+      })),
+    });
   }
 
   function addSeason() {
@@ -193,11 +245,25 @@ export function ClimateEditor() {
                         {s[axis.key].map((e, i) => (
                           <span key={i} className={"chip" + (e.weight > 0 ? " on" : "")}>
                             {e.name} ×{e.weight}
+                            {share(s[axis.key], e) ? ` · ${share(s[axis.key], e)}` : ""}
                             {e.requires_temp?.length ? ` (${e.requires_temp.join(", ")} only)` : ""}
                           </span>
                         ))}
                       </div>
                     ))}
+                    {s.conditions.some((c) => c.requires_temp?.length) && (
+                      <div className="field-hint">
+                        {/* A constraint changes the eligible total, so a
+                            condition's headline share is not what it draws at
+                            in any particular band. */}
+                        Per band: {s.temperature.filter((tp) => tp.weight > 0).map((tp) => (
+                          `${tp.name} — ` + eligible(s.conditions, tp.name)
+                            .filter((c) => c.weight > 0)
+                            .map((c) => `${c.name} ${share(eligible(s.conditions, tp.name), c)}`)
+                            .join(", ")
+                        )).join("; ")}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

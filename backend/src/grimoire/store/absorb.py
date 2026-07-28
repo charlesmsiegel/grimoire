@@ -443,6 +443,17 @@ def _weather_edits(cid: str, sid: str, parsed: dict) -> list[dict]:
         location = (e.get("location") or "").strip() or scene_location
         if not location:
             continue
+        if location != scene_location:
+            # The model can emit a misspelled id or a display name, and
+            # `current_weather` answers for *any* id — a deleted location keeps
+            # resolving on purpose, so it cannot tell a typo from a tombstone.
+            # Without this the edit stages, applies, and lands under an orphan
+            # weather.json key no scene can reach, against materialize's stated
+            # contract of dropping targets that do not exist.
+            try:
+                overlay.read_entity(cid, "locations", location)
+            except (entities.EntityNotFound, KeyError, OSError):
+                continue
         resolved = weather_store.current_weather(cid, location, native)
         if resolved is None:
             continue  # unparseable moment: the same case the resolver declines
