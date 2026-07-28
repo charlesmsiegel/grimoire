@@ -108,7 +108,7 @@ test("saving an invalid climate surfaces the server's reason", async () => {
 test("a constrained condition shows what it is limited to", async () => {
   render(<ClimateEditor />);
   fireEvent.click(await screen.findByText("Temperate Interior"));
-  expect(await screen.findByText(/snow ×2 \(freezing only\)/)).toBeInTheDocument();
+  expect(await screen.findByText(/snow ×2 · 50% \(freezing only\)/)).toBeInTheDocument();
 });
 
 test("a whole-year season is described as such rather than 0% to 0%", async () => {
@@ -186,4 +186,54 @@ test("deleting a standalone climate discloses the campaigns defaulting to it", a
   expect(message).toContain("Saltmarch Docks");
   expect(api.deleteClimate).not.toHaveBeenCalled();  // declined
   confirm.mockRestore();
+});
+
+test("a failed referrer lookup blocks deletion rather than claiming no impact", async () => {
+  // Treating a failed lookup as an empty one would say "Nothing is using it"
+  // and delete anyway — an unknown impact presented as no impact.
+  vi.mocked(api.readClimate).mockResolvedValue(
+    { climate: { ...CLIMATE, id: "saltmarch-fens", name: "Fens" }, builtin: false, custom: true });
+  vi.mocked(api.climateReferrers).mockRejectedValue(new Error("network"));
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+  render(<ClimateEditor />);
+  fireEvent.click(await screen.findByText("Fens"));
+  fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+  expect(await screen.findByText(/Could not check what is using this climate/)).toBeInTheDocument();
+  expect(confirm).not.toHaveBeenCalled();
+  expect(api.deleteClimate).not.toHaveBeenCalled();
+  confirm.mockRestore();
+});
+
+test("removing a temperature drops it from the conditions that required it", async () => {
+  // Left behind, the reference is a dangling requirement the backend rejects,
+  // so remove could never complete without hand-editing every dependant.
+  render(<ClimateEditor />);
+  fireEvent.click(await screen.findByText("Temperate Interior"));
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  // The first Temperature row is `freezing`, which `snow` requires.
+  fireEvent.click(screen.getAllByRole("button", { name: "✕" })[0]);
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.saveClimate).toHaveBeenCalled());
+  const calls = vi.mocked(api.saveClimate).mock.calls;
+  const sent = calls[calls.length - 1][1];
+  expect(sent.seasons[0].temperature.map((x) => x.name)).toEqual(["cold"]);
+  // `snow` required only `freezing`, so it becomes unconstrained rather than
+  // carrying an empty array the validator rejects.
+  expect("requires_temp" in sent.seasons[0].conditions[1]).toBe(false);
+});
+
+test("the read-only view shows what the weights actually mean", async () => {
+  // ×2 and ×6 alone do not tell an author they configured 25% and 75%.
+  render(<ClimateEditor />);
+  fireEvent.click(await screen.findByText("Temperate Interior"));
+  expect(await screen.findByText(/freezing ×2 · 25%/)).toBeInTheDocument();
+  expect(screen.getByText(/cold ×6 · 75%/)).toBeInTheDocument();
+});
+
+test("per-band odds are shown when a constraint changes the eligible total", async () => {
+  render(<ClimateEditor />);
+  fireEvent.click(await screen.findByText("Temperate Interior"));
+  // `snow` requires freezing, so cold can only draw `clear`.
+  expect(await screen.findByText(/cold — clear 100%/)).toBeInTheDocument();
+  expect(screen.getByText(/freezing — clear 50%, snow 50%/)).toBeInTheDocument();
 });

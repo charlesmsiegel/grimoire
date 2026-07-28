@@ -119,3 +119,21 @@ def test_a_garbled_duration_falls_back_to_one_block(monkeypatch, tmp_path):
     absorb.apply_edits(cid, rows, sid=sid)
     assert weather.resolve(cid, lid, "2026-06-14T09:00")["condition"] == "hail"
     assert weather.resolve(cid, lid, "2026-06-14T13:00")["condition"] != "hail"
+
+
+def test_a_narrated_location_that_does_not_exist_is_dropped(monkeypatch, tmp_path):
+    # current_weather answers for any id — a deleted location keeps resolving
+    # on purpose — so it cannot tell a typo from a tombstone. Staging one would
+    # write under an orphan weather.json key no scene can reach.
+    cid, sid, lid = setup(monkeypatch, tmp_path)
+    rows = absorb.materialize(cid, sid, {"weather_edits": [
+        {"location": "Saltmarch Docks", "condition": "hail"}]})   # a name, not an id
+    assert [r for r in rows if r["kind"] == "weather"] == []
+
+
+def test_a_narrated_location_that_does_exist_is_staged(monkeypatch, tmp_path):
+    cid, sid, lid = setup(monkeypatch, tmp_path)
+    other = entities.create_entity(campaigns.campaign_root(cid), "locations", "Winifred Hall")
+    rows = [r for r in absorb.materialize(cid, sid, {"weather_edits": [
+        {"location": other, "condition": "hail"}]}) if r["kind"] == "weather"]
+    assert rows and rows[0]["payload"]["location"] == other
