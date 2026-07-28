@@ -72,7 +72,8 @@ def _read_meta(root: Path, pid: str) -> dict:
 
 
 def _write_meta(root: Path, pid: str, name: str, tags: list[str], default_version: str) -> None:
-    atomic.write_text(_meta_path(root, pid), dump_frontmatter({"name": name, "tags": ",".join(tags), "default_version": default_version}, ""))
+    atomic.write_text(_meta_path(root, pid), dump_frontmatter(
+        {"name": name, "tags": ",".join(tags), "default_version": default_version}, ""))
 
 
 def _tags_of(meta: dict) -> list[str]:

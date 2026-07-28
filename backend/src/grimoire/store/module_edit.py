@@ -104,8 +104,8 @@ def create_module(name: str) -> str:
         try:
             staging = base / mid
             staging.mkdir(parents=True)
-            atomic.write_text(staging / "module.md", dump_frontmatter({"name": clean, "description": "",
-                                  "version": "0.1"}, ""))
+            atomic.write_text(staging / "module.md", dump_frontmatter(
+                {"name": clean, "description": "", "version": "0.1"}, ""))
             atomic.write_text(staging / "sheets.json", '{\n  "groups": {},\n  "sheet_types": {}\n}\n')
             return _publish(staging, mid)
         finally:
