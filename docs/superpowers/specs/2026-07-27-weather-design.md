@@ -143,7 +143,11 @@ plugin and is never committed.
   that nobody edited. JavaScript makes it worse by reordering integer-like keys
   during enumeration. An array is ordered by construction, so the guarantee
   survives any conforming JSON implementation.
-- **Entry names must be unique within each axis of each season.** Uniqueness
+- **Entry names must be non-empty strings, and unique within each axis of each
+  season.** Non-empty is not pedantry: the name is the row's only identity and
+  its only display value, so an empty condition is indistinguishable from the
+  popover's blank state and an empty temperature name makes every
+  `requires_temp` choice referencing it unreadable. Uniqueness
   came free when tables were name-keyed objects and does not survive the move
   to arrays. Two entries sharing a name are individually unidentifiable
   everywhere downstream — `requires_temp` cannot say which temperature row it
@@ -177,11 +181,15 @@ plugin and is never committed.
   validated at load. This is what makes the degenerate-table fallback safe
   (§ Drawing a block) without letting it emit a constrained condition outside
   its band.
-- `persistence` is the **lag-1 autocorrelation between adjacent blocks**, in
-  `[0, 1)`. `0` makes every block independent; `0.35` means a block is 35%
-  correlated with the one before it; higher values give longer runs. Absent
-  means 0.5. Values are clamped to `0.998` (§ The construction, concretely),
-  so `1` is accepted but resolves to the clamp with a warning.
+- `persistence` is the **lag-1 autocorrelation between adjacent blocks**. The
+  **accepted** range is `[0, 1]` — a document declaring `1` is valid and loads;
+  the **effective** range is `[0, 0.998]`, since values are clamped (§ The
+  construction, concretely) and `1` resolves to the clamp with a warning. The
+  two ranges are stated separately because an implementation that built its
+  load validation from a single `[0, 1)` would reject a document the rest of
+  this spec requires it to accept. `0` makes every block independent; `0.35`
+  means a block is 35% correlated with the one before it; higher values give
+  longer runs. Absent means 0.5.
 
   This is a real unit, not a dial — the same number produces the same run
   lengths in any conforming implementation, and it is measurable directly from
@@ -928,6 +936,16 @@ it rather than reimplement the axis logic.
   Resolving from `cid` alone would return an arbitrary scene's sky. Accepts
   optional explicit `location` / `native` overrides for previewing a moment the
   scene isn't at.
+
+  The response carries the three resolved axes with per-axis provenance and
+  covering span stack, **plus the resolved climate id, the active season's
+  name, and that season's three tables**. The tables must come from the server:
+  the popover's selects offer the active season's entries, and the client
+  cannot determine those on its own — the climate may be inherited from the
+  campaign default or fallen back from a dangling id, and the season depends on
+  year-fraction arithmetic over the campaign's calendar. Deriving them
+  client-side means reimplementing the fallback chain and the calendar maths,
+  and lets the popover disagree with the weather displayed beside it.
 - **Manual override** (#45): `PUT /api/campaigns/{cid}/weather`, with the target
   in the **request body** — `{location, from, to, condition?, temperature?,
   wind?, note?}`, where `location` accepts `_default`. The campaign id alone
@@ -956,7 +974,11 @@ it rather than reimplement the axis logic.
   whole blocks by rounding outward. Narration that implies onset rather than
   extent ("rain begins") takes the default — one block, re-narratable next turn.
 - **Climate editor** (#40): `GET /api/climates` (the merged list, each entry
-  tagged `builtin` or `custom`), `GET /api/climates/{id}`,
+  carrying **both** tier flags — `builtin: true/false` and `custom: true/false`
+  — rather than one tag; a single `custom` label cannot distinguish a custom
+  climate that shadows a preset from one that stands alone, and the editor
+  needs that to choose between **Revert to preset** and **Delete**, and to know
+  whether deleting frees the id), `GET /api/climates/{id}`,
   `PUT /api/climates/{id}`, and `DELETE /api/climates/{id}` — the delete route
   is what makes the revert behavior below reachable, and without it a custom
   copy can never be undone from inside the app. The write path needs a rule the spec cannot leave
@@ -1050,6 +1072,14 @@ The form is where the real work is:
   opened from, falling back to `gregorian` when there is none, and the
   reference year is that provider's `RULE_REFERENCE_YEAR` — already the
   convention for calendar-relative rules in `calendars/base.py`.
+
+  **`GET /api/campaigns/{cid}/calendar` gains `reference_year` and
+  `year_length`** in its response. `RULE_REFERENCE_YEAR` is a backend class
+  attribute a custom provider may override, and the existing calendar routes
+  expose neither it nor the year's length — `/calendar/months` requires the
+  client to supply a year, which is the very thing it does not know. Without
+  this the editor would guess, and guess wrong for exactly the homebrew
+  calendars this design otherwise supports.
 
   Both directions are pinned, because "round to the day" leaves three choices
   open and the editor and the resolver disagreeing by one day moves weather:
@@ -1163,7 +1193,13 @@ has nothing to prefill from — a world author would have to set the default
 again for every campaign, or tag every location individually.
 
 **`create_campaign` takes a `climate` argument**, alongside the `calendar` one
-it already has, and the wizard passes the user's selection through it. Copying
+it already has, and the wizard passes the user's selection through it. It
+**validates against the registry before creating any campaign files**, exactly
+as the two default setters do and for the same reason — `create_campaign`
+already resolves its `calendar` argument up front so an unknown provider fails
+before anything is written, and an unknown climate should fail the same way
+rather than producing a campaign whose every untagged location silently reads
+`temperate-interior`. Copying
 the world file unconditionally would make the wizard's control a lie: it would
 render an editable prefilled choice and then discard whatever the user chose.
 The world file is the default *for* that argument, not a substitute for it —
@@ -1204,6 +1240,15 @@ a typo *invisible*: `temperate-costal` produces plausible weather from the wrong
 climate and reports nothing. Leniency is right in the turn loop and wrong at the
 authoring surface, where the user is present and can simply be told. When the
 ref-valued widget lands, the field becomes a picker and the validation stays.
+
+**Empty means absent, and is normalized before any validator runs.**
+`EntityEditor` binds each field to `fields[f.key] ?? ""` and sends `""` for one
+the user cleared or never set (`EntityEditor.tsx:427`), while the store only
+drops empty values later, in `entities.update_entity:113-117` — after route
+validation. A validator applied literally to the incoming dict would therefore
+reject an ordinary location save that simply has no climate. Empty strings are
+coerced to absence at the route boundary, and validators only ever see values
+that are actually present.
 
 **The check belongs in the backend save path, not only in the form.**
 `entity_schema.invalid_keys` and `routes._check_fields` validate field *names*
@@ -1516,7 +1561,17 @@ to invent the deferred feature in order to test it.)*
   settings — the test that catches a non-uniform marginal reaching the inverse
   CDF. Tolerance, not equality: the latent is `2⁵²` discrete atoms passed
   through a finite-precision `Φ⁻¹`, so exact uniformity is unavailable in
-  principle and asserting it would fail every conforming implementation. The
+  principle and asserting it would fail every conforming implementation.
+
+  **The protocol is fixed, not left to the implementer**: one climate, one
+  fixed campaign id and zone, `N = 100_000` consecutive block ordinals, and
+  each entry's observed frequency asserted within `3 · sqrt(p(1−p)/N)` of its
+  declared `p`. A stated tolerance with no number attached is not a testable
+  claim — it permits an arbitrarily permissive bound. Note the test is not
+  statistically flaky despite looking like a sampling test: generation is
+  deterministic, so the sample is fixed and the result is a stable pass or
+  fail. The `3σ` bound is a sanity margin against a genuinely wrong
+  distribution, not protection against random variation. The
   unconstrained climate is required, not incidental: under `requires_temp` an
   entry is filtered out whenever its band is absent and the survivors are
   renormalized, so a conforming resolver's unconditional frequencies
@@ -1595,7 +1650,18 @@ Frontend, from `frontend/` with `npx vitest run` and `npx tsc -b`:
   takes.
 - Individual weights: an axis containing a negative or non-finite weight is
   rejected inline even when a positive sibling is present.
-- Duplicate entry names within one axis are rejected inline.
+- Duplicate entry names within one axis are rejected inline, as is an entry
+  whose name is empty or whitespace.
+- A location saved with `climate` cleared to an empty string succeeds and
+  removes the field, rather than being rejected by the registry validator.
+- The climate list distinguishes a custom climate shadowing a preset from a
+  custom-only one, and the sidebar action reads **Revert to preset** in the
+  first case and **Delete** in the second.
+- `POST /api/campaigns` with an unknown `climate` fails before any campaign
+  directory is created.
+- A climate declaring `persistence: 1` loads without error and resolves at the
+  clamp — the accepted range admits it even though the effective range does
+  not.
 - A constrained condition whose `requires_temp` names only zero-weight
   temperature entries is rejected, as is an empty `requires_temp`.
 - Deleting a custom climate that shadows a builtin restores the preset and the
