@@ -122,7 +122,12 @@ def test_a_new_record_gets_the_umask_default_not_0600(tmp_path):
     rejecting a strict-umask environment."""
     p = tmp_path / "fresh.md"
     atomic.write_text(p, "new")
-    assert stat.S_IMODE(os.stat(p).st_mode) == 0o666 & ~atomic._UMASK
+    # Sample the umask independently rather than reusing atomic._UMASK: an
+    # implementation that sampled it wrongly would otherwise agree with its own
+    # assertion and the test would pass vacuously.
+    live = os.umask(0o022)
+    os.umask(live)
+    assert stat.S_IMODE(os.stat(p).st_mode) == 0o666 & ~live
 
 
 def test_the_mode_carried_over_is_the_targets(tmp_path, monkeypatch):
@@ -149,7 +154,9 @@ def test_a_new_record_does_not_inherit_the_0600_temp_mode(tmp_path, monkeypatch)
 
     atomic.write_text(tmp_path / "fresh.md", "new")
 
-    assert chmodded == [0o666 & ~atomic._UMASK], f"not the umask default: {chmodded!r}"
+    live = os.umask(0o022)   # sampled independently -- see the test above
+    os.umask(live)
+    assert chmodded == [0o666 & ~live], f"not the umask default: {chmodded!r}"
 
 
 def test_transient_sharing_violation_is_retried(tmp_path, monkeypatch):
@@ -237,6 +244,26 @@ def test_a_symlinked_record_is_replaced_not_written_through(tmp_path):
     assert link.read_text(encoding="utf-8") == "new content\n"
     assert target.read_text(encoding="utf-8") == "original\n", \
         "the link's target was written through, which is the OLD behavior"
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="creating hard links on Windows needs privileges")
+def test_a_hard_linked_record_is_detached_not_updated_in_place(tmp_path):
+    """The other half of the same declared limitation: write_text updated the
+    shared inode, so every hard link saw the change. os.replace swaps only the
+    directory entry it targets, so the links diverge."""
+    a = tmp_path / "a.md"
+    a.write_text("original\n", encoding="utf-8")
+    b = tmp_path / "b.md"
+    os.link(a, b)
+    assert os.stat(a).st_ino == os.stat(b).st_ino
+
+    atomic.write_text(a, "new content\n")
+
+    assert a.read_text(encoding="utf-8") == "new content\n"
+    assert b.read_text(encoding="utf-8") == "original\n", \
+        "the shared inode was updated, which is the OLD behavior"
+    assert os.stat(a).st_ino != os.stat(b).st_ino, "the links did not detach"
 
 
 def test_concurrent_readers_never_see_a_partial_record(tmp_path):

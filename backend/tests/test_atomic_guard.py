@@ -87,10 +87,26 @@ def _write_calls(tree: ast.AST):
                 if _is_write_mode(_mode_arg(node)):
                     yield node, "io.open"
             else:
-                mode = node.args[0].value if (
-                    node.args and isinstance(node.args[0], ast.Constant)) else _kw_mode(node)
-                if _is_write_mode(mode):
-                    yield node, f"Path.open({mode!r})"
+                # Receiver-agnostic: `p.open("w")` puts the mode first, but
+                # `zipfile.open("member", "w")` puts it second. Check both, and
+                # require something mode-SHAPED, so `svc.open("item")` is not
+                # read as a mode. A false positive here is a loud test failure a
+                # human clears with a marker; a false negative is the bug.
+                for arg in (node.args[:1] + node.args[1:2]):
+                    mode = arg.value if isinstance(arg, ast.Constant) else None
+                    if _looks_like_mode(mode) and _is_write_mode(mode):
+                        yield node, f"{'.open'}({mode!r})"
+                        break
+                else:
+                    if _is_write_mode(_kw_mode(node)):
+                        yield node, f".open(mode={_kw_mode(node)!r})"
+
+
+def _looks_like_mode(mode) -> bool:
+    """A real file mode is short and drawn from a tiny alphabet. Without this,
+    any first string argument to any `.open()` reads as a mode."""
+    return (isinstance(mode, str) and 0 < len(mode) <= 3
+            and set(mode) <= set("rwaxbt+"))
 
 
 def _kw_mode(node: ast.Call):
@@ -177,6 +193,15 @@ def test_the_guard_catches_the_less_obvious_write_forms():
 
     for src in ["open(p).read()", "open(p, 'r').read()", "p.open('rb').read()"]:
         assert not list(_write_calls(ast.parse(src))), f"false positive: {src}"
+
+
+def test_the_guard_reads_the_mode_not_just_the_first_string():
+    """`.open` is receiver-agnostic, so a zip member name in the first slot
+    used to be mistaken for a mode -- hiding the real mode in the second."""
+    assert list(_write_calls(ast.parse("archive.open('item', 'w')"))), \
+        "mode in the second slot was missed"
+    assert not list(_write_calls(ast.parse("svc.open('inventory')"))), \
+        "a non-mode string argument was read as a mode"
 
 
 def test_multi_line_calls_are_not_missed():
