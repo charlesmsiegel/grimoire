@@ -1,0 +1,87 @@
+{
+  "id": "temperate-coastal",
+  "name": "Temperate Coastal",
+  "persistence": 0.35,
+  "seasons": [
+    {
+      "name": "winter", "from": 0.92, "to": 0.21,
+      "temperature": [
+        { "name": "freezing", "weight": 2 },
+        { "name": "cold", "weight": 6 },
+        { "name": "mild", "weight": 2 }
+      ],
+      "conditions": [
+        { "name": "clear", "weight": 2 },
+        { "name": "overcast", "weight": 5 },
+        { "name": "light rain", "weight": 4 },
+        { "name": "snow", "weight": 2, "requires_temp": ["freezing"] },
+        { "name": "storm", "weight": 1 }
+      ],
+      "wind": [
+        { "name": "calm", "weight": 1 },
+        { "name": "breeze", "weight": 4 },
+        { "name": "strong", "weight": 3 },
+        { "name": "gale", "weight": 1 }
+      ]
+    },
+    {
+      "name": "spring", "from": 0.21, "to": 0.42,
+      "temperature": [
+        { "name": "cold", "weight": 3 },
+        { "name": "mild", "weight": 6 },
+        { "name": "warm", "weight": 1 }
+      ],
+      "conditions": [
+        { "name": "clear", "weight": 3 },
+        { "name": "overcast", "weight": 4 },
+        { "name": "light rain", "weight": 4 },
+        { "name": "storm", "weight": 1 }
+      ],
+      "wind": [
+        { "name": "calm", "weight": 2 },
+        { "name": "breeze", "weight": 5 },
+        { "name": "strong", "weight": 2 },
+        { "name": "gale", "weight": 1 }
+      ]
+    },
+    {
+      "name": "summer", "from": 0.42, "to": 0.67,
+      "temperature": [
+        { "name": "mild", "weight": 5 },
+        { "name": "warm", "weight": 5 },
+        { "name": "hot", "weight": 1 }
+      ],
+      "conditions": [
+        { "name": "clear", "weight": 6 },
+        { "name": "overcast", "weight": 3 },
+        { "name": "light rain", "weight": 3 },
+        { "name": "storm", "weight": 1 }
+      ],
+      "wind": [
+        { "name": "calm", "weight": 3 },
+        { "name": "breeze", "weight": 5 },
+        { "name": "strong", "weight": 2 }
+      ]
+    },
+    {
+      "name": "autumn", "from": 0.67, "to": 0.92,
+      "temperature": [
+        { "name": "cold", "weight": 4 },
+        { "name": "mild", "weight": 5 },
+        { "name": "warm", "weight": 1 }
+      ],
+      "conditions": [
+        { "name": "clear", "weight": 2 },
+        { "name": "overcast", "weight": 5 },
+        { "name": "light rain", "weight": 5 },
+        { "name": "storm", "weight": 2 }
+      ],
+      "wind": [
+        { "name": "calm", "weight": 1 },
+        { "name": "breeze", "weight": 4 },
+        { "name": "strong", "weight": 3 },
+        { "name": "gale", "weight": 2 }
+      ]
+    }
+  ]
+}
