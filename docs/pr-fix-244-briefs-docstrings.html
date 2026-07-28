@@ -163,7 +163,7 @@ footer.doc{max-width:1280px;margin:0 auto;padding:0 28px 34px;color:var(--text-f
   <div class="doc-label">PULL REQUEST REVIEW</div>
   <h1 class="doc-title">grimoire fix/244-briefs-docstrings — Review</h1>
   <p class="doc-sub">Repoint two docstrings away from a briefs.py that never existed, and guard the class of defect</p>
-  <div class="doc-meta">base main @ 39743b1a → 1428e261 · +45/−4 · generated 2026-07-28</div>
+  <div class="doc-meta">base main @ 39743b1a → b1044dbb · +61/−4 · generated 2026-07-28</div>
 </header>
 <nav class="tabs" role="tablist"><button role="tab" data-tab="summary" aria-selected="true" aria-controls="summary">Summary</button>
 <button role="tab" data-tab="footprint" aria-selected="false" aria-controls="footprint">Footprint</button>
@@ -368,43 +368,47 @@ footer.doc{max-width:1280px;margin:0 auto;padding:0 28px 34px;color:var(--text-f
 </div>
 
 <div class="card">
-  <h3><code>backend/tests/test_module_references.py</code> <span class="badge warn">sound, one hardening gap</span></h3>
+  <h3><code>backend/tests/test_module_references.py</code> <span class="badge good">sound; review findings applied in <code>b1044dbb</code></span></h3>
   <p>The right instinct for a docs bug — it converts "someone should have noticed" into a failing test, and
-  it was demonstrated to fail on the pre-fix tree rather than merely asserted to. Three design properties
-  are worth a reviewer's attention:</p>
+  it was demonstrated to fail on the pre-fix tree rather than merely asserted to. Review raised two issues
+  against the first version; both are fixed on this branch and are recorded here because the reasoning
+  outlives the diff.</p>
 
-  <div class="callout warn">
-    <strong>Should-fix — the guard can pass vacuously if the package is ever imported from a non-editable install.</strong>
-    <code>backend/tests/test_module_references.py:18</code> derives the search root positionally:
-    <div class="diff-snippet"><div class="fh">backend/tests/test_module_references.py — lines 17–18</div>
-<span class="ln ctx">PKG = Path(grimoire.__file__).parent          # backend/src/grimoire</span>
-<span class="ln ctx">BACKEND = PKG.parents[1]                      # backend/</span>
+  <div class="callout good">
+    <strong>Resolved — the guard could have passed vacuously from a non-editable install.</strong>
+    <code>backend/tests/test_module_references.py:23</code> derives the search root positionally
+    (<code>BACKEND = PKG.parents[1]</code>), which is the checkout's <code>backend/</code> only when the
+    package is imported from source. From <code>site-packages</code> it resolves to the environment root,
+    <code>_known_modules()</code> sweeps every installed third-party <code>.py</code> into the known-set,
+    and almost any name then resolves — the test passes without testing anything. A guard that fails
+    <em>loudly</em> when its assumptions break is fine; one that passes silently is the exact failure mode
+    it was written to prevent. Now asserted:
+    <div class="diff-snippet"><div class="fh">backend/tests/test_module_references.py — lines 37–41</div>
+<span class="ln add">+    assert (BACKEND / "pyproject.toml").is_file(), (</span>
+<span class="ln add">+        f"expected a source checkout at {BACKEND}; grimoire was imported from "</span>
+<span class="ln add">+        f"{PKG}, so this guard cannot see the backend tree. Run pytest against the "</span>
+<span class="ln add">+        f"checkout (see CLAUDE.md: PYTHONPATH=backend/src)."</span>
+<span class="ln add">+    )</span>
     </div>
-    <p>That comment is only true for a source checkout. Imported from <code>site-packages</code>,
-    <code>PKG.parents[1]</code> becomes the environment root, and <code>_known_modules()</code>
-    (<code>backend/tests/test_module_references.py:24-26</code>) then <code>rglob</code>s every installed
-    third-party <code>.py</code> into the known-set — at which point almost any name resolves and the
-    assertion quietly stops testing anything. A guard that fails <em>loudly</em> when its assumptions
-    break is fine; one that passes silently is the failure mode it was written to prevent. One line fixes
-    it: assert <code>(BACKEND / "pyproject.toml").exists()</code> before scanning, so a wrong layout
-    errors instead of green-lighting.</p>
-    <p>Not currently reachable — the repo's venv installs editable and CLAUDE.md pins worktree runs to
-    <code>PYTHONPATH=backend/src</code> — so this is a robustness fix, not a live bug.</p>
+    <p>Verified by pointing <code>BACKEND</code> at a directory with no <code>pyproject.toml</code>: the
+    assert fires with the message above instead of scanning. Was never reachable in practice — the repo's
+    venv installs editable and CLAUDE.md pins worktree runs to <code>PYTHONPATH=backend/src</code> — so
+    this is robustness, not a live bug fix.</p>
+  </div>
+
+  <div class="callout good">
+    <strong>Resolved — the basename-only scope is now stated.</strong>
+    <code>backend/tests/test_module_references.py:52</code> checks <code>name not in known</code>, a set of
+    bare filenames, so a docstring naming <code>dossiers.py</code> would pass even if the intended module
+    lived in a different subpackage. That is the right trade (prose says "mirrors dossiers.py" without a
+    path, so a path-accurate check would demand prose the codebase doesn't write), but "references a module
+    that exists" is a weaker guarantee than the test name suggests. The module docstring now says so
+    explicitly at <code>backend/tests/test_module_references.py:9-12</code>.
   </div>
 
   <div class="callout">
-    <strong>Nit — resolution is by basename, so it proves existence, not correctness.</strong>
-    <code>backend/tests/test_module_references.py:36</code> checks <code>name not in known</code>, a set of
-    bare filenames. A docstring naming <code>dossiers.py</code> would pass even if the intended module lived
-    in a different subpackage, and a hypothetical <code>calendars/briefs.py</code> would have satisfied the
-    original bad reference. Defensible — prose says "mirrors dossiers.py" without a path, so a
-    path-accurate check would demand prose the codebase doesn't write — but the test's docstring should say
-    so, since "references a module that exists" is a weaker guarantee than the test name suggests.
-  </div>
-
-  <div class="callout">
-    <strong>Nit — the regex scans all source text, not only comments and docstrings.</strong>
-    <code>backend/tests/test_module_references.py:21</code> matches any <code>&lt;name&gt;.py</code> token,
+    <strong>Accepted as-is — the regex scans all source text, not only comments and docstrings.</strong>
+    <code>backend/tests/test_module_references.py:26</code> matches any <code>&lt;name&gt;.py</code> token,
     including one inside a string literal. No false positives exist today (22 references, all resolving),
     and catching a stale filename in a literal is arguably a feature; but the first legitimate reference to
     an external script will fail this test and need an allowlist. Cheap to live with, worth knowing.
@@ -438,8 +442,8 @@ footer.doc{max-width:1280px;margin:0 auto;padding:0 28px 34px;color:var(--text-f
         <td>Filesystem walk introduced in a test</td>
         <td>Bounded / scoped?</td>
         <td><span class="badge good">yes</span> Scoped to <code>backend/</code> with <code>.venv</code>
-        excluded (<code>backend/tests/test_module_references.py:26</code>); runs in ~0.06 s. Degrades if the
-        root is misresolved — see the should-fix.</td>
+        excluded (<code>backend/tests/test_module_references.py:42</code>); runs in ~0.06 s. A misresolved
+        root now fails the assert rather than degrading silently.</td>
       </tr>
     </tbody>
   </table></div>
@@ -469,15 +473,17 @@ footer.doc{max-width:1280px;margin:0 auto;padding:0 28px 34px;color:var(--text-f
   invoking two different patterns, and repointing both at <code>absorb.py</code> (issue #244's suggestion)
   would have been wrong for <code>playstate.py</code> and self-referential for <code>chronicle.py</code>.
   Every factual claim added to the two docstrings was checked against the code. Nothing here can break the
-  runtime.</p>
+  runtime. The two review findings against the guard test were applied in <code>b1044dbb</code>; one
+  optional item remains.</p>
   <ol>
-    <li><strong>Should fix</strong> — assert the source-checkout layout in
-    <code>backend/tests/test_module_references.py:18</code> so a non-editable install fails loudly instead
-    of passing vacuously.</li>
-    <li><strong>Nit</strong> — state the basename-only limitation in the test's docstring
-    (<code>backend/tests/test_module_references.py:1-8</code>); "the module exists" ≠ "the reference is
-    right".</li>
-    <li><strong>Consider</strong> — the two <code>briefs.py</code> mentions in
+    <li><span class="badge good">done</span> <strong>Should fix</strong> — assert the source-checkout
+    layout so a non-editable install fails loudly instead of passing vacuously. Applied in
+    <code>b1044dbb</code> at <code>backend/tests/test_module_references.py:37-41</code>, and verified to
+    fire.</li>
+    <li><span class="badge good">done</span> <strong>Nit</strong> — state the basename-only limitation in
+    the test's docstring; "the module exists" ≠ "the reference is right". Applied in <code>b1044dbb</code>
+    at <code>backend/tests/test_module_references.py:9-12</code>.</li>
+    <li><strong>Open — consider</strong> — the two <code>briefs.py</code> mentions in
     <code>docs/superpowers/</code> are out of scope as history, but a reader who greps the repo (rather
     than the package) still lands on them. A one-line "never built" annotation on
     <code>docs/superpowers/plans/2026-06-29-character-brief-tiers.md:7</code> would finish the job.</li>
