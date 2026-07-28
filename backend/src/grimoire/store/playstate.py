@@ -3,7 +3,8 @@
 character `knows` / `suspects`, as optional `## `-headed prose sections. A body with no
 recognized header is read wholesale as `current_state` (Phase-2 back-compat). Snapshot
 only — rewritten each absorb (discrete events live in the chronicle timeline). Mirrors
-briefs.py.
+dossiers.py: a per-character, campaign-local markdown artifact filed beside the character
+copy; groupstate.py is the same shape for groups.
 """
 
 from __future__ import annotations
