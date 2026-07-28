@@ -5,6 +5,11 @@ explain a shared pattern. When the named module gets renamed or never lands, the
 pointer rots silently and a reader who greps for it finds nothing (issue #244:
 chronicle.py and playstate.py both pointed at a `briefs.py` that was designed but
 never built).
+
+Scope: this resolves *basenames*, so it proves a named module exists somewhere in the
+backend tree — not that the reference points at the right one. Prose says "mirrors
+dossiers.py" without a path, so a path-accurate check would demand prose we don't
+write. Existence is the failure mode that actually bites a reader.
 """
 
 from __future__ import annotations
@@ -22,7 +27,18 @@ _REF = re.compile(r"\b([a-z_][a-z0-9_]*\.py)\b")
 
 
 def _known_modules() -> set[str]:
-    """Every .py basename in the backend tree (package, scripts, tests)."""
+    """Every .py basename in the backend tree (package, scripts, tests).
+
+    Assumes BACKEND is the checkout's backend/. Imported from a non-editable install
+    it would instead be the environment root, and rglob would sweep every third-party
+    module into the set -- at which point nearly any name resolves and this test passes
+    without testing anything. Fail loudly on that rather than silently green.
+    """
+    assert (BACKEND / "pyproject.toml").is_file(), (
+        f"expected a source checkout at {BACKEND}; grimoire was imported from "
+        f"{PKG}, so this guard cannot see the backend tree. Run pytest against the "
+        f"checkout (see CLAUDE.md: PYTHONPATH=backend/src)."
+    )
     return {p.name for p in BACKEND.rglob("*.py") if ".venv" not in p.parts}
 
 
