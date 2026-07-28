@@ -29,6 +29,35 @@ class ClimateError(Exception):
     pass
 
 
+def _finite(x) -> bool:
+    """``math.isfinite``, but a bignum is *not finite* rather than a crash.
+
+    A hand-edited ``10**1000`` is a perfectly good Python int that cannot be
+    converted to a float, so ``math.isfinite`` raises ``OverflowError``. The
+    registry's broad handler hides that, but a direct caller — the save
+    boundary — would turn malformed user input into an internal error instead
+    of the validation failure it is.
+    """
+    try:
+        return math.isfinite(x)
+    except OverflowError:
+        return False
+
+
+def _warn(message: str) -> None:
+    """Emit a warning without letting warning *policy* decide validity.
+
+    Under ``-W error`` a bare ``warnings.warn`` raises, the registry's broad
+    handler catches it, and a valid climate silently vanishes from the merged
+    list because of how the process was started. Re-enabling the warning inside
+    a saved filter state keeps the author's notice — recorders such as
+    ``pytest.warns`` still see it — while keeping it non-fatal.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("always")
+        warnings.warn(message, stacklevel=3)
+
+
 def _weights(entries: list[dict], where: str) -> list[float]:
     out = []
     for e in entries:
@@ -38,7 +67,7 @@ def _weights(entries: list[dict], where: str) -> list[float]:
         if not isinstance(name, str) or not name.strip():
             raise ClimateError(f"{where}: every entry needs a non-empty name")
         w = e.get("weight")
-        if not isinstance(w, (int, float)) or isinstance(w, bool) or not math.isfinite(w) or w < 0:
+        if not isinstance(w, (int, float)) or isinstance(w, bool) or not _finite(w) or w < 0:
             raise ClimateError(f"{where}: weight for {name!r} must be a finite number >= 0")
         out.append(float(w))
     names = [e["name"] for e in entries]
@@ -101,14 +130,12 @@ def validate(doc: dict) -> dict:
         raise ClimateError(f"climate {cid!r} needs a non-empty name")
 
     p = doc.get("persistence", 0.5)
-    if not isinstance(p, (int, float)) or isinstance(p, bool) or not math.isfinite(p) or not 0 <= p <= 1:
+    if not isinstance(p, (int, float)) or isinstance(p, bool) or not _finite(p) or not 0 <= p <= 1:
         raise ClimateError(f"persistence must be a finite number in [0, 1], got {p!r}")
     if p > CLAMP:
         # Accepted range is [0, 1]; effective range is [0, CLAMP]. The author
         # should know the number they wrote is not the number in use.
-        warnings.warn(
-            f"climate {cid!r}: persistence {p} is clamped to {CLAMP} when sampling",
-            stacklevel=2)
+        _warn(f"climate {cid!r}: persistence {p} is clamped to {CLAMP} when sampling")
 
     seasons = doc.get("seasons")
     if not isinstance(seasons, list) or not seasons:

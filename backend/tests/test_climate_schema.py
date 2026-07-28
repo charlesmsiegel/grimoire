@@ -1,3 +1,5 @@
+import warnings
+
 import pytest
 
 from grimoire.store.climates.schema import ClimateError, validate
@@ -174,3 +176,31 @@ def test_climate_id_with_slash_rejected():
 def test_dot_only_climate_id_rejected():
     with pytest.raises(ClimateError, match="id"):
         validate(climate(id=".."))
+
+
+def test_a_bignum_weight_is_a_validation_error_not_an_overflow():
+    # 10**1000 is a valid Python int that cannot become a float, so a bare
+    # math.isfinite raises OverflowError. At the save boundary that turns
+    # malformed user input into an internal error instead of a 400.
+    doc = climate()
+    doc["seasons"][0]["wind"][0]["weight"] = 10 ** 1000
+    with pytest.raises(ClimateError, match="finite number"):
+        validate(doc)
+
+
+def test_a_bignum_persistence_is_a_validation_error_not_an_overflow():
+    doc = climate()
+    doc["persistence"] = 10 ** 1000
+    with pytest.raises(ClimateError, match="finite number"):
+        validate(doc)
+
+
+def test_the_clamp_warning_does_not_become_a_validation_failure():
+    # Under `-W error` a bare warnings.warn raises, the registry's broad
+    # handler catches it, and a valid climate silently disappears from the
+    # merged list because of how the process happened to be started.
+    doc = climate()
+    doc["persistence"] = 1
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert validate(doc) is doc
