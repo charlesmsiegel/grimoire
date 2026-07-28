@@ -1,0 +1,43 @@
+{
+  "id": "monsoon",
+  "name": "Monsoon",
+  "persistence": 0.6,
+  "seasons": [
+    {
+      "name": "dry", "from": 0.75, "to": 0.4,
+      "temperature": [
+        { "name": "warm", "weight": 5 },
+        { "name": "hot", "weight": 5 }
+      ],
+      "conditions": [
+        { "name": "clear", "weight": 7 },
+        { "name": "hazy", "weight": 3 },
+        { "name": "light rain", "weight": 1 }
+      ],
+      "wind": [
+        { "name": "still", "weight": 4 },
+        { "name": "breeze", "weight": 4 },
+        { "name": "strong", "weight": 1 }
+      ]
+    },
+    {
+      "name": "wet", "from": 0.4, "to": 0.75,
+      "temperature": [
+        { "name": "warm", "weight": 7 },
+        { "name": "hot", "weight": 3 }
+      ],
+      "conditions": [
+        { "name": "clear", "weight": 1 },
+        { "name": "overcast", "weight": 4 },
+        { "name": "downpour", "weight": 7 },
+        { "name": "storm", "weight": 3 }
+      ],
+      "wind": [
+        { "name": "still", "weight": 2 },
+        { "name": "breeze", "weight": 4 },
+        { "name": "strong", "weight": 3 },
+        { "name": "gale", "weight": 1 }
+      ]
+    }
+  ]
+}

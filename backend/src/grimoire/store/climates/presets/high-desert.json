@@ -1,0 +1,43 @@
+{
+  "id": "high-desert",
+  "name": "High Desert",
+  "persistence": 0.7,
+  "seasons": [
+    {
+      "name": "cold season", "from": 0.83, "to": 0.25,
+      "temperature": [
+        { "name": "freezing", "weight": 4 },
+        { "name": "cold", "weight": 5 },
+        { "name": "mild", "weight": 2 }
+      ],
+      "conditions": [
+        { "name": "clear", "weight": 8 },
+        { "name": "overcast", "weight": 2 },
+        { "name": "snow", "weight": 1, "requires_temp": ["freezing"] }
+      ],
+      "wind": [
+        { "name": "still", "weight": 3 },
+        { "name": "breeze", "weight": 3 },
+        { "name": "dust wind", "weight": 3 }
+      ]
+    },
+    {
+      "name": "hot season", "from": 0.25, "to": 0.83,
+      "temperature": [
+        { "name": "mild", "weight": 2 },
+        { "name": "warm", "weight": 4 },
+        { "name": "scorching", "weight": 6 }
+      ],
+      "conditions": [
+        { "name": "clear", "weight": 9 },
+        { "name": "hazy", "weight": 3 },
+        { "name": "dust storm", "weight": 1 }
+      ],
+      "wind": [
+        { "name": "still", "weight": 4 },
+        { "name": "breeze", "weight": 3 },
+        { "name": "dust wind", "weight": 3 }
+      ]
+    }
+  ]
+}
