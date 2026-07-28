@@ -1813,6 +1813,10 @@ def _check_fields(kind: str, fields: dict | None) -> None:
     bad = store.entity_schema.invalid_keys(kind, fields or {})
     if bad:
         raise HTTPException(status_code=400, detail=f"unknown fields for {kind}: {', '.join(bad)}")
+    bad_values = store.entity_schema.invalid_values(kind, fields or {})
+    if bad_values:
+        raise HTTPException(status_code=400,
+                            detail=f"invalid values for {kind}: {', '.join(bad_values)}")
 
 
 def _content_fields(kind: str, content: dict) -> dict:
