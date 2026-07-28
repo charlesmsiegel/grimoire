@@ -40,6 +40,7 @@ export function WeatherWidget({ cid, sid, refreshKey }:
   // chosen duration would be impossible for the same reason.
   const [touched, setTouched] = useState<Set<WeatherAxis>>(new Set());
   const [metaDirty, setMetaDirty] = useState(false);
+  const [durationTouched, setDurationTouched] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -82,6 +83,7 @@ export function WeatherWidget({ cid, sid, refreshKey }:
     setNote(noteOf(stack[0]) ?? "");
     setTouched(new Set());
     setMetaDirty(false);
+    setDurationTouched(false);
     setError(null);
     setOpen(true);
   }
@@ -116,11 +118,23 @@ export function WeatherWidget({ cid, sid, refreshKey }:
                                       axes: clearing });
       }
       if (setting.length) {
+        // Editing an existing span *replaces* it. A create-shaped PUT would
+        // layer a higher-precedence one-block duplicate over it and leave the
+        // original standing, so the old note returns in the next block and any
+        // shorter duration lets the old span resume afterwards.
+        //
+        // Its own bounds are kept unless the user changed the duration: a
+        // note-only edit on an open-ended override should stay open-ended.
+        const replacing = metaDirty && editingHere && editing?.id
+          && setting.every((a) => Boolean((editing as Record<string, unknown>)[a]));
         const body: Record<string, unknown> = {
-          location: data.location ?? "_default", start: data.native,
-          blocks: chosen.blocks, note,
+          location: data.location ?? "_default",
+          start: replacing ? editing.from : data.native, note,
         };
+        if (durationTouched || !replacing) body.blocks = chosen.blocks;
+        else body.end = editing.to ?? null;
         for (const a of setting) body[a] = draft[a];
+        if (replacing) await api.deleteWeatherOverride(cid, editing.location!, editing.id);
         await api.setWeatherOverride(cid, body as never);
       }
       await reload();
@@ -207,7 +221,11 @@ export function WeatherWidget({ cid, sid, refreshKey }:
           <div className="field">
             <label htmlFor="weather-duration">For</label>
             <select id="weather-duration" value={duration}
-                    onChange={(e) => { setDuration(Number(e.target.value)); setMetaDirty(true); }}>
+                    onChange={(e) => {
+                      setDuration(Number(e.target.value));
+                      setMetaDirty(true);
+                      setDurationTouched(true);
+                    }}>
               {DURATIONS.map((d, i) => <option key={d.label} value={i}>{d.label}</option>)}
             </select>
           </div>

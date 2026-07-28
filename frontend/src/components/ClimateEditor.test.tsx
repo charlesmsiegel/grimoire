@@ -237,3 +237,15 @@ test("per-band odds are shown when a constraint changes the eligible total", asy
   expect(await screen.findByText(/cold — clear 100%/)).toBeInTheDocument();
   expect(screen.getByText(/freezing — clear 50%, snow 50%/)).toBeInTheDocument();
 });
+
+test("+ New climate cannot reuse a shipped preset's id", async () => {
+  // Submitting the blank form under a preset's id would create a custom
+  // document shadowing it; copy-on-write belongs to the Edit flow.
+  render(<ClimateEditor />);
+  fireEvent.click(await screen.findByRole("button", { name: "+ New climate" }));
+  fireEvent.change(await screen.findByLabelText("Id"), { target: { value: "temperate-interior" } });
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Mine" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  expect(await screen.findByText(/already exists/)).toBeInTheDocument();
+  expect(api.saveClimate).not.toHaveBeenCalled();
+});

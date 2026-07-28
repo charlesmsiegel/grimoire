@@ -427,3 +427,16 @@ def test_a_suppression_naming_no_real_axis_is_rejected(client):
     r = client.put(f"/api/campaigns/{cid}/weather",
                    json={"location": lid, "start": "2026-06-14", "suppress": ["humidity"]})
     assert r.status_code == 400
+
+
+def test_a_nonpositive_block_count_is_rejected(client):
+    # max(1, ...) would turn an empty selection into a one-block override.
+    cid, sid, lid = scene(client)
+    for bad in (0, -3):
+        r = client.put(f"/api/campaigns/{cid}/weather",
+                       json={"location": lid, "start": "2026-06-14",
+                             "condition": "storm", "blocks": bad})
+        assert r.status_code == 400, bad
+    r = client.post(f"/api/campaigns/{cid}/weather/clear",
+                    json={"location": lid, "start": "2026-06-14", "blocks": 0})
+    assert r.status_code == 400

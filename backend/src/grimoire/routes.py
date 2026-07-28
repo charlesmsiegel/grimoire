@@ -2070,10 +2070,10 @@ def _climate_referrers(climate_id: str) -> dict:
     editor can only warn about that if it is told.
     """
     campaigns_using, locations_using = [], []
-    try:
-        rows = store.campaigns.list_campaigns()
-    except Exception:
-        return {"campaigns": [], "locations": []}
+    # Not caught: an unreadable campaign list is an *unknown* result, and
+    # returning an empty one would tell the editor nothing uses the climate —
+    # defeating the fail-closed guard on the other side of the call.
+    rows = store.campaigns.list_campaigns()
     for row in rows:
         cid = row["id"]
         try:
@@ -2095,13 +2095,19 @@ def _climate_referrers(climate_id: str) -> dict:
 
 @router.get("/climates/{climate_id}/referrers")
 def get_climate_referrers(climate_id: str):
-    return _climate_referrers(climate_id)
+    try:
+        return _climate_referrers(climate_id)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"could not scan campaigns: {e}")
 
 
 @router.delete("/climates/{climate_id}")
 def delete_climate(climate_id: str):
     """Drop the private copy, reverting to the preset if there is one."""
-    referrers = _climate_referrers(climate_id)
+    try:
+        referrers = _climate_referrers(climate_id)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"could not scan campaigns: {e}")
     try:
         removed = store.climates.remove(climate_id)
     except OSError as e:
@@ -2765,6 +2771,10 @@ def put_weather(cid: str, body: WeatherOverride):
                 list(store.weather.overrides.resolve_endpoint(provider, body.end, end=True)))
     except (store.calendars.CalendarError, KeyError, TypeError, AttributeError) as e:
         raise HTTPException(status_code=400, detail=f"unparseable moment: {e}")
+    if body.blocks is not None and body.blocks < 1:
+        # max(1, ...) would turn an empty selection into a one-block override
+        # and report success for it.
+        raise HTTPException(status_code=400, detail="blocks must be at least 1")
     if end is not None and end <= start:
         # Such a span covers no block, so it appears in no covering stack and
         # its id is discoverable nowhere — success reported for an override
@@ -2831,7 +2841,9 @@ def _weather_bounds(provider, body) -> None:
             list(store.weather.overrides.resolve_endpoint(provider, body.start, end=False)))
         hi = None
         if getattr(body, "blocks", None) is not None:
-            hi = lo + max(1, body.blocks)
+            if body.blocks < 1:
+                raise HTTPException(status_code=400, detail="blocks must be at least 1")
+            hi = lo + body.blocks
         elif body.end is not None:
             hi = store.weather.overrides.ordinal_of(
                 list(store.weather.overrides.resolve_endpoint(provider, body.end, end=True)))
