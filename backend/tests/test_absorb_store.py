@@ -55,7 +55,7 @@ def test_parse_output_tolerates_garbage():
         "one_line": "", "summary": "", "keywords": [], "timeline_events": [],
         "character_state_edits": [], "group_state_edits": [], "lore_edits": [], "authored_edits": [],
         "relationship_deltas": [], "bond_changes": [], "plot_movements": [],
-        "new_characters": [], "new_locations": [], "new_lore": []}
+        "new_characters": [], "new_locations": [], "new_lore": [], "weather_edits": []}
 
 
 def test_parse_output_plot_movements():
