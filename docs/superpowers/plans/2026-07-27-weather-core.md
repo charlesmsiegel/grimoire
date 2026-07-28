@@ -224,6 +224,36 @@ def test_non_object_table_entry_rejected():
         validate(climate(seasons=[season(wind=["calm"])]))
 
 
+def test_climate_without_a_name_rejected():
+    doc = climate()
+    del doc["name"]
+    with pytest.raises(ClimateError, match="name"):
+        validate(doc)
+
+
+def test_season_without_a_name_rejected():
+    s = season()
+    del s["name"]
+    with pytest.raises(ClimateError, match="name"):
+        validate(climate(seasons=[s]))
+
+
+def test_id_with_a_trailing_newline_rejected():
+    # `$` matches before a final newline, so a `match`-based check would pass.
+    with pytest.raises(ClimateError, match="id"):
+        validate(climate(id="saltmarch\n"))
+
+
+def test_persistence_one_warns_about_the_clamp():
+    with pytest.warns(UserWarning, match="clamped"):
+        validate(climate(persistence=1))
+
+
+def test_ordinary_persistence_does_not_warn(recwarn):
+    validate(climate(persistence=0.35))
+    assert len(recwarn) == 0
+
+
 def test_climate_id_with_slash_rejected():
     with pytest.raises(ClimateError, match="id"):
         validate(climate(id="a/b"))
@@ -258,9 +288,15 @@ from __future__ import annotations
 
 import math
 import re
+import warnings
 
-_ID = re.compile(r"^[A-Za-z0-9._-]+$")
+# fullmatch, and note the pattern has no anchors: `$` in Python matches before a
+# trailing newline, so `re.match(r"^[A-Za-z0-9._-]+$", "saltmarch\n")` succeeds
+# and would admit an id the climate routes cannot address.
+_ID = re.compile(r"[A-Za-z0-9._-]+")
 _AXES = ("temperature", "conditions", "wind")
+
+CLAMP = 0.998
 
 
 class ClimateError(Exception):
@@ -328,12 +364,24 @@ def validate(doc: dict) -> dict:
     if not isinstance(doc, dict):
         raise ClimateError("a climate document must be a JSON object")
     cid = doc.get("id")
-    if not isinstance(cid, str) or not _ID.match(cid) or not cid.strip("."):
+    if not isinstance(cid, str) or not _ID.fullmatch(cid) or not cid.strip("."):
         raise ClimateError(f"climate id must match [A-Za-z0-9._-]+ and not be dots only: {cid!r}")
+
+    name = doc.get("name")
+    if not isinstance(name, str) or not name.strip():
+        # `list_climates` dereferences doc["name"]; without this one malformed
+        # private file takes the whole merged registry down with a KeyError.
+        raise ClimateError(f"climate {cid!r} needs a non-empty name")
 
     p = doc.get("persistence", 0.5)
     if not isinstance(p, (int, float)) or isinstance(p, bool) or not math.isfinite(p) or not 0 <= p <= 1:
         raise ClimateError(f"persistence must be a finite number in [0, 1], got {p!r}")
+    if p > CLAMP:
+        # Accepted range is [0, 1]; effective range is [0, CLAMP]. The author
+        # should know the number they wrote is not the number in use.
+        warnings.warn(
+            f"climate {cid!r}: persistence {p} is clamped to {CLAMP} when sampling",
+            stacklevel=2)
 
     seasons = doc.get("seasons")
     if not isinstance(seasons, list) or not seasons:
@@ -342,7 +390,12 @@ def validate(doc: dict) -> dict:
     for s in seasons:
         if not isinstance(s, dict):
             raise ClimateError(f"each season must be a JSON object, got {type(s).__name__}")
-        where = f"season {s.get('name', '?')!r}"
+        s_name = s.get("name")
+        if not isinstance(s_name, str) or not s_name.strip():
+            # `current_weather` returns season["name"] to its callers; a season
+            # without one raises KeyError inside prompt assembly.
+            raise ClimateError(f"climate {cid!r}: every season needs a non-empty name")
+        where = f"season {s_name!r}"
         for edge in ("from", "to"):
             v = s.get(edge)
             if not isinstance(v, (int, float)) or isinstance(v, bool) or not 0 <= v < 1:
@@ -398,7 +451,7 @@ def validate(doc: dict) -> dict:
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `backend/.venv/Scripts/python.exe -m pytest backend/tests/test_climate_schema.py -q`
-Expected: PASS (18 tests)
+Expected: PASS (27 tests)
 
 - [ ] **Step 5: Commit**
 
@@ -1389,16 +1442,29 @@ def test_degenerate_filtered_table_falls_back_to_an_unconstrained_condition():
         assert draw("realm", "saltmarch", s, 0.5, i)["condition"] == "drizzle"
 
 
-def test_weight_fidelity_over_independent_zones():
-    # Weight fidelity is a claim about the marginal, so sample across
-    # independent streams rather than along one autocorrelated run.
+@pytest.mark.parametrize("persistence", [0.0, 0.5, 0.9])
+def test_weight_fidelity_over_independent_zones(persistence):
+    """Declared weights must survive the whole chain, at every persistence.
+
+    Two things this pins that a single value would not. Sampling across
+    *independent zones* rather than along one run: consecutive blocks are
+    autocorrelated by construction, so a long run carries far less information
+    than its length suggests and the binomial bound would understate the
+    spread. And running at *nonzero* persistence: at 0.0 the filter collapses
+    to the raw latent, so a broken normalization or copula mapping in the
+    smoothing path would never be exercised.
+
+    N is 20,000 rather than the spec's 100,000 — the 3-sigma bound scales with
+    N, so the assertion stays sound, and 100k at persistence 0.9 costs ~6s per
+    value against ~1.2s here. The zone ids and campaign id follow the spec.
+    """
     table = [{"name": "clear", "weight": 2}, {"name": "overcast", "weight": 5},
              {"name": "light rain", "weight": 4}, {"name": "storm", "weight": 1}]
     s = season(temperature=[{"name": "mild", "weight": 1}], conditions=table)
     n = 20_000
     counts = {e["name"]: 0 for e in table}
     for i in range(n):
-        counts[draw("fidelity-check", f"fidelity-{i:05d}", s, 0.0, 0)["condition"]] += 1
+        counts[draw("fidelity-check", f"fidelity-{i:05d}", s, persistence, 0)["condition"]] += 1
     total = sum(e["weight"] for e in table)
     for e in table:
         p = e["weight"] / total
@@ -1484,7 +1550,7 @@ def draw(cid: str, zone: str, season: dict, persistence: float, ordinal: int) ->
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `backend/.venv/Scripts/python.exe -m pytest backend/tests/test_weather_draw.py -q`
-Expected: PASS (10 tests)
+Expected: PASS (12 tests — the fidelity test is parametrized over three persistences)
 
 - [ ] **Step 5: Capture the end-to-end regression fixture**
 
@@ -1656,6 +1722,15 @@ def test_campaign_default_is_used_when_set(monkeypatch, tmp_path):
     assert settings.resolve(cid, lid)["climate"]["id"] == "saltmarch-fens"
 
 
+def test_non_string_campaign_default_falls_through_without_raising(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = make_campaign(tmp_path)
+    (campaigns.campaign_root(cid) / "climate.json").write_text(
+        json.dumps({"default_climate": ["temperate-interior"]}), encoding="utf-8")
+    lid = location(cid, "Saltmarch Docks")
+    assert settings.resolve(cid, lid)["climate"]["id"] == climates.FALLBACK_ID
+
+
 def test_unknown_campaign_default_falls_through_to_the_preset(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = make_campaign(tmp_path)
@@ -1776,6 +1851,12 @@ def _campaign_default(cid: str) -> dict:
     try:
         wanted = json.loads(path.read_text(encoding="utf-8")).get("default_climate")
     except (OSError, json.JSONDecodeError, AttributeError):
+        wanted = None
+    # Non-string ids are treated as unset. A hand-edited
+    # `{"default_climate": ["temperate-interior"]}` is truthy, and passing a
+    # list to the registry's dict lookup raises `TypeError: unhashable` — from
+    # inside prompt assembly, where nothing may raise.
+    if not isinstance(wanted, str) or not wanted:
         wanted = None
     return (climates.get(wanted) if wanted else None) or climates.get(climates.FALLBACK_ID)
 
@@ -2052,7 +2133,7 @@ def current_weather(cid: str, location_id: str | None, native: str | None) -> di
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `backend/.venv/Scripts/python.exe -m pytest backend/tests/test_weather_resolve.py -q`
-Expected: PASS (10 tests)
+Expected: PASS (13 tests)
 
 - [ ] **Step 5: Commit**
 
