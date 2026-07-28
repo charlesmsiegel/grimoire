@@ -148,15 +148,29 @@ def read(cid: str) -> dict[str, list[dict]]:
         # Derived exactly once: ids and tiebreaks become stored facts rather
         # than recomputations, so a loader refactor cannot quietly move a
         # record's DELETE address or reverse a precedence winner.
-        _write(cid, out)
+        _write(cid, out, best_effort=True)
     return out
 
 
-def _write(cid: str, data: dict[str, list[dict]]) -> None:
+class OverrideWriteError(Exception):
+    """A write that the caller must not report as success."""
+
+
+def _write(cid: str, data: dict[str, list[dict]], *, best_effort: bool = False) -> None:
+    """Persist the store.
+
+    ``best_effort`` is for the load-repair pass only, where a read-only store
+    should still resolve from what was parsed. Authoring writes raise instead:
+    swallowing the error there makes PUT, clear, resume and delete all report
+    success while `weather.json` is untouched, and the weather reverts on the
+    next reload with nothing having said so.
+    """
     try:
         path(cid).write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    except OSError:
-        pass  # read-only store: resolution still works from what we parsed
+    except OSError as e:
+        if best_effort:
+            return
+        raise OverrideWriteError(str(e)) from e
 
 
 def next_seq(data: dict[str, list[dict]], key: str) -> int:
@@ -181,7 +195,15 @@ def resolve_endpoint(provider, native: str | None, *, end: bool) -> tuple[int, i
     if minutes is None:
         # Date-only. Outward rounding: the whole of D, and `to` is exclusive.
         return (fixed, 0) if not end else (fixed + 1, 0)
-    return blocks.block_of(fixed, minutes)
+    if not end or blocks.at_block_start(minutes):
+        return blocks.block_of(fixed, minutes)
+    # A timed *end* inside a block rounds up to the next boundary. Returning the
+    # containing block's start would make `09:00 to 10:00` resolve both
+    # endpoints to the morning ordinal and match nothing — an override that
+    # saves cleanly and never applies. Outward rounding means a start floors
+    # and an exclusive end ceilings.
+    o = blocks.next_ordinal(fixed, minutes)
+    return (o // 5, o % 5)
 
 
 def ordinal_of(point) -> int | None:
@@ -192,6 +214,17 @@ def ordinal_of(point) -> int | None:
     if not all(isinstance(v, int) and not isinstance(v, bool) for v in (day, position)):
         return None
     return 5 * day + position
+
+
+def _intersects(record: dict, lo: int, hi: int | None) -> bool:
+    """Whether a span overlaps the half-open range [lo, hi) at all."""
+    start = ordinal_of(record.get("from_fixed"))
+    if start is None:
+        return False
+    end = ordinal_of(record.get("to_fixed")) if record.get("to_fixed") is not None else None
+    if end is not None and end <= lo:
+        return False
+    return not (hi is not None and start >= hi)
 
 
 def covers(record: dict, ordinal: int) -> bool:
@@ -215,8 +248,17 @@ def covers(record: dict, ordinal: int) -> bool:
 
 
 def _rank(record: dict) -> int:
-    """manual beats extractor. Anything else sorts below both."""
-    return {"manual": 2, "extractor": 1}.get(record.get("source"), 0)
+    """manual beats extractor. Anything else sorts below both.
+
+    Type-checked before the lookup: a hand-edited `"source": []` is valid JSON
+    and unhashable, so using it as a dict key raises TypeError — out of
+    resolution, through `current_weather`, and into prompt assembly, defeating
+    the loader's malformed-file tolerance one layer further in.
+    """
+    source = record.get("source")
+    if not isinstance(source, str):
+        return 0
+    return {"manual": 2, "extractor": 1}.get(source, 0)
 
 
 def _precedence(record: dict, key: str) -> tuple:
@@ -338,6 +380,20 @@ def delete(cid: str, span_id: str, storage_key: str | None = None) -> bool:
     return found
 
 
+def _only_axes(axes) -> tuple[str, ...]:
+    """Keep just the real axes, in canonical order.
+
+    `_cut` deletes each named key from the record, so an unexpected name like
+    `to_fixed` would strip that span's own bounds — turning a bounded override
+    into an open-ended one. Filtering here means no caller, route or otherwise,
+    can reach span metadata through an axis list.
+    """
+    if not axes:
+        return AXES
+    wanted = set(axes)
+    return tuple(a for a in AXES if a in wanted)
+
+
 def _upper(provider, lo: int, to: str | None, blocks: int | None) -> int | None:
     """The exclusive upper bound: a block count, a native endpoint, or open.
 
@@ -451,7 +507,7 @@ def clear(cid: str, provider, location_id: str, frm: str, to: str | None,
     day 15 did storm for five days, and re-reading day 12 still shows it;
     `delete` is the more emphatic action for taking that back.
     """
-    axes = tuple(axes) if axes else AXES
+    axes = _only_axes(axes)
     key = location_id or DEFAULT_KEY
     data = read(cid)
     lo = ordinal_of(resolve_endpoint(provider, frm, end=False))
@@ -464,9 +520,13 @@ def clear(cid: str, provider, location_id: str, frm: str, to: str | None,
     if key != DEFAULT_KEY:
         # Anything still inherited over this range needs suppressing, or the
         # clear looks like it did nothing at the one place it was aimed.
+        # Intersection with [lo, hi), not coverage at lo. Clearing the next
+        # three days while a campaign-wide storm begins tomorrow would
+        # otherwise create no suppression and leave the later part of the
+        # requested range stormy here.
         inherited = tuple(
             a for a in axes
-            if any(covers(r, lo) and r.get(a) for r in data.get(DEFAULT_KEY, [])))
+            if any(_intersects(r, lo, hi) and r.get(a) for r in data.get(DEFAULT_KEY, [])))
         if inherited:
             record = {
                 "id": _generated_id(key, len(data.get(key, [])),
@@ -501,7 +561,7 @@ def resume(cid: str, provider, location_id: str, frm: str, to: str | None,
     concrete value writes another local exception rather than restoring the
     campaign-wide one.
     """
-    axes = tuple(axes) if axes else AXES
+    axes = _only_axes(axes)
     key = location_id or DEFAULT_KEY
     data = read(cid)
     lo = ordinal_of(resolve_endpoint(provider, frm, end=False))
@@ -513,7 +573,8 @@ def resume(cid: str, provider, location_id: str, frm: str, to: str | None,
         _write(cid, data)
     return touched
 def put_ordinals(cid: str, location_id: str, native: str, start: int, end: int | None,
-                 axes: dict, note: str = "", source: str = "manual") -> dict:
+                 axes: dict, note: str = "", source: str = "manual",
+                 suppress: list[str] | None = None) -> dict:
     """Write a span whose bounds are already block ordinals.
 
     The extractor works this way: narration gives a moment and sometimes a
@@ -536,6 +597,8 @@ def put_ordinals(cid: str, location_id: str, native: str, start: int, end: int |
     for axis in AXES:
         if axes.get(axis):
             record[axis] = axes[axis]
+    if suppress:
+        record["suppress"] = [a for a in suppress if a in AXES]
     data.setdefault(key, []).append(record)
     _write(cid, data)
     return record

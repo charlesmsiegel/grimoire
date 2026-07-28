@@ -299,6 +299,8 @@ export type SceneWeather = {
   season?: string;
   location: string | null;
   native: string | null;
+  /** The block ordinal, so the popover can count the blocks left in the day. */
+  ordinal?: number;
   /** The active season's entries, per axis. Server-supplied: the client cannot
    *  derive them without reimplementing the climate fallback chain and the
    *  calendar's year-fraction arithmetic. */

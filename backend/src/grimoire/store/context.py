@@ -332,7 +332,11 @@ def _weather_data(cid: str, sid: str) -> dict | None:
                                   moments[-1] if moments else None)
     if not got:
         return None
-    return {k: got[k] for k in ("condition", "temperature", "wind")}
+    out = {k: got[k] for k in ("condition", "temperature", "wind")}
+    # Authored notes ride along: the model gets "the Wintertide storm" rather
+    # than only `storm`, which is why a note is stored at all.
+    out["notes"] = got.get("notes") or []
+    return out
 
 
 def _character_states(croot, cast) -> list[dict]:

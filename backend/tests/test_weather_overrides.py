@@ -398,3 +398,96 @@ def test_a_split_keeps_the_original_id_on_the_earlier_fragment(monkeypatch, tmp_
                      key=lambda r: overrides.ordinal_of(r["from_fixed"]))
     assert records[0]["id"] == made["id"]
     assert records[1]["id"] != made["id"]
+
+
+# ---- from Codex review of #232 ----
+
+def test_a_timed_end_inside_a_block_rounds_up(monkeypatch, tmp_path):
+    # Both endpoints resolving to the containing block makes 09:00-10:00 an
+    # empty span: an override that saves cleanly and never applies.
+    cid, p = setup(monkeypatch, tmp_path)
+    overrides.put(cid, p, "saltmarch-docks", "2026-06-14T09:00", "2026-06-14T10:00",
+                  {"condition": "squall"})
+    data = overrides.read(cid)
+    assert overrides.winner(data, "saltmarch-docks", ordinal(p, "2026-06-14T09:00"), "condition")
+    assert not overrides.winner(data, "saltmarch-docks", ordinal(p, "2026-06-14T13:00"), "condition")
+
+
+def test_a_timed_end_already_on_a_boundary_is_not_extended(monkeypatch, tmp_path):
+    cid, p = setup(monkeypatch, tmp_path)
+    overrides.put(cid, p, "saltmarch-docks", "2026-06-14T08:00", "2026-06-14T12:00",
+                  {"condition": "squall"})
+    data = overrides.read(cid)
+    assert overrides.winner(data, "saltmarch-docks", ordinal(p, "2026-06-14T09:00"), "condition")
+    assert not overrides.winner(data, "saltmarch-docks", ordinal(p, "2026-06-14T13:00"), "condition")
+
+
+def test_a_non_string_source_does_not_raise_into_resolution(monkeypatch, tmp_path):
+    # A hand-edited `"source": []` is valid JSON and unhashable as a dict key.
+    cid, p = setup(monkeypatch, tmp_path)
+    write_raw(cid, {"saltmarch-docks": [
+        {"id": "odd", "from": "2026-06-14", "to": None,
+         "from_fixed": [calendars.fixed_of(p, "2026-06-14"), 0], "to_fixed": None,
+         "condition": "fog", "source": []}]})
+    got = overrides.winner(overrides.read(cid), "saltmarch-docks",
+                           ordinal(p, "2026-06-14T09:00"), "condition")
+    assert got[1]["condition"] == "fog"
+
+
+def test_an_unknown_axis_cannot_strip_span_metadata(monkeypatch, tmp_path):
+    # `_cut` deletes each named key, so `to_fixed` would turn a bounded
+    # override into an open-ended one.
+    cid, p = setup(monkeypatch, tmp_path)
+    overrides.put(cid, p, "saltmarch-docks", "2026-06-14", "2026-06-16", {"condition": "storm"})
+    overrides.clear(cid, p, "saltmarch-docks", "2026-06-14", None, axes=["to_fixed"])
+    record = overrides.read(cid)["saltmarch-docks"][0]
+    assert record["to_fixed"] is not None
+    assert not overrides.winner(overrides.read(cid), "saltmarch-docks",
+                                ordinal(p, "2026-06-20T09:00"), "condition")
+
+
+def test_an_inherited_span_starting_later_in_the_range_is_suppressed(monkeypatch, tmp_path):
+    # Checking coverage only at the first ordinal misses a campaign-wide storm
+    # that begins tomorrow, leaving the later part of the cleared range stormy.
+    cid, p = setup(monkeypatch, tmp_path)
+    overrides.put(cid, p, overrides.DEFAULT_KEY, "2026-06-15", "2026-06-17", {"condition": "storm"})
+    overrides.clear(cid, p, "saltmarch-docks", "2026-06-14", "2026-06-17", axes=["condition"])
+    data = overrides.read(cid)
+    kind, _ = overrides.winner(data, "saltmarch-docks", ordinal(p, "2026-06-16T09:00"), "condition")
+    assert kind == "suppress"
+
+
+def test_a_failed_authoring_write_raises_rather_than_reporting_success(monkeypatch, tmp_path):
+    cid, p = setup(monkeypatch, tmp_path)
+    import pytest
+    def boom(*a, **k):
+        raise OSError("read-only file system")
+    monkeypatch.setattr(overrides.Path, "write_text", boom)
+    with pytest.raises(overrides.OverrideWriteError):
+        overrides.put(cid, p, "saltmarch-docks", "2026-06-14", None, {"condition": "fog"})
+
+
+def test_load_repair_still_tolerates_an_unwritable_store(monkeypatch, tmp_path):
+    # The repair pass is best-effort: resolution works from what was parsed.
+    cid, p = setup(monkeypatch, tmp_path)
+    write_raw(cid, {"saltmarch-docks": [
+        {"from": "2026-06-14", "to": None,
+         "from_fixed": [calendars.fixed_of(p, "2026-06-14"), 0], "to_fixed": None,
+         "condition": "fog", "source": "manual"}]})
+    real = overrides.Path.write_text
+    def boom(self, *a, **k):
+        raise OSError("read-only file system")
+    monkeypatch.setattr(overrides.Path, "write_text", boom)
+    got = overrides.read(cid)
+    assert got["saltmarch-docks"][0]["condition"] == "fog"
+    monkeypatch.setattr(overrides.Path, "write_text", real)
+
+
+def test_put_ordinals_carries_a_suppression(monkeypatch, tmp_path):
+    cid, p = setup(monkeypatch, tmp_path)
+    overrides.put(cid, p, overrides.DEFAULT_KEY, "2026-06-14", None, {"condition": "storm"})
+    start = ordinal(p, "2026-06-14T09:00")
+    overrides.put_ordinals(cid, "saltmarch-docks", "2026-06-14T09:00", start, start + 1,
+                           {}, suppress=["condition"])
+    kind, _ = overrides.winner(overrides.read(cid), "saltmarch-docks", start, "condition")
+    assert kind == "suppress"

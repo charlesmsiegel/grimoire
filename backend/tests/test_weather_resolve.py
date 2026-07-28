@@ -93,7 +93,8 @@ def test_a_moment_at_the_calendar_lower_bound_does_not_raise(monkeypatch, tmp_pa
 
 def test_different_blocks_can_differ(monkeypatch, tmp_path):
     cid, lid = setup(monkeypatch, tmp_path)
-    seen = {tuple(sorted(weather.current_weather(cid, lid, f"2026-06-{d:02d}T09:00").items()))
+    seen = {tuple(weather.current_weather(cid, lid, f"2026-06-{d:02d}T09:00")[a]
+                  for a in ("condition", "temperature", "wind"))
             for d in range(1, 29)}
     assert len(seen) > 1
 
@@ -213,7 +214,7 @@ def test_current_weather_keeps_its_narrow_shape(monkeypatch, tmp_path):
     # Prompt assembly reads this; the HUD extras belong to resolve().
     cid, lid = setup(monkeypatch, tmp_path)
     got = weather.current_weather(cid, lid, "2026-06-14T09:00")
-    assert set(got) == {"temperature", "condition", "wind", "climate", "season"}
+    assert set(got) == {"temperature", "condition", "wind", "climate", "season", "notes"}
 
 
 # ---- sweep ----

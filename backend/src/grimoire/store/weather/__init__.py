@@ -68,7 +68,7 @@ def resolve(cid: str, location_id: str | None, native: str | None) -> dict | Non
     procedural = _draw.draw(cid, resolved["zone"], season, resolved["persistence"], ordinal)
     spans = overrides.read(cid)
 
-    axes, source = {}, {}
+    axes, source, notes = {}, {}, []
     for axis in AXES:
         got = overrides.winner(spans, location_id, ordinal, axis)
         if got is None or got[0] == "suppress":
@@ -77,9 +77,16 @@ def resolve(cid: str, location_id: str | None, native: str | None) -> dict | Non
         else:
             axes[axis] = got[1][axis]
             source[axis] = got[1].get("source") or "manual"
+            note = (got[1].get("note") or "").strip()
+            if note and note not in notes:
+                # The note is the whole point of authoring one: "the Wintertide
+                # storm" tells the model more than `condition: storm` does. It
+                # is stored for narration context, so it has to reach the
+                # prompt or it is decoration.
+                notes.append(note)
 
     return {**axes, "climate": climate["id"], "season": season["name"],
-            "source": source, "procedural": procedural,
+            "source": source, "procedural": procedural, "notes": notes,
             "stack": overrides.stack(spans, location_id, ordinal),
             "ordinal": ordinal, "zone": resolved["zone"],
             "persistence": resolved["persistence"], "tables": season}
@@ -94,7 +101,8 @@ def current_weather(cid: str, location_id: str | None, native: str | None) -> di
     got = resolve(cid, location_id, native)
     if got is None:
         return None
-    return {**{a: got[a] for a in AXES}, "climate": got["climate"], "season": got["season"]}
+    return {**{a: got[a] for a in AXES}, "climate": got["climate"],
+            "season": got["season"], "notes": got["notes"]}
 
 
 def sweep(cid: str, sid: str, prev_native: str | None, now_native: str | None) -> list[dict]:

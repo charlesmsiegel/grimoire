@@ -1,4 +1,5 @@
-{#- The current sky. Vars: weather (None, or {condition, temperature, wind}). -#}
+{#- The current sky. Vars: weather (None, or {condition, temperature, wind, notes?}). -#}
 {%- if weather -%}
 Weather: {{ weather.condition }}, {{ weather.temperature }}, wind {{ weather.wind }}.
+{%- if weather.get('notes') %} {{ weather.notes | join(" ") }}{% endif %}
 {%- endif -%}
