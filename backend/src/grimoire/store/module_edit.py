@@ -4,7 +4,7 @@ whole-directory publication of user-library pack edits.
 Concurrency threat model (spec): exactly two actors — the User (UI) and the
 LLM (play flows). One global re-entrant module-edit lock serializes all
 module mutation + recovery; every publishing writer also holds every
-campaign's sheets.lock_for(cid) across its swap, so LLM flows (which hold
+campaign's locks.campaign_lock(cid) across its swap, so LLM flows (which hold
 their single campaign lock across resolve/load/compute) never observe a
 half-published pack. No machinery for two User actions racing.
 Spec: docs/superpowers/specs/2026-07-13-mechanics-phase8-authoring-ui-design.md.
@@ -22,7 +22,7 @@ import zipfile
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
-from . import campaigns, modules, proposals, sheets, worlds
+from . import campaigns, locks, modules, proposals, sheets, worlds
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import home, slugify, uniquify
 
@@ -508,7 +508,7 @@ def _campaign_locks():
     can run concurrently with anything (LLM flows hold exactly one)."""
     with ExitStack() as stack:
         for c in campaigns.list_campaigns():
-            stack.enter_context(sheets.lock_for(c["id"]))
+            stack.enter_context(locks.campaign_lock(c["id"]))
         yield
 
 

@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from grimoire.store import campaigns, characters, entities, modules, pcs, sheets, worlds
+from grimoire.store import campaigns, characters, entities, locks, modules, pcs, sheets, worlds
 
 
 def _campaign(monkeypatch, tmp_path, module="pool-basic"):
@@ -453,7 +453,7 @@ def test_write_world_creation_missing_entity_raises_not_found(monkeypatch, tmp_p
 
 def _campaign_with_advancement_module(monkeypatch, tmp_path, campaign_name="Run"):
     # campaign_name is overridable because cid = slugify(name), and
-    # sheets._campaign_locks is a module-level global that outlives any one
+    # locks._campaign_locks is a module-level global that outlives any one
     # test's GRIMOIRE_HOME -- reusing the default "Run"/"run" cid across
     # every advance test in this file would let an earlier test's lock leak
     # into a later test that specifically needs a cold (unregistered) cid.
@@ -589,7 +589,7 @@ def test_advance_concurrent_calls_only_one_succeeds(monkeypatch, tmp_path):
 
 
 def test_advance_first_ever_call_cold_registry_race(monkeypatch, tmp_path):
-    # exercises _lock_for's cold-registry path directly, not just contention
+    # exercises campaign_lock's cold-registry path directly, not just contention
     # on an already-created lock. Uses a campaign name unique to this test so
     # its cid can't already be registered by a sibling advance test that ran
     # first in the same process (see _campaign_with_advancement_module).
@@ -598,11 +598,11 @@ def test_advance_first_ever_call_cold_registry_race(monkeypatch, tmp_path):
     characters.create_character(worlds.world_root(wid), "First")  # id: "first"
     sheets.write(cid, "characters", "first", "hero", {"wits": 2, "xp": {"current": 9, "max": 999}},
                  expected=None)
-    # sheets.write above now also serializes on lock_for(cid) (Task 2), which
-    # warms the registry -- pop it back out so this test still exercises the
-    # concurrent first-ever-call race through advance()'s own lock_for(cid).
-    del sheets._campaign_locks[cid]
-    assert cid not in sheets._campaign_locks
+    # sheets.write above now also serializes on campaign_lock(cid) (Task 2),
+    # which warms the registry -- pop it back out so this test still exercises
+    # the concurrent first-ever-call race through advance()'s own lock.
+    del locks._campaign_locks[cid]
+    assert cid not in locks._campaign_locks
     results = []
     barrier = threading.Barrier(2)
 
@@ -777,21 +777,13 @@ def test_advance_preserves_gen(monkeypatch, tmp_path):
     assert sheets.read(cid, "characters", "mara")["gen"] == g1
 
 
-# lock_for() -- public per-campaign RLock shared by every sheet mutator (#164, Phase 5)
-
-
-def test_lock_for_public_and_reentrant(monkeypatch, tmp_path):
-    _wid, cid = _campaign(monkeypatch, tmp_path)
-    lock = sheets.lock_for(cid)
-    with lock:
-        with lock:  # RLock: no deadlock
-            pass
-    assert sheets.lock_for(cid) is lock
+# campaign_lock() -- the shared per-campaign RLock every sheet mutator takes
+# (#164, Phase 5; registry moved to store/locks.py in #245, tested there)
 
 
 def test_write_resolves_module_inside_the_lock(monkeypatch, tmp_path):
     """Rebind serialization invariant: no campaign mutator may call
-    modules.resolve outside lock_for(cid) -- otherwise a writer could resolve
+    modules.resolve outside campaign_lock(cid) -- otherwise a writer could resolve
     module A, lose the CPU to a rebind publishing B under the lock, then
     write under A after B is visible."""
     _wid, cid = _campaign(monkeypatch, tmp_path)
@@ -800,7 +792,7 @@ def test_write_resolves_module_inside_the_lock(monkeypatch, tmp_path):
     seen = []
 
     def spy(c):
-        seen.append(sheets.lock_for(c)._is_owned())  # RLock: owned by us?
+        seen.append(locks.campaign_lock(c)._is_owned())  # RLock: owned by us?
         return real(c)
 
     monkeypatch.setattr(modules_mod, "resolve", spy)
@@ -1135,7 +1127,7 @@ def test_set_field_resolves_module_inside_the_lock(monkeypatch, tmp_path):
     seen = []
 
     def spy(c):
-        seen.append(sheets.lock_for(c)._is_owned())  # RLock: owned by us?
+        seen.append(locks.campaign_lock(c)._is_owned())  # RLock: owned by us?
         return real(c)
 
     monkeypatch.setattr(modules_mod, "resolve", spy)
