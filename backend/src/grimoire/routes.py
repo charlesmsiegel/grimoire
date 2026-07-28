@@ -183,6 +183,8 @@ class WeatherOverride(BaseModel):
     note: str | None = None
     suppress: list[str] | None = None
     clear: bool = False
+    # Which moment a block count is measured from, when it is not the start.
+    blocks_from: str | None = None
     # A block count instead of an `end`. The duration control offers "this
     # block" and "the rest of today"; turning those into native strings
     # client-side means reimplementing the calendar's month lengths.
@@ -2083,13 +2085,13 @@ def _climate_referrers(climate_id: str) -> dict:
                 campaigns_using.append({"id": cid, "name": row.get("name", cid)})
         except (OSError, UnicodeDecodeError, json.JSONDecodeError, AttributeError):
             pass
-        try:
-            for loc in store.overlay.list_entities(cid, "locations"):
-                if loc.get("climate") == climate_id:
-                    locations_using.append({"campaign": cid, "id": loc["id"],
-                                            "name": loc.get("name", loc["id"])})
-        except Exception:
-            pass
+        # Not caught either: one unreadable location file aborting the scan
+        # would drop every valid reference in that campaign, and the editor
+        # would report no impact for a climate those locations use.
+        for loc in store.overlay.list_entities(cid, "locations"):
+            if loc.get("climate") == climate_id:
+                locations_using.append({"campaign": cid, "id": loc["id"],
+                                        "name": loc.get("name", loc["id"])})
     return {"campaigns": campaigns_using, "locations": locations_using}
 
 
@@ -2736,6 +2738,11 @@ def get_scene_weather(cid: str, sid: str, location: str | None = None, native: s
         # The popover's "rest of today" needs the position within the day, and
         # the client cannot derive it without the block grid.
         "ordinal": got["ordinal"],
+        # ...and cannot derive the count at all between 00:00 and 03:59, where
+        # the current block is the *previous* date's night. Position 4 there is
+        # indistinguishable from an ordinary 22:00 night, so the client would
+        # compute one block for a moment with a whole day still ahead of it.
+        "blocks_left_today": got["blocks_left_today"],
         # The tables come from the server because the client cannot determine
         # them: the climate may be inherited from the campaign default or
         # fallen back from a dangling id, and the season depends on
@@ -2795,6 +2802,13 @@ def put_weather(cid: str, body: WeatherOverride):
         _weather_axes(body.suppress)
         if not body.suppress:
             raise HTTPException(status_code=400, detail="suppress names no axes")
+        both = [a for a in body.suppress if axes.get(a)]
+        if both:
+            # Resolution checks suppression first, so the record would report a
+            # successful authored value for an axis that stays procedural.
+            raise HTTPException(
+                status_code=400,
+                detail=f"cannot set and suppress the same axis: {', '.join(both)}")
     if not any(axes.values()) and not body.suppress:
         # A span setting no axis appears in no covering stack, so its generated
         # id is discoverable nowhere and repeated calls would quietly accumulate
@@ -2906,6 +2920,55 @@ def post_weather_resume(cid: str, body: WeatherRange):
     except store.weather.overrides.OverrideWriteError as e:
         raise HTTPException(status_code=500, detail=f"could not write weather: {e}")
     return {"resumed": n}
+
+
+@router.put("/campaigns/{cid}/weather/{storage_key}/{span_id}")
+def put_weather_span(cid: str, storage_key: str, span_id: str, body: WeatherOverride):
+    """Rewrite one span atomically, keeping its identity and precedence.
+
+    The client-side alternative — DELETE then PUT — destroys the original if
+    the create fails, which for a user who was only editing a note is the
+    worst possible outcome.
+
+    `blocks` is counted from `blocks_from` when given rather than from
+    `start`, so changing the duration of a span that began days ago applies
+    the new length from the moment being looked at while keeping the coverage
+    it already had.
+    """
+    _campaign_root_or_404(cid)
+    provider = _weather_provider(cid)
+    axes = {a: getattr(body, a) for a in store.weather.AXES}
+    if not any(axes.values()) and not body.suppress:
+        raise HTTPException(status_code=400, detail="at least one axis is required")
+    try:
+        start = store.weather.overrides.ordinal_of(
+            list(store.weather.overrides.resolve_endpoint(provider, body.start, end=False)))
+        end = None
+        if body.blocks is not None:
+            if body.blocks < 1:
+                raise HTTPException(status_code=400, detail="blocks must be at least 1")
+            anchor = start
+            if body.blocks_from:
+                anchor = store.weather.overrides.ordinal_of(
+                    list(store.weather.overrides.resolve_endpoint(
+                        provider, body.blocks_from, end=False)))
+            end = anchor + body.blocks
+        elif body.end is not None:
+            end = store.weather.overrides.ordinal_of(
+                list(store.weather.overrides.resolve_endpoint(provider, body.end, end=True)))
+    except (store.calendars.CalendarError, KeyError, TypeError, AttributeError) as e:
+        raise HTTPException(status_code=400, detail=f"unparseable moment: {e}")
+    if end is not None and end <= start:
+        raise HTTPException(status_code=400, detail="the override range ends before it starts")
+    try:
+        got = store.weather.overrides.replace(
+            cid, storage_key, span_id, from_ordinal=start, to_ordinal=end,
+            native=body.start, axes=axes, note=body.note or "", suppress=body.suppress)
+    except store.weather.overrides.OverrideWriteError as e:
+        raise HTTPException(status_code=500, detail=f"could not write weather: {e}")
+    if got is None:
+        raise HTTPException(status_code=404, detail="override not found")
+    return got
 
 
 @router.delete("/campaigns/{cid}/weather/{storage_key}/{span_id}")

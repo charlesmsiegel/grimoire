@@ -30,6 +30,21 @@ def _moment(cid: str, native: str):
         return None
 
 
+def _blocks_left(fixed: int, owning_day: int, ordinal: int) -> int:
+    """Blocks from here through the end of the date the scene is showing.
+
+    Between 00:00 and 03:59 the current block belongs to the *previous* date,
+    so the displayed date still has all five of its own blocks ahead: the
+    current night plus five. Anywhere else it is what remains of the owning
+    day. The client cannot tell those apart — the night's position is 4 either
+    way — which is why this is computed here.
+    """
+    position = ordinal - 5 * owning_day
+    if owning_day < fixed:
+        return 1 + 5
+    return 5 - position
+
+
 def resolve(cid: str, location_id: str | None, native: str | None) -> dict | None:
     """The full resolution, including per-axis provenance and covering stack.
 
@@ -88,7 +103,8 @@ def resolve(cid: str, location_id: str | None, native: str | None) -> dict | Non
     return {**axes, "climate": climate["id"], "season": season["name"],
             "source": source, "procedural": procedural, "notes": notes,
             "stack": overrides.stack(spans, location_id, ordinal),
-            "ordinal": ordinal, "zone": resolved["zone"],
+            "ordinal": ordinal, "blocks_left_today": _blocks_left(fixed, owning_day, ordinal),
+            "zone": resolved["zone"],
             "persistence": resolved["persistence"], "tables": season}
 
 

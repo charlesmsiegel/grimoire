@@ -4,18 +4,15 @@ import { api, WEATHER_AXES, type SceneWeather, type WeatherAxis } from "../api/c
 const LABELS: Record<WeatherAxis, string> = {
   condition: "Condition", temperature: "Temperature", wind: "Wind",
 };
-const POSITIONS_PER_DAY = 5;
-
 /** Duration options, with "the rest of today" counting the blocks actually left.
  *
- *  A fixed 5 would always span a whole day *starting here*: at 09:00 the
- *  current block is morning and only four remain, so five would also override
- *  the following day's dawn. The server returns the block ordinal, and the
- *  position within its day is what tells us the remainder. */
-function durationsFor(ordinal: number | null | undefined) {
-  const remaining = ordinal === null || ordinal === undefined
-    ? POSITIONS_PER_DAY
-    : POSITIONS_PER_DAY - (((ordinal % POSITIONS_PER_DAY) + POSITIONS_PER_DAY) % POSITIONS_PER_DAY);
+ *  The count comes from the server. A fixed 5 would span a whole day *starting
+ *  here* — at 09:00 only four blocks remain, so five would also override the
+ *  next day's dawn. Deriving it from the ordinal is not enough either: between
+ *  00:00 and 03:59 the current block belongs to the previous date, and its
+ *  position is indistinguishable from an ordinary 22:00 night. */
+function durationsFor(blocksLeft: number | null | undefined) {
+  const remaining = blocksLeft ?? 5;
   return [
     { label: "this block", blocks: 1 },
     { label: "the rest of today", blocks: remaining },
@@ -59,7 +56,7 @@ export function WeatherWidget({ cid, sid, refreshKey }:
   const tables = data.tables ?? { condition: [], temperature: [], wind: [] };
   const authored = WEATHER_AXES.filter((a) => source[a] !== "procedural");
   const stack = data.stack ?? [];
-  const DURATIONS = durationsFor(data.ordinal);
+  const DURATIONS = durationsFor(data.blocks_left_today);
 
   function noteOf(span: { note?: string } | undefined) {
     return span?.note || undefined;
@@ -131,11 +128,27 @@ export function WeatherWidget({ cid, sid, refreshKey }:
           location: data.location ?? "_default",
           start: replacing ? editing.from : data.native, note,
         };
-        if (durationTouched || !replacing) body.blocks = chosen.blocks;
-        else body.end = editing.to ?? null;
+        if (durationTouched) {
+          body.blocks = chosen.blocks;
+          // Counted from the moment on screen, not from the span's start: a
+          // span that began days ago and is given "this block" here should end
+          // after *this* block, keeping the coverage it already had, rather
+          // than shrinking to one block back on its original start date.
+          if (replacing) body.blocks_from = data.native;
+        } else if (replacing) {
+          body.end = editing.to ?? null;   // untouched duration keeps its bounds
+        } else {
+          body.blocks = chosen.blocks;
+        }
         for (const a of setting) body[a] = draft[a];
-        if (replacing) await api.deleteWeatherOverride(cid, editing.location!, editing.id);
-        await api.setWeatherOverride(cid, body as never);
+        if (replacing) {
+          // One call, not delete-then-create: the pair leaves a window where
+          // the original is gone and its replacement has not landed, so a
+          // failure destroys an override the user was merely renaming.
+          await api.replaceWeatherOverride(cid, editing.location!, editing.id, body as never);
+        } else {
+          await api.setWeatherOverride(cid, body as never);
+        }
       }
       await reload();
       setOpen(false);

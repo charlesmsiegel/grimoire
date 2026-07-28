@@ -10,6 +10,7 @@ vi.mock("../api/client", async () => {
     clearWeather: vi.fn(),
     resumeWeather: vi.fn(),
     deleteWeatherOverride: vi.fn(),
+    replaceWeatherOverride: vi.fn(),
   } };
 });
 
@@ -22,7 +23,8 @@ const BASE = {
   season: "winter",
   location: "saltmarch-docks",
   native: "2026-06-14T09:00",
-  ordinal: 3698906,  // ...T09:00 is morning, position 1 of 5
+  ordinal: 3698906,
+  blocks_left_today: 4,  // morning: afternoon, evening, night remain
   tables: {
     condition: ["clear", "overcast", "light rain"],
     temperature: ["freezing", "cold", "mild"],
@@ -39,6 +41,7 @@ beforeEach(() => {
   vi.mocked(api.setWeatherOverride).mockResolvedValue({ id: "ovr-1" } as never);
   vi.mocked(api.clearWeather).mockResolvedValue({ cleared: 1 });
   vi.mocked(api.resumeWeather).mockResolvedValue({ resumed: 1 });
+  vi.mocked(api.replaceWeatherOverride).mockResolvedValue({ id: "ovr-1" } as never);
 });
 
 test("reads as one line of the three axes", async () => {
@@ -205,8 +208,11 @@ test("changing only the note re-writes the authored axis", async () => {
   fireEvent.click(await screen.findByRole("button", { name: /Weather/ }));
   fireEvent.change(screen.getByLabelText("Note"), { target: { value: "the Wintertide storm" } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
-  await waitFor(() => expect(api.setWeatherOverride).toHaveBeenCalledWith("c",
-    expect.objectContaining({ condition: "blizzard", note: "the Wintertide storm" })));
+  // Editing an existing span goes through the atomic replace, not a create.
+  await waitFor(() => expect(api.replaceWeatherOverride).toHaveBeenCalled());
+  const body = vi.mocked(api.replaceWeatherOverride).mock.calls[0][3] as Record<string, unknown>;
+  expect(body.condition).toBe("blizzard");
+  expect(body.note).toBe("the Wintertide storm");
 });
 
 test("pinning a currently procedural value still writes an override", async () => {
@@ -246,15 +252,16 @@ test("a metadata-only save does not localize an inherited axis", async () => {
   fireEvent.click(await screen.findByRole("button", { name: /Weather/ }));
   fireEvent.change(screen.getByLabelText("Note"), { target: { value: "the Wintertide storm" } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
-  await waitFor(() => expect(api.setWeatherOverride).toHaveBeenCalled());
-  const body = vi.mocked(api.setWeatherOverride).mock.calls[0][1] as Record<string, unknown>;
+  await waitFor(() => expect(api.replaceWeatherOverride).toHaveBeenCalled());
+  const body = vi.mocked(api.replaceWeatherOverride).mock.calls[0][3] as Record<string, unknown>;
   expect(body.condition).toBe("blizzard");
   expect(body.wind).toBeUndefined();  // still inherited from _default
 });
 
-test("a note-only edit replaces the span instead of layering a duplicate", async () => {
-  // A create-shaped PUT would leave the original standing, so the old note
-  // returns in the next block and any shorter duration lets it resume.
+test("a note-only edit replaces the span atomically instead of layering a duplicate", async () => {
+  // One call, not delete-then-create: the pair leaves a window where the
+  // original is gone and its replacement has not landed, so a failure destroys
+  // an override the user was merely renaming.
   vi.mocked(api.getSceneWeather).mockResolvedValue({
     ...BASE,
     weather: { ...BASE.weather, condition: "blizzard" },
@@ -262,23 +269,25 @@ test("a note-only edit replaces the span instead of layering a duplicate", async
     stack: [{ id: "ovr-1", location: "saltmarch-docks", from: "2026-06-10", to: null,
               condition: "blizzard", note: "old note" }],
   } as never);
-  vi.mocked(api.deleteWeatherOverride).mockResolvedValue({ ok: true });
   render(<WeatherWidget cid="c" sid="s" />);
   fireEvent.click(await screen.findByRole("button", { name: /Weather/ }));
   fireEvent.change(screen.getByLabelText("Note"), { target: { value: "the Wintertide storm" } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
-  await waitFor(() => expect(api.setWeatherOverride).toHaveBeenCalled());
-  expect(api.deleteWeatherOverride).toHaveBeenCalledWith("c", "saltmarch-docks", "ovr-1");
-  const body = vi.mocked(api.setWeatherOverride).mock.calls[0][1] as Record<string, unknown>;
-  // Its own bounds are kept: the duration select was not touched, so an
-  // open-ended override stays open-ended rather than becoming one block.
-  expect(body.start).toBe("2026-06-10");
-  expect(body.end).toBeNull();
-  expect(body.blocks).toBeUndefined();
-  expect(body.note).toBe("the Wintertide storm");
+  await waitFor(() => expect(api.replaceWeatherOverride).toHaveBeenCalled());
+  expect(api.deleteWeatherOverride).not.toHaveBeenCalled();
+  expect(api.setWeatherOverride).not.toHaveBeenCalled();
+  const [, key, spanId, body] = vi.mocked(api.replaceWeatherOverride).mock.calls[0];
+  expect([key, spanId]).toEqual(["saltmarch-docks", "ovr-1"]);
+  // Bounds untouched: a note-only edit on an open-ended override stays open.
+  expect((body as Record<string, unknown>).start).toBe("2026-06-10");
+  expect((body as Record<string, unknown>).end).toBeNull();
+  expect((body as Record<string, unknown>).note).toBe("the Wintertide storm");
 });
 
-test("changing the duration of an existing span re-bounds it", async () => {
+test("changing the duration counts blocks from the moment on screen", async () => {
+  // A span that began days ago given "this block" here should end after *this*
+  // block, keeping what it already covered — not shrink to one block back on
+  // its original start date.
   vi.mocked(api.getSceneWeather).mockResolvedValue({
     ...BASE,
     weather: { ...BASE.weather, condition: "blizzard" },
@@ -286,15 +295,15 @@ test("changing the duration of an existing span re-bounds it", async () => {
     stack: [{ id: "ovr-1", location: "saltmarch-docks", from: "2026-06-10", to: null,
               condition: "blizzard" }],
   } as never);
-  vi.mocked(api.deleteWeatherOverride).mockResolvedValue({ ok: true });
   render(<WeatherWidget cid="c" sid="s" />);
   fireEvent.click(await screen.findByRole("button", { name: /Weather/ }));
   fireEvent.change(screen.getByLabelText("For"), { target: { value: "0" } });  // this block
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
-  await waitFor(() => expect(api.setWeatherOverride).toHaveBeenCalled());
-  const body = vi.mocked(api.setWeatherOverride).mock.calls[0][1] as Record<string, unknown>;
+  await waitFor(() => expect(api.replaceWeatherOverride).toHaveBeenCalled());
+  const body = vi.mocked(api.replaceWeatherOverride).mock.calls[0][3] as Record<string, unknown>;
+  expect(body.start).toBe("2026-06-10");          // earlier coverage kept
   expect(body.blocks).toBe(1);
-  expect(api.deleteWeatherOverride).toHaveBeenCalled();
+  expect(body.blocks_from).toBe("2026-06-14T09:00");
 });
 
 test("a brand-new override is created, not treated as a replacement", async () => {
@@ -303,7 +312,21 @@ test("a brand-new override is created, not treated as a replacement", async () =
   fireEvent.change(await screen.findByLabelText("Condition"), { target: { value: "light rain" } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(api.setWeatherOverride).toHaveBeenCalled());
-  expect(api.deleteWeatherOverride).not.toHaveBeenCalled();
+  expect(api.replaceWeatherOverride).not.toHaveBeenCalled();
   const body = vi.mocked(api.setWeatherOverride).mock.calls[0][1] as Record<string, unknown>;
   expect(body.start).toBe("2026-06-14T09:00");
+});
+
+test("the rest of today uses the server's count, not the ordinal", async () => {
+  // At 01:00 the block is the previous date's night; deriving the count from
+  // the ordinal alone would give one block with a whole day still ahead.
+  vi.mocked(api.getSceneWeather).mockResolvedValue(
+    { ...BASE, native: "2026-06-15T01:00", blocks_left_today: 6 } as never);
+  render(<WeatherWidget cid="c" sid="s" />);
+  fireEvent.click(await screen.findByRole("button", { name: /Weather/ }));
+  fireEvent.change(await screen.findByLabelText("Condition"), { target: { value: "clear" } });
+  fireEvent.change(screen.getByLabelText("For"), { target: { value: "1" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.setWeatherOverride).toHaveBeenCalledWith("c",
+    expect.objectContaining({ blocks: 6 })));
 });
