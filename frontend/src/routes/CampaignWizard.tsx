@@ -21,6 +21,8 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
   const [region, setRegion] = useState("US");
   const [calendar, setCalendar] = useState("gregorian");
   const [calendars, setCalendars] = useState<{ id: string; name: string }[]>([]);
+  const [climate, setClimate] = useState("temperate-interior");
+  const [climates, setClimates] = useState<{ id: string; name: string }[]>([]);
   const [modules, setModules] = useState<ModuleSummary[]>([]);
   const [moduleId, setModuleId] = useState("");
 
@@ -48,6 +50,7 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
       if (ws.length) setWorld(ws[0].id);
     });
     api.getCalendarProviders().then((r) => setCalendars(r.providers)).catch(() => setCalendars([]));
+    api.listClimates().then((r) => setClimates(r.climates)).catch(() => setClimates([]));
     api.listModules().then(setModules).catch(() => setModules([]));
   }, []);
 
@@ -74,7 +77,8 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
     try {
       const usesRegion = calendar === "gregorian" || calendar === "hebrew";
       const { id: cid } = await api.createCampaign(
-        name.trim(), world, usesRegion ? region || undefined : undefined, calendar, moduleId || undefined);
+        name.trim(), world, usesRegion ? region || undefined : undefined, calendar,
+        moduleId || undefined, climate || undefined);
       // an existing world PC is already copied into the new campaign — just seat it
       let cast: { kind: "pcs"; id: string; version?: string };
       if (pickedPC) {
@@ -188,6 +192,16 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
                 {calendars.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
               <div className="field-caption">The campaign's primary calendar</div>
+            </div>
+            <div className="field">
+              <label htmlFor="wiz-climate">Climate</label>
+              <select id="wiz-climate" aria-label="Climate" value={climate}
+                      onChange={(e) => setClimate(e.target.value)}>
+                {climates.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+              <div className="field-caption">
+                The default for locations that don't name one of their own
+              </div>
             </div>
             {calendar === "gregorian" && (
               <div className="field">

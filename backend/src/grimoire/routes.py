@@ -189,6 +189,10 @@ class WeatherOverride(BaseModel):
     blocks: int | None = None
 
 
+class CampaignClimate(BaseModel):
+    default_climate: str
+
+
 class WeatherRange(BaseModel):
     """A location, a span, and the axes to act on — for clear and resume."""
     location: str = "_default"
@@ -1989,6 +1993,33 @@ def get_calendar_providers():
     return {"providers": store.calendars.list_providers()}
 
 
+@router.get("/campaigns/{cid}/climate")
+def get_campaign_climate(cid: str):
+    """The campaign's default climate id, and the resolved document."""
+    _campaign_root_or_404(cid)
+    resolved = store.weather.settings.resolve(cid, None)
+    return {"default_climate": resolved["climate"]["id"], "climate": resolved["climate"]}
+
+
+@router.put("/campaigns/{cid}/climate")
+def put_campaign_climate(cid: str, body: CampaignClimate):
+    """Change the default after creation.
+
+    Without this the create-time write is the only thing that ever touches
+    `climate.json`, so a campaign's default is immutable short of hand-editing
+    the store or tagging every location individually.
+    """
+    _campaign_root_or_404(cid)
+    if store.climates.get(body.default_climate) is None:
+        raise HTTPException(status_code=400, detail=f"unknown climate: {body.default_climate!r}")
+    try:
+        (store.campaigns.campaign_root(cid) / "climate.json").write_text(
+            json.dumps({"default_climate": body.default_climate}), encoding="utf-8")
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"could not write climate: {e}")
+    return {"ok": True, "default_climate": body.default_climate}
+
+
 # ---- climates (#40) ----
 
 @router.get("/climates")
@@ -2031,12 +2062,50 @@ def put_climate(climate_id: str, body: dict):
         raise HTTPException(status_code=500, detail=f"could not write climate: {e}")
 
 
+def _climate_referrers(climate_id: str) -> dict:
+    """Which campaigns default to this climate, and which locations name it.
+
+    Disclosed rather than blocking. Deleting a custom-only climate silently
+    moves every *untagged* location in a campaign that defaults to it, and the
+    editor can only warn about that if it is told.
+    """
+    campaigns_using, locations_using = [], []
+    try:
+        rows = store.campaigns.list_campaigns()
+    except Exception:
+        return {"campaigns": [], "locations": []}
+    for row in rows:
+        cid = row["id"]
+        try:
+            raw = json.loads((store.campaigns.campaign_root(cid) / "climate.json")
+                             .read_text(encoding="utf-8"))
+            if isinstance(raw, dict) and raw.get("default_climate") == climate_id:
+                campaigns_using.append({"id": cid, "name": row.get("name", cid)})
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, AttributeError):
+            pass
+        try:
+            for loc in store.overlay.list_entities(cid, "locations"):
+                if loc.get("climate") == climate_id:
+                    locations_using.append({"campaign": cid, "id": loc["id"],
+                                            "name": loc.get("name", loc["id"])})
+        except Exception:
+            pass
+    return {"campaigns": campaigns_using, "locations": locations_using}
+
+
+@router.get("/climates/{climate_id}/referrers")
+def get_climate_referrers(climate_id: str):
+    return _climate_referrers(climate_id)
+
+
 @router.delete("/climates/{climate_id}")
 def delete_climate(climate_id: str):
     """Drop the private copy, reverting to the preset if there is one."""
+    referrers = _climate_referrers(climate_id)
     if not store.climates.remove(climate_id):
         raise HTTPException(status_code=404, detail="no custom climate to delete")
-    return {"ok": True, "reverted_to_preset": store.climates.is_builtin(climate_id)}
+    return {"ok": True, "reverted_to_preset": store.climates.is_builtin(climate_id),
+            "referrers": referrers}
 
 
 @router.get("/worlds/{wid}/calendar/months")
@@ -2654,6 +2723,9 @@ def get_scene_weather(cid: str, sid: str, location: str | None = None, native: s
         "source": got["source"], "procedural": got["procedural"],
         "stack": got["stack"], "climate": got["climate"], "season": got["season"],
         "location": location, "native": native,
+        # The popover's "rest of today" needs the position within the day, and
+        # the client cannot derive it without the block grid.
+        "ordinal": got["ordinal"],
         # The tables come from the server because the client cannot determine
         # them: the climate may be inherited from the campaign default or
         # fallen back from a dangling id, and the season depends on
@@ -2703,11 +2775,27 @@ def put_weather(cid: str, body: WeatherOverride):
             list(store.weather.overrides.resolve_endpoint(provider, body.start, end=False)))
         return store.weather.overrides.put_ordinals(
             cid, body.location, body.start, start, start + max(1, body.blocks), axes,
-            note=body.note or "", source="manual")
+            note=body.note or "", source="manual", suppress=body.suppress)
     record = store.weather.overrides.put(
         cid, provider, body.location, body.start, body.end, axes,
         note=body.note or "", source="manual", suppress=body.suppress)
     return record
+
+
+def _weather_axes(axes) -> list[str] | None:
+    """Reject anything that is not a real axis.
+
+    The store filters too, but a caller sending `to_fixed` deserves a 400
+    rather than a silently narrowed no-op — the value it asked to clear would
+    otherwise appear to have been cleared.
+    """
+    if axes is None:
+        return None
+    bad = [a for a in axes if a not in store.weather.AXES]
+    if bad:
+        raise HTTPException(status_code=400,
+                            detail=f"unknown weather axes: {', '.join(map(str, bad))}")
+    return list(axes)
 
 
 def _weather_provider(cid: str):
@@ -2733,9 +2821,12 @@ def post_weather_clear(cid: str, body: WeatherRange):
     provider = _weather_provider(cid)
     try:
         n = store.weather.overrides.clear(cid, provider, body.location, body.start,
-                                          body.end, axes=body.axes, blocks=body.blocks)
+                                          body.end, axes=_weather_axes(body.axes),
+                                          blocks=body.blocks)
     except store.calendars.CalendarError as e:
         raise HTTPException(status_code=400, detail=f"unparseable moment: {e}")
+    except store.weather.overrides.OverrideWriteError as e:
+        raise HTTPException(status_code=500, detail=f"could not write weather: {e}")
     return {"cleared": n}
 
 
@@ -2751,9 +2842,12 @@ def post_weather_resume(cid: str, body: WeatherRange):
     provider = _weather_provider(cid)
     try:
         n = store.weather.overrides.resume(cid, provider, body.location, body.start,
-                                           body.end, axes=body.axes, blocks=body.blocks)
+                                           body.end, axes=_weather_axes(body.axes),
+                                           blocks=body.blocks)
     except store.calendars.CalendarError as e:
         raise HTTPException(status_code=400, detail=f"unparseable moment: {e}")
+    except store.weather.overrides.OverrideWriteError as e:
+        raise HTTPException(status_code=500, detail=f"could not write weather: {e}")
     return {"resumed": n}
 
 
@@ -3412,11 +3506,18 @@ def get_scene_datetime(cid: str, sid: str):
 @router.put("/campaigns/{cid}/scenes/{sid}/datetime")
 def put_scene_datetime(cid: str, sid: str, body: SceneDatetime):
     _require_scene(cid, sid)
+    # Captured before the write: the sweep needs the moment being left, and
+    # set_datetime appends to the same history it would read back.
+    history = store.scenes.get_time_history(cid, sid)
+    previous = history[-1] if history else None
     try:
         result = store.scenes.set_datetime(cid, sid, body.datetime)
     except store.calendars.CalendarError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return {"ok": True, **result}
+    # Names the transitions for the advance digest. Generation is pure, so the
+    # changes happen either way; without this they are simply never reported.
+    weather_changes = store.weather.sweep(cid, result.get("id", sid), previous, body.datetime)
+    return {"ok": True, **result, "weather_changes": weather_changes}
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}/response")

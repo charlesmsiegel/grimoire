@@ -2002,7 +2002,10 @@ def test_datetime_get_put_roundtrip(client):
     assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/datetime").json()["current"] is None
     r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/datetime", json={"datetime": "2026-12-25"})
     assert r.json() == {"ok": True, "advanced": False, "friendly": "25 December 2026",
-                        "id": "001--2026-12-25--s"}
+                        "id": "001--2026-12-25--s",
+                        # The advance sweep rides this payload; a scene with no
+                        # location has no weather to report a transition for.
+                        "weather_changes": []}
     sid = r.json()["id"]  # first date set renames the scene
     got = client.get(f"/api/campaigns/{cid}/scenes/{sid}/datetime").json()
     assert got["current"]["native"] == "2026-12-25"

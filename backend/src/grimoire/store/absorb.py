@@ -491,8 +491,13 @@ def _new_character_dossier(name: str, payload: dict) -> str:
     return " ".join(parts)
 
 
-def _apply_weather(cid: str, edit: dict, after: str) -> None:
+def _apply_weather(cid: str, edit: dict, after: str) -> bool:
     """Write one narrated axis as an `extractor` override span.
+
+    Returns whether anything was written. The campaign calendar can change
+    between staging a proposal and approving it, at which point the stored
+    native moment no longer parses — and reporting that edit as applied would
+    tell the user their weather landed when no override exists.
 
     The span covers the block containing the narrated moment, extended by an
     explicit `duration_blocks` when the narration stated an extent. Endpoints
@@ -504,14 +509,14 @@ def _apply_weather(cid: str, edit: dict, after: str) -> None:
     native, axis = payload.get("native"), edit.get("field")
     location = payload.get("location")
     if not native or axis not in weather_store.AXES or not location:
-        return
+        return False
     try:
         cfg = calendars.read_calendar(campaigns.campaign_root(cid))
         provider = calendars.get_provider(cfg["primary"])
         fixed = calendars.fixed_of(provider, native)
         minutes = calendars.minutes_of(native)
     except (calendars.CalendarError, KeyError, TypeError, AttributeError, OSError):
-        return
+        return False
     start = weather_store.blocks.ordinal(fixed, minutes)
     try:
         span = max(1, int(payload.get("duration_blocks") or 1))
@@ -521,6 +526,7 @@ def _apply_weather(cid: str, edit: dict, after: str) -> None:
     weather_store.overrides.put_ordinals(
         cid, location, native, start, end, {axis: after},
         note=str(payload.get("note") or ""), source="extractor")
+    return True
 
 
 def apply_edits(cid: str, edits: list[dict],
@@ -564,7 +570,8 @@ def apply_edits(cid: str, edits: list[dict],
             kind, target, after = e["kind"], e["target"], e.get("after", "")
             extra_fields: list[dict] = []
             if kind == "weather":
-                _apply_weather(cid, e, after)
+                if not _apply_weather(cid, e, after):
+                    continue  # skipped, not applied: nothing was written
             elif kind == "character_state":
                 playstate.write_state(croot, target["id"], after)
             elif kind == "group_state":

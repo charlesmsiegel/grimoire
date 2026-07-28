@@ -4,13 +4,25 @@ import { api, WEATHER_AXES, type SceneWeather, type WeatherAxis } from "../api/c
 const LABELS: Record<WeatherAxis, string> = {
   condition: "Condition", temperature: "Temperature", wind: "Wind",
 };
-/** Blocks are five per day, so a day is 5 and three days 15. */
-const DURATIONS = [
-  { label: "this block", blocks: 1 },
-  { label: "the rest of today", blocks: 5 },
-  { label: "three days", blocks: 15 },
-  { label: "until I clear it", blocks: null as number | null },
-];
+const POSITIONS_PER_DAY = 5;
+
+/** Duration options, with "the rest of today" counting the blocks actually left.
+ *
+ *  A fixed 5 would always span a whole day *starting here*: at 09:00 the
+ *  current block is morning and only four remain, so five would also override
+ *  the following day's dawn. The server returns the block ordinal, and the
+ *  position within its day is what tells us the remainder. */
+function durationsFor(ordinal: number | null | undefined) {
+  const remaining = ordinal === null || ordinal === undefined
+    ? POSITIONS_PER_DAY
+    : POSITIONS_PER_DAY - (((ordinal % POSITIONS_PER_DAY) + POSITIONS_PER_DAY) % POSITIONS_PER_DAY);
+  return [
+    { label: "this block", blocks: 1 },
+    { label: "the rest of today", blocks: remaining },
+    { label: "three days", blocks: 15 },
+    { label: "until I clear it", blocks: null as number | null },
+  ];
+}
 const CHANCE = "__chance__"; // "leave to chance" — clears the axis over the range
 
 export function WeatherWidget({ cid, sid, refreshKey }:
@@ -21,6 +33,13 @@ export function WeatherWidget({ cid, sid, refreshKey }:
     { condition: "", temperature: "", wind: "" });
   const [duration, setDuration] = useState(0);
   const [note, setNote] = useState("");
+  // Which controls the user actually touched. Comparing the draft against the
+  // resolved value is not enough: opening an existing override and changing
+  // only its note or duration leaves every axis equal, so the save would issue
+  // no request at all — and pinning a currently *procedural* value for a
+  // chosen duration would be impossible for the same reason.
+  const [touched, setTouched] = useState<Set<WeatherAxis>>(new Set());
+  const [metaDirty, setMetaDirty] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -39,6 +58,11 @@ export function WeatherWidget({ cid, sid, refreshKey }:
   const tables = data.tables ?? { condition: [], temperature: [], wind: [] };
   const authored = WEATHER_AXES.filter((a) => source[a] !== "procedural");
   const stack = data.stack ?? [];
+  const DURATIONS = durationsFor(data.ordinal);
+
+  function noteOf(span: { note?: string } | undefined) {
+    return span?.note || undefined;
+  }
 
   /** The note behind an authored axis, for the title tooltip. */
   function noteFor(axis: WeatherAxis) {
@@ -55,7 +79,9 @@ export function WeatherWidget({ cid, sid, refreshKey }:
     // Seed each select with what is actually in force, so opening and saving
     // one axis cannot silently discard another.
     setDraft({ condition: axes.condition, temperature: axes.temperature, wind: axes.wind });
-    setNote("");
+    setNote(noteOf(stack[0]) ?? "");
+    setTouched(new Set());
+    setMetaDirty(false);
     setError(null);
     setOpen(true);
   }
@@ -67,7 +93,10 @@ export function WeatherWidget({ cid, sid, refreshKey }:
     try {
       const chosen = DURATIONS[duration];
       const clearing = WEATHER_AXES.filter((a) => draft[a] === CHANCE);
-      const setting = WEATHER_AXES.filter((a) => draft[a] && draft[a] !== CHANCE && draft[a] !== axes[a]);
+      // An axis is written when the user picked it, or when they changed the
+      // note/duration on an axis that is already authored.
+      const setting = WEATHER_AXES.filter((a) => draft[a] && draft[a] !== CHANCE
+        && (touched.has(a) || (metaDirty && source[a] !== "procedural")));
       // "Leave to chance" clears the axis over the selected duration rather
       // than merely omitting it from the record: a user selecting it on an
       // overridden axis means "stop overriding this", and omitting would let
@@ -149,7 +178,10 @@ export function WeatherWidget({ cid, sid, refreshKey }:
               <div key={axis} className="field">
                 <label htmlFor={`weather-${axis}`}>{LABELS[axis]}</label>
                 <select id={`weather-${axis}`} value={draft[axis]}
-                        onChange={(e) => setDraft({ ...draft, [axis]: e.target.value })}>
+                        onChange={(e) => {
+                          setDraft({ ...draft, [axis]: e.target.value });
+                          setTouched(new Set(touched).add(axis));
+                        }}>
                   <option value={CHANCE}>leave to chance</option>
                   {table.map((v) => <option key={v} value={v}>{v}</option>)}
                   {extra.map((v) => <option key={v} value={v}>{v} (authored)</option>)}
@@ -166,7 +198,7 @@ export function WeatherWidget({ cid, sid, refreshKey }:
           <div className="field">
             <label htmlFor="weather-duration">For</label>
             <select id="weather-duration" value={duration}
-                    onChange={(e) => setDuration(Number(e.target.value))}>
+                    onChange={(e) => { setDuration(Number(e.target.value)); setMetaDirty(true); }}>
               {DURATIONS.map((d, i) => <option key={d.label} value={i}>{d.label}</option>)}
             </select>
           </div>
@@ -175,7 +207,8 @@ export function WeatherWidget({ cid, sid, refreshKey }:
             <label htmlFor="weather-note">Note</label>
             {/* What the prompt actually gets to work with: "the Wintertide
                 storm" tells the model more than condition: storm does. */}
-            <input id="weather-note" value={note} onChange={(e) => setNote(e.target.value)}
+            <input id="weather-note" value={note}
+                   onChange={(e) => { setNote(e.target.value); setMetaDirty(true); }}
                    placeholder="the Wintertide storm" />
           </div>
 

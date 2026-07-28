@@ -22,6 +22,7 @@ const BASE = {
   season: "winter",
   location: "saltmarch-docks",
   native: "2026-06-14T09:00",
+  ordinal: 3698906,  // ...T09:00 is morning, position 1 of 5
   tables: {
     condition: ["clear", "overcast", "light rain"],
     temperature: ["freezing", "cold", "mild"],
@@ -102,8 +103,10 @@ test("saving an axis writes an override for the chosen duration", async () => {
   fireEvent.change(screen.getByLabelText("Note"), { target: { value: "the squall" } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(api.setWeatherOverride).toHaveBeenCalledWith("c",
+    // 4, not 5: the moment is the morning block, so "the rest of today" is
+    // the four blocks left rather than a whole day starting here.
     expect.objectContaining({ location: "saltmarch-docks", start: "2026-06-14T09:00",
-                              blocks: 5, condition: "light rain", note: "the squall" })));
+                              blocks: 4, condition: "light rain", note: "the squall" })));
 });
 
 test("leave to chance clears that axis rather than omitting it", async () => {
@@ -171,4 +174,56 @@ test("a save failure surfaces the reason and keeps the popover open", async () =
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   expect(await screen.findByText("unparseable moment")).toBeInTheDocument();
   expect(screen.getByRole("dialog")).toBeInTheDocument();
+});
+
+
+test("the rest of today counts the blocks actually left, not a whole day", async () => {
+  // A fixed 5 would span a whole day *starting here*: at 09:00 the current
+  // block is morning and only four remain, so five would also override the
+  // following day's dawn.
+  vi.mocked(api.getSceneWeather).mockResolvedValue({ ...BASE, ordinal: 5 * 739781 + 1 } as never);
+  render(<WeatherWidget cid="c" sid="s" />);
+  fireEvent.click(await screen.findByRole("button", { name: /Weather/ }));
+  fireEvent.change(await screen.findByLabelText("Condition"), { target: { value: "clear" } });
+  fireEvent.change(screen.getByLabelText("For"), { target: { value: "1" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.setWeatherOverride).toHaveBeenCalledWith("c",
+    expect.objectContaining({ blocks: 4 })));
+});
+
+test("changing only the note re-writes the authored axis", async () => {
+  // Every draft axis still equals the resolved value, so a value comparison
+  // alone would issue no request and the edit would vanish silently.
+  vi.mocked(api.getSceneWeather).mockResolvedValue({
+    ...BASE,
+    weather: { ...BASE.weather, condition: "blizzard" },
+    source: { ...BASE.source, condition: "manual" },
+    stack: [{ id: "ovr-1", location: "saltmarch-docks", from: "2026-06-14",
+              to: null, condition: "blizzard", note: "old note" }],
+  } as never);
+  render(<WeatherWidget cid="c" sid="s" />);
+  fireEvent.click(await screen.findByRole("button", { name: /Weather/ }));
+  fireEvent.change(screen.getByLabelText("Note"), { target: { value: "the Wintertide storm" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.setWeatherOverride).toHaveBeenCalledWith("c",
+    expect.objectContaining({ condition: "blizzard", note: "the Wintertide storm" })));
+});
+
+test("pinning a currently procedural value still writes an override", async () => {
+  render(<WeatherWidget cid="c" sid="s" />);
+  fireEvent.click(await screen.findByRole("button", { name: /Weather/ }));
+  // Re-select the value already showing: the user means "pin this".
+  fireEvent.change(await screen.findByLabelText("Condition"), { target: { value: "overcast" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.setWeatherOverride).toHaveBeenCalledWith("c",
+    expect.objectContaining({ condition: "overcast" })));
+});
+
+test("an untouched popover saves nothing", async () => {
+  render(<WeatherWidget cid="c" sid="s" />);
+  fireEvent.click(await screen.findByRole("button", { name: /Weather/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  expect(api.setWeatherOverride).not.toHaveBeenCalled();
+  expect(api.clearWeather).not.toHaveBeenCalled();
 });
