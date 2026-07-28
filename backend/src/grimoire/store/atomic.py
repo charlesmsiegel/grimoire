@@ -51,6 +51,13 @@ _RETRY_DELAYS = (0.005, 0.010, 0.015, 0.020)  # ~50 ms total, then give up
 # directly yet fail once the prefix and random suffix are added.
 _MAX_NAME_HINT = 40
 
+# Read once, at import, while the process is still single-threaded. There is no
+# getter for the umask -- you must set it to read it -- and doing that inside a
+# request thread would briefly expose a 0 umask to every other thread creating a
+# file, making their files world-writable.
+_UMASK = os.umask(0)
+os.umask(_UMASK)
+
 
 def _replace(src: str, dst: Path) -> None:
     for delay in _RETRY_DELAYS:
@@ -75,9 +82,7 @@ def _carry_mode(tmp_name: str, path: Path) -> None:
     try:
         mode = stat.S_IMODE(os.stat(path).st_mode)
     except OSError:
-        umask = os.umask(0)
-        os.umask(umask)
-        mode = 0o666 & ~umask
+        mode = 0o666 & ~_UMASK
     try:
         os.chmod(tmp_name, mode)
     except OSError:
@@ -101,8 +106,8 @@ def tempfile_for(path: Path) -> Iterator[Path]:
     path = Path(path)
     fd, tmp_name = tempfile.mkstemp(
         dir=str(path.parent), prefix=f".{path.name[:_MAX_NAME_HINT]}.", suffix=".tmp")
-    os.close(fd)
     try:
+        os.close(fd)  # inside the try: a failing close must not leak the temp
         yield Path(tmp_name)
         # Flush the caller's bytes to disk before publishing. Reopened O_RDWR
         # because Windows FlushFileBuffers needs write access.

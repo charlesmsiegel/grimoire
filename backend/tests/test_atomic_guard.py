@@ -30,7 +30,13 @@ PACKAGE = pathlib.Path(grimoire.__file__).parent
 _PATH_WRITERS = ("write_text", "write_bytes")
 # Builtins that open a handle for writing.
 _OPENERS = ("open",)
-_WRITE_MODES = ("w", "wb", "wt", "a", "ab", "at", "w+", "r+")
+
+
+def _is_write_mode(mode) -> bool:
+    """Any mode that can publish bytes to the named path. Enumerating literals
+    ("w", "wb", ...) missed real forms — `open(p, "x")`, `"w+b"`, `"a+"` — so
+    this tests for the characters that make a mode writable instead."""
+    return isinstance(mode, str) and any(ch in mode for ch in "wax+")
 
 MARKER = "atomic-ok:"
 
@@ -72,15 +78,31 @@ def _write_calls(tree: ast.AST):
             # -- found by auditing the atlas, which cited exactly such a site.
             yield node, f"os.{f.attr}"
         elif isinstance(f, ast.Name) and f.id in _OPENERS:
-            mode = next((a.value for a in node.args[1:2]
-                         if isinstance(a, ast.Constant)), None)
-            mode = mode or next((k.value.value for k in node.keywords
-                                 if k.arg == "mode" and isinstance(k.value, ast.Constant)), None)
-            if isinstance(mode, str) and mode in _WRITE_MODES:
-                yield node, f"open(..., {mode!r})"
-        elif isinstance(f, ast.Attribute) and f.attr == "open" and \
-                isinstance(f.value, ast.Name) and f.value.id == "io":
-            yield node, "io.open"
+            if _is_write_mode(_mode_arg(node)):
+                yield node, f"open(..., {_mode_arg(node)!r})"
+        elif isinstance(f, ast.Attribute) and f.attr == "open":
+            # io.open(p, "w") and, importantly, Path.open("w") — the latter is
+            # the most natural way to reintroduce exactly this bug.
+            if isinstance(f.value, ast.Name) and f.value.id == "io":
+                if _is_write_mode(_mode_arg(node)):
+                    yield node, "io.open"
+            else:
+                mode = node.args[0].value if (
+                    node.args and isinstance(node.args[0], ast.Constant)) else _kw_mode(node)
+                if _is_write_mode(mode):
+                    yield node, f"Path.open({mode!r})"
+
+
+def _kw_mode(node: ast.Call):
+    return next((k.value.value for k in node.keywords
+                 if k.arg == "mode" and isinstance(k.value, ast.Constant)), None)
+
+
+def _mode_arg(node: ast.Call):
+    """The mode of an open()-shaped call: second positional, else mode=."""
+    if len(node.args) > 1 and isinstance(node.args[1], ast.Constant):
+        return node.args[1].value
+    return _kw_mode(node)
 
 
 def _offenders():
@@ -139,6 +161,22 @@ def test_the_guard_actually_detects_a_raw_write():
 
     tree = ast.parse("with open(p, 'w') as f:\n    f.write('x')\n")
     assert [kind for _n, kind in _write_calls(tree)] == ["open(..., 'w')"]
+
+
+def test_the_guard_catches_the_less_obvious_write_forms():
+    """Enumerating mode literals missed all of these; a review caught it."""
+    for src, why in [
+        ("p.open('w').write('x')", "Path.open — the most natural reintroduction"),
+        ("open(p, 'x').write('b')", "exclusive create"),
+        ("open(p, 'w+b').write(b'')", "multi-char mode"),
+        ("open(p, 'a+').write('x')", "append-update"),
+        ("open(p, mode='wb').write(b'')", "mode as a keyword"),
+        ("os.fdopen(fd, 'wb')", "bypasses open() entirely"),
+    ]:
+        assert list(_write_calls(ast.parse(src))), f"missed: {why} ({src})"
+
+    for src in ["open(p).read()", "open(p, 'r').read()", "p.open('rb').read()"]:
+        assert not list(_write_calls(ast.parse(src))), f"false positive: {src}"
 
 
 def test_multi_line_calls_are_not_missed():

@@ -37,6 +37,18 @@ def _dir(root: Path, cid: str, vid: str, base: str = "characters") -> Path:
     return root / base / cid / "assets" / vid
 
 
+def _mtime_ns(p: Path) -> int:
+    """Sort key that tolerates the file vanishing mid-scan. put_image writes
+    the new extension and then unlinks the stale sibling, so a concurrent
+    reader can genuinely glob a path that is gone by the time it stats -- and
+    the old `sorted(...)[0]` never stat'd at all, so raising here would be a
+    regression, not a new safety check."""
+    try:
+        return p.stat().st_mtime_ns
+    except OSError:
+        return -1
+
+
 def image_path(root: Path, cid: str, vid: str, name: str, base: str = "characters") -> Path | None:
     if not (_safe(cid) and _safe(vid) and _safe_name(name)):
         return None
@@ -51,7 +63,7 @@ def image_path(root: Path, cid: str, vid: str, name: str, base: str = "character
     # the image), which leaves both present for a moment -- and a plain
     # sorted()[0] would hand back the stale one. Also self-heals if that
     # unlink ever fails.
-    return max(matches, key=lambda p: (p.stat().st_mtime_ns, p.name))
+    return max(matches, key=lambda p: (_mtime_ns(p), p.name))
 
 
 def list_images(root: Path, cid: str, vid: str, base: str = "characters") -> list[dict]:
@@ -121,10 +133,18 @@ def put_image(root: Path, cid: str, vid: str, name: str, data: bytes, ext: str,
     # unlink and the write -- atomicity alone cannot fix an ordering bug.
     # image_path() breaks the resulting momentary tie by mtime.
     written = d / f"{name}.{ext}"
+    # Snapshot the siblings BEFORE writing, and only ever delete those. Globbing
+    # after the write instead would let two concurrent put_image calls delete
+    # each other's brand-new file -- A writes .jpg, B writes .png, then each
+    # cleanup removes the other's -- leaving no image at all, which is worse
+    # than the delete-first ordering this replaced.
+    stale = [p for p in d.glob(f"{name}.*") if p != written]
     atomic.write_bytes(written, data)
-    for p in d.glob(f"{name}.*"):
-        if p != written:
+    for p in stale:
+        try:
             p.unlink()
+        except OSError:
+            pass  # a lost cleanup is self-healing: image_path prefers the newest
     if name == AVATAR:
         clear_focus(root, cid, vid, base)
     return ext

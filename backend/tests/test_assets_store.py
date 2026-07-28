@@ -171,3 +171,51 @@ def test_an_orphaned_sibling_still_resolves_to_the_newest(tmp_path, monkeypatch)
 
     p = assets.image_path(tmp_path, "sera", "default", assets.AVATAR)
     assert p is not None and p.read_bytes() == b"new"
+
+
+def test_lookup_survives_a_sibling_vanishing_mid_scan(tmp_path, monkeypatch):
+    """put_image writes the new extension then unlinks the stale one, so a
+    concurrent reader can glob a path that is gone by the time it stats. The
+    old sorted(...)[0] never stat'd, so raising here would be a regression."""
+    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"real", "png")
+    d = tmp_path / "characters" / "sera" / "assets" / "default"
+    (d / "avatar.jpg").write_bytes(b"about to vanish")
+    (d / "avatar.jpg").unlink()
+
+    real_stat = assets.Path.stat
+
+    def vanishing(self, *a, **kw):
+        if self.name == "avatar.png":
+            return real_stat(self, *a, **kw)
+        raise FileNotFoundError(self)
+
+    monkeypatch.setattr(assets.Path, "stat", vanishing)
+    monkeypatch.setattr(assets.Path, "glob",
+                        lambda self, pat: iter([d / "avatar.jpg", d / "avatar.png"]))
+
+    p = assets.image_path(tmp_path, "sera", "default", assets.AVATAR)
+    assert p is not None and p.name == "avatar.png"
+
+
+def test_concurrent_puts_cannot_delete_each_others_images(tmp_path, monkeypatch):
+    """Write-before-cleanup opened a worse interleaving than the delete-first
+    ordering it replaced: A writes .jpg, B writes .png, then each cleanup loop
+    unlinks the other's brand-new file and NO image remains. Cleanup must only
+    ever remove siblings that existed before that call started."""
+    from grimoire.store import atomic
+    d = tmp_path / "characters" / "sera" / "assets" / "default"
+    d.mkdir(parents=True)
+    real_write = atomic.write_bytes
+    reentered = {"done": False}
+
+    def interleave(path, data):
+        real_write(path, data)
+        if not reentered["done"]:          # B runs entirely inside A's call
+            reentered["done"] = True
+            assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"B", "png")
+
+    monkeypatch.setattr(atomic, "write_bytes", interleave)
+    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"A", "jpg")
+
+    assert assets.image_path(tmp_path, "sera", "default", assets.AVATAR) is not None, \
+        "both writers deleted each other's image"
