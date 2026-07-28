@@ -1,0 +1,117 @@
+import importlib
+import json
+
+import pytest
+from fastapi.testclient import TestClient
+
+from grimoire import store
+from grimoire.main import create_app
+
+
+@pytest.fixture
+def client(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    importlib.reload(store)
+    return TestClient(create_app())
+
+
+def doc(cid="saltmarch-fens", name="Fens", persistence=0.4):
+    return {"id": cid, "name": name, "persistence": persistence,
+            "seasons": [{"name": "all year", "from": 0.0, "to": 0.0,
+                         "temperature": [{"name": "mild", "weight": 1}],
+                         "conditions": [{"name": "clear", "weight": 1}],
+                         "wind": [{"name": "calm", "weight": 1}]}]}
+
+
+def test_list_reports_both_tier_flags(client):
+    rows = client.get("/api/climates").json()["climates"]
+    assert rows and all({"id", "name", "builtin", "custom"} <= set(r) for r in rows)
+    assert all(r["builtin"] and not r["custom"] for r in rows)
+
+
+def test_a_private_climate_appears_as_custom_only(client):
+    client.put("/api/climates/saltmarch-fens", json=doc())
+    row = next(r for r in client.get("/api/climates").json()["climates"]
+               if r["id"] == "saltmarch-fens")
+    assert row["custom"] is True and row["builtin"] is False
+
+
+def test_editing_a_preset_copies_it_rather_than_writing_the_package(client, tmp_path):
+    # Presets live inside the installed backend package and must never be
+    # written; the edit lands in GRIMOIRE_HOME and shadows the shipped one.
+    before = json.loads((__import__("pathlib").Path(store.climates._PRESETS)
+                         / "temperate-interior.json").read_text())
+    edited = {**before, "name": "My Interior"}
+    assert client.put("/api/climates/temperate-interior", json=edited).status_code == 200
+    assert (tmp_path / "climates" / "temperate-interior.json").exists()
+    after = json.loads((__import__("pathlib").Path(store.climates._PRESETS)
+                        / "temperate-interior.json").read_text())
+    assert after == before  # the shipped file is untouched
+    row = next(r for r in client.get("/api/climates").json()["climates"]
+               if r["id"] == "temperate-interior")
+    assert row["builtin"] and row["custom"]
+    assert row["name"] == "My Interior"  # the custom copy shadows the preset
+
+
+def test_get_returns_the_shadowing_copy(client):
+    client.put("/api/climates/temperate-interior",
+               json={**doc("temperate-interior", "Shadowed"), "persistence": 0.1})
+    got = client.get("/api/climates/temperate-interior").json()
+    assert got["climate"]["name"] == "Shadowed"
+    assert got["builtin"] and got["custom"]
+
+
+def test_deleting_a_custom_copy_reverts_to_the_preset(client):
+    client.put("/api/climates/temperate-interior", json=doc("temperate-interior", "Shadowed"))
+    r = client.delete("/api/climates/temperate-interior")
+    assert r.status_code == 200 and r.json()["reverted_to_preset"] is True
+    assert client.get("/api/climates/temperate-interior").json()["climate"]["name"] != "Shadowed"
+
+
+def test_deleting_a_standalone_custom_climate_frees_the_id(client):
+    client.put("/api/climates/saltmarch-fens", json=doc())
+    r = client.delete("/api/climates/saltmarch-fens")
+    assert r.status_code == 200 and r.json()["reverted_to_preset"] is False
+    assert client.get("/api/climates/saltmarch-fens").status_code == 404
+
+
+def test_delete_404s_when_there_is_no_custom_copy(client):
+    assert client.delete("/api/climates/temperate-interior").status_code == 404
+
+
+def test_an_invalid_document_is_a_400_not_a_silently_skipped_file(client):
+    # The resolver is lenient so bad data cannot take a turn down, which makes
+    # this the only place a mistake can be reported at all.
+    bad = doc()
+    bad["seasons"][0]["conditions"] = [{"name": "clear", "weight": -1}]
+    r = client.put("/api/climates/saltmarch-fens", json=bad)
+    assert r.status_code == 400 and "weight" in r.json()["detail"]
+    assert client.get("/api/climates/saltmarch-fens").status_code == 404
+
+
+def test_seasons_with_a_gap_are_rejected(client):
+    bad = doc()
+    bad["seasons"] = [{**bad["seasons"][0], "from": 0.0, "to": 0.4}]
+    r = client.put("/api/climates/saltmarch-fens", json=bad)
+    assert r.status_code == 400
+
+
+def test_the_route_id_wins_over_a_mismatched_body_id(client):
+    # Otherwise the write lands in a file the editor cannot reopen.
+    client.put("/api/climates/saltmarch-fens", json=doc(cid="something-else"))
+    assert client.get("/api/climates/saltmarch-fens").status_code == 200
+    assert client.get("/api/climates/something-else").status_code == 404
+
+
+def test_an_unopenable_id_is_rejected(client):
+    # A dot-only id lists fine and is then unopenable, uneditable and
+    # undeletable through these routes.
+    assert client.put("/api/climates/..", json=doc(cid="..")).status_code in (400, 404, 405)
+
+
+def test_a_saved_climate_is_usable_as_a_campaign_default(client):
+    client.put("/api/climates/saltmarch-fens", json=doc())
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    r = client.post("/api/campaigns", json={"name": "Saltmarch Chronicle", "world": wid,
+                                            "climate": "saltmarch-fens"})
+    assert r.status_code == 200
