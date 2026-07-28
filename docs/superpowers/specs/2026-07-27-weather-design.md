@@ -308,6 +308,7 @@ hash-diffing of entity blobs is undisturbed.
       "wind": "gale",
       "note": "the Wintertide storm",
       "source": "manual",
+      "seq": 7,
       "set_at": "2026-07-27T18:22:04Z"
     }
   ]
@@ -429,8 +430,21 @@ for each axis independently:
    written in the same second tie and fall through to the id backstop — which
    can hand the argument to the *earlier* instruction. A GM adjusting an
    override twice in quick succession is exactly when recency matters most.
-   `seq` increments on every write to that storage key and is what precedence
-   compares; `set_at` is retained for display and provenance. Since `set_datetime` permits moving a scene backward in
+   `seq` is a stored integer, incremented on every write to that storage key —
+   the file's current maximum plus one — and it is what precedence compares.
+   `set_at` is retained for display and provenance.
+
+   **A record without `seq` reads as `seq: 0`**, which is what every existing
+   file and every hand-authored record will have. That needs no migration pass
+   and is not a special case in the resolver: ties at `seq` fall through to
+   `set_at`, then to the id backstop, which is precisely the ordering this
+   spec had before `seq` existed. Legacy records therefore keep their old
+   behaviour among themselves and lose to anything written afterwards, which is
+   the correct reading — a span written today *is* newer than one that predates
+   the field.
+
+   Splitting a span (§ Interface) gives both fragments the original's `seq`:
+   they are one instruction cut in two, not two instructions. Since `set_datetime` permits moving a scene backward in
    time, an in-world stamp would let a freshly authored override lose to one
    written weeks ago, and the GM's most recent instruction is what should win.
    It is the only field in the record on the real-world clock; `from` and `to`
@@ -1050,6 +1064,14 @@ The form is where the real work is:
     `164/365 < 0.45` and still belongs to the outgoing season. `floor` would
     display 164 and the resolver would use 165, showing every existing
     fractional boundary a day early.
+  - **A fraction past the last day's start has no day to name.** Anything in
+    `((L−1)/L, 1)` — `0.999` in a 365-day year — makes `ceil` return `L`, which
+    is not a valid zero-based index and would either build an invalid date or
+    roll into a year whose fractions start again at 0. The editor **writes only
+    day-start fractions** `k/L`, so it can never create one; a pre-existing one
+    displays as the last day of the year with its raw fraction shown beside it,
+    and is left byte-untouched unless the user edits that boundary, at which
+    point it snaps to a day start.
   - **Day → fraction** emits the day's own start, `day_index / year_length`,
     never a midpoint or an end.
 
@@ -1308,6 +1330,14 @@ campaign-wide override for everyone is then a separate, explicit act — issuing
 the clear against `_default` itself — rather than something a user does by
 accident while adjusting one harbour.
 
+**Suppression is a tombstone: it terminates resolution for that axis across
+every lower-precedence record, not merely the one it shadows.** Specificity is
+otherwise compared within a source rank, so a location-scoped suppression that
+only outranked the manual `_default` would expose the extractor `_default`
+beneath it — reinstating exactly the shadow-promotion that clearing the whole
+stack exists to prevent, and doing it one rank down where nobody would look.
+A covering suppression means the axis is procedural here, full stop.
+
 `suppress` is a **separate field listing axis names**, not a reserved value in
 the axis fields themselves. A sentinel string like `condition: "procedural"`
 would be indistinguishable from an authored value: entry names are
@@ -1384,8 +1414,12 @@ Backend, `backend/tests/test_weather.py`, store isolated with
 - A default-climate `PUT` naming an unknown id is rejected at both the campaign
   and world routes, while a default that goes dangling later still resolves to
   the shipped preset rather than raising.
-- Override precedence: location beats `_default`, newer `set_at` beats older,
-  and two spans differing only in array order resolve identically.
+- Override precedence: location beats `_default`, higher `seq` beats lower,
+  a record with no `seq` reads as 0 and loses to anything written since, and
+  two spans differing only in array order resolve identically.
+- Suppression is a tombstone: a location-scoped suppression covering a
+  `_default` stack that holds both a manual and an extractor span returns the
+  axis to procedural weather, rather than exposing the extractor span beneath.
 - Span boundaries are half-open: at the shared endpoint of two adjacent
   overrides, exactly one matches.
 - Span comparison under a non-lexicographic provider: under `hebrew`, spans
@@ -1455,10 +1489,15 @@ Backend, `backend/tests/test_weather.py`, store isolated with
 - Recency under sub-second writes: two spans written within the same second
   resolve in write order, which `set_at` alone cannot express.
 - Boundary display: for a 365-day year and `from: 0.45`, the editor shows day
-  165 — the first day the resolver assigns to the incoming season — not 164.
-- Accumulator truncation: extending an accumulator's window well past its
-  chosen *K* changes the reported value by less than its reporting resolution,
-  including across a freeze longer than *K*.
+  165 — the first day the resolver assigns to the incoming season — not 164;
+  and a boundary of `0.999` displays as the last day of the year rather than
+  producing an out-of-range index.
+*(Accumulator truncation — that extending the window past *K* moves the
+reported value by less than its resolution, including across a freeze longer
+than *K* — belongs with the accumulator work, not here. It cannot be written
+against this scope: the caps, decay rates and reporting resolutions it needs
+are all deliberately left to that later pass, so a v1 implementation would have
+to invent the deferred feature in order to test it.)*
 - Random access: resolving block *t* directly and resolving it after walking
   every block from 0 to *t* yield the same answer, at any *t*, including
   negative — the property that makes prequel scenes and multi-year jumps free.
