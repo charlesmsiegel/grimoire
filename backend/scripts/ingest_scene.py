@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from grimoire.llm import LLMClient  # noqa: E402
 from grimoire.store import (  # noqa: E402
-    absorb, appearances, campaigns, characters, chronicle, llm_connections, overlay, scenes,
+    absorb, appearances, atomic, campaigns, characters, chronicle, llm_connections, overlay, scenes,
 )
 from grimoire.store.paths import slugify  # noqa: E402
 
@@ -39,8 +39,8 @@ def load_manifest(cid: str) -> dict:
 
 
 def save_manifest(cid: str, data: dict) -> None:
-    _manifest_path(cid).write_text(
-        json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    atomic.write_text(_manifest_path(cid),
+                      json.dumps(data, indent=2, sort_keys=True) + "\n")
 
 
 def ensure_character(campaign_id: str, spec: dict) -> str:

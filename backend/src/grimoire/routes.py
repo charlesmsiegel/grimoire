@@ -782,6 +782,8 @@ async def post_module_import(request: Request):
     fd, tmp_name = tempfile.mkstemp(suffix=".zip")
     total = 0
     try:
+        # atomic-ok: a system temp file for the uploaded zip, not a store
+        # record; read by import_module and unlinked in the finally below
         with os.fdopen(fd, "wb") as f:
             async for chunk in request.stream():
                 total += len(chunk)
@@ -2015,8 +2017,8 @@ def put_campaign_climate(cid: str, body: CampaignClimate):
     if store.climates.get(body.default_climate) is None:
         raise HTTPException(status_code=400, detail=f"unknown climate: {body.default_climate!r}")
     try:
-        (store.campaigns.campaign_root(cid) / "climate.json").write_text(
-            json.dumps({"default_climate": body.default_climate}), encoding="utf-8")
+        store.atomic.write_text(store.campaigns.campaign_root(cid) / "climate.json",
+                                json.dumps({"default_climate": body.default_climate}))
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"could not write climate: {e}")
     return {"ok": True, "default_climate": body.default_climate}

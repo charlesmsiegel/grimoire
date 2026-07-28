@@ -17,9 +17,14 @@ from __future__ import annotations
 import ast
 import pathlib
 
+import grimoire
 import grimoire.store as store_pkg
 
 STORE = pathlib.Path(store_pkg.__file__).parent
+# The whole package, not just store/: routes.py wrote a campaign's
+# climate.json with a plain write_text, which a store-only scan missed
+# entirely. Anything that writes a record belongs under the same rule.
+PACKAGE = pathlib.Path(grimoire.__file__).parent
 
 # Path methods that publish bytes straight to a live pathname.
 _PATH_WRITERS = ("write_text", "write_bytes")
@@ -52,13 +57,20 @@ def _write_calls(tree: ast.AST):
             continue
         f = node.func
         if isinstance(f, ast.Attribute) and f.attr in _PATH_WRITERS:
-            # atomic.write_text(...) is the helper itself, not a raw write
-            if isinstance(f.value, ast.Name) and f.value.id == "atomic":
+            # The helper itself is not a raw write. Match the receiver's last
+            # name, so `store.atomic.write_text` counts as well as `atomic.` --
+            # routes.py reaches it through the package.
+            recv = f.value
+            recv_name = recv.id if isinstance(recv, ast.Name) else (
+                recv.attr if isinstance(recv, ast.Attribute) else None)
+            if recv_name == "atomic":
                 continue
             yield node, f"Path.{f.attr}"
-        elif isinstance(f, ast.Attribute) and f.attr == "write" and \
+        elif isinstance(f, ast.Attribute) and f.attr in ("write", "fdopen") and \
                 isinstance(f.value, ast.Name) and f.value.id == "os":
-            yield node, "os.write"
+            # os.fdopen is how you write a file while bypassing open() entirely
+            # -- found by auditing the atlas, which cited exactly such a site.
+            yield node, f"os.{f.attr}"
         elif isinstance(f, ast.Name) and f.id in _OPENERS:
             mode = next((a.value for a in node.args[1:2]
                          if isinstance(a, ast.Constant)), None)
@@ -72,7 +84,7 @@ def _write_calls(tree: ast.AST):
 
 
 def _offenders():
-    for path in sorted(STORE.rglob("*.py")):
+    for path in sorted(PACKAGE.rglob("*.py")):
         if path.name == "atomic.py":
             continue  # the helper is where the raw writes are supposed to live
         src = path.read_text(encoding="utf-8")
@@ -80,13 +92,14 @@ def _offenders():
         for node, kind in _write_calls(tree):
             reason = _marker_reason(src, node)
             if reason is None:
-                yield f"{path.relative_to(STORE)}:{node.lineno}: {kind}"
+                yield f"{path.relative_to(PACKAGE)}:{node.lineno}: {kind}"
 
 
 def test_every_store_write_goes_through_atomic_or_is_marked():
     offenders = list(_offenders())
     assert not offenders, (
-        "raw write(s) in store/ — route through store.atomic, or annotate the "
+        "raw write(s) in the grimoire package — route through store.atomic, "
+        "or annotate the "
         "line with `# atomic-ok: <why this one is safe>`:\n  "
         + "\n  ".join(offenders))
 
@@ -96,7 +109,7 @@ def test_the_marker_is_not_a_rubber_stamp():
     reason, or a growing pile of them, means the rule is being routed around
     rather than applied."""
     marked = []
-    for path in sorted(STORE.rglob("*.py")):
+    for path in sorted(PACKAGE.rglob("*.py")):
         if path.name == "atomic.py":
             continue
         src = path.read_text(encoding="utf-8")
@@ -104,7 +117,7 @@ def test_the_marker_is_not_a_rubber_stamp():
         for node, kind in _write_calls(tree):
             reason = _marker_reason(src, node)
             if reason is not None:
-                marked.append((f"{path.relative_to(STORE)}:{node.lineno}", reason))
+                marked.append((f"{path.relative_to(PACKAGE)}:{node.lineno}", reason))
 
     unexplained = [loc for loc, reason in marked if len(reason) < 15]
     assert not unexplained, f"`atomic-ok` with no real reason: {unexplained}"
@@ -120,6 +133,9 @@ def test_the_guard_actually_detects_a_raw_write():
 
     tree = ast.parse("atomic.write_text(p, 'x')\n")
     assert list(_write_calls(tree)) == [], "helper calls must not be flagged"
+
+    tree = ast.parse("store.atomic.write_text(p, 'x')\n")
+    assert list(_write_calls(tree)) == [], "package-qualified helper calls too"
 
     tree = ast.parse("with open(p, 'w') as f:\n    f.write('x')\n")
     assert [kind for _n, kind in _write_calls(tree)] == ["open(..., 'w')"]
