@@ -2778,6 +2778,13 @@ def put_weather(cid: str, body: WeatherOverride):
         return {"cleared": n}
 
     axes = {a: getattr(body, a) for a in store.weather.AXES}
+    if body.suppress is not None:
+        # `put` filters unknown names out, so `suppress: ["humidity"]` alone
+        # would store a record affecting no axis and report it as a successful
+        # override.
+        _weather_axes(body.suppress)
+        if not body.suppress:
+            raise HTTPException(status_code=400, detail="suppress names no axes")
     if not any(axes.values()) and not body.suppress:
         # A span setting no axis appears in no covering stack, so its generated
         # id is discoverable nowhere and repeated calls would quietly accumulate
@@ -2811,6 +2818,29 @@ def _weather_axes(axes) -> list[str] | None:
     return list(axes)
 
 
+def _weather_bounds(provider, body) -> None:
+    """Reject a range whose end does not follow its start.
+
+    The same check `put_weather` makes, applied here too: `_cut` given an
+    inverted interval processes it anyway, and for an open-ended override that
+    means building the head and discarding everything after `start` — a
+    malformed clear silently truncating a real override instead of failing.
+    """
+    try:
+        lo = store.weather.overrides.ordinal_of(
+            list(store.weather.overrides.resolve_endpoint(provider, body.start, end=False)))
+        hi = None
+        if getattr(body, "blocks", None) is not None:
+            hi = lo + max(1, body.blocks)
+        elif body.end is not None:
+            hi = store.weather.overrides.ordinal_of(
+                list(store.weather.overrides.resolve_endpoint(provider, body.end, end=True)))
+    except (store.calendars.CalendarError, KeyError, TypeError, AttributeError) as e:
+        raise HTTPException(status_code=400, detail=f"unparseable moment: {e}")
+    if hi is not None and hi <= lo:
+        raise HTTPException(status_code=400, detail="the range ends before it starts")
+
+
 def _weather_provider(cid: str):
     try:
         cfg = store.calendars.read_calendar(store.campaigns.campaign_root(cid))
@@ -2832,6 +2862,7 @@ def post_weather_clear(cid: str, body: WeatherRange):
     """
     _campaign_root_or_404(cid)
     provider = _weather_provider(cid)
+    _weather_bounds(provider, body)
     try:
         n = store.weather.overrides.clear(cid, provider, body.location, body.start,
                                           body.end, axes=_weather_axes(body.axes),
@@ -2853,6 +2884,7 @@ def post_weather_resume(cid: str, body: WeatherRange):
     """
     _campaign_root_or_404(cid)
     provider = _weather_provider(cid)
+    _weather_bounds(provider, body)
     try:
         n = store.weather.overrides.resume(cid, provider, body.location, body.start,
                                            body.end, axes=_weather_axes(body.axes),

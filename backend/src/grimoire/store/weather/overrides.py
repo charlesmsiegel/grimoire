@@ -102,6 +102,7 @@ def _repair_key(key: str, records: list, taken_ids: set[str]) -> tuple[list[dict
 
         record = dict(record)
         rid = record.get("id")
+        was_collision = _valid_id(rid) and rid in collided
         if not _valid_id(rid) or rid in collided or rid in taken_ids:
             record["id"] = _generated_id(key, n, taken_ids)
             changed = True
@@ -110,8 +111,17 @@ def _repair_key(key: str, records: list, taken_ids: set[str]) -> tuple[list[dict
         # `tiebreak` is deliberately not the id: splitting reassigns ids, and a
         # fragment with a fresh id would take a fresh position in the ordering,
         # so clearing a range inside one span could flip which override wins in
-        # a range the user never touched.
-        if not isinstance(record.get("tiebreak"), str) or not record["tiebreak"]:
+        # a range the user never touched. Fragments of one span therefore
+        # *share* a tiebreak on purpose, which is why this is not a blanket
+        # uniqueness sweep.
+        #
+        # An id collision is the exception. Two cloned records carrying the
+        # same explicit id can also carry the same explicit tiebreak; giving
+        # them fresh ids alone leaves identical precedence tuples when source,
+        # seq and set_at match too, and the winner falls back to array order —
+        # the one thing the backstop exists to prevent.
+        if (not isinstance(record.get("tiebreak"), str) or not record["tiebreak"]
+                or was_collision):
             record["tiebreak"] = record["id"]
             changed = True
 

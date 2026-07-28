@@ -396,3 +396,34 @@ def test_an_empty_timed_range_is_rejected(client):
                    json={"location": lid, "start": "2026-06-14T08:00",
                          "end": "2026-06-14T08:00", "condition": "storm"})
     assert r.status_code == 400
+
+
+def test_a_reversed_clear_range_is_rejected(client):
+    # _cut given an inverted interval processes it anyway: for an open-ended
+    # override it builds the head and discards everything after `start`, so a
+    # malformed clear truncates a real override.
+    cid, sid, lid = scene(client)
+    client.put(f"/api/campaigns/{cid}/weather",
+               json={"location": lid, "start": "2026-06-10", "condition": "storm"})
+    r = client.post(f"/api/campaigns/{cid}/weather/clear",
+                    json={"location": lid, "start": "2026-06-20", "end": "2026-06-12"})
+    assert r.status_code == 400
+    # The override is untouched.
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/weather",
+                      params={"native": "2026-06-25T09:00"}).json()["weather"]["condition"] == "storm"
+
+
+def test_a_reversed_resume_range_is_rejected(client):
+    cid, sid, lid = scene(client)
+    r = client.post(f"/api/campaigns/{cid}/weather/resume",
+                    json={"location": lid, "start": "2026-06-20", "end": "2026-06-12"})
+    assert r.status_code == 400
+
+
+def test_a_suppression_naming_no_real_axis_is_rejected(client):
+    # put filters unknown names out, so this would store a record affecting no
+    # axis and report a successful override.
+    cid, sid, lid = scene(client)
+    r = client.put(f"/api/campaigns/{cid}/weather",
+                   json={"location": lid, "start": "2026-06-14", "suppress": ["humidity"]})
+    assert r.status_code == 400
