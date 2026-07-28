@@ -338,8 +338,15 @@ hash-diffing of entity blobs is undisturbed.
   storage for the HUD's *"until I clear it"* duration (§ Interface), which
   otherwise has no representation and would force implementers to invent a
   sentinel far-future date. Clearing an open-ended span **truncates it at the
-  clear range**, exactly as clearing a bounded span does — there is no
-  open-ended special case.
+  start of the clear range and discards everything after** — it does not split.
+
+  This is the one place clearing behaves differently from a bounded span, and
+  it has to. Splitting `[day 10, null)` with the popover's default one-block
+  range on day 15 would leave a historical fragment and a *fresh open-ended
+  fragment* starting a block later, so the storm would resume immediately and
+  run forever — the opposite of what "clear it" means. An open-ended span is an
+  instruction that runs until stopped; stopping it is an ending, not a hole.
+  A user who genuinely wants a gap sets a new override after the clear.
 
   An earlier draft had clearing delete such a record outright so that earlier
   scenes reverted to procedural. That was wrong twice over: it contradicted the
@@ -530,7 +537,9 @@ for each axis independently:
    greatest **`tiebreak`** wins, so the result never depends on file ordering.
 
    `tiebreak` is a stored string, set to the record's `id` when the record is
-   first created and **carried unchanged through splits**. It is deliberately
+   first created, **backfilled from the `id` during load repair** for any
+   record that lacks one — legacy files, hand-authored spans, and the example
+   above all do — and **carried unchanged through splits** thereafter. It is deliberately
    not the `id` itself, which splitting reassigns: a fragment given a fresh id
    would take a fresh position in this ordering, so clearing a range in the
    middle of one span could flip which override wins in a range the user never
@@ -1060,6 +1069,10 @@ it rather than reimplement the axis logic.
   extent ("rain begins") takes the default — one block, re-narratable next turn.
 - **Climate editor** (#40): `GET /api/climates` (the merged list, each entry
   carrying **both** tier flags — `builtin: true/false` and `custom: true/false`
+  (ids obey the same URL-safe grammar as span ids — `[A-Za-z0-9._-]+` with at
+  least one non-dot character — enforced when the registry loads, since a
+  private climate whose id contains `/` or is dot-only would list fine and then
+  be unopenable, uneditable and undeletable through these routes)
   — rather than one tag; a single `custom` label cannot distinguish a custom
   climate that shadows a preset from one that stands alone, and the editor
   needs that to choose between **Revert to preset** and **Delete**, and to know
@@ -1078,6 +1091,20 @@ it rather than reimplement the axis logic.
   moment and the scene are both required: `scenes.set_datetime` permits
   arbitrary jumps, including backward ones, and keeps a separate history per
   scene, so a sweep that knows only the new "now" cannot say what changed.
+
+  **Scope**: the distinct locations in that scene's `location_history`, not
+  every location in the campaign. The history is the set of places the story
+  has actually visited, so it is both bounded and the set a digest line would
+  be *about* — sweeping the whole campaign would scale with the world rather
+  than the story and fill the digest with weather nobody is looking at.
+
+  **Output**: one record per changed axis,
+  `{location, axis, before, after}`, comparing the block containing
+  `prev_native` with the block containing `now_native` — not every block
+  between, since an advance of a month should report what is different now, not
+  narrate the intervening weather. Unchanged axes emit nothing. The list rides
+  the existing advance-digest payload; nothing is written to the transcript,
+  and nothing is stored.
   Since generation is pure, "changes across locations on advance" mostly falls
   out for free; the sweep exists to *name* the transitions for the digest, not
   to cause them.
@@ -1171,8 +1198,17 @@ The form is where the real work is:
   - **Day index is zero-based**: the first day of the reference year is index
     `0`, so `fraction = day_index / year_length` and the year's first day is
     fraction `0` exactly.
-  - **Fraction → day** uses `ceil(fraction * year_length)` — the smallest day
-    whose own start fraction reaches the boundary. Not `floor`: with half-open
+  - **Fraction → day** uses `ceil(fraction * year_length − 1e-9)` — the
+    smallest day whose own start fraction reaches the boundary, with a
+    tolerance that matters more than it looks. A boundary the editor itself
+    wrote as `k / L` does not always multiply back cleanly: `(29/365) * 365`
+    evaluates to `29.000000000000004`, so a bare `ceil` returns 30 and the
+    editor shows a date one day later than the one just chosen. That affects
+    **19 of 365** indices in a Gregorian year and 17 of 400 in a homebrew one —
+    around 5% of dates, silently, on reopen. The epsilon absorbs the
+    representation error without reaching any genuine fraction, since a real
+    boundary strictly inside a day sits far more than `1e-9` from the day
+    start. Not `floor`: with half-open
     seasons the incoming season begins on the first day at or after the
     boundary, so for a 365-day year and `from: 0.45`, day 164 has fraction
     `164/365 < 0.45` and still belongs to the outgoing season. `floor` would
@@ -1661,10 +1697,13 @@ to invent the deferred feature in order to test it.)*
 - Random access: resolving block *t* directly and resolving it after walking
   every block from 0 to *t* yield the same answer, at any *t*, including
   negative — the property that makes prequel scenes and multi-year jumps free.
-- Filter evaluation: `g` matches a reference computed with carried powers and a
-  single ascending pass, and differs from one computed with `a**k` or a
-  separately accumulated denominator — the test that pins the arithmetic rather
-  than only the formula.
+- Filter evaluation: `g` matches the fixture value, and differs from one
+  computed with `a**k` in place of carried powers — genuinely different
+  arithmetic. Do **not** assert that a separately-accumulated denominator
+  differs: accumulating `den` in its own ascending loop from the same carried
+  powers performs the same multiplications and additions in the same order, so
+  it is bit-identical by construction and such a test could only fail
+  spuriously or never.
 - Suppression is removable: after clearing an inherited `_default` override at
   one location, **Resume inheriting** is offered there and restores the
   campaign-wide weather.
@@ -1795,6 +1834,19 @@ Frontend, from `frontend/` with `npx vitest run` and `npx tsc -b`:
   `tiebreak`, so a fresh address id cannot reorder them.
 - A `PUT` body setting no axis at all is rejected rather than persisting an
   unreachable span.
+- Load repair backfills `tiebreak` from `id` for a record that lacks one, so
+  two legacy spans tied on `seq` and `set_at` still resolve deterministically.
+- Clearing an open-ended span truncates it and discards the remainder: the
+  override does not resume a block later.
+- Boundary round-trip: for every day index in a 365-day and a 400-day year,
+  writing that index as a fraction and reading it back yields the same index —
+  the 19 Gregorian indices that fail under a bare `ceil` are the point of the
+  test.
+- Sweep scope: an advance reports changed axes only for locations in that
+  scene's `location_history`, one record per changed axis, and nothing for
+  axes that did not change.
+- A climate whose id contains `/` or is dot-only is rejected when the registry
+  loads, rather than listed and then unreachable through its routes.
 - An override written with date-only endpoints matches every moment of the
   blocks it covers, including 23:00 of the preceding evening where that shares
   a `night` ordinal with the following midnight.
