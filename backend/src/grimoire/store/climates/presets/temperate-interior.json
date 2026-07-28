@@ -1,0 +1,83 @@
+{
+  "id": "temperate-interior",
+  "name": "Temperate Interior",
+  "persistence": 0.55,
+  "seasons": [
+    {
+      "name": "winter", "from": 0.92, "to": 0.21,
+      "temperature": [
+        { "name": "freezing", "weight": 4 },
+        { "name": "cold", "weight": 5 },
+        { "name": "mild", "weight": 1 }
+      ],
+      "conditions": [
+        { "name": "clear", "weight": 4 },
+        { "name": "overcast", "weight": 5 },
+        { "name": "light rain", "weight": 2 },
+        { "name": "snow", "weight": 3, "requires_temp": ["freezing"] }
+      ],
+      "wind": [
+        { "name": "still", "weight": 3 },
+        { "name": "breeze", "weight": 4 },
+        { "name": "strong", "weight": 2 }
+      ]
+    },
+    {
+      "name": "spring", "from": 0.21, "to": 0.42,
+      "temperature": [
+        { "name": "cold", "weight": 3 },
+        { "name": "mild", "weight": 6 },
+        { "name": "warm", "weight": 2 }
+      ],
+      "conditions": [
+        { "name": "clear", "weight": 5 },
+        { "name": "overcast", "weight": 3 },
+        { "name": "light rain", "weight": 4 },
+        { "name": "storm", "weight": 1 }
+      ],
+      "wind": [
+        { "name": "still", "weight": 2 },
+        { "name": "breeze", "weight": 5 },
+        { "name": "strong", "weight": 2 }
+      ]
+    },
+    {
+      "name": "summer", "from": 0.42, "to": 0.67,
+      "temperature": [
+        { "name": "mild", "weight": 3 },
+        { "name": "warm", "weight": 6 },
+        { "name": "hot", "weight": 3 }
+      ],
+      "conditions": [
+        { "name": "clear", "weight": 8 },
+        { "name": "overcast", "weight": 2 },
+        { "name": "light rain", "weight": 2 },
+        { "name": "storm", "weight": 2 }
+      ],
+      "wind": [
+        { "name": "still", "weight": 5 },
+        { "name": "breeze", "weight": 4 },
+        { "name": "strong", "weight": 1 }
+      ]
+    },
+    {
+      "name": "autumn", "from": 0.67, "to": 0.92,
+      "temperature": [
+        { "name": "freezing", "weight": 1 },
+        { "name": "cold", "weight": 4 },
+        { "name": "mild", "weight": 4 }
+      ],
+      "conditions": [
+        { "name": "clear", "weight": 3 },
+        { "name": "overcast", "weight": 5 },
+        { "name": "light rain", "weight": 4 },
+        { "name": "storm", "weight": 1 }
+      ],
+      "wind": [
+        { "name": "still", "weight": 2 },
+        { "name": "breeze", "weight": 4 },
+        { "name": "strong", "weight": 3 }
+      ]
+    }
+  ]
+}
