@@ -545,3 +545,46 @@ def test_omitting_axes_still_means_all_of_them(monkeypatch, tmp_path):
                   {"condition": "storm", "wind": "gale"})
     assert overrides.clear(cid, p, "saltmarch-docks", "2026-06-14", None) == 1
     assert overrides.read(cid).get("saltmarch-docks", []) == []
+
+
+# ---- from the fourth Codex review of #232 ----
+
+def test_clearing_one_axis_of_an_open_ended_span_keeps_the_others(monkeypatch, tmp_path):
+    # The truncation is per axis, not per record: clearing `condition` must not
+    # take the wind down with it from the clear point onward.
+    cid, p = setup(monkeypatch, tmp_path)
+    overrides.put(cid, p, "saltmarch-docks", "2026-06-10", None,
+                  {"condition": "storm", "wind": "gale"})
+    overrides.clear(cid, p, "saltmarch-docks", "2026-06-14", "2026-06-15", axes=["condition"])
+    data = overrides.read(cid)
+    at = lambda t, a: overrides.winner(data, "saltmarch-docks", ordinal(p, t), a)
+    assert at("2026-06-20T09:00", "wind")[1]["wind"] == "gale"     # survives
+    assert at("2026-06-20T09:00", "condition") is None             # never resumes
+    assert at("2026-06-12T09:00", "condition")[1]["condition"] == "storm"  # history kept
+
+
+def test_clearing_every_axis_of_an_open_ended_span_still_discards_it(monkeypatch, tmp_path):
+    # The truncate-and-discard rule falls out of the per-axis one: the
+    # remainder sets nothing, so it is dropped.
+    cid, p = setup(monkeypatch, tmp_path)
+    overrides.put(cid, p, "saltmarch-docks", "2026-06-10", None, {"condition": "storm"})
+    overrides.clear(cid, p, "saltmarch-docks", "2026-06-14", "2026-06-15")
+    data = overrides.read(cid)
+    assert overrides.winner(data, "saltmarch-docks", ordinal(p, "2027-01-01T09:00"),
+                            "condition") is None
+
+
+def test_a_non_string_set_at_does_not_raise_into_resolution(monkeypatch, tmp_path):
+    # set_at is compared inside the precedence tuple, so a number beside a
+    # string raises TypeError once two records actually tie above it.
+    cid, p = setup(monkeypatch, tmp_path)
+    f = calendars.fixed_of(p, "2026-06-14")
+    base = {"from": "2026-06-14", "to": None, "from_fixed": [f, 0], "to_fixed": None,
+            "source": "manual", "seq": 0}
+    write_raw(cid, {"saltmarch-docks": [
+        {**base, "id": "a", "tiebreak": "a", "condition": "x", "set_at": 123},
+        {**base, "id": "b", "tiebreak": "b", "condition": "y",
+         "set_at": "2026-07-27T18:00:00Z"}]})
+    got = overrides.winner(overrides.read(cid), "saltmarch-docks",
+                           ordinal(p, "2026-06-14T09:00"), "condition")
+    assert got[1]["condition"] == "y"   # the real timestamp beats the normalized ""

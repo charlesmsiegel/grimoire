@@ -139,6 +139,13 @@ def _repair_key(key: str, records: list, taken_ids: set[str]) -> tuple[list[dict
             else:
                 record.pop("suppress", None)
 
+        # `set_at` is compared inside the precedence tuple, so a truthy
+        # non-string raises TypeError against a neighbouring string — out of
+        # resolution and into prompt assembly, past the loader's tolerance.
+        if not isinstance(record.get("set_at"), str):
+            record["set_at"] = ""
+            changed = True
+
         if not isinstance(record.get("seq"), int) or isinstance(record.get("seq"), bool):
             # Every legacy and hand-authored record reads as 0, which needs no
             # migration pass: such records keep their old ordering among
@@ -489,28 +496,29 @@ def _cut(cid: str, key: str, data: dict, lo: int, hi: int | None,
             head = dict(record)
             head["to_fixed"] = [lo // 5, lo % 5]
             out.append(head)
-        if end is None and hi is not None:
-            # An open-ended span cut by a *bounded* range is truncated and
-            # everything after is discarded, never split. Splitting would leave
-            # a fresh open-ended fragment starting a block later, so the storm
-            # would resume immediately and run forever — the opposite of "clear
-            # it". An instruction that runs until stopped ends when stopped; a
-            # user who wants a gap sets a new override after the clear.
-            #
-            # An open-ended *range* has no "after" to discard, so it falls
-            # through and edits the span in place instead. Discarding there
-            # would drop the record whole and take its other axes with it.
-            continue
+        # A bounded span keeps whatever lies past the range; an open-ended one
+        # does not. Clearing an open-ended span truncates the *named* axes
+        # permanently rather than splitting them, because a fresh open-ended
+        # fragment a block later would resume the storm immediately and run
+        # forever — the opposite of "clear it".
+        #
+        # That truncation is per axis, not per record. The remainder therefore
+        # runs on open-ended carrying the axes the caller did not name; when
+        # every axis was named it sets nothing and is dropped, which is the
+        # truncate-and-discard behaviour falling out rather than special-cased.
+        bounded_tail = hi is not None and end is not None and end > hi
         middle = _split_axes(record, axes, field)
         middle["from_fixed"] = [max(start, lo) // 5, max(start, lo) % 5]
-        if hi is not None and (end is None or end > hi):
+        if bounded_tail:
             middle["to_fixed"] = [hi // 5, hi % 5]
+        elif end is None:
+            middle["to_fixed"] = None
         if _sets_anything(middle):
             if start < lo:                   # a fresh id: the head kept the original
                 middle["id"] = _generated_id(key, len(out), taken)
                 taken.add(middle["id"])
             out.append(middle)
-        if hi is not None and (end is None or end > hi):
+        if bounded_tail:
             tail = dict(record)
             tail["from_fixed"] = [hi // 5, hi % 5]
             tail["id"] = _generated_id(key, len(out), taken)
