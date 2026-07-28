@@ -34,3 +34,53 @@ def test_fields_round_trip(tmp_path: Path):
 def test_fields_survive_in_list_summaries(tmp_path: Path):
     entities.create_entity(tmp_path, "creatures", "Marsh Wyrm", "x", fields={"threat": "apex"})
     assert entities.list_entities(tmp_path, "creatures")[0]["threat"] == "apex"
+
+
+def test_locations_accept_weather_fields():
+    from grimoire.store import entity_schema
+    assert entity_schema.invalid_keys(
+        "locations", {"climate": "temperate-interior", "persistence": "0.3",
+                      "weather_zone": "saltmarch"}) == []
+
+
+def test_valid_location_weather_values_pass(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    from grimoire.store import entity_schema
+    assert entity_schema.invalid_values(
+        "locations", {"climate": "temperate-interior", "persistence": "0.3",
+                      "weather_zone": "anything-goes"}) == []
+
+
+def test_unknown_climate_is_rejected_at_save(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    from grimoire.store import entity_schema
+    assert entity_schema.invalid_values(
+        "locations", {"climate": "temperate-costal"}) == ["climate"]
+
+
+def test_out_of_range_persistence_is_rejected_at_save(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    from grimoire.store import entity_schema
+    for bad in ("2", "-1", "NaN", "wet"):
+        assert entity_schema.invalid_values("locations", {"persistence": bad}) == ["persistence"], bad
+
+
+def test_empty_values_are_treated_as_clears_not_rejections(monkeypatch, tmp_path):
+    # EntityEditor sends "" for a field the user cleared or never set, and the
+    # store drops empties only after route validation.
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    from grimoire.store import entity_schema
+    assert entity_schema.invalid_values(
+        "locations", {"climate": "", "persistence": ""}) == []
+
+
+def test_boundary_persistence_values_are_accepted(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    from grimoire.store import entity_schema
+    for good in ("0", "1", "0.0", "1.0"):
+        assert entity_schema.invalid_values("locations", {"persistence": good}) == [], good
+
+
+def test_other_kinds_are_unaffected():
+    from grimoire.store import entity_schema
+    assert entity_schema.invalid_values("items", {"item_type": "anything"}) == []
