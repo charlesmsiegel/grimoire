@@ -117,12 +117,16 @@ def test_audit_baselines_serialize_on_the_campaign_lock(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("mod", [sheets, proposals, audit])
-def test_borrowers_do_not_keep_their_own_registry(mod):
+def test_borrowers_neither_re_export_nor_re_implement_the_registry(mod):
     """The lock domain is discoverable from store/locks.py only if no module
-    re-exports or re-implements it -- sheets.lock_for() was the old name and
-    must not come back."""
+    re-exports or re-implements it: `sheets.lock_for()` was the old name and
+    must not come back, and borrowers spell the call `locks.campaign_lock(...)`
+    at the point of use rather than importing the name into their own
+    namespace -- which is the readability the move was for."""
     assert not hasattr(mod, "lock_for")
     assert not hasattr(mod, "_campaign_locks")
+    assert not hasattr(mod, "campaign_lock")
+    assert mod.locks is locks
 
 
 def test_module_edit_holds_every_campaign_lock_from_this_registry():
