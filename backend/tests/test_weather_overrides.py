@@ -588,3 +588,53 @@ def test_a_non_string_set_at_does_not_raise_into_resolution(monkeypatch, tmp_pat
     got = overrides.winner(overrides.read(cid), "saltmarch-docks",
                            ordinal(p, "2026-06-14T09:00"), "condition")
     assert got[1]["condition"] == "y"   # the real timestamp beats the normalized ""
+
+
+# ---- from the fifth Codex review of #232 ----
+
+def test_a_bounded_resume_leaves_the_suppression_standing_afterwards(monkeypatch, tmp_path):
+    # The open-ended truncation rule belongs to clearing a concrete override.
+    # Applied to a resume it strips the axis for all time, so resuming one
+    # block would resume every later one.
+    cid, p = setup(monkeypatch, tmp_path)
+    overrides.put(cid, p, overrides.DEFAULT_KEY, "2026-06-10", None, {"condition": "storm"})
+    overrides.clear(cid, p, "saltmarch-docks", "2026-06-10", None, axes=["condition"])
+    overrides.resume(cid, p, "saltmarch-docks", "2026-06-14T09:00", None,
+                     axes=["condition"], blocks=1)
+    data = overrides.read(cid)
+    at = lambda t: overrides.winner(data, "saltmarch-docks", ordinal(p, t), "condition")
+    assert at("2026-06-14T09:00")[0] == "set"        # inheritance restored here
+    assert at("2026-06-14T13:00")[0] == "suppress"   # and only here
+    assert at("2026-06-20T09:00")[0] == "suppress"
+
+
+def test_a_non_string_note_does_not_raise_into_resolution(monkeypatch, tmp_path):
+    cid, p = setup(monkeypatch, tmp_path)
+    f = calendars.fixed_of(p, "2026-06-14")
+    write_raw(cid, {"saltmarch-docks": [
+        {"id": "odd", "from": "2026-06-14", "to": None, "from_fixed": [f, 0],
+         "to_fixed": None, "condition": "fog", "source": "manual", "note": 1}]})
+    assert overrides.read(cid)["saltmarch-docks"][0]["note"] == ""
+
+
+def test_replace_keeps_the_span_identity_and_precedence(monkeypatch, tmp_path):
+    # Same instruction edited, not a new one: bumping seq would move it in the
+    # precedence order as a side effect of changing its note.
+    cid, p = setup(monkeypatch, tmp_path)
+    made = overrides.put(cid, p, "saltmarch-docks", "2026-06-10", None, {"condition": "storm"})
+    start = overrides.ordinal_of(made["from_fixed"])
+    got = overrides.replace(cid, "saltmarch-docks", made["id"], from_ordinal=start,
+                            to_ordinal=None, native="2026-06-10",
+                            axes={"condition": "storm"}, note="the Wintertide storm")
+    assert got["id"] == made["id"]
+    assert got["tiebreak"] == made["tiebreak"]
+    assert got["seq"] == made["seq"]
+    assert got["note"] == "the Wintertide storm"
+    assert len(overrides.read(cid)["saltmarch-docks"]) == 1   # replaced, not added
+
+
+def test_replace_reports_an_unknown_span(monkeypatch, tmp_path):
+    cid, p = setup(monkeypatch, tmp_path)
+    assert overrides.replace(cid, "saltmarch-docks", "nope", from_ordinal=0,
+                             to_ordinal=None, native="2026-06-10",
+                             axes={"condition": "fog"}) is None

@@ -139,6 +139,13 @@ def _repair_key(key: str, records: list, taken_ids: set[str]) -> tuple[list[dict
             else:
                 record.pop("suppress", None)
 
+        # `note` is read with `.strip()` when resolution collects it for the
+        # prompt, so a truthy non-string raises AttributeError there.
+        if not isinstance(record.get("note"), str):
+            if "note" in record:
+                changed = True
+            record["note"] = ""
+
         # `set_at` is compared inside the precedence tuple, so a truthy
         # non-string raises TypeError against a neighbouring string — out of
         # resolution and into prompt assembly, past the loader's tolerance.
@@ -467,7 +474,7 @@ def _sets_anything(record: dict) -> bool:
 
 
 def _cut(cid: str, key: str, data: dict, lo: int, hi: int | None,
-         axes: tuple[str, ...], field: str) -> int:
+         axes: tuple[str, ...], field: str, *, truncate_open_ended: bool = True) -> int:
     """Remove ``axes`` from every span under ``key`` intersecting [lo, hi).
 
     Splits a span whose remainder still applies outside the range. The earlier
@@ -506,12 +513,17 @@ def _cut(cid: str, key: str, data: dict, lo: int, hi: int | None,
         # runs on open-ended carrying the axes the caller did not name; when
         # every axis was named it sets nothing and is dropped, which is the
         # truncate-and-discard behaviour falling out rather than special-cased.
-        bounded_tail = hi is not None and end is not None and end > hi
+        # `truncate_open_ended` is the clear-a-concrete-override rule, and only
+        # that. Applying it to a bounded *resume* would strip the axis from an
+        # open-ended suppression for all time — resuming one block would resume
+        # every later one — when the caller asked for a range.
+        bounded_tail = hi is not None and (
+            end > hi if end is not None else not truncate_open_ended)
         middle = _split_axes(record, axes, field)
         middle["from_fixed"] = [max(start, lo) // 5, max(start, lo) % 5]
         if bounded_tail:
             middle["to_fixed"] = [hi // 5, hi % 5]
-        elif end is None:
+        elif end is None and not bounded_tail:
             middle["to_fixed"] = None
         if _sets_anything(middle):
             if start < lo:                   # a fresh id: the head kept the original
@@ -521,6 +533,8 @@ def _cut(cid: str, key: str, data: dict, lo: int, hi: int | None,
         if bounded_tail:
             tail = dict(record)
             tail["from_fixed"] = [hi // 5, hi % 5]
+            if end is None:
+                tail["to_fixed"] = None
             tail["id"] = _generated_id(key, len(out), taken)
             taken.add(tail["id"])
             out.append(tail)
@@ -611,7 +625,8 @@ def resume(cid: str, provider, location_id: str, frm: str, to: str | None,
     if lo is None:
         return 0
     hi = _upper(provider, lo, to, blocks)
-    touched = _cut(cid, key, data, lo, hi, axes, field="suppress")
+    touched = _cut(cid, key, data, lo, hi, axes, field="suppress",
+                   truncate_open_ended=False)
     if touched:
         _write(cid, data)
     return touched
@@ -645,3 +660,41 @@ def put_ordinals(cid: str, location_id: str, native: str, start: int, end: int |
     data.setdefault(key, []).append(record)
     _write(cid, data)
     return record
+
+
+def replace(cid: str, key: str, span_id: str, *, from_ordinal: int, to_ordinal: int | None,
+            native: str, axes: dict, note: str = "",
+            suppress: list[str] | None = None) -> dict | None:
+    """Rewrite one span in place. Returns the new record, or None if not found.
+
+    One operation, not a delete followed by a create. Editing a span through
+    that pair leaves a window where the original is gone and its replacement
+    has not landed: if the second call fails — a moment that no longer parses
+    under a swapped provider, a read-only store — the override the user was
+    merely renaming has been destroyed.
+
+    `seq` and `tiebreak` carry over, because this is the same instruction
+    edited rather than a new one: bumping them would move the record in the
+    precedence order as a side effect of changing its note.
+    """
+    data = read(cid)
+    for n, record in enumerate(data.get(key, [])):
+        if record.get("id") != span_id:
+            continue
+        updated = {
+            "id": record["id"], "tiebreak": record.get("tiebreak", record["id"]),
+            "seq": record.get("seq", 0), "source": record.get("source", "manual"),
+            "from": native, "to": None,
+            "from_fixed": [from_ordinal // 5, from_ordinal % 5],
+            "to_fixed": None if to_ordinal is None else [to_ordinal // 5, to_ordinal % 5],
+            "note": note, "set_at": now_iso(),
+        }
+        for axis in AXES:
+            if axes.get(axis):
+                updated[axis] = axes[axis]
+        if suppress:
+            updated["suppress"] = [a for a in suppress if a in AXES]
+        data[key][n] = updated
+        _write(cid, data)
+        return updated
+    return None
