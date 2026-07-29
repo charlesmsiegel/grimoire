@@ -47,18 +47,29 @@ below.)
 - **Multi-file atomicity.** `characters.write_card` writes a card *and* a meta
   file; a crash between them still leaves the pair inconsistent. Each file is
   individually valid, which is what this spec buys.
-- **`assets.promote_image` (`assets.py:141-144`).** The avatar swap is a
+- **`assets.promote_image` (`assets.py:215-229`).** The avatar swap is a
   three-rename sequence through `promote-tmp<ext>`; a crash between renames
   strands the temp and leaves the avatar missing. That is a multi-rename
   recovery problem, not a torn write. Out of scope — but it is a real
   image-loss path, so it gets a filed issue, not a hand-wave (see Follow-ups).
 - **Append-only reworking of `scenes.append_message`.** It stays a whole-file
   read-modify-write (O(n) per message).
-- **Concurrency control.** No locking is added. In particular
-  `scenes.append_message` has no per-scene lock today, so two concurrent
-  appenders can already lose a message (A reads v0, B writes v1, A writes
-  v0+delta). This spec does not fix that and must not *widen* it — see the
-  retry decision below.
+- **Concurrency control**, with one deliberate exception. No locking is added
+  for record writes: `scenes.append_message` has no per-scene lock today, so two
+  concurrent appenders can already lose a message (A reads v0, B writes v1, A
+  writes v0+delta). This spec does not fix that and must not *widen* it — see
+  the retry decision below.
+
+  The exception is `assets.put_image`, which grew a per-logical-image lock
+  during PR review. Publishing an image is inherently multi-step (write the new
+  extension, then remove the stale siblings) and no filesystem offers an
+  identity-conditional unlink, so "verify this is still the file I snapshotted,
+  then delete it" leaves a gap that care alone cannot close — two concurrent
+  uploads could interleave through it and leave *no* image, the exact outcome
+  the ordering fix exists to prevent. Two successive attempts to fix it without
+  a lock each left a narrower version of the same hole, which is the evidence
+  that serialization was the actual answer. In-process only, like every other
+  lock here.
 - **Linked records.** A record file that is itself a symlink or hard link is
   unsupported after this change (see Decisions). A symlinked store *root* or
   parent directory is fine and stays supported.
@@ -69,41 +80,41 @@ A new `backend/src/grimoire/store/atomic.py`. It imports nothing from the
 package, so it cannot participate in an import cycle.
 
 ```python
-@contextmanager
-def tempfile_for(path: Path) -> Iterator[Path]: ...
 def write_text(path: Path, text: str) -> None: ...
 def write_bytes(path: Path, data: bytes) -> None: ...
 ```
 
-`tempfile_for` is the single mechanism; `write_text` and `write_bytes` are thin
-wrappers over it. The context manager exists because one caller (`thumbs.py`)
-hands a *path* to PIL's `im.save()` and never holds the bytes itself.
+Two functions, and deliberately no third. An earlier draft added a
+`tempfile_for` context manager yielding a temp *path*, because `thumbs.py`
+hands a path to PIL's `im.save()`. That was the wrong shape — see Handle
+lifecycle — and it is gone; `thumbs` encodes to a `BytesIO` and calls
+`write_bytes` like everything else.
 
 ### Handle lifecycle
 
-There are **two** paths, because only one caller actually needs a pathname.
+**There is one path, and the temp's pathname is never handed out.**
+`mkstemp` → write through that descriptor → flush → `fsync` → close → carry
+metadata → `os.replace`. Because no caller ever learns the temp's name, there is
+no interval in which another process can unlink it and substitute a symlink for
+our write, our chmod, and our rename to follow.
 
-**`write_text` / `write_bytes` — the ~100-site path. The descriptor never
-leaves the function.** `mkstemp` → write through that fd → flush → `fsync` →
-close → chmod → `os.replace`. The temp's *pathname* is never handed to anyone,
-so there is no interval in which another process can unlink it and substitute a
-symlink for our write, our chmod, and our rename to follow. An earlier draft
-closed the fd and reopened by name for every write, which opened exactly that
-window for no benefit — flagged in PR review.
+Getting here took two corrections, both from PR review. The first draft closed
+the fd and reopened by name on *every* write — opening that window at ~100 sites
+for no benefit. The second kept a `tempfile_for` context manager that yielded a
+path for PIL, and tried to *detect* a swap afterwards with an `lstat` identity
+check — but detection happens after `im.save()` has already written through the
+symlink, so the damage is done before the check runs.
 
-**`tempfile_for` — only for callers that must open the file themselves.**
-`thumbs` hands the path to PIL's `im.save()` and never holds the bytes. Here the
-fd *is* closed and a path yielded, so the swap window cannot be closed while the
-contract is "here is a path" — instead it is **detected**: `os.fstat` records the
-identity of the file `mkstemp` created, and before anything is published an
-`os.lstat` (not `stat` — a substituted symlink must be seen as a symlink, not
-followed) must still show a regular file with the same `st_dev`/`st_ino`. A
-mismatch aborts without touching the record.
+The real fix was to stop handing out a path at all. PIL's `im.save()` accepts a
+file object, so `thumbs` encodes the tile to a `BytesIO` and calls
+`write_bytes`; a thumbnail is a few KB, so buffering is free. `tempfile_for`
+was **deleted** rather than defended, and a test pins the module's public
+surface to exactly `write_text` / `write_bytes` so re-adding a path-yielding API
+cannot quietly reopen the hole.
 
-Both paths end the same way: chmod, then `os.replace`; on any exception a
-best-effort unlink of the temp (swallowing `OSError`, since a scanner can hold
-it briefly on Windows) and re-raise. The descriptor is closed exactly once on
-every path, success or failure.
+On any exception: best-effort unlink of the temp (swallowing `OSError`, since a
+scanner can hold it briefly on Windows) and re-raise. The descriptor is closed
+exactly once on every path, success or failure.
 
 ### Read-only targets are refused, not silently replaced
 
@@ -117,6 +128,18 @@ before creating a temp, preserving the semantics every migrated caller had.
 (Windows read-only attributes surface through the same check.) Flagged in PR
 review — the first implementation claimed read-only targets were a permanent
 failure while in fact bypassing them.
+
+Because the surviving file is the temp rather than the original inode, the mode
+is not the only thing that would be lost. The owning **group** and **extended
+attributes** are copied too (uid as well, though only a privileged process can
+set it — the attempt is harmless and falls back to group-only). Explicitly
+*not* preserved, and accepted: POSIX ACLs proper, which the standard library
+cannot read at all, and on Windows a non-inherited DACL, alternate data streams
+and per-file compression/encryption flags. Grimoire records are plain files in a
+user-owned directory that inherit their parent's ACL, so a fresh sibling gets
+the same treatment; a genuinely ACL-managed shared store is out of scope. Every
+step is best effort — failing a whole write over a metadata bit would trade a
+cosmetic problem for a data-loss one. (Raised in PR review.)
 
 ### Decisions
 
@@ -133,7 +156,7 @@ also removes a latent hazard in the four existing copies, which share a fixed
 `audit` each hold a per-campaign in-process lock, and not safe across two
 processes on one synced store.
 
-**Preserve the file mode.** `mkstemp` creates `0600`. Without this step the
+**Preserve the record's access metadata.** `mkstemp` creates `0600`. Without this step the
 first atomic write would silently narrow every previously group/world-readable
 record to owner-only — a real regression on Linux, macOS, and the Android build.
 So: `os.chmod(tmp, stat.S_IMODE(os.stat(path).st_mode))` when the target exists,
@@ -232,7 +255,8 @@ highest frequency, least recoverable.
 
 The six existing copies collapse onto the shared helper: `sheets._atomic_write_json`,
 `proposals._write`, `rolls._write`, `audit._write`, `module_edit` (two sites),
-and `thumbs` (via `tempfile_for`). `rolls.py`'s module docstring, which credits
+and `thumbs` (which encodes to memory and calls `write_bytes`). `rolls.py`'s
+module docstring, which credits
 the temp-file pattern for concurrency safety it does not provide alone, is
 corrected to credit the lock.
 
@@ -247,7 +271,7 @@ store from CRLF to LF on its next save, churning a synced folder for nothing.
 
 ### Writers that are not `write_text` calls
 
-- **`assets.put_image` (`assets.py:122-147`) — an ordering bug, not just a torn
+- **`assets.put_image` (`assets.py:153-194`) — an ordering bug, not just a torn
   write.** It unlinks every prior-extension file *before* writing the new one,
   so a crash after the unlink loses the image outright; atomicity alone does not
   help. Reordered to write first, then unlink stale siblings.
@@ -291,9 +315,10 @@ store from CRLF to LF on its next save, churning a synced folder for nothing.
 - **`sheets.seed` (`sheets.py:547`) — `shutil.copy2` into the live campaign
   sheets directory.** Routed through the helper, so a partial copy can never
   appear under a real sheet name.
-- **`thumbs` (`thumbs.py:50-51`) — PIL `im.save(tmp)` then `tmp.replace(out)`.**
-  Moves onto `tempfile_for`, which also removes its pid-based temp name (two
-  threads in one process collide on it today).
+- **`thumbs` (`thumbs.py:43-58`) — PIL `im.save(tmp)` then `tmp.replace(out)`.**
+  Encodes the tile to a `BytesIO` and calls `write_bytes`, so no temp path is
+  ever exposed. Also removes its pid-based temp name, on which two threads in
+  one process collided.
 - **`module_edit` zip extraction (`module_edit.py:213`)** writes members with a
   bare `write_bytes` into an *unpublished staging directory*, published by a
   single `staging.rename(dest)` (`module_edit.py:68`). Partially extracted files

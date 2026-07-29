@@ -197,54 +197,76 @@ def test_lookup_survives_a_sibling_vanishing_mid_scan(tmp_path, monkeypatch):
     assert p is not None and p.name == "avatar.png"
 
 
-def test_concurrent_puts_cannot_delete_each_others_images(tmp_path, monkeypatch):
-    """Write-before-cleanup opened a worse interleaving than the delete-first
-    ordering it replaced: A writes .jpg, B writes .png, then each cleanup loop
-    unlinks the other's brand-new file and NO image remains. Cleanup must only
-    ever remove siblings that existed before that call started."""
-    from grimoire.store import atomic
-    d = tmp_path / "characters" / "sera" / "assets" / "default"
-    d.mkdir(parents=True)
-    real_write = atomic.write_bytes
-    reentered = {"done": False}
+def test_concurrent_puts_of_different_extensions_leave_exactly_one_image(tmp_path):
+    """The real invariant, exercised with real threads rather than a simulated
+    re-entrancy the lock now forbids: whichever upload wins, exactly one image
+    survives and it is one that was actually written. Two earlier attempts at
+    this (glob-after-write, then snapshot-by-path) each left a window where
+    both calls succeeded and NO image remained."""
+    import threading
 
-    def interleave(path, data):
-        real_write(path, data)
-        if not reentered["done"]:          # B runs entirely inside A's call
-            reentered["done"] = True
-            assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"B", "png")
+    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"ORIGINAL", "png")
+    payloads = {"png": b"NEW-PNG", "jpg": b"NEW-JPG", "webp": b"NEW-WEBP"}
+    start = threading.Barrier(len(payloads))
+    errors = []
 
-    monkeypatch.setattr(atomic, "write_bytes", interleave)
-    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"A", "jpg")
+    def upload(ext):
+        try:
+            start.wait(timeout=5)
+            for _ in range(20):        # hammer the window
+                assets.put_image(tmp_path, "sera", "default", assets.AVATAR,
+                                 payloads[ext], ext)
+        except Exception as e:         # noqa: BLE001 - surfaced by the assert below
+            errors.append(e)
 
-    assert assets.image_path(tmp_path, "sera", "default", assets.AVATAR) is not None, \
-        "both writers deleted each other's image"
+    threads = [threading.Thread(target=upload, args=(e,)) for e in payloads]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=20)
 
-
-def test_cleanup_never_deletes_an_image_published_after_its_snapshot(tmp_path, monkeypatch):
-    """Snapshotting a stale PATH is not enough. With an existing avatar.png:
-    call A (.jpg) snapshots that path, publishes its JPG; call B (.png) then
-    replaces the PNG and removes A's JPG; when A resumes, deleting by path
-    alone would destroy B's brand-new PNG -- both calls succeed and no avatar
-    remains. A must verify the file it snapshotted is still the same file."""
-    from grimoire.store import atomic
-    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"OLD-PNG", "png")
-
-    real_write = atomic.write_bytes
-    inner_done = {"yes": False}
-
-    def interleave(path, data):
-        real_write(path, data)
-        # A has just published its .jpg; B now runs to completion, replacing
-        # the old .png with a new one and cleaning up A's .jpg.
-        if not inner_done["yes"]:
-            inner_done["yes"] = True
-            assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"NEW-PNG", "png")
-
-    monkeypatch.setattr(atomic, "write_bytes", interleave)
-    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"NEW-JPG", "jpg")
-    monkeypatch.undo()
+    assert not errors, f"a concurrent put raised: {errors}"
+    assert not any(t.is_alive() for t in threads), "a put_image deadlocked"
 
     p = assets.image_path(tmp_path, "sera", "default", assets.AVATAR)
-    assert p is not None, "both writers succeeded but no avatar remains"
-    assert p.read_bytes() != b"OLD-PNG", "the stale image survived instead"
+    assert p is not None, "concurrent uploads destroyed the image"
+    assert p.read_bytes() in payloads.values(), "lookup returned a stale image"
+    survivors = assets.list_images(tmp_path, "sera", "default")
+    assert len(survivors) == 1, f"stale siblings left behind: {survivors}"
+
+
+def test_a_delete_racing_an_upload_does_not_interleave(tmp_path):
+    """delete_image shares put_image's lock, so it removes the whole set or
+    none of it -- never half of a set an upload is mid-way through replacing."""
+    import threading
+
+    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"ORIGINAL", "png")
+    start = threading.Barrier(2)
+    errors = []
+
+    def uploader():
+        try:
+            start.wait(timeout=5)
+            for _ in range(20):
+                assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"NEW", "jpg")
+        except Exception as e:  # noqa: BLE001
+            errors.append(e)
+
+    def deleter():
+        try:
+            start.wait(timeout=5)
+            for _ in range(20):
+                assets.delete_image(tmp_path, "sera", "default", assets.AVATAR)
+        except Exception as e:  # noqa: BLE001
+            errors.append(e)
+
+    threads = [threading.Thread(target=uploader), threading.Thread(target=deleter)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=20)
+
+    assert not errors, f"a concurrent operation raised: {errors}"
+    assert not any(t.is_alive() for t in threads), "an operation deadlocked"
+    # Either outcome is legal; a half-state (two extensions) is not.
+    assert len(assets.list_images(tmp_path, "sera", "default")) <= 1
