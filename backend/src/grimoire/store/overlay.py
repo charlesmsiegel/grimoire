@@ -4,8 +4,9 @@ A campaign materializes a record only when it diverges from its world (edit,
 version lock, delete, campaign-local create); everything else reads through to
 the world live. Rules:
 
-- Flat records (locations/lore/greetings, plotmap.json): campaign file wins;
-  else a tombstone means absent; else the world file.
+- Flat records (every kind in INHERITED_KINDS that is not an actor -- currently
+  locations, lore, items, groups, creatures, greetings -- plus plotmap.json):
+  campaign file wins; else a tombstone means absent; else the world file.
 - Actors (characters/pcs): whole-dir, keyed on character.md / pc.md existing in
   the campaign — a materialized actor is authoritative for meta + versions, so
   lock-purged versions stay purged. Sidecars (tagline.md) and assets still
