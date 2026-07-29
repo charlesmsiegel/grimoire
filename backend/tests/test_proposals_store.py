@@ -1,4 +1,5 @@
 import ast
+import json
 import pathlib
 import threading
 
@@ -87,6 +88,59 @@ def test_transition_refuses_every_exit_from_the_projectable_states(monkeypatch, 
         with pytest.raises(ValueError, match="illegal edge"):
             proposals.transition(cid, sid, rec["id"], ("resolved",), exit_status)
     assert proposals.get(cid, sid)["status"] == "resolved"   # refused before any write
+
+
+def test_transition_refuses_a_resolution_on_a_non_resolved_edge(monkeypatch, tmp_path):
+    """#242, the data invariant: a roll `result` may only ever land on a status
+    `project()` accepts. A legal edge like `pending -> declined` carrying a
+    resolution would otherwise store one where `heal()` reads it as projectable
+    and `project()` refuses the status — and the next retirement discards the
+    roll entirely, never having logged it."""
+    cid, sid = _scene(monkeypatch, tmp_path)
+    rec = proposals.new(cid, sid, {})
+    for from_state, to in (("pending", "declined"), ("pending", "resolving")):
+        if from_state != proposals.get(cid, sid)["status"]:
+            continue
+        with pytest.raises(ValueError, match="may not carry a resolution"):
+            proposals.transition(cid, sid, rec["id"], (from_state,), to,
+                                 {"result": {"total": 9}})
+    got = proposals.get(cid, sid)
+    assert got["status"] == "pending" and got["resolution"] is None
+
+    # resolving -> pending is the other non-resolved edge; reach it legally
+    proposals.claim(cid, sid, rec["id"])
+    with pytest.raises(ValueError, match="may not carry a resolution"):
+        proposals.transition(cid, sid, rec["id"], ("resolving",), "pending",
+                             {"result": {"total": 9}})
+    # and the two edges that MAY carry one still do
+    assert proposals.transition(cid, sid, rec["id"], ("resolving",), "resolved",
+                                {"result": {"total": 9}}) is True
+    assert proposals.get(cid, sid)["resolution"] == {"result": {"total": 9}}
+
+
+def test_heal_raises_rather_than_retiring_a_roll_it_cannot_project(monkeypatch, tmp_path):
+    """The backstop. `heal`'s notion of projectable is broader than `project`'s,
+    and every gap between them has been a way to lose a roll. The guards above
+    make the gap unreachable through the API, so this drives it by corrupting
+    the file directly — if a future edge reopens it, retirement must fail loudly
+    instead of silently discarding the roll."""
+    cid, sid = _scene(monkeypatch, tmp_path)
+    rec = proposals.new(cid, sid, {})
+    path = campaigns.campaign_root(cid) / "proposals.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data[sid]["status"] = "declined"                       # not projectable...
+    data[sid]["resolution"] = {"result": {"total": 9}}     # ...but carries a roll
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="would discard the roll"):
+        proposals.supersede(cid, sid)
+    assert proposals.get(cid, sid)["status"] == "declined"  # not retired
+
+    # a narrated record is the one legitimate project()-declines case: no raise
+    data[sid]["status"] = "narrated"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    proposals.supersede(cid, sid)                           # narrated is terminal
+    assert proposals.get(cid, sid)["status"] == "narrated"
 
 
 def test_transition_checks_the_whole_declaration_not_just_the_winning_edge(monkeypatch, tmp_path):
