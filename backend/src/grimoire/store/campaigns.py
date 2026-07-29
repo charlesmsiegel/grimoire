@@ -44,6 +44,18 @@ def campaign_meta_path(cid: str) -> Path:
     return campaign_root(cid) / "campaign.md"
 
 
+def campaign_exists(cid: str) -> bool:
+    """Existence check that survives an id `campaign_root` refuses to resolve.
+
+    Callers testing "is there such a campaign?" want False for an unusable id,
+    not an exception -- see worlds.world_exists.
+    """
+    try:
+        return campaign_meta_path(cid).exists()
+    except CampaignNotFound:
+        return False
+
+
 def _manifest_path(cid: str) -> Path:
     return campaign_root(cid) / "sync.md"
 
@@ -85,7 +97,7 @@ def create_campaign(name: str, world_id: str, region: str | None = None,
                      calendar: str | None = None, module: str | None = None,
                      climate: str | None = None) -> str:
     ensure_home()
-    if not worlds.world_meta_path(world_id).exists():
+    if not worlds.world_exists(world_id):
         raise worlds.WorldNotFound(world_id)
     if calendar is not None:
         calendars.get_provider({"provider": calendar})  # unknown id -> CalendarError before anything is created
