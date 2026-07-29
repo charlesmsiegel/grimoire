@@ -163,7 +163,7 @@ footer.doc{max-width:1280px;margin:0 auto;padding:0 28px 34px;color:var(--text-f
   <div class="doc-label">PULL REQUEST REVIEW</div>
   <h1 class="doc-title">grimoire#260 — Review</h1>
   <p class="doc-sub">Break the five-file module-editor import cycle by extracting shared helpers</p>
-  <div class="doc-meta">base main @ 55b1022c → 17400bed · +284/−124 · generated 2026-07-28</div>
+  <div class="doc-meta">base main @ 55b1022c → de299a9f · +284/−124 · generated 2026-07-28</div>
 </header>
 <nav class="tabs" role="tablist"><button role="tab" data-tab="summary" aria-selected="true" aria-controls="summary">Summary</button>
 <button role="tab" data-tab="footprint" aria-selected="false" aria-controls="footprint">Footprint</button>
@@ -288,6 +288,10 @@ No feature, no bugfix, no behavioural change bundled in.</p>
   strongly-connected group) and the LLM providers cycling through
   <code>LLMError</code> (issue #239, a 4-file group rooted at
   <code>backend/src/grimoire/claude_agent.py</code>).</li>
+  <li><strong>The codebase atlas.</strong> <code>docs/codemap.html</code> is
+  untouched by this PR and still describes the cycle as present. An earlier
+  revision of this branch refreshed it; that was reverted to keep the diff to
+  the code change, so the atlas is knowingly one regeneration behind.</li>
   <li><strong>No lint rule.</strong> The invariant is enforced by a test, not by
   <code>import/no-cycle</code>, so it holds only where the test's entry-point
   regex reaches — <code>components/Module*Editor.tsx</code> and
@@ -660,10 +664,14 @@ the completeness assertion exposed it.</p>
   <code>store</code> package, and the LLM providers of issue #239) that a
   repo-wide assertion would fail on — but it means this guard protects one
   neighbourhood, not the codebase.</li>
-  <li><strong>Atlas claim now stale:</strong> <code>docs/codemap.html</code> states
-  "File-level import cycles: 3 strongly-connected groups" and names the
-  module-editor five-file cycle in its Boundaries text. After this change it is 2.
-  Handled — the codemap is regenerated on this branch as part of the PR.</li>
+  <li><strong>Atlas claim now stale, deliberately.</strong>
+  <code>docs/codemap.html</code> states "File-level import cycles: 3
+  strongly-connected groups" and names the module-editor five-file cycle in its
+  Boundaries text. After this change it is 2. The atlas is <em>not</em> updated
+  in this PR — an earlier revision of this branch did refresh it, and that
+  refresh was reverted to keep the diff to the code change. Anyone reading the
+  atlas between now and its next regeneration will see a cycle that no longer
+  exists; the guard test is the current source of truth.</li>
   <li><strong>No invariant weakened.</strong> Nothing in the diff moves a
   uniqueness, ordering, or atomicity guarantee into a second place.</li>
 </ul>
