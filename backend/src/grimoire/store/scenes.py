@@ -1,7 +1,9 @@
 """Scene CRUD — chat transcripts living under <campaign>/scenes/.
 
-Every mutator here is `@_serialized`: a scene file is rewritten whole, so two
-concurrent read-modify-writes silently lose one of them. See that decorator.
+Every mutator here runs under `@_serialized` — directly, or (where user-authored
+calendar code has to be resolved first) through a decorated inner. A scene file
+is rewritten whole, so two concurrent read-modify-writes silently lose one of
+them. See that decorator.
 """
 
 from __future__ import annotations
@@ -131,8 +133,13 @@ def _serialized(fn):
     happen under it (``proposals.commit_narration`` persists a reply through a
     callback, and ``create_scene`` captures an audit baseline), so a separate
     scene lock would be a second domain nested inside this one — a lock
-    ordering to get wrong for no gain. The critical sections are a file read
-    and a file write; no LLM call is ever held across this lock.
+    ordering to get wrong for no gain.
+
+    What that buys has to be paid for by keeping the critical sections short:
+    a file read and a file write, nothing whose duration this codebase does
+    not control. No LLM call is ever held across it, and the two mutators that
+    need a calendar resolve it BEFORE delegating here, because that path
+    executes user-authored plugin code (see `_date_hint`).
 
     In-process only, like every lock in this app. Two processes on a synced
     store still race — #234 covers that half, and the two want fixing together
@@ -175,9 +182,36 @@ def repad(cid: str, width: int) -> None:
     scene_refs.repoint(cid, mapping)
 
 
-@_serialized
 def create_scene(cid: str, title: str, suggested_date: str | None = None,
                  pcless: bool = False) -> str:
+    # The date hint is normalized before the lock, not inside it — see _date_hint.
+    return _create_scene(cid, title, pcless, _date_hint(cid, suggested_date))
+
+
+def _date_hint(cid: str, suggested_date: str | None) -> str:
+    """The creation-time date hint in canonical form, resolved OUTSIDE the
+    campaign lock (see `_serialized`).
+
+    `get_provider` imports every user-authored provider in
+    `<home>/calendars/` and `normalize` then runs that provider's own code.
+    None of it touches the scene file, and nothing bounds how long a
+    hand-written plugin takes — running it under a campaign-wide lock would
+    let one bad calendar stall every writer in the campaign.
+
+    Only a hint: a bad one is dropped, never an error.
+    """
+    if not suggested_date:
+        return ""
+    try:
+        provider = calendars.get_provider(
+            calendars.read_calendar(campaigns.campaign_root(cid))["primary"])
+        return calendars.normalize(provider, suggested_date)
+    except (calendars.CalendarError, KeyError):
+        return ""
+
+
+@_serialized
+def _create_scene(cid: str, title: str, pcless: bool, date_hint: str) -> str:
     _require_campaign(cid)
     d = _scenes_dir(cid)
     d.mkdir(parents=True, exist_ok=True)
@@ -193,13 +227,8 @@ def create_scene(cid: str, title: str, suggested_date: str | None = None,
              "created": now, "updated": now}
     if pcless:
         meta["pcless"] = "true"
-    if suggested_date:
-        try:
-            provider = calendars.get_provider(
-                calendars.read_calendar(campaigns.campaign_root(cid))["primary"])
-            meta["suggested_date"] = calendars.normalize(provider, suggested_date)
-        except (calendars.CalendarError, KeyError):
-            pass  # only a hint — a bad one is dropped, never an error
+    if date_hint:
+        meta["suggested_date"] = date_hint
     atomic.write_text(_scene_path(cid, sid), dump_frontmatter(meta, ""))
     from . import audit  # lazy: audit imports campaigns/sheets, scenes must not cycle
     audit.capture_baseline(cid, sid)
@@ -802,19 +831,26 @@ def get_suggested_date(cid: str, sid: str) -> str:
     return meta.get("suggested_date", "")
 
 
-@_serialized
 def set_datetime(cid: str, sid: str, native: str) -> dict:
     """Set the scene's current moment (in the primary calendar). The first set is
     silent and stamps the start date into the filename (the id changes); later
     changes append an assistant transition line. Returns {"advanced", "friendly",
     "id"} where id is the possibly-renamed scene id."""
-    p = _scene_path(cid, sid)
-    if not _safe_id(sid) or not p.exists():
-        raise SceneNotFound(sid)
+    if not _safe_id(sid) or not _scene_path(cid, sid).exists():
+        raise SceneNotFound(sid)     # cheap pre-check; re-checked under the lock
+    # Resolve the calendar BEFORE taking the lock — user-authored provider code
+    # must not run under it (see _date_hint). Nothing here touches the scene.
     cfg = calendars.read_calendar(campaigns.campaign_root(cid))
     provider = calendars.get_provider(cfg["primary"])
     canonical = calendars.normalize(provider, native)  # raises calendars.CalendarError
-    friendly = calendars.friendly(provider, canonical)
+    return _apply_datetime(cid, sid, canonical, calendars.friendly(provider, canonical))
+
+
+@_serialized
+def _apply_datetime(cid: str, sid: str, canonical: str, friendly: str) -> dict:
+    p = _scene_path(cid, sid)
+    if not _safe_id(sid) or not p.exists():
+        raise SceneNotFound(sid)
     history = get_time_history(cid, sid)
     if history and history[-1] == canonical:
         return {"advanced": False, "friendly": friendly, "id": sid}
@@ -832,9 +868,14 @@ def set_datetime(cid: str, sid: str, native: str) -> dict:
     return {"advanced": advanced, "friendly": friendly, "id": sid}
 
 
+@_serialized
 def _stamp_start_date(cid: str, sid: str, canonical: str) -> str:
     """First date set: insert the date section into the filename. The start date
-    is fixed — later advances never touch the name. Legacy ids are left alone."""
+    is fixed — later advances never touch the name. Legacy ids are left alone.
+
+    Serialized in its own right, not just via its one caller: it renames the
+    scene file and repoints every store that references it, which is exactly
+    the sequence a concurrent append must not land in the middle of."""
     parsed = scene_ids.parse_sid(sid)
     if parsed is None or parsed["date_slug"] is not None:
         return sid
