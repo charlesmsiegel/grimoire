@@ -1,12 +1,15 @@
 """Per-campaign serialization: the app's one general-purpose lock domain.
 
 A campaign is the unit of mutual exclusion in grimoire. Everything that
-reads-validates-writes campaign-scoped state — sheets, audit baselines,
-roll proposals, and the module-pack swap that can invalidate all three —
-serializes on the *same* ``campaign_lock(cid)``. That unification is
-deliberate: a module edit holding a campaign's lock must exclude a proposal
-derived from the pack it is about to replace, so the two cannot live in
-separate lock domains.
+reads-validates-writes campaign-scoped state — scene transcripts, sheets,
+audit baselines, roll proposals, the roll log, and the module-pack swap that
+can invalidate most of them — serializes on the *same* ``campaign_lock(cid)``.
+That unification is deliberate: a module edit holding a campaign's lock must
+exclude a proposal derived from the pack it is about to replace, so the two
+cannot live in separate lock domains. **This list is the domain**: a
+campaign-scoped mutator that keeps a private registry instead is invisible
+here and silently outside the exclusion (#255 — ``rolls`` was, until it
+joined).
 
 Who takes it:
 
@@ -19,6 +22,10 @@ Who takes it:
 - every ``proposals`` state transition, and the routes that wrap a whole
   derive-and-persist span (``routes/streaming.py`` proposal finalizers) so a proposal
   cannot be derived from a pack that is swapped away before it lands;
+- every ``rolls`` mutator (``append``, ``find_or_append_by_proposal``,
+  ``repoint_scenes``) plus its ``find_by_proposal`` reader — a logged roll
+  can carry the id of the proposal it resolved, and proposals are in this
+  domain, so the two belong in one (#255);
 - ``module_edit`` publication and the world-module rebind route, the only
   actors that hold *every* campaign's lock at once, across the swap;
   ``PUT /campaigns/{cid}/module`` holds just that campaign's;
