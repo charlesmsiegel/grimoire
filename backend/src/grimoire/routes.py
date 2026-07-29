@@ -1633,6 +1633,9 @@ def promote_world_image(wid: str, cid: str, vid: str, name: str):
         store.assets.promote_image(_world_root_or_404(wid), cid, vid, name)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="image not found")
+    except ValueError as exc:
+        # an externally-placed file whose extension we never accepted for upload
+        raise HTTPException(status_code=400, detail=str(exc))
     return {"ok": True}
 
 
@@ -2196,6 +2199,9 @@ def _entity_image_promote(root, kind: str, eid: str, name: str):
         store.assets.promote_image(root, eid, "default", name, base=kind)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="image not found")
+    except ValueError as exc:
+        # an externally-placed file whose extension we never accepted for upload
+        raise HTTPException(status_code=400, detail=str(exc))
     return {"ok": True}
 
 
@@ -3303,6 +3309,9 @@ def promote_campaign_image(cid: str, char: str, vid: str, name: str):
         store.overlay.promote_image(cid, char, vid, name)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="image not found")
+    except ValueError as exc:
+        # an externally-placed file whose extension we never accepted for upload
+        raise HTTPException(status_code=400, detail=str(exc))
     return {"ok": True}
 
 
@@ -4344,4 +4353,7 @@ def promote_campaign_entity_image(cid: str, kind: str, eid: str, name: str):
         store.overlay.promote_image(cid, eid, "default", name, base=kind)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="image not found")
+    except ValueError as exc:
+        # an externally-placed file whose extension we never accepted for upload
+        raise HTTPException(status_code=400, detail=str(exc))
     return {"ok": True}

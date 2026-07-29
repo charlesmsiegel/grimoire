@@ -492,6 +492,22 @@ def test_character_image_promote_missing_404(client):
     assert r.status_code == 404
 
 
+def test_character_image_promote_unsupported_type_400(client):
+    """Promotion republishes both slots through put_image, which accepts only
+    allowlisted extensions -- so a file no upload could have created (an
+    external tool dropped it in) is a bad request, not a 500 (#253)."""
+    wid = _world(client)
+    cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
+    wroot = store.worlds.world_root(wid)
+    d = wroot / "characters" / cid / "assets" / "default"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "gallery_1.bmp").write_bytes(b"external")
+
+    r = client.post(f"/api/worlds/{wid}/characters/{cid}/versions/default/images/gallery_1/promote")
+    assert r.status_code == 400
+    assert (d / "gallery_1.bmp").exists()  # nothing moved
+
+
 def test_avatar_focus_endpoint_round_trip(client):
     wid = _world(client)
     cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]

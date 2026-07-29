@@ -75,9 +75,15 @@ def _image_locks_held(d: Path, *names: str):
 
     ``promote_image`` mutates two of them (the promoted slot and the avatar
     slot), so it has to hold both for the whole swap or an upload can land in
-    the middle of it. Acquiring them in sorted order is what keeps two
-    promotions in flight -- ``promote(gallery_1)`` and ``promote(gallery_2)``,
-    each also wanting ``avatar`` -- from deadlocking against each other.
+    the middle of it.
+
+    Sorted acquisition is discipline, not a fix for a cycle that exists today:
+    every other caller takes exactly one image lock, and two promotions of
+    different names share only ``avatar`` -- neither ever waits on the other's
+    gallery lock -- so nothing can currently deadlock whatever order is used
+    (PR review corrected the original claim here). It is the *second*
+    multi-lock caller that would introduce a cycle, and a fixed global order
+    means that caller is safe by construction rather than by review.
     """
     with ExitStack() as stack:
         for n in sorted(set(names)):
@@ -252,7 +258,11 @@ def promote_image(root: Path, cid: str, vid: str, name: str, base: str = "charac
     recovery protocol; a duplicate image is worth less than that.
 
     Both locks are held across the whole swap, so an upload to either slot
-    cannot interleave with it.
+    cannot interleave with it. What that does *not* buy is an atomic two-slot
+    swap: reads take no locks anywhere in this module, so a concurrent reader
+    between the two publishes sees the promoted image in both slots (PR
+    review). Same as before this change -- except the old sequence showed such
+    a reader no avatar at all, which is the failure worth closing.
     """
     if name == AVATAR:
         return
@@ -274,9 +284,16 @@ def promote_image(root: Path, cid: str, vid: str, name: str, base: str = "charac
         demoted = (cur.read_bytes(), cur.suffix) if cur is not None else None
         put_image(root, cid, vid, AVATAR, promoted[0], promoted[1], base)
         if demoted is None:
-            # Nothing to swap back in; the promoted image only lives in the
-            # avatar slot now, matching the rename this replaced.
+            # Nothing to swap back in, so the promoted image has to LEAVE this
+            # slot, matching the rename this replaced. `delete_image` swallows
+            # unlink failures by design (a lost cleanup self-heals there), but
+            # here the unlink IS the operation: `overlay.promote_image` reads
+            # this slot's emptiness to decide whether to tombstone an inherited
+            # image, so a silently-kept source becomes a visible duplicate.
+            # Confirm it, rather than report a move that did not happen.
             delete_image(root, cid, vid, name, base)
+            if image_path(root, cid, vid, name, base) is not None:
+                raise OSError(f"promoted image could not be cleared: {name}")
         else:
             put_image(root, cid, vid, name, demoted[0], demoted[1], base)
     clear_focus(root, cid, vid, base)
