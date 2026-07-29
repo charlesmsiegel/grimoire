@@ -184,10 +184,14 @@ page.
 One caveat: **do not actively use grimoire on two devices at once.** Sync
 clients resolve simultaneous edits by making conflict copies on their own
 schedule, and grimoire cannot merge those — one side's edit wins and the other
-becomes a stray file. Let the sync settle before switching devices. Two
-grimoire processes *on the same machine* do serialize their campaign edits
-against each other, so running the desktop app and a dev server together is
-fine.
+becomes a stray file. Let the sync settle before switching devices.
+
+Two grimoire processes *on the same machine* fare better: scene, sheet,
+proposal and module-pack writes lock against each other across processes, so
+the desktop app and a dev server can share a store without shredding a
+transcript. That is not a blanket guarantee — a few writers (dice-roll history,
+campaign rename and delete, image assets) still don't participate — so it makes
+accidents survivable rather than making two-at-once a supported way to work.
 
 ---
 

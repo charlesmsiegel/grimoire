@@ -32,17 +32,26 @@ def dist_dir() -> Path:
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    migrations.migrate_scene_ids()
-    migrations.bake_char_macros()
-    try:
-        module_edit.recover()
-    except locks.StoreBusy:
-        # Another backend holds the module-edit lock: it is running recovery
-        # itself, and replay is idempotent. Refusing to start would be strictly
-        # worse than starting and serializing per request (#234). Only here --
-        # the in-request _apply -> recover() path still surfaces as a 409.
-        logging.getLogger(__name__).info(
-            "module-edit recovery skipped: another grimoire process holds the lock")
+    # Every step here can now hit a cross-process lock (#234) --
+    # migrate_scene_ids reaches one through scenes.repad, not just recover().
+    # A second backend starting while the first is mid-edit must SERVE, not
+    # refuse to start: all three steps are idempotent and re-run later
+    # (recovery at the head of every module_edit operation, the migrations at
+    # the next startup), so skipping beats failing to boot. Startup is also the
+    # one place the 409 handler cannot reach.
+    #
+    # Each step is guarded separately so contention in one does not skip the
+    # others, and each logs at WARNING: silently starting with a stale journal
+    # or a half-applied migration is exactly the kind of thing that should be
+    # visible in the log.
+    log = logging.getLogger(__name__)
+    for step in (migrations.migrate_scene_ids, migrations.bake_char_macros,
+                 module_edit.recover):
+        try:
+            step()
+        except locks.StoreBusy as exc:
+            log.warning("startup step %s skipped -- %s; it will be retried",
+                        step.__name__, exc)
     yield
 
 
