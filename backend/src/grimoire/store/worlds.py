@@ -61,7 +61,9 @@ def list_worlds() -> list[dict]:
     if base.exists():
         for d in sorted(base.iterdir()):
             mp = d / "world.md"
-            if not d.is_dir() or not mp.exists():
+            # an id the resolvers refuse must not be listed: it would only fail
+            # on the caller's next call (#259 review)
+            if not d.is_dir() or not mp.exists() or not safe_id(d.name):
                 continue
             meta, _ = parse_frontmatter(mp.read_text(encoding="utf-8"))
             out.append({
