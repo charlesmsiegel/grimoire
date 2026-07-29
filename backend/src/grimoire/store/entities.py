@@ -48,6 +48,8 @@ def list_entities(root: Path, kind: str) -> list[dict]:
     out: list[dict] = []
     if d.exists():
         for p in sorted(d.glob("*.md")):
+            if not safe_id(p.stem):   # enumeration agrees with the resolvers
+                continue
             meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
             out.append({"id": p.stem, "name": meta.get("name", p.stem), **meta})
     return out
@@ -147,7 +149,8 @@ def all_refs(root: Path) -> list[tuple[str, str]]:
         d = _kind_dir(root, kind)
         if d.exists():
             for p in sorted(d.glob("*.md")):
-                refs.append((kind, p.stem))
+                if safe_id(p.stem):
+                    refs.append((kind, p.stem))
     return refs
 
 
@@ -156,7 +159,7 @@ def synced_refs(root: Path) -> list[tuple[str, str]]:
     for kind in SYNCED_KINDS:
         d = _kind_dir(root, kind)
         if d.exists():
-            refs.extend((kind, p.stem) for p in sorted(d.glob("*.md")))
+            refs.extend((kind, p.stem) for p in sorted(d.glob("*.md")) if safe_id(p.stem))
     return refs
 
 
@@ -164,5 +167,5 @@ def entity_counts(root: Path) -> dict[str, int]:
     counts: dict[str, int] = {}
     for kind in ENTITY_KINDS:
         d = _kind_dir(root, kind)
-        counts[kind] = len(list(d.glob("*.md"))) if d.exists() else 0
+        counts[kind] = sum(1 for p in d.glob("*.md") if safe_id(p.stem)) if d.exists() else 0
     return counts

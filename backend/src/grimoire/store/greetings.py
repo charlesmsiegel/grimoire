@@ -127,14 +127,14 @@ def list_greetings(root: Path) -> list[dict]:
     d = _greetings_dir(root)
     if not d.exists():
         return []
-    metas = [read_greeting(root, p.stem)["meta"] for p in d.glob("*.md")]
+    metas = [read_greeting(root, p.stem)["meta"] for p in d.glob("*.md") if safe_id(p.stem)]
     metas.sort(key=lambda m: natural_key(m["name"]))  # A2 before A10
     return metas
 
 
 def greeting_count(root: Path) -> int:
     d = _greetings_dir(root)
-    return len(list(d.glob("*.md"))) if d.exists() else 0
+    return sum(1 for p in d.glob("*.md") if safe_id(p.stem)) if d.exists() else 0
 
 
 def update_greeting(root: Path, gid: str, *, name: str | None = None, body: str | None = None,

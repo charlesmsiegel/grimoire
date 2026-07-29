@@ -115,19 +115,33 @@ def safe_id(value: object) -> bool:
     """Reject ids that could escape their parent directory (defense in depth).
 
     For every value this accepts, ``parent / value`` names a direct child of
-    ``parent``: no path separator, no ``.`` or ``..``, no empty string (which
-    would resolve to ``parent`` itself), and no colon -- on Windows a
-    drive-relative id replaces the base outright (``Path("store") / "C:evil"``
-    is ``C:evil``), and any colon names an NTFS alternate data stream.
+    ``parent`` *and no other id names that same child*:
+
+    - no path separator, no ``.`` or ``..``, no empty string (which would
+      resolve to ``parent`` itself);
+    - no colon -- on Windows a drive-relative id replaces the base outright
+      (``Path("store") / "C:evil"`` is ``C:evil``), and any colon names an
+      NTFS alternate data stream;
+    - no trailing dot or space. Win32 trims those off a path component, so
+      ``realm.`` and ``realm`` are one directory. Aliasing is as dangerous as
+      escaping: `delete_world("realm.")` opened the live world but compared
+      the raw ``realm.`` against campaigns' stored ``realm``, decided nothing
+      used it, and deleted it (#259 review). Rejected on every platform --
+      a store is synced between them, and an id must mean the same thing on
+      both.
+
     Non-strings are rejected too, so ids read back out of on-disk JSON need no
     separate type check.
 
     Every id-to-path resolver in the store goes through this one function --
     it used to be copy-pasted per module, and the copies that were never made
-    were exactly the resolvers that lacked the guard (#240).
+    were exactly the resolvers that lacked the guard (#240). Enumeration has
+    to agree with it: a listing that hands back an id this rejects turns its
+    own next call into an error, so every listing filters on it too.
     """
     return (isinstance(value, str) and value not in ("", ".", "..")
-            and not any(c in value for c in "/\\:"))
+            and not any(c in value for c in "/\\:")
+            and value == value.rstrip(". "))
 
 
 def natural_key(text: str) -> tuple:

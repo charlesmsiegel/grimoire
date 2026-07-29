@@ -146,7 +146,8 @@ def list_pcs(root: Path) -> list[dict]:
     out: list[dict] = []
     d = _pcs_dir(root)
     if d.exists():
-        for pd in sorted(p for p in d.iterdir() if p.is_dir() and (p / "pc.md").exists()):
+        for pd in sorted(p for p in d.iterdir()
+                         if p.is_dir() and (p / "pc.md").exists() and safe_id(p.name)):
             pid = pd.name
             meta = _read_meta(root, pid)
             out.append({"id": pid, "name": meta.get("name", pid), "tags": _tags_of(meta),
@@ -222,11 +223,13 @@ def dir_hash(root: Path, pid: str) -> str | None:
 
 def pc_count(root: Path) -> int:
     d = _pcs_dir(root)
-    return sum(1 for p in d.iterdir() if p.is_dir() and (p / "pc.md").exists()) if d.exists() else 0
+    return sum(1 for p in d.iterdir()
+               if p.is_dir() and (p / "pc.md").exists() and safe_id(p.name)) if d.exists() else 0
 
 
 def pc_refs(root: Path) -> list[str]:
     d = _pcs_dir(root)
     if not d.exists():
         return []
-    return sorted(p.name for p in d.iterdir() if p.is_dir() and (p / "pc.md").exists())
+    return sorted(p.name for p in d.iterdir()
+                  if p.is_dir() and (p / "pc.md").exists() and safe_id(p.name))
