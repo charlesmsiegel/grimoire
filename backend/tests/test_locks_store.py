@@ -654,3 +654,25 @@ def test_hold_all_is_bounded_by_one_timeout_not_n(monkeypatch, tmp_path):
         for p in holders:
             p.kill()
             p.wait(timeout=10)
+
+
+def test_a_second_process_cannot_hold_the_module_edit_lock(monkeypatch, tmp_path):
+    """The second stated goal of #234.
+
+    Note what this asserts on: module_edit._M, the lock the code actually
+    takes -- NOT locks.module_edit_lock(). Testing the new lock against itself
+    would pass before _M is rewired, so _M could stay a private process-local
+    RLock and every test would still be green.
+    """
+    from grimoire.store import module_edit
+
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    p = _hold_in_child(tmp_path, "module_edit_lock()")
+    try:
+        monkeypatch.setattr(locks, "LOCK_TIMEOUT", 0.5)
+        with pytest.raises(locks.ModuleEditBusy):
+            with module_edit._M:            # the lock module_edit really uses
+                pass
+    finally:
+        p.kill()
+        p.wait(timeout=10)
