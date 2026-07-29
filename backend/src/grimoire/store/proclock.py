@@ -1,0 +1,205 @@
+"""OS advisory file locks: the cross-process half of ``store/locks.py`` (#234).
+
+``store/locks.py`` owns the *domain* (which campaign, which hierarchy); this
+module owns the *mechanism* and knows nothing about campaigns.
+
+**Where the lock files live.** Machine-local, per-user, outside the store, and
+outside any directory subject to automatic cleaning. Not inside the store,
+because the store may be a synced folder: a lock file there would be
+replicated, would collect conflict copies, and on Windows with OneDrive
+Files-On-Demand an open handle on it can stall. A file lock cannot cross
+devices anyway, so putting it in the synced tree buys nothing.
+
+The path is derived from the account database rather than the environment.
+``$XDG_RUNTIME_DIR`` is set in a desktop session and unset under cron or
+systemd, and ``$HOME`` can be rewritten; either would make two processes of the
+*same user* pick *different* lock files and exclude nothing -- which is the
+whole guarantee. ``pwd`` does not consult the environment. Windows has no
+env-independent equivalent short of a ctypes ``SHGetKnownFolderPath``, which is
+not worth a compiled-API dependency for a case that needs someone to
+deliberately run two backends under differing ``USERPROFILE`` values.
+
+Spec: docs/superpowers/specs/2026-07-28-cross-process-campaign-locks-design.md
+"""
+
+from __future__ import annotations
+
+import errno
+import hashlib
+import os
+import re
+import sys
+import time
+from pathlib import Path
+
+_WINDOWS = sys.platform == "win32"
+
+if _WINDOWS:
+    import msvcrt
+else:
+    import fcntl
+    import pwd
+
+# Sentinel deadline: make exactly one attempt and give up. Distinct from None,
+# which means "no deadline" -- passing None for a non-blocking acquire would
+# retry forever, the opposite of what the caller asked for.
+NO_WAIT = object()
+
+_RETRY_DELAY = 0.02
+_UNSAFE = re.compile(r"[^A-Za-z0-9._-]")
+_MAX_NAME_HINT = 40          # matches atomic.py's bound, well inside NAME_MAX
+
+
+def _user_home() -> Path:
+    """The account's home directory, preferring the passwd database over the
+    environment (see the module docstring)."""
+    if not _WINDOWS:
+        try:
+            return Path(pwd.getpwuid(os.getuid()).pw_dir)
+        except (KeyError, OSError):
+            pass                      # fall through to Path.home()
+    return Path.home()
+
+
+def lock_dir() -> Path:
+    base = _user_home()
+    if _WINDOWS:
+        return base / "AppData" / "Local" / "grimoire" / "locks"
+    # ~/.local/state, not ~/.cache: the XDG location for state that persists
+    # and is not swept. A cleaner unlinking a held lock file would split two
+    # processes onto different inodes with both believing they hold the lock.
+    return base / ".local" / "state" / "grimoire" / "locks"
+
+
+def _store_key(root: Path) -> str:
+    """Identify the store by its resolved path. ``realpath`` resolves symlinks,
+    junctions, DOS 8.3 names and ``subst`` drives; ``normcase`` normalizes case
+    and separators on Windows and is a no-op on POSIX, so genuinely distinct
+    case-sensitive paths stay distinct."""
+    norm = os.path.normcase(os.path.realpath(str(root)))
+    return hashlib.sha256(norm.encode("utf-8", "surrogateescape")).hexdigest()[:16]
+
+
+def lock_path(root: Path, name: str) -> Path:
+    """Resolve (and create the directory for) one lock file.
+
+    ``name`` reaches us from a route parameter, so it is sanitized *and* hash
+    suffixed: sanitizing alone would collide distinct ids, while the 64-bit
+    suffix keeps them distinct and the readable prefix keeps the directory
+    debuggable. A collision is not impossible, only negligible, and its
+    consequence is bounded -- two names would share a lock file and serialize
+    against each other, a spurious wait rather than a lost lock.
+    """
+    d = lock_dir() / _store_key(root)
+    d.mkdir(parents=True, exist_ok=True)
+    if not _WINDOWS:
+        try:
+            os.chmod(d, 0o700)
+        except OSError:
+            pass                      # best effort; an existing dir may be ours already
+    slug = _UNSAFE.sub("-", name)[:_MAX_NAME_HINT]
+    digest = hashlib.sha256(name.encode("utf-8", "surrogateescape")).hexdigest()[:16]
+    return d / f"{slug}-{digest}.lock"
+
+
+def _try_lock(fd: int) -> bool:
+    """True if acquired, False if another process holds it.
+
+    Only the errors that *mean* "held elsewhere" return False. ENOSYS, ENOTSUP,
+    ENOLCK, EBADF and permission failures propagate: reporting a filesystem
+    that cannot lock as "another process is editing this campaign" would send
+    the user hunting a process that does not exist.
+    """
+    try:
+        if _WINDOWS:
+            # msvcrt.locking works at the CURRENT file position, unlike
+            # whole-file flock, so the seek is mandatory in both directions.
+            # Byte 0, length 1; locking past EOF is legal, so the file stays
+            # zero-length.
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError as e:
+        if _WINDOWS and e.errno in (errno.EACCES, errno.EDEADLOCK):
+            return False
+        if not _WINDOWS and e.errno in (errno.EAGAIN, errno.EWOULDBLOCK):
+            return False
+        raise
+
+
+def _unlock(fd: int) -> None:
+    if _WINDOWS:
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    else:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+def _same_file(fd: int, path: Path) -> bool:
+    """Is the fd we locked still the file at ``path``?
+
+    Only ENOENT counts as a mismatch (the name is gone, so it certainly is not
+    our inode). Every other stat failure propagates, per the same rule that
+    keeps permanent errors out of the contention path.
+    """
+    try:
+        named = os.stat(str(path))
+    except FileNotFoundError:
+        return False
+    held = os.fstat(fd)
+    return (held.st_dev, held.st_ino) == (named.st_dev, named.st_ino)
+
+
+def _expired(deadline) -> bool:
+    if deadline is NO_WAIT:
+        return True
+    return deadline is not None and deadline - time.monotonic() <= 0
+
+
+def acquire(path: Path, deadline) -> int | None:
+    """Open and lock ``path``; return the fd, or None if it stayed held.
+
+    ``deadline`` is None (wait indefinitely), ``NO_WAIT`` (one attempt), or a
+    ``time.monotonic()`` value.
+    """
+    while True:
+        fd = os.open(str(path), os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            got = _try_lock(fd)
+        except BaseException:
+            os.close(fd)
+            raise
+        if got:
+            if _WINDOWS or _same_file(fd, path):
+                return fd
+            # Someone replaced the file under us. Defence in depth only -- the
+            # chosen directory is not one anything cleans -- and not a proof:
+            # an unlink between this check and the return is still possible.
+            release(fd)
+            # Retrying must still respect the caller's deadline: a file being
+            # replaced repeatedly would otherwise make a NO_WAIT or expired
+            # acquisition spin forever.
+            if _expired(deadline):
+                return None
+            continue
+        os.close(fd)
+        if _expired(deadline):
+            return None
+        if deadline is None:
+            time.sleep(_RETRY_DELAY)
+        else:
+            # max(0.0, ...): the deadline can expire between _expired() above
+            # and this subtraction, and time.sleep() raises on a negative.
+            time.sleep(max(0.0, min(_RETRY_DELAY, deadline - time.monotonic())))
+
+
+def release(fd: int) -> None:
+    """Unlock and close. The fd is closed even if the unlock raises: leaking an
+    open descriptor would keep the OS lock held while the caller believed it
+    had released, which is the worst available outcome."""
+    try:
+        _unlock(fd)
+    finally:
+        os.close(fd)
