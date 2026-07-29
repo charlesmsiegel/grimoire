@@ -26,9 +26,11 @@ Three limits, all deliberate:
 - **Not across devices.** The lock file is machine-local by design (see The
   lock file), so the store's own filesystem and its lock support are
   irrelevant — a lock held on device A is invisible to device B whether the
-  store is on Dropbox, NFS, or SMB. No lock-based design can fix the
-  multi-device case: the sync client owns that domain and resolves simultaneous
-  edits with conflict copies on its own schedule.
+  store is on Dropbox, NFS, or SMB. No *filesystem* lock on a sync-replicated
+  store can fix the multi-device case: the sync client owns that domain and
+  resolves simultaneous edits with conflict copies on its own schedule. A
+  shared lock *service* could, and is out of scope for a local-first app with
+  no server.
 - **Not across OS users.** The lock directory is per-user, so two accounts on
   one machine pointed at one shared store are not excluded from each other.
   Grimoire is a single-user desktop/mobile app; the alternative (a
@@ -64,9 +66,12 @@ Non-goals.
   territory. Filed as a follow-up. Note that `sheets.write(expected=…)` and
   `sheets.set_field(expect=…)` already do exactly this at the sheet level, so a
   future generalization has a foothold rather than a blank page.
-- **Widening the lock domain.** Every unlocked writer listed in What remains
-  unlocked stays unlocked. Locking them is a behaviour change with its own
-  deadlock analysis, and bundling it here would make this diff unreviewable.
+- **Widening the lock domain**, with exactly one forced exception.
+  `scenes.create_scene` takes the campaign lock so that contention cannot leave
+  an orphaned scene without a baseline (see Where contention must not be
+  swallowed). Every other unlocked writer listed in What remains unlocked stays
+  unlocked: locking them is a behaviour change with its own deadlock analysis,
+  and bundling it here would make this diff unreviewable.
 - **Stale-lock reaping.** Not needed: both `flock` and `LockFileEx` are
   released by the kernel when the holding process dies, however it dies, and
   the lock fd is non-inheritable (PEP 446 makes Python fds non-inheritable by
@@ -102,51 +107,81 @@ uses.
 
 The timeout is a deadline for the **whole** acquisition. Time spent waiting on
 the thread lock is subtracted from the budget left for the file lock, so a
-`with` block waits `LOCK_TIMEOUT` in total, not twice that.
+`with` block waits `LOCK_TIMEOUT` in total, not twice that. It bounds *lock
+contention* only — see the note on blocking syscalls under Contention.
 
 ```
-acquire(blocking, timeout):
-    deadline = monotonic() + timeout   (None if timeout < 0)
-    if not rlock.acquire(blocking, remaining(deadline)):
+def _remaining(deadline):              # never pass a negative timeout: only
+    if deadline is None: return -1     # -1 means "no timeout" to RLock, and
+    return max(0.0, deadline - monotonic())   # any other negative is invalid
+
+acquire(blocking=True, timeout=-1):
+    deadline = monotonic() + timeout if (blocking and timeout >= 0) else None
+    if blocking:
+        ok = rlock.acquire(True, _remaining(deadline))
+    else:
+        ok = rlock.acquire(False)      # a timeout with blocking=False is a
+    if not ok:                         # ValueError, so it is a separate call
         return False
-    if depth > 0:                      # we already hold the file lock
-        depth += 1
-        return True
     try:
-        fd, path = open_and_lock(deadline)   # None,None on timeout
+        if depth > 0:                  # we already hold the file lock
+            depth += 1
+            return True
+        fd, path = open_and_lock(deadline)    # (None, None) on timeout
+        if fd is None:
+            rlock.release()
+            return False
+        self._fd, self._path = fd, path       # installed BEFORE depth is 1
+        depth = 1
+        return True
     except BaseException:
         rlock.release()                # never strand the thread lock
         raise
-    if fd is None:
-        rlock.release()
-        return False
-    self._fd, self._path = fd, path    # installed BEFORE depth becomes 1
-    depth = 1
-    return True
 
 release():
-    if depth == 0:
-        raise RuntimeError("release unlocked lock")   # RLock parity
+    if not rlock._is_owned():          # check ownership BEFORE touching state
+        raise RuntimeError("cannot release un-acquired lock")
     if depth > 1:
         depth -= 1
         rlock.release()
         return
     try:
-        unlock_and_close(self._fd)
-    finally:                           # even if unlock raises
+        try:
+            unlock(self._fd)           # seek+LK_UNLCK / flock(LOCK_UN)
+        finally:
+            os.close(self._fd)         # closed even if the unlock raises
+    finally:
         self._fd = self._path = None
         depth = 0
         rlock.release()
 ```
 
 `depth` is only ever read or written while the thread lock is held, so it needs
-no guard of its own, and no second thread can observe an intermediate state.
-The invariants the review demanded: depth stays 0 until the OS lock is held;
-the fd is installed before depth becomes 1; the outer release clears state,
-closes the fd and releases the thread lock even if the unlock call raises;
-every failure path — `CampaignBusy`, `PermissionError`, `KeyboardInterrupt`,
-`SystemExit`, a failing `stat` — releases the thread lock via the bare
-`except BaseException`.
+no guard of its own and no second thread can observe an intermediate state.
+The invariants, each one a round-2 finding:
+
+- **Ownership is checked before state.** `release()` tests `rlock._is_owned()`
+  first. A non-owner thread raises `RuntimeError` without decrementing `depth`
+  or closing the fd; the naive version corrupted the recursion count and
+  dropped cross-process exclusion before `rlock.release()` got to complain.
+- **Nothing between `acquire` succeeding and `return` is outside the `try`.**
+  The reentrant `depth += 1` is inside it, so a `KeyboardInterrupt` landing
+  there cannot strand a thread-lock acquisition.
+- **`blocking=False` never carries a timeout.** `RLock.acquire(False, t)`
+  raises `ValueError`; the two cases are separate calls.
+- **Remaining time is clamped to zero.** A slightly negative computed remainder
+  is not "expire immediately" to `RLock` — every negative other than `-1` is
+  invalid.
+- **The fd is closed even if unlocking raises**, via the nested `try/finally`.
+  A failed unlock that leaked an open descriptor would keep the OS lock held
+  while the wrapper believed it released — the worst available outcome.
+- Depth stays 0 until the OS lock is held, and the fd is installed before depth
+  becomes 1, so a failure at any line leaves the object usable.
+
+One residual, equivalent to plain `RLock` and not created here: if the
+interpreter is interrupted between `acquire()` returning `True` and the `with`
+body starting, `__exit__` never runs. That exposure is `threading`'s, identical
+before and after this change.
 
 The public surface is preserved exactly — the context-manager protocol,
 `acquire(blocking, timeout)`, `release()`, and `_is_owned()`. `_is_owned()` in
@@ -168,20 +203,42 @@ to automatic cleaning:
 <lockdir>/<sha256(normcase(realpath(home())))[:16]>/<cid-slug>-<sha256(cid)[:16]>.lock
 ```
 
-`<lockdir>` is, in order:
+`<lockdir>` is derived **deterministically from `Path.home()` alone**:
 
-- **Windows**: `%LOCALAPPDATA%\grimoire\locks`
-- **POSIX with `$XDG_RUNTIME_DIR`**: `$XDG_RUNTIME_DIR/grimoire/locks` — per-user
-  by construction, mode 0700, and cleared only at logout
-- **POSIX otherwise, including Android/Chaquopy**: `~/.cache/grimoire/locks`.
-  Under Chaquopy `Path.home()` is the app's private files directory, which is
-  stable and is *not* the cache directory Android evicts under storage
-  pressure.
+- **Windows**: `Path.home() / "AppData" / "Local" / "grimoire" / "locks"`
+- **POSIX, including Android/Chaquopy**: `Path.home() / ".local" / "state" /
+  "grimoire" / "locks"`
 
-The first draft put this under `tempfile.gettempdir()`, which was wrong on
-three counts the review caught: a `/tmp` cleaner can unlink a held lock file,
-per-user temp directories vary, and a shared `/tmp` needs an ownership and
-permissions story. A persistent per-user directory has none of those problems.
+Created with `mkdir(parents=True, exist_ok=True)` and mode `0o700` on POSIX.
+
+Two earlier attempts were wrong, and why matters more than the answer:
+
+- The **first draft** used `tempfile.gettempdir()`. A `/tmp` cleaner can unlink
+  a held lock file, per-user temp directories vary, and a shared `/tmp` needs
+  an ownership and permissions story it did not have.
+- The **second draft** used `$XDG_RUNTIME_DIR` when set and `~/.cache`
+  otherwise. That breaks the *primary* guarantee: `XDG_RUNTIME_DIR` is set in a
+  desktop session and unset under cron, systemd, or a bare `ssh` command, so
+  two processes of the same user on the same machine would pick **different
+  lock files for the same store** and neither would exclude the other. Any
+  environment-conditional path has this defect. And `~/.cache` is a cleanable
+  directory, contradicting the very reason the first draft was rejected —
+  `~/.local/state` is the XDG location for state that must persist and is not
+  swept.
+
+Deriving from `Path.home()` alone is safe here because grimoire already depends
+on it unconditionally: `paths.DEFAULT_HOME` is `Path.home() / ".grimoire"` and
+the bootstrap pointer is `Path.home() / ".grimoire.json"`. If `Path.home()`
+fails, the store cannot be located at all and the lock directory is moot — this
+adds no new dependency. `%LOCALAPPDATA%` is deliberately *not* read, for the
+same environment-conditional reason; `Path.home() / "AppData" / "Local"` is
+where it points on any normal Windows profile.
+
+Android is the weakest assumption: under Chaquopy `Path.home()` resolves to the
+app's private files directory. If that is ever wrong the lock file still lands
+somewhere app-private and writable, and the consequence is nil in practice —
+the APK runs a single backend process, so there is no second process on the
+device for it to exclude.
 
 Not inside the store, because the store may be a synced folder. A lock file
 there would be replicated, would accumulate conflict copies, and — on Windows
@@ -204,8 +261,11 @@ place to trust it (cf. #240). The readable prefix is the cid filtered to
 `atomic.py:_MAX_NAME_HINT` uses, and well inside `NAME_MAX` and Windows'
 component limit once the 16-hex suffix and `.lock` are added. The suffix is 64
 bits of SHA-256 over the full cid, so distinct cids that sanitize to the same
-prefix still get distinct files and a collision is not reachable by accident or
-by construction.
+prefix still get distinct files. Truncation to 64 bits does not make collisions
+*impossible* — the round-2 review is right that "not reachable by construction"
+was false — only negligible, and the consequence is bounded: two colliding cids
+would share one lock file and therefore serialize against each other, producing
+a spurious 409 rather than a lost lock or a corrupted record.
 
 **POSIX**: `fcntl.flock(fd, LOCK_EX | LOCK_NB)` in a retry loop. After
 acquiring, compare `(st_dev, st_ino)` from `os.fstat(fd)` against
@@ -261,12 +321,39 @@ locks()` and the world-module rebind route each acquire N campaign locks while
 holding the earlier ones. Applying `LOCK_TIMEOUT` per lock would give an N×30 s
 convoy. Both call a new `locks.hold_all(cids)` context manager that computes a
 single deadline and passes the remaining budget to each `acquire`, so the whole
-span is bounded by `LOCK_TIMEOUT`. `hold_all` is also where the sorted-order
-rule below is enforced, in one place rather than two.
+span is bounded by one `LOCK_TIMEOUT`. `hold_all` is also where the
+sorted-order rule below is enforced, in one place rather than two.
 
-The deadline covers the retry loop only. `realpath`, `mkdir`, `open` and `stat`
-on an unavailable network path can block outside it — an OS-level hang that no
-userspace deadline can bound, and one that today's code has equally.
+Partial acquisition must unwind completely, so `hold_all` is built on
+`contextlib.ExitStack` rather than a hand-rolled reversed loop:
+
+```
+@contextmanager
+def hold_all(cids):
+    deadline = monotonic() + LOCK_TIMEOUT
+    with ExitStack() as stack:
+        for cid in sorted(set(cids)):          # sorted: the ordering rule
+            lock = campaign_lock(cid)
+            if not lock.acquire(timeout=_remaining(deadline)):
+                raise CampaignBusy(cid)        # ExitStack unwinds the rest
+            stack.push(lock)                   # registered IMMEDIATELY
+        yield
+```
+
+`stack.push(lock)` registers each lock the instant it is acquired, so an
+exception at any later point — `CampaignBusy`, a `BaseException`, anything
+raised by the `yield` body — unwinds every lock already held. `ExitStack`
+runs **all** registered exits even when one of them raises, chaining the
+exceptions, which a `for lock in reversed(held): lock.release()` loop does not:
+there, one raising `release()` strands every remaining lock. When the budget is
+exhausted `_remaining` returns `0.0`, so the next `acquire` fails immediately
+rather than waiting again.
+
+The deadline bounds **lock contention**. It does not bound `realpath`, `mkdir`,
+`open` or `stat` on an unavailable network path — those are OS-level blocking
+calls that no userspace deadline can interrupt, and today's code has exactly
+the same exposure. The earlier claim that "the whole acquisition" is bounded
+overstated this; contention is bounded, syscalls are not.
 
 #### Where contention must not be swallowed
 
@@ -278,17 +365,41 @@ deliberate decision:
 
 1. **`audit.capture_baseline`** wraps its whole body in `except Exception:
    return` — "never raises, a capture failure must not fail scene creation".
-   That would turn contention into a scene with no baseline, which silently
-   loses that scene's audit delta. `CampaignBusy` is re-raised ahead of the
-   broad catch: a 409 on scene creation is trivially retryable, a scene that
-   quietly cannot be audited is not. The docstring's "never raises" gains its
-   one stated exception.
+   That would turn contention into a scene with no baseline, silently losing
+   that scene's audit delta.
+
+   The second draft proposed simply re-raising `CampaignBusy` there. The
+   round-2 review was right to reject it: `capture_baseline` has exactly one
+   caller, `scenes.create_scene` (`scenes.py:163`), and it runs **after**
+   `atomic.write_text` has already durably written the scene file. Re-raising
+   would return 409 while leaving an orphaned scene on disk — a worse outcome
+   than the one being fixed.
+
+   So the lock moves **outward**: `create_scene` takes
+   `locks.campaign_lock(cid)` around both the scene write and the baseline
+   capture. Contention then fails before any durable side effect, and a scene
+   that exists is guaranteed to have a baseline. `capture_baseline` re-raises
+   `CampaignBusy` ahead of its broad catch, which is now safe because its only
+   caller holds the lock already and the acquisition is reentrant — the
+   re-raise is a guard against a future caller that does not, not a live path.
+
+   This is the one place the spec widens the lock domain, and it is forced:
+   there is no way to make contention fail loudly here without moving the lock
+   above the first durable write.
 2. **The proposal adjudication route** catches every exception from
    `checks.resolve_check` (which takes the campaign lock internally) and turns
    it into a `check_error` SSE frame. `CampaignBusy` is caught first, the
    proposal is reverted `resolving → pending` exactly as the broad path does,
    and then it propagates as a 409 — contention is not a check error and must
    not be reported as one.
+
+   The revert can itself contend, since `proposals.transition` takes the same
+   lock. It is therefore best effort: if the revert also raises `CampaignBusy`
+   the record stays `resolving` and the 409 still propagates. That state is
+   already recoverable and needs no new machinery — `resolving` is in
+   `proposals.NON_TERMINAL`, so the next send's `supersede()` retires it, and
+   until then the route answers 409 "adjudication in progress", which is
+   accurate.
 3. **Startup.** `_lifespan` calls `module_edit.recover()` before serving, which
    takes `_M` and, when a journal must be replayed, every campaign lock. A
    second backend starting while the first is mid-edit would fail to start
@@ -310,11 +421,15 @@ not be written would persist narration whose roll fence has no proposal record
 — destroying the proposal-before-narration invariant that `_chat_stream`'s
 docstring calls out as the whole point of the ordering.
 
-So on `CampaignBusy` the wrapper persists **nothing** and emits
-`{"error": {"detail": …, "kind": "busy"}}`, the shape an `LLMError` already
-produces. The turn is lost and the user re-sends. That is a real cost, stated
-rather than hidden: a lost turn is recoverable, a transcript whose mechanical
-decision point has no proposal is not.
+So on `CampaignBusy` the wrapper emits `{"error": {"detail": …, "kind":
+"busy"}}` — the shape an `LLMError` already produces — and persists neither the
+generated narration nor a new proposal record. Stated that precisely, because
+"persists nothing" was too broad: `proposals.claim` and
+`_heal_current_proposal` can have persisted state earlier in the turn, and the
+guarantee being made is only about the two writes the failing finalizer would
+otherwise have made. The turn is lost and the user re-sends. That is a real
+cost, stated rather than hidden: a lost turn is recoverable, a transcript whose
+mechanical decision point has no proposal is not.
 
 ### The deadlock this would otherwise create
 
@@ -417,22 +532,41 @@ exclusion.
 
 - `acquire(timeout=…)` returns `False` on contention and does **not** raise —
   the `RLock` contract `test_locks_store.py:57` depends on.
+- `acquire(blocking=False)` returns a bool rather than raising `ValueError` —
+  the case the second draft's pseudocode got wrong.
 - After a timed-out `with`, the thread lock is free: another thread in the same
   process acquires it once the child exits.
+- `release()` from a thread that does not hold the lock raises `RuntimeError`
+  and leaves `depth`, the fd and the cross-process lock untouched — a
+  subsequent legitimate release by the owner still works.
 - Repeated timeouts and repeated inode-mismatch retries leak no file
   descriptors (compare fd count before and after).
 - A permanent lock error (injected `OSError(ENOLCK)`) propagates rather than
   becoming `CampaignBusy` / 409.
 - An exception raised inside a held `with` block still releases both the file
   lock and the thread lock.
+- An `unlock` that raises still closes the fd and releases the thread lock
+  (injected failure).
 - `hold_all` over N campaigns is bounded by one `LOCK_TIMEOUT`, not N of them.
+- `hold_all` unwinds every already-acquired lock when a later one is busy —
+  including when one `release()` raises mid-unwind, which must not strand the
+  remaining locks.
+- The lock directory is derived from `Path.home()` alone: clearing
+  `XDG_RUNTIME_DIR` / `LOCALAPPDATA` from the environment does not change which
+  file is locked. This is the regression guard for the round-2 finding that an
+  environment-conditional path silently breaks same-user exclusion.
 
 **Placement and integration**
 
 - No new file appears under `GRIMOIRE_HOME` — the guard that lock files stay
   out of the synced library.
 - `CampaignBusy` reaches the client as HTTP 409, through `TestClient`.
+- `create_scene` holds the campaign lock across the scene write, so contention
+  leaves **no** scene file behind — the guard on the orphaned-scene finding.
 - `capture_baseline` propagates `CampaignBusy` instead of swallowing it.
+- Adjudication contention returns 409 rather than a `check_error` SSE frame,
+  and a revert that is itself busy leaves the record `resolving` (recoverable
+  by the next send's `supersede()`) rather than raising a second error.
 - `_lifespan` startup survives a `CampaignBusy` from `recover()`.
 - The SSE `finalize` wrapper emits a `busy` error frame and persists **no**
   narration.
