@@ -146,16 +146,17 @@ for st in ({"current_state": "Wounded.", "knows": "The ledger is real.", "suspec
     check(f"state snapshot line ({st['current_state'] or 'no-cs'})",
           absorb._snapshot_line(st), render("snippets/state_snapshot_line.j2", st=st))
 
-routes_src = (REPO / "backend/src/grimoire/routes.py").read_text(encoding="utf-8")
+routes_src = "\n".join(p.read_text(encoding="utf-8")
+                       for p in sorted((REPO / "backend/src/grimoire/routes").glob("*.py")))
 assert 'prompts.render("scene/director_note.j2")' in routes_src, \
-    "routes.py no longer renders the director-note template"
+    "the routes package no longer renders the director-note template"
 assert 'prompts.render("scene/regenerate_guidance.j2"' in routes_src, \
-    "routes.py no longer renders the regenerate-guidance template"
+    "the routes package no longer renders the regenerate-guidance template"
 assert 'prompts.render(\n        "scene/roll_result.j2"' in routes_src \
     or 'prompts.render("scene/roll_result.j2"' in routes_src, \
-    "routes.py no longer renders the roll-result continuation template (#162)"
+    "the routes package no longer renders the roll-result continuation template (#162)"
 assert 'prompts.render("scene/roll_declined.j2")' in routes_src, \
-    "routes.py no longer renders the roll-declined continuation template (#162)"
+    "the routes package no longer renders the roll-declined continuation template (#162)"
 
 # ------------------------------------------------------------- store fixture
 

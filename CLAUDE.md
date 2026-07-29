@@ -79,7 +79,7 @@ code into `android/`. Rules that keep the platforms in lockstep
   Chaquopy-wheel'd); compiled desktop-only deps go in the `desktop` extra, and
   the pip block in `android/app/build.gradle.kts` mirrors the base list.
 - pydantic usage stays v1/v2-agnostic: plain `BaseModel` fields only, dump via
-  `routes._dump` (no `model_dump()`, `Field`, validators, `ConfigDict`).
+  `routes.common._dump` (no `model_dump()`, `Field`, validators, `ConfigDict`).
 
 Build: `make android-bootstrap` (once per machine — JDK 17, Android SDK,
 licenses, `android/local.properties`), then `make apk` (debug) /

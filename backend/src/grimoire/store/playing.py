@@ -133,7 +133,7 @@ def start_from_greeting(cid: str, sid: str, gid: str) -> str:
     # start of a scene and it WILL be matched, so it records a turn like any
     # other model output.
     #
-    # Split on the SAME marker grammar routes._persist_reply uses. Storing a
+    # Split on the SAME marker grammar routes.streaming._persist_reply uses. Storing a
     # multi-block greeting as one segment records turn_sizes [1] while
     # _parse_messages re-splits it into N messages at read time; drift
     # segmentation would then measure only the trailing block of the very turn

@@ -52,7 +52,7 @@ for Android in Chaquopy's repository. Two documented fallbacks
    `app/build.gradle.kts`.
 2. Pin the pure-python line instead: `install("pydantic==1.10.*")` plus a
    FastAPI version that accepts it. The backend is v1/v2-agnostic — the only
-   v2-specific API call is wrapped in `routes._dump`.
+   v2-specific API call is wrapped in `routes.common._dump`.
 
 ## Runtime layout on the device
 

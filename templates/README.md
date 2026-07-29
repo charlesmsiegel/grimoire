@@ -149,8 +149,8 @@ All three are `[]` when the campaign has no mechanics module bound
 (`store/modules.py:resolve`).
 
 ### Roll continuation — `scene/roll_result.j2` / `scene/roll_declined.j2`
-Ephemeral system messages `routes._continuation_messages` /
-`routes._declined_continuation_messages` append to `build_messages`'s output
+Ephemeral system messages `routes.mechanics._continuation_messages` /
+`routes.mechanics._declined_continuation_messages` append to `build_messages`'s output
 for the POST …/roll-proposal accept/decline call; never persisted.
 - `roll_result.j2` (accept) vars: `resolution` (the resolved-check dict),
   `on_roll_docs` (`list[str]`, bodies of every `on_roll` rules doc),
