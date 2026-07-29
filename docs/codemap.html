@@ -147,121 +147,147 @@ footer.doc{max-width:1280px;margin:0 auto;padding:0 28px 34px;color:var(--text-f
 <header class="doc">
   <div class="doc-label">CODEBASE ATLAS</div>
   <h1 class="doc-title">grimoire — Codebase Atlas</h1>
-  <p class="doc-sub"></p>
-  <div class="doc-meta">updated 2026-07-28 · 1816399c → 473f0adc · atomic-write retrofit (#233) absorbed</div>
+  <p class="doc-sub">A worldbuilding and roleplay tool whose database is a folder of Markdown</p>
+  <div class="doc-meta">generated 2026-07-29 · fd38a84a · 521 source files, 155,306 LOC · 18 modules, 0 cycles</div>
 </header>
 <nav class="tabs" role="tablist"><button role="tab" data-tab="overview" aria-selected="true" aria-controls="overview">Overview</button>
 <button role="tab" data-tab="inventory" aria-selected="false" aria-controls="inventory">Inventory</button>
 <button role="tab" data-tab="dependencies" aria-selected="false" aria-controls="dependencies">Dependencies</button>
 <button role="tab" data-tab="hotspots" aria-selected="false" aria-controls="hotspots">Hotspots</button>
 <button role="tab" data-tab="flows" aria-selected="false" aria-controls="flows">Critical Flows</button>
-<button role="tab" data-tab="boundaries" aria-selected="false" aria-controls="boundaries">Boundaries &amp; Ownership</button>
-<button role="tab" data-tab="invariants" aria-selected="false" aria-controls="invariants">Invariants &amp; Risks</button>
+<button role="tab" data-tab="boundaries" aria-selected="false" aria-controls="boundaries">Boundaries &amp;amp; Ownership</button>
+<button role="tab" data-tab="invariants" aria-selected="false" aria-controls="invariants">Invariants &amp;amp; Risks</button>
 <button role="tab" data-tab="glossary" aria-selected="false" aria-controls="glossary">Glossary</button></nav>
 <main><section class="panel active" id="overview" role="tabpanel">
 
-
-
-
 <div class="card hero">
-  <h2>What grimoire is</h2>
-  <p>A <strong>local-first, single-user app for AI-driven collaborative storytelling</strong>: a FastAPI backend plus a Vite/React SPA that let one person run roleplay campaigns against a language model. Its defining architectural choice is that <strong>the filesystem is the database</strong> — worlds, campaigns, characters and every scene transcript are plain Markdown and JSON under a user-chosen data root, with no schema, no migrations table and no server-side session.</p>
-  <p>Two further choices shape almost everything else. <strong>Every prompt is a Jinja2 template</strong> under <code>templates/</code>, rendered by <code>backend/src/grimoire/prompts.py</code>, so no prompt text is hard-coded in Python. And a <strong>campaign is a copy-on-write overlay on a world</strong> (<code>backend/src/grimoire/store/overlay.py</code>): a campaign materializes a record only when it diverges, and reads through to the world otherwise.</p>
+  <h2>A single-user worldbuilding and roleplay tool whose database is a folder of Markdown</h2>
+  <p>
+    grimoire runs a FastAPI backend and a Vite/React frontend against a store
+    that is <em>literally files</em> — Markdown-with-frontmatter for prose
+    records, JSON for structured state, rooted wherever
+    <code>store.home()</code> resolves (<code>backend/src/grimoire/store/paths.py:42</code>).
+    No database, no ORM, no transactions. The upside is that a user's library is
+    portable, greppable, and syncable; the cost is that every consistency
+    property normally bought from a database has to be hand-built here, and the
+    interesting findings in this atlas are almost all in that gap.
+  </p>
+  <p>
+    The domain has two axes. <strong>Worlds</strong> hold reusable canon
+    (characters, locations, lore); <strong>campaigns</strong> instantiate a
+    world and accumulate play — scenes, appearances, a chronicle, sheets. A
+    campaign reads through an <em>overlay</em>: its own copy if it has one, the
+    world's otherwise. That indirection is the single most load-bearing idea in
+    the codebase, and also the one most often bypassed.
+  </p>
 </div>
 
 <div class="kpis">
-  <div class="kpi"><div class="n">150k</div><div class="l">total LOC counted</div></div>
-  <div class="kpi accent"><div class="n">38k</div><div class="l">Python</div></div>
-  <div class="kpi accent"><div class="n">22k</div><div class="l">TypeScript</div></div>
-  <div class="kpi"><div class="n">82k</div><div class="l">Markdown (docs + specs)</div></div>
-  <div class="kpi good"><div class="n">48%</div><div class="l">of LOC is test code</div></div>
-  <div class="kpi warn"><div class="n">252</div><div class="l">HTTP routes in one file</div></div>
+  <div class="kpi accent"><div class="n">155k</div><div class="l">total LOC</div></div>
+  <div class="kpi"><div class="n">521</div><div class="l">source files</div></div>
+  <div class="kpi good"><div class="n">48.9%</div><div class="l">of LOC is tests</div></div>
+  <div class="kpi"><div class="n">18</div><div class="l">modules</div></div>
+  <div class="kpi good"><div class="n">0</div><div class="l">module-level cycles</div></div>
+  <div class="kpi warn"><div class="n">3,483</div><div class="l">LOC in routes.py</div></div>
 </div>
 
-<div class="callout">
-  <strong>Read the inventory numbers with one correction.</strong> Markdown is the largest "language" in this repo, but it is not the system — <code>docs/superpowers/</code> holds 78 design specs and 72 implementation plans (a development-process archive, roughly 4.9&nbsp;MB) that describe work already merged. The actual system is about <strong>38k lines of Python and 22k of TypeScript</strong>, and nearly half of that is tests. Treat <code>docs/superpowers/</code> as historical rationale you can consult, not as code to read.
-</div>
-
-<h2>Entry points</h2>
-<div class="tbl-wrap">
-<table class="sortable">
-<thead><tr><th>Entry point</th><th>Where</th><th>What it kicks off</th></tr></thead>
-<tbody>
-<tr><td><code>create_app()</code> / module-level <code>app</code></td><td><code>backend/src/grimoire/main.py:40</code></td><td>The whole backend. Adds gzip + CORS, mounts the API router under <code>/api</code>, then serves the built frontend as static files from the same origin.</td></tr>
-<tr><td>Startup lifespan</td><td><code>backend/src/grimoire/main.py:32-37</code></td><td>Runs three side-effecting store operations on every boot: two idempotent data migrations and a module-edit crash recovery pass.</td></tr>
-<tr><td><code>router</code> — 252 endpoints</td><td><code>backend/src/grimoire/routes.py:20</code></td><td>The entire HTTP surface. 116 routes under <code>/campaigns</code>, 80 under <code>/worlds</code>, 24 under <code>/modules</code>, the rest config/styles/presets/climates.</td></tr>
-<tr><td>React SPA root</td><td><code>frontend/src/App.tsx:18</code></td><td>Client-side routing over ten top-level views; the single API client is <code>frontend/src/api/client.ts</code>.</td></tr>
-<tr><td>Android WebView shell</td><td><code>android/app/build.gradle.kts</code></td><td>Packages this same backend (via Chaquopy) and the built frontend verbatim into an APK. No grimoire code lives in <code>android/</code> by design.</td></tr>
-<tr><td>Dev/ops scripts</td><td><code>scripts/verify_templates.py</code>, <code>backend/scripts/ingest_scene.py</code></td><td>Template-contract checker and a bulk transcript importer — both standalone, neither on the request path.</td></tr>
-</tbody>
-</table>
-</div>
-
-<h2>Reading order</h2>
-<p class="dim">Eight stops, in order. This is the shortest path to being able to review a change safely.</p>
+<h3>Entry points, and where to start reading</h3>
 <div class="tbl-wrap">
 <table>
-<thead><tr><th class="num">#</th><th>File</th><th>Why it matters</th></tr></thead>
-<tbody>
-<tr><td class="num">1</td><td><code>backend/src/grimoire/store/paths.py:41-54</code></td><td>Start here. <code>home()</code> resolves the data root on <em>every call</em> (env var, then a bootstrap pointer file, then <code>~/.grimoire</code>). Every other store module is relative to this, and tests isolate by setting the env var.</td></tr>
-<tr><td class="num">2</td><td><code>backend/src/grimoire/main.py</code></td><td>68 lines. The whole app assembly, including the startup migrations you will otherwise be surprised by.</td></tr>
-<tr><td class="num">3</td><td><code>backend/src/grimoire/store/overlay.py</code></td><td>The single most important domain concept: campaign-over-world copy-on-write, tombstones, and the difference between flat records and "actors". Nearly every campaign bug in this codebase's history is an overlay misuse.</td></tr>
-<tr><td class="num">4</td><td><code>backend/src/grimoire/store/context.py:1-140</code></td><td>How a scene becomes a prompt: cast, world-info activation, macro expansion, calendar/weather facts. This is where "the model said something wrong" investigations begin.</td></tr>
-<tr><td class="num">5</td><td><code>backend/src/grimoire/routes.py:2456-2600</code></td><td>The streaming machinery — SSE framing, the roll-fence interception, and the two persisted-turn strategies. Small region, disproportionate consequence.</td></tr>
-<tr><td class="num">6</td><td><code>backend/src/grimoire/routes.py:2988-3150</code></td><td>The three generation routes (chat/retry/regenerate) and absorb. Read these together; they share a fragile pre-flight sequence.</td></tr>
-<tr><td class="num">7</td><td><code>frontend/src/api/client.ts</code></td><td>The one place the frontend talks to the backend. Fan-in of 92 — 1009 lines of typed wrappers plus the SSE reader at <code>frontend/src/api/client.ts:481</code>.</td></tr>
-<tr><td class="num">8</td><td><code>templates/README.md</code></td><td>The prompt contract. Each template's variables are documented here; changing a store function's output without updating its template is a silent breakage class.</td></tr>
-</tbody>
+  <thead><tr><th>#</th><th>Read</th><th>Why</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td><code>backend/src/grimoire/store/paths.py:42</code></td>
+        <td><code>home()</code> — three-step resolution (env var → bootstrap pointer → <code>~/.grimoire</code>). Everything on disk hangs off this; the Android build depends on it not assuming a desktop <code>~</code>.</td></tr>
+    <tr><td>2</td><td><code>backend/src/grimoire/store/overlay.py</code></td>
+        <td>The campaign-reads-through-world indirection. Read this before any store module, or you will misread every one of them.</td></tr>
+    <tr><td>3</td><td><code>backend/src/grimoire/store/atomic.py:193</code></td>
+        <td>Two functions, and every byte the app writes goes through them. Short, and the docstring is unusually explicit about what it does <em>not</em> guarantee.</td></tr>
+    <tr><td>4</td><td><code>backend/src/grimoire/store/scenes.py</code></td>
+        <td>The highest-frequency writer and the least recoverable data. The transcript format is Markdown with <code>**Speaker:**</code> blocks — parsing is by convention, not schema.</td></tr>
+    <tr><td>5</td><td><code>backend/src/grimoire/routes.py:41</code></td>
+        <td>All 252 endpoints plus streaming, the fence protocol, proposal healing and audit orchestration. Read last, and expect to disagree with its size.</td></tr>
+    <tr><td>6</td><td><code>backend/src/grimoire/prompts.py:35</code></td>
+        <td><code>render()</code> — the seam between code and the 219 Jinja templates that constitute the actual LLM behavior.</td></tr>
+  </tbody>
 </table>
 </div>
-<p><strong>Skip on a first pass:</strong> <code>docs/superpowers/</code> (merged-work archive), <code>backend/src/grimoire/store/module_edit.py</code> (1125 lines of authoring/journaling machinery, self-contained), and the <code>frontend/src/components/Sheet*.tsx</code> family unless you are working on mechanics.</p>
 
-<h2>Intended architecture</h2>
+<h3>Intended architecture</h3>
 <div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">
 flowchart TD
-  UI["React SPA<br/>frontend/src"] -->|"fetch + SSE"| API["routes.py<br/>252 endpoints"]
-  API --> CTX["context.py<br/>prompt assembly"]
-  API --> STORE["store/ — ~60 modules"]
-  CTX --> TPL["templates/*.j2<br/>all prompt text"]
-  CTX --> STORE
-  API --> LLMC["llm.py<br/>LLMClient facade"]
-  LLMC --> P1["openrouter.py"]
-  LLMC --> P2["claude_agent.py"]
-  LLMC --> P3["openai_compatible.py"]
-  STORE --> OV["overlay.py<br/>campaign CoW"]
-  OV --> FS[("data root<br/>markdown + JSON")]
-  STORE --> FS
+    UI["frontend/components + routes (108 files)"] --&gt;|fetch| API["routes.py — 252 endpoints"]
+    API --&gt; STORE["store/ — 75 files, 13.8k LOC"]
+    API --&gt; LLM["llm.py + providers"]
+    LLM --&gt; TPL["prompts.py + 219 .j2 templates"]
+    STORE --&gt; OVL["overlay.py — campaign sees world"]
+    STORE --&gt; ATOM["atomic.py — the only writer"]
+    OVL --&gt; FS[("~/.grimoire — Markdown + JSON")]
+    ATOM --&gt; FS
+    API -.bypasses overlay.-&gt; FS
 </pre></div></div>
+<p class="note">
+  The dotted edge is not decoration — it is finding #4 below and issue #248.
+  The route layer reaches the filesystem directly in places, which is exactly
+  how a raw <code>write_text</code> survived in <code>routes.py</code> until a
+  package-wide guard went looking for it.
+</p>
 
+<h3>Decisions worth knowing before you judge the code</h3>
+<ul>
+  <li>
+    <strong>Files over a database, deliberately.</strong> Records are portable
+    and diffable; the README encourages pointing the store at a synced folder to
+    share a library across devices. That decision is the direct cause of risks #1
+    and #2 below — it is a trade, not an oversight, but the trade's cost is
+    unpaid in places.
+  </li>
+  <li>
+    <strong>Campaigns copy-on-write from worlds.</strong> A campaign starts thin
+    and materializes records only when edited. Anything that reads campaign data
+    without going through <code>overlay</code> silently sees a partial world.
+  </li>
+  <li>
+    <strong>pydantic stays v1/v2-agnostic and base deps stay Android-installable.</strong>
+    Per <code>CLAUDE.md</code> — the Android app packages <code>backend/src</code>
+    verbatim via Chaquopy, so a compiled desktop-only dependency breaks a
+    platform that has no CI here.
+  </li>
+  <li>
+    <strong>Test share is 48.9% of LOC</strong> and the suite is ~2,082 tests.
+    This is a well-tested codebase by volume; the gaps below are concurrency and
+    crash-recovery properties that tests of this shape cannot easily reach.
+  </li>
+</ul>
+
+<h3>What this atlas cannot see</h3>
 <div class="callout warn">
-  <strong>Where the real graph diverges from this picture.</strong> The diagram shows <code>store/</code> as a layer; the dependency analysis shows it is closer to a mesh. All 41 modules under <code>backend/src/grimoire/store/</code> participate in one import cycle through the package <code>__init__</code>, and 33 call sites use function-level imports specifically to break cycles (for example <code>backend/src/grimoire/store/campaigns.py:141</code> and <code>backend/src/grimoire/store/absorb.py:556</code>). The Boundaries tab explains which of these are benign and which are not. The newest store module is the counter-example worth copying: <code>backend/src/grimoire/store/locks.py</code> imports only <code>threading</code>, so it sits <em>outside</em> the 41-module cycle and every consumer can reach it with a plain top-level import — which is what let #245 delete one of those deferred-import workarounds outright.
+  <ul>
+    <li>
+      <strong>219 Jinja templates are invisible to the dependency graph.</strong>
+      95 files were excluded as unrecognized languages, 57 of them <code>.j2</code>.
+      Those templates <em>are</em> the LLM behavior — a prompt change is a
+      behavior change with no import edge and no type signature. Treat the
+      Dependencies tab as covering the Python/TS skeleton only.
+    </li>
+    <li>
+      <strong>No coverage tab.</strong> No parseable artifact exists in the repo
+      (no Cobertura XML, LCOV info, or Go coverage profile). Coverage was not generated for this atlas —
+      running the suite to manufacture a number would misrepresent when it was
+      measured. Line-level coverage is genuinely unknown.
+    </li>
+    <li>
+      <strong>No eval harness.</strong> There is no benchmark or eval
+      infrastructure for LLM output quality — tracked as issue #246. For a
+      product whose core value is model output, that is a notable absence rather
+      than a missing tab.
+    </li>
+    <li>
+      <strong>Module-level cycles are zero, but file-level cycles exist</strong>
+      (issues #238, #239). The graph is grouped at depth 3; a cycle wholly inside
+      one module does not appear as an edge.
+    </li>
+  </ul>
 </div>
-
-<h2>Key decisions &amp; constraints</h2>
-<div class="grid cols-2">
-  <div class="card">
-    <h3>Filesystem as database</h3>
-    <p>No DB, no ORM, no transactions. Records are Markdown-with-frontmatter or JSON; content hashes (<code>backend/src/grimoire/store/entities.py:130</code>) stand in for revision numbers, and a three-hash comparison (world / base / mine) drives world-to-campaign sync at <code>backend/src/grimoire/store/sync.py:33</code>. The upside is that a user's library is portable and greppable. Single-record writes became atomic in #233 (<code>backend/src/grimoire/store/atomic.py</code>); the residual cost is that <em>multi-file</em> updates still are not — <code>characters.write_card</code> writes a card and a meta file separately, and a crash between them leaves the pair inconsistent.</p>
-  </div>
-  <div class="card">
-    <h3>Prompts are data, and so are game mechanics</h3>
-    <p>Prompt text lives in <code>templates/</code> with Jinja auto-reload (<code>backend/src/grimoire/prompts.py:28-32</code>), so editing a prompt needs no restart. Mechanics modules follow the same instinct one step further: they are <em>declarative data packs</em>, explicitly not code plugins, so importing someone else's module never executes their code (<code>backend/src/grimoire/store/modules.py:1-7</code>).</p>
-  </div>
-  <div class="card">
-    <h3>Calendars are the deliberate exception</h3>
-    <p>Custom calendars <em>are</em> Python plugins, imported with <code>exec_module</code> from the user's data directory (<code>backend/src/grimoire/store/calendars/plugins.py:45-47</code>). The code comments treat this as intentional given a single-user local app, and the module docstring for modules explicitly contrasts itself with it. Worth knowing before anyone proposes a "share your calendar" feature.</p>
-  </div>
-  <div class="card">
-    <h3>Provider-agnostic LLM access, pydantic-version-agnostic models</h3>
-    <p>Three providers sit behind one facade (<code>backend/src/grimoire/llm.py:13-38</code>), selected per stored connection. Separately, the Android build may pin pydantic 1.x, so the codebase avoids v2-only APIs and dumps models through one shim at <code>backend/src/grimoire/routes.py:25-30</code>.</p>
-  </div>
-</div>
-
-<h3>Evaluation artifacts</h3>
-<p class="dim">There is no eval or benchmark suite in this repository — no <code>evals/</code> tree, no benchmark job, no scored regression harness for prompt or model output quality. Correctness assurance is entirely conventional testing: 88 pytest modules and 49 vitest files, about 48% of all counted lines. For a system whose primary output is LLM prose, the absence of any output-quality measurement is a genuine gap rather than an oversight worth papering over; the closest thing that exists is <code>scripts/verify_templates.py</code>, which checks the template/variable contract, not generation quality.</p>
-
-
-
 
 </section>
 <section class="panel" id="inventory" role="tabpanel">
@@ -269,7 +295,7 @@ flowchart TD
 
 <div class="kpis">
   <div class="kpi accent"><div class="n">521</div><div class="l">source files</div></div>
-  <div class="kpi"><div class="n">155,195</div><div class="l">lines of code</div></div>
+  <div class="kpi"><div class="n">155,306</div><div class="l">lines of code</div></div>
   <div class="kpi"><div class="n">4</div><div class="l">languages</div></div>
   <div class="kpi good"><div class="n">49%</div><div class="l">test code share</div></div>
 </div>
@@ -281,19 +307,19 @@ flowchart TD
 <tr><td>Python</td><td class='num'>39,373</td><td class='num'>177</td><td><div class="bar "><i style="width:48.1%"></i></div></td><td class='num'>25.4%</td></tr>
 <tr><td>TypeScript</td><td class='num'>21,744</td><td class='num'>127</td><td><div class="bar "><i style="width:26.6%"></i></div></td><td class='num'>14.0%</td></tr>
 <tr><td>JSON</td><td class='num'>5,648</td><td class='num'>20</td><td><div class="bar "><i style="width:6.9%"></i></div></td><td class='num'>3.6%</td></tr>
-<tr><td>HTML</td><td class='num'>5,044</td><td class='num'>6</td><td><div class="bar "><i style="width:6.2%"></i></div></td><td class='num'>3.3%</td></tr>
+<tr><td>HTML</td><td class='num'>5,155</td><td class='num'>6</td><td><div class="bar "><i style="width:6.3%"></i></div></td><td class='num'>3.3%</td></tr>
 <tr><td>CSS</td><td class='num'>943</td><td class='num'>2</td><td><div class="bar "><i style="width:1.5%"></i></div></td><td class='num'>0.6%</td></tr>
 <tr><td>Kotlin</td><td class='num'>296</td><td class='num'>3</td><td><div class="bar "><i style="width:1.5%"></i></div></td><td class='num'>0.2%</td></tr>
 <tr><td>Shell</td><td class='num'>184</td><td class='num'>4</td><td><div class="bar "><i style="width:1.5%"></i></div></td><td class='num'>0.1%</td></tr>
 <tr><td>Make</td><td class='num'>62</td><td class='num'>1</td><td><div class="bar "><i style="width:1.5%"></i></div></td><td class='num'>0.0%</td></tr>
 <tr><td>TOML</td><td class='num'>41</td><td class='num'>1</td><td><div class="bar "><i style="width:1.5%"></i></div></td><td class='num'>0.0%</td></tr></tbody></table></div>
-<p class="dim">Coverage: 93 file(s) in unrecognized languages are not counted above (.j2 (57), .xml (5), .png (5), .xhtml (5), .ttf (4)).</p>
+<p class="dim">Coverage: 95 file(s) in unrecognized languages are not counted above (.j2 (57), .xml (5), .png (5), .xhtml (5), .ttf (4)).</p>
 
 <h2>Top-level directories</h2>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>Directory</th><th class="num">LOC</th><th>Share</th></tr></thead>
-<tbody><tr><td><code>docs/</code></td><td class='num'>86,143</td><td><div class="bar "><i style="width:100.0%"></i></div></td></tr>
-<tr><td><code>backend/</code></td><td class='num'>39,673</td><td><div class="bar "><i style="width:46.1%"></i></div></td></tr>
+<tbody><tr><td><code>docs/</code></td><td class='num'>86,254</td><td><div class="bar "><i style="width:100.0%"></i></div></td></tr>
+<tr><td><code>backend/</code></td><td class='num'>39,673</td><td><div class="bar "><i style="width:46.0%"></i></div></td></tr>
 <tr><td><code>frontend/</code></td><td class='num'>27,580</td><td><div class="bar "><i style="width:32.0%"></i></div></td></tr>
 <tr><td><code>scripts/</code></td><td class='num'>701</td><td><div class="bar "><i style="width:1.5%"></i></div></td></tr>
 <tr><td><code>android/</code></td><td class='num'>386</td><td><div class="bar "><i style="width:1.5%"></i></div></td></tr>
@@ -360,16 +386,16 @@ flowchart TD
 
 
 <div class="kpis">
-  <div class="kpi accent"><div class="n">12</div><div class="l">modules</div></div>
+  <div class="kpi accent"><div class="n">18</div><div class="l">modules</div></div>
   <div class="kpi"><div class="n">1,272</div><div class="l">file-level imports</div></div>
-  <div class="kpi bad"><div class="n">1</div><div class="l">cycles</div></div>
+  <div class="kpi bad"><div class="n">3</div><div class="l">cycles</div></div>
   <div class="kpi"><div class="n">5</div><div class="l">top-level arms</div></div>
 </div>
-<div class="callout bad"><b>1 module-level dependency cycle detected</b> — modules that import each other directly or transitively. Cycles make modules impossible to understand or test in isolation.<ul style="margin-top:8px"><li><span class='badge bad'>cycle 1</span> <code>frontend/src/components</code> ⇄ <code>frontend/src/routes</code></li></ul></div><details><summary>File-level import cycles: 3 strongly-connected groups</summary><div class="body"><p class="dim">Files that (transitively) import each other. In Python these often include type-annotation or lazy in-function imports — less harmful than top-level cycles, but each one still couples the files' lifecycles. Worth explaining case-by-case in the Boundaries tab.</p><ul><li><span class='badge warn'>group 1</span> <code>backend/src/grimoire/store/__init__.py</code> ⇄ <code>backend/src/grimoire/store/absorb.py</code> ⇄ <code>backend/src/grimoire/store/appearances.py</code> ⇄ <code>backend/src/grimoire/store/assets.py</code> ⇄ <code>backend/src/grimoire/store/audit.py</code> ⇄ <code>backend/src/grimoire/store/calendars/__init__.py</code> ⇄ <code>backend/src/grimoire/store/calendars/base.py</code> ⇄ <code>backend/src/grimoire/store/calendars/config.py</code> <span class='dim'>… 52 more</span></li><li><span class='badge warn'>group 2</span> <code>frontend/src/components/ModuleContentEditor.tsx</code> ⇄ <code>frontend/src/components/ModuleDisplayEditor.tsx</code> ⇄ <code>frontend/src/components/ModuleEditor.tsx</code> ⇄ <code>frontend/src/components/ModuleRulesEditor.tsx</code> ⇄ <code>frontend/src/components/ModuleSchemaEditor.tsx</code></li><li><span class='badge warn'>group 3</span> <code>backend/src/grimoire/claude_agent.py</code> ⇄ <code>backend/src/grimoire/llm.py</code> ⇄ <code>backend/src/grimoire/openai_compatible.py</code> ⇄ <code>backend/src/grimoire/openrouter.py</code></li></ul></div></details>
+<div class="callout bad"><b>3 module-level dependency cycles detected</b> — modules that import each other directly or transitively. Cycles make modules impossible to understand or test in isolation.<ul style="margin-top:8px"><li><span class='badge bad'>cycle 1</span> <code>backend/src/grimoire</code> ⇄ <code>backend/src/grimoire/store</code></li><li><span class='badge bad'>cycle 2</span> <code>frontend/src/theme</code> ⇄ <code>frontend/src/theme/themes</code></li><li><span class='badge bad'>cycle 3</span> <code>frontend/src/components</code> ⇄ <code>frontend/src/routes</code></li></ul></div><details><summary>File-level import cycles: 3 strongly-connected groups</summary><div class="body"><p class="dim">Files that (transitively) import each other. In Python these often include type-annotation or lazy in-function imports — less harmful than top-level cycles, but each one still couples the files' lifecycles. Worth explaining case-by-case in the Boundaries tab.</p><ul><li><span class='badge warn'>group 1</span> <code>backend/src/grimoire/store/__init__.py</code> ⇄ <code>backend/src/grimoire/store/absorb.py</code> ⇄ <code>backend/src/grimoire/store/appearances.py</code> ⇄ <code>backend/src/grimoire/store/assets.py</code> ⇄ <code>backend/src/grimoire/store/audit.py</code> ⇄ <code>backend/src/grimoire/store/calendars/__init__.py</code> ⇄ <code>backend/src/grimoire/store/calendars/base.py</code> ⇄ <code>backend/src/grimoire/store/calendars/config.py</code> <span class='dim'>… 52 more</span></li><li><span class='badge warn'>group 2</span> <code>frontend/src/components/ModuleContentEditor.tsx</code> ⇄ <code>frontend/src/components/ModuleDisplayEditor.tsx</code> ⇄ <code>frontend/src/components/ModuleEditor.tsx</code> ⇄ <code>frontend/src/components/ModuleRulesEditor.tsx</code> ⇄ <code>frontend/src/components/ModuleSchemaEditor.tsx</code></li><li><span class='badge warn'>group 3</span> <code>backend/src/grimoire/claude_agent.py</code> ⇄ <code>backend/src/grimoire/llm.py</code> ⇄ <code>backend/src/grimoire/openai_compatible.py</code> ⇄ <code>backend/src/grimoire/openrouter.py</code></li></ul></div></details>
 <h2>Module import graph</h2>
 <p class="dim">Node area = lines of code · arrows point from importer to imported · drag nodes, Ctrl/⌘-scroll to zoom, hover to isolate a neighborhood.</p>
 <div class="viz" data-render="forcegraph" style="height:620px"></div>
-<script type="application/json">{"nodes":[{"id":"","label":"(root)","group":"(root)","size":62,"fanIn":0,"fanOut":0,"meta":"(repo root) \u00b7 1 files"},{"id":"android/app/src/main/java/app/grimoire","label":"grimoire","group":"android","size":296,"fanIn":0,"fanOut":0,"meta":"android/app/src/main/java/app/grimoire \u00b7 3 files"},{"id":"android/app/src/main/python","label":"python","group":"android","size":34,"fanIn":0,"fanOut":1,"meta":"android/app/src/main/python \u00b7 1 files"},{"id":"backend","label":"backend","group":"backend","size":38822,"fanIn":2,"fanOut":0,"meta":"backend \u00b7 177 files"},{"id":"frontend","label":"frontend","group":"frontend","size":16,"fanIn":0,"fanOut":0,"meta":"frontend \u00b7 1 files"},{"id":"frontend/src","label":"frontend","group":"frontend","size":232,"fanIn":0,"fanOut":3,"meta":"frontend/src \u00b7 4 files"},{"id":"frontend/src/api","label":"api","group":"frontend","size":1623,"fanIn":3,"fanOut":0,"meta":"frontend/src/api \u00b7 8 files"},{"id":"frontend/src/components","label":"components","group":"cycle","size":14436,"fanIn":1,"fanOut":2,"meta":"frontend/src/components \u00b7 83 files \u00b7 in dependency cycle #1"},{"id":"frontend/src/markdown","label":"markdown","group":"frontend","size":122,"fanIn":1,"fanOut":0,"meta":"frontend/src/markdown \u00b7 2 files"},{"id":"frontend/src/routes","label":"routes","group":"cycle","size":5118,"fanIn":2,"fanOut":4,"meta":"frontend/src/routes \u00b7 21 files \u00b7 in dependency cycle #1"},{"id":"frontend/src/theme","label":"theme","group":"frontend","size":197,"fanIn":2,"fanOut":0,"meta":"frontend/src/theme \u00b7 8 files"},{"id":"scripts","label":"scripts","group":"scripts","size":701,"fanIn":0,"fanOut":1,"meta":"scripts \u00b7 5 files"}],"links":[{"source":"android/app/src/main/python","target":"backend","weight":1,"cycle":false},{"source":"frontend/src","target":"frontend/src/api","weight":2,"cycle":false},{"source":"frontend/src","target":"frontend/src/theme","weight":2,"cycle":false},{"source":"frontend/src","target":"frontend/src/routes","weight":11,"cycle":false},{"source":"frontend/src/components","target":"frontend/src/api","weight":76,"cycle":false},{"source":"frontend/src/components","target":"frontend/src/routes","weight":1,"cycle":true},{"source":"frontend/src/routes","target":"frontend/src/api","weight":21,"cycle":false},{"source":"frontend/src/routes","target":"frontend/src/components","weight":24,"cycle":true},{"source":"frontend/src/routes","target":"frontend/src/markdown","weight":1,"cycle":false},{"source":"frontend/src/routes","target":"frontend/src/theme","weight":2,"cycle":false},{"source":"scripts","target":"backend","weight":29,"cycle":false}],"legendExtra":"<span><i class=\"sw\" style=\"background:transparent;border:2px solid var(--bad);box-sizing:border-box\"><\/i>red edges = cycle<\/span>"}</script>
+<script type="application/json">{"nodes":[{"id":"","label":"(root)","group":"(root)","size":62,"fanIn":0,"fanOut":0,"meta":"(repo root) \u00b7 1 files"},{"id":"android/app/src/main/java/app/grimoire","label":"android","group":"android","size":296,"fanIn":0,"fanOut":0,"meta":"android/app/src/main/java/app/grimoire \u00b7 3 files"},{"id":"android/app/src/main/python","label":"python","group":"android","size":34,"fanIn":0,"fanOut":1,"meta":"android/app/src/main/python \u00b7 1 files"},{"id":"backend/scripts","label":"scripts","group":"backend","size":252,"fanIn":1,"fanOut":2,"meta":"backend/scripts \u00b7 2 files"},{"id":"backend/src/grimoire","label":"backend","group":"cycle","size":3874,"fanIn":4,"fanOut":1,"meta":"backend/src/grimoire \u00b7 8 files \u00b7 in dependency cycle #1"},{"id":"backend/src/grimoire/store","label":"store","group":"cycle","size":13818,"fanIn":5,"fanOut":1,"meta":"backend/src/grimoire/store \u00b7 75 files \u00b7 in dependency cycle #1"},{"id":"backend/tests","label":"tests","group":"backend","size":20839,"fanIn":0,"fanOut":3,"meta":"backend/tests \u00b7 90 files"},{"id":"backend/tests/fixtures","label":"fixtures","group":"backend","size":39,"fanIn":0,"fanOut":1,"meta":"backend/tests/fixtures \u00b7 2 files"},{"id":"frontend","label":"frontend","group":"frontend","size":16,"fanIn":0,"fanOut":0,"meta":"frontend \u00b7 1 files"},{"id":"frontend/src","label":"frontend","group":"frontend","size":232,"fanIn":0,"fanOut":4,"meta":"frontend/src \u00b7 4 files"},{"id":"frontend/src/api","label":"api","group":"frontend","size":1623,"fanIn":3,"fanOut":0,"meta":"frontend/src/api \u00b7 8 files"},{"id":"frontend/src/components","label":"components","group":"cycle","size":14436,"fanIn":1,"fanOut":2,"meta":"frontend/src/components \u00b7 83 files \u00b7 in dependency cycle #3"},{"id":"frontend/src/markdown","label":"markdown","group":"frontend","size":122,"fanIn":1,"fanOut":0,"meta":"frontend/src/markdown \u00b7 2 files"},{"id":"frontend/src/routes","label":"routes","group":"cycle","size":5118,"fanIn":2,"fanOut":5,"meta":"frontend/src/routes \u00b7 21 files \u00b7 in dependency cycle #3"},{"id":"frontend/src/theme","label":"theme","group":"cycle","size":60,"fanIn":3,"fanOut":1,"meta":"frontend/src/theme \u00b7 3 files \u00b7 in dependency cycle #2"},{"id":"frontend/src/theme/themes","label":"themes","group":"cycle","size":137,"fanIn":3,"fanOut":1,"meta":"frontend/src/theme/themes \u00b7 5 files \u00b7 in dependency cycle #2"},{"id":"scripts","label":"scripts","group":"scripts","size":517,"fanIn":0,"fanOut":1,"meta":"scripts \u00b7 1 files"},{"id":"scripts/unix","label":"unix","group":"scripts","size":184,"fanIn":0,"fanOut":0,"meta":"scripts/unix \u00b7 4 files"}],"links":[{"source":"android/app/src/main/python","target":"backend/src/grimoire","weight":1,"cycle":false},{"source":"backend/scripts","target":"backend/src/grimoire/store","weight":16,"cycle":false},{"source":"backend/scripts","target":"backend/src/grimoire","weight":1,"cycle":false},{"source":"backend/src/grimoire","target":"backend/src/grimoire/store","weight":4,"cycle":true},{"source":"backend/src/grimoire/store","target":"backend/src/grimoire","weight":23,"cycle":true},{"source":"backend/tests","target":"backend/src/grimoire/store","weight":441,"cycle":false},{"source":"backend/tests","target":"backend/src/grimoire","weight":27,"cycle":false},{"source":"backend/tests","target":"backend/scripts","weight":1,"cycle":false},{"source":"backend/tests/fixtures","target":"backend/src/grimoire/store","weight":2,"cycle":false},{"source":"frontend/src","target":"frontend/src/api","weight":2,"cycle":false},{"source":"frontend/src","target":"frontend/src/routes","weight":11,"cycle":false},{"source":"frontend/src","target":"frontend/src/theme/themes","weight":1,"cycle":false},{"source":"frontend/src","target":"frontend/src/theme","weight":1,"cycle":false},{"source":"frontend/src/components","target":"frontend/src/api","weight":76,"cycle":false},{"source":"frontend/src/components","target":"frontend/src/routes","weight":1,"cycle":true},{"source":"frontend/src/routes","target":"frontend/src/api","weight":21,"cycle":false},{"source":"frontend/src/routes","target":"frontend/src/components","weight":24,"cycle":true},{"source":"frontend/src/routes","target":"frontend/src/markdown","weight":1,"cycle":false},{"source":"frontend/src/routes","target":"frontend/src/theme","weight":1,"cycle":false},{"source":"frontend/src/routes","target":"frontend/src/theme/themes","weight":1,"cycle":false},{"source":"frontend/src/theme","target":"frontend/src/theme/themes","weight":1,"cycle":true},{"source":"frontend/src/theme/themes","target":"frontend/src/theme","weight":4,"cycle":true},{"source":"scripts","target":"backend/src/grimoire/store","weight":29,"cycle":false}],"legendExtra":"<span><i class=\"sw\" style=\"background:transparent;border:2px solid var(--bad);box-sizing:border-box\"><\/i>red edges = cycle<\/span>"}</script>
 
 <div class="grid cols-2">
 <div>
@@ -422,7 +448,7 @@ flowchart TD
 
 
 <div class="kpis">
-  <div class="kpi accent"><div class="n">2,309</div><div class="l">commits (24 months ago)</div></div>
+  <div class="kpi accent"><div class="n">2,310</div><div class="l">commits (24 months ago)</div></div>
   <div class="kpi"><div class="n">311</div><div class="l">files touched</div></div>
   <div class="kpi warn"><div class="n">routes.py</div><div class="l">top hotspot</div></div>
 </div>
@@ -469,411 +495,546 @@ flowchart TD
 </section>
 <section class="panel" id="flows" role="tabpanel">
 
-
-
-
 <div class="card hero">
-  <h2>Three flows carry the system</h2>
-  <p>Playing a turn, absorbing a finished scene, and resolving a campaign record against its world. Everything else in the 252-route surface is CRUD around these. All three share one property that shapes their risk profile: <strong>they perform multi-file writes with no transaction</strong>, so every diagram below is really a diagram of where a crash can leave the store half-updated.</p>
+  <h2>Three flows carry the product, and each has one seam worth staring at</h2>
+  <p>
+    Play (send a message, get a reply), absorb (turn a finished scene into
+    durable campaign state), and record write (how anything reaches disk). The
+    third is now uniform; the first two are where the unpaid cost of "files
+    instead of a database" actually lands.
+  </p>
 </div>
 
-<h2>Flow 1 — playing a turn</h2>
-<p>The hot path. A user sends text, the model streams back, and a fence watcher intercepts any <code>```roll</code> block mid-stream so the app can turn it into a durable dice proposal instead of letting the model narrate its own dice result.</p>
-
+<h3>1. Play — the message round trip</h3>
 <div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">
 sequenceDiagram
-  autonumber
-  participant V as CampaignView.tsx
-  participant R as routes.post_chat
-  participant C as context.build_messages
-  participant L as LLMClient
-  participant F as FenceWatcher
-  participant S as store files
-  V->>R: POST scenes/sid/chat
-  R->>R: _heal_current_proposal
-  R->>S: proposals.supersede
-  R->>S: append_message user
-  R->>C: build_messages
-  C->>S: read cast, dossiers, lore, sheets, weather
-  C-->>R: messages
-  R->>L: stream messages, conn
-  loop each delta
-    L-->>R: delta
-    R->>F: feed delta
-    alt no fence seen
-      R-->>V: SSE delta
-    else fence opened
-      F-->>R: withhold, stop emitting
-    end
-  end
-  alt fence complete or truncated
-    R->>S: proposals.new under campaign lock
-    R->>S: persist pre-fence narration
-    R-->>V: SSE proposal
-  else plain reply
-    R->>S: persist full reply
-  end
-  R-->>V: SSE done
+    participant U as Frontend
+    participant R as routes.py
+    participant S as store.scenes
+    participant C as store.context
+    participant L as LLM provider
+    U-&gt;&gt;R: POST /campaigns/{cid}/scenes/{sid}/chat
+    R-&gt;&gt;S: append_message(user text)
+    R-&gt;&gt;C: build context (cast, chronicle, sheets, style)
+    C-&gt;&gt;R: assembled prompt
+    R-&gt;&gt;L: stream completion
+    L--&gt;&gt;R: tokens
+    R--&gt;&gt;U: SSE frames
+    R-&gt;&gt;S: append_reply(segments + turn_sizes)
+    Note over S: transcript and boundary list land in ONE write
 </pre></div></div>
 
-<h3>Seams</h3>
+<h4>The seam: two appends, no lock</h4>
 <div class="callout bad">
-  <strong>The proposal is written before the narration it belongs to.</strong> In <code>backend/src/grimoire/routes.py:2538-2546</code> the finalizer mints the proposal record inside the campaign lock and only then calls <code>_persist_reply</code> outside it. A crash between the two leaves a pending dice proposal attached to a scene whose transcript does not contain the narration that led to it. The code comments acknowledge this ordering as deliberate — a transcript ending at a mechanical decision point always has a recoverable proposal — so the residual risk is a proposal without its lead-in, not the reverse.
+  <p>
+    <code>append_message</code>
+    (<code>backend/src/grimoire/store/scenes.py:316</code>) is a read-modify-write
+    with <strong>no lock of any kind</strong>. Writer A reads the transcript,
+    writer B reads it, appends, publishes; A appends to its stale copy and
+    publishes — B's message is gone, silently, and the file is well-formed at
+    every instant. The write is atomic (nothing is ever torn) and that is
+    precisely why nothing notices: both writes are individually complete.
+  </p>
+  <p>
+    The window is not microseconds. A user sending a second message while a
+    reply is being persisted is ordinary behavior. <strong>Issue #254.</strong>
+  </p>
 </div>
-<div class="callout warn">
-  <strong>A hand-written invariant guards proposal retirement, enforced only by convention.</strong> <code>backend/src/grimoire/routes.py:2505-2530</code> documents the rule in a 25-line docstring: a record with a projectable resolution must never be retired or replaced before its projection completes, so every such path calls <code>_heal_current_proposal</code> first. Five call sites currently honour it (<code>backend/src/grimoire/routes.py:2543</code>, <code>backend/src/grimoire/routes.py:2575</code>, <code>backend/src/grimoire/routes.py:2992</code>, <code>backend/src/grimoire/routes.py:3019</code>, <code>backend/src/grimoire/routes.py:3033</code>). Nothing in the code enforces it — a fifth retirement path added later that forgets the call silently orphans a completed roll.
-</div>
-<div class="callout warn">
-  <strong>Partial replies persist on upstream failure in one path but not the other.</strong> <code>_chat_stream</code> passes an <code>on_error</code> that keeps whatever narration arrived before an <code>LLMError</code> (<code>backend/src/grimoire/routes.py:2552-2554</code>); <code>_continuation_stream</code> deliberately passes none, dropping the partial (<code>backend/src/grimoire/routes.py:2583-2586</code>). Both choices are defended in comments, but a reader tracing "why did my text vanish" needs to know which stream they were in.
-</div>
-<div class="callout">
-  <strong>No timeout is set at this layer.</strong> The route awaits <code>client.stream</code> without a deadline of its own; whatever timeout exists comes from the provider client's httpx configuration. A hung upstream holds the SSE connection open indefinitely from the route's point of view.
-</div>
+<p>
+  One thing this flow gets right and is easy to miss:
+  <code>append_reply</code> persists the segments <em>and</em> the
+  <code>turn_sizes</code> boundary list in a single write. Splitting them would
+  let a crash leave the boundary list describing a transcript that no longer
+  exists, and reroll would then delete blocks belonging to an older generation.
+  Four tests pin this specifically.
+</p>
 
-<h2>Flow 2 — absorbing a finished scene</h2>
-<p>The heaviest operation in the app: one extraction call, then <em>one LLM call per present NPC</em> to refresh dossiers, then a mechanics audit. It is the only route that issues an unbounded number of model calls.</p>
-
+<h3>2. Absorb — scene becomes campaign state</h3>
 <div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">
 sequenceDiagram
-  autonumber
-  participant V as SceneInspector.tsx
-  participant R as routes.post_absorb
-  participant A as absorb.py
-  participant L as LLM
-  participant D as dossiers.py
-  participant AU as _run_audit
-  V->>R: POST scenes/sid/absorb
-  R->>A: build_prompt transcript plus snapshots
-  R->>L: complete
-  alt LLMError
-    L-->>R: error
-    R-->>V: HTTP 502
-  else ok
-    L-->>R: text
-    R->>A: parse_output then materialize
-    loop each present NPC
-      R->>D: build_prompt name, prior, transcript
-      R->>L: complete
-      alt any exception
-        R->>R: continue, dossier skipped silently
-      end
-    end
-    R->>AU: run audit
-    AU-->>R: edits plus mechanics status
-    R-->>V: summary, edits, mechanics
-  end
+    participant R as routes.py
+    participant L as LLM
+    participant A as store.absorb
+    participant D as dossiers
+    participant AU as store.audit
+    R-&gt;&gt;L: absorb prompt (transcript + state snapshot)
+    L--&gt;&gt;R: structured edits
+    R-&gt;&gt;A: materialize(cid, sid, parsed)
+    Note over A: chronicle, state, relationships, plot, groups COMMIT here
+    R-&gt;&gt;D: refresh dossiers (per NPC)
+    D--&gt;&gt;R: exception
+    Note over R: swallowed with a bare continue
+    R-&gt;&gt;AU: run audit
 </pre></div></div>
 
-<h3>Seams</h3>
+<h4>The seam: a multi-phase write with no rollback and no idempotency key</h4>
 <div class="callout bad">
-  <strong>Absorb is a long non-atomic write sequence with no rollback.</strong> <code>store.absorb.materialize</code> at <code>backend/src/grimoire/routes.py:3132</code> commits chronicle, state, relationship, plot and group edits to disk <em>before</em> the dossier loop and audit run. If the process dies during the dossier loop, the campaign has absorbed the scene but some NPCs still carry pre-scene dossiers, and re-running absorb re-applies the prose edits from scratch. There is no idempotency key and no "absorbed" guard on the route.
-</div>
-<div class="callout bad">
-  <strong>Dossier failures are invisible.</strong> The per-NPC loop swallows every exception with a bare <code>continue</code> at <code>backend/src/grimoire/routes.py:3143-3144</code> and reports nothing in the response payload. A user whose dossiers silently stopped updating — because of a rate limit, a parse failure, or a bad character record — gets a successful-looking absorb with no signal. Contrast this with the audit step immediately below it, which threads a structured <code>mechanics.status</code> of <code>ok</code>/<code>degraded</code>/<code>failed</code> back to the UI (<code>backend/src/grimoire/routes.py:3107-3111</code>). The audit's design is the right one; the dossier loop predates it.
-</div>
-<div class="callout warn">
-  <strong>The audit's blanket exception handler is correct but broad.</strong> <code>backend/src/grimoire/routes.py:3103-3105</code> catches bare <code>Exception</code> around the entire audit pipeline, by explicit design ("never fail absorb"). It converts any bug in <code>backend/src/grimoire/store/audit.py</code> into a user-visible "audit failed" string rather than a crash — good for availability, but it also means a genuine programming error in the audit path will never surface as a traceback in normal use.
-</div>
-<div class="callout">
-  <strong>Cost is unbounded in the number of NPCs.</strong> One extraction call plus N dossier calls plus one audit call, all sequential, all awaited inside a single HTTP request. A large scene cast makes this a multi-minute request with no progress reporting.
+  <p>
+    <code>store.absorb.materialize</code> commits prose edits at
+    <code>backend/src/grimoire/routes.py:3134</code> — <em>before</em> the
+    dossier loop and audit run. If the process dies during the dossier loop, the
+    campaign has absorbed the scene while some NPCs still carry pre-scene
+    dossiers. There is no "already absorbed" guard, so re-running re-applies
+    everything from scratch. <strong>Issue #235.</strong>
+  </p>
+  <p>
+    Worse, the dossier failures are invisible: the loop discards every exception
+    with a bare <code>continue</code>
+    (<code>backend/src/grimoire/routes.py:3145</code>) and reports nothing. A
+    user can lose dossier updates indefinitely with no symptom.
+    <strong>Issue #236.</strong> The audit path immediately below it
+    (<code>routes.py:3102</code>) returns a <code>dropped</code> count and a
+    "degraded" status — the correct shape, sitting right next to the wrong one.
+  </p>
 </div>
 
-<h2>Flow 3 — resolving a record through the campaign overlay</h2>
-<p>The rule that makes campaigns cheap: read through to the world, materialize on write. Getting this wrong is the codebase's most repeated bug class, so it is worth being able to draw.</p>
-
+<h3>3. Record write — now the one uniform path</h3>
 <div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">
-sequenceDiagram
-  autonumber
-  participant R as route handler
-  participant O as overlay.py
-  participant CR as campaign dir
-  participant WR as world dir
-  R->>O: read_entity cid, kind, eid
-  O->>CR: entities.read_entity croot
-  alt found campaign-side
-    CR-->>R: campaign copy
-  else EntityNotFound
-    O->>CR: check deleted.json
-    alt tombstoned
-      O-->>R: raise EntityNotFound
-    else inherited
-      O->>WR: entities.read_entity wroot
-      WR-->>R: world copy, read-through
-    end
-  end
-  Note over R,O: any write must materialize first
-  R->>O: update_entity cid, kind, eid
-  O->>O: _materialize_flat copies world file in
-  O->>CR: write manifest base hash
-  O->>CR: entities.update_entity croot
+flowchart LR
+    A[any store module] --&gt; B["atomic.write_text / write_bytes"]
+    B --&gt; C{target read-only?}
+    C --&gt;|yes| D[PermissionError, no temp created]
+    C --&gt;|no| E[mkstemp beside target]
+    E --&gt; F[write through that fd]
+    F --&gt; G[fsync, close]
+    G --&gt; H[carry mode, group, xattrs]
+    H --&gt; I[os.replace]
+    F -.exception.-&gt; J[unlink temp, record untouched]
 </pre></div></div>
-
-<h3>Seams</h3>
-<div class="callout warn">
-  <strong>Read-through is opt-in, not enforced.</strong> Correctness depends on every campaign-scoped read going through <code>backend/src/grimoire/store/overlay.py</code> rather than reading the campaign root directly. Nothing prevents a new route from calling <code>store.campaigns.campaign_root(cid)</code> and reading a file itself — and two places already do exactly that for <em>climate.json</em> (<code>backend/src/grimoire/routes.py:2018</code> and <code>backend/src/grimoire/routes.py:2082</code>). A record read that way is invisible to inheritance and to tombstones.
+<p>
+  Every byte the package writes goes through
+  <code>backend/src/grimoire/store/atomic.py:193</code>. The temp's pathname is
+  never handed out — the descriptor <code>mkstemp</code> returns is written
+  through directly — so there is no interval in which the temp can be swapped for
+  a symlink. <code>backend/tests/test_atomic_guard.py</code> fails the build if a
+  raw write reappears anywhere in the package without a reasoned
+  <code>atomic-ok</code> marker.
+</p>
+<div class="callout good">
+  <p>
+    <strong>This was risk #1 in the previous atlas and is resolved</strong> (#233,
+    merged at <code>fd38a84a</code>). Scene transcripts were being rewritten with
+    a plain <code>write_text</code> on every message. Two things are worth
+    carrying forward rather than filing away: the guarantee is
+    <em>atomicity, not durability</em> — a power cut can still lose the last
+    write, it just cannot shred the file — and the retrofit's own review turned
+    up four further defects in the fix, three of them in code written to address
+    earlier review rounds.
+  </p>
 </div>
-<div class="callout warn">
-  <strong>Materialization writes two files and can be interrupted between them.</strong> <code>_materialize_flat</code> copies the record, then reads, mutates and rewrites the campaign manifest (<code>backend/src/grimoire/store/overlay.py:73-90</code>). A crash between the copy and the manifest write leaves a materialized record with no recorded sync base, which the three-hash comparison in <code>backend/src/grimoire/store/sync.py:97-100</code> will then classify differently than it should. The same two-step shape appears in <code>materialize_actor</code> (<code>backend/src/grimoire/store/overlay.py:289-308</code>), where it spans an entire directory copy.
-</div>
-<div class="callout">
-  <strong>A missing world is handled by resolving to a path that holds nothing.</strong> <code>wroot_of</code> deliberately never raises when a campaign's world was deleted or its <code>world</code> meta is empty (<code>backend/src/grimoire/store/overlay.py:31-38</code>) — every resolver then simply finds no records there. This is a defensible choice, well documented in place, but it converts a data-integrity problem into silently empty lists rather than an error the user sees.
-</div>
 
-
-
+<h3>Sync — the flow most likely to surprise a reader</h3>
+<p>
+  World edits reach a campaign through a three-hash comparison (world / base /
+  mine) in <code>backend/src/grimoire/store/sync.py:33</code>, with content
+  hashes standing in for revision numbers
+  (<code>backend/src/grimoire/store/entities.py:130</code>). There is no
+  timestamp ordering and no vector clock: a record is "changed" if its hash
+  differs from the recorded base. That is sound for a single writer and
+  undefined for two — see risk #2.
+</p>
 
 </section>
 <section class="panel" id="boundaries" role="tabpanel">
 
-
-
-
 <div class="card hero">
-  <h2>The layering is real; the module boundaries inside the store are not</h2>
-  <p>Grimoire's vertical boundary is genuinely clean: prompt text lives only in <code>templates/</code>, LLM calls happen only in the route layer, and stores are pure file I/O. The horizontal boundary — between the ~60 modules inside <code>backend/src/grimoire/store/</code> — has largely dissolved. All 41 top-level store modules sit in a single import cycle, and the codebase's own answer to that pressure is a documented convention of function-level imports rather than a dependency direction.</p>
+  <h2>Most concerns have one owner; the ones that don't are the findings</h2>
+  <p>
+    This codebase is unusually disciplined about single ownership — durability,
+    Markdown serialization, path resolution, and campaign locking each have
+    exactly one home. The exceptions cluster in one place: the HTTP layer
+    reaching past the store, which is both a boundary violation and the reason
+    two separate bugs went unnoticed.
+  </p>
 </div>
 
-<h2>Concern ownership</h2>
+<h3>Concern ownership</h3>
 <div class="tbl-wrap">
-<table class="sortable">
-<thead><tr><th>Concern</th><th>Owner(s)</th><th>Verdict</th></tr></thead>
-<tbody>
-<tr><td>Prompt text</td><td><code>templates/</code>, rendered only through <code>backend/src/grimoire/prompts.py</code></td><td><span class="badge good">single owner</span> No prompt strings are built in Python; the contract is documented per-template in <code>templates/README.md</code>.</td></tr>
-<tr><td>LLM invocation</td><td><code>backend/src/grimoire/routes.py</code> only, via the facade in <code>backend/src/grimoire/llm.py</code></td><td><span class="badge good">single owner</span> Store modules build prompts and parse output but never call the model — stated explicitly in <code>backend/src/grimoire/store/absorb.py:1-5</code> and <code>backend/src/grimoire/store/suggest.py:1-6</code>, and it holds.</td></tr>
-<tr><td>Provider differences</td><td><code>backend/src/grimoire/openrouter.py</code>, <code>backend/src/grimoire/claude_agent.py</code>, <code>backend/src/grimoire/openai_compatible.py</code> behind <code>backend/src/grimoire/llm.py:27-35</code></td><td><span class="badge good">single owner</span> One dispatch on <code>conn["kind"]</code>; each provider normalizes its own errors into <code>LLMError</code>.</td></tr>
-<tr><td>Data-root resolution</td><td><code>backend/src/grimoire/store/paths.py:41-54</code></td><td><span class="badge good">single owner</span> Fan-in of 33 and fan-out of 0 — the cleanest module in the codebase.</td></tr>
-<tr><td>Campaign/world resolution</td><td><code>backend/src/grimoire/store/overlay.py</code></td><td><span class="badge warn">2 owners</span> Intended sole owner, but the route layer bypasses it for <em>climate.json</em> (see violations below).</td></tr>
-<tr><td>Serialization</td><td><code>backend/src/grimoire/store/frontmatter.py</code> for Markdown records; ad-hoc <code>json.dumps</code> in ~20 store modules for JSON records</td><td><span class="badge warn">2 owners</span> Markdown has one parser/dumper pair; JSON does not — each module still hand-rolls its <code>json.dumps</code> flavour (indent, sort_keys, trailing newline). Since #233 that no longer affects <em>atomicity</em> (all writes share one publisher), only formatting consistency.</td></tr>
-<tr><td>Durability / atomic writes</td><td><code>backend/src/grimoire/store/atomic.py</code></td><td><span class="badge good">1 owner</span> Was smeared across six hand-rolled near-copies with the older core left out entirely; consolidated by #233 and held there by <code>backend/tests/test_atomic_guard.py</code>. One reviewed exemption (<code>backend/src/grimoire/store/module_edit.py:211</code>, staged zip extraction published by a single rename).</td></tr>
-<tr><td>Concurrency control</td><td><code>backend/src/grimoire/store/locks.py:43-52</code> (per-campaign RLock registry)</td><td><span class="badge good">1 owner</span> One lock domain in one module that imports nothing else, with the membership list and both ordering rules in its docstring (<code>backend/src/grimoire/store/locks.py:1-37</code>). Seven modules take it; none re-implement or re-export it, which <code>backend/tests/test_locks_store.py:120-130</code> enforces. Fixed in #245 — it used to live in <code>sheets.py</code>.</td></tr>
-<tr><td>Validation</td><td>pydantic models at the HTTP boundary in <code>backend/src/grimoire/routes.py:55-510</code>; domain validation inside each store module</td><td><span class="badge good">clean split</span> Wire shape is rejected at the boundary; semantic rules live with the data. <code>_turn_override</code> at <code>backend/src/grimoire/routes.py:33-44</code> is a good example of holding that line deliberately.</td></tr>
-<tr><td>Error to HTTP mapping</td><td>Each route, individually</td><td><span class="badge warn">repeated</span> Every store exception is caught and re-raised as an <code>HTTPException</code> in each handler; the <code>LLMError</code>-to-502 conversion alone is written out at least four separate times (for example <code>backend/src/grimoire/routes.py:1462-1463</code>, <code>backend/src/grimoire/routes.py:2650-2651</code>, <code>backend/src/grimoire/routes.py:3129-3130</code>). No exception-handler middleware does this centrally, though <code>backend/src/grimoire/main.py:53-57</code> shows the hook exists.</td></tr>
-</tbody>
+<table>
+  <thead><tr><th>Concern</th><th>Owner</th><th>Verdict</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>Durability / atomic writes</td>
+      <td><code>backend/src/grimoire/store/atomic.py</code></td>
+      <td><span class="badge good">1 owner, enforced</span> Was smeared across six hand-rolled copies with the older core left out entirely; consolidated by #233 and held by <code>backend/tests/test_atomic_guard.py</code>, which scans the whole package. One reviewed exemption (<code>backend/src/grimoire/store/module_edit.py:211</code>, staged zip extraction published by a single rename).</td>
+    </tr>
+    <tr>
+      <td>Path / store-root resolution</td>
+      <td><code>backend/src/grimoire/store/paths.py:42</code></td>
+      <td><span class="badge good">1 owner</span> Every filesystem access resolves through <code>home()</code>. This is what lets the Android build repoint the store without touching store code.</td>
+    </tr>
+    <tr>
+      <td>Per-campaign serialization</td>
+      <td><code>backend/src/grimoire/store/locks.py:47</code></td>
+      <td><span class="badge warn">1 owner, 1 holdout</span> #245 unified sheets, audit, proposals and module publication onto <code>campaign_lock</code>. <code>rolls.py</code> still runs a private <code>_LOCKS</code> registry, silently outside the domain — issue #255. Two lock domains over the same <code>cid</code> is a deadlock shape waiting for an ordering mistake.</td>
+    </tr>
+    <tr>
+      <td>Markdown serialization</td>
+      <td><code>backend/src/grimoire/store/frontmatter.py</code></td>
+      <td><span class="badge good">1 owner</span> One parser/dumper pair for every prose record.</td>
+    </tr>
+    <tr>
+      <td>JSON serialization</td>
+      <td><span class="dim">none</span></td>
+      <td><span class="badge warn">~20 hand-rolled</span> Each module picks its own <code>json.dumps</code> flavour (indent, <code>sort_keys</code>, trailing newline). Since #233 this no longer affects <em>atomicity</em> — all writes share one publisher — but it does mean two records can differ in formatting for no reason, and a reader cannot predict a file's shape from its module.</td>
+    </tr>
+    <tr>
+      <td>Campaign→world read indirection</td>
+      <td><code>backend/src/grimoire/store/overlay.py</code></td>
+      <td><span class="badge bad">bypassed</span> Intended sole owner. Nothing enforces it (issue #248), and the route layer reads campaign roots directly in places. A bypass does not fail — it silently returns a partial world.</td>
+    </tr>
+    <tr>
+      <td>Error translation (store → HTTP)</td>
+      <td><code>backend/src/grimoire/routes.py</code></td>
+      <td><span class="badge warn">repeated</span> Every store exception is caught and re-raised as an <code>HTTPException</code> at each call site rather than by one handler. Mechanical, but it is ~250 opportunities to translate one inconsistently.</td>
+    </tr>
+    <tr>
+      <td>LLM behavior</td>
+      <td><code>backend/src/grimoire/prompts.py:35</code> + 219 <code>.j2</code> templates</td>
+      <td><span class="badge warn">invisible to tooling</span> The templates carry the product's actual behavior but have no import edges, no signatures, and no type checking. A prompt edit is a behavior change that every static tool in this repo — including this atlas — will report as nothing.</td>
+    </tr>
+  </tbody>
 </table>
 </div>
 
-<h2>Data ownership — who writes each file</h2>
+<h3>Data ownership</h3>
 <div class="tbl-wrap">
-<table class="sortable">
-<thead><tr><th>Store file</th><th>Writers</th><th>Verdict</th></tr></thead>
-<tbody>
-<tr><td><code>&lt;campaign&gt;/scenes/*.md</code></td><td><code>backend/src/grimoire/store/scenes.py</code> (15 write sites)</td><td><span class="badge good">single</span></td></tr>
-<tr><td><code>&lt;campaign&gt;/proposals.json</code></td><td><code>backend/src/grimoire/store/proposals.py</code>, always under the campaign lock</td><td><span class="badge good">single</span></td></tr>
-<tr><td><code>&lt;campaign&gt;/sheets/*.json</code></td><td><code>backend/src/grimoire/store/sheets.py</code>, plus <code>backend/src/grimoire/store/audit.py</code> through <code>apply_delta</code> under the same lock</td><td><span class="badge good">single domain</span></td></tr>
-<tr><td><code>&lt;campaign&gt;/deleted.json</code> (tombstones)</td><td><code>backend/src/grimoire/store/overlay.py</code> only</td><td><span class="badge good">single</span></td></tr>
-<tr><td><code>&lt;campaign&gt;/climate.json</code></td><td><code>backend/src/grimoire/store/campaigns.py:98</code> (create), <code>backend/src/grimoire/routes.py:2018</code> (update), read by <code>backend/src/grimoire/store/weather/settings.py:19</code> and <code>backend/src/grimoire/routes.py:2082</code></td><td><span class="badge bad">no owning module</span></td></tr>
-<tr><td>Campaign manifest / sync base hashes</td><td><code>backend/src/grimoire/store/overlay.py</code> (materialization), <code>backend/src/grimoire/store/sync.py</code> (accept/reject), <code>backend/src/grimoire/store/appearances.py</code> (<code>set_base</code>, <code>backend/src/grimoire/store/sync.py:158</code>)</td><td><span class="badge warn">3 writers</span></td></tr>
-<tr><td><code>~/.grimoire.json</code> bootstrap pointer</td><td><code>backend/src/grimoire/store/paths.py:64-87</code> only</td><td><span class="badge good">single</span></td></tr>
-</tbody>
+<table>
+  <thead><tr><th>Data</th><th>Touchpoints</th><th>Verdict</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>Scene transcript</td>
+      <td><code>store/scenes.py</code> only</td>
+      <td><span class="badge good">clean</span> One module owns the format. The <code>**Speaker:**</code> block convention is parsed in one place.</td>
+    </tr>
+    <tr>
+      <td>the campaign climate record</td>
+      <td>4, across 3 layers</td>
+      <td><span class="badge bad">no owning module</span> create at <code>backend/src/grimoire/store/campaigns.py:96</code>, update at <code>backend/src/grimoire/routes.py:2020</code>, two reads elsewhere. Issue #237. #233 made the route's write crash-safe but did not give the file an owner.</td>
+    </tr>
+    <tr>
+      <td>Per-version images</td>
+      <td><code>store/assets.py</code></td>
+      <td><span class="badge warn">multi-step publish</span> Owns the format cleanly, but publication is write-then-clean and needed a per-logical-image lock (<code>backend/src/grimoire/store/assets.py:45</code>) to be safe. <code>promote_image</code>'s three-rename swap is still unguarded — issue #253.</td>
+    </tr>
+  </tbody>
 </table>
 </div>
 
-<div class="callout bad">
-  <strong>climate.json has four touchpoints and no owner.</strong> It is created by <code>backend/src/grimoire/store/campaigns.py:98</code>, updated by the route layer at <code>backend/src/grimoire/routes.py:2018-2019</code>, read by the weather subsystem at <code>backend/src/grimoire/store/weather/settings.py:19</code>, and read again — with its own inline JSON parsing and a five-exception catch — by a different route at <code>backend/src/grimoire/routes.py:2082-2087</code>. Every other campaign-level JSON file in the store has a module that owns its shape. This one has the shape spelled out in four places, so a schema change has to be found by grep.
+<h3>Cycles</h3>
+<div class="callout">
+  <p>
+    <strong>Zero module-level cycles</strong> across 18 modules and 1,272 import
+    edges — genuinely good, and worth stating because it is the kind of property
+    that erodes quietly.
+  </p>
+  <p>
+    Two <em>file-level</em> cycles are known and tracked, and the module graph
+    cannot show them because both live wholly inside one module: the
+    module-editor components form a five-file cycle (issue #238), and the LLM
+    providers cycle through <code>LLMError</code> in <code>llm.py</code> (issue
+    #239). Read the Dependencies tab as "no cycles between subsystems", not "no
+    cycles".
+  </p>
 </div>
-
-<h2>Boundary violations</h2>
-<div class="callout warn">
-  <strong>The route layer performs filesystem I/O.</strong> Besides the <em>climate.json</em> pair above, <code>backend/src/grimoire/routes.py:785-794</code> opens a raw file descriptor and unlinks a temp file for module import. These are the only places the HTTP layer touches the disk directly; everything else goes through <code>store</code>. Small in volume, but they are precedent — and the <em>climate.json</em> read is exactly the campaign-root-direct-read pattern the overlay design exists to prevent.
-</div>
-<div class="callout good">
-  <strong>The lock that governs all campaign mutation has its own module.</strong> <code>locks.campaign_lock(cid)</code> (<code>backend/src/grimoire/store/locks.py</code>) is the single serialization point for sheet writes, proposal transitions, audit application and module publication; <code>sheets.py</code>, <code>proposals.py</code>, <code>audit.py</code>, <code>checks.py</code>, <code>context.py</code>, <code>module_edit.py</code> and <code>routes.py</code> all import it. The module docstring carries the membership list and the two ordering rules (campaign lock before audit baseline lock; module-edit lock before campaign locks), so the concurrency model is discoverable from the module that owns it. Fixed in #245 — this was previously filed under <code>sheets.lock_for()</code>.
-</div>
-
-<h2>What the three import cycles actually mean</h2>
-
-<h3><span class="badge neutral">benign</span> The 41-module store cycle</h3>
-<p>The dependency analyzer reports every module under <code>backend/src/grimoire/store/</code> in one cycle. This is largely an artifact of Python package semantics: <code>from . import campaigns</code> inside a submodule imports the package, and <code>backend/src/grimoire/store/__init__.py:5-12</code> imports all 60-odd submodules eagerly to build the flat <code>store.*</code> namespace. That alone would make every submodule cyclic with the package regardless of the real dependency direction.</p>
-<p>The part that is <em>not</em> an artifact is what the codebase had to do to keep it working: <strong>at least 20 function-level imports exist purely to break genuine cycles</strong>, each annotated. Representative cases — <code>backend/src/grimoire/store/campaigns.py:141</code> ("campaigns is imported by these"), <code>backend/src/grimoire/store/appearances.py:201</code> ("scenes and appearances is already a lazy pair"), <code>backend/src/grimoire/store/module_display.py:65</code> ("deferred: modules imports us"), <code>backend/src/grimoire/store/proposals.py:33</code>, <code>backend/src/grimoire/store/chronicle.py:84</code>. The comments are excellent and the pattern is applied consistently, but it is a workaround holding a layering problem in place: <code>campaigns</code>, <code>scenes</code>, <code>appearances</code> and <code>overlay</code> are genuinely mutually dependent, and the top four fan-in modules (<code>backend/src/grimoire/store/__init__.py</code> at 114, <code>backend/src/grimoire/store/campaigns.py</code> at 64, <code>backend/src/grimoire/store/worlds.py</code> at 51, <code>backend/src/grimoire/store/characters.py</code> at 46) are all also fan-out participants.</p>
-
-<h3><span class="badge good">deliberate and documented</span> The LLM provider cycle</h3>
-<p><code>backend/src/grimoire/llm.py</code> ↔ <code>backend/src/grimoire/openrouter.py</code> / <code>backend/src/grimoire/claude_agent.py</code> / <code>backend/src/grimoire/openai_compatible.py</code>. The providers import <code>LLMError</code> from <code>backend/src/grimoire/llm.py</code> at module scope; <code>backend/src/grimoire/llm.py</code> imports the providers inside <code>LLMClient.__init__</code> instead, with the reason stated in place at <code>backend/src/grimoire/llm.py:18-21</code>. The clean fix — a shared <em>errors.py</em> holding <code>LLMError</code> — would cost one small file and remove the cycle entirely. This is the cheapest cycle in the codebase to eliminate.</p>
-
-<h3><span class="badge warn">worth fixing</span> The module-editor component cycle</h3>
-<p>Five frontend files cycle: <code>frontend/src/components/ModuleEditor.tsx</code> imports the four section components, and each of them imports shared helpers back out of <code>frontend/src/components/ModuleEditor.tsx</code> — see <code>frontend/src/components/ModuleSchemaEditor.tsx:3</code>, <code>frontend/src/components/ModuleContentEditor.tsx:5</code>, and the corresponding lines in <code>frontend/src/components/ModuleRulesEditor.tsx</code> and <code>frontend/src/components/ModuleDisplayEditor.tsx</code>. The shared pieces are <code>useModuleDryRun</code>, <code>ErrorList</code>, <code>ImpactConfirm</code> and the <code>SaveFn</code> type, all defined at <code>frontend/src/components/ModuleEditor.tsx:13-129</code> above the component itself. Extracting those four exports into a <em>moduleEditShared.ts</em> would break the cycle with no behaviour change; as it stands, bundlers resolve it but the initialization order is load-order dependent.</p>
-
-
-
 
 </section>
 <section class="panel" id="invariants" role="tabpanel">
 
-
-
-
 <div class="card hero">
-  <h2>The store assumes one writer, one process, and no crashes</h2>
-  <p>Grimoire's correctness rests on a small set of assumptions about how its files are touched. Most are enforced somewhere and documented well — this codebase writes unusually good "why" comments. Atomic writes <em>were</em> such a gap — added with the newer mechanics subsystem and never retrofitted onto the older core, leaving scene transcripts with the weakest guarantees in the system — and that one is now closed (39a016b4, #233): every record write in the package goes through <code>backend/src/grimoire/store/atomic.py</code>, enforced by a guard test. The remaining gaps are <strong>concurrency, not durability</strong>: the serialization lock is still in-process only, and still absent from the highest-frequency writer.</p>
+  <h2>The durability gap is closed; the concurrency gap is not</h2>
+  <p>
+    The previous atlas's headline finding — scene transcripts rewritten
+    non-atomically on every message — is fixed and enforced. What remains is a
+    consistent shape: this codebase reliably makes each <em>individual</em> write
+    correct, and reliably does not protect <em>sequences</em> of them. Every risk
+    below is a multi-step operation with no serialization, no rollback, or both.
+  </p>
 </div>
 
-<h2>Invariants the code relies on</h2>
+<h3>Invariants and where they are enforced</h3>
 <div class="tbl-wrap">
-<table class="sortable">
-<thead><tr><th>Invariant</th><th>Where enforced</th><th>Verdict</th></tr></thead>
-<tbody>
-<tr>
-  <td>Entity ids are stable for life; renaming changes only frontmatter, so <code>(kind, id)</code> refs line up across world and campaign</td>
-  <td><code>backend/src/grimoire/store/entities.py:1-5</code>; rename paths never move files</td>
-  <td><span class="badge good">enforced</span> Structural — there is no code path that renames an entity file.</td>
-</tr>
-<tr>
-  <td>A tombstoned id stays taken forever, so a deleted record can never resurrect under a reused id</td>
-  <td><code>backend/src/grimoire/store/overlay.py:126-130</code> and the parallel <code>taken</code> closures at <code>backend/src/grimoire/store/overlay.py:195-196</code>, <code>375-377</code>, <code>385-387</code></td>
-  <td><span class="badge good">enforced</span> Every campaign-side create passes a <code>taken</code> predicate that consults both the world and <em>deleted.json</em>.</td>
-</tr>
-<tr>
-  <td>A roll proposal with a projectable resolution is never retired or replaced before its projection completes</td>
-  <td><code>backend/src/grimoire/routes.py:2505-2530</code>, honoured by five callers</td>
-  <td><span class="badge warn">convention only</span> Stated as an explicit INVARIANT in a docstring and correct at every current call site, but nothing detects a sixth path that forgets it.</td>
-</tr>
-<tr>
-  <td>Every campaign-scoped read resolves through the overlay, never straight off the campaign root</td>
-  <td><code>backend/src/grimoire/store/overlay.py</code> by convention</td>
-  <td><span class="badge bad">already violated</span> <code>backend/src/grimoire/routes.py:2082-2083</code> reads <em>climate.json</em> from <code>campaign_root</code> directly. Historically this is the codebase's most repeated bug class.</td>
-</tr>
-<tr>
-  <td>Owned world-info entries never leak into a scene without an owner present</td>
-  <td><code>backend/src/grimoire/store/context.py:29-31</code></td>
-  <td><span class="badge good">enforced</span> A single early <code>continue</code>, in the one function all world-info selection funnels through.</td>
-</tr>
-<tr>
-  <td>Macros (<code>{{roll:…}}</code>, <code>{{random:…}}</code>) resolve exactly once, at persist time, never on re-read</td>
-  <td><code>backend/src/grimoire/routes.py:3007-3009</code> for user text, <code>backend/src/grimoire/routes.py:2449-2452</code> for model replies</td>
-  <td><span class="badge good">enforced</span> Both persist paths expand before writing; context rebuilds read already-resolved text.</td>
-</tr>
-<tr>
-  <td>Recorded turn boundaries always match the transcript</td>
-  <td><code>backend/src/grimoire/store/scenes.py:334-345</code> parses strictly; <code>backend/src/grimoire/routes.py:3049-3056</code> refuses to regenerate on mismatch</td>
-  <td><span class="badge good">enforced defensively</span> A model instance of doing this right: the desync is detected, nothing is written, and the user gets an actionable message instead of a guess.</td>
-</tr>
-<tr>
-  <td>Ids from the URL cannot escape their directory</td>
-  <td><code>_safe_id</code> in <code>backend/src/grimoire/store/scenes.py:98-100</code>, <code>backend/src/grimoire/store/entities.py:37-39</code>, and in <code>backend/src/grimoire/store/modules.py</code> / <code>backend/src/grimoire/store/module_edit.py</code></td>
-  <td><span class="badge warn">partial</span> Absent from the three highest-traffic root resolvers: <code>backend/src/grimoire/store/campaigns.py:23-24</code>, <code>backend/src/grimoire/store/worlds.py:27-28</code> and <code>backend/src/grimoire/store/characters.py:37-38</code> all join a caller-supplied id onto a path unchecked. Practical exposure is limited because FastAPI path parameters do not match <code>/</code>, so the protection currently comes from the router rather than from the store — which is precisely what "defense in depth" was supposed to stop depending on.</td>
-</tr>
-<tr>
-  <td>The LLM call never happens inside <code>store/</code> — store modules build prompts and parse replies; the route layer makes the network call</td>
-  <td>By convention, stated in each participating docstring: <code>backend/src/grimoire/store/absorb.py:3-4</code>, <code>backend/src/grimoire/store/suggest.py:4-5</code>, <code>backend/src/grimoire/store/dossiers.py:4-5</code>, <code>backend/src/grimoire/store/chronicle.py:9-12</code></td>
-  <td><span class="badge warn">convention only</span> Holds at this sha — no module under <code>store/</code> imports <code>backend/src/grimoire/llm.py</code> or <code>backend/src/grimoire/openrouter.py</code> (<code>backend/src/grimoire/store/chub.py</code> and <code>backend/src/grimoire/store/fetch.py</code> use <code>httpx</code> for asset fetching, not completions). Nothing detects a future store module that calls out directly. This is what the dangling <em>briefs.py</em> references used to gesture at; they are now replaced by named, real exemplars.</td>
-</tr>
-<tr>
-  <td>A <code>&lt;name&gt;.py</code> written in prose inside the package resolves to a real file in the backend tree</td>
-  <td><code>backend/tests/test_module_references.py:45-55</code></td>
-  <td><span class="badge good">newly enforced</span> Added with the #244 fix — the repo's first mechanical check on documentation accuracy, covering 22 cross-references. It matches basenames only, so it proves a named module <em>exists</em> rather than that the reference is apt; the docstring says so (<code>backend/tests/test_module_references.py:9-12</code>). Its search root is derived positionally from <code>grimoire.__file__</code> and is only correct for a source checkout, which it now asserts rather than assumes (<code>backend/tests/test_module_references.py:37-41</code>) — otherwise an installed-package import would sweep site-packages into the known-set and pass vacuously.</td>
-</tr>
-<tr>
-  <td>Only one actor mutates a campaign at a time</td>
-  <td><code>backend/src/grimoire/store/locks.py:43-52</code> (in-process <code>RLock</code> per campaign), taken by all seven campaign-scoped modules</td>
-  <td><span class="badge bad">holds only within one process</span> See concurrency below.</td>
-</tr>
-<tr>
-  <td>A crash never leaves a record half-written</td>
-  <td>One helper, <code>backend/src/grimoire/store/atomic.py:88</code> — same-directory <code>mkstemp</code>, fsync, mode carry, <code>os.replace</code>. Every write site in the package routes through it.</td>
-  <td><span class="badge good">enforced</span> Was true of only six mechanics-era modules; closed for all ~100 write sites by #233. <code>backend/tests/test_atomic_guard.py</code> fails the build if a raw <code>write_text</code> reappears without an <code>atomic-ok</code> marker. Note the guarantee is per-file atomicity (old-or-new, never torn), <em>not</em> power-loss durability and not sync-client consistency.</td>
-</tr>
-</tbody>
+<table>
+  <thead><tr><th>Invariant</th><th>Enforced by</th><th>Verdict</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>A record on disk is always a complete record</td>
+      <td><code>backend/src/grimoire/store/atomic.py:193</code> + <code>backend/tests/test_atomic_guard.py</code></td>
+      <td><span class="badge good">enforced by test</span> All ~100 write sites publish by rename. A raw write reappearing anywhere in the package fails the build. Note the bound: per-file atomicity, <em>not</em> power-loss durability and not sync-client consistency.</td>
+    </tr>
+    <tr>
+      <td>A campaign read sees world content it hasn't overridden</td>
+      <td><code>backend/src/grimoire/store/overlay.py</code></td>
+      <td><span class="badge bad">convention only</span> Nothing enforces it (#248). A bypass silently returns a partial world rather than failing — the worst failure mode for a rule.</td>
+    </tr>
+    <tr>
+      <td>Concurrent campaign mutations serialize</td>
+      <td><code>backend/src/grimoire/store/locks.py:47</code></td>
+      <td><span class="badge bad">in-process only, and incomplete</span> <code>threading.RLock</code> protects nothing across processes (#234) — and the highest-frequency writer, <code>append_message</code>, takes no lock at all (#254). <code>rolls.py</code> is outside the domain entirely (#255).</td>
+    </tr>
+    <tr>
+      <td>A proposal is healed before it is retired</td>
+      <td><code>backend/src/grimoire/routes.py:2507</code></td>
+      <td><span class="badge warn">convention, 5 call sites</span> <code>_heal_current_proposal</code> must be called on every retirement path. Enforced by remembering to (#242).</td>
+    </tr>
+    <tr>
+      <td>Path ids cannot escape their root</td>
+      <td><code>_safe_id</code> guards in <code>store/scenes.py:98</code>, <code>store/entities.py:37</code></td>
+      <td><span class="badge warn">uneven</span> Present on scene and entity ids; missing from campaign/world/character root resolution (#240).</td>
+    </tr>
+    <tr>
+      <td>An absorbed scene is absorbed exactly once</td>
+      <td><span class="dim">nothing</span></td>
+      <td><span class="badge bad">not enforced</span> No idempotency key, no "absorbed" guard. Re-running re-applies every edit (#235).</td>
+    </tr>
+  </tbody>
 </table>
 </div>
 
-<h2>Failure handling</h2>
+<h3>Failure handling</h3>
 <div class="callout warn">
-  <strong>Two silent-swallow sites, one of them on the main flow.</strong> The dossier refresh loop discards every exception with a bare <code>continue</code> and reports nothing (<code>backend/src/grimoire/routes.py:3143-3144</code>) — a user can lose dossier updates indefinitely without a single visible symptom. The custom-calendar loader does the same on import failure (<code>backend/src/grimoire/store/calendars/plugins.py:48-49</code>), though there the retry-next-call behaviour is documented and reasonable for a plugin system.
+  <p>
+    <strong>One silent-swallow site remains on the main flow.</strong> The
+    dossier refresh loop discards every exception with a bare
+    <code>continue</code> and reports nothing
+    (<code>backend/src/grimoire/routes.py:3145</code>) — a user can lose dossier
+    updates indefinitely with no visible symptom. The audit path 40 lines above
+    it returns a <code>dropped</code> count and a "degraded" status, so the
+    correct shape already exists in the same function. Issue #236.
+  </p>
+  <p>
+    The custom-calendar loader swallows import failures too
+    (<code>backend/src/grimoire/store/calendars/plugins.py</code>), but there the
+    retry-next-call behavior is documented and reasonable for a plugin system.
+  </p>
 </div>
-<div class="callout good">
-  <strong>The audit pipeline is the pattern to copy.</strong> <code>_run_audit</code> wraps its whole pipeline in one failure boundary and converts any exception into a structured status the UI renders — <code>status</code> of <code>ok</code> / <code>degraded</code> / <code>failed</code>, plus <code>reason</code>, <code>warnings</code> and <code>dropped</code> (<code>backend/src/grimoire/routes.py:3073-3111</code>). Failures degrade visibly instead of vanishing. The dossier loop sitting twenty lines above it does the opposite.
+<p>
+  Worth crediting: the codebase writes unusually good <em>why</em> comments, and
+  several of the trickiest invariants (turn-size boundaries, lock ordering, the
+  two-actor module-edit threat model) are explained at their definition rather
+  than left for a reader to reconstruct.
+</p>
+
+<h3>Concurrency</h3>
+<div class="callout bad">
+  <p>
+    <strong>The locks are in-process; the product advertises multi-process
+    use.</strong> <code>threading.RLock</code> protects nothing across
+    processes, yet the README recommends pointing the data directory at Dropbox
+    or iCloud to share one library across devices, and the same store is
+    reachable from the desktop app and the Android APK. Two devices — or two
+    backend processes on one machine — editing one campaign have no mutual
+    exclusion at all, and because most records are rewritten whole rather than
+    merged, the loser's edit is silently overwritten.
+  </p>
+  <p>
+    The threat model documented in
+    <code>backend/src/grimoire/store/module_edit.py:4-10</code> names exactly two
+    actors, User and LLM, both inside one process. The sync-folder scenario adds
+    a third the design does not account for.
+  </p>
+</div>
+
+<h3>Risk ranking</h3>
+<div class="callout bad">
+  <p>
+    <strong>1. <code>scenes.append_message</code> takes no lock at all.</strong>
+    Two concurrent appends lose a message — inside a single process, no synced
+    folder required. It is the most-executed write in the app and the data is
+    the one thing that cannot be regenerated. The write is atomic, which is
+    exactly why the loss is silent: both writes are individually complete and
+    well-formed. <em>New in this atlas</em> — the previous one ranked the
+    cross-process case (#2 below) and did not separate out the in-process
+    absence. <strong>#254.</strong>
+  </p>
+</div>
+<div class="callout bad">
+  <p>
+    <strong>2. Cross-process and cross-device writers have no protection.</strong>
+    Given a documented, encouraged sync-folder workflow, last-writer-wins on
+    whole-file rewrites is a data-loss path with no detection and no user-visible
+    symptom. Fixing #254 without this leaves the advertised workflow unprotected;
+    fixing this without #254 leaves single-process play unprotected. They want
+    doing together. <strong>#234.</strong>
+  </p>
+</div>
+<div class="callout warn">
+  <p>
+    <strong>3. Absorb is a long, non-atomic, non-idempotent multi-phase
+    write.</strong> Prose edits commit before the dossier loop and audit run
+    (<code>backend/src/grimoire/routes.py:3134</code>); there is no
+    absorbed-already guard, and a re-run re-applies everything. Interrupted
+    absorbs leave campaigns in states no code path expects. <strong>#235.</strong>
+  </p>
+</div>
+<div class="callout warn">
+  <p>
+    <strong>4. <code>routes.py</code> is 3,483 LOC with 563 branches and 158
+    commits — the top hotspot by a factor of four.</strong> Its churn×complexity
+    score is 89,112 against 20,128 for the next file. It holds all 252 endpoints
+    plus streaming, the fence protocol, the proposal-healing invariant and audit
+    orchestration. Two of this atlas's boundary violations live here <em>because
+    there is nowhere better to put them</em>. Splitting by domain is mechanical
+    and would shrink the review surface of every future change.
+    <strong>#241.</strong>
+  </p>
+</div>
+<div class="callout warn">
+  <p>
+    <strong>5. Silent dossier failures.</strong> Low blast radius per
+    occurrence, unbounded in time — nothing ever tells the user their campaign
+    memory stopped refreshing. Cheap to fix by mirroring the audit's
+    status-reporting shape. <strong>#236.</strong>
+  </p>
 </div>
 <div class="callout">
-  <strong>Reads are permissive, writes are strict — deliberately.</strong> Several modules state this contract explicitly: <code>backend/src/grimoire/store/sheets.py:1-9</code> ("read/coverage never raise on malformed sheet content; writes validate strictly"), and <code>backend/src/grimoire/store/paths.py:25-33</code> silently returns an empty dict for an unparseable bootstrap pointer. This keeps a corrupted file from bricking the app, at the cost of corruption being invisible until a write fails.
+  <p>
+    <strong>Resolved since the last atlas.</strong> Risk #1 was "scene
+    transcripts are rewritten non-atomically on every message" — fixed in #233
+    (merged <code>fd38a84a</code>). All ~100 write sites publish by rename
+    through one helper, and a guard test keeps it that way. Two smaller findings
+    went with it: <code>put_image</code> deleted the old image before writing the
+    new one, and <code>routes.py</code> was writing a campaign record with a raw
+    <code>write_text</code> from the HTTP layer.
+  </p>
+  <p class="note">
+    One process observation worth carrying: that fix took five review rounds, and
+    <strong>three of its four P1 defects were introduced while fixing earlier
+    findings</strong> — a symlink window opened by closing a file descriptor, a
+    process-global umask mutation, and two successive incomplete fixes to the
+    same image-cleanup race. Changes in this area are unusually good at looking
+    finished before they are.
+  </p>
 </div>
-<div class="callout warn">
-  <strong>No request-level timeouts.</strong> Neither the streaming routes nor the awaited <code>client.complete</code> calls set a deadline; whatever bound exists comes from each provider's httpx client. Absorb — which issues one call per present NPC sequentially — has no ceiling on total duration.
-</div>
-
-<h2>Concurrency</h2>
-<p>The backend is a normal async FastAPI app: streaming endpoints are async generators, and most store work is synchronous file I/O executed inline. Shared mutable state is small and explicit — a per-campaign <code>RLock</code> registry (<code>backend/src/grimoire/store/locks.py:43-52</code>), a global module-edit lock, and a module-level <code>LLMClient</code> singleton created at import (<code>backend/src/grimoire/routes.py:21-22</code>). Lock ordering is disciplined and, since #245, stated in the module that owns the lock: <code>backend/src/grimoire/store/locks.py:27-35</code> gives both rules — campaign lock before audit's baseline lock, and the global edit lock before every campaign lock — and notes that LLM play flows hold their single campaign lock across resolve/load/compute so they never see a half-published pack. Two narrower registries stay separate on purpose: the audit baseline lock (<code>backend/src/grimoire/store/audit.py:23-29</code>) and the roll-log lock (<code>backend/src/grimoire/store/rolls.py:31-37</code>) guard single-file write integrity, not campaign-state coherence. All three are the same eight-line get-or-create pattern, written out three times.</p>
-<div class="callout bad">
-  <strong>The locks are in-process, but the product advertises multi-process use.</strong> <code>threading.RLock</code> protects nothing across processes, yet the README explicitly recommends pointing the data directory at Dropbox or iCloud to share one library across devices, and the same store is reachable from the desktop app and the Android APK. Two devices — or two backend processes on one machine — editing one campaign have no mutual exclusion at all, and because most records are rewritten whole (rather than merged), the loser's edit is silently overwritten. The threat model in <code>backend/src/grimoire/store/module_edit.py:4-10</code> names exactly two actors, User and LLM, both inside one process; the sync-folder scenario adds a third the design does not account for.
-</div>
-
-<h2>Risk ranking</h2>
-<div class="callout good">
-  <strong>Resolved since the last atlas: transcripts are no longer rewritten non-atomically.</strong> What this atlas ranked risk #1 — <code>scenes.append_message</code> rewriting the whole transcript with a plain <code>write_text</code> on every message — is fixed in 39a016b4 (#233). All ~100 write sites in the package now publish by rename through <code>backend/src/grimoire/store/atomic.py</code>, and a guard test keeps it that way. Two caveats carry forward: the guarantee is atomicity, not power-loss durability, and it does nothing for the concurrency risk immediately below — which is now the top item.
-</div>
-<div class="callout bad">
-  <strong>1. Concurrent writers across processes or devices have no protection.</strong> Given a documented, encouraged sync-folder workflow, last-writer-wins on whole-file rewrites is a data-loss path with no detection and no user-visible symptom.
-</div>
-<div class="callout warn">
-  <strong>2. Absorb is a long, non-atomic, non-idempotent multi-phase write.</strong> Prose edits commit before the dossier loop and audit run (<code>backend/src/grimoire/routes.py:3132</code>), there is no absorbed-already guard, and a re-run re-applies everything. Interrupted absorbs leave campaigns in states no code path expects.
-</div>
-<div class="callout warn">
-  <strong>3. <code>backend/src/grimoire/routes.py</code> is a 3481-line file with 563 branches and 156 commits — the top hotspot by a factor of four.</strong> It holds all 252 endpoints plus the streaming machinery, the fence protocol, the proposal-healing invariant and the audit orchestration. The hand-maintained invariant in point 3 of the Flows tab lives here precisely because there is nowhere better to put it. Splitting by domain (campaigns / worlds / modules / config) is mechanical and would cut the review surface of every future change to this file.
-</div>
-<div class="callout warn">
-  <strong>4. Silent dossier failures.</strong> Low blast radius per occurrence, but unbounded in time — nothing ever tells the user their campaign memory stopped being refreshed. Cheap to fix by mirroring the audit's status-reporting shape.
-</div>
-
-
-
 
 </section>
 <section class="panel" id="glossary" role="tabpanel">
 
-
-
-
 <div class="card hero">
-  <h2>Domain language is strong; two terms are overloaded</h2>
-  <p>Grimoire's vocabulary is unusually well-kept — most domain concepts have exactly one code name, and the store module is literally named after the concept it owns. Two exceptions are worth knowing before you read: <strong>"module"</strong> means a game-mechanics data pack, not a Python module, and the SillyTavern heritage left <strong>three overlapping names</strong> for world knowledge.</p>
+  <h2>Domain vocabulary, and the places a name will mislead you</h2>
+  <p>
+    Most names here are honest. The entries flagged below are the ones where the
+    code name and the domain meaning have drifted apart far enough to cost a
+    reader time — those are worth reading even if you skip the rest.
+  </p>
 </div>
 
-<h2>Domain term ↔ code name</h2>
+<h3>Core nouns</h3>
 <div class="tbl-wrap">
-<table class="sortable">
-<thead><tr><th>Domain term</th><th>Code name(s)</th><th>Where</th><th>Note</th></tr></thead>
-<tbody>
-<tr><td>World — a setting and its cast</td><td><code>worlds</code>, <code>wroot</code>, <code>wid</code></td><td><code>backend/src/grimoire/store/worlds.py</code></td><td>Consistent everywhere.</td></tr>
-<tr><td>Campaign — a playthrough in a world</td><td><code>campaigns</code>, <code>croot</code>, <code>cid</code></td><td><code>backend/src/grimoire/store/campaigns.py</code></td><td><span class="badge warn">watch out</span> <code>cid</code> means <em>campaign</em> id in campaign routes but <em>character</em> id in world-character routes — compare <code>backend/src/grimoire/routes.py:2988</code> with <code>backend/src/grimoire/routes.py:1450</code>.</td></tr>
-<tr><td>Scene — one chat transcript</td><td><code>scenes</code>, <code>sid</code></td><td><code>backend/src/grimoire/store/scenes.py</code></td><td>Stored as Markdown where every message is a <code>**Speaker:**</code> line; role is derived, never stored.</td></tr>
-<tr><td>Absorb — fold a finished scene back into the campaign</td><td><code>absorb</code></td><td><code>backend/src/grimoire/store/absorb.py</code></td><td>The app's own coinage, used identically in UI, code and prompts.</td></tr>
-<tr><td>Chronicle — the running recap/memory</td><td><code>chronicle</code>, plus <em>timeline.md</em></td><td><code>backend/src/grimoire/store/chronicle.py</code></td><td>Two artifacts under one name: a keyed JSON fact record and an append-only dated timeline.</td></tr>
-<tr><td>Dossier — per-NPC campaign memory</td><td><code>dossiers</code></td><td><code>backend/src/grimoire/store/dossiers.py</code></td><td>Distinct from <em>state</em> below; a dossier is narrative, state is a snapshot.</td></tr>
-<tr><td>Character state / group state</td><td><code>playstate</code> (<em>state.md</em>), <code>groupstate</code></td><td><code>backend/src/grimoire/store/playstate.py</code>, <code>backend/src/grimoire/store/groupstate.py</code></td><td><span class="badge warn">drift</span> The domain word is "state" and the file is <em>state.md</em>, but the modules are <code>playstate</code>/<code>groupstate</code> — and neither relates to <code>backend/src/grimoire/store/playing.py</code>, which is about greeting availability.</td></tr>
-<tr><td>Cast — who is in a scene</td><td><code>appearances</code>; <code>roster()</code> for the campaign, <code>scene_cast()</code> for one scene</td><td><code>backend/src/grimoire/store/appearances.py:277</code>, <code>backend/src/grimoire/store/appearances.py:323</code></td><td><span class="badge warn">three names</span> The UI says "cast", the file is <em>appearances.json</em>, and the campaign-wide function is <code>roster</code>. All one concept at two scopes.</td></tr>
-<tr><td>Actor — a character or a PC</td><td><code>ACTOR_KINDS = ("characters", "pcs")</code></td><td><code>backend/src/grimoire/store/appearances.py:19</code></td><td>An overlay-layer term only: actors resolve whole-directory, unlike flat records.</td></tr>
-<tr><td>Entity — a generic world record</td><td><code>ENTITY_KINDS = ("locations", "lore", "items", "groups", "creatures")</code></td><td><code>backend/src/grimoire/store/entities.py:17</code></td><td>Note that characters, PCs and greetings are <em>not</em> entities — they have their own modules and resolution rules.</td></tr>
-<tr><td>Greeting — a scene opener</td><td><code>greetings</code>; edges in <em>plotmap.json</em></td><td><code>backend/src/grimoire/store/greetings.py</code></td><td>Doubles as a node in the plot graph, so "greeting" also means "a startable story beat".</td></tr>
-<tr><td>Lore / world info / lorebook</td><td><code>lore</code> (an entity kind), <code>lorebook</code> (importer), <code>activate()</code> (selection)</td><td><code>backend/src/grimoire/store/lorebook.py</code>, <code>backend/src/grimoire/store/context.py:23-38</code></td><td><span class="badge warn">three names, one idea</span> <code>lore</code> is the stored record, <code>lorebook</code> is the SillyTavern import format, and the runtime concept ("world info") appears only in the docstring at <code>backend/src/grimoire/store/context.py:1-8</code>. Newcomers reliably conflate them.</td></tr>
-<tr><td>Module — a game-mechanics data pack</td><td><code>modules</code>, <code>mid</code>, <code>module_edit</code>, <code>module_display</code></td><td><code>backend/src/grimoire/store/modules.py</code></td><td><span class="badge bad">collides with Python's own term</span> "the module" in a comment can mean a mechanics pack or a <code>.py</code> file. Three code files carry the prefix, so the collision is unavoidable when reading <code>store/</code>.</td></tr>
-<tr><td>Sheet — a filled-in character sheet</td><td><code>sheets</code>, <code>sheet_type</code></td><td><code>backend/src/grimoire/store/sheets.py</code></td><td>Instance vs. definition is kept clean: sheets are instances, sheet types live in the module pack.</td></tr>
-<tr><td>Check — a dice test defined by a module</td><td><code>checks</code>, resolved into a <code>proposal</code></td><td><code>backend/src/grimoire/store/checks.py</code>, <code>backend/src/grimoire/store/proposals.py</code></td><td><code>backend/src/grimoire/store/checks.py</code> is pure (draws only); <code>backend/src/grimoire/store/proposals.py</code> owns the durable record. The split is deliberate and documented.</td></tr>
-<tr><td>Fence — a <code>```roll</code> block the model emits</td><td><code>fence</code>, <code>FenceWatcher</code>, <code>OPENER</code></td><td><code>backend/src/grimoire/store/fence.py:15</code></td><td>The opener grammar is defined exactly once and re-used by <code>backend/src/grimoire/store/length_drift.py</code> — a good example of single-definition discipline.</td></tr>
-<tr><td>Style guide vs. response preset vs. length preset</td><td><code>styles</code>, <code>response_presets</code>, <code>lengths</code></td><td><code>backend/src/grimoire/store/styles.py</code>, <code>backend/src/grimoire/store/response_presets.py</code>, <code>backend/src/grimoire/store/lengths.py</code></td><td><span class="badge warn">easy to confuse</span> A <em>style</em> is prose tone, a <em>length preset</em> is five numeric knobs, and a <em>response preset</em> is a saved pairing of the two. All three resolve through the same global → campaign → scene scope chain.</td></tr>
-<tr><td>Climate vs. weather</td><td><code>climates</code> (registry), <code>weather</code> (per-moment draw)</td><td><code>backend/src/grimoire/store/climates/</code>, <code>backend/src/grimoire/store/weather/</code></td><td>Clean distinction: a climate is a static profile, weather is what it produces at a moment.</td></tr>
-<tr><td>Campaign lock vs. baseline lock vs. roll lock</td><td><code>campaign_lock</code>, <code>audit._lock</code>, <code>rolls._lock</code></td><td><code>backend/src/grimoire/store/locks.py:47</code>, <code>backend/src/grimoire/store/audit.py:27</code>, <code>backend/src/grimoire/store/rolls.py:35</code></td><td><span class="badge warn">three same-named registries</span> Only the first is the general campaign lock; the other two are narrower single-file guards that happen to use the identical get-or-create pattern. <code>backend/src/grimoire/store/appearances.py:113</code> also defines a <code>_lock</code> that is not a lock at all — it returns a locked-in appearance base string.</td></tr>
-<tr><td>Data root / home / store</td><td><code>home()</code>, <code>GRIMOIRE_HOME</code>, "the store"</td><td><code>backend/src/grimoire/store/paths.py:41</code></td><td>"Store" means both the Python package and the user's data directory. Context always disambiguates, but be aware of it.</td></tr>
-</tbody>
+<table>
+  <thead><tr><th>Term</th><th>Means</th><th>Lives in</th></tr></thead>
+  <tbody>
+    <tr><td><strong>World</strong></td>
+        <td>Reusable canon — characters, locations, lore. Not playable on its own.</td>
+        <td><code>backend/src/grimoire/store/worlds.py</code></td></tr>
+    <tr><td><strong>Campaign</strong></td>
+        <td>A playthrough instantiating one world. Owns scenes and accumulated state; reads world content through the overlay.</td>
+        <td><code>backend/src/grimoire/store/campaigns.py</code></td></tr>
+    <tr><td><strong>Overlay</strong></td>
+        <td>The campaign-sees-world indirection: the campaign's own copy if materialized, the world's otherwise. The most load-bearing concept in the store.</td>
+        <td><code>backend/src/grimoire/store/overlay.py</code></td></tr>
+    <tr><td><strong>Scene</strong></td>
+        <td>One unit of play: a Markdown transcript of <code>**Speaker:**</code> blocks plus frontmatter (location, datetime, cast, turn boundaries).</td>
+        <td><code>backend/src/grimoire/store/scenes.py</code></td></tr>
+    <tr><td><strong>Absorb</strong></td>
+        <td>Turning a finished scene into durable campaign state — chronicle entry, relationship and plot edits, sheet changes.</td>
+        <td><code>backend/src/grimoire/store/absorb.py</code></td></tr>
+    <tr><td><strong>Chronicle</strong></td>
+        <td>The campaign's timeline of absorbed scene summaries. Distinct from the transcripts themselves.</td>
+        <td><code>backend/src/grimoire/store/chronicle.py</code></td></tr>
+    <tr><td><strong>Dossier</strong></td>
+        <td>An LLM-maintained per-NPC brief, refreshed after absorb. Derived — regenerable, unlike a transcript.</td>
+        <td><code>backend/src/grimoire/store/dossiers.py</code></td></tr>
+    <tr><td><strong>Appearance</strong></td>
+        <td>The record that an actor appeared in a scene, with the version locked at that moment and a sync base hash.</td>
+        <td><code>backend/src/grimoire/store/appearances.py</code></td></tr>
+    <tr><td><strong>Module (mechanics)</strong></td>
+        <td>A game-system data pack — sheet types, checks, rules. User-authorable, published by whole-directory rename.</td>
+        <td><code>backend/src/grimoire/store/modules.py</code></td></tr>
+    <tr><td><strong>Sheet</strong></td>
+        <td>An instance of a module's sheet type bound to an entity. Campaign-owned mutable state; derived values computed on read, never stored.</td>
+        <td><code>backend/src/grimoire/store/sheets.py</code></td></tr>
+    <tr><td><strong>Fence</strong></td>
+        <td>The delimiter protocol separating narration from structured output in a model response.</td>
+        <td><code>backend/src/grimoire/store/fence.py</code></td></tr>
+  </tbody>
 </table>
 </div>
 
-<h2>Misleading and stale names</h2>
+<h3>Kind vocabularies — closed sets worth knowing verbatim</h3>
+<div class="tbl-wrap">
+<table>
+  <thead><tr><th>Constant</th><th>Value</th><th>Where</th></tr></thead>
+  <tbody>
+    <tr><td><code>ENTITY_KINDS</code></td>
+        <td><code>locations, lore, items, groups, creatures</code></td>
+        <td><code>backend/src/grimoire/store/entities.py:17</code></td></tr>
+    <tr><td><code>SYNCED_KINDS</code></td>
+        <td><code>ENTITY_KINDS + greetings</code> — the set world→campaign sync walks</td>
+        <td><code>backend/src/grimoire/store/entities.py:21</code></td></tr>
+    <tr><td><code>ACTOR_KINDS</code></td>
+        <td><code>characters, pcs</code> — actors are versioned and appear in scenes; entities are not</td>
+        <td><code>backend/src/grimoire/store/appearances.py:19</code></td></tr>
+    <tr><td><code>SYNTHETIC_SPEAKERS</code></td>
+        <td>Roll and transition lines — assistant blocks that are <em>not</em> model prose</td>
+        <td><code>backend/src/grimoire/store/scenes.py:43</code></td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>Names that will mislead you</h3>
 <div class="callout warn">
-  <strong><code>backend/src/grimoire/store/playing.py</code> is not about playing a scene.</strong> Despite sitting next to <code>backend/src/grimoire/store/playstate.py</code>, it owns greeting availability and the played/completed/skipped marks (<code>backend/src/grimoire/store/playing.py:1-3</code>). The actual play path is <code>backend/src/grimoire/store/context.py</code> plus the chat routes. The <code>playing</code>/<code>playstate</code> pair is the one place in the codebase where adjacent names imply a relationship that does not exist.
+  <p>
+    <strong><code>atomic.py</code> does not mean transactional.</strong> It
+    guarantees <em>per-file</em> atomicity — a reader sees the whole old version
+    or the whole new one. It does not give you multi-file consistency, and it
+    does not give you durability across a power cut. Both limits are stated at
+    <code>backend/src/grimoire/store/atomic.py:8-21</code>, and both have been
+    over-read at least once already.
+  </p>
 </div>
-<div class="callout good">
-  <strong>The general campaign lock is now named and filed as one.</strong> What was <code>sheets.lock_for()</code> — named for its original scope, but serializing proposals, audits and module publication as well — moved to <code>locks.campaign_lock()</code> in <code>store/locks.py</code> (#245). The borrowing modules no longer have to explain the borrowing in their own docstrings.
+<div class="callout warn">
+  <p>
+    <strong><code>locks.campaign_lock</code> is not <em>the</em> lock.</strong>
+    Its docstring enumerates who takes it, and that list is incomplete:
+    <code>rolls.py</code> keeps a private registry (#255), and
+    <code>assets.py:45</code> has its own per-image lock added for a different
+    reason. "Campaign-scoped mutation serializes here" is true of most callers,
+    not all.
+  </p>
 </div>
-<div class="callout good">
-  <strong>Everything else lines up.</strong> Store module names match the domain nouns they own, route paths match store modules, and the frontend components are named for the records they edit (<code>GreetingEditor</code>, <code>EntityEditor</code>, <code>CharacterEditor</code>). For a codebase this size, three naming problems total is a good result.
+<div class="callout warn">
+  <p>
+    <strong><code>playstate</code> vs <code>playing</code> vs
+    <code>plotmap</code>.</strong> Three similarly-named modules holding
+    different things: <code>playstate.py</code> is per-character campaign
+    play-state stored beside the character copy; <code>playing.py</code> is the
+    campaign's played-greeting set; <code>plot.py</code>/plotmaps are authored
+    plot threads. Nothing in the names distinguishes them.
+  </p>
 </div>
-<div class="callout good">
-  <strong>Resolved since the last atlas.</strong> The fourth item here used to be two docstrings pointing at a <em>briefs.py</em> that was specified but never built (issue #244). Fixed on <code>fix/244-briefs-docstrings</code>: <code>backend/src/grimoire/store/chronicle.py:9-12</code> now states the store/route split inline and cites three modules that demonstrate it, and <code>backend/src/grimoire/store/playstate.py:5-7</code> points at <code>backend/src/grimoire/store/dossiers.py</code>, the real per-character artifact of the same shape. That also repairs the trail from <code>backend/src/grimoire/store/groupstate.py:5-6</code>, whose "Mirrors playstate.py" previously led into the dead reference.
+<div class="callout warn">
+  <p>
+    <strong>"Character" is two things.</strong> A world character (canon, shared)
+    and a campaign character (a materialized copy with its own version lock and
+    play-state). <code>overlay.read_character</code> resolves across both;
+    <code>characters.read_character</code> takes an explicit root and does not.
+    Calling the wrong one is a silent partial read, not an error.
+  </p>
 </div>
-
-
-
+<div class="callout">
+  <p>
+    <strong>Templates are named for their prompt role, not their caller.</strong>
+    The 219 <code>.j2</code> files under the templates directory
+    (<code>backend/src/grimoire/prompts.py:17</code>) are organized by
+    flow (an absorb system prompt, an audit system prompt) rather than by caller, so
+    finding which code path renders a given template means grepping for the
+    template name, not following imports. There are no import edges to follow.
+  </p>
+</div>
 
 </section></main>
-<footer class="doc"></footer>
+<footer class="doc">Generated by code-visualization. Automated tabs: Inventory, Dependencies, Hotspots. Judgment tabs authored from code reading — verify citations before acting.</footer>
 <div class="viz-tip" id="viz-tip"></div>
 <script>
 /* ============ tabs ============ */
