@@ -19,6 +19,7 @@ const cfg = {
   theme: "codex", system_prompt: "", quote_color: "off", user_label: "You", assistant_label: "Grimoire",
   active_connection_id: "openrouter",
   active_connection: { id: "openrouter", kind: "openrouter", name: "OpenRouter" }, ready: true,
+  llm_timeout: "120", absorb_budget: "600",
 };
 const dataDir = {
   data_dir: "/home/u/.grimoire", default: "/home/u/.grimoire",
@@ -110,6 +111,22 @@ test("switching the active connection saves immediately", async () => {
   const select = await screen.findByLabelText("LLM connection");
   fireEvent.change(select, { target: { value: "claude" } });
   await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith({ active_connection_id: "claude" }));
+});
+
+test("shows the configured timeout and absorb budget", async () => {
+  renderView();
+  expect(await screen.findByLabelText(/no-reply timeout/i)).toHaveValue("120");
+  expect(screen.getByLabelText(/absorb budget/i)).toHaveValue("600");
+});
+
+test("edits the timeouts and saves them", async () => {
+  renderView();
+  const timeout = await screen.findByLabelText(/no-reply timeout/i);
+  fireEvent.change(timeout, { target: { value: "45" } });
+  fireEvent.change(screen.getByLabelText(/absorb budget/i), { target: { value: "300" } });
+  fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+  await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith(
+    expect.objectContaining({ llm_timeout: "45", absorb_budget: "300" })));
 });
 
 test("links to the Connections page to manage keys/endpoints", async () => {

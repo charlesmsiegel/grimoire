@@ -783,6 +783,10 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
                       : "Some NPC dossiers could not be refreshed"}</p>
                 {absorb.dossiers.failed.map((d, i) => (
                   <p className="field-hint" key={i}>{d.id}: {d.reason}</p>))}
+                {absorb.dossiers.skipped.length > 0 && (
+                  <p className="field-hint">
+                    Never attempted, skipped: {absorb.dossiers.skipped.join(", ")}
+                  </p>)}
               </div>)}
             {editRows.length > 0 && (
               <div className="absorb-edits">

@@ -25,6 +25,8 @@ def _public_config(cfg: dict[str, str]) -> dict:
             "quote_color": cfg.get("quote_color", "off"),
             "user_label": cfg.get("user_label", "You"),
             "assistant_label": cfg.get("assistant_label", "Grimoire"),
+            "llm_timeout": cfg.get("llm_timeout", store.config.DEFAULT_LLM_TIMEOUT),
+            "absorb_budget": cfg.get("absorb_budget", store.config.DEFAULT_ABSORB_BUDGET),
             "active_connection_id": active["id"] if active else "",
             "active_connection": ({"id": active["id"], "kind": active["kind"], "name": active["name"]}
                                    if active else None),

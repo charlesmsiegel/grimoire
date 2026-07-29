@@ -4,6 +4,9 @@ response scope, the chronicle, and the absorb/audit end-of-scene flow."""
 
 from __future__ import annotations
 
+import asyncio
+import time
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from .. import prompts, store
@@ -195,7 +198,61 @@ def get_chronicle(cid: str):
     return store.chronicle.recent(cid, 50)
 
 
-async def _run_audit(cid: str, sid: str, client: LLMClient, conn: dict) -> tuple[list[dict], dict]:
+# Indirection so tests can drive budget arithmetic off a fake clock instead of
+# real waiting. Deliberately NOT time.time(): a wall-clock jump (NTP, DST,
+# sleep/wake) must not expire or extend a running absorb.
+_clock = time.monotonic
+BUDGET_EXHAUSTED = "absorb time budget exhausted"
+
+
+class _Budget:
+    """A wall-clock ceiling on one absorb's whole LLM sequence (#243).
+
+    Absorb awaits an extraction call, then one dossier call per present NPC,
+    then an audit call, all inside a single HTTP request — the per-call idle
+    timeout in `llm` bounds each *stall*, but nothing bounds the total. This
+    does, and it is deliberately absorb's policy rather than the LLM facade's:
+    only the caller knows which of its steps are droppable.
+
+    `seconds <= 0` means no ceiling at all (config's escape hatch), in which
+    case every method degrades to a plain await.
+    """
+
+    def __init__(self, seconds: float):
+        self._deadline = None if seconds <= 0 else _clock() + seconds
+
+    def remaining(self) -> float | None:
+        return None if self._deadline is None else self._deadline - _clock()
+
+    def spent(self) -> bool:
+        left = self.remaining()
+        return left is not None and left <= 0
+
+    async def run(self, coro):
+        """Await `coro` under the remaining budget, reporting an overrun as the
+        same LLMError kind an upstream stall raises — so every caller's existing
+        LLM failure handling covers it with no new branch.
+
+        wait_for waits for the cancellation it requests to complete, so the
+        real ceiling is the budget plus however long the call takes to unwind;
+        that unwinding is itself hard-bounded in `llm` (grace-then-abandon),
+        which is what keeps this a bound rather than a hope.
+        """
+        left = self.remaining()
+        if left is None:
+            return await coro
+        try:
+            return await asyncio.wait_for(coro, left)
+        except asyncio.TimeoutError as exc:
+            # asyncio.TimeoutError is the builtin TimeoutError from 3.11 on, so
+            # this also catches one raised *inside* the call. Only blame the
+            # budget when the budget is actually gone.
+            detail = BUDGET_EXHAUSTED if self.spent() else (str(exc) or "the call timed out")
+            raise LLMError("timeout", detail) from exc
+
+
+async def _run_audit(cid: str, sid: str, client: LLMClient, conn: dict,
+                     budget: _Budget) -> tuple[list[dict], dict]:
     """(edits, mechanics) for the scene audit. Never raises; every failure is
     an explicit mechanics status (spec: audit visibility) so absorb stays
     intact even when the audit pipeline blows up."""
@@ -220,7 +277,10 @@ async def _run_audit(cid: str, sid: str, client: LLMClient, conn: dict) -> tuple
         transcript = store.chronicle.transcript_text(scene["messages"])
         messages = store.audit.build_prompt(transcript, blocks,
                                             store.audit.roll_lines(cid, sid))
-        text = await client.complete(messages, conn)
+        # An exhausted budget fails this instantly (never calling the model),
+        # landing in the catch-all below as a failed audit — the status the UI
+        # already renders with a POST /audit retry beside it.
+        text = await budget.run(client.complete(messages, conn))
         parsed = store.audit.parse_output(text)
         edits, dropped = store.audit.materialize(cid, sid, parsed)
     except store.audit.AuditParseError as exc:
@@ -237,25 +297,33 @@ async def _run_audit(cid: str, sid: str, client: LLMClient, conn: dict) -> tuple
 
 
 async def _refresh_dossiers(cid: str, sid: str, transcript: str,
-                            client: LLMClient, conn: dict) -> dict:
+                            client: LLMClient, conn: dict, budget: _Budget) -> dict:
     """Refresh every present NPC's campaign dossier from this scene, reporting
     the outcome. Never raises -- a dossier failure must not fail absorb -- but
     it is no longer silent either: failures come back as a status the inspector
     renders, mirroring _run_audit's shape, so a user whose dossiers quietly
     stopped updating sees it on the very first absorb rather than never."""
-    out: dict = {"status": "skipped", "reason": None, "refreshed": [], "failed": []}
+    out: dict = {"status": "skipped", "reason": None,
+                 "refreshed": [], "failed": [], "skipped": []}
     try:
         cast = store.appearances.scene_cast(cid, sid)
         croot = store.campaigns.campaign_root(cid)
     except Exception as exc:  # noqa: BLE001 -- an unreadable cast is a failed phase, not a 500
         return {**out, "status": "failed", "reason": f"could not read the scene cast: {exc}"}
-    for a in cast:
+    for i, a in enumerate(cast):
         if a["kind"] != "characters" or a["role"] != "npc":
             continue  # dossiers feed the npc-only "Active elsewhere" tier; skip player cards
+        if budget.spent():
+            # The extraction call is the part worth keeping, so the tail is
+            # dropped rather than run unbounded (#243) — but named, not
+            # silently, for the same reason failures are (#236).
+            out["skipped"] = [b["id"] for b in cast[i:]
+                              if b["kind"] == "characters" and b["role"] == "npc"]
+            break
         try:
             name = store.characters.read_character(croot, a["id"])["meta"].get("name", a["id"])
             msgs = store.dossiers.build_prompt(name, store.dossiers.read(croot, a["id"]), transcript)
-            d_text = await client.complete(msgs, conn)
+            d_text = await budget.run(client.complete(msgs, conn))
             store.dossiers.write(croot, a["id"], store.dossiers.parse_output(d_text))
         except Exception as exc:  # noqa: BLE001 -- LLMError, store errors, anything
             # Type-prefixed: a bare str() is useless for the store's own errors
@@ -266,12 +334,19 @@ async def _refresh_dossiers(cid: str, sid: str, transcript: str,
                 "reason": f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__})
         else:
             out["refreshed"].append(a["id"])
-    if not out["refreshed"] and not out["failed"]:
+    if not out["refreshed"] and not out["failed"] and not out["skipped"]:
         return {**out, "reason": "no npcs present"}
     if not out["refreshed"]:
-        return {**out, "status": "failed", "reason": "no dossier could be refreshed"}
-    if out["failed"]:
+        # A budget that ran out before the first call is a different story from
+        # calls that were made and went wrong; say which one happened.
+        return {**out, "status": "failed",
+                "reason": "no dossier could be refreshed" if out["failed"] else
+                          "the absorb time budget ran out before any dossier could be refreshed"}
+    if out["failed"]:  # the more specific story when both happened; `skipped` still lists the rest
         return {**out, "status": "degraded", "reason": "some dossiers could not be refreshed"}
+    if out["skipped"]:
+        return {**out, "status": "degraded",
+                "reason": "the absorb time budget ran out before the rest could be refreshed"}
     return {**out, "status": "ok"}
 
 
@@ -288,18 +363,21 @@ async def post_absorb(cid: str, sid: str,
         transcript, facts,
         store.absorb.state_snapshot(cid, sid), store.absorb.relationships_snapshot(cid, sid),
         store.absorb.plot_snapshot(cid), store.absorb.group_snapshot(cid))
+    budget = _Budget(store.config.absorb_budget())
     try:
-        text = await client.complete(messages, conn)
+        text = await budget.run(client.complete(messages, conn))
     except LLMError as exc:
+        # Including a budget overrun on this first call: nothing has been
+        # produced yet, so there is nothing to degrade to.
         raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
     parsed = store.absorb.parse_output(text)
     edits = store.absorb.materialize(cid, sid, parsed)
     # Phase 2: refresh each present NPC's campaign dossier from this scene
     # (never raises -- see _refresh_dossiers' own failure boundary).
-    dossiers = await _refresh_dossiers(cid, sid, transcript, client, conn)
+    dossiers = await _refresh_dossiers(cid, sid, transcript, client, conn, budget)
     # Phase 5: audit the scene's mechanics against the sheeted cast (never
     # raises -- see _run_audit's own failure boundary).
-    audit_edits, mechanics = await _run_audit(cid, sid, client, conn)
+    audit_edits, mechanics = await _run_audit(cid, sid, client, conn, budget)
     return {"one_line": parsed["one_line"], "summary": parsed["summary"],
             "keywords": parsed["keywords"], "timeline_events": parsed["timeline_events"],
             **facts, "edits": edits + audit_edits, "mechanics": mechanics,
@@ -314,7 +392,10 @@ async def post_audit(cid: str, sid: str, client: LLMClient = Depends(get_llm)):
     conn = _require_connection()
     if store.modules.resolve(cid) is None:
         raise HTTPException(status_code=400, detail="no module resolved")
-    edits, mechanics = await _run_audit(cid, sid, client, conn)
+    # A retry gets its own budget — it never inherits the deadline of whatever
+    # absorb ran out of time earlier.
+    edits, mechanics = await _run_audit(cid, sid, client, conn,
+                                        _Budget(store.config.absorb_budget()))
     return {"mechanics": mechanics, "edits": edits}
 
 

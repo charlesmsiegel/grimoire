@@ -68,3 +68,42 @@ def test_length_keys_default_to_empty(monkeypatch, tmp_path):
     cfg = store.read_config()
     assert cfg["response_preset"] == ""
     assert cfg["length_reply_words"] == ""
+
+
+# ---- LLM duration settings (#243) ----
+
+def test_duration_defaults_and_write(monkeypatch, tmp_path):
+    s = reload_with_home(monkeypatch, tmp_path)
+    cfg = s.read_config()
+    assert cfg["llm_timeout"] == "120"
+    assert cfg["absorb_budget"] == "600"
+    s.write_config(llm_timeout="45", absorb_budget="300")
+    assert s.config.llm_timeout() == 45.0
+    assert s.config.absorb_budget() == 300.0
+
+
+def test_durations_fall_back_when_unparseable(monkeypatch, tmp_path):
+    """A hand-edited config.md must not take scene generation down with it."""
+    s = reload_with_home(monkeypatch, tmp_path)
+    s.write_config(llm_timeout="soon", absorb_budget="")
+    assert s.config.llm_timeout() == 120.0
+    assert s.config.absorb_budget() == 600.0
+
+
+def test_non_finite_durations_fall_back_to_the_default(monkeypatch, tmp_path):
+    """float() happily parses "inf"/"nan": inf is an unbounded call that never
+    says so, and nan compares false against everything, silently reading as
+    "disabled" instead of as the malformed value it is."""
+    s = reload_with_home(monkeypatch, tmp_path)
+    s.write_config(llm_timeout="inf", absorb_budget="nan")
+    assert s.config.llm_timeout() == 120.0
+    assert s.config.absorb_budget() == 600.0
+
+
+def test_non_positive_duration_means_no_bound(monkeypatch, tmp_path):
+    """The escape hatch for a slow local endpoint: 0 (or anything negative,
+    however it got there) disables the bound rather than expiring instantly."""
+    s = reload_with_home(monkeypatch, tmp_path)
+    s.write_config(llm_timeout="0", absorb_budget="-1")
+    assert s.config.llm_timeout() == 0.0
+    assert s.config.absorb_budget() == 0.0

@@ -20,6 +20,8 @@ class ConfigUpdate(BaseModel):
     user_label: str | None = None
     assistant_label: str | None = None
     active_connection_id: str | None = None
+    llm_timeout: str | None = None
+    absorb_budget: str | None = None
 
 
 class ConnectionCreate(BaseModel):

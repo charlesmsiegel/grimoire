@@ -61,6 +61,10 @@ export type Config = {
   active_connection_id: string;
   active_connection: { id: string; kind: LLMConnectionKind; name: string } | null;
   ready: boolean;
+  /** Seconds of silence before an LLM call is abandoned; "0" disables. */
+  llm_timeout: string;
+  /** Seconds one absorb's whole LLM sequence may take; "0" disables. */
+  absorb_budget: string;
 };
 export type DataDirInfo = {
   data_dir: string;
@@ -353,6 +357,8 @@ export type DossierFailure = { id: string; reason: string };
 export type Dossiers = {
   status: "ok" | "degraded" | "failed" | "skipped"; reason: string | null;
   refreshed: string[]; failed: DossierFailure[];
+  /** NPCs the absorb budget ran out before reaching — never attempted (#243). */
+  skipped: string[];
 };
 export type SceneAbsorb = {
   one_line: string; summary: string; keywords: string[];
@@ -526,7 +532,7 @@ export const api = {
     }
     return configCache;
   },
-  putConfig: (body: Partial<{ theme: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string; active_connection_id: string }>) =>
+  putConfig: (body: Partial<{ theme: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string; active_connection_id: string; llm_timeout: string; absorb_budget: string }>) =>
     request<Config>("PUT", "/api/config", body).then((cfg) => {
       configCache = Promise.resolve(cfg); // the write's response is the fresh config
       return cfg;
