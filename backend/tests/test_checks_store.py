@@ -109,7 +109,8 @@ def test_resolve_check_never_appeared_actor(monkeypatch, tmp_path):
     res = checks.resolve_check(cid, "brawl", f"characters:{eid}", seed=7)
     assert res["actor_label"] == "Mara"       # container meta name, no version needed
     # campaign-local copy, still never appeared (the reviewer's TypeError repro:
-    # read_card(croot, eid, None) passes _require_char, then _safe(None) crashes)
+    # read_card(croot, eid, None) passes _require_char, then hits the vid guard --
+    # which took a non-string and crashed before it rejected non-strings)
     croot = campaigns.campaign_root(cid)
     eid2, _ = characters.create_character(croot, "Seraphine")
     sheets.write(cid, "characters", eid2, "medium", {"vigor": 2, "brawl": 1}, expected=None)
