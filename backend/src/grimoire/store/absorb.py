@@ -488,7 +488,8 @@ def _weather_edits(cid: str, sid: str, parsed: dict) -> list[dict]:
     return out
 
 
-_BROWSABLE_KINDS = ("character_state", "lore", "authored", "new_character", "new_location", "new_lore")
+_BROWSABLE_KINDS = ("character_state", "dossier", "lore", "authored", "new_character",
+                    "new_location", "new_lore")
 
 
 def _new_character_provenance(after: str, payload: dict) -> str:

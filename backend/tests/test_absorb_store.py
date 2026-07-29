@@ -445,6 +445,35 @@ def test_apply_edits_skips_empty_dossier(monkeypatch, tmp_path):
     assert dossiers.read(croot, ch) == "Seraphine is wary."
 
 
+def test_apply_edits_rejects_a_forged_dossier_target(monkeypatch, tmp_path):
+    """PUT /chronicle takes its edit list from the client, so a dossier row can
+    name any target it likes -- it must not escape the campaign."""
+    cid = _campaign(monkeypatch, tmp_path)
+    applied, _ = absorb.apply_edits(cid, [
+        {"id": "dossier:x", "kind": "dossier",
+         "target": {"kind": "characters", "id": "../../../pwned"}, "field": "dossier",
+         "before": "", "after": "owned"}])
+    assert applied == []
+    assert not (tmp_path / "pwned").exists()
+    assert list(tmp_path.glob("**/pwned*")) == []
+
+
+def test_apply_edits_records_dossier_in_changes(monkeypatch, tmp_path):
+    from grimoire.store import scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    ch = _char(croot, "Seraphine")
+    sid = scenes.create_scene(cid, "S")
+    absorb.apply_edits(cid, [
+        {"id": f"dossier:{ch}", "kind": "dossier",
+         "target": {"kind": "characters", "id": ch}, "field": "dossier",
+         "label": "Seraphine — campaign dossier",
+         "before": "Wary.", "after": "Loyal."}], sid)
+    entry = changes.read(cid)[f"characters/{ch}"]
+    assert entry["fields"][0]["field"] == "dossier"
+    assert entry["fields"][0]["before"] == "Wary." and entry["fields"][0]["after"] == "Loyal."
+
+
 def test_dossier_edit_stages_before_and_after(monkeypatch, tmp_path):
     from grimoire.store import dossiers
     cid = _campaign(monkeypatch, tmp_path)
