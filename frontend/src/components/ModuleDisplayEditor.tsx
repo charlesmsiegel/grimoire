@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, type ModuleDetail, type ModuleTheme } from "../api/client";
 import SheetLayout, { themeStyle } from "./SheetLayout";
-import { ErrorList, useModuleDryRun, type SaveFn } from "./ModuleEditor";
+import { ErrorList, useModuleDryRun, type SaveFn } from "./moduleEditShared";
 
 const PREVIEW_SCOPE = { kind: "world", id: "preview" } as const;
 
