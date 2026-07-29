@@ -558,15 +558,18 @@ def _apply_weather(cid: str, edit: dict, after: str) -> bool:
 def apply_edits(cid: str, edits: list[dict],
                 sid: str | None = None) -> tuple[list[str], list[dict]]:
     """Apply each approved StagedEdit to the campaign copies. Best-effort: a missing or
-    broken non-sheet target is skipped. Returns (applied ids, sheet_failures) -- sheet
-    edits get their own error contract (never silently skipped): each failure is
-    {"id", "reason", "kind": "conflict"|"error"}. When `sid` is given, the before/after
+    broken non-sheet target is skipped. Returns (applied ids, failures) -- some edits
+    have an error contract and are never silently skipped: each failure is
+    {"id", "reason", "kind": "conflict"|"error"}. Sheet edits report through it, and so
+    does a dossier whose stored text moved since it was staged -- the reviewer approved
+    that paragraph and must not be told the save succeeded while it was dropped. When
+    `sid` is given, the before/after
     of each applied *browsable* edit (characters/lore/locations) is captured into
     changes.json (the latest write-back delta per record); sheet edits are never
     browsable and never land there -- the sheet itself is the record."""
     croot = campaigns.campaign_root(cid)
     applied: list[str] = []
-    sheet_failures: list[dict] = []
+    failures: list[dict] = []
     recorded: dict[str, list[dict]] = {}
     from . import audit  # lazy: audit imports absorb-adjacent stores
     for e in edits:
@@ -575,21 +578,21 @@ def apply_edits(cid: str, edits: list[dict],
         if e.get("kind") == "sheet":
             eid = e.get("id", "")
             if not isinstance(eid, str) or not eid:
-                sheet_failures.append({"id": "", "kind": "error",
+                failures.append({"id": "", "kind": "error",
                                        "reason": "sheet edit missing id"})
                 continue  # rejected before apply_delta runs: a nameless mutation can never land
             if not sid:
-                sheet_failures.append({"id": eid, "kind": "error",
+                failures.append({"id": eid, "kind": "error",
                                        "reason": "sheet edits need a scene id"})
                 continue
             try:
                 audit.apply_delta(cid, sid, e)
                 applied.append(eid)
             except sheets.SheetConflict as exc:
-                sheet_failures.append({"id": eid, "kind": "conflict",
+                failures.append({"id": eid, "kind": "conflict",
                                        "reason": str(exc)})
             except sheets.SheetError as exc:
-                sheet_failures.append({"id": eid, "kind": "error",
+                failures.append({"id": eid, "kind": "error",
                                        "reason": str(exc)})
             continue
         try:
@@ -620,6 +623,9 @@ def apply_edits(cid: str, edits: list[dict],
                 # if it no longer matches, a newer dossier already landed and
                 # this one is stale. (Replaying one save twice lands here too.)
                 if dossiers.read(croot, target["id"]) != e.get("before", ""):
+                    failures.append({
+                        "id": e.get("id", ""), "kind": "conflict",
+                        "reason": "this dossier changed since the scene was absorbed"})
                     continue
                 dossiers.write(croot, target["id"], after)
             elif kind == "lore":
@@ -694,7 +700,7 @@ def apply_edits(cid: str, edits: list[dict],
             continue
     if sid:
         changes.record(cid, sid, recorded)
-    return applied, sheet_failures
+    return applied, failures
 
 
 def relationships_snapshot(cid: str, sid: str) -> str:
