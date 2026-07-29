@@ -56,6 +56,17 @@ TRANSITION_EDGES = frozenset({
     ("resolved", "resolved"),     # update_resolution: metadata, status untouched
 })
 
+# ...and the subset of those that may CARRY a resolution. This enforces the
+# data invariant the rest of the module leans on: a resolution containing a
+# roll ``result`` only ever exists on a status ``project`` accepts (or on
+# ``narrated``, which by construction projected on the way there). Without it a
+# legal edge like ``pending -> declined`` could store a result, which ``heal``
+# reads as projectable while ``project`` refuses the status — and the roll is
+# then discarded by the next retirement, unlogged. ``update_resolution``
+# already restricts its own writes to resolved/superseded, so these two edges
+# are the only other way a resolution reaches disk.
+RESOLUTION_EDGES = frozenset({("resolving", "resolved"), ("resolved", "resolved")})
+
 
 @contextmanager
 def locked(cid: str):
@@ -129,6 +140,13 @@ def transition(cid: str, sid: str, pid: str, from_states, to: str,
             f"proposals.transition: illegal edge(s) {illegal} — a record may only "
             "leave a projectable state through supersede() or commit_narration(), "
             "which heal first (#242)")
+    if resolution is not None:
+        unresolved = sorted((f, to) for f in from_states if (f, to) not in RESOLUTION_EDGES)
+        if unresolved:
+            raise ValueError(
+                f"proposals.transition: edge(s) {unresolved} may not carry a "
+                "resolution — a roll result stored on a status project() refuses "
+                "is discarded by the next retirement (#242)")
     with locks.campaign_lock(cid):
         data = _read(cid)
         rec = data.get(sid)
@@ -256,11 +274,31 @@ def heal(cid: str, sid: str) -> None:
 
     The heal is idempotent, and a crash during it leaves the record current
     (retirement never ran), so the next attempt re-heals. The only remaining
-    loss windows are the phase-4 spec's two accepted fence-handoff ones."""
-    rec = get(cid, sid)
-    if (isinstance(rec, dict) and isinstance(rec.get("resolution"), dict)
-            and "result" in rec["resolution"]):
-        project(cid, sid, rec["id"])
+    loss windows are the phase-4 spec's two accepted fence-handoff ones.
+
+    The closing check is a backstop, not flow control. This function's notion
+    of "projectable" (a resolution carrying a ``result``) is deliberately
+    broader than ``project``'s (that, AND a resolved/superseded status), and
+    every gap found between the two has been a way to retire a roll unlogged.
+    ``TRANSITION_EDGES`` / ``RESOLUTION_EDGES`` and ``update_resolution``'s own
+    guard now make the gap unreachable — ``narrated`` is the sole status that
+    can hold a projectable resolution ``project`` declines, and it projected on
+    its way there. If some future edge reopens it, this raises instead of
+    letting the caller retire the record: loud beats a silent orphan, which is
+    the whole point of #242."""
+    # Reentrant, so free under the retirement paths that already hold it; taken
+    # explicitly so the read and the projection are one atomic step even for a
+    # direct caller — otherwise `project` could lose a race and return None for
+    # a reason the backstop below would misread as a broken invariant.
+    with locks.campaign_lock(cid):
+        rec = get(cid, sid)
+        if (isinstance(rec, dict) and isinstance(rec.get("resolution"), dict)
+                and "result" in rec["resolution"]):
+            if project(cid, sid, rec["id"]) is None and rec.get("status") != "narrated":
+                raise RuntimeError(
+                    f"proposals.heal: record {rec['id']} carries a roll result on "
+                    f"status {rec.get('status')!r}, which project() refuses — "
+                    "retiring it would discard the roll (#242)")
 
 
 def commit_narration(cid: str, sid: str, pid: str, persist) -> bool:
