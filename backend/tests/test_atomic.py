@@ -298,3 +298,57 @@ def test_reading_the_umask_does_not_race_other_threads(tmp_path):
     after = os.umask(0o022)
     os.umask(after)
     assert before == after, "a write mutated the process umask"
+
+
+def test_a_read_only_record_is_not_silently_replaced(tmp_path):
+    """Publishing by rename is governed by the DIRECTORY's permissions, so a
+    read-only record that Path.write_text refused would otherwise be replaced
+    without complaint -- bypassing a protection the user set deliberately."""
+    p = tmp_path / "locked.md"
+    _write_prior(p)
+    p.chmod(0o444)
+    try:
+        with pytest.raises(PermissionError):
+            atomic.write_text(p, "must not land")
+        assert p.read_text(encoding="utf-8") == PRIOR
+        assert list(tmp_path.glob("*.tmp")) == [], "a temp was left behind"
+    finally:
+        p.chmod(0o644)
+
+
+def test_the_write_helpers_never_expose_the_temp_path(tmp_path, monkeypatch):
+    """write_text/write_bytes write through mkstemp's own descriptor. If they
+    reopened by name instead, another process could swap a symlink in between
+    creation and the write -- so assert the pathname is never reopened."""
+    opened = []
+    real_open = atomic.os.open
+
+    def spy(p, flags, *a, **kw):
+        # mkstemp's own creating open is expected; a second open of the same
+        # path without O_EXCL is the reopen-by-name this must not do.
+        opened.append((str(p), bool(flags & os.O_EXCL)))
+        return real_open(p, flags, *a, **kw)
+
+    monkeypatch.setattr(atomic.os, "open", spy)
+    atomic.write_text(tmp_path / "a.md", "x")
+    atomic.write_bytes(tmp_path / "b.bin", b"y")
+
+    reopens = [p for p, exclusive in opened if not exclusive]
+    assert reopens == [], f"temp path was reopened by name: {reopens}"
+    assert len(opened) == 2, f"expected one creating open per write, got {opened}"
+
+
+def test_a_swapped_temp_is_detected_and_nothing_is_published(tmp_path):
+    """tempfile_for must hand out a path (PIL needs one), so the swap cannot be
+    prevented -- it must at least be caught before the record is replaced."""
+    p = tmp_path / "rec.md"
+    _write_prior(p)
+
+    with pytest.raises(OSError) as exc:
+        with atomic.tempfile_for(p) as tmp:
+            tmp.unlink()                                   # attacker removes it
+            tmp.write_text("attacker content", encoding="utf-8")  # ...and recreates
+    assert "replaced" in str(exc.value)
+
+    assert p.read_text(encoding="utf-8") == PRIOR, "the record was published anyway"
+    assert list(tmp_path.glob("*.tmp")) == []

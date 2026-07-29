@@ -30,6 +30,7 @@ Design: docs/superpowers/specs/2026-07-28-atomic-store-writes-design.md
 
 from __future__ import annotations
 
+import errno
 import os
 import stat
 import tempfile
@@ -89,40 +90,60 @@ def _carry_mode(tmp_name: str, path: Path) -> None:
         pass  # best effort; a filesystem without mode bits is not a failure
 
 
-@contextmanager
-def tempfile_for(path: Path) -> Iterator[Path]:
-    """Yield a same-directory temp path that replaces ``path`` on clean exit.
+def _assert_target_writable(path: Path) -> None:
+    """Refuse a read-only record, the way ``write_text`` did.
 
-    The temp lives beside its target because ``os.replace`` is only atomic
-    within one filesystem. The descriptor ``mkstemp`` opens is closed
-    immediately and only a path is yielded, so a caller that opens the path
-    itself -- ``thumbs`` hands it to PIL's ``im.save`` -- never contends with a
-    handle of ours, and nothing of ours can block the replace on Windows.
+    Publishing by rename is governed by the *directory's* permissions, not the
+    file's, so a `0444` record (or a Windows read-only attribute) that
+    ``Path.write_text`` correctly refused would otherwise be replaced without
+    complaint -- silently bypassing a protection the user set deliberately.
+    """
+    if path.exists() and not os.access(path, os.W_OK):
+        raise PermissionError(errno.EACCES, "record is read-only", str(path))
 
-    On any exception the temp is removed (best effort: the same scanner that
-    blocks a replace can briefly block the unlink) and the exception re-raised,
-    leaving the previous record exactly as it was.
+
+def _mkstemp_beside(path: Path) -> tuple[int, str]:
+    return tempfile.mkstemp(
+        dir=str(path.parent), prefix=f".{path.name[:_MAX_NAME_HINT]}.", suffix=".tmp")
+
+
+def _discard(tmp_name: str) -> None:
+    """Best effort: the same scanner that can block a replace can briefly block
+    the unlink, and failing to remove litter must not mask the real error."""
+    try:
+        os.unlink(tmp_name)
+    except OSError:
+        pass
+
+
+def _write_through_fd(path: Path, mode: str, encoding: str | None, payload) -> None:
+    """Write ``payload`` to a temp via mkstemp's own descriptor, then publish.
+
+    The descriptor never leaves this function, so the temp's *pathname* is
+    never something another process can substitute between creation and
+    publication. Ordering: write -> flush -> fsync -> close -> chmod -> replace.
+    The fd is closed exactly once on every path, including failures.
     """
     path = Path(path)
-    fd, tmp_name = tempfile.mkstemp(
-        dir=str(path.parent), prefix=f".{path.name[:_MAX_NAME_HINT]}.", suffix=".tmp")
+    _assert_target_writable(path)
+    fd, tmp_name = _mkstemp_beside(path)
+    closed = False
     try:
-        os.close(fd)  # inside the try: a failing close must not leak the temp
-        yield Path(tmp_name)
-        # Flush the caller's bytes to disk before publishing. Reopened O_RDWR
-        # because Windows FlushFileBuffers needs write access.
-        fd = os.open(tmp_name, os.O_RDWR)
-        try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
+        with os.fdopen(fd, mode, encoding=encoding, closefd=False) as f:
+            f.write(payload)
+            f.flush()
+        os.fsync(fd)
+        os.close(fd)
+        closed = True
         _carry_mode(tmp_name, path)
         _replace(tmp_name, path)
     except BaseException:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
+        if not closed:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        _discard(tmp_name)
         raise
 
 
@@ -133,13 +154,60 @@ def write_text(path: Path, text: str) -> None:
     ``newline=""`` would rewrite every file in the user's store from CRLF to LF
     on its next save.
     """
-    with tempfile_for(path) as tmp:
-        with open(tmp, "w", encoding="utf-8") as f:  # atomic-ok: the temp itself
-            f.write(text)
+    _write_through_fd(path, "w", "utf-8", text)
 
 
 def write_bytes(path: Path, data: bytes) -> None:
-    """Atomic replacement for ``path.write_bytes(data)``."""
-    with tempfile_for(path) as tmp:
-        with open(tmp, "wb") as f:  # atomic-ok: the temp itself
-            f.write(data)
+    """Atomic replacement for ``path.write_bytes(data)``. See ``write_text``."""
+    _write_through_fd(path, "wb", None, data)
+
+
+@contextmanager
+def tempfile_for(path: Path) -> Iterator[Path]:
+    """Yield a same-directory temp *path* that replaces ``path`` on clean exit.
+
+    Only for callers that must open the file themselves -- ``thumbs`` hands the
+    path to PIL's ``im.save`` and never holds the bytes. Prefer ``write_text``
+    / ``write_bytes``, which write through the ``mkstemp`` descriptor and so
+    never expose the temp's pathname at all.
+
+    Handing out a pathname reopens a window this module otherwise closes: in a
+    store directory writable by another local account, the temp can be unlinked
+    and replaced with a symlink between the yield and the reopen, and the write,
+    the chmod, and the rename would all follow it. That cannot be *prevented*
+    while the contract is "here is a path" -- so it is detected: the identity of
+    the file mkstemp created is recorded and re-checked before anything is
+    published, and a mismatch aborts without replacing the record.
+    """
+    path = Path(path)
+    _assert_target_writable(path)
+    fd, tmp_name = _mkstemp_beside(path)
+    created = os.fstat(fd)
+    closed = False
+    try:
+        os.close(fd)  # inside the try: a failing close must not leak the temp
+        closed = True
+        yield Path(tmp_name)
+
+        # lstat, not stat: a symlink swapped in must be seen AS a symlink
+        # rather than silently followed to whatever it points at.
+        now = os.lstat(tmp_name)
+        if not stat.S_ISREG(now.st_mode) or (now.st_dev, now.st_ino) != (
+                created.st_dev, created.st_ino):
+            raise OSError(errno.EPERM,
+                          "temp file was replaced while being written", tmp_name)
+        fd = os.open(tmp_name, os.O_RDWR)
+        closed = False
+        os.fsync(fd)
+        os.close(fd)
+        closed = True
+        _carry_mode(tmp_name, path)
+        _replace(tmp_name, path)
+    except BaseException:
+        if not closed:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        _discard(tmp_name)
+        raise

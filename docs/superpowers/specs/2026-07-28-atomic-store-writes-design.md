@@ -81,19 +81,42 @@ hands a *path* to PIL's `im.save()` and never holds the bytes itself.
 
 ### Handle lifecycle
 
-Specified explicitly, because `mkstemp` returns an already-open descriptor while
-the PIL caller wants to open the path itself:
+There are **two** paths, because only one caller actually needs a pathname.
 
-1. `mkstemp` in the target's directory, then **close the returned descriptor
-   immediately**. The context manager yields only a path; it never holds a
-   handle across the caller's block. This is what makes the PIL caller safe on
-   Windows — no sharing-mode negotiation, nothing of ours blocking the replace.
-2. The caller writes to that path however it likes.
-3. On clean exit: reopen with `os.open(tmp, os.O_RDWR)` — writable, because
-   Windows `FlushFileBuffers` requires write access — `os.fsync`, close.
-4. Copy the target's file mode onto the temp (below), then `os.replace`.
-5. On any exception: best-effort unlink the temp (swallowing `OSError`, since a
-   scanner can hold it briefly on Windows) and re-raise.
+**`write_text` / `write_bytes` — the ~100-site path. The descriptor never
+leaves the function.** `mkstemp` → write through that fd → flush → `fsync` →
+close → chmod → `os.replace`. The temp's *pathname* is never handed to anyone,
+so there is no interval in which another process can unlink it and substitute a
+symlink for our write, our chmod, and our rename to follow. An earlier draft
+closed the fd and reopened by name for every write, which opened exactly that
+window for no benefit — flagged in PR review.
+
+**`tempfile_for` — only for callers that must open the file themselves.**
+`thumbs` hands the path to PIL's `im.save()` and never holds the bytes. Here the
+fd *is* closed and a path yielded, so the swap window cannot be closed while the
+contract is "here is a path" — instead it is **detected**: `os.fstat` records the
+identity of the file `mkstemp` created, and before anything is published an
+`os.lstat` (not `stat` — a substituted symlink must be seen as a symlink, not
+followed) must still show a regular file with the same `st_dev`/`st_ino`. A
+mismatch aborts without touching the record.
+
+Both paths end the same way: chmod, then `os.replace`; on any exception a
+best-effort unlink of the temp (swallowing `OSError`, since a scanner can hold
+it briefly on Windows) and re-raise. The descriptor is closed exactly once on
+every path, success or failure.
+
+### Read-only targets are refused, not silently replaced
+
+`Path.write_text` raises `PermissionError` on a `0444` record. Publishing by
+rename does not: the rename is governed by the *directory's* permissions, so a
+naive temp+replace would overwrite a file the user deliberately protected —
+and copying the target's `0444` onto the temp only makes the result read-only
+*after* its contents were already replaced. So the helper checks
+`os.access(path, os.W_OK)` when the target exists and raises `PermissionError`
+before creating a temp, preserving the semantics every migrated caller had.
+(Windows read-only attributes surface through the same check.) Flagged in PR
+review — the first implementation claimed read-only targets were a permanent
+failure while in fact bypassing them.
 
 ### Decisions
 
@@ -286,6 +309,13 @@ tested for the characters that make them writable (`w`, `a`, `x`, `+`) rather
 than matched against a list of literals, which missed `open(p, "x")`, `"w+b"`
 and `"a+"`. Each hit must be inside `atomic.py` or carry an
 `# atomic-ok: <reason>` marker.
+
+The marker binds to **one call**: it is read from the call's own lines, or from
+the unbroken comment block immediately above it. A blank line or any code
+detaches it. The first implementation used a fixed three-line backward window,
+which let one marker silently cover a raw write added just *below* the call it
+was written for — the exemption spreading on its own is the same invisible
+drift this guard exists to stop. Flagged in PR review.
 
 Described honestly: this is a **regression check over known write APIs**, not a
 proof that every writer uses one mechanism. A determined writer can still reach
