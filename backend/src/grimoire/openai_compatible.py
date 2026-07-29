@@ -14,7 +14,7 @@ from typing import AsyncIterator
 import certifi
 import httpx
 
-from .llm import LLMError
+from .llm_errors import LLMError
 
 
 class OpenAICompatibleError(LLMError):

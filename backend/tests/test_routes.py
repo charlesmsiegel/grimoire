@@ -132,7 +132,6 @@ class FakeModelsClient:
 
 
 def test_models_refresh_fetches_and_caches(client):
-    from grimoire.llm import LLMError
     r = client.post("/api/llm-connections", json={
         "kind": "openai_compatible", "name": "Endpoint", "base_url": "https://x", "api_key": "sk-x"})
     cid = r.json()["id"]
@@ -152,7 +151,7 @@ def test_models_refresh_fetches_and_caches(client):
 
 
 def test_models_refresh_upstream_error_normalized(client):
-    from grimoire.llm import LLMError
+    from grimoire.llm_errors import LLMError
     r = client.post("/api/llm-connections", json={
         "kind": "openai_compatible", "name": "Endpoint", "base_url": "https://x", "api_key": "sk-x"})
     cid = r.json()["id"]
