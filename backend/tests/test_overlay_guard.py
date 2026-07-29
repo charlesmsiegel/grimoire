@@ -53,7 +53,13 @@ ROOT_FUNCS = ("campaign_root", "croot_of", "_campaign_root_or_404")
 #: Store modules that take a `root` and resolve a record under it. They know
 #: nothing about world inheritance by design -- that is the overlay's job -- so
 #: handing one a campaign root is the mistake this guard looks for.
-RESOLVER_MODULES = ("entities", "characters", "pcs", "greetings", "assets", "taglines")
+#:
+#: `appearances` is here as well as in OWNERS, and both are correct: inside its
+#: own module a raw campaign root is the point (it owns the lock), but its
+#: root-taking actor readers -- `actor_hash`, `_actor_name` -- are reachable
+#: from elsewhere, and `checks.py` was calling one with a bare `campaign_root`.
+RESOLVER_MODULES = ("entities", "characters", "pcs", "greetings", "assets", "taglines",
+                    "appearances")
 
 #: Name prefixes of resolver functions that *write*. A write belongs on the
 #: campaign root: that is how a record materializes.
@@ -219,6 +225,16 @@ def test_the_guard_actually_detects_an_unresolved_read():
     src = ("def f(cid):\n"
            "    return (store.campaigns.campaign_root(cid) / 'greetings').exists()\n")
     assert list(_unresolved_reads(ast.parse(src)))
+
+
+def test_a_resolver_reached_through_another_module_is_still_caught():
+    """`checks.py` read an actor by calling `appearances._actor_name` with a raw
+    `campaign_root` — correct (it is gated on a locked version) but invisible,
+    and missed until the blast-radius pass surfaced it."""
+    src = ("def f(cid):\n"
+           "    return appearances._actor_name(campaigns.campaign_root(cid), kind, eid, vid)\n")
+    assert [w for _n, w in _unresolved_reads(ast.parse(src))] == \
+        ["appearances._actor_name(<campaign root>, ...)"]
 
 
 def test_the_overlay_and_the_sanctioned_accessor_are_not_flagged():
