@@ -12,8 +12,13 @@ import re
 from . import fence, scenes
 
 WINDOW = 3          # turns measured; a constant, deliberately not a setting
-_TRIM = 1.25        # below this, nothing renders
-_CUT = 1.75
+# The two overshoot thresholds, public because they ARE the codebase's
+# definition of "this reply ran long": below TRIM the corrective renders
+# nothing, at CUT it escalates. evals/graders.py scores recorded output
+# against TRIM rather than inventing a second tolerance that would drift out
+# of step with the corrective the moment either number is tuned.
+TRIM = 1.25
+CUT = 1.75
 
 # The fence grammar is owned by store/fence.py; a second copy of the opener here
 # would silently diverge the day that one changes. Only the closing half is
@@ -111,6 +116,6 @@ def measure(messages: list[dict], turn_sizes: list[int], cast_names,
 
     peak = max(ratios)
     return {"totals": totals, "max_ratio": peak,
-            "tier": "cut" if peak >= _CUT else ("trim" if peak >= _TRIM else ""),
+            "tier": "cut" if peak >= CUT else ("trim" if peak >= TRIM else ""),
             "blocks": over_blocks, "paragraphs": over_paras,
             "speakers": over_speakers, "blocks_per_speaker": over_repeats}

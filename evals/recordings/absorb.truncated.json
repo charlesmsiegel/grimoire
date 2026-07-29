@@ -1,0 +1,10 @@
+{
+  "one_line": "Winifred admitted she knows about the ledger, and Seraphine stopped pretending she didn't.",
+  "summary": "On the pier after dark, Winifred asked whose crates were being moved and Seraphine deflected, giving her until midnight and no further. When Winifred said outright that she knew about the ledger, Seraphine dropped the deflection and admitted, obliquely, that it is why she does not sleep.",
+  "keywords": ["ledger", "pier", "midnight", "smuggling"],
+  "timeline_events": [
+    {"date": "2026-07-05", "text": "Winifred tells Seraphine she knows the ledger exists."}
+  ],
+  "character_state_edits": [
+    {"id": "characters/seraphine-vale",
+     "current_state": "Rattled. Winifred knows about the ledger and she no longer has the option of pret

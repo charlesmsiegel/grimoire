@@ -7,9 +7,15 @@ chronicle.py and playstate.py both pointed at a `briefs.py` that was designed bu
 never built).
 
 Scope: this resolves *basenames*, so it proves a named module exists somewhere in the
-backend tree — not that the reference points at the right one. Prose says "mirrors
+checkout — not that the reference points at the right one. Prose says "mirrors
 dossiers.py" without a path, so a path-accurate check would demand prose we don't
 write. Existence is the failure mode that actually bites a reader.
+
+The search covers the whole repo, not just backend/: python that is deliberately NOT
+shipped in the package lives at the repo root (evals/, scripts/), and store docstrings
+legitimately point at it. Scoping this to backend/ would force those pointers to be
+deleted or vagued down to "the eval suite", which is the rot this guard exists to
+prevent, arrived at from the other direction.
 """
 
 from __future__ import annotations
@@ -21,13 +27,19 @@ import grimoire
 
 PKG = Path(grimoire.__file__).parent          # backend/src/grimoire
 BACKEND = PKG.parents[1]                      # backend/
+REPO = BACKEND.parent                         # the checkout root
+
+# Trees that are not this repo's source: a sibling worktree would let a name resolve
+# against a branch this checkout has never seen, and a vendored dependency would let
+# almost any name resolve, which is the silently-green failure guarded against below.
+_SKIP = {".venv", "node_modules", ".worktrees", ".git", "build", "dist"}
 
 # "absorb.py", "scene_ids.py" -- module basenames as written in prose.
 _REF = re.compile(r"\b([a-z_][a-z0-9_]*\.py)\b")
 
 
 def _known_modules() -> set[str]:
-    """Every .py basename in the backend tree (package, scripts, tests).
+    """Every .py basename in the checkout (package, scripts, tests, evals).
 
     Assumes BACKEND is the checkout's backend/. Imported from a non-editable install
     it would instead be the environment root, and rglob would sweep every third-party
@@ -39,7 +51,13 @@ def _known_modules() -> set[str]:
         f"{PKG}, so this guard cannot see the backend tree. Run pytest against the "
         f"checkout (see CLAUDE.md: PYTHONPATH=backend/src)."
     )
-    return {p.name for p in BACKEND.rglob("*.py") if ".venv" not in p.parts}
+    # Matched against the path RELATIVE to REPO. Absolute parts would also match the
+    # checkout's own location -- this repo is routinely worked on from
+    # <repo>/.worktrees/<branch>, where every absolute path contains ".worktrees" and
+    # an absolute-parts filter silently excludes the entire tree, failing every
+    # reference in the codebase at once.
+    return {p.name for p in REPO.rglob("*.py")
+            if not _SKIP & set(p.relative_to(REPO).parts)}
 
 
 def test_named_modules_exist():
