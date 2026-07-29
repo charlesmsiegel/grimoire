@@ -1,3 +1,4 @@
+import ast
 import pathlib
 import threading
 
@@ -237,18 +238,22 @@ def test_only_this_module_touches_proposals_json():
     `supersede`/`new`/`commit_narration`, so it only holds while this module is
     the sole writer of proposals.json. A future path that opened the file
     directly would bypass the boundary AND every test that guards it, silently
-    — exactly the failure mode the issue is about. Comments and docstrings may
-    name the file; code outside the module may not reach it."""
+    — exactly the failure mode the issue is about.
+
+    Matched on the AST, not the text: prose may name the file freely (the
+    streaming module's crash-window disclosure does, correctly), but only a
+    string literal that IS the filename can be used to build a path to it.
+    """
     src = pathlib.Path(__file__).resolve().parents[1] / "src" / "grimoire"
     owner = src / "store" / "proposals.py"
     offenders = []
     for path in src.rglob("*.py"):
         if path == owner:
             continue
-        for n, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            line = raw.split("#", 1)[0]
-            if "proposals.json" in line:
-                offenders.append(f"{path.relative_to(src)}:{n}: {raw.strip()}")
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and node.value == "proposals.json":
+                offenders.append(f"{path.relative_to(src)}:{node.lineno}")
     assert offenders == [], (
         "proposals.json must only be reached through store/proposals.py:\n"
         + "\n".join(offenders))
