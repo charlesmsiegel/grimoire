@@ -10,13 +10,30 @@ def _campaign(monkeypatch, tmp_path):
 
 def test_an_unseen_token_has_no_result(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
-    assert commits.result_for(cid, "tok") is None
+    assert commits.lookup(cid, "tok") is None
 
 
 def test_a_recorded_token_returns_its_result(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     commits.record(cid, "tok", {"applied": ["a"], "failures": []})
-    assert commits.result_for(cid, "tok") == {"applied": ["a"], "failures": []}
+    entry = commits.lookup(cid, "tok")
+    assert entry["done"] is True and entry["result"] == {"applied": ["a"], "failures": []}
+
+
+def test_a_reserved_token_is_seen_but_not_done(monkeypatch, tmp_path):
+    """The window the reserve exists for: effects have begun, the result is not
+    known, and a replay must not run them again."""
+    cid = _campaign(monkeypatch, tmp_path)
+    commits.reserve(cid, "tok")
+    entry = commits.lookup(cid, "tok")
+    assert entry is not None and entry["done"] is False
+
+
+def test_recording_completes_a_reservation(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    commits.reserve(cid, "tok")
+    commits.record(cid, "tok", {"applied": []})
+    assert commits.lookup(cid, "tok")["done"] is True
 
 
 def test_an_empty_token_is_never_recorded_or_matched(monkeypatch, tmp_path):
@@ -24,7 +41,8 @@ def test_an_empty_token_is_never_recorded_or_matched(monkeypatch, tmp_path):
     with every other tokenless save."""
     cid = _campaign(monkeypatch, tmp_path)
     commits.record(cid, "", {"applied": []})
-    assert commits.result_for(cid, "") is None
+    commits.reserve(cid, "")
+    assert commits.lookup(cid, "") is None
 
 
 def test_the_ledger_is_capped(monkeypatch, tmp_path):
@@ -33,11 +51,11 @@ def test_the_ledger_is_capped(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     for i in range(commits.KEEP + 5):
         commits.record(cid, f"tok{i}", {"applied": [str(i)]})
-    assert commits.result_for(cid, "tok0") is None            # oldest evicted
-    assert commits.result_for(cid, f"tok{commits.KEEP + 4}") == {"applied": [str(commits.KEEP + 4)]}
+    assert commits.lookup(cid, "tok0") is None                # oldest evicted
+    assert commits.lookup(cid, f"tok{commits.KEEP + 4}")["result"] == {"applied": [str(commits.KEEP + 4)]}
 
 
 def test_a_garbled_ledger_reads_as_empty(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     (campaigns.campaign_root(cid) / "commits.json").write_text("{ not json", encoding="utf-8")
-    assert commits.result_for(cid, "tok") is None
+    assert commits.lookup(cid, "tok") is None

@@ -622,19 +622,21 @@ def apply_edits(cid: str, edits: list[dict],
                 # earlier-scene state. The staged `before` dates the proposal --
                 # if it no longer matches, a newer dossier already landed and
                 # this one is stale. (Replaying one save twice lands here too.)
-                if dossiers.read(croot, target["id"]) != e.get("before", ""):
-                    failures.append({
-                        "id": e.get("id", ""), "kind": "conflict",
-                        "reason": "this dossier changed since the scene was absorbed"})
-                    continue
+                # Read AND write inside one handler: the conflict check reads
+                # first, and a read that raised would otherwise fall through to
+                # the generic per-edit skip below. Either way the chronicle is
+                # already recorded and the reviewer's panel closes on a 200, so
+                # a swallowed failure loses an approved dossier silently.
                 try:
+                    if dossiers.read(croot, target["id"]) != e.get("before", ""):
+                        failures.append({
+                            "id": e.get("id", ""), "kind": "conflict",
+                            "reason": "this dossier changed since the scene was absorbed"})
+                        continue
                     dossiers.write(croot, target["id"], after)
                 except Exception as exc:  # noqa: BLE001 -- full disk, permissions, ...
-                    # Not the generic per-edit skip below: the chronicle is
-                    # already recorded and the reviewer's panel closes on a 200,
-                    # so a swallowed write loses an approved dossier silently.
                     failures.append({"id": e.get("id", ""), "kind": "error",
-                                     "reason": f"could not write the dossier: {exc}"})
+                                     "reason": f"could not update the dossier: {exc}"})
                     continue
             elif kind == "lore":
                 overlay.update_entity(cid, target["kind"], target["id"], body=after)

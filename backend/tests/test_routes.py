@@ -2289,6 +2289,45 @@ def test_replaying_a_save_with_the_same_token_applies_once(client):
     assert timeline.count("The tea was poured.") == 1
 
 
+def test_a_commit_that_died_midway_refuses_to_replay(client):
+    """The token is reserved BEFORE the first non-idempotent write and completed
+    after the last, so the window between them is durable. A retry landing in it
+    must refuse rather than re-run appends whose first pass may have landed."""
+    _, cid = _campaign(client)
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "We poured the tea.")
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
+        '{"one_line": "o", "summary": "s", "keywords": [],'
+        ' "timeline_events": [{"date": "d1", "text": "The tea was poured."}],'
+        ' "plot_movements": [{"title": "The Tea", "beat": "poured", "status": "open"}]}')
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    save = {"one_line": "o", "summary": "s", "keywords": [],
+            "timeline_events": body["timeline_events"], "edits": body["edits"],
+            "commit_token": body["commit_token"]}
+
+    # the crash: the commit gets as far as its effects, then dies before
+    # recording the result
+    real_record = store.commits.record
+
+    def die(*a, **k):
+        raise OSError("died before recording")
+
+    store.commits.record = die
+    try:
+        client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle", json=save)
+    except OSError:
+        pass
+    finally:
+        store.commits.record = real_record
+
+    retry = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle", json=save)
+    assert retry.status_code == 409 and retry.json()["kind"] == "commit_incomplete"
+    assert len(store.plot.read(cid)["the-tea"]["beats"]) == 1      # not appended twice
+    timeline = (store.campaigns.campaign_root(cid) / "timeline.md").read_text(encoding="utf-8")
+    assert timeline.count("The tea was poured.") == 1
+
+
 def test_a_save_without_a_token_still_commits(client):
     """The token is the UI's guard, not a new requirement: a body without one
     behaves exactly as before."""
