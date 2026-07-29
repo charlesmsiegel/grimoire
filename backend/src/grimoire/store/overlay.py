@@ -71,8 +71,10 @@ def _flat_path(root: Path, kind: str, eid: str) -> Path:
 
 
 @contextmanager
-def _recorded_base(cid: str, ref: str, base: str):
+def _recorded_base(cid: str, ref: str, base: str, commit: Path):
     """Record `ref`'s sync base in sync.md, then make the copy it describes.
+    `commit` is the copy's last write — the file whose existence *is* the
+    materialization.
 
     Base first, copy second, because the two writes cannot be made one and a
     crash between them has to land on the harmless side (#247):
@@ -92,6 +94,13 @@ def _recorded_base(cid: str, ref: str, base: str):
     An exception, unlike a crash, can unwind, so undo the base then. It restores
     what it displaced rather than dropping the ref: an earlier interrupted
     attempt may have left a base there.
+
+    But undo only while `commit` is absent. An asynchronous exception —
+    KeyboardInterrupt, a worker shutdown — can arrive after the commit write
+    returned, and an unconditional undo would then strip the base off a copy
+    that did land: the very state this ordering exists to prevent. A concurrent
+    materialization of the same ref that finished while ours failed is the same
+    case (Codex review).
     """
     manifest = campaigns.read_manifest(cid)
     previous = manifest.get(ref)
@@ -100,15 +109,16 @@ def _recorded_base(cid: str, ref: str, base: str):
     try:
         yield
     except BaseException:
-        manifest = campaigns.read_manifest(cid)
-        if previous is None:
-            manifest.pop(ref, None)
-        else:
-            manifest[ref] = previous
-        try:
-            campaigns.write_manifest(cid, manifest)
-        except OSError:
-            pass   # the copy's failure is the one worth raising
+        if not commit.exists():
+            manifest = campaigns.read_manifest(cid)
+            if previous is None:
+                manifest.pop(ref, None)
+            else:
+                manifest[ref] = previous
+            try:
+                campaigns.write_manifest(cid, manifest)
+            except Exception:
+                pass   # the copy's failure is the one worth raising
         raise
 
 
@@ -126,7 +136,7 @@ def _materialize_flat(cid: str, kind: str, eid: str) -> bool:
     dst = _flat_path(croot, kind, eid)
     dst.parent.mkdir(parents=True, exist_ok=True)
     text = src.read_text(encoding="utf-8")
-    with _recorded_base(cid, _flat_ref(kind, eid), entities.entity_hash(wroot, kind, eid) or ""):
+    with _recorded_base(cid, _flat_ref(kind, eid), entities.entity_hash(wroot, kind, eid) or "", dst):
         atomic.write_text(dst, text)
     return True
 
@@ -287,8 +297,9 @@ def materialize_plotmap(cid: str) -> None:
     if not src.exists():
         return   # nothing to copy; set_edges will create a fresh campaign map
     text = src.read_text(encoding="utf-8")
-    with _recorded_base(cid, "plotmap", greetings.plotmap_hash(wroot) or ""):
-        atomic.write_text(croot / "plotmap.json", text)
+    dst = croot / "plotmap.json"
+    with _recorded_base(cid, "plotmap", greetings.plotmap_hash(wroot) or "", dst):
+        atomic.write_text(dst, text)
 
 
 def set_edges(cid: str, gid: str, leads_to=None, excludes=None) -> None:
@@ -340,7 +351,14 @@ def materialize_actor(cid: str, kind: str, aid: str) -> None:
     base = (characters.dir_hash if kind == "characters" else pcs.dir_hash)(wroot, aid)
     ext = "json" if kind == "characters" else "md"
     meta_src = src / _actor_meta(kind)
-    with _recorded_base(cid, _flat_ref(kind, aid), base or ""):
+    # No meta here means no materialized actor, so any version file in the
+    # campaign dir is residue from an interrupted copy. Drop it: overwriting
+    # only what the world still has would resurrect a version purged in
+    # between, and the base we are about to record excludes it (Codex review).
+    for p in dst.glob(f"*.{ext}"):
+        if p.name != meta_src.name:
+            p.unlink()
+    with _recorded_base(cid, _flat_ref(kind, aid), base or "", dst / meta_src.name):
         # pc.md is itself an *.md sibling of the version files; skip it here so
         # the meta write below stays the single commit point (see _recorded_base)
         for p in sorted(src.glob(f"*.{ext}")):
