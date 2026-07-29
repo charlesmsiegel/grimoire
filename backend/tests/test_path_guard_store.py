@@ -713,3 +713,76 @@ def test_an_actor_with_no_addressable_version_is_not_listed(monkeypatch, tmp_pat
     assert [c["id"] for c in characters.list_characters(wroot)] == []
     with pytest.raises(characters.CharacterNotFound):
         characters.read_character(wroot, cid)
+
+
+# ---- round 9 of the review
+
+def test_a_case_variant_reference_still_pins_its_world(monkeypatch, tmp_path):
+    """The alias can be in the *stored reference*, not just the request.
+
+    `world_exists("REALM")` resolves `realm` where the filesystem is
+    case-insensitive, so a campaign could be created holding `REALM`. A later
+    `delete_world("realm")` passed the canonical-name check and then missed
+    that reference on a string compare, deleting a world still inherited.
+    """
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    entities.create_entity(worlds.world_root(wid), "lore", "Salt Pact", "the pact")
+    cid = campaigns.create_campaign("Saltmarch", "REALM" if worlds.world_exists("REALM") else wid)
+    # new campaigns store the canonical spelling ...
+    assert campaigns.read_campaign(cid)["meta"]["world"] == wid
+
+    # ... and a store written before that still pins the world
+    mp = campaigns.campaign_meta_path(cid)
+    meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
+    meta["world"] = wid.upper()
+    mp.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+    if worlds.world_exists(wid.upper()):        # only where the filesystem aliases
+        with pytest.raises(worlds.WorldInUse):
+            worlds.delete_world(wid)
+        assert worlds.world_root(wid).exists()
+
+
+def test_a_reference_to_a_different_world_does_not_pin_this_one(monkeypatch, tmp_path):
+    home(monkeypatch, tmp_path)
+    keep = worlds.create_world("Realm")
+    other = worlds.create_world("Saltmarch Deeps")
+    campaigns.create_campaign("Elsewhere", other)
+    worlds.delete_world(keep)                   # unused: must still be deletable
+    assert not worlds.world_root(keep).exists()
+    assert worlds.world_root(other).exists()
+
+
+def test_an_actor_with_no_addressable_version_has_no_hash(monkeypatch, tmp_path):
+    """`dir_hash` drove sync to a record `read_character` then refused, 500ing
+    GET /campaigns/{cid}/incoming. `snapshot` has to agree with it (#247)."""
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    wroot = worlds.world_root(wid)
+    cid, vid = characters.create_character(wroot, "Seraphine")
+    pid, pvid = pcs.create_pc(wroot, "Mara", [])
+    (characters._char_dir(wroot, cid) / f"{vid}.json").rename(
+        characters._char_dir(wroot, cid) / f"{MARK}.json")
+    (pcs._pc_dir(wroot, pid) / f"{pvid}.md").rename(
+        pcs._pc_dir(wroot, pid) / f"{MARK}.md")
+    _reject_mark(monkeypatch)
+
+    assert characters.dir_hash(wroot, cid) is None
+    assert characters.snapshot(wroot, cid) is None
+    assert pcs.dir_hash(wroot, pid) is None
+    assert pcs.snapshot(wroot, pid) is None
+
+
+def test_incoming_survives_an_actor_with_no_addressable_version(monkeypatch, tmp_path):
+    from grimoire.store import sync
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    wroot = worlds.world_root(wid)
+    cid, vid = characters.create_character(wroot, "Seraphine")
+    ccid = campaigns.create_campaign("Saltmarch", wid)
+    campaigns.write_manifest(ccid, {f"characters/{cid}": "stale-hash"})
+    (characters._char_dir(wroot, cid) / f"{vid}.json").rename(
+        characters._char_dir(wroot, cid) / f"{MARK}.json")
+    _reject_mark(monkeypatch)
+
+    assert sync.incoming(ccid) == []     # must not raise CharacterNotFound

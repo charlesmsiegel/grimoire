@@ -327,7 +327,14 @@ def snapshot(root: Path, cid: str) -> tuple[str, list[tuple[str, str]]] | None:
     got even if the source moves mid-copy (#247). None when not an actor."""
     if not safe_id(cid) or not _meta_path(root, cid).exists():
         return None
-    files = [_meta_path(root, cid)] + [_card_path(root, cid, v) for v in _version_ids(root, cid)]
+    version_ids = _version_ids(root, cid)
+    if not version_ids:
+        # read_character/read_pc refuse an actor with no addressable version,
+        # so reporting a hash makes sync see a changed record it cannot then
+        # read. `snapshot` and `dir_hash` have to agree (#247), so both say
+        # absent -- the same answer as for an actor that isn't there (#259 review)
+        return None
+    files = [_meta_path(root, cid)] + [_card_path(root, cid, v) for v in version_ids]
     pairs = [(p.name, p.read_text(encoding="utf-8")) for p in files]
     return dir_content_hash(pairs), pairs
 
@@ -341,7 +348,14 @@ def dir_hash(root: Path, cid: str) -> str | None:
     Assets are excluded so an image-only change never surfaces in sync."""
     if not safe_id(cid) or not _meta_path(root, cid).exists():
         return None
-    files = [_meta_path(root, cid)] + [_card_path(root, cid, v) for v in _version_ids(root, cid)]
+    version_ids = _version_ids(root, cid)
+    if not version_ids:
+        # read_character/read_pc refuse an actor with no addressable version,
+        # so reporting a hash makes sync see a changed record it cannot then
+        # read. `snapshot` and `dir_hash` have to agree (#247), so both say
+        # absent -- the same answer as for an actor that isn't there (#259 review)
+        return None
+    files = [_meta_path(root, cid)] + [_card_path(root, cid, v) for v in version_ids]
     # the signature spans the whole file set, so adding/removing a version invalidates too
     return statcache.memo("dir_hash", statcache.signature(*files),
                           lambda: _dir_hash_compute(files))
