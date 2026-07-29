@@ -8,28 +8,9 @@ strictly instead, where the user is present to be told.
 
 from __future__ import annotations
 
-import json
 import math
 
-from .. import campaigns, climates, entities, overlay
-
-
-def _campaign_default(cid: str) -> dict:
-    """The campaign's default climate, or the shipped preset."""
-    path = campaigns.campaign_root(cid) / "climate.json"
-    try:
-        wanted = json.loads(path.read_text(encoding="utf-8")).get("default_climate")
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, AttributeError):
-        # AttributeError covers a JSON scalar: `json.loads("7").get` is not a
-        # thing, and this file is hand-editable.
-        wanted = None
-    # Non-string ids are treated as unset. A hand-edited
-    # `{"default_climate": ["temperate-interior"]}` is truthy, and passing a
-    # list to the registry's dict lookup raises `TypeError: unhashable` — from
-    # inside prompt assembly, where nothing may raise.
-    if not isinstance(wanted, str) or not wanted:
-        wanted = None
-    return (climates.get(wanted) if wanted else None) or climates.get(climates.FALLBACK_ID)
+from .. import campaign_climate, climates, entities, overlay
 
 
 def _fields(cid: str, location_id: str) -> dict:
@@ -62,7 +43,7 @@ def _persistence(raw, fallback: float) -> float:
 
 def resolve(cid: str, location_id: str | None) -> dict:
     """{climate, zone, persistence} for a location. Never raises."""
-    default = _campaign_default(cid)
+    default = campaign_climate.resolve_default(cid)
     if not location_id:
         return {"climate": default, "zone": "_default",
                 "persistence": default.get("persistence", 0.5)}

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import filecmp
-import json
 import shutil
 from pathlib import Path
 
@@ -73,10 +72,9 @@ def create_campaign(name: str, world_id: str, region: str | None = None,
         raise worlds.WorldNotFound(world_id)
     if calendar is not None:
         calendars.get_provider({"provider": calendar})  # unknown id -> CalendarError before anything is created
-    from . import climates
+    from . import campaign_climate, climates
     wanted_climate = climate or climates.FALLBACK_ID
-    if climates.get(wanted_climate) is None:  # unknown id -> fail before anything is created
-        raise climates.ClimateError(f"unknown climate: {wanted_climate!r}")
+    campaign_climate.check_default(wanted_climate)  # unknown id -> fail before anything is created
     if module and module != "none":  # "none" = explicitly mechanics-free, always legal
         from . import modules
         modules.pack_root(module)  # raises ModuleNotFound before creating anything
@@ -93,7 +91,7 @@ def create_campaign(name: str, world_id: str, region: str | None = None,
     # (store/overlay.py) and sync.md tracks bases for materialized records only
     write_manifest(cid, {})
     calendars.copy_calendar(worlds.world_root(world_id), root)
-    atomic.write_text(root / "climate.json", json.dumps({"default_climate": wanted_climate}))
+    campaign_climate.write_default(cid, wanted_climate)
     from . import sheets
     sheets.seed(cid)
     if region is not None or calendar is not None:
