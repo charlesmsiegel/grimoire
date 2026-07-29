@@ -184,17 +184,59 @@ function specifiers(code: string, path = "f.tsx"): string[] {
     }
   }
 
-  // Dynamic import() can appear anywhere, and is always a runtime edge.
+  // Dynamic import() can appear anywhere and is always a runtime edge — as is
+  // `require()` and `import x = require()`, which the glob admits because it
+  // covers .cjs/.cts. A template *expression* specifier is handled by
+  // `patternEdges` below; anything else non-literal is unanalyzable and is
+  // reported by OPAQUE_IMPORTS rather than dropped.
   const walk = (node: ts.Node): void => {
     if (ts.isCallExpression(node) &&
-        node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+        (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+         (ts.isIdentifier(node.expression) && node.expression.text === "require"))) {
       const spec = literal(node.arguments[0]);
+      if (spec) found.push(spec);
+    } else if (ts.isImportEqualsDeclaration(node) &&
+               ts.isExternalModuleReference(node.moduleReference)) {
+      const spec = literal(node.moduleReference.expression);
       if (spec) found.push(spec);
     }
     ts.forEachChild(node, walk);
   };
   ts.forEachChild(src, walk);
   return found;
+}
+
+/** Executable module requests whose specifier is a node we can inspect. */
+function dynamicArgs(code: string, path: string): ts.Expression[] {
+  const src = ts.createSourceFile(path, code, ts.ScriptTarget.Latest, true,
+                                  scriptKind(path));
+  const args: ts.Expression[] = [];
+  const walk = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) &&
+        (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+         (ts.isIdentifier(node.expression) && node.expression.text === "require")) &&
+        node.arguments[0]) {
+      args.push(node.arguments[0]);
+    }
+    ts.forEachChild(node, walk);
+  };
+  ts.forEachChild(src, walk);
+  return args;
+}
+
+/**
+ * A template-expression specifier as a glob. Vite's dynamic-import-vars
+ * rewrites ``import(`./Module${kind}Editor.tsx`)`` into a glob whose variable
+ * part cannot cross a path separator, so `${…}` becomes a single-segment
+ * wildcard. Expanding it keeps those edges in the graph; the alternative is
+ * the silent hole of a request that reaches neither the graph nor
+ * `UNRESOLVED`.
+ */
+function templatePattern(node: ts.Expression): string | null {
+  if (!ts.isTemplateExpression(node)) return null;
+  let out = node.head.text;
+  for (const span of node.templateSpans) out += "*" + span.literal.text;
+  return out;
 }
 
 /** `import.meta.glob(...)` calls in a file, as {patterns, raw} records. */
@@ -236,17 +278,40 @@ function globCalls(code: string, path: string) {
  * for the same reason the equivalent static import is: it yields data, not a
  * module. (This file's own glob is that case.)
  */
+/** Expand one pattern set against SOURCES, honouring Vite's `!` exclusions. */
+function expandPatterns(patterns: string[], from: string): string[] {
+  const toRe = (p: string) => {
+    const base = normalize(dirOf(from) + "/" + p.split("?")[0]);
+    return base === null ? null : globToRegExp(base);
+  };
+  const include = patterns.filter((p) => !p.startsWith("!"))
+    .map(toRe).filter((r): r is RegExp => !!r);
+  // Vite subtracts `!`-prefixed patterns from the matches. Treating them as
+  // ordinary patterns that simply match nothing would keep a file the build
+  // excludes, inventing a cycle the generated imports do not contain.
+  const exclude = patterns.filter((p) => p.startsWith("!"))
+    .map((p) => toRe(p.slice(1))).filter((r): r is RegExp => !!r);
+  const out: string[] = [];
+  for (const candidate of SOURCES.keys()) {
+    if (candidate === from) continue;                 // a glob never self-matches
+    if (!include.some((r) => r.test(candidate))) continue;
+    if (exclude.some((r) => r.test(candidate))) continue;
+    out.push(candidate);
+  }
+  return out;
+}
+
 function globEdges(code: string, path: string): string[] {
   const out: string[] = [];
   for (const call of globCalls(code, path)) {
     if (call.raw) continue;
-    for (const pattern of call.patterns) {
-      const base = normalize(dirOf(path) + "/" + pattern.split("?")[0]);
-      if (base === null) continue;
-      const re = globToRegExp(base);
-      for (const candidate of SOURCES.keys()) {
-        if (candidate !== path && re.test(candidate)) out.push(candidate);
-      }
+    out.push(...expandPatterns(call.patterns, path));
+  }
+  // ``import(`./Module${kind}Editor.tsx`)`` is a module request too.
+  for (const arg of dynamicArgs(code, path)) {
+    const pattern = templatePattern(arg);
+    if (pattern && !NON_EXECUTING_QUERY.test(pattern)) {
+      out.push(...expandPatterns([pattern], path));
     }
   }
   return out;
@@ -256,6 +321,16 @@ function globEdges(code: string, path: string): string[] {
 const OPAQUE_GLOBS = [...SOURCES].flatMap(([path, code]) =>
   globCalls(code, path)
     .filter((c) => !c.raw && !c.analyzable)
+    .map(() => path));
+
+/**
+ * Dynamic `import()`/`require()` whose specifier is neither a literal nor a
+ * template we can turn into a glob — `import(someVariable)`. Its edges cannot
+ * be recovered, so it fails the suite instead of vanishing.
+ */
+const OPAQUE_IMPORTS = [...SOURCES].flatMap(([path, code]) =>
+  dynamicArgs(code, path)
+    .filter((a) => !ts.isStringLiteralLike(a) && templatePattern(a) === null)
     .map(() => path));
 
 /**
@@ -280,10 +355,25 @@ const JS_TO_TS: Record<string, string[]> = {
  */
 const NON_EXECUTING_QUERY = /[?&](raw|url|inline)(&|$)/;
 
-/** Resolve a relative specifier to a src-relative source path, or null. */
+/**
+ * Vite also resolves root-absolute specifiers against the project root, so
+ * `/src/components/ModuleEditor.tsx` is the same module as a relative import
+ * of it. Dropping those for "not starting with a dot" let such an import close
+ * a cycle while missing from both the graph and the unresolved-edge check.
+ */
+const ROOT_ABSOLUTE = /^\/src\//;
+
+/** A specifier that names a file in this project rather than a package. */
+const isLocal = (spec: string) =>
+  spec.startsWith(".") || ROOT_ABSOLUTE.test(spec);
+
+/** Resolve a local specifier to a src-relative source path, or null. */
 function resolve(from: string, spec: string): string | null {
   if (NON_EXECUTING_QUERY.test(spec)) return null;
-  const base = normalize(dirOf(from) + "/" + spec.split("?")[0]);
+  const bare = spec.split("?")[0];
+  const base = ROOT_ABSOLUTE.test(bare)
+    ? normalize(bare.replace(ROOT_ABSOLUTE, ""))
+    : normalize(dirOf(from) + "/" + bare);
   if (base === null) return null;
   // `base === ""` is the src root itself — a bare `".."` from a component —
   // where the only candidates are its index files, with no path prefix.
@@ -302,13 +392,11 @@ function resolve(from: string, spec: string): string | null {
   return null;
 }
 
-const isRelative = (spec: string) => spec.startsWith(".");
-
 /** path -> the source files it imports. */
 const GRAPH = new Map(
   [...SOURCES].map(([path, code]) => [
     path,
-    [...specifiers(code, path).filter(isRelative)
+    [...specifiers(code, path).filter(isLocal)
         .map((spec) => resolve(path, spec))
         .filter((dep): dep is string => dep !== null),
      ...globEdges(code, path)],
@@ -334,7 +422,7 @@ function isCodeSpecifier(spec: string): boolean {
 
 /** Relative specifiers that resolved to nothing — assets, or a dropped edge. */
 const UNRESOLVED = [...SOURCES].flatMap(([path, code]) =>
-  specifiers(code, path).filter(isRelative)
+  specifiers(code, path).filter(isLocal)
     .filter((spec) => resolve(path, spec) === null)
     .map((spec) => `${path} -> ${spec}`));
 
@@ -453,10 +541,57 @@ describe("module-editor import graph", () => {
       .not.toContain("components/ModuleEditor.tsx");
   });
 
-  it("has no glob it cannot expand", () => {
+  it("has no glob or dynamic import it cannot expand", () => {
     // A computed pattern can't be matched against SOURCES, so its edges would
     // vanish silently. Fail loudly instead of guessing.
     expect(OPAQUE_GLOBS).toEqual([]);
+    expect(OPAQUE_IMPORTS).toEqual([]);
+  });
+
+  it("counts CommonJS requires and import-equals", () => {
+    // The glob admits .cjs/.cts, so a transitive dependency can reach an
+    // editor through `require()` — a runtime edge invisible to an
+    // import-keyword-only walk, and to UNRESOLVED, which gets no specifier.
+    expect(specifiers(`const m = require("./ModuleEditor");`, "api/a.cjs"))
+      .toEqual(["./ModuleEditor"]);
+    expect(specifiers(`import m = require("./ModuleEditor");`, "api/a.ts"))
+      .toEqual(["./ModuleEditor"]);
+  });
+
+  it("expands template-expression dynamic imports", () => {
+    // Vite's dynamic-import-vars rewrites this into a glob whose variable part
+    // cannot cross a path separator. Without expansion the request reaches
+    // neither the graph nor UNRESOLVED.
+    const code = "const f = (k) => import(`./Module${k}Editor.tsx`);";
+    expect(globEdges(code, "components/X.tsx")).toEqual(
+      expect.arrayContaining([
+        "components/ModuleSchemaEditor.tsx", "components/ModuleRulesEditor.tsx",
+      ]));
+    // A specifier that is neither literal nor template can't be expanded at
+    // all, so it must surface rather than disappear.
+    expect(dynamicArgs("const f = (p) => import(p);", "components/X.tsx")
+      .filter((a) => !ts.isStringLiteralLike(a) && templatePattern(a) === null))
+      .toHaveLength(1);
+  });
+
+  it("subtracts negated glob patterns", () => {
+    // Vite excludes `!`-prefixed patterns. Treating one as a positive pattern
+    // that matches nothing keeps a file the build leaves out — a cycle the
+    // generated imports do not contain.
+    const code = 'const m = import.meta.glob(["./Module*Editor.tsx", ' +
+      '"!./ModuleEditor.tsx"], { eager: true });';
+    const edges = globEdges(code, "components/X.tsx");
+    expect(edges).toContain("components/ModuleSchemaEditor.tsx");
+    expect(edges).not.toContain("components/ModuleEditor.tsx");
+  });
+
+  it("resolves Vite root-absolute specifiers", () => {
+    const from = "components/X.tsx";
+    expect(isLocal("/src/components/ModuleEditor.tsx")).toBe(true);
+    expect(isLocal("react")).toBe(false);
+    expect(resolve(from, "/src/components/ModuleEditor.tsx"))
+      .toBe("components/ModuleEditor.tsx");
+    expect(resolve(from, "/src/api/client")).toBe("api/client.ts");
   });
 
   it("parses each file as its own script kind", () => {
