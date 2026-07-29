@@ -29,9 +29,16 @@ def post_scene_roll(cid: str, sid: str, body: RollBody):
     # followed by a marker like "**You:**" and get split into a forged
     # message by scenes._markers on the next read.
     label = " ".join((body.label or "").split()) or None
-    entry = store.rolls.append(cid, sid, label, result)
     line = store.dice.format_roll(result, label)
-    store.scenes.append_message(cid, sid, "assistant", line, speaker=store.scenes.ROLL_SPEAKER)
+    # One lock across BOTH writes (#234). They each take it anyway, but
+    # separately: contention arriving between them returns 409 with the roll
+    # already durable and no transcript line, so the retry the 409 invites logs
+    # a *second* roll while the first stays invisible forever. Reentrant, so the
+    # inner acquisitions are free.
+    with store.locks.campaign_lock(cid):
+        entry = store.rolls.append(cid, sid, label, result)
+        store.scenes.append_message(cid, sid, "assistant", line,
+                                    speaker=store.scenes.ROLL_SPEAKER)
     return {"ok": True, "roll": entry, "message": line}
 
 
@@ -183,12 +190,17 @@ def post_scene_check(cid: str, sid: str, body: CheckBody):
             cid, body.check, body.actor, body.difficulty, body.modifier or 0)
     except store.checks.CheckError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    entry = store.rolls.append(cid, sid, store.checks.roll_label(resolution),
-                               resolution["result"],
-                               tier=resolution.get("tier"))
-    resolution = {**resolution, "roll_id": entry["id"]}
-    line = store.checks.format_check_roll(resolution)
-    store.scenes.append_message(cid, sid, "assistant", line, speaker=store.scenes.ROLL_SPEAKER)
+    # One lock across both writes, for the same reason as post_scene_roll above
+    # (#234): a 409 landing between them strands a durable roll outside the
+    # transcript and the retry logs a duplicate.
+    with store.locks.campaign_lock(cid):
+        entry = store.rolls.append(cid, sid, store.checks.roll_label(resolution),
+                                   resolution["result"],
+                                   tier=resolution.get("tier"))
+        resolution = {**resolution, "roll_id": entry["id"]}
+        line = store.checks.format_check_roll(resolution)
+        store.scenes.append_message(cid, sid, "assistant", line,
+                                    speaker=store.scenes.ROLL_SPEAKER)
     return {"ok": True, "resolution": resolution, "roll": entry, "message": line}
 
 

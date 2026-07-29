@@ -50,14 +50,40 @@ _UNSAFE = re.compile(r"[^A-Za-z0-9._-]")
 _MAX_NAME_HINT = 40          # matches atomic.py's bound, well inside NAME_MAX
 
 
+def _on_android() -> bool:
+    """CPython only defines ``sys.getandroidapilevel`` on Android builds; the
+    env vars are the belt-and-braces check for a Chaquopy runtime that does
+    not."""
+    return (hasattr(sys, "getandroidapilevel")
+            or bool(os.environ.get("ANDROID_ROOT") and os.environ.get("ANDROID_DATA")))
+
+
 def _user_home() -> Path:
     """The account's home directory, preferring the passwd database over the
-    environment (see the module docstring)."""
-    if not _WINDOWS:
+    environment (see the module docstring) -- except on Android.
+
+    **Android is the deliberate exception.** ``android_entry.start_server``
+    points ``$HOME`` at the app's writable files directory precisely so the
+    whole store resolves there, while Android's synthesized passwd record
+    reports ``/`` as the home. Consulting passwd there would put the lock
+    directory at ``/.local/state/grimoire/locks``, which is unwritable -- and
+    since the first thing a lock does is ``mkdir``, startup would die with
+    PermissionError instead of ever reaching a lock. The environment is the
+    right source there, and there is no second process on the device for the
+    determinism argument to protect.
+
+    The same sanity check guards a broken passwd entry anywhere: a home that
+    is not a real directory (or is the filesystem root) is not usable, and
+    both processes of one user evaluate it identically, so falling back stays
+    deterministic.
+    """
+    if not _WINDOWS and not _on_android():
         try:
-            return Path(pwd.getpwuid(os.getuid()).pw_dir)
+            candidate = Path(pwd.getpwuid(os.getuid()).pw_dir)
         except (KeyError, OSError):
-            pass                      # fall through to Path.home()
+            candidate = None
+        if candidate is not None and candidate.parent != candidate and candidate.is_dir():
+            return candidate
     return Path.home()
 
 
