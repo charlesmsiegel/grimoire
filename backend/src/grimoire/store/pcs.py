@@ -213,7 +213,14 @@ def snapshot(root: Path, pid: str) -> tuple[str, list[tuple[str, str]]] | None:
     hash covers, meta first. See `characters.snapshot` (#247)."""
     if not safe_id(pid) or not _meta_path(root, pid).exists():
         return None
-    files = [_meta_path(root, pid)] + [_version_path(root, pid, v) for v in _version_ids(root, pid)]
+    version_ids = _version_ids(root, pid)
+    if not version_ids:
+        # read_character/read_pc refuse an actor with no addressable version,
+        # so reporting a hash makes sync see a changed record it cannot then
+        # read. `snapshot` and `dir_hash` have to agree (#247), so both say
+        # absent -- the same answer as for an actor that isn't there (#259 review)
+        return None
+    files = [_meta_path(root, pid)] + [_version_path(root, pid, v) for v in version_ids]
     pairs = [(p.name, p.read_text(encoding="utf-8")) for p in files]
     return dir_content_hash(pairs), pairs
 
@@ -227,7 +234,14 @@ def dir_hash(root: Path, pid: str) -> str | None:
     Only these files feed the hash, so nothing else in the dir can surface in sync."""
     if not safe_id(pid) or not _meta_path(root, pid).exists():
         return None
-    files = [_meta_path(root, pid)] + [_version_path(root, pid, v) for v in _version_ids(root, pid)]
+    version_ids = _version_ids(root, pid)
+    if not version_ids:
+        # read_character/read_pc refuse an actor with no addressable version,
+        # so reporting a hash makes sync see a changed record it cannot then
+        # read. `snapshot` and `dir_hash` have to agree (#247), so both say
+        # absent -- the same answer as for an actor that isn't there (#259 review)
+        return None
+    files = [_meta_path(root, pid)] + [_version_path(root, pid, v) for v in version_ids]
     return statcache.memo("pc_dir_hash", statcache.signature(*files),
                           lambda: _dir_hash_compute(files))
 
