@@ -1,0 +1,20 @@
+{
+  "one_line": "Winifred admitted she knows about the ledger, and Seraphine stopped pretending she didn't.",
+  "summary": "",
+  "keywords": ["ledger", "pier"],
+  "timeline_events": [],
+  "character_state_edits": [
+    {"id": "characters/seraphine-vale",
+     "current_state": "Rattled. Winifred knows about the ledger."}
+  ],
+  "group_state_edits": [],
+  "lore_edits": [],
+  "authored_edits": [],
+  "relationship_deltas": [],
+  "bond_changes": [],
+  "plot_movements": [],
+  "new_characters": [],
+  "new_locations": [],
+  "new_lore": [],
+  "weather_edits": []
+}
