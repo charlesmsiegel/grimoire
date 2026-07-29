@@ -179,7 +179,9 @@ def get_available_greetings(cid: str, after: str | None = None):
     _campaign_root_or_404(cid)
     try:
         return store.playing.available_greetings(cid, after=after)
-    except store.scenes.SceneNotFound:
+    except (store.scenes.SceneNotFound, store.campaigns.CampaignNotFound):
+        # a scene path is built from campaign_root, so an unusable campaign id
+        # surfaces here as CampaignNotFound -- still a 404, not a 500
         raise HTTPException(status_code=404, detail="scene not found")
 
 

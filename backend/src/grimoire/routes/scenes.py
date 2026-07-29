@@ -88,7 +88,9 @@ async def post_scene_suggestions(cid: str, after: str | None = None, offscreen: 
 def get_scene(cid: str, sid: str):
     try:
         return store.scenes.read_scene(cid, sid)
-    except store.scenes.SceneNotFound:
+    except (store.scenes.SceneNotFound, store.campaigns.CampaignNotFound):
+        # a scene path is built from campaign_root, so an unusable campaign id
+        # surfaces here as CampaignNotFound -- still a 404, not a 500
         raise HTTPException(status_code=404, detail="scene not found")
 
 
@@ -99,7 +101,9 @@ def put_scene(cid: str, sid: str, body: RenameScene):
         raise HTTPException(status_code=400, detail="title is required")
     try:
         new_sid = store.scenes.rename_scene(cid, sid, title)
-    except store.scenes.SceneNotFound:
+    except (store.scenes.SceneNotFound, store.campaigns.CampaignNotFound):
+        # a scene path is built from campaign_root, so an unusable campaign id
+        # surfaces here as CampaignNotFound -- still a 404, not a 500
         raise HTTPException(status_code=404, detail="scene not found")
     return {"id": new_sid, "title": title}
 
@@ -108,7 +112,9 @@ def put_scene(cid: str, sid: str, body: RenameScene):
 def delete_scene(cid: str, sid: str):
     try:
         store.scenes.delete_scene(cid, sid)
-    except store.scenes.SceneNotFound:
+    except (store.scenes.SceneNotFound, store.campaigns.CampaignNotFound):
+        # a scene path is built from campaign_root, so an unusable campaign id
+        # surfaces here as CampaignNotFound -- still a 404, not a 500
         raise HTTPException(status_code=404, detail="scene not found")
     return {"ok": True}
 

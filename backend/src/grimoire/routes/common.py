@@ -111,7 +111,7 @@ def _serve_image(root, cid: str, vid: str, name: str, base: str = "characters",
 
 # ---- 404 guards and other lookups shared by worlds and campaigns ----
 def _world_root_or_404(wid: str):
-    if not store.worlds.world_meta_path(wid).exists():
+    if not store.worlds.world_exists(wid):
         raise HTTPException(status_code=404, detail="world not found")
     return store.worlds.world_root(wid)
 
@@ -145,5 +145,7 @@ def _require_connection() -> dict:
 def _require_scene(cid: str, sid: str) -> dict:
     try:
         return store.scenes.read_scene(cid, sid)
-    except store.scenes.SceneNotFound:
+    except (store.scenes.SceneNotFound, store.campaigns.CampaignNotFound):
+        # a scene path is built from campaign_root, so an unusable campaign id
+        # surfaces here as CampaignNotFound -- still a 404, not a 500
         raise HTTPException(status_code=404, detail="scene not found")
