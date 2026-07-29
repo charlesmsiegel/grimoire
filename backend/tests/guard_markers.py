@@ -14,22 +14,28 @@ import io
 import tokenize
 
 
-def _comment_text(line: str) -> str | None:
-    """The comment part of a source line, or None if it has no real comment.
+def _comments_by_line(src: str) -> dict[int, str]:
+    """{lineno: comment text} for the whole source.
 
     Tokenized rather than split on "#", so a marker sitting inside a string
     literal is not mistaken for an exemption -- an assertion message or a
-    docstring that happens to quote the marker must not silence the guard.
-    Unterminated multi-line constructs make a single line untokenizable; those
-    yield None, which fails closed (no exemption).
+    docstring quoting the marker must not silence a guard.
+
+    The whole file is tokenized in one pass, deliberately. Tokenizing each
+    physical line on its own is not equivalent: a line *inside* a triple-quoted
+    string that happens to start with "#" tokenizes as a comment when read
+    alone, so a docstring could still hand out exemptions. Only the full-file
+    pass knows it is inside a string. A file that will not tokenize yields no
+    comments at all, which fails closed.
     """
+    out: dict[int, str] = {}
     try:
-        for tok in tokenize.generate_tokens(io.StringIO(line).readline):
+        for tok in tokenize.generate_tokens(io.StringIO(src).readline):
             if tok.type == tokenize.COMMENT:
-                return tok.string
+                out[tok.start[0]] = tok.string
     except (tokenize.TokenError, IndentationError, SyntaxError):
-        return None
-    return None
+        return {}
+    return out
 
 
 def marker_reason(marker: str, src: str, node: ast.AST) -> str | None:
@@ -45,21 +51,21 @@ def marker_reason(marker: str, src: str, node: ast.AST) -> str | None:
     string literal containing the marker exempt a call, which is both a way to
     silence a guard by accident and a way to do it on purpose.
     """
-    lines = src.splitlines()
+    comments = _comments_by_line(src)
     end = getattr(node, "end_lineno", node.lineno)
 
-    for line in lines[node.lineno - 1:end]:
-        comment = _comment_text(line)
-        if comment is not None:
-            _, sep, reason = comment.partition(marker)
-            if sep:
-                return reason.strip()
+    for lineno in range(node.lineno, end + 1):
+        _, sep, reason = comments.get(lineno, "").partition(marker)
+        if sep:
+            return reason.strip()
 
     # Walk up through contiguous comment lines only; a blank line or any code
-    # ends the block and detaches the marker from this call.
-    i = node.lineno - 2
-    while i >= 0 and lines[i].lstrip().startswith("#"):
-        _, sep, reason = lines[i].partition(marker)
+    # ends the block and detaches the marker from this call. A comment line is
+    # one the tokenizer calls a comment AND that holds nothing else.
+    lines = src.splitlines()
+    i = node.lineno - 1                      # 1-based line above the node
+    while i >= 1 and i in comments and lines[i - 1].strip() == comments[i]:
+        _, sep, reason = comments[i].partition(marker)
         if sep:
             return reason.strip()
         i -= 1
