@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>grimoire #233 — Atomic store writes — Review</title>
+<title>grimoire #252 — Atomic store writes — Review</title>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 :root{
@@ -161,9 +161,9 @@ footer.doc{max-width:1280px;margin:0 auto;padding:0 28px 34px;color:var(--text-f
 <body>
 <header class="doc">
   <div class="doc-label">PULL REQUEST REVIEW</div>
-  <h1 class="doc-title">grimoire #233 — Atomic store writes — Review</h1>
-  <p class="doc-sub">Route every store record write through one crash-safe helper</p>
-  <div class="doc-meta">base main @ a989ea88 → 9529a57e · 49 files · +1,346/−231 · generated 2026-07-28</div>
+  <h1 class="doc-title">grimoire #252 — Atomic store writes — Review</h1>
+  <p class="doc-sub">Route every store record write through one crash-safe helper (closes #233)</p>
+  <div class="doc-meta">base main @ a989ea88 → 6a49008c · 49 files · +1,346/−231 · generated 2026-07-28</div>
 </header>
 <nav class="tabs" role="tablist"><button role="tab" data-tab="summary" aria-selected="true" aria-controls="summary">Summary</button>
 <button role="tab" data-tab="footprint" aria-selected="false" aria-controls="footprint">Footprint</button>
@@ -173,216 +173,224 @@ footer.doc{max-width:1280px;margin:0 auto;padding:0 28px 34px;color:var(--text-f
 <button role="tab" data-tab="review-walkthrough" aria-selected="false" aria-controls="review-walkthrough">Review Walkthrough</button></nav>
 <main><section class="panel active" id="summary" role="tabpanel">
 
-<div class="panel">
-  <h2>What this change does</h2>
-  <p class="lede">
-    Every Markdown and JSON record in the store was rewritten with a plain
-    <code>Path.write_text</code> — truncate, then write. This routes all ~100 write
-    sites through one crash-safe helper, <code>store/atomic.py</code>, so a failure
-    between those two steps can no longer leave a truncated record.
-  </p>
-
+<div class="card hero">
+  <h2>What this change does to the system's behavior</h2>
   <p>
-    The motivating case is <code>scenes.append_message</code>: it read the whole
-    transcript, appended one block, and rewrote the file on <em>every single
-    message</em>. A scene transcript is the one piece of user data in this app that
-    cannot be regenerated — not from the chronicle, not from the model.
+    A store record on disk is now always a complete record. Every Markdown and
+    JSON write in the <code>grimoire</code> package publishes by writing a
+    same-directory temp file and renaming it over the target, so a reader sees
+    the whole previous version or the whole new one — never a truncated one.
+    Previously ~100 write sites truncated the live file and then wrote into it,
+    including <code>scenes.append_message</code>, which did that on
+    <em>every single chat message</em>.
   </p>
-
-  <h3>The mechanism</h3>
   <p>
-    <code>backend/src/grimoire/store/atomic.py:93</code> — <code>tempfile_for</code>
-    is the single primitive; <code>write_text</code> and <code>write_bytes</code> are
-    thin wrappers. The sequence: <code>mkstemp</code> beside the target → close the
-    descriptor → caller writes → reopen <code>O_RDWR</code> and <code>fsync</code> →
-    carry the target's mode → <code>os.replace</code>.
+    Two behaviors change beyond durability: a character image write can no
+    longer destroy the existing image when it fails, and image lookup now
+    returns the newest file rather than the alphabetically-first one.
   </p>
+</div>
 
-  <div class="callout">
-    <strong>The guarantee is atomicity, not durability.</strong> A reader sees the
-    whole old version or the whole new one, never a partial one. It is
-    <em>not</em> power-loss durability: CPython's <code>os.replace</code> uses
-    <code>MoveFileExW</code> without <code>MOVEFILE_WRITE_THROUGH</code>, and the
-    parent directory is not fsynced on POSIX, so the rename itself may not survive a
-    power cut. The first draft of the design claimed more than this; the claim was
-    narrowed after review. Stated at <code>backend/src/grimoire/store/atomic.py:1</code>.
+<div class="kpis">
+  <div class="kpi accent"><div class="n">~100</div><div class="l">write sites rerouted</div></div>
+  <div class="kpi"><div class="n">35</div><div class="l">store modules</div></div>
+  <div class="kpi good"><div class="n">6</div><div class="l">hand-rolled copies collapsed</div></div>
+  <div class="kpi warn"><div class="n">2</div><div class="l">read paths changed</div></div>
+</div>
+
+<h3>Classification</h3>
+<p>
+  <span class="badge accent">bugfix</span> with a deliberate
+  <span class="badge warn">refactor</span> component. The two are not bundled
+  arbitrarily: the refactor (one shared helper) <em>is</em> the fix, because the
+  issue is that six modules had the correct pattern and thirty-five did not.
+  One genuinely separate concern rides along — the
+  <code>backend/src/grimoire/store/assets.py</code> ordering bug — and it is
+  here because the atomic-write work is what surfaced it.
+</p>
+
+<h3>Claimed vs. actual</h3>
+<div class="tbl-wrap">
+<table>
+  <thead><tr><th>PR claim</th><th>Verdict</th><th>Evidence</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>All ~100 write sites route through one helper</td>
+      <td><span class="badge good">matches</span></td>
+      <td>Enforced by <code>backend/tests/test_atomic_guard.py</code>, which fails on any unmarked raw write in the package</td>
+    </tr>
+    <tr>
+      <td>Guarantee is atomicity, not power-loss durability</td>
+      <td><span class="badge good">matches</span></td>
+      <td>Stated in the module docstring, <code>backend/src/grimoire/store/atomic.py:8-14</code></td>
+    </tr>
+    <tr>
+      <td>Six hand-rolled copies collapse onto the helper</td>
+      <td><span class="badge good">matches</span></td>
+      <td><code>sheets</code>, <code>proposals</code>, <code>rolls</code>, <code>audit</code>, <code>module_edit</code>, <code>thumbs</code></td>
+    </tr>
+    <tr>
+      <td>"One intentional change to an existing read path"</td>
+      <td><span class="badge warn">undercounts</span></td>
+      <td>There are <strong>two</strong>: <code>backend/src/grimoire/store/assets.py:66</code> (mtime tie-break) and the <code>_mtime_ns</code> OSError tolerance at <code>backend/src/grimoire/store/assets.py:40</code>, which also changes what a concurrent lookup does</td>
+    </tr>
+    <tr>
+      <td>Scene writes land first (highest frequency, least recoverable)</td>
+      <td><span class="badge neutral">not observable</span></td>
+      <td>True of the authoring order, but the final diff converts everything at once — nothing ships partially converted</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<h3>The write path, before and after</h3>
+<div class="diff-snippet"><div class="fh">backend/src/grimoire/store/scenes.py — append_message, line 320</div>
+<span class="ln ctx">     meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))</span>
+<span class="ln ctx">     body = _append_block(body, _block(role, speaker, content))</span>
+<span class="ln ctx">     meta["updated"] = now_iso()</span>
+<span class="ln del">-    p.write_text(dump_frontmatter(meta, body), encoding="utf-8")</span>
+<span class="ln add">+    atomic.write_text(p, dump_frontmatter(meta, body))</span>
+</div>
+<p>
+  That one-line substitution is ~95% of the diff, repeated across 35 modules.
+  The review value is concentrated in the four places it isn't.
+</p>
+
+<h3 id="undisclosed">Undisclosed behavior change: image lookup</h3>
+<div class="callout warn">
+  <p>
+    <strong>The PR description calls the mtime tie-break "required by" the
+    ordering fix, which understates it — it changes what every existing caller
+    of <code>image_path</code> gets.</strong> Any caller that relied on
+    deterministic alphabetical selection when two extensions coexist now gets
+    mtime order instead. In practice two extensions only coexist transiently,
+    but the guarantee genuinely changed.
+  </p>
+</div>
+<div class="diff-snippet"><div class="fh">backend/src/grimoire/store/assets.py — image_path, lines 56–66</div>
+<span class="ln del">-    return matches[0] if matches else None</span>
+<span class="ln add">+    if not matches:</span>
+<span class="ln add">+        return None</span>
+<span class="ln add">+    # Newest wins, not alphabetically-first. put_image writes the new file</span>
+<span class="ln add">+    # before unlinking stale other-extension siblings (so a crash can't lose</span>
+<span class="ln add">+    # the image), which leaves both present for a moment -- and a plain</span>
+<span class="ln add">+    # sorted()[0] would hand back the stale one. Also self-heals if that</span>
+<span class="ln add">+    # unlink ever fails.</span>
+<span class="ln add">+    return max(matches, key=lambda p: (_mtime_ns(p), p.name))</span>
+</div>
+
+<h3>The ordering bug atomicity could not have fixed</h3>
+<div class="callout bad">
+  <p>
+    <code>put_image</code> deleted the old image <em>before</em> writing the new
+    one. Making the write atomic does nothing for this: the destructive step
+    came first, so any failure in between left the character with no image at
+    all. This is a pre-existing data-loss path the retrofit happened to surface.
+  </p>
+</div>
+<div class="diff-snippet"><div class="fh">backend/src/grimoire/store/assets.py — put_image, lines 128–147</div>
+<span class="ln del">-    for p in d.glob(f"{name}.*"):  # drop any prior-ext file of this name</span>
+<span class="ln del">-        p.unlink()</span>
+<span class="ln del">-    (d / f"{name}.{ext}").write_bytes(data)</span>
+<span class="ln add">+    written = d / f"{name}.{ext}"</span>
+<span class="ln add">+    stale = [p for p in d.glob(f"{name}.*") if p != written]</span>
+<span class="ln add">+    atomic.write_bytes(written, data)</span>
+<span class="ln add">+    for p in stale:</span>
+<span class="ln add">+        try:</span>
+<span class="ln add">+            p.unlink()</span>
+<span class="ln add">+        except OSError:</span>
+<span class="ln add">+            pass</span>
+</div>
+<p>
+  The snapshot-before-write is not cosmetic: globbing <em>after</em> the write
+  let two concurrent <code>put_image</code> calls delete each other's brand-new
+  file, leaving no image — strictly worse than the delete-first ordering being
+  replaced. Found by the implementation-stage review.
+</p>
+
+<h3>What did NOT change</h3>
+<div class="grid cols-2">
+  <div class="card">
+    <h4>No locking was added</h4>
+    <p>
+      <code>scenes.append_message</code> still has no per-scene lock, so two
+      concurrent appenders can still lose a message. Pre-existing and out of
+      scope — but the <code>os.replace</code> retry was deliberately narrowed to
+      <code>winerror</code> 32/33 so this change does not <em>widen</em> that
+      window. <code>backend/src/grimoire/store/atomic.py:68</code>
+    </p>
   </div>
-
-  <h3>Three fixes that are not just mechanical</h3>
-  <p>
-    Most of the diff is a one-line substitution repeated ~100 times. These three are
-    not, and are where review attention belongs:
-  </p>
-  <ul>
-    <li>
-      <strong>File mode preservation</strong>
-      (<code>backend/src/grimoire/store/atomic.py:74</code>). <code>mkstemp</code>
-      creates <code>0600</code>. Without an explicit chmod, the <em>first</em> atomic
-      write would silently narrow every group/world-readable record to owner-only on
-      Linux, macOS, and the Android build. This is a bug the retrofit would have
-      introduced, not one it fixes.
-    </li>
-    <li>
-      <strong>Narrowed retry</strong>
-      (<code>backend/src/grimoire/store/atomic.py:68</code>). Retrying every
-      <code>PermissionError</code> would delay permanent failures (read-only target,
-      a directory ACL denying child-create) <em>and</em> widen the pre-existing
-      unlocked read-modify-write race: writer A fails its replace, sleeps, then lands
-      a stale temp on top of writer B's completed update. Restricted to
-      <code>winerror</code> 32/33 with ~50 ms total backoff.
-    </li>
-    <li>
-      <strong>An ordering bug in <code>assets.put_image</code></strong>
-      (<code>backend/src/grimoire/store/assets.py:142</code>). It unlinked
-      prior-extension files <em>before</em> writing the new one, so any failure
-      between lost the image outright — atomicity cannot fix a delete-first ordering.
-      Reordered to write first.
-    </li>
-  </ul>
-
-  <h3>A read path changed too</h3>
-  <p>
-    Reordering <code>put_image</code> alone was insufficient.
-    <code>image_path</code> returned <code>sorted(d.glob(f"{name}.*"))[0]</code> —
-    the first <em>alphabetically</em>. Writing <code>avatar.webp</code> over an
-    existing <code>avatar.png</code> leaves both present for a moment, and the sort
-    hands back the stale <code>.png</code>. So
-    <code>backend/src/grimoire/store/assets.py:66</code> now breaks the tie by newest
-    <code>st_mtime_ns</code>, which also makes a failed sibling-unlink self-healing
-    rather than permanently wrong.
-  </p>
-  <p class="note">
-    This is the one intentional change to existing read semantics, and it is
-    slightly outside the issue's literal scope. It was an explicit decision, not
-    drift.
-  </p>
-
-  <h3>Found while building the report</h3>
-  <div class="callout">
-    The blast-radius pass surfaced <code>routes.py:2020</code> writing a campaign's stored
-    climate default with a plain <code>write_text</code> — a store record
-    written from <em>outside</em> the store package, which the original
-    <code>store/</code>-only guard did not scan. Fixed, and the guard was widened to
-    the whole <code>grimoire</code> package. The same sweep caught
-    <code>backend/scripts/ingest_scene.py:41</code>.
+  <div class="card">
+    <h4>No multi-file atomicity</h4>
+    <p>
+      <code>characters.write_card</code> still writes a card and a meta file
+      separately; a crash between them still leaves the pair inconsistent. Each
+      file is now individually valid, which is all this buys.
+    </p>
   </div>
+  <div class="card">
+    <h4>No power-loss durability</h4>
+    <p>
+      <code>MoveFileExW</code> runs without <code>MOVEFILE_WRITE_THROUGH</code>
+      and the parent directory is never fsynced, so the rename itself may not
+      survive a power cut. The first spec draft claimed otherwise; a review
+      caught it.
+    </p>
+  </div>
+  <div class="card">
+    <h4>No fix for <code>promote_image</code></h4>
+    <p>
+      The avatar swap at
+      <code>backend/src/grimoire/store/assets.py:164</code> is a three-rename
+      sequence that can strand a temp and leave the avatar missing. A recovery-protocol
+      problem, explicitly scoped out — <span class="badge warn">no issue filed yet</span>
+    </p>
+  </div>
+</div>
 
-  <h3>Found by the implementation review</h3>
-  <p>
-    An adversarial review of the pushed branch returned no blockers but two
-    Major findings, both real, both now fixed:
-  </p>
-  <ul>
-    <li>
-      <strong>Concurrent <code>put_image</code> calls could delete each other's
-      images.</strong> Write-before-cleanup opened an interleaving <em>worse</em>
-      than the delete-first ordering it replaced: A writes <code>.jpg</code>, B
-      writes <code>.png</code>, then each cleanup loop unlinks the other's
-      brand-new file and no image remains. Cleanup now snapshots its siblings
-      before writing and deletes only those
-      (<code>backend/src/grimoire/store/assets.py:141</code>).
-    </li>
-    <li>
-      <strong><code>_carry_mode</code> mutated the process-global umask.</strong>
-      There is no getter for the umask — you set it to read it — and doing that
-      inside a request thread briefly exposed a <code>0</code> umask to every
-      other thread creating a file. Sampled once at import instead
-      (<code>backend/src/grimoire/store/atomic.py:58</code>).
-    </li>
-  </ul>
-  <p class="note">
-    Plus minors: <code>image_path</code> could raise if a sibling vanished
-    between glob and stat; the guard missed <code>Path.open("w")</code>,
-    <code>open(p, "x")</code>, <code>"w+b"</code> and <code>"a+"</code>; two
-    spec'd tests (full publish order, symlink behavior) were missing; and the
-    new-file mode tests would have failed under a legitimate <code>umask
-    0o077</code>. All fixed in 4634129b.
-  </p>
+<h3>Absent where a reader would expect it</h3>
+<ul>
+  <li>
+    <strong>16 changed source files have no test change</strong> —
+    <code>pcs.py</code>, <code>greetings.py</code>, <code>styles.py</code>,
+    <code>tags.py</code> and others. Defensible: they received only the
+    mechanical substitution and their existing tests already exercise those
+    writers. The guard test covers the property that actually changed.
+  </li>
+  <li>
+    <strong>No user-facing note about the new failure mode.</strong>
+    <code>os.replace</code> can raise <code>PermissionError</code> where an
+    in-place rewrite succeeded (a concurrent reader on Windows, a directory ACL
+    permitting file-write but not child-create). That surfaces as a 500 with no
+    tailored message.
+  </li>
+  <li>
+    <strong>No cleanup for orphaned temps.</strong> A hard power loss can leave
+    a <code>.tmp</code> behind; the <code>glob</code>-based listers ignore it,
+    but three bare <code>iterdir()</code>/<code>rglob("*")</code> call sites
+    would see it. Documented in the spec, not swept.
+  </li>
+</ul>
 
+<h3>Rebased onto the lock refactor</h3>
+<div class="callout">
   <p>
-    A final spec-vs-diff gate confirmed both Majors fixed and found no new ones.
-    What it did find was mostly the <em>spec</em> having drifted from the code —
-    which is what that gate is for. Corrected in d13e47dc: the claimed
-    <code>write → flush → fsync → close → replace</code> ordering assertion
-    (the test observes the helper's own OS calls, not the caller's
-    <code>TextIOWrapper</code>); the guard's stated scope and API list; an
-    over-strong mtime tie-break claim; and mode preservation, which is
-    best-effort rather than guaranteed. Two accepted residues are now disclosed
-    rather than implied — a post-import umask change is ignored, and concurrent
-    same-name puts of different extensions can leave both siblings until the
-    next write cleans up.
-  </p>
-  <p class="note">
-    It also caught two genuine code issues: the guard's <code>.open</code>
-    detection assumed the first positional argument was the mode, so
-    <code>archive.open("item", "w")</code> was <em>missed</em> while
-    <code>svc.open("inventory")</code> would have been falsely flagged; and the
-    mode tests derived their expected value from the implementation's own
-    <code>_UMASK</code>, so a wrongly-sampled umask would have agreed with its
-    own assertion.
-  </p>
-
-  <h3>Rebased onto the lock refactor</h3>
-  <p>
-    This branch was rebased onto <code>a989ea88</code> after <code>main</code>
-    advanced seven commits, two of which land in the same files: #245 moved the
-    per-campaign lock registry out of <code>sheets.py</code> into a new
-    <code>backend/src/grimoire/store/locks.py</code> and respelled every call
-    site as <code>locks.campaign_lock(cid)</code>.
+    Rebased onto <code>a989ea88</code> after <code>main</code> advanced seven
+    commits. #245 moved the per-campaign lock registry out of
+    <code>sheets.py</code> into <code>backend/src/grimoire/store/locks.py</code>
+    and respelled every call site as <code>locks.campaign_lock(cid)</code> —
+    touching six of the same files. All four conflicts were import lines where
+    <code>main</code> added <code>locks</code> and this branch added
+    <code>atomic</code>; both kept. The changes are orthogonal:
+    <code>locks.py</code> contains no writes, and the guard passes over it.
   </p>
   <p>
-    Four conflicts, all import lines where <code>main</code> added
-    <code>locks</code> and this branch added <code>atomic</code> — resolved by
-    keeping both. The two changes are orthogonal: <code>locks.py</code> contains
-    no writes, so the sweep needed nothing there, and the guard (which scans the
-    whole package) passes against it. One docstring in
-    <code>backend/src/grimoire/store/rolls.py:11</code> was corrected while
-    passing through: it pointed at a <code>_LOCKS</code> pattern "from
-    proposals.py" that #245 had since replaced, and <code>rolls</code> is now
-    the odd one out still keeping a private registry rather than joining the
-    shared domain.
-  </p>
-
-  <h3>What did not change</h3>
-  <ul>
-    <li>
-      <strong>No locking was added.</strong> <code>scenes.append_message</code> still
-      has no per-scene lock, so two concurrent appenders can still lose a message.
-      Pre-existing, deliberately out of scope, and the retry was constrained
-      specifically so this change does not widen it.
-    </li>
-    <li>
-      <strong>Multi-file atomicity.</strong> <code>characters.write_card</code> still
-      writes a card and a meta file separately; a crash between them still leaves the
-      pair inconsistent. Each file is individually valid, which is what this buys.
-    </li>
-    <li>
-      <strong><code>assets.promote_image</code></strong>
-      (<code>backend/src/grimoire/store/assets.py:164</code>) — the avatar swap is a
-      three-rename sequence that can strand a temp and leave the avatar missing. A
-      recovery-protocol problem, not a torn write. Explicitly scoped out.
-    </li>
-    <li>
-      <strong><code>module_edit</code>'s zip extraction</strong> stays a bare
-      <code>write_bytes</code>, marked <code># atomic-ok:</code> — it writes into an
-      unpublished staging tree published by a single rename, and per-member fsync
-      would only slow large imports.
-    </li>
-  </ul>
-
-  <h3>Test posture</h3>
-  <p>
-    2035 → 2057 passing. The one failing test,
-    <code>test_weather_draw.py::test_end_to_end_regression_fixture</code>, fails
-    identically on <code>main</code> at <code>39743b1a</code> — a last-digit float
-    drift in a pinned weather fixture, unrelated to this change.
-  </p>
-  <p>
-    Six existing tests needed updating because they monkeypatched
-    <code>Path.write_text</code> and no longer intercepted anything. One of them
-    (<code>test_weather_overrides.py:477</code>) was still <em>passing</em> while no
-    longer exercising its scenario — worth noting, because a silently inert test is
-    worse than a failing one.
+    One docstring corrected in passing at
+    <code>backend/src/grimoire/store/rolls.py:11</code> — it pointed at a
+    <code>_LOCKS</code> pattern "from proposals.py" that #245 replaced.
+    <code>rolls</code> is now the only module still keeping a private lock
+    registry instead of joining the shared domain, which is worth someone's
+    attention independently of this PR.
   </p>
 </div>
 
@@ -456,302 +464,424 @@ footer.doc{max-width:1280px;margin:0 auto;padding:0 28px 34px;color:var(--text-f
 </section>
 <section class="panel" id="flow-impact" role="tabpanel">
 
-<div class="panel">
-  <h2>What moved in the write path</h2>
-
-  <h3>Before: truncate, then write</h3>
+<div class="card hero">
+  <h2>One flow changed, and it changed everywhere</h2>
   <p>
-    The window between truncation and the final byte is the bug. Any failure inside
-    it — crash, full disk, sync-client conflict — leaves the record truncated, and a
-    concurrent reader can observe the half-written file directly.
+    Every store write shares a single flow, so this is one before/after rather
+    than several. The runtime delta is that the live pathname is never
+    truncated: it flips from the old file to the new one in a single
+    <code>os.replace</code>. Two secondary flows shift with it — the image
+    write/lookup pair, and a new retry branch.
   </p>
-  <pre class="mermaid">
+</div>
+
+<h3>Record write — before and after</h3>
+<div class="grid cols-2">
+  <div class="card">
+    <h4>Before — truncate, then write</h4>
+    <div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">
 sequenceDiagram
-    participant C as Caller (append_message)
+    participant C as append_message
     participant FS as Filesystem
     participant R as Concurrent reader
-
-    C->>FS: read_text(scene.md)
-    C->>C: append one block
-    C->>FS: write_text(...) — truncates scene.md
-    Note over FS: scene.md is now EMPTY
-    R->>FS: read_text(scene.md)
-    FS-->>R: truncated / partial transcript
-    C->>FS: ...bytes land
-    Note over FS: a crash anywhere here loses the transcript
-  </pre>
-
-  <h3>After: publish by rename</h3>
-  <p>
-    The live pathname is never truncated. It changes from the old inode to the new
-    one in a single <code>os.replace</code>, so a reader sees one whole version or
-    the other.
-  </p>
-  <pre class="mermaid">
+    C-&gt;&gt;FS: read_text(scene.md)
+    C-&gt;&gt;C: append one block
+    C-&gt;&gt;FS: write_text truncates scene.md
+    Note over FS: file is now EMPTY
+    R-&gt;&gt;FS: read_text(scene.md)
+    FS--&gt;&gt;R: truncated transcript
+    C-&gt;&gt;FS: bytes land
+    Note over FS: a crash here loses the transcript
+</pre></div></div>
+  </div>
+  <div class="card">
+    <h4>After — publish by rename</h4>
+    <div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">
 sequenceDiagram
-    participant C as Caller (append_message)
+    participant C as append_message
     participant A as store.atomic
     participant FS as Filesystem
     participant R as Concurrent reader
-
-    C->>FS: read_text(scene.md)
-    C->>C: append one block
-    C->>A: write_text(scene.md, body)
-    A->>FS: mkstemp(dir=scene.md's own dir)
-    A->>FS: close fd
-    A->>FS: write bytes to .scene.md.<rand>.tmp
-    R->>FS: read_text(scene.md)
-    FS-->>R: previous transcript, complete
-    A->>FS: reopen O_RDWR, fsync
-    A->>FS: chmod to target's mode
-    A->>FS: os.replace(tmp, scene.md)
+    C-&gt;&gt;FS: read_text(scene.md)
+    C-&gt;&gt;A: write_text(scene.md, body)
+    A-&gt;&gt;FS: mkstemp beside target, close fd
+    A-&gt;&gt;FS: write bytes to temp
+    R-&gt;&gt;FS: read_text(scene.md)
+    FS--&gt;&gt;R: previous transcript, complete
+    A-&gt;&gt;FS: reopen O_RDWR, fsync, close
+    A-&gt;&gt;FS: chmod from target
+    A-&gt;&gt;FS: os.replace(temp, scene.md)
     Note over FS: pathname flips atomically
-    R->>FS: read_text(scene.md)
-    FS-->>R: new transcript, complete
-  </pre>
-
-  <div class="callout">
-    <strong>Why the descriptor is closed before yielding.</strong>
-    <code>mkstemp</code> returns an open fd, but <code>thumbs.py</code> hands the
-    <em>path</em> to PIL's <code>im.save()</code> and never holds the bytes. So
-    <code>tempfile_for</code> closes the fd immediately and yields only a path
-    (<code>backend/src/grimoire/store/atomic.py:107</code>): nothing of ours is
-    holding a handle that could block the replace on Windows, and there is no
-    sharing-mode negotiation with PIL. The fsync then needs its own reopen —
-    <code>O_RDWR</code>, because Windows <code>FlushFileBuffers</code> requires write
-    access.
+</pre></div></div>
   </div>
+</div>
 
-  <h3>The failure path</h3>
-  <p>
-    On any exception the temp is unlinked and the exception re-raised, leaving the
-    previous record byte-for-byte intact. The unlink is best-effort: the same scanner
-    or sync client that can block a replace can briefly block a delete, and failing
-    to clean up litter must not mask the real error.
-  </p>
-  <pre class="mermaid">
+<h4>What moved</h4>
+<ul>
+  <li>
+    <strong>The truncation step is gone.</strong> No window exists in which the
+    live path holds partial content —
+    <code>backend/src/grimoire/store/atomic.py:93</code>.
+  </li>
+  <li>
+    <strong>A new fsync boundary.</strong> Every write now pays one flush,
+    measured at ~1.0 ms median on local NVMe versus 0.11 ms for the old
+    <code>write_text</code>. Human-paced writes absorb this; a 100-file bulk
+    copy pays ~100 ms.
+  </li>
+  <li>
+    <strong>The mkstemp descriptor is closed before the caller runs</strong>
+    (<code>backend/src/grimoire/store/atomic.py:107</code>), so
+    <code>thumbs</code> can hand the path to PIL with no sharing-mode
+    negotiation and nothing of ours blocking the rename on Windows. The fsync
+    therefore needs its own reopen — <code>O_RDWR</code>, because Windows
+    <code>FlushFileBuffers</code> requires write access.
+  </li>
+  <li>
+    <strong>A chmod appears before publication</strong>
+    (<code>backend/src/grimoire/store/atomic.py:74</code>) so the file is never
+    briefly visible under its real name carrying <code>mkstemp</code>'s
+    <code>0600</code>.
+  </li>
+</ul>
+
+<h3>Error paths — where the risk actually lives</h3>
+<div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">
 flowchart TD
-    A[mkstemp beside target] --> B[caller writes to temp]
-    B -->|exception| X[best-effort unlink temp]
-    X --> Y[re-raise; record untouched]
-    B -->|clean| C[reopen O_RDWR + fsync]
-    C --> D[chmod from target]
-    D --> E{os.replace}
-    E -->|winerror 32/33| F[sleep, retry: ~50ms total]
-    F --> E
-    E -->|other PermissionError| Y2[raise immediately]
-    E -->|ok| G[published]
-  </pre>
+    A[mkstemp beside target] --&gt; B[caller writes to temp]
+    B --&gt;|exception| X[best-effort unlink temp]
+    X --&gt; Y[re-raise; record untouched]
+    B --&gt;|clean| C[reopen O_RDWR + fsync]
+    C --&gt; D[chmod from target]
+    D --&gt; E{os.replace}
+    E --&gt;|"winerror 32/33"| F["sleep, retry, ~50ms total"]
+    F --&gt; E
+    E --&gt;|"other PermissionError"| Z[raise immediately]
+    E --&gt;|ok| G[published]
+</pre></div></div>
 
-  <h3>The retry's blast radius, stated honestly</h3>
+<div class="callout warn">
   <p>
-    The retry is the only place this change can make concurrency <em>worse</em>, so
-    it is deliberately narrow. Permanent causes — a read-only target, a directory ACL
-    that permits rewriting a file but denies creating or deleting children — raise on
-    the first attempt (<code>backend/src/grimoire/store/atomic.py:68</code>). Only
-    <code>ERROR_SHARING_VIOLATION</code> and <code>ERROR_LOCK_VIOLATION</code> retry,
-    because only those are transient.
+    <strong>The retry is the one place this change can make concurrency
+    worse.</strong> <code>append_message</code> is an unlocked
+    read-modify-write, so every millisecond spent retrying is a millisecond in
+    which another writer can complete — after which the retry would publish
+    stale content over it. That is why it is restricted to transient sharing
+    violations and capped at ~50 ms rather than retrying every
+    <code>PermissionError</code>.
   </p>
-  <p class="note">
-    The reason this matters: <code>append_message</code> is an unlocked
-    read-modify-write. Every millisecond spent retrying is a millisecond in which
-    another writer can complete, after which the retry would publish stale content
-    over it. Capping total backoff at ~50 ms bounds that window; it does not
-    eliminate the pre-existing race, which is out of scope and filed as a follow-up.
-  </p>
+</div>
+<div class="diff-snippet"><div class="fh">backend/src/grimoire/store/atomic.py — _replace, lines 62–71</div>
+<span class="ln ctx">  for delay in _RETRY_DELAYS:</span>
+<span class="ln ctx">      try:</span>
+<span class="ln ctx">          os.replace(src, dst)</span>
+<span class="ln ctx">          return</span>
+<span class="ln ctx">      except PermissionError as e:</span>
+<span class="ln add">+         if getattr(e, "winerror", None) not in _TRANSIENT_WINERRORS:</span>
+<span class="ln add">+             raise</span>
+<span class="ln ctx">          time.sleep(delay)</span>
+</div>
+<p>
+  Permanent causes — a read-only target, or a directory ACL that permits
+  rewriting a file but denies creating and deleting children (rights
+  temp+replace needs and an in-place rewrite does not) — now fail on the first
+  attempt instead of after five.
+</p>
 
-  <h3>Image writes</h3>
-  <pre class="mermaid">
+<h3>Image write and lookup</h3>
+<div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">
 flowchart LR
     subgraph Before
-      A1[unlink avatar.*] --> A2[write avatar.png]
-      A1 -.crash here.-> A3[image gone]
+      A1[unlink every avatar.*] --&gt; A2[write avatar.png]
+      A1 -.crash here.-&gt; A3[image gone permanently]
     end
     subgraph After
-      B1[write avatar.png atomically] --> B2[unlink other-ext siblings]
-      B1 -.crash here.-> B3[old image still present]
-      B2 -.unlink fails.-> B4[both present; mtime picks the new one]
+      B1[snapshot existing siblings] --&gt; B2[write avatar.png atomically]
+      B2 --&gt; B3[unlink snapshot only]
+      B2 -.crash here.-&gt; B4[old image still present]
+      B3 -.unlink fails.-&gt; B5["both present, mtime picks the new one"]
     end
-  </pre>
+</pre></div></div>
+
+<h4>What moved</h4>
+<ul>
+  <li>
+    The destructive step moved from <em>first</em> to <em>last</em> —
+    <code>backend/src/grimoire/store/assets.py:141</code>.
+  </li>
+  <li>
+    The sibling list is captured <em>before</em> the write, so a concurrent
+    writer's new file can never land in another call's delete set.
+  </li>
+  <li>
+    Lookup order changed from alphabetical to newest-mtime —
+    <code>backend/src/grimoire/store/assets.py:66</code> — which is what makes
+    the transient two-file state resolve correctly.
+  </li>
+  <li>
+    Lookup no longer raises when a sibling disappears mid-scan
+    (<code>backend/src/grimoire/store/assets.py:40</code>); the old
+    <code>sorted(...)[0]</code> never called <code>stat</code>, so tolerating
+    <code>OSError</code> restores prior robustness rather than adding a check.
+  </li>
+</ul>
+
+<div class="callout">
+  <p>
+    <strong>Accepted residue:</strong> if two writers both snapshot before
+    either publishes, neither delete set contains the other's file and both
+    extensions survive until the next write cleans up. A stale duplicate beats a
+    vanished image, and closing it properly needs the per-record lock this
+    change lists as a non-goal.
+  </p>
 </div>
 
 </section>
 <section class="panel" id="review-walkthrough" role="tabpanel">
 
-<div class="panel">
-  <h2>Verdict</h2>
-  <p class="lede">
-    <strong>Ship, with two things worth a second opinion.</strong> The mechanism is
-    sound and its guarantee is stated precisely rather than optimistically. ~95% of
-    the diff is one mechanical substitution repeated; the risk is concentrated in
-    <code>atomic.py</code> itself and in the two files where behavior genuinely
-    changed (<code>assets.py</code>, and the retry policy).
-  </p>
-
-  <h3>Where to actually look</h3>
-  <table>
-    <thead><tr><th>File</th><th>Verdict</th><th>Why</th></tr></thead>
-    <tbody>
-      <tr>
-        <td><code>store/atomic.py</code></td>
-        <td><span class="tag warn">read closely</span></td>
-        <td>New, and everything else depends on it. 96 lines of logic; the mode
-            carry, the retry predicate, and the handle lifecycle are the parts that
-            can be wrong.</td>
-      </tr>
-      <tr>
-        <td><code>store/assets.py</code></td>
-        <td><span class="tag warn">behavior change</span></td>
-        <td>The only file where a <em>read</em> path changed
-            (<code>image_path</code>, assets.py:54). Also the only real ordering bug fixed.</td>
-      </tr>
-      <tr>
-        <td><code>routes.py</code></td>
-        <td><span class="tag warn">late addition</span></td>
-        <td>Found by the blast-radius pass after the main sweep was committed —
-            worth confirming it is the only one outside <code>store/</code>.</td>
-      </tr>
-      <tr>
-        <td><code>store/scenes.py</code> (15 sites)</td>
-        <td><span class="tag ok">mechanical</span></td>
-        <td>Highest site count, but every edit is the same substitution. Heavily
-            covered by existing tests.</td>
-      </tr>
-      <tr>
-        <td><code>store/module_edit.py</code> (14 sites)</td>
-        <td><span class="tag ok">mechanical + 1 exemption</span></td>
-        <td>Check the <code># atomic-ok:</code> at
-            <code>store/module_edit.py:211</code> is justified — I believe it is
-            (staging tree, published by rename).</td>
-      </tr>
-      <tr>
-        <td>The other ~30 store modules</td>
-        <td><span class="tag ok">mechanical</span></td>
-        <td>Substitution plus an import line. The guard proves none were missed.</td>
-      </tr>
-    </tbody>
-  </table>
-
-  <h3>Two things I'd want a second opinion on</h3>
-  <div class="callout">
-    <p>
-      <strong>1. The <code>image_path</code> mtime tie-break is scope expansion.</strong>
-      <code>backend/src/grimoire/store/assets.py:66</code> changes what an existing
-      read returns. It is <em>necessary</em> — reordering <code>put_image</code>
-      without it introduces a stale-read window that the old delete-first ordering
-      did not have — but it is a semantic change to a function this issue never
-      mentioned. The alternative (reorder only, accept the window) was offered and
-      declined deliberately. Reasonable people could prefer the narrower fix.
-    </p>
-    <p>
-      <strong>2. <code>sheets.seed</code> now reads whole files into memory.</strong>
-      <code>backend/src/grimoire/store/sheets.py:536</code> replaced
-      <code>shutil.copy2</code> with <code>atomic.write_bytes(dst, p.read_bytes())</code>.
-      Correct, and sheet JSON is small — but it is a read-all-then-write where a
-      streaming copy used to be, and it drops <code>copy2</code>'s metadata
-      preservation. Fine for these files; would not be fine for large binaries.
-    </p>
-  </div>
-
-  <h3>Asymmetry checklist</h3>
-  <table>
-    <thead><tr><th>Check</th><th>Result</th></tr></thead>
-    <tbody>
-      <tr><td>Every <code>write_text</code> site converted?</td>
-          <td><span class="tag ok">yes</span> — enforced by the guard, verified by planting a raw write and watching it fail</td></tr>
-      <tr><td>Writers outside <code>store/</code>?</td>
-          <td><span class="tag ok">found and fixed</span> — <code>routes.py:2020</code>, <code>backend/scripts/ingest_scene.py:41</code>. Guard widened to the whole package.</td></tr>
-      <tr><td>Non-<code>write_text</code> writers (copy2, PIL, zip)?</td>
-          <td><span class="tag ok">enumerated</span> — <code>sheets.seed</code> and <code>thumbs</code> converted; <code>module_edit</code> zip exempted with a reason</td></tr>
-      <tr><td>Callers relying on <code>write_text</code>'s return value or <code>errors=</code>/<code>newline=</code>?</td>
-          <td><span class="tag ok">none</span> — checked before changing the signature shape</td></tr>
-      <tr><td>Output bytes unchanged (CRLF on Windows)?</td>
-          <td><span class="tag ok">asserted</span> — <code>backend/tests/test_atomic.py:39</code> compares against the old <code>write_text</code> output byte-for-byte</td></tr>
-      <tr><td>Missing-parent behavior preserved?</td>
-          <td><span class="tag ok">asserted</span> — still <code>FileNotFoundError</code></td></tr>
-      <tr><td>Tests that patched the old seam updated?</td>
-          <td><span class="tag ok">6 updated</span> — including one that still passed while no longer testing anything</td></tr>
-      <tr><td>Concurrent <code>put_image</code> calls?</td>
-          <td><span class="tag ok">fixed after review</span> — write-before-cleanup let two writers delete each other's new file. Cleanup now snapshots siblings before writing (<code>backend/src/grimoire/store/assets.py:141</code>).</td></tr>
-      <tr><td>Process-global state mutated per write?</td>
-          <td><span class="tag ok">fixed after review</span> — the umask is sampled once at import, not set-and-restored inside a request thread.</td></tr>
-      <tr><td>Symlinked / hard-linked records?</td>
-          <td><span class="tag warn">declared unsupported</span> — <code>os.replace</code> replaces the directory entry where <code>write_text</code> wrote through the link (and updated every hard link's shared inode). Nothing in grimoire creates linked records; documented at <code>backend/src/grimoire/store/atomic.py:24</code> and pinned by a POSIX-only test per link kind rather than prevented.</td></tr>
-      <tr><td>Guard detects the awkward write forms?</td>
-          <td><span class="tag ok">yes, with self-tests</span> — <code>Path.open("w")</code>, <code>open(p,"x")</code>, <code>"w+b"</code>, <code>"a+"</code>, keyword modes, <code>os.fdopen</code>, and mode-in-second-slot (<code>archive.open("item","w")</code>), plus negative cases so read modes don't trip it.</td></tr>
-      <tr><td>Do the mode tests actually constrain the implementation?</td>
-          <td><span class="tag ok">fixed after review</span> — they derived the expected value from the implementation's own <code>_UMASK</code>, so a wrong sample would have agreed with itself. They sample the umask independently now.</td></tr>
-      <tr><td>Windows DACL / alternate data streams?</td>
-          <td><span class="tag warn">not preserved</span> — the surviving file is the temp. <code>ReplaceFileW</code> exists for this but Python does not expose it without <code>ctypes</code>. Accepted: these are plain files inheriting their directory's DACL.</td></tr>
-    </tbody>
-  </table>
-
-  <h3>Invariant impact</h3>
-  <ul>
-    <li>
-      <strong>Strengthened:</strong> "a store record on disk is always a complete
-      record." Previously untrue for ~100 write sites; now enforced everywhere and
-      guarded against regression.
-    </li>
-    <li>
-      <strong>Unchanged:</strong> "concurrent writers to one record serialize."
-      Still only true where a lock exists (<code>rolls</code>, <code>proposals</code>,
-      <code>audit</code>, <code>sheets</code>). <code>rolls.py</code>'s docstring
-      previously credited the temp-file pattern for this; corrected at
-      <code>backend/src/grimoire/store/rolls.py:11</code> to credit the lock.
-    </li>
-    <li>
-      <strong>Newly possible failure:</strong> <code>os.replace</code> can raise
-      <code>PermissionError</code> where an in-place rewrite would have succeeded —
-      a concurrent reader on Windows, or a directory ACL permitting file-write but
-      not child-create. Deliberate trade: a rare surfaced error instead of a silent
-      truncation.
-    </li>
-    <li>
-      <strong>New litter:</strong> a hard power loss can orphan a
-      <code>.tmp</code>. Invisible to the <code>glob("*.md")</code> listers, but
-      <code>store/assets.py:76</code>, <code>store/overlay.py:332</code> and
-      <code>store/campaigns.py:222</code> use bare <code>iterdir()</code>/<code>rglob("*")</code>
-      and would see one — <code>overlay</code>'s emptiness check would read a stray
-      temp as non-empty. Documented, not fixed.
-    </li>
-  </ul>
-
-  <h3>Coverage note</h3>
+<div class="card hero">
+  <h2>Verdict: mergeable</h2>
   <p>
-    16 changed source files have no corresponding test change
-    (<code>pcs.py</code>, <code>greetings.py</code>, <code>styles.py</code>,
-    <code>tags.py</code>, …). That is expected and not a gap: those files received
-    only the mechanical substitution, their existing tests exercise the writers
-    already, and the guard test covers the property the change is about. No coverage
-    artifact is present in the repo, so no measured percentages are claimed here.
+    The mechanism is sound and its guarantee is stated precisely rather than
+    optimistically. ~95% of the diff is one mechanical substitution repeated
+    across 35 modules, verified line-by-line by an independent review; the risk
+    is concentrated in <code>backend/src/grimoire/store/atomic.py</code> itself
+    and in <code>backend/src/grimoire/store/assets.py</code>, the only file
+    where runtime behavior genuinely changed.
   </p>
+  <p>
+    Nothing blocks merge. Two items below deserve a second opinion before you
+    approve, and two follow-ups should be filed rather than forgotten.
+  </p>
+</div>
 
-  <h3>Must-fix before merge</h3>
-  <p><strong>Nothing.</strong> Open items, none blocking:</p>
+<h3>Where to actually look</h3>
+<div class="tbl-wrap">
+<table>
+  <thead><tr><th>File</th><th>Risk</th><th>Verdict</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><code>backend/src/grimoire/store/atomic.py</code></td>
+      <td><span class="badge bad">10 — highest</span></td>
+      <td>
+        New, and everything depends on it. ~130 lines. The three parts that can
+        be wrong: the mode carry (<code>:74</code>), the retry predicate
+        (<code>:68</code>), and the temp handle lifecycle (<code>:93</code>).
+        Read these; skim the rest.
+      </td>
+    </tr>
+    <tr>
+      <td><code>backend/src/grimoire/store/assets.py</code></td>
+      <td><span class="badge warn">5 — behavior</span></td>
+      <td>
+        The only <em>runtime</em> behavior change in the diff: a read path
+        (<code>:66</code>) and a write ordering (<code>:141</code>). Worth full
+        attention despite the low score — the score is a keyword heuristic and
+        does not know this file changed semantics.
+      </td>
+    </tr>
+    <tr>
+      <td><code>backend/src/grimoire/routes.py</code></td>
+      <td><span class="badge warn">late find</span></td>
+      <td>
+        Wrote a campaign's climate record directly (<code>:2020</code>), outside
+        the store package where the original guard never looked. Confirm it is
+        the only such site — the guard now scans the whole package, which is the
+        real assurance.
+      </td>
+    </tr>
+    <tr>
+      <td><code>backend/src/grimoire/store/scenes.py</code> (15 sites)</td>
+      <td><span class="badge good">mechanical</span></td>
+      <td>Highest site count, identical substitution each time. Heavily covered by existing tests.</td>
+    </tr>
+    <tr>
+      <td><code>backend/src/grimoire/store/module_edit.py</code> (14 sites)</td>
+      <td><span class="badge good">mechanical + 1 exemption</span></td>
+      <td>
+        Check the one <code>atomic-ok</code> marker at
+        <code>backend/src/grimoire/store/module_edit.py:211</code> is justified.
+        It is: an unpublished staging tree published by a single rename.
+      </td>
+    </tr>
+    <tr>
+      <td>The other ~30 store modules</td>
+      <td><span class="badge good">mechanical</span></td>
+      <td>Substitution plus an import line. The guard proves none were missed.</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<h3>Two things worth a second opinion</h3>
+<div class="callout warn">
+  <p>
+    <strong>1. The <code>image_path</code> mtime tie-break is scope
+    expansion.</strong> <code>backend/src/grimoire/store/assets.py:66</code>
+    changes what an existing read returns for every caller. It is
+    <em>necessary</em> — reordering <code>put_image</code> without it introduces
+    a stale-read window the old delete-first ordering did not have — but it is a
+    semantic change to a function this issue never mentioned. The narrower
+    alternative (reorder only, accept the window) was offered and deliberately
+    declined. Reasonable people could prefer it.
+  </p>
+</div>
+<div class="callout warn">
+  <p>
+    <strong>2. <code>sheets.seed</code> now buffers whole files in
+    memory.</strong> <code>backend/src/grimoire/store/sheets.py:536</code>
+    replaced <code>shutil.copy2</code> with
+    <code>atomic.write_bytes(dst, p.read_bytes())</code>. Correct, and sheet
+    JSON is small — but it is a read-all-then-write where a streaming copy used
+    to be, and it drops <code>copy2</code>'s metadata preservation. Fine for
+    these files; the wrong shape if this helper is ever reused for large
+    binaries.
+  </p>
+</div>
+
+<h3>Asymmetry checklist</h3>
+<div class="tbl-wrap">
+<table>
+  <thead><tr><th>Opened…</th><th>…closed?</th><th>Evidence</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>Temp file created</td>
+      <td><span class="badge good">yes, all paths</span></td>
+      <td>Best-effort unlink on any exception, inside the same <code>try</code> as the initial close — <code>backend/src/grimoire/store/atomic.py:93</code></td>
+    </tr>
+    <tr>
+      <td>File descriptors opened (mkstemp, fsync reopen)</td>
+      <td><span class="badge good">yes</span></td>
+      <td>mkstemp fd closed immediately; the reopened fd closed in a <code>finally</code></td>
+    </tr>
+    <tr>
+      <td>Retry added</td>
+      <td><span class="badge good">bounded + narrowed</span></td>
+      <td>4 retries, ~50 ms total, only <code>winerror</code> 32/33 — <code>backend/src/grimoire/store/atomic.py:68</code></td>
+    </tr>
+    <tr>
+      <td>New errors caught</td>
+      <td><span class="badge warn">deliberately swallowed</span></td>
+      <td>Temp-unlink and <code>chmod</code> failures are suppressed by design; the spec now says mode preservation is best-effort rather than guaranteed</td>
+    </tr>
+    <tr>
+      <td>Symbols moved (six hand-rolled writers deleted)</td>
+      <td><span class="badge good">all callers updated</span></td>
+      <td>Blast Radius traces 6 changed symbols; the only untouched-caller hits are the three files that legitimately call the new helper</td>
+    </tr>
+    <tr>
+      <td>Serialization format touched</td>
+      <td><span class="badge good">byte-identical</span></td>
+      <td>Asserted against the old <code>write_text</code> output, CRLF included — <code>backend/tests/test_atomic.py:39</code>. Forcing <code>newline=""</code> would have rewritten every file in the user's store.</td>
+    </tr>
+    <tr>
+      <td>Process-global state read (umask)</td>
+      <td><span class="badge good">fixed after review</span></td>
+      <td>Was set-and-restored per write, exposing a <code>0</code> umask to other threads; now sampled once at import — <code>backend/src/grimoire/store/atomic.py:58</code></td>
+    </tr>
+    <tr>
+      <td>Concurrent <code>put_image</code> calls</td>
+      <td><span class="badge good">fixed after review</span></td>
+      <td>Write-before-cleanup let two writers delete each other's file; siblings are now snapshotted first — <code>backend/src/grimoire/store/assets.py:141</code></td>
+    </tr>
+    <tr>
+      <td>Linked records (symlink / hard link)</td>
+      <td><span class="badge warn">unsupported by design</span></td>
+      <td><code>os.replace</code> swaps the directory entry where <code>write_text</code> wrote through the link. Documented at <code>backend/src/grimoire/store/atomic.py:24</code>, pinned by a POSIX test per link kind rather than prevented.</td>
+    </tr>
+    <tr>
+      <td>Windows DACL / alternate data streams</td>
+      <td><span class="badge warn">not preserved</span></td>
+      <td>The surviving file is the temp. <code>ReplaceFileW</code> exists for this but Python does not expose it without <code>ctypes</code>. Accepted: these are plain files inheriting their directory's DACL.</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<h3>Invariant impact</h3>
+<ul>
+  <li>
+    <strong>Strengthened —</strong> "a store record on disk is always a complete
+    record." Previously untrue at ~100 sites; now enforced package-wide and
+    guarded against regression. The atlas ranked the violation of this invariant
+    as its <em>#1 risk</em>; this PR closes it.
+  </li>
+  <li>
+    <strong>Unchanged —</strong> "concurrent writers to one record serialize."
+    Still true only where a lock exists. <code>rolls.py</code>'s docstring
+    previously credited the temp-file pattern for this; corrected at
+    <code>backend/src/grimoire/store/rolls.py:11</code> to credit the lock, and
+    to note that <code>rolls</code> is now the only module still keeping a
+    private registry rather than joining #245's shared
+    <code>locks.campaign_lock</code> domain.
+  </li>
+  <li>
+    <strong>New failure mode —</strong> <code>os.replace</code> can raise
+    <code>PermissionError</code> where an in-place rewrite succeeded. A
+    deliberate trade: a rare surfaced error instead of a silent truncation.
+  </li>
+  <li>
+    <strong>New litter —</strong> a hard power loss can orphan a
+    <code>.tmp</code>. Invisible to the <code>glob</code>-based listers, but
+    <code>backend/src/grimoire/store/assets.py:76</code>,
+    <code>backend/src/grimoire/store/overlay.py:332</code> and
+    <code>backend/src/grimoire/store/campaigns.py:222</code> use bare
+    <code>iterdir()</code>/<code>rglob("*")</code> and would see one —
+    <code>overlay</code>'s emptiness check would read a stray temp as non-empty.
+  </li>
+</ul>
+
+<h3>Test posture</h3>
+<p>
+  2072 passing. <code>backend/tests/test_weather_draw.py</code>'s pinned float
+  fixture fails identically on <code>main</code> — unrelated. 16 changed source
+  files have no test change; that is expected, since they received only the
+  mechanical substitution and the guard covers the property that changed. No
+  coverage artifact exists in the repo, so no measured percentages are claimed.
+</p>
+<div class="callout good">
+  <p>
+    <strong>The guard was verified by planting a regression</strong> — a raw
+    <code>write_text</code> added to a store module, confirmed to fail the
+    build, then reverted. A guard that cannot fail reads as coverage while
+    providing none. It also carries self-tests for the awkward forms
+    (<code>Path.open("w")</code>, <code>open(p,"x")</code>, <code>"w+b"</code>,
+    <code>os.fdopen</code>, mode-in-second-slot) plus negative cases.
+  </p>
+</div>
+
+<h3>Merge readiness</h3>
+<div class="card hero">
+  <h4>Must fix — none</h4>
+  <h4>Should fix (post-merge is fine)</h4>
   <ol>
     <li>
-      <strong>Gate status — all three ran.</strong> Spec-stage returned "needs
-      rework" (all findings addressed). Implementation-stage returned no
-      blockers, 2 Major + 7 Minor (fixed in 4634129b). The final spec-vs-diff
-      gate confirmed both Majors fixed, found no new Majors, and surfaced
-      mostly spec-drift plus two real code issues (fixed in d13e47dc).
-      <br><br>
-      All three had to read from GitHub rather than locally: the sandbox helper
-      <code>codex-windows-sandbox-setup.exe</code> is missing, so Codex's local
-      <code>git diff</code> fails and it falls back to the remote <em>silently</em>
-      — the first run reviewed <code>main</code> while appearing to succeed.
-      Worth repairing before the next change: an unpushed branch cannot be gated
-      at all, and a gate can look clean while reading the wrong code.
+      <strong>File the two deferred follow-ups.</strong> The spec commits to
+      them and neither exists yet:
+      <code>backend/src/grimoire/store/assets.py:164</code>
+      (<code>promote_image</code>'s three-rename swap can strand a temp and lose
+      the avatar) and <code>scenes.append_message</code>'s missing per-scene
+      lock. A spec that promises filed issues and doesn't file them is how the
+      original #233 drift started.
     </li>
     <li>
-      Two follow-ups the spec commits to filing:
-      <code>assets.promote_image</code>'s three-rename swap, and
-      <code>scenes.append_message</code>'s missing per-scene lock.
+      <strong>Repair the Codex sandbox.</strong>
+      <code>codex-windows-sandbox-setup.exe</code> is missing, so review gates
+      fail locally and fall back to reading GitHub <em>silently</em> — the first
+      run reviewed <code>main</code> while appearing to succeed. A gate that can
+      look clean while reading the wrong code is worse than no gate.
+    </li>
+  </ol>
+  <h4>Nits</h4>
+  <ol>
+    <li>
+      <code>rolls.py</code> keeping a private lock registry while sheets/audit/
+      proposals share <code>locks.campaign_lock</code> is an inconsistency #245
+      left behind — noted here, not fixed.
     </li>
     <li>
-      <code>test_weather_draw.py::test_end_to_end_regression_fixture</code> fails on
-      <code>main</code> too. Unrelated, but someone should own it.
+      <code>backend/tests/test_weather_draw.py</code>'s float fixture fails on
+      <code>main</code> and should be owned by someone.
     </li>
   </ol>
 </div>
