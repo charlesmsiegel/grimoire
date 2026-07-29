@@ -224,9 +224,15 @@ def test_repeated_timeouts_leak_no_descriptors(tmp_path):
 
 
 def _open_fds() -> int:
+    """Live handle/descriptor count for this process."""
     if sys.platform == "win32":
         import ctypes
-        return ctypes.cdll.msvcrt._getmaxstdio()  # stable; the real check is below
+        from ctypes import wintypes
+        count = wintypes.DWORD()
+        ok = ctypes.windll.kernel32.GetProcessHandleCount(
+            ctypes.windll.kernel32.GetCurrentProcess(), ctypes.byref(count))
+        assert ok, "GetProcessHandleCount failed"
+        return count.value
     return len(os.listdir("/proc/self/fd"))
 ```
 
@@ -435,7 +441,7 @@ def release(fd: int) -> None:
 Run: `PYTHONPATH="$PWD/backend/src" ../../backend/.venv/Scripts/python.exe -m pytest backend/tests/test_proclock.py -q`
 Expected: PASS
 
-If `test_repeated_timeouts_leak_no_descriptors` cannot count fds on Windows, replace `_open_fds` with a `psutil`-free approximation: open 200 sentinel files after the loop and assert they all succeed. Do **not** delete the test.
+`_open_fds()` must return a value that actually moves when a descriptor leaks — a constant such as `_getmaxstdio()` would make the test pass unconditionally. Verify by temporarily removing the `os.close(fd)` from `proclock.acquire`'s contention path and confirming the test then FAILS.
 
 - [ ] **Step 5: Commit**
 
@@ -532,21 +538,36 @@ def test_different_campaigns_do_not_block_across_processes(monkeypatch, tmp_path
         p.wait(timeout=10)
 
 
+_PROBE = """
+import sys
+sys.path[:0] = {path!r}
+from grimoire.store import locks
+lock = locks.{factory}
+print("GOT" if lock.acquire(timeout={wait}) else "BUSY", flush=True)
+"""
+
+
+def _probe(tmp_path, factory, wait=0.5) -> str:
+    """Ask another process whether it can take the lock right now."""
+    src = _PROBE.format(path=sys.path, factory=factory, wait=wait)
+    r = subprocess.run([sys.executable, "-c", src], capture_output=True,
+                       text=True, timeout=60,
+                       env={**os.environ, "GRIMOIRE_HOME": str(tmp_path)})
+    assert r.returncode == 0, r.stderr
+    return r.stdout.strip()
+
+
 def test_reentrancy_takes_the_file_lock_exactly_once(monkeypatch, tmp_path):
     """A child must stay blocked at depth 2 and be freed only by the OUTERMOST
     release -- otherwise the inner exit drops cross-process exclusion."""
     _wid, cid = _campaign(monkeypatch, tmp_path)
     lock = locks.campaign_lock(cid)
+    factory = f"campaign_lock({cid!r})"
     with lock:
         with lock:
             pass                                   # inner exit must NOT unlock
-        probe = subprocess.run(
-            [sys.executable, "-c", _HOLDER.format(
-                path=sys.path, factory=f"campaign_lock({cid!r})", hold=0)],
-            capture_output=True, text=True, timeout=30,
-            env={**os.environ, "GRIMOIRE_HOME": str(tmp_path),
-                 "GRIMOIRE_LOCK_TIMEOUT": "0.5"})
-        assert "HELD" not in probe.stdout, "child acquired while we held it"
+        assert _probe(tmp_path, factory) == "BUSY", "inner exit dropped the file lock"
+    assert _probe(tmp_path, factory) == "GOT", "outer exit failed to release"
 
 
 def test_a_second_process_cannot_hold_the_module_edit_lock(monkeypatch, tmp_path):
@@ -1088,10 +1109,12 @@ Create `backend/tests/test_locks_http.py`:
 """Contention reaches the user as a 409, and never as a hang, a silent skip,
 or a mislabelled error (#234)."""
 
+import inspect
+
 import pytest
 from fastapi.testclient import TestClient
 
-from grimoire import main
+from grimoire import main, store
 from grimoire.store import campaigns, locks, worlds
 
 
@@ -1113,7 +1136,7 @@ def test_store_busy_becomes_a_409(client, monkeypatch, tmp_path):
     def busy(*a, **k):
         raise locks.CampaignBusy(cid)
 
-    monkeypatch.setattr(main.store.scenes, "create_scene", busy, raising=False)
+    monkeypatch.setattr(store.scenes, "create_scene", busy)
     r = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S1"})
     assert r.status_code == 409
     assert "another grimoire process" in r.json()["detail"]
@@ -1250,6 +1273,10 @@ def test_concurrent_scene_creation_yields_distinct_ids(monkeypatch, tmp_path):
         t.join(timeout=30)
     assert len(got) == 8
     assert len(set(got)) == 8, f"duplicate scene ids: {got}"
+    # This is a stress test, so confirm it can actually fail: temporarily
+    # remove the `with locks.campaign_lock(cid):` from create_scene and check
+    # it goes red (it should, reliably, at 8 threads). If it stays green
+    # without the lock, raise the thread count until it does.
 
 
 def test_capture_baseline_propagates_contention(monkeypatch, tmp_path):
@@ -1374,7 +1401,7 @@ def test_adjudication_contention_is_not_reported_as_a_check_error(monkeypatch):
     assert marker in src, "contention must be caught ahead of the broad handler"
 ```
 
-Add `import inspect` at the top of the test file. Replace this source assertion with a behavioural test if the adjudication route can be driven end-to-end from an existing fixture in `backend/tests/test_proposals*.py` — prefer that if one exists.
+This is a source assertion, which is weaker than a behavioural test: it proves the handler exists, not that it works. **Prefer a behavioural test** — check `backend/tests/` for an existing fixture that drives `POST /campaigns/{cid}/scenes/{sid}/roll-proposal` to the `accept` branch (grep for `roll-proposal`), and if one exists, monkeypatch `store.checks.resolve_check` to raise `locks.CampaignBusy` and assert the response is 409 rather than a `check_error` frame. Keep the source assertion only if no such fixture exists.
 
 - [ ] **Step 2: Run to verify failure**
 
