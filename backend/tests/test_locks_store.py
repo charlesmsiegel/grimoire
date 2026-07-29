@@ -145,7 +145,8 @@ def _lock_is_free(cid) -> bool:
     t = threading.Thread(target=probe)
     t.start()
     t.join(timeout=5)
-    return bool(seen) and seen[0]
+    assert not t.is_alive(), "the probe never finished"  # its acquire caps at 0.3s
+    return seen[0]
 
 
 @pytest.mark.parametrize("dated", [
@@ -160,13 +161,18 @@ def test_calendar_plugin_code_never_runs_under_the_campaign_lock(monkeypatch, tm
     otherwise one bad calendar stalls every writer in the campaign."""
     _wid, cid = _campaign(monkeypatch, tmp_path)
     free = []
-    real = scenes.calendars.get_provider
 
-    def watched(config):
-        free.append(_lock_is_free(cid))
-        return real(config)
+    # Every entry point into provider code, not just the import: `normalize`
+    # and `friendly` both call methods the plugin author wrote.
+    for name in ("get_provider", "normalize", "friendly"):
+        real = getattr(scenes.calendars, name)
 
-    monkeypatch.setattr(scenes.calendars, "get_provider", watched)
+        def watched(*args, _real=real):
+            free.append(_lock_is_free(cid))
+            return _real(*args)
+
+        monkeypatch.setattr(scenes.calendars, name, watched)
+
     dated(cid)
     assert free, "the calendar was never resolved -- the test proves nothing"
     assert all(free), "the campaign lock was held across user calendar code"
