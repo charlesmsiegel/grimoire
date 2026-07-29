@@ -1,0 +1,218 @@
+"""store/proclock.py -- the OS advisory file lock behind store/locks.py (#234).
+
+Cross-process behaviour needs real processes: an in-process test cannot
+demonstrate that a second *process* is excluded. The child prints HELD only
+after it owns the lock, so the parent never races the handshake.
+"""
+
+import os
+import subprocess
+import sys
+import time
+
+import pytest
+
+from grimoire.store import proclock
+
+_CHILD = """
+import sys, time
+sys.path[:0] = {path!r}
+from grimoire.store import proclock
+fd = proclock.acquire({lock!r}, None)
+print("HELD", flush=True)
+time.sleep({hold})
+proclock.release(fd)
+"""
+
+
+def _holder(lock_file, hold=10.0):
+    """Spawn a process holding `lock_file`; return once it actually holds it."""
+    src = _CHILD.format(path=sys.path, lock=str(lock_file), hold=hold)
+    p = subprocess.Popen([sys.executable, "-c", src],
+                         stdout=subprocess.PIPE, text=True)
+    assert p.stdout.readline().strip() == "HELD", "child never acquired"
+    return p
+
+
+def _open_fds() -> int:
+    """Live handle/descriptor count for this process.
+
+    Must be a value that actually MOVES when a descriptor leaks -- a constant
+    such as msvcrt's _getmaxstdio() would make the leak tests below pass
+    unconditionally.
+    """
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
+        # Explicit signatures: GetCurrentProcess returns a pseudo-handle
+        # (-1), which ctypes truncates without a declared HANDLE restype.
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.GetCurrentProcess.restype = wintypes.HANDLE
+        k32.GetProcessHandleCount.argtypes = [wintypes.HANDLE,
+                                              ctypes.POINTER(wintypes.DWORD)]
+        k32.GetProcessHandleCount.restype = wintypes.BOOL
+        count = wintypes.DWORD()
+        ok = k32.GetProcessHandleCount(k32.GetCurrentProcess(), ctypes.byref(count))
+        assert ok, f"GetProcessHandleCount failed: {ctypes.get_last_error()}"
+        return count.value
+    # /dev/fd works on macOS and the BSDs as well as Linux; /proc/self/fd is
+    # Linux-only.
+    return len(os.listdir("/dev/fd"))
+
+
+# ---- paths ----
+
+
+def test_lock_dir_is_outside_the_store_and_per_user(tmp_path):
+    d = proclock.lock_dir()
+    assert "grimoire" in d.parts and d.name == "locks"
+    assert tmp_path not in d.parents and d != tmp_path
+
+
+def test_locking_writes_nothing_into_the_store(tmp_path):
+    """The guard that lock files stay out of the user's (possibly synced)
+    library -- the whole reason the lock dir is machine-local."""
+    store = tmp_path / "store"
+    store.mkdir()
+    before = set(store.rglob("*"))
+    fd = proclock.acquire(proclock.lock_path(store, "campaign-a"), None)
+    try:
+        assert set(store.rglob("*")) == before
+    finally:
+        proclock.release(fd)
+
+
+def test_lock_dir_ignores_environment_overrides(monkeypatch):
+    """The round-2 finding: an environment-conditional path means two
+    processes of one user pick different lock files and exclude nothing."""
+    before = proclock.lock_dir()
+    for var in ("XDG_RUNTIME_DIR", "XDG_STATE_HOME", "LOCALAPPDATA", "TMPDIR"):
+        monkeypatch.delenv(var, raising=False)
+    if sys.platform != "win32":
+        monkeypatch.setenv("HOME", "/nonexistent-home")
+    assert proclock.lock_dir() == before
+
+
+def test_lock_path_separates_stores_and_names(tmp_path):
+    a, b = tmp_path / "store-a", tmp_path / "store-b"
+    a.mkdir()
+    b.mkdir()
+    assert proclock.lock_path(a, "run") != proclock.lock_path(b, "run")
+    assert proclock.lock_path(a, "run") != proclock.lock_path(a, "other")
+    assert proclock.lock_path(a, "run") == proclock.lock_path(a, "run")
+
+
+@pytest.mark.parametrize("hostile", [
+    "../../escape/../../etc/passwd",
+    "..",
+    "/absolute/path",
+    "C:\\Windows\\System32",
+    "with spaces and\ttabs",
+    "\u0000truncation",
+])
+def test_lock_path_cannot_escape_the_lock_directory(tmp_path, hostile):
+    """The cid reaches us from a route parameter. What matters is not that
+    the name looks tidy but that the resolved path stays inside the lock
+    directory -- a literal '..' *within* a filename traverses nothing."""
+    d = proclock.lock_path(tmp_path, "x").parent
+    p = proclock.lock_path(tmp_path, hostile)
+    assert p.parent == d
+    assert d.resolve() in p.resolve().parents
+    assert p.name.endswith(".lock")
+
+
+def test_lock_path_bounds_the_component_length(tmp_path):
+    p = proclock.lock_path(tmp_path, "x" * 500)
+    assert len(p.name) < 100
+
+
+# ---- locking ----
+
+
+def test_acquire_and_release_roundtrip(tmp_path):
+    lock = proclock.lock_path(tmp_path, "roundtrip")
+    fd = proclock.acquire(lock, None)
+    assert isinstance(fd, int)
+    proclock.release(fd)
+    fd2 = proclock.acquire(lock, None)          # re-acquirable after release
+    proclock.release(fd2)
+
+
+def test_a_second_process_is_excluded(tmp_path):
+    lock = proclock.lock_path(tmp_path, "excluded")
+    p = _holder(lock)
+    try:
+        assert proclock.acquire(lock, time.monotonic() + 0.5) is None
+    finally:
+        p.kill()
+        p.wait(timeout=10)
+
+
+def test_the_lock_is_released_when_the_holder_dies(tmp_path):
+    """No stale-lock reaping: the kernel releases on process death."""
+    lock = proclock.lock_path(tmp_path, "died")
+    p = _holder(lock)
+    p.kill()
+    p.wait(timeout=10)
+    deadline = time.monotonic() + 10
+    while (fd := proclock.acquire(lock, time.monotonic() + 0.2)) is None:
+        assert time.monotonic() < deadline, "lock never released"
+    proclock.release(fd)
+
+
+def test_no_wait_returns_immediately(tmp_path):
+    """NO_WAIT must make ONE attempt. Passing None here would retry forever."""
+    lock = proclock.lock_path(tmp_path, "nowait")
+    p = _holder(lock)
+    try:
+        started = time.monotonic()
+        assert proclock.acquire(lock, proclock.NO_WAIT) is None
+        assert time.monotonic() - started < 1.0
+    finally:
+        p.kill()
+        p.wait(timeout=10)
+
+
+def test_a_permanent_error_propagates_rather_than_timing_out(tmp_path, monkeypatch):
+    """A filesystem that cannot lock, or a directory we may not write, must not
+    be reported as contention."""
+    lock = proclock.lock_path(tmp_path, "permanent")
+
+    def boom(fd):
+        raise OSError(38, "Function not implemented")  # ENOSYS
+
+    monkeypatch.setattr(proclock, "_try_lock", boom)
+    with pytest.raises(OSError):
+        proclock.acquire(lock, time.monotonic() + 0.2)
+
+
+def test_repeated_timeouts_leak_no_descriptors(tmp_path):
+    lock = proclock.lock_path(tmp_path, "fdleak")
+    p = _holder(lock)
+    try:
+        proclock.acquire(lock, proclock.NO_WAIT)          # warm any lazy state
+        before = _open_fds()
+        for _ in range(25):
+            assert proclock.acquire(lock, proclock.NO_WAIT) is None
+        assert _open_fds() - before < 5
+    finally:
+        p.kill()
+        p.wait(timeout=10)
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="the inode-mismatch branch is POSIX-only: a locked+open file cannot "
+           "be unlinked on Windows, so acquire() short-circuits past _same_file")
+def test_inode_mismatch_retries_respect_the_deadline_and_leak_nothing(
+        tmp_path, monkeypatch):
+    """A file replaced under us must not make a NO_WAIT acquire spin forever,
+    and each discarded attempt must close its descriptor."""
+    lock = proclock.lock_path(tmp_path, "mismatch")
+    monkeypatch.setattr(proclock, "_same_file", lambda fd, path: False)
+    before = _open_fds()
+    started = time.monotonic()
+    assert proclock.acquire(lock, proclock.NO_WAIT) is None
+    assert time.monotonic() - started < 1.0, "NO_WAIT spun on the mismatch path"
+    assert proclock.acquire(lock, time.monotonic() + 0.3) is None
+    assert _open_fds() - before < 5, "mismatch retries leaked descriptors"
