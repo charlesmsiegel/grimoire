@@ -78,3 +78,55 @@ def test_capture_baseline_propagates_contention(monkeypatch, tmp_path):
     monkeypatch.setattr(audit.locks, "campaign_lock", busy)
     with pytest.raises(locks.CampaignBusy):
         audit.capture_baseline(cid, "0001-x")
+
+
+# ---- contention in an SSE finalizer (#234) ----
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_a_busy_finalize_emits_an_error_frame_and_persists_nothing(
+        monkeypatch, tmp_path, lazy):
+    """finalize() runs OUTSIDE _fence_stream's try, so contention there would
+    abort the stream with no frame at all.
+
+    It must NOT route through on_error: that persists watcher.narration, and
+    narration whose roll fence has no proposal record destroys the
+    proposal-before-narration guarantee.
+
+    Parameterized over a list-returning and a GENERATOR finalize, because
+    guarding only the call leaves a generator's StoreBusy escaping the `for`.
+    """
+    import anyio
+
+    from grimoire.routes import streaming
+
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    persisted = []
+    monkeypatch.setattr(streaming, "_persist_reply",
+                        lambda *a, **k: persisted.append(("persist",) + a))
+
+    class _Client:
+        async def stream(self, messages, conn):
+            yield "narrated text"
+
+    def finalize(watcher):
+        raise store.locks.CampaignBusy("run")
+
+    def lazy_finalize(watcher):
+        def gen():
+            raise store.locks.CampaignBusy("run")
+            yield  # pragma: no cover
+        return gen()
+
+    def on_error(watcher):
+        persisted.append(("on_error",))
+
+    resp = streaming._fence_stream("run", "0001-x", [], {}, _Client(),
+                                   lazy_finalize if lazy else finalize, on_error)
+
+    async def drain():
+        return [chunk async for chunk in resp.body_iterator]
+
+    frames = "".join(anyio.run(drain))
+    assert '"busy"' in frames, frames
+    assert not persisted, f"a busy finalize persisted something: {persisted}"
