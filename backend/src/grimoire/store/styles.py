@@ -15,7 +15,7 @@ from pathlib import Path
 
 from .. import prompts
 from .frontmatter import dump_frontmatter, parse_frontmatter
-from .paths import home, natural_key, slugify, uniquify
+from .paths import home, natural_key, safe_id, slugify, uniquify
 from . import atomic
 
 
@@ -25,10 +25,6 @@ class StyleNotFound(Exception):
 
 class BuiltInStyleImmutable(Exception):
     pass
-
-
-def _safe(sid: str) -> bool:
-    return sid not in ("", ".", "..") and "/" not in sid and "\\" not in sid
 
 
 def _builtin_dir() -> Path:
@@ -57,7 +53,7 @@ def _meta_dict(sid: str, meta: dict, built_in: bool) -> dict:
 
 
 def _find_path(sid: str) -> tuple[Path, bool] | None:
-    if not _safe(sid):
+    if not safe_id(sid):
         return None
     p = _custom_path(sid)
     if p.exists():
@@ -151,7 +147,7 @@ def update_style(sid: str, *, name: str | None = None, description: str | None =
     if is_built_in(sid):
         raise BuiltInStyleImmutable(sid)
     p = _custom_path(sid)
-    if not _safe(sid) or not p.exists():
+    if not safe_id(sid) or not p.exists():
         raise StyleNotFound(sid)
     meta, cur_body = parse_frontmatter(p.read_text(encoding="utf-8"))
     if name is not None:
@@ -168,7 +164,7 @@ def delete_style(sid: str) -> None:
     if is_built_in(sid):
         raise BuiltInStyleImmutable(sid)
     p = _custom_path(sid)
-    if not _safe(sid) or not p.exists():
+    if not safe_id(sid) or not p.exists():
         raise StyleNotFound(sid)
     p.unlink()
 

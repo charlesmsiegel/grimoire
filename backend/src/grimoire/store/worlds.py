@@ -7,7 +7,7 @@ from pathlib import Path
 
 from . import atomic, characters, entities, greetings, pcs
 from .frontmatter import dump_frontmatter, parse_frontmatter
-from .paths import ensure_home, home, now_iso, slugify, uniquify
+from .paths import ensure_home, home, now_iso, safe_id, slugify, uniquify
 
 
 class WorldNotFound(Exception):
@@ -24,8 +24,33 @@ def _worlds_dir() -> Path:
     return home() / "worlds"
 
 
+# An id `slugify` can never emit (it produces only [a-z0-9-]), so this names a
+# directory the store never creates -- see world_root_or_missing.
+_NO_WORLD = ".none"
+
+
 def world_root(wid: str) -> Path:
+    """The world's directory.
+
+    Raises WorldNotFound for an id that doesn't name a child of the worlds dir
+    -- including "", which would otherwise resolve to the worlds dir itself.
+    The guard lives here rather than in the router so a caller that isn't an
+    HTTP path parameter (a body field, a CLI script, an importer) gets it too.
+    """
+    if not safe_id(wid):
+        raise WorldNotFound(wid)
     return _worlds_dir() / wid
+
+
+def world_root_or_missing(wid: str) -> Path:
+    """The world root for a campaign's recorded world, which may be unset.
+
+    An empty id means the campaign has no world at all, so this hands back a
+    path that cannot exist and every world-side read finds nothing -- which is
+    what these callers already wanted from `world_root("")`. What they got was
+    the worlds parent dir, which exists and holds every world.
+    """
+    return world_root(wid or _NO_WORLD)
 
 
 def world_meta_path(wid: str) -> Path:

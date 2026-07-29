@@ -18,7 +18,7 @@ from pathlib import Path
 from .. import prompts
 from . import atomic, lengths
 from .frontmatter import dump_frontmatter, parse_frontmatter
-from .paths import home, natural_key, slugify, uniquify
+from .paths import home, natural_key, safe_id, slugify, uniquify
 
 # The explicit "clear whatever a broader scope supplies" marker, as opposed to
 # "" which means "this record has no opinion". Prefixed with U+2063 (invisible
@@ -49,10 +49,6 @@ class BuiltInPresetImmutable(Exception):
     pass
 
 
-def _safe(pid: str) -> bool:
-    return pid not in ("", ".", "..") and "/" not in pid and "\\" not in pid
-
-
 def _builtin_dir() -> Path:
     return prompts.templates_dir() / "response_presets"
 
@@ -62,7 +58,7 @@ def _custom_dir() -> Path:
 
 
 def _find_path(pid: str) -> tuple[Path, bool] | None:
-    if not _safe(pid):
+    if not safe_id(pid):
         return None
     p = _custom_dir() / f"{pid}.md"
     if p.exists():
@@ -306,7 +302,7 @@ def update_preset(pid: str, *, name: str | None = None, description: str | None 
     if is_built_in(pid):
         raise BuiltInPresetImmutable(pid)
     p = _custom_dir() / f"{pid}.md"
-    if not _safe(pid) or not p.exists():
+    if not safe_id(pid) or not p.exists():
         raise PresetNotFound(pid)
     meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
     if name is not None:
@@ -326,7 +322,7 @@ def delete_preset(pid: str) -> None:
     if is_built_in(pid):
         raise BuiltInPresetImmutable(pid)
     p = _custom_dir() / f"{pid}.md"
-    if not _safe(pid) or not p.exists():
+    if not safe_id(pid) or not p.exists():
         raise PresetNotFound(pid)
     p.unlink()
 

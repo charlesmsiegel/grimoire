@@ -12,7 +12,7 @@ from pathlib import Path
 
 from . import atomic, statcache
 from .frontmatter import dump_frontmatter, parse_frontmatter
-from .paths import slugify, uniquify
+from .paths import safe_id, slugify, uniquify
 
 ENTITY_KINDS: tuple[str, ...] = ("locations", "lore", "items", "groups", "creatures")
 
@@ -32,11 +32,6 @@ class UnknownKind(Exception):
 def _check_kind(kind: str) -> None:
     if kind not in ENTITY_KINDS:
         raise UnknownKind(kind)
-
-
-def _safe_id(eid: str) -> bool:
-    """Reject ids that could escape the kind directory (defense in depth)."""
-    return eid not in ("", ".", "..") and "/" not in eid and "\\" not in eid
 
 
 def _kind_dir(root: Path, kind: str) -> Path:
@@ -61,7 +56,7 @@ def list_entities(root: Path, kind: str) -> list[dict]:
 def read_entity(root: Path, kind: str, eid: str) -> dict:
     _check_kind(kind)
     p = _entity_path(root, kind, eid)
-    if not _safe_id(eid) or not p.exists():
+    if not safe_id(eid) or not p.exists():
         raise EntityNotFound(f"{kind}/{eid}")
     meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
     return {"meta": {"id": eid, **meta}, "body": body}
@@ -99,7 +94,7 @@ def update_entity(
 ) -> None:
     _check_kind(kind)
     p = _entity_path(root, kind, eid)
-    if not _safe_id(eid) or not p.exists():
+    if not safe_id(eid) or not p.exists():
         raise EntityNotFound(f"{kind}/{eid}")
     meta, cur_body = parse_frontmatter(p.read_text(encoding="utf-8"))
     if name is not None:
@@ -122,7 +117,7 @@ def update_entity(
 def delete_entity(root: Path, kind: str, eid: str) -> None:
     _check_kind(kind)
     p = _entity_path(root, kind, eid)
-    if not _safe_id(eid) or not p.exists():
+    if not safe_id(eid) or not p.exists():
         raise EntityNotFound(f"{kind}/{eid}")
     p.unlink()
 
@@ -135,7 +130,7 @@ def content_hash(text: str) -> str:
 
 
 def entity_hash(root: Path, kind: str, eid: str) -> str | None:
-    if not _safe_id(eid):
+    if not safe_id(eid):
         return None
     p = _entity_path(root, kind, eid)
     sig = statcache.signature(p)

@@ -15,7 +15,7 @@ from pathlib import Path
 
 from . import assets, atomic, cards, chub, fetch, lorebook, statcache, taglines
 from .frontmatter import dump_frontmatter, parse_frontmatter
-from .paths import slugify, uniquify
+from .paths import safe_id, slugify, uniquify
 
 
 class CharacterNotFound(Exception):
@@ -26,15 +26,16 @@ class VersionNotFound(Exception):
     pass
 
 
-def _safe(part: str) -> bool:
-    return part not in ("", ".", "..") and "/" not in part and "\\" not in part
-
-
 def _chars_dir(root: Path) -> Path:
     return root / "characters"
 
 
 def _char_dir(root: Path, cid: str) -> Path:
+    """The character's directory. Raises CharacterNotFound for an id that
+    doesn't name a child of the characters dir, so every path built from it
+    inherits the guard rather than having to repeat it (#240)."""
+    if not safe_id(cid):
+        raise CharacterNotFound(cid)
     return _chars_dir(root) / cid
 
 
@@ -69,8 +70,8 @@ def blank_card(name: str) -> dict:
 
 
 def _require_char(root: Path, cid: str) -> Path:
-    d = _char_dir(root, cid)
-    if not _safe(cid) or not _meta_path(root, cid).exists():
+    d = _char_dir(root, cid)   # raises CharacterNotFound for an unsafe id
+    if not _meta_path(root, cid).exists():
         raise CharacterNotFound(cid)
     return d
 
@@ -104,7 +105,7 @@ def create_version(root: Path, cid: str, version_name: str, card: dict) -> str:
 def update_version(root: Path, cid: str, vid: str, card: dict) -> None:
     _require_char(root, cid)
     p = _card_path(root, cid, vid)
-    if not _safe(vid) or not p.exists():
+    if not safe_id(vid) or not p.exists():
         raise VersionNotFound(vid)
     cards.bake_char_name(card)  # #137: {{char}} is always self-reference, baked at write time
     atomic.write_text(p, _dumps(card))
@@ -112,7 +113,7 @@ def update_version(root: Path, cid: str, vid: str, card: dict) -> None:
 
 def set_default_version(root: Path, cid: str, vid: str) -> None:
     _require_char(root, cid)
-    if not _safe(vid) or not _card_path(root, cid, vid).exists():
+    if not safe_id(vid) or not _card_path(root, cid, vid).exists():
         raise VersionNotFound(vid)
     meta, _ = parse_frontmatter(_meta_path(root, cid).read_text(encoding="utf-8"))
     meta["default_version"] = vid
@@ -150,7 +151,7 @@ def _version_ids(root: Path, cid: str) -> list[str]:
 def read_card(root: Path, cid: str, vid: str) -> dict:
     _require_char(root, cid)
     p = _card_path(root, cid, vid)
-    if not _safe(vid) or not p.exists():
+    if not safe_id(vid) or not p.exists():
         raise VersionNotFound(vid)
     return json.loads(p.read_text(encoding="utf-8"))
 
@@ -210,7 +211,7 @@ def _card_summary(root: Path, cid: str, vid: str) -> dict:
     """The small derived view of a card that list endpoints need (label,
     greeting count, chub link), memoized by stat so unchanged cards are
     never re-read or re-parsed."""
-    if not _safe(vid):
+    if not safe_id(vid):
         raise VersionNotFound(vid)
     p = _card_path(root, cid, vid)
     sig = statcache.signature(p)
@@ -258,7 +259,7 @@ def list_characters(root: Path) -> list[dict]:
 def delete_version(root: Path, cid: str, vid: str) -> None:
     _require_char(root, cid)
     p = _card_path(root, cid, vid)
-    if not _safe(vid) or not p.exists():
+    if not safe_id(vid) or not p.exists():
         raise VersionNotFound(vid)
     if len(_version_ids(root, cid)) == 1:
         raise ValueError("cannot delete the last version of a character")
@@ -275,7 +276,7 @@ def delete_character(root: Path, cid: str) -> None:
 
 
 def card_hash(root: Path, cid: str, vid: str) -> str | None:
-    if not _safe(cid) or not _safe(vid):
+    if not safe_id(cid) or not safe_id(vid):
         return None
     p = _card_path(root, cid, vid)
     sig = statcache.signature(p)
@@ -315,7 +316,7 @@ def _dir_hash_compute(files: list[Path]) -> str:
 def dir_hash(root: Path, cid: str) -> str | None:
     """Whole-actor content hash: character.md plus every version card, name-tagged.
     Assets are excluded so an image-only change never surfaces in sync."""
-    if not _safe(cid) or not _meta_path(root, cid).exists():
+    if not safe_id(cid) or not _meta_path(root, cid).exists():
         return None
     files = [_meta_path(root, cid)] + [_card_path(root, cid, v) for v in _version_ids(root, cid)]
     # the signature spans the whole file set, so adding/removing a version invalidates too

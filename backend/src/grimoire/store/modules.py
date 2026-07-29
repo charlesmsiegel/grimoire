@@ -17,7 +17,7 @@ from pathlib import Path
 
 from . import atomic, dice, entities, expressions, module_display
 from .frontmatter import dump_frontmatter, parse_frontmatter
-from .paths import home, slugify, uniquify
+from .paths import home, safe_id, slugify, uniquify
 
 class ModuleError(Exception):
     """Invalid module operation (e.g. deleting a built-in)."""
@@ -465,14 +465,9 @@ def _load_content(root: Path, sheets: dict, errors: list[str]) -> list[dict]:
     return out
 
 
-def _safe_id_like(value: str) -> bool:
-    return isinstance(value, str) and bool(value) and value not in (".", "..") \
-        and "/" not in value and "\\" not in value
-
-
 def read_content(mid: str, kind: str, id: str) -> dict:
     root, _source = pack_root(mid)  # raises ModuleNotFound
-    if kind not in CONTENT_KINDS or not _safe_id_like(id):
+    if kind not in CONTENT_KINDS or not safe_id(id):
         raise ContentNotFound(f"{kind}/{id}")
     p = root / "content" / kind / f"{id}.md"
     if not p.exists():

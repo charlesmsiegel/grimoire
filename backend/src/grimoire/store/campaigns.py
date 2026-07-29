@@ -8,7 +8,7 @@ from pathlib import Path
 
 from . import assets, atomic, calendars, characters, entities, greetings, pcs, worlds
 from .frontmatter import dump_frontmatter, parse_frontmatter
-from .paths import ensure_home, home, now_iso, slugify, uniquify
+from .paths import ensure_home, home, now_iso, safe_id, slugify, uniquify
 
 
 class CampaignNotFound(Exception):
@@ -30,7 +30,13 @@ def campaign_root(cid: str) -> Path:
     here misses everything still live-inherited from the world, and misses the
     campaign's tombstones — silently, which is why `tests/test_overlay_guard.py`
     checks for it (#248).
+
+    Raises CampaignNotFound for an id that doesn't name a child of the
+    campaigns dir. The guard lives here rather than in the router so a caller
+    that isn't an HTTP path parameter gets it too (#240).
     """
+    if not safe_id(cid):
+        raise CampaignNotFound(cid)
     return _campaigns_dir() / cid
 
 
@@ -141,7 +147,7 @@ def ensure_campaign_slim(cid: str) -> None:
     if meta.get("world_copy") == "overlay":
         return
     root = campaign_root(cid)
-    wroot = worlds.world_root(meta.get("world", ""))
+    wroot = worlds.world_root_or_missing(meta.get("world", ""))
     if not wroot.exists():
         return
     from . import appearances, overlay  # campaigns is imported by these
