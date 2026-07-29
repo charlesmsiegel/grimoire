@@ -59,8 +59,12 @@ const specifiers = (code: string) =>
 function resolve(from: string, spec: string): string | null {
   const base = normalize(dirOf(from) + "/" + spec.split("?")[0]);
   if (base === null) return null;
-  for (const candidate of [base, `${base}.ts`, `${base}.tsx`,
-                           `${base}/index.ts`, `${base}/index.tsx`]) {
+  // `base === ""` is the src root itself — a bare `".."` from a component —
+  // where the only candidates are its index files, with no path prefix.
+  const candidates = base
+    ? [base, `${base}.ts`, `${base}.tsx`, `${base}/index.ts`, `${base}/index.tsx`]
+    : ["index.ts", "index.tsx"];
+  for (const candidate of candidates) {
     if (SOURCES.has(candidate)) return candidate;
   }
   return null;
@@ -78,15 +82,30 @@ const GRAPH = new Map(
   ]),
 );
 
+/**
+ * A specifier that should have resolved to one of our source files: no
+ * extension, or a JS/TS one. Anything else (`./index.css`, `./logo.svg?url`)
+ * is an asset, so failing to resolve it is expected rather than a lost edge.
+ * Testing what a module looks like, rather than listing every asset type,
+ * keeps a new asset extension from tripping the assertion below.
+ */
+function isCodeSpecifier(spec: string): boolean {
+  const name = spec.split("?")[0].split("/").pop() ?? "";
+  if (/^\.*$/.test(name)) return true; // a bare `.` or `..` directory target
+  const dot = name.lastIndexOf(".");
+  return dot <= 0 || /^\.[mc]?[jt]sx?$/.test(name.slice(dot));
+}
+
 /** Relative specifiers that resolved to nothing — assets, or a dropped edge. */
 const UNRESOLVED = [...SOURCES].flatMap(([path, code]) =>
   specifiers(code).filter(isRelative)
     .filter((spec) => resolve(path, spec) === null)
     .map((spec) => `${path} -> ${spec}`));
 
-const ASSET = /\.(css|svg|png|jpe?g|gif|webp|woff2?|json|md)(\?|$)/;
-
-const MODULE_EDITOR = /^components\/[Mm]odule\w*\.tsx$/;
+// Every section file plus the shared module. Deliberately narrower than
+// `Module\w*` so an unrelated future `ModulePicker.tsx` isn't dragged in,
+// but open enough that a new section editor is covered automatically.
+const MODULE_EDITOR = /^components\/(Module\w*Editor|moduleEditShared)\.tsx$/;
 const ENTRY_POINTS = [...SOURCES.keys()]
   .filter((p) => MODULE_EDITOR.test(p) && !p.includes(".test."));
 
@@ -127,7 +146,8 @@ describe("module-editor import graph", () => {
   it("drops no edge it could not resolve", () => {
     // Every unresolved relative specifier must be an asset, not a module the
     // resolver failed on — otherwise the graph has invisible holes.
-    expect(UNRESOLVED.filter((u) => !ASSET.test(u))).toEqual([]);
+    expect(UNRESOLVED.filter((u) => isCodeSpecifier(u.split(" -> ")[1])))
+      .toEqual([]);
   });
 
   it.each(ENTRY_POINTS)("%s is in no import cycle", (entry) => {
