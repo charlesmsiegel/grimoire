@@ -84,9 +84,12 @@ def test_transition_refuses_every_exit_from_the_projectable_states(monkeypatch, 
     proposals.claim(cid, sid, rec["id"])
     proposals.transition(cid, sid, rec["id"], ("resolving",), "resolved",
                          {"result": {"total": 5}})
-    for exit_status in ("narrated", "superseded", "declined", "pending", "resolving"):
+    # `resolved` is a sink for the generic CAS: every target is refused,
+    # including `resolved` itself — amending a resolved record is
+    # `update_resolution`'s job, and it refuses to change the roll.
+    for to in ("narrated", "superseded", "declined", "pending", "resolving", "resolved"):
         with pytest.raises(ValueError, match="illegal edge"):
-            proposals.transition(cid, sid, rec["id"], ("resolved",), exit_status)
+            proposals.transition(cid, sid, rec["id"], ("resolved",), to)
     assert proposals.get(cid, sid)["status"] == "resolved"   # refused before any write
 
 
@@ -116,6 +119,45 @@ def test_transition_refuses_a_resolution_on_a_non_resolved_edge(monkeypatch, tmp
     assert proposals.transition(cid, sid, rec["id"], ("resolving",), "resolved",
                                 {"result": {"total": 9}}) is True
     assert proposals.get(cid, sid)["resolution"] == {"result": {"total": 9}}
+
+
+def test_update_resolution_cannot_change_the_rolled_result(monkeypatch, tmp_path):
+    """#242: metadata amendments only. Swapping a projected record's `result`
+    would leave `rolls.json` holding the ORIGINAL roll — `find_or_append_by_
+    proposal` is idempotent by tag — while the next `project()` formats its
+    transcript line from the replacement, so the log and the transcript would
+    disagree about what was rolled."""
+    cid, sid = _scene(monkeypatch, tmp_path)
+    rec = proposals.new(cid, sid, {})
+    pid = rec["id"]
+    proposals.claim(cid, sid, pid)
+    proposals.transition(cid, sid, pid, ("resolving",), "resolved",
+                         {"result": {"total": 5}})
+
+    # metadata alongside the SAME result: allowed, that is the whole purpose
+    assert proposals.update_resolution(
+        cid, sid, pid, {"result": {"total": 5}, "roll_id": 3}) is True
+    assert proposals.get(cid, sid)["resolution"]["roll_id"] == 3
+
+    for swapped in ({"result": {"total": 20}}, {"result": {"total": 20}, "roll_id": 3}):
+        with pytest.raises(ValueError, match="cannot change a resolved roll"):
+            proposals.update_resolution(cid, sid, pid, swapped)
+    assert proposals.get(cid, sid)["resolution"]["result"] == {"total": 5}
+
+    # the same guard holds once superseded, where the roll stands as history.
+    # Status set on disk rather than through supersede(), which would heal and
+    # try to project this deliberately label-less stub resolution.
+    path = campaigns.campaign_root(cid) / "proposals.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data[sid]["status"] = "superseded"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(ValueError, match="cannot change a resolved roll"):
+        proposals.update_resolution(cid, sid, pid, {"result": {"total": 20}})
+    assert proposals.get(cid, sid)["resolution"]["result"] == {"total": 5}
+    # ...and a metadata-only amendment still lands on the superseded record
+    assert proposals.update_resolution(
+        cid, sid, pid, {"result": {"total": 5}, "line_intent": 7}) is True
+    assert proposals.get(cid, sid)["resolution"]["line_intent"] == 7
 
 
 def test_heal_raises_rather_than_retiring_a_roll_it_cannot_project(monkeypatch, tmp_path):
