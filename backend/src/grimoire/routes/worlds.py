@@ -7,8 +7,6 @@ Characters and greetings have their own modules; the generic
 
 from __future__ import annotations
 
-import contextlib
-
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from .. import store
@@ -80,9 +78,7 @@ def put_world_module(wid: str, body: ModuleSetting):
         all_cids = sorted(
             c["id"] for c in store.campaigns.list_campaigns() if c.get("world") == wid
         )
-        with contextlib.ExitStack() as stack:
-            for c in all_cids:                   # sole multi-lock holder; sorted order
-                stack.enter_context(store.locks.campaign_lock(c))
+        with store.locks.hold_all(all_cids):     # sorted order; see locks.hold_all
             store.modules.set_world_module(wid, body.module.strip())
             for c in all_cids:
                 try:
