@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 
-from . import (appearances, campaigns, characters, dice, entities, expressions,
+from . import (appearances, characters, dice, entities, expressions,
                locks, modules, overlay, pcs, sheets)
 
 
@@ -91,7 +91,7 @@ def _actor_label(cid: str, kind: str, eid: str) -> str:
     if kind in appearances.ACTOR_KINDS:
         vid = appearances.locked_version(cid, kind, eid)
         if vid is not None:
-            name = appearances._actor_name(campaigns.campaign_root(cid), kind, eid, vid)
+            name = appearances._actor_name(appearances.locked_actor_root(cid), kind, eid, vid)
             return name or eid
         # Never appeared: no locked version (and possibly no campaign copy).
         # A None vid must not reach read_card/read_persona (TypeError); the
