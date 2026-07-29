@@ -49,17 +49,21 @@ def write(croot: Path, cid: str, text: str) -> None:
     atomic.write_text(p, text.strip() + "\n")
 
 
-def stage_edit(croot: Path, cid: str, name: str, text: str) -> dict | None:
+def stage_edit(cid: str, name: str, prior: str, text: str) -> dict | None:
     """The refreshed dossier as a StagedEdit against the stored one, or None when
     there is nothing to propose (blank reply, or the same paragraph again).
+
+    `prior` is the paragraph the PROMPT was built from, passed in rather than
+    re-read here: another review can land between the read and the model's
+    reply, and recording that newer text as `before` would let this staler
+    proposal pass the apply-time conflict check and overwrite it.
 
     Absorb never writes dossiers itself (#235): a refresh that lands before the
     reviewer saves would survive a Cancel, and a run interrupted mid-loop would
     leave half the cast holding post-scene dossiers for a scene the chronicle
     never recorded. Staging puts them on the same commit boundary as every other
     edit -- absorb proposes, PUT /chronicle applies."""
-    after = text.strip()
-    before = read(croot, cid)
+    after, before = text.strip(), prior.strip()
     if not after or after == before:
         return None
     return {"id": f"dossier:{cid}", "kind": "dossier",

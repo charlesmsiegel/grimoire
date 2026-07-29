@@ -2328,6 +2328,30 @@ def test_a_commit_that_died_midway_refuses_to_replay(client):
     assert timeline.count("The tea was poured.") == 1
 
 
+def test_editing_the_review_after_a_committed_save_is_refused(client):
+    """The review stays editable after a failed save, so the retry can carry the
+    same token and different content. Returning the first result then reports
+    success while silently discarding whatever was changed in between."""
+    _, cid = _campaign(client)
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "We poured the tea.")
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
+        '{"one_line": "o", "summary": "s", "keywords": [], "timeline_events": []}')
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    save = {"one_line": "o", "summary": "s", "keywords": [], "timeline_events": [],
+            "edits": body["edits"], "commit_token": body["commit_token"]}
+    assert client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                      json=save).status_code == 200
+
+    edited = {**save, "summary": "s, but the reviewer rewrote this"}
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle", json=edited)
+    assert r.status_code == 409 and r.json()["kind"] == "commit_body_changed"
+    # and the unchanged replay still short-circuits to the first result
+    assert client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                      json=save).status_code == 200
+
+
 def test_a_save_without_a_token_still_commits(client):
     """The token is the UI's guard, not a new requirement: a body without one
     behaves exactly as before."""
@@ -2390,6 +2414,38 @@ def test_rejected_dossier_edit_leaves_the_prior_dossier(client):
                json={"one_line": "o", "summary": "s", "keywords": [],
                      "timeline_events": [], "edits": []})
     assert store.dossiers.read(store.campaigns.campaign_root(cid), "aese") == "Aese is a stranger."
+
+
+def test_a_dossier_written_mid_call_is_not_overwritten(client):
+    """`before` must be the paragraph the prompt was built from, not one re-read
+    after the model returned: another review landing during the call would
+    otherwise be recorded as `before`, so the conflict guard would pass and this
+    stale output would overwrite it."""
+    cid, sid = _dossier_scene(client, prior="Aese is a stranger.")
+    croot = store.campaigns.campaign_root(cid)
+
+    class WritesMidCall:
+        """Simulates another review committing while this dossier call runs."""
+
+        async def stream(self, m, cfg):
+            yield "{}"
+
+        async def complete(self, msgs, cfg):
+            if "Character: Aese" in msgs[1]["content"]:
+                store.dossiers.write(croot, "aese", "Aese joined the guard.")
+                return "Aese is still a stranger, per the old context."
+            return '{"one_line": "o", "summary": "s", "keywords": [], "timeline_events": []}'
+
+    client.app.dependency_overrides[routes.get_llm] = lambda: WritesMidCall()
+    edits = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["edits"]
+    dossier = next(e for e in edits if e["kind"] == "dossier")
+    assert dossier["before"] == "Aese is a stranger."      # what the prompt saw
+
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                   json={"one_line": "o", "summary": "s", "keywords": [],
+                         "timeline_events": [], "edits": edits})
+    assert [f["kind"] for f in r.json()["failures"]] == ["conflict"]
+    assert store.dossiers.read(croot, "aese") == "Aese joined the guard."
 
 
 def test_absorb_skips_dossier_edit_when_unchanged(client):

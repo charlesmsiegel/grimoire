@@ -579,15 +579,16 @@ def test_dossier_edit_stages_before_and_after(monkeypatch, tmp_path):
     from grimoire.store import dossiers
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
-    dossiers.write(croot, "seraphine", "Seraphine is wary.")
-    edit = dossiers.stage_edit(croot, "seraphine", "Seraphine", "Seraphine is loyal.")
+    edit = dossiers.stage_edit("seraphine", "Seraphine", "Seraphine is wary.",
+                               "Seraphine is loyal.")
     assert edit == {"id": "dossier:seraphine", "kind": "dossier",
                     "target": {"kind": "characters", "id": "seraphine"},
                     "label": "Seraphine — campaign dossier", "field": "dossier",
                     "before": "Seraphine is wary.", "after": "Seraphine is loyal.",
                     "authored": False}
-    assert dossiers.stage_edit(croot, "seraphine", "Seraphine", "Seraphine is wary.") is None
-    assert dossiers.stage_edit(croot, "seraphine", "Seraphine", "  ") is None
+    assert dossiers.stage_edit("seraphine", "Seraphine", "Seraphine is wary.",
+                               "Seraphine is wary.") is None
+    assert dossiers.stage_edit("seraphine", "Seraphine", "Seraphine is wary.", "  ") is None
 
 
 def test_parse_output_relationship_and_bond_lists():
