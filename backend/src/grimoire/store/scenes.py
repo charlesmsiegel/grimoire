@@ -1,11 +1,16 @@
-"""Scene CRUD — chat transcripts living under <campaign>/scenes/."""
+"""Scene CRUD — chat transcripts living under <campaign>/scenes/.
+
+Every mutator here is `@_serialized`: a scene file is rewritten whole, so two
+concurrent read-modify-writes silently lose one of them. See that decorator.
+"""
 
 from __future__ import annotations
 
+import functools
 import re
 from pathlib import Path
 
-from . import atomic, calendars, campaigns, overlay, scene_ids, scene_refs
+from . import atomic, calendars, campaigns, locks, overlay, scene_ids, scene_refs
 from .frontmatter import dump_frontmatter, parse_frontmatter, parse_frontmatter_head
 from .llm_connections import get_active as _get_active_connection
 from .paths import now_iso, slugify, uniquify
@@ -105,6 +110,41 @@ def _require_campaign(cid: str) -> None:
         raise campaigns.CampaignNotFound(cid)
 
 
+def _serialized(fn):
+    """Run a scene mutation under its campaign's lock, read included (#254).
+
+    Every mutator below is an unlocked read-modify-write of a whole file:
+    parse the frontmatter and body, change something, write it all back.
+    Writer A reads v0; writer B reads v0, appends, publishes v1; A appends to
+    *its* v0 and publishes — B's message is gone, with no error and no trace.
+    Atomic publication (#233) does not help, because both writes are
+    individually complete and well-formed; that is precisely why nothing
+    notices. `append_message` runs on every chat message, and a scene
+    transcript is the one piece of user data in this app that cannot be
+    regenerated.
+
+    The lock has to span the READ as well as the write — a lock around
+    `atomic.write_text` alone serializes two publications of the same stale
+    body, which loses exactly as much.
+
+    Why the campaign lock rather than a per-scene one: scene writes already
+    happen under it (``proposals.commit_narration`` persists a reply through a
+    callback, and ``create_scene`` captures an audit baseline), so a separate
+    scene lock would be a second domain nested inside this one — a lock
+    ordering to get wrong for no gain. The critical sections are a file read
+    and a file write; no LLM call is ever held across this lock.
+
+    In-process only, like every lock in this app. Two processes on a synced
+    store still race — #234 covers that half, and the two want fixing together
+    to be meaningful for a shared library.
+    """
+    @functools.wraps(fn)
+    def locked(cid, *args, **kwargs):
+        with locks.campaign_lock(cid):   # reentrant: nesting under a holder is fine
+            return fn(cid, *args, **kwargs)
+    return locked
+
+
 def _numbering(cid: str) -> tuple[int, int]:
     """(next number, current pad width) from the files on disk — no stored
     counter. Width starts at MIN_WIDTH and follows the widest number present;
@@ -120,6 +160,7 @@ def _numbering(cid: str) -> tuple[int, int]:
     return top + 1, width
 
 
+@_serialized
 def repad(cid: str, width: int) -> None:
     """Re-pad every scene number to `width` digits (renames files, repoints all
     referencing stores). Keeps widths uniform so lexicographic order stays exact."""
@@ -134,6 +175,7 @@ def repad(cid: str, width: int) -> None:
     scene_refs.repoint(cid, mapping)
 
 
+@_serialized
 def create_scene(cid: str, title: str, suggested_date: str | None = None,
                  pcless: bool = False) -> str:
     _require_campaign(cid)
@@ -227,6 +269,7 @@ def read_scene_meta(cid: str, sid: str) -> dict:
     return {"id": sid, **parse_frontmatter_head(p)}
 
 
+@_serialized
 def rename_scene(cid: str, sid: str, title: str) -> str:
     p = _scene_path(cid, sid)
     if not _safe_id(sid) or not p.exists():
@@ -248,6 +291,7 @@ def rename_scene(cid: str, sid: str, title: str) -> str:
     return new_sid
 
 
+@_serialized
 def delete_scene(cid: str, sid: str) -> None:
     p = _scene_path(cid, sid)
     if not _safe_id(sid) or not p.exists():
@@ -264,6 +308,7 @@ def get_dismissed(cid: str, sid: str) -> list[str]:
     return [x for x in meta.get("dismissed", "").split(",") if x]
 
 
+@_serialized
 def add_dismissed(cid: str, sid: str, char_id: str) -> None:
     p = _scene_path(cid, sid)
     if not _safe_id(sid) or not p.exists():
@@ -276,6 +321,7 @@ def add_dismissed(cid: str, sid: str, char_id: str) -> None:
     atomic.write_text(p, dump_frontmatter(meta, body))
 
 
+@_serialized
 def stamp_greeting(cid: str, sid: str, gid: str) -> None:
     """Record the greeting this scene was started from (plot-map unlock linkage)."""
     p = _scene_path(cid, sid)
@@ -286,6 +332,7 @@ def stamp_greeting(cid: str, sid: str, gid: str) -> None:
     atomic.write_text(p, dump_frontmatter(meta, body))
 
 
+@_serialized
 def set_pcless(cid: str, sid: str) -> None:
     """Flag a scene as deliberately player-less (an offscreen greeting stamps it)."""
     p = _scene_path(cid, sid)
@@ -300,6 +347,7 @@ RESPONSE_FIELDS = ("response_preset", "style_id", "length_reply_words", "length_
                    "length_paragraphs", "length_speakers", "length_blocks_per_speaker")
 
 
+@_serialized
 def set_response(cid: str, sid: str, fields: dict) -> None:
     """Write scene-scope response settings. An empty value clears the field
     (inherit); a key that is absent from `fields` is left untouched."""
@@ -313,6 +361,7 @@ def set_response(cid: str, sid: str, fields: dict) -> None:
     atomic.write_text(p, dump_frontmatter(meta, body))
 
 
+@_serialized
 def append_message(cid: str, sid: str, role: str, content: str, speaker: str | None = None) -> None:
     p = _scene_path(cid, sid)
     if not _safe_id(sid) or not p.exists():
@@ -386,6 +435,7 @@ def _set_turn_sizes(meta: dict, sizes: list[int]) -> None:
         meta["turn_sizes"] = ",".join(str(n) for n in sizes)
 
 
+@_serialized
 def append_reply(cid: str, sid: str, segments: list[dict]) -> None:
     """Persist ONE model generation as per-speaker posts, recording its block
     count as a turn boundary.
@@ -425,6 +475,7 @@ def _serialize_messages(messages: list[dict]) -> str:
     return body
 
 
+@_serialized
 def stamp_user_speaker(cid: str, sid: str, name: str) -> None:
     """Backfill: give every speakerless user message the (sole) player's name."""
     p = _scene_path(cid, sid)
@@ -518,6 +569,7 @@ def _tracked_suffix_fits(messages: list[dict], sizes: list[int]) -> bool:
             and sizes[-1] <= _trailing_model_run(messages))
 
 
+@_serialized
 def remove_trailing_assistant_run(cid: str, sid: str) -> None:
     """Drop the trailing run of assistant-side messages (one turn's output).
 
@@ -560,6 +612,7 @@ def remove_trailing_assistant_run(cid: str, sid: str) -> None:
     atomic.write_text(p, dump_frontmatter(meta, _serialize_messages(messages + tail)))
 
 
+@_serialized
 def trim_continuation(cid: str, sid: str, from_index: int) -> None:
     """Roll a scene back to `from_index`, discarding a crashed or
     superseded continuation attempt (proposals.commit_narration's crash
@@ -602,6 +655,7 @@ class RollMessageImmutable(Exception):
     its content must stay in lockstep with the immutable rolls.json entry."""
 
 
+@_serialized
 def edit_message(cid: str, sid: str, index: int, content: str) -> None:
     p = _scene_path(cid, sid)
     if not _safe_id(sid) or not p.exists():
@@ -680,6 +734,7 @@ def _reconciled_turn_sizes(sizes: list[int], before: list[int], after: list[int]
     return sizes
 
 
+@_serialized
 def mark_absorbed(cid: str, sid: str, one_line: str, summary: str) -> None:
     """Record a scene's absorbed summary into its frontmatter and flag it done."""
     p = _scene_path(cid, sid)
@@ -702,6 +757,7 @@ def get_location_history(cid: str, sid: str) -> list[str]:
     return [x for x in meta.get("location_history", "").split(",") if x]
 
 
+@_serialized
 def set_location(cid: str, sid: str, eid: str) -> dict:
     """Make campaign location `eid` the scene's current setting.
 
@@ -746,6 +802,7 @@ def get_suggested_date(cid: str, sid: str) -> str:
     return meta.get("suggested_date", "")
 
 
+@_serialized
 def set_datetime(cid: str, sid: str, native: str) -> dict:
     """Set the scene's current moment (in the primary calendar). The first set is
     silent and stamps the start date into the filename (the id changes); later

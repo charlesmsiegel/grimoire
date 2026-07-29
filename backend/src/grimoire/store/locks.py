@@ -10,6 +10,9 @@ separate lock domains.
 
 Who takes it:
 
+- every ``scenes`` mutator (``scenes._serialized``) — a scene file is
+  rewritten whole, so two unlocked read-modify-writes lose one of them, and
+  a transcript is the one thing here that cannot be regenerated (#254);
 - every campaign-sheet mutator (``sheets.write``, ``write_creation``,
   ``delete``, ``set_field``, ``advance``);
 - ``audit.capture_baseline`` / ``audit.apply_delta``;
