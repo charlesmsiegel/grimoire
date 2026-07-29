@@ -54,7 +54,7 @@ def scene_substitutions(cid: str, sid: str) -> dict[str, str]:
     greeting's own name at creation time (cards.bake_char_name,
     greetings.create_greeting) instead -- any {{char}} still unresolved at
     prompt time stays literal, same as an unresolved {{user}}."""
-    croot = campaigns.campaign_root(cid)
+    aroot = appearances.locked_actor_root(cid)
     player_names: list[str] = []
     for a in appearances.scene_cast(cid, sid):
         vid = appearances.locked_version(cid, a["kind"], a["id"])
@@ -62,14 +62,14 @@ def scene_substitutions(cid: str, sid: str) -> dict[str, str]:
             if a["role"] == "npc":
                 continue
             elif a["kind"] == "pcs":
-                player_names.append(pcs.read_persona(croot, a["id"], vid).get("name", a["id"]))
+                player_names.append(pcs.read_persona(aroot, a["id"], vid).get("name", a["id"]))
             else:
-                player_names.append(characters.read_card(croot, a["id"], vid)["data"].get("name", a["id"]))
+                player_names.append(characters.read_card(aroot, a["id"], vid)["data"].get("name", a["id"]))
         except (characters.CharacterNotFound, characters.VersionNotFound,
                 pcs.PCNotFound, pcs.PCVersionNotFound):
             continue
     if not any(player_names) and scenes.is_pcless(cid, sid):
-        player_names = _campaign_player_refs(cid, croot)[1]
+        player_names = _campaign_player_refs(cid, aroot)[1]
     return {"{{user}}": ", ".join(n for n in player_names if n)}
 
 
@@ -152,10 +152,13 @@ def _project_history(messages: list[dict]) -> list[dict]:
     return out
 
 
-def _campaign_player_refs(cid: str, croot) -> tuple[list[dict], list[str]]:
+def _campaign_player_refs(cid: str, aroot) -> tuple[list[dict], list[str]]:
     """(persona data dicts, names) of every campaign-level player actor, seated in
     the scene or not — the offscreen reference cast. Each dict carries "kind" so
-    the persona-block templates pick the right format."""
+    the persona-block templates pick the right format.
+
+    `aroot` is an `appearances.locked_actor_root`: the roster is the appearance
+    record, so every actor here has a campaign-side copy."""
     refs: list[dict] = []
     names: list[str] = []
     for a in appearances.roster(cid):
@@ -163,11 +166,11 @@ def _campaign_player_refs(cid: str, croot) -> tuple[list[dict], list[str]]:
             continue
         try:
             if a["kind"] == "pcs":
-                p = pcs.read_persona(croot, a["id"], a["version"])
+                p = pcs.read_persona(aroot, a["id"], a["version"])
                 refs.append({"kind": "pcs", **p})
                 names.append(p.get("name", a["id"]))
             else:
-                data = characters.read_card(croot, a["id"], a["version"])["data"]
+                data = characters.read_card(aroot, a["id"], a["version"])["data"]
                 refs.append({"kind": "characters", **data})
                 names.append(data.get("name", a["id"]))
         except (pcs.PCNotFound, pcs.PCVersionNotFound,
@@ -279,7 +282,8 @@ def _drift_roster(cid: str, npc_names: list[str], player_names: list[str]) -> li
 
 def cast_datetime_facts(cid: str, sid: str, native: str) -> list[dict]:
     """Age / birthday-today for each in-scene actor that has a birthdate. Others skipped."""
-    croot = campaigns.campaign_root(cid)
+    croot = campaigns.campaign_root(cid)          # calendar.json is campaign-local
+    aroot = appearances.locked_actor_root(cid)    # cast actors are locked, so campaign-side
     cfg = calendars.read_calendar(croot)
     provider = calendars.get_provider(cfg["primary"])
     out: list[dict] = []
@@ -287,10 +291,10 @@ def cast_datetime_facts(cid: str, sid: str, native: str) -> list[dict]:
         vid = appearances.locked_version(cid, a["kind"], a["id"])
         try:
             if a["kind"] == "pcs":
-                persona = pcs.read_persona(croot, a["id"], vid)
+                persona = pcs.read_persona(aroot, a["id"], vid)
                 birth, name = persona.get("birthdate", ""), persona.get("name", a["id"])
             else:
-                meta = characters.read_character(croot, a["id"])["meta"]
+                meta = characters.read_character(aroot, a["id"])["meta"]
                 birth, name = meta.get("birthdate", ""), meta.get("name", a["id"])
         except (pcs.PCNotFound, pcs.PCVersionNotFound, characters.CharacterNotFound):
             continue
@@ -340,16 +344,19 @@ def _weather_data(cid: str, sid: str) -> dict | None:
     return out
 
 
-def _character_states(croot, cast) -> list[dict]:
+def _character_states(aroot, cast) -> list[dict]:
+    """`aroot` is an `appearances.locked_actor_root` — `cast` comes from the
+    appearance record, so both the campaign-local state.md and the actor's
+    campaign-side copy are found under it."""
     try:
         out = []
         for a in cast:
             if a["role"] != "npc" or a["kind"] != "characters":
                 continue
-            st = playstate.read_state(croot, a["id"])
+            st = playstate.read_state(aroot, a["id"])
             if st and (st["current_state"] or st["knows"] or st["suspects"]):
                 try:
-                    name = characters.read_character(croot, a["id"])["meta"].get("name", a["id"])
+                    name = characters.read_character(aroot, a["id"])["meta"].get("name", a["id"])
                 except characters.CharacterNotFound:
                     name = a["id"]
                 out.append({"name": name, **st})
@@ -499,7 +506,8 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     outranks every stored scope in response_presets.resolve -- see build_messages."""
     scene = scenes.read_scene(cid, sid)
     history = [dict(m) for m in scene["messages"]]
-    croot = campaigns.campaign_root(cid)
+    croot = campaigns.campaign_root(cid)          # campaign-local: dossiers, calendar, group state
+    aroot = appearances.locked_actor_root(cid)    # cast/roster actors are locked, so campaign-side
     cast = appearances.scene_cast(cid, sid)
 
     npc_cards: list[dict] = []
@@ -508,7 +516,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
             continue
         vid = appearances.locked_version(cid, a["kind"], a["id"])
         try:
-            npc_cards.append(characters.read_card(croot, a["id"], vid)["data"])
+            npc_cards.append(characters.read_card(aroot, a["id"], vid)["data"])
         except (characters.CharacterNotFound, characters.VersionNotFound):
             continue
 
@@ -520,11 +528,11 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         vid = appearances.locked_version(cid, a["kind"], a["id"])
         try:
             if a["kind"] == "pcs":
-                p = pcs.read_persona(croot, a["id"], vid)
+                p = pcs.read_persona(aroot, a["id"], vid)
                 players.append({"kind": "pcs", **p})
                 player_names.append(p.get("name", a["id"]))
             else:
-                data = characters.read_card(croot, a["id"], vid)["data"]
+                data = characters.read_card(aroot, a["id"], vid)["data"]
                 players.append({"kind": "characters", **data})
                 player_names.append(data.get("name", a["id"]))
         except (pcs.PCNotFound, pcs.PCVersionNotFound, characters.CharacterNotFound, characters.VersionNotFound):
@@ -535,7 +543,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     refs: list[dict] = []
     ref_names: list[str] = []
     if pcless:
-        refs, ref_names = _campaign_player_refs(cid, croot)
+        refs, ref_names = _campaign_player_refs(cid, aroot)
     # {{char}} is not resolved here (#137): baked at creation time instead, see
     # scene_substitutions.
     subs = {"{{user}}": ", ".join(player_names or ref_names)}
@@ -588,7 +596,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         "prose_style_body": resolved_style["body"].strip() if resolved_style else "",
         "budget": {k: budget[k] for k in lengths.KNOBS},
         "npc_cards": npc_cards,
-        "states": _character_states(croot, cast),
+        "states": _character_states(aroot, cast),
         "relationship_lines": _relationship_lines(cid, cast),
         "players": players, "ref_names": ref_names, "refs": refs,
         "story_entries": _story_entries(cid, depth=full_recap or None, full=bool(full_recap)),

@@ -14,6 +14,9 @@ from . import atomic
 
 
 def dossier_path(croot: Path, cid: str) -> Path:
+    # overlay-ok: dossier.md is campaign-local, merely filed inside the actor's
+    # dir for locality — it is never inherited from the world, so there is
+    # nothing for store/overlay.py to resolve here
     return croot / "characters" / cid / "dossier.md"
 
 

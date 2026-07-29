@@ -13,6 +13,17 @@ the world live. Rules:
 - sync.md holds base hashes for materialized records only. Tombstones live in
   <campaign>/deleted.json (a sorted JSON list of refs); a tombstoned id counts
   as taken for uniquify, so nothing ever resurrects under a reused id.
+
+Which records inherit, and which do not, is the whole content of the rule, so
+it is declared below as data (INHERITED_KINDS / INHERITED_FILES) rather than
+only in prose: `tests/test_overlay_guard.py` reads those names to check that
+nothing outside this module resolves an inheritable record off a raw campaign
+root. Everything else under <campaign> is campaign-local by definition and is
+read directly: campaign.md, sync.md, deleted.json, appearances.json,
+climate.json, calendar.json, changes.json, chronicle.json, timeline.md,
+sheet_baselines.json, scenes/, sheets/, proposals/, and the per-actor sidecars
+filed inside an actor dir (dossier.md, state.md). tagline.md is the exception
+among sidecars -- it overlays per file, via `tagline()` below.
 """
 
 from __future__ import annotations
@@ -23,6 +34,14 @@ from pathlib import Path
 
 from . import assets, atomic, campaigns, cards, characters, entities, greetings, groupstate, pcs, taglines, worlds
 from .paths import natural_key
+
+#: Record kinds a campaign inherits from its world. A `<campaign>/<kind>/...`
+#: read for one of these is only correct through this module (or after the
+#: reader has materialized the record itself).
+INHERITED_KINDS: tuple[str, ...] = entities.SYNCED_KINDS + ("characters", "pcs")
+
+#: Campaign-root files that resolve through to the world the same way.
+INHERITED_FILES: tuple[str, ...] = ("plotmap.json",)
 
 
 def croot_of(cid: str) -> Path:

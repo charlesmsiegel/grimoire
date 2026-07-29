@@ -407,6 +407,9 @@ def post_copy_campaign_image_from_greeting(cid: str, char: str, vid: str, body: 
         raise HTTPException(status_code=404, detail="source image not found")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    # overlay-ok: reads back the file copy_to_character just wrote campaign-side,
+    # only to report its extension — the overlay union would answer a different
+    # question (which image wins), not "what did this call just store"
     p = store.assets.image_path(root, char, vid, stored)
     return {"name": stored, "ext": p.suffix.lstrip(".").lower() if p else ""}
 

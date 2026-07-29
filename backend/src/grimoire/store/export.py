@@ -94,18 +94,20 @@ def _avatar(cid: str, rid: str, vid: str, base: str, images: Images, prefix: str
     return f"{prefix}{images.add(p)}" if p is not None else None
 
 
-def _actor_sections(croot: Path, kind: str, actor_id: str, vid: str) -> tuple[str, list[dict]]:
+def _actor_sections(aroot: Path, kind: str, actor_id: str, vid: str) -> tuple[str, list[dict]]:
     """(display name, labeled sections) — the reader-facing cast_detail field
-    set; prompt plumbing is deliberately excluded."""
+    set; prompt plumbing is deliberately excluded.
+
+    `aroot` is an `appearances.locked_actor_root`; callers walk the roster."""
     if kind == "characters":
-        data = characters.read_card(croot, actor_id, vid).get("data", {})
+        data = characters.read_card(aroot, actor_id, vid).get("data", {})
         name = data.get("name") or actor_id
         labelled = [("Description", "description"), ("Personality", "personality"),
                     ("Scenario", "scenario")]
         sections = [{"label": lbl, "text": data[f]} for lbl, f in labelled
                     if isinstance(data.get(f), str) and data[f].strip()]
     else:
-        p = pcs.read_persona(croot, actor_id, vid)
+        p = pcs.read_persona(aroot, actor_id, vid)
         name = p.get("name") or actor_id
         sections = [{"label": None, "text": t}
                     for t in (p.get("summary", "").strip(), p.get("description", "").strip()) if t]
@@ -140,13 +142,13 @@ def _chapter(cid: str, provider, sid: str, number: int, images: Images, prefix: 
             "cast": cast, "epigraph": meta.get("one_line") or None, "messages": messages}
 
 
-def _appendix_entries(cid: str, croot: Path, sids: list[str], images: Images, prefix: str) -> list[dict]:
+def _appendix_entries(cid: str, aroot: Path, sids: list[str], images: Images, prefix: str) -> list[dict]:
     entries: list[dict] = []
     roster = sorted(appearances.roster(cid),
                     key=lambda a: (a["role"] != "player", a["kind"], a["id"]))
     for a in roster:
         try:
-            name, sections = _actor_sections(croot, a["kind"], a["id"], a["version"])
+            name, sections = _actor_sections(aroot, a["kind"], a["id"], a["version"])
         except (json.JSONDecodeError, characters.CharacterNotFound,
                 characters.VersionNotFound, pcs.PCNotFound, pcs.PCVersionNotFound):
             continue  # unreadable actor: skip the entry, never fail the export
@@ -196,7 +198,7 @@ def collect(cid: str, image_prefix: str = "images/") -> dict:
     sids = [s["id"] for s in sorted(scenes.list_scenes(cid), key=lambda s: s["id"])]
     chapters = [_chapter(cid, provider, sid, i, images, image_prefix)
                 for i, sid in enumerate(sids, start=1)]
-    appendix = _appendix_entries(cid, croot, sids, images, image_prefix)
+    appendix = _appendix_entries(cid, appearances.locked_actor_root(cid), sids, images, image_prefix)
 
     # in-world date range: first dated scene's start — last dated scene's latest
     histories = [h for sid in sids if (h := scenes.get_time_history(cid, sid))]

@@ -20,6 +20,17 @@ def _campaigns_dir() -> Path:
 
 
 def campaign_root(cid: str) -> Path:
+    """The campaign's own directory — nothing it inherits from its world.
+
+    Correct for campaign-local state (scenes, sheets, proposals, chronicle,
+    playstate, calendar.json, climate.json, ...) and for writes, which is how a
+    record materializes. It is *not* a place to read a record the campaign
+    inherits: `overlay.INHERITED_KINDS` / `INHERITED_FILES` say which those are,
+    and `store/overlay.py` is the only thing that resolves them. Reading one
+    here misses everything still live-inherited from the world, and misses the
+    campaign's tombstones — silently, which is why `tests/test_overlay_guard.py`
+    checks for it (#248).
+    """
     return _campaigns_dir() / cid
 
 
