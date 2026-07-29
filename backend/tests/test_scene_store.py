@@ -1,3 +1,6 @@
+import threading
+import time
+
 import pytest
 
 from grimoire.store import appearances, campaigns, pcs, scenes, worlds
@@ -965,3 +968,102 @@ def test_a_failed_append_leaves_the_whole_transcript_readable(monkeypatch, tmp_p
     assert [m["content"] for m in messages] == ["First message.", "Second message."]
     scene_dir = campaigns.campaign_root(cid) / "scenes"
     assert list(scene_dir.glob("*.tmp")) == [], "a temp file was left behind"
+
+
+# ---- lost updates (#254) ----
+#
+# #233 made the write atomic, which guarantees the file is never torn. It says
+# nothing about a lost update: two unlocked read-modify-writes both publish
+# complete, well-formed files, and the second one silently erases the first's
+# message. These tests widen the read->write window so an unlocked
+# implementation loses a message every run rather than once in a thousand.
+
+
+def _widen_the_write_window(monkeypatch, delay=0.05):
+    """Stretch every scene read so concurrent writers reliably overlap.
+
+    Without this the window is microseconds wide and a lost-update test is a
+    coin flip that passes on the broken code most of the time -- which is
+    exactly how this bug survived to #254.
+    """
+    real = scenes.parse_frontmatter
+
+    def slow(text):
+        parsed = real(text)
+        time.sleep(delay)
+        return parsed
+
+    monkeypatch.setattr(scenes, "parse_frontmatter", slow)
+
+
+def _run_together(calls):
+    """Run each thunk in its own thread, all entering at the same instant."""
+    start = threading.Barrier(len(calls))
+    errors = []
+
+    def run(call):
+        try:
+            start.wait(timeout=5)
+            call()
+        except Exception as exc:  # noqa: BLE001 - surfaced by the assert below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=run, args=(c,)) for c in calls]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=20)
+    assert not any(t.is_alive() for t in threads), "a scene write deadlocked"
+    assert not errors, f"a concurrent write raised: {errors}"
+
+
+def test_concurrent_appends_never_drop_a_message(monkeypatch, tmp_path):
+    """Every append survives. Unlocked, all five readers see the same v0 and
+    the last writer to publish wins -- four messages gone, no error, no trace."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Concurrent")
+    _widen_the_write_window(monkeypatch)
+
+    _run_together([
+        (lambda n=n: scenes.append_message(cid, sid, "user", f"message {n}"))
+        for n in range(5)
+    ])
+
+    contents = [m["content"] for m in scenes.read_scene(cid, sid)["messages"]]
+    assert sorted(contents) == [f"message {n}" for n in range(5)]
+
+
+def test_a_user_message_racing_a_persisted_reply_keeps_both(monkeypatch, tmp_path):
+    """The ordinary case from the ticket: the player types while the model's
+    reply is being written. Either order is fine; losing one is not, and
+    turn_sizes must still describe the blocks that are actually stored."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Racing")
+    _widen_the_write_window(monkeypatch)
+
+    _run_together([
+        lambda: scenes.append_message(cid, sid, "user", "Wait, I interrupt."),
+        lambda: scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "one"},
+                                               {"speaker": None, "content": "two"}]),
+    ])
+
+    contents = [m["content"] for m in scenes.read_scene(cid, sid)["messages"]]
+    assert sorted(contents) == ["Wait, I interrupt.", "one", "two"]
+    assert scenes.get_turn_sizes(cid, sid) == [2]
+
+
+def test_an_edit_racing_an_append_keeps_the_appended_message(monkeypatch, tmp_path):
+    """edit_message is a read-modify-write of the same body, so it loses an
+    append landing beside it just as surely as another append would."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Edited")
+    scenes.append_message(cid, sid, "user", "original")
+    _widen_the_write_window(monkeypatch)
+
+    _run_together([
+        lambda: scenes.edit_message(cid, sid, 0, "edited"),
+        lambda: scenes.append_message(cid, sid, "assistant", "appended"),
+    ])
+
+    contents = [m["content"] for m in scenes.read_scene(cid, sid)["messages"]]
+    assert sorted(contents) == ["appended", "edited"]
