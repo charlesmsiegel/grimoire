@@ -157,6 +157,12 @@ Two modes, mirroring the existing "Storage location" config page:
    `pathlib` store requires. SAF trees are not POSIX-visible and are therefore not
    usable without rewriting the entire store's I/O — rejected.
 
+   *Concurrency:* the same caveat as on the desktop applies, and more sharply
+   here — the phone and the PC are two devices, so do not play on both at once.
+   Grimoire's locking is machine-local (`store/proclock.py`) and cannot span
+   them; a lock held on the PC is invisible to the phone. Let the sync settle
+   before switching.
+
    *Play Store note:* `MANAGE_EXTERNAL_STORAGE` triggers a policy review. For
    personal/sideloaded use this is a non-issue; if we ever publish, the permission is
    justifiable ("user-configurable document library"), and default mode works without it.

@@ -13,7 +13,8 @@ joined).
 
 Who takes it:
 
-- every ``scenes`` mutator (``scenes._serialized``) — a scene file is
+- every ``scenes`` mutator (``scenes._serialized``), ``create_scene``
+  included — a scene file is
   rewritten whole, so two unlocked read-modify-writes lose one of them, and
   a transcript is the one thing here that cannot be regenerated (#254);
 - every campaign-sheet mutator (``sheets.write``, ``write_creation``,
@@ -35,15 +36,40 @@ Who takes it:
 
 Ordering rules (deadlock avoidance):
 
+    module-edit lock (``module_edit._M``)
+      └─ campaign locks, always in sorted cid order  (``hold_all``)
+           ├─ audit baseline lock   (``store/audit.py``)
+           └─ rolls lock            (``store/rolls.py``)
+
+- Every multi-campaign holder goes through ``hold_all``, which sorts. The two
+  that exist (module publication, the world-module rebind route) already
+  agreed before that existed, but only by accident — see ``hold_all``. No LLM
+  play flow ever holds more than its own campaign's lock.
 - campaign lock -> audit baseline lock, never reversed (``store/audit.py``).
-- The module-edit lock is taken *before* campaign locks; multi-campaign
-  holders (module publication, world-module rebind) are the only actors
-  that hold more than one campaign lock, and no LLM play flow ever holds
-  more than its own (``store/module_edit.py``).
 
 The lock is an ``RLock`` so a caller can compose lower-level mutators —
-``audit.apply_delta`` calls ``sheets.set_field`` under an already-held lock.
-Locks are process-local; the store is single-process by design.
+``audit.apply_delta`` calls ``sheets.set_field`` under an already-held lock —
+and it is *additionally* an OS advisory file lock (``store/proclock.py``), so
+it excludes concurrent **processes** and not merely threads (#234).
+
+Three limits on that, all deliberate:
+
+- **Not across devices.** The lock file is machine-local, so a lock held on
+  one device is invisible to another sharing the store through a synced
+  folder. No filesystem lock on a sync-replicated store can do better; the
+  sync client resolves simultaneous edits with conflict copies on its own
+  schedule. Detecting that after the fact (compare-and-swap on a content
+  digest) is a separate, larger change.
+- **Not across OS users**, whose lock directories differ.
+- **Not every campaign mutation** — only the ones that take this lock.
+  ``rolls`` keeps a private process-local registry (#255), and
+  ``campaigns.rename_campaign`` / ``set_campaign_response`` / ``touch`` /
+  ``delete_campaign`` take no lock at all.
+
+Contention raises ``StoreBusy`` after ``LOCK_TIMEOUT``; one handler in
+``main.create_app`` turns that into HTTP 409.
+
+Spec: docs/superpowers/specs/2026-07-28-cross-process-campaign-locks-design.md
 """
 
 from __future__ import annotations
