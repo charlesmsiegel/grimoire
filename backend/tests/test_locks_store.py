@@ -126,6 +126,52 @@ def test_scene_writes_serialize_on_the_campaign_lock(monkeypatch, tmp_path):
     assert _blocks_while_held(cid, lambda: scenes.edit_message(cid, sid, 0, "edited"))
 
 
+def _lock_is_free(cid) -> bool:
+    """Whether some *other* thread could take the campaign lock right now.
+
+    Probing from this thread would prove nothing: the lock is reentrant, so a
+    holder's own `acquire` always succeeds. Acquire and release both happen in
+    the probe thread — an RLock cannot be released by anyone else.
+    """
+    seen = []
+
+    def probe():
+        lock = locks.campaign_lock(cid)
+        got = lock.acquire(timeout=0.3)
+        seen.append(got)
+        if got:
+            lock.release()
+
+    t = threading.Thread(target=probe)
+    t.start()
+    t.join(timeout=5)
+    return bool(seen) and seen[0]
+
+
+@pytest.mark.parametrize("dated", [
+    lambda cid: scenes.create_scene(cid, "Hinted", "2026-06-29"),
+    lambda cid: scenes.set_datetime(cid, scenes.create_scene(cid, "Dated"), "2026-06-29"),
+])
+def test_calendar_plugin_code_never_runs_under_the_campaign_lock(monkeypatch, tmp_path, dated):
+    """`get_provider` imports every user-authored provider in
+    `<home>/calendars/` and `normalize` then runs that provider's own code.
+    Nothing bounds how long a hand-written plugin takes, so the two scene
+    mutators that need a calendar resolve it before they take the lock --
+    otherwise one bad calendar stalls every writer in the campaign."""
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+    free = []
+    real = scenes.calendars.get_provider
+
+    def watched(config):
+        free.append(_lock_is_free(cid))
+        return real(config)
+
+    monkeypatch.setattr(scenes.calendars, "get_provider", watched)
+    dated(cid)
+    assert free, "the calendar was never resolved -- the test proves nothing"
+    assert all(free), "the campaign lock was held across user calendar code"
+
+
 def test_a_campaign_lock_holder_can_still_write_a_scene(monkeypatch, tmp_path):
     """Reentrancy is load-bearing, not incidental: proposals.commit_narration
     persists the reply through a callback while holding this lock, and
