@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, type ModuleContentEntry, type ModuleDetail, type ModuleEditResult, type ModuleField } from "../api/client";
-import { ErrorList, ImpactConfirm, useModuleDryRun, type SaveFn } from "./ModuleEditor";
+import { ErrorList, ImpactConfirm, useModuleDryRun, type SaveFn } from "./moduleEditShared";
 import { RenamePrompt } from "./ModuleSchemaEditor";
 
 const CONTENT_KINDS = ["locations", "lore", "items", "groups", "creatures"];
