@@ -136,7 +136,10 @@ def _materialize_flat(cid: str, kind: str, eid: str) -> bool:
     dst = _flat_path(croot, kind, eid)
     dst.parent.mkdir(parents=True, exist_ok=True)
     text = src.read_text(encoding="utf-8")
-    with _recorded_base(cid, _flat_ref(kind, eid), entities.entity_hash(wroot, kind, eid) or "", dst):
+    # hashed from `text`, not re-read from the world: a world edit between the
+    # two would otherwise record a base for content the campaign never got, and
+    # sync would see world == base and skip the record forever (Codex review)
+    with _recorded_base(cid, _flat_ref(kind, eid), entities.content_hash(text), dst):
         atomic.write_text(dst, text)
     return True
 
@@ -298,7 +301,7 @@ def materialize_plotmap(cid: str) -> None:
         return   # nothing to copy; set_edges will create a fresh campaign map
     text = src.read_text(encoding="utf-8")
     dst = croot / "plotmap.json"
-    with _recorded_base(cid, "plotmap", greetings.plotmap_hash(wroot) or "", dst):
+    with _recorded_base(cid, "plotmap", greetings.plotmap_content_hash(text), dst):
         atomic.write_text(dst, text)
 
 
@@ -343,28 +346,30 @@ def materialize_actor(cid: str, kind: str, aid: str) -> None:
     croot, wroot = croot_of(cid), wroot_of(cid)
     if (croot / kind / aid / _actor_meta(kind)).exists():
         return
-    src = wroot / kind / aid
-    if not (src / _actor_meta(kind)).exists() or _flat_ref(kind, aid) in deleted(cid):
+    # one read of the world actor: the base and the bytes it covers, so the two
+    # cannot disagree even if the world moves mid-copy (Codex review)
+    taken = (characters.snapshot if kind == "characters" else pcs.snapshot)(wroot, aid)
+    if taken is None or _flat_ref(kind, aid) in deleted(cid):
         raise _actor_not_found(kind, aid)
+    base, files = taken
+    meta_name = _actor_meta(kind)
     dst = croot / kind / aid
     dst.mkdir(parents=True, exist_ok=True)
-    base = (characters.dir_hash if kind == "characters" else pcs.dir_hash)(wroot, aid)
-    ext = "json" if kind == "characters" else "md"
-    meta_src = src / _actor_meta(kind)
     # No meta here means no materialized actor, so any version file in the
     # campaign dir is residue from an interrupted copy. Drop it: overwriting
     # only what the world still has would resurrect a version purged in
     # between, and the base we are about to record excludes it (Codex review).
+    ext = "json" if kind == "characters" else "md"
     for p in dst.glob(f"*.{ext}"):
-        if p.name != meta_src.name:
+        if p.name != meta_name:
             p.unlink()
-    with _recorded_base(cid, _flat_ref(kind, aid), base or "", dst / meta_src.name):
-        # pc.md is itself an *.md sibling of the version files; skip it here so
-        # the meta write below stays the single commit point (see _recorded_base)
-        for p in sorted(src.glob(f"*.{ext}")):
-            if p.name != meta_src.name:
-                atomic.write_text(dst / p.name, p.read_text(encoding="utf-8"))
-        atomic.write_text(dst / meta_src.name, meta_src.read_text(encoding="utf-8"))
+    with _recorded_base(cid, _flat_ref(kind, aid), base, dst / meta_name):
+        # the meta is the single commit point, so it goes last -- `snapshot`
+        # puts it first, and for a PC it is an *.md sibling of the versions
+        for name, text in files:
+            if name != meta_name:
+                atomic.write_text(dst / name, text)
+        atomic.write_text(dst / meta_name, dict(files)[meta_name])
 
 
 def ensure_actor_writable(cid: str, kind: str, aid: str) -> Path:
