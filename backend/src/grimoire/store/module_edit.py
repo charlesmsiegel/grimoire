@@ -9,8 +9,9 @@ adds a third, a second grimoire process, which that design did not account for
 locks.campaign_lock(cid) across its swap, so LLM flows (which hold their
 single campaign lock across resolve/load/compute) never observe a
 half-published pack. Both locks are now OS file locks as well as in-process
-ones, so all three actors are excluded **on one machine**; two *devices*
-sharing a synced folder are still not, and cannot be by any filesystem lock.
+ones, so all three actors are excluded **on one machine, under one OS user**;
+two *devices* sharing a synced folder are still not, and cannot be by any
+filesystem lock, and neither are two OS accounts sharing one store.
 No machinery for two User actions racing.
 Specs: docs/superpowers/specs/2026-07-13-mechanics-phase8-authoring-ui-design.md,
 docs/superpowers/specs/2026-07-28-cross-process-campaign-locks-design.md.

@@ -142,9 +142,11 @@ def _serialized(fn):
     executes user-authored plugin code (see `_date_hint`).
 
     No longer in-process only: #234 made this lock an OS file lock as well, so
-    two grimoire processes on one machine serialize here too. Two *devices*
-    sharing a synced folder still race — no filesystem lock can cross them,
-    and the sync client resolves it with conflict copies. See `store/locks.py`.
+    two grimoire processes running as the same OS user on one machine serialize
+    here too. Two *devices* sharing a synced folder still race — no filesystem
+    lock can cross them, and the sync client resolves it with conflict copies.
+    So do two different OS accounts, whose lock directories differ. See
+    `store/locks.py`.
     """
     @functools.wraps(fn)
     def locked(cid, *args, **kwargs):

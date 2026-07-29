@@ -657,6 +657,68 @@ The existing suite is the regression guard for the drop-in claim:
 domain-serialization tests, and the two `_is_owned()` tests in
 `test_sheets_store.py`, all pass unchanged.
 
+## What changed during implementation
+
+This section is appended rather than folded in, so the design record stays
+honest about what was decided up front and what a review or the code forced
+later. Where this section and the text above disagree, this section is right.
+
+**Two premises above are false, and were only found by writing the code:**
+
+- **There is no lock-order inversion.** The Problem statement and the
+  ordering section both assume `module_edit._campaign_locks()` acquires in
+  `list_campaigns()` order against the rebind route's sorted order.
+  `list_campaigns()` walks `sorted(base.iterdir())` and reports the directory
+  name as the id — the same key the route sorts by. The two holders already
+  agree. `hold_all()` still lands, because that agreement is incidental and
+  undocumented and one refactor of `list_campaigns` away from becoming a real
+  cross-process deadlock, but it is a guardrail, not a bug fix.
+- **`scenes.append_message` is not unlocked**, and `create_scene` did not need
+  the widening this spec describes. #254 landed on main first and put every
+  scene mutator under the campaign lock — including `create_scene`'s whole
+  body, and *better* than planned here: it hoists the user-authored calendar
+  plugin call **out** of the lock, which this spec would have wrongly pulled
+  in, holding a campaign-wide lock across arbitrary plugin code. Only the
+  `capture_baseline` re-raise remained to do.
+
+**Changes the review gates forced, which the sections above predate:**
+
+- **Lock files are domain-namespaced.** The formula above
+  (`<cid-slug>-<sha256(cid)>.lock`) lets a campaign whose id is literally
+  `module-edit` hash onto the module-edit lock's own file. Publication takes
+  the module lock and *then* every campaign lock, so that campaign made
+  publication block on itself to the timeout and could make journal recovery
+  skip forever. `lock_path` now takes a `domain` and folds it into the digest,
+  not just the readable prefix.
+- **Startup guards all three steps**, not only `recover()`.
+  `migrate_scene_ids` reaches a campaign lock through `scenes.repad`, so
+  contention could abort boot *after* a partially applied migration. Each step
+  is guarded separately and logs at WARNING.
+- **SSE `on_error` contention is suppressed too.** It persists the partial
+  reply, which now takes a lock and can raise — from an already-started
+  response, where the 409 handler cannot reach it, truncating the stream with
+  no error frame at all.
+- **`finalize` is materialized with `list(...)`.** Guarding only the call would
+  let a generator finalizer's `StoreBusy` escape the `for` outside the handler.
+- **The busy SSE path does not "persist neither narration nor a new
+  proposal".** That claim was too strong: `finalize` is not transactional —
+  `_chat_stream` writes the proposal under one lock, releases it, then
+  `_persist_reply` takes it again. Contention on that second acquisition leaves
+  a proposal with no narration, which is the *sanctioned* recoverable direction
+  (the same state the documented fence crash-window produces). What is
+  guaranteed is that the busy path adds no narration without its proposal.
+- **The acquire handler keys on `depth`.** "A failure at any line leaves the
+  object usable" was false for an asynchronous exception landing after
+  `depth = 1`: the handler released the thread lock while leaving depth and the
+  fd set, so the lock claimed to be held with no owner and the next acquire
+  would skip the file lock entirely. It now unwinds an established hold through
+  `release()`.
+- **The `hold_all` deadline test was replaced.** The original could not
+  discriminate: `hold_all` raises on the first failure, so per-lock and shared
+  deadlines take identical wall-clock however many locks are contended. The
+  test now uses a slow-but-successful first acquisition followed by a contended
+  one.
+
 ## Follow-ups
 
 - Optimistic concurrency (CAS on a content digest) to *detect* the cross-device
