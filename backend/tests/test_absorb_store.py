@@ -458,6 +458,29 @@ def test_apply_edits_rejects_a_forged_dossier_target(monkeypatch, tmp_path):
     assert list(tmp_path.glob("**/pwned*")) == []
 
 
+def test_apply_edits_dossier_needs_a_real_character(monkeypatch, tmp_path):
+    """A forged row must not conjure a dossier-only phantom under characters/."""
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    applied, _ = absorb.apply_edits(cid, [
+        {"id": "dossier:ghost", "kind": "dossier",
+         "target": {"kind": "characters", "id": "ghost"}, "field": "dossier",
+         "before": "", "after": "a ghost"}])
+    assert applied == []
+    assert not (croot / "characters" / "ghost").exists()
+
+
+def test_apply_edits_dossier_rejects_a_non_character_target(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    _char(croot, "Seraphine")
+    applied, _ = absorb.apply_edits(cid, [
+        {"id": "dossier:seraphine", "kind": "dossier",
+         "target": {"kind": "lore", "id": "seraphine"}, "field": "dossier",
+         "before": "", "after": "wrong kind"}])
+    assert applied == []
+
+
 def test_apply_edits_records_dossier_in_changes(monkeypatch, tmp_path):
     from grimoire.store import scenes
     cid = _campaign(monkeypatch, tmp_path)
