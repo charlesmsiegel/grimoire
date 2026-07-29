@@ -57,6 +57,14 @@ function dirOf(path: string): string {
   return cut < 0 ? "" : path.slice(0, cut);
 }
 
+/**
+ * Glob syntax this matcher does not implement. fast-glob (what Vite uses)
+ * supports extglobs — `+(a|b)`, `@(a|b)`, `?(a)`, `!(a)`. Rather than match
+ * them wrongly and drop the real edges silently, a pattern containing one is
+ * reported as unanalyzable so the suite fails.
+ */
+const UNSUPPORTED_GLOB = /[?*+@!]\(/;
+
 /** A Vite glob pattern as a matcher over src-relative paths. */
 function globToRegExp(pattern: string): RegExp {
   let out = "";
@@ -65,6 +73,14 @@ function globToRegExp(pattern: string): RegExp {
     if (c === "*") {
       if (pattern[i + 1] === "*") { out += ".*"; i++; if (pattern[i + 1] === "/") i++; }
       else out += "[^/]*";
+    } else if (c === "[") {
+      // A character class passes through, with fast-glob's `!` negation
+      // rewritten to regex form. `./Module[SR]*Editor.tsx` is a valid pattern.
+      const close = pattern.indexOf("]", i + 1);
+      if (close < 0) { out += "\\["; continue; }
+      const body = pattern.slice(i + 1, close);
+      out += "[" + (body.startsWith("!") ? "^" + body.slice(1) : body) + "]";
+      i = close;
     } else if (c === "{") out += "(";
     else if (c === "}") out += ")";
     else if (c === ",") out += "|";
@@ -74,14 +90,26 @@ function globToRegExp(pattern: string): RegExp {
   return new RegExp(`^${out}$`);
 }
 
-/** Vite glob options that hand over data instead of evaluating the match. */
+/**
+ * Vite glob options that hand over data instead of evaluating the match.
+ * Matched as a whole parameter rather than a substring: `{ query: "?draw=1" }`
+ * is an ordinary custom query whose modules *are* imported, so reading it as
+ * raw would drop every edge the glob creates.
+ */
+const NON_EXECUTING_MODE = /^(raw|url|inline)$/;
+
 function globIsRaw(opts: ts.Node | undefined): boolean {
   if (!opts || !ts.isObjectLiteralExpression(opts)) return false;
-  return opts.properties.some((p) =>
-    ts.isPropertyAssignment(p) &&
-    ts.isIdentifier(p.name) && (p.name.text === "query" || p.name.text === "as") &&
-    ts.isStringLiteralLike(p.initializer) &&
-    /raw|url|inline/.test(p.initializer.text));
+  return opts.properties.some((p) => {
+    if (!ts.isPropertyAssignment(p) || !ts.isIdentifier(p.name)) return false;
+    if (!ts.isStringLiteralLike(p.initializer)) return false;
+    const value = p.initializer.text;
+    if (p.name.text === "as") return NON_EXECUTING_MODE.test(value);
+    if (p.name.text !== "query") return false;
+    // `query` is a query string: "?raw", "raw", or "?foo=1&raw".
+    return value.replace(/^\?/, "").split("&")
+      .some((param) => NON_EXECUTING_MODE.test(param.split("=")[0]));
+  });
 }
 
 /** Parse each file as what it actually is: `<Foo>x` is a cast in .ts, JSX in .tsx. */
@@ -195,8 +223,10 @@ function specifiers(code: string, path = "f.tsx"): string[] {
          (ts.isIdentifier(node.expression) && node.expression.text === "require"))) {
       const spec = literal(node.arguments[0]);
       if (spec) found.push(spec);
-    } else if (ts.isImportEqualsDeclaration(node) &&
+    } else if (ts.isImportEqualsDeclaration(node) && !node.isTypeOnly &&
                ts.isExternalModuleReference(node.moduleReference)) {
+      // `import type E = require("./x")` is erased like the other type-only
+      // forms, so counting it would report a cycle the runtime does not have.
       const spec = literal(node.moduleReference.expression);
       if (spec) found.push(spec);
     }
@@ -245,9 +275,16 @@ function globCalls(code: string, path: string) {
                                   scriptKind(path));
   const calls: { patterns: string[]; raw: boolean; analyzable: boolean }[] = [];
   const walk = (node: ts.Node): void => {
-    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) &&
-        node.expression.name.text === "glob" &&
-        ts.isMetaProperty(node.expression.expression)) {
+    // `new.target` is a MetaProperty too, so a class with a static `glob`
+    // method would otherwise read as a Vite glob and invent an edge.
+    const meta = ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.expression.name.text === "glob" &&
+      ts.isMetaProperty(node.expression.expression)
+        ? node.expression.expression : null;
+    if (ts.isCallExpression(node) && meta &&
+        meta.keywordToken === ts.SyntaxKind.ImportKeyword &&
+        meta.name.text === "meta") {
       const arg = node.arguments[0];
       const list = !arg ? []
         : ts.isStringLiteralLike(arg) ? [arg.text]
@@ -260,7 +297,7 @@ function globCalls(code: string, path: string) {
       calls.push({
         patterns: list,
         raw: globIsRaw(node.arguments[1]),
-        analyzable: literalArg,
+        analyzable: literalArg && !list.some((g) => UNSUPPORTED_GLOB.test(g)),
       });
     }
     ts.forEachChild(node, walk);
@@ -281,7 +318,13 @@ function globCalls(code: string, path: string) {
 /** Expand one pattern set against SOURCES, honouring Vite's `!` exclusions. */
 function expandPatterns(patterns: string[], from: string): string[] {
   const toRe = (p: string) => {
-    const base = normalize(dirOf(from) + "/" + p.split("?")[0]);
+    const bare = p.split("?")[0];
+    // A glob pattern can be root-absolute too. Always prefixing dirOf(from)
+    // would build `components/src/components/…`, matching nothing — and
+    // because the pattern is still a literal it would not trip OPAQUE_GLOBS.
+    const base = ROOT_ABSOLUTE.test(bare)
+      ? normalize(bare.replace(ROOT_ABSOLUTE, ""))
+      : normalize(dirOf(from) + "/" + bare);
     return base === null ? null : globToRegExp(base);
   };
   const include = patterns.filter((p) => !p.startsWith("!"))
@@ -429,7 +472,13 @@ const UNRESOLVED = [...SOURCES].flatMap(([path, code]) =>
 // Every section file plus the shared module. Deliberately narrower than
 // `Module\w*` so an unrelated future `ModulePicker.tsx` isn't dragged in,
 // but open enough that a new section editor is covered automatically.
-const MODULE_EDITOR = /^components\/(Module\w*Editor|moduleEditShared)\.tsx$/;
+// Any admitted extension, not just .tsx: a future `ModuleDataEditor.ts` must
+// be a cycle root in its own right. Walking only the existing roots would miss
+// a cycle between a new editor and its own helper — one that never leads back
+// to ModuleEditor, and so is never reached from any current entry point.
+const MODULE_EDITOR = new RegExp(
+  `^components/(Module\\w*Editor|moduleEditShared)(${
+    MODULE_EXTS.map((e) => e.replace(".", "\\.")).join("|")})$`);
 const ENTRY_POINTS = [...SOURCES.keys()]
   .filter((p) => MODULE_EDITOR.test(p) && !p.includes(".test."));
 
@@ -572,6 +621,61 @@ describe("module-editor import graph", () => {
     expect(dynamicArgs("const f = (p) => import(p);", "components/X.tsx")
       .filter((a) => !ts.isStringLiteralLike(a) && templatePattern(a) === null))
       .toHaveLength(1);
+  });
+
+  it("skips type-only import-equals", () => {
+    expect(specifiers(`import E = require("./ModuleEditor"); E.go();`, "a/b.ts"))
+      .toEqual(["./ModuleEditor"]);
+    expect(specifiers(`import type E = require("./ModuleEditor"); let x: E.T;`,
+                      "a/b.ts")).toEqual([]);
+  });
+
+  it("resolves root-absolute glob patterns from the project root", () => {
+    // Prefixing dirOf(from) would build `components/src/components/…`, which
+    // matches nothing — and the pattern is still a literal, so OPAQUE_GLOBS
+    // would not catch the loss either.
+    const code = 'const m = import.meta.glob("/src/components/Module*Editor.tsx",' +
+      ' { eager: true });';
+    expect(globEdges(code, "routes/Deep.tsx")).toEqual(
+      expect.arrayContaining(["components/ModuleEditor.tsx"]));
+  });
+
+  it("matches glob character classes", () => {
+    const code = 'const m = import.meta.glob("./Module[SR]*Editor.tsx",' +
+      ' { eager: true });';
+    const edges = globEdges(code, "components/X.tsx");
+    expect(edges).toEqual(expect.arrayContaining([
+      "components/ModuleSchemaEditor.tsx", "components/ModuleRulesEditor.tsx"]));
+    expect(edges).not.toContain("components/ModuleContentEditor.tsx");
+    // Extglob syntax is not implemented, so it must be reported rather than
+    // matched wrongly — `analyzable: false` routes it to OPAQUE_GLOBS.
+    expect(UNSUPPORTED_GLOB.test("./+(a|b).tsx")).toBe(true);
+    expect(UNSUPPORTED_GLOB.test("./Module[SR]*Editor.tsx")).toBe(false);
+  });
+
+  it("treats a raw glob query as a whole parameter", () => {
+    const raw = 'const m = import.meta.glob("./Module*Editor.tsx", { query: "?raw" });';
+    expect(globEdges(raw, "components/X.tsx")).toEqual([]);
+    // "?draw=1" merely contains "raw" — Vite still imports these modules.
+    const draw = 'const m = import.meta.glob("./Module*Editor.tsx", ' +
+      '{ query: "?draw=1", eager: true });';
+    expect(globEdges(draw, "components/X.tsx")).toEqual(
+      expect.arrayContaining(["components/ModuleEditor.tsx"]));
+  });
+
+  it("does not mistake new.target.glob for a Vite glob", () => {
+    // `new.target` is a MetaProperty as well, so an unguarded check invents an
+    // edge from an ordinary method call.
+    const code = 'class C { constructor() { new.target.glob("./ModuleEditor.tsx"); } }';
+    expect(globEdges(code, "components/X.tsx")).toEqual([]);
+  });
+
+  it("treats every admitted extension as a possible cycle root", () => {
+    expect(MODULE_EDITOR.test("components/ModuleDataEditor.ts")).toBe(true);
+    expect(MODULE_EDITOR.test("components/ModuleLegacyEditor.jsx")).toBe(true);
+    expect(MODULE_EDITOR.test("components/moduleEditShared.tsx")).toBe(true);
+    expect(MODULE_EDITOR.test("components/ModulePicker.tsx")).toBe(false);
+    expect(MODULE_EDITOR.test("routes/ModulesView.tsx")).toBe(false);
   });
 
   it("subtracts negated glob patterns", () => {
