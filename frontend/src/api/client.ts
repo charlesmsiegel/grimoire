@@ -343,7 +343,7 @@ export type CastDetail = { kind: "characters" | "pcs"; id: string; name: string;
 export type TimelineEvent = { date: string; text: string };
 export type StagedEdit = {
   id: string; kind: "character_state" | "lore" | "authored" | "relationship" | "bond" | "plot"
-    | "new_character" | "new_location" | "new_lore" | "sheet";
+    | "new_character" | "new_location" | "new_lore" | "sheet" | "dossier";
   target: { kind: string; id: string }; label: string; field: string;
   before: string; after: string; authored: boolean;
   payload?: Record<string, unknown>;
@@ -356,7 +356,7 @@ export type Mechanics = {
 export type DossierFailure = { id: string; reason: string };
 export type Dossiers = {
   status: "ok" | "degraded" | "failed" | "skipped"; reason: string | null;
-  refreshed: string[]; failed: DossierFailure[];
+  proposed: string[]; failed: DossierFailure[];
   /** NPCs the absorb budget ran out before reaching — never attempted (#243). */
   skipped: string[];
 };
@@ -924,8 +924,11 @@ export const api = {
     request<CastDetail>("GET", `/api/campaigns/${cid}/scenes/${sid}/cast/${kind}/${id}`),
   editMessage: (cid: string, sid: string, index: number, content: string) =>
     request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/scenes/${sid}/messages/${index}`, { content }),
-  absorbScene: (cid: string, sid: string) =>
-    request<SceneAbsorb>("POST", `/api/campaigns/${cid}/scenes/${sid}/absorb`),
+  // `force` re-runs an absorb the backend has already recorded in the chronicle;
+  // without it that POST is a 409 (kind "already_absorbed") -- see #235.
+  absorbScene: (cid: string, sid: string, force = false) =>
+    request<SceneAbsorb>("POST",
+      `/api/campaigns/${cid}/scenes/${sid}/absorb${force ? "?force=true" : ""}`),
   saveChronicle: (cid: string, sid: string,
                   body: { one_line: string; summary: string; keywords: string[];
                           timeline_events: TimelineEvent[]; edits: StagedEdit[] }) =>

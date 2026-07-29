@@ -417,6 +417,49 @@ def test_apply_edits_new_lore_creates_entity(monkeypatch, tmp_path):
     assert got["body"].strip() == "An old pact." and got["meta"]["keys"] == "pact"
 
 
+def test_apply_edits_writes_dossier(monkeypatch, tmp_path):
+    from grimoire.store import dossiers
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    ch = _char(croot, "Seraphine")
+    applied, _ = absorb.apply_edits(cid, [
+        {"id": f"dossier:{ch}", "kind": "dossier",
+         "target": {"kind": "characters", "id": ch}, "field": "dossier",
+         "before": "", "after": "Seraphine now walks with the party."}])
+    assert applied == [f"dossier:{ch}"]
+    assert dossiers.read(croot, ch) == "Seraphine now walks with the party."
+
+
+def test_apply_edits_skips_empty_dossier(monkeypatch, tmp_path):
+    """An empty `after` would blank a good dossier -- skip rather than erase."""
+    from grimoire.store import dossiers
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    ch = _char(croot, "Seraphine")
+    dossiers.write(croot, ch, "Seraphine is wary.")
+    applied, _ = absorb.apply_edits(cid, [
+        {"id": f"dossier:{ch}", "kind": "dossier",
+         "target": {"kind": "characters", "id": ch}, "field": "dossier",
+         "before": "Seraphine is wary.", "after": "   "}])
+    assert applied == []
+    assert dossiers.read(croot, ch) == "Seraphine is wary."
+
+
+def test_dossier_edit_stages_before_and_after(monkeypatch, tmp_path):
+    from grimoire.store import dossiers
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    dossiers.write(croot, "seraphine", "Seraphine is wary.")
+    edit = dossiers.stage_edit(croot, "seraphine", "Seraphine", "Seraphine is loyal.")
+    assert edit == {"id": "dossier:seraphine", "kind": "dossier",
+                    "target": {"kind": "characters", "id": "seraphine"},
+                    "label": "Seraphine — campaign dossier", "field": "dossier",
+                    "before": "Seraphine is wary.", "after": "Seraphine is loyal.",
+                    "authored": False}
+    assert dossiers.stage_edit(croot, "seraphine", "Seraphine", "Seraphine is wary.") is None
+    assert dossiers.stage_edit(croot, "seraphine", "Seraphine", "  ") is None
+
+
 def test_parse_output_relationship_and_bond_lists():
     text = ('{"one_line": "", "summary": "", "keywords": [], "timeline_events": [],'
             ' "character_state_edits": [], "lore_edits": [], "authored_edits": [],'
