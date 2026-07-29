@@ -24,9 +24,13 @@ def _worlds_dir() -> Path:
     return home() / "worlds"
 
 
-# An id `slugify` can never emit (it produces only [a-z0-9-]), so this names a
-# directory the store never creates -- see world_root_or_missing.
-_NO_WORLD = ".none"
+# The no-world root sits *outside* `worlds/` on purpose: anything under
+# `worlds/` is by definition an addressable world -- `list_worlds` offers any
+# directory there holding a world.md, and a world id resolves to it -- so a
+# sentinel in that namespace would be a world a restored or synced store could
+# supply, and every world-less campaign would inherit its records. Nothing
+# creates this path.
+_NO_WORLD_DIR = ".no-world"
 
 
 def world_root(wid: str) -> Path:
@@ -46,15 +50,28 @@ def world_root_or_missing(wid: str) -> Path:
     """The world root for a campaign's recorded world, which may be unset.
 
     An empty id means the campaign has no world at all, so this hands back a
-    path that cannot exist and every world-side read finds nothing -- which is
-    what these callers already wanted from `world_root("")`. What they got was
-    the worlds parent dir, which exists and holds every world.
+    path that does not exist and every world-side read finds nothing -- which
+    is what these callers already wanted from `world_root("")`. What they got
+    was the worlds parent dir, which exists and holds every world.
     """
-    return world_root(wid or _NO_WORLD)
+    return world_root(wid) if wid else home() / _NO_WORLD_DIR
 
 
 def world_meta_path(wid: str) -> Path:
     return world_root(wid) / "world.md"
+
+
+def world_exists(wid: str) -> bool:
+    """Existence check that survives an id `world_root` refuses to resolve.
+
+    Callers testing "is there such a world?" want False for an unusable id,
+    not an exception -- an id that can't name a world dir is exactly as absent
+    as one that names a missing dir.
+    """
+    try:
+        return world_meta_path(wid).exists()
+    except WorldNotFound:
+        return False
 
 
 def list_worlds() -> list[dict]:
@@ -101,10 +118,12 @@ def read_world(wid: str) -> dict:
 
 def world_name(wid: str) -> str | None:
     """Just the display name — no entity counts, one file read (for embedding
-    in other payloads without read_world's directory sweeps)."""
-    mp = world_meta_path(wid)
-    if not mp.exists():
+    in other payloads without read_world's directory sweeps). A nullable
+    lookup: an id that can't resolve to a world reports absence, so a campaign
+    with no world recorded embeds cleanly instead of raising."""
+    if not world_exists(wid):
         return None
+    mp = world_meta_path(wid)
     meta, _ = parse_frontmatter(mp.read_text(encoding="utf-8"))
     return meta.get("name", wid)
 
