@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { api, type ModuleDetail, type ModuleEditResult } from "../api/client";
-import { ErrorList, ImpactConfirm, useModuleDryRun, type SaveFn } from "./ModuleEditor";
+import { ErrorList, ImpactConfirm, useModuleDryRun, type SaveFn } from "./moduleEditShared";
 import { RenamePrompt } from "./ModuleSchemaEditor";
 
 type OutcomeRow = { label: string; when: string };

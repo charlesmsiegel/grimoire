@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { api, type ModuleDetail, type ModuleEditResult, type ModuleField } from "../api/client";
-import { ErrorList, ImpactConfirm, useModuleDryRun, type SaveFn } from "./ModuleEditor";
+import { ErrorList, ImpactConfirm, useModuleDryRun, type SaveFn } from "./moduleEditShared";
 
 const FIELD_TYPES = ["number", "dots", "track", "resource", "text", "list", "ref"];
 const REF_KINDS = ["locations", "lore", "items", "groups", "creatures"];
