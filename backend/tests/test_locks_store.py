@@ -280,6 +280,93 @@ def test_borrowers_neither_re_export_nor_re_implement_the_registry(mod):
 
 def test_module_edit_holds_every_campaign_lock_from_this_registry():
     """The multi-campaign holder (User-edit vs LLM-play exclusion) must take
-    the same registry's locks, not a private one."""
+    the same registry's locks, not a private one. It reaches them through
+    ``locks.hold_all`` (#234), which is where the sorted-order rule lives; the
+    order itself is asserted behaviourally in
+    ``test_module_edit_acquires_campaign_locks_in_sorted_order``."""
     from grimoire.store import module_edit
-    assert "locks.campaign_lock(" in inspect.getsource(module_edit._campaign_locks)
+    assert "locks.hold_all(" in inspect.getsource(module_edit._campaign_locks)
+
+
+# ---- hold_all: one deadline, sorted order (#234) ----
+#
+# Sorted order is what keeps the two multi-campaign holders from deadlocking
+# once these locks are cross-process.
+#
+# Note what these tests are and are not. The two holders already AGREE today:
+# module_edit._campaign_locks() iterates list_campaigns(), which walks
+# `sorted(base.iterdir())` and reports each directory name as the id, so it is
+# already cid-sorted -- the same key put_world_module sorts by. There is no
+# live inversion to fix.
+#
+# What is missing is any guarantee of that. The agreement is incidental,
+# undocumented, and one refactor of list_campaigns() (sort by name, by
+# `updated`, drop the sort) away from becoming a genuine cross-process
+# deadlock. hold_all() makes the rule explicit and these tests hold it there.
+
+
+def test_hold_all_acquires_in_sorted_order(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    order = []
+    real = locks.campaign_lock
+
+    def spy(cid):
+        order.append(cid)
+        return real(cid)
+
+    monkeypatch.setattr(locks, "campaign_lock", spy)
+    with locks.hold_all(["zeta", "alpha", "mid"]):
+        pass
+    assert order == ["alpha", "mid", "zeta"]
+
+
+def test_hold_all_holds_every_named_lock(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    with locks.hold_all(["a", "b", "c"]):
+        assert all(locks.campaign_lock(c)._is_owned() for c in ("a", "b", "c"))
+    assert not any(locks.campaign_lock(c)._is_owned() for c in ("a", "b", "c"))
+
+
+def test_module_edit_acquires_campaign_locks_in_sorted_order(monkeypatch, tmp_path):
+    """Behavioural, not a source grep: spy on the registry and assert the ORDER
+    module_edit actually asks for. A source assertion would pass on a docstring
+    mention and would not catch an alias."""
+    from grimoire.store import module_edit
+
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Realm")
+    for name in ("Zulu", "Alpha", "Mike"):
+        campaigns.create_campaign(name, wid, module="pool-basic")
+
+    order = []
+    real = locks.campaign_lock
+    monkeypatch.setattr(locks, "campaign_lock",
+                        lambda c: (order.append(c), real(c))[1])
+    with module_edit._campaign_locks():
+        pass
+    assert len(order) == 3, f"acquired nothing: {order}"
+    assert order == sorted(order), f"unsorted acquisition: {order}"
+
+
+def test_world_module_rebind_acquires_in_sorted_order(monkeypatch, tmp_path):
+    """Same guarantee for the other multi-lock holder, through the real route."""
+    from fastapi.testclient import TestClient
+
+    from grimoire import main
+
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Realm")
+    for name in ("Zulu", "Alpha", "Mike"):
+        campaigns.create_campaign(name, wid, module="pool-basic")
+
+    order = []
+    real = locks.campaign_lock
+    monkeypatch.setattr(locks, "campaign_lock",
+                        lambda c: (order.append(c), real(c))[1])
+    client = TestClient(main.create_app())
+    # A DIFFERENT module from the campaigns' current one, so the route cannot
+    # take a no-op path and acquire nothing. ("none" is rejected as reserved.)
+    r = client.put(f"/api/worlds/{wid}/module", json={"module": "d20-basic"})
+    assert r.status_code == 200, r.text
+    assert len(order) == 3, f"the route acquired nothing: {order}"  # not vacuous
+    assert order == sorted(order), f"unsorted acquisition: {order}"

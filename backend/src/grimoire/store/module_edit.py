@@ -19,7 +19,7 @@ import shutil
 import threading
 import uuid
 import zipfile
-from contextlib import ExitStack, contextmanager
+from contextlib import contextmanager
 from pathlib import Path
 
 from . import atomic, campaigns, locks, modules, proposals, sheets, worlds
@@ -503,11 +503,17 @@ def _run_migration(mid: str, migration: dict) -> dict:
 @contextmanager
 def _campaign_locks():
     """Every campaign's sheet lock: the User-edit vs LLM-play exclusion.
-    Order is irrelevant — the module edit is the only multi-lock holder that
-    can run concurrently with anything (LLM flows hold exactly one)."""
-    with ExitStack() as stack:
-        for c in campaigns.list_campaigns():
-            stack.enter_context(locks.campaign_lock(c["id"]))
+
+    Order is *not* irrelevant, as this docstring used to claim. Once campaign
+    locks are cross-process (#234) two multi-lock holders acquiring the same
+    campaigns in different orders deadlock, and the global _M no longer masks
+    it. `locks.hold_all` sorts, and is the single place that rule lives.
+
+    Known limit, pre-existing: the enumeration is a snapshot, so a campaign
+    another process creates afterwards is not covered, and campaign deletion
+    takes no lock at all.
+    """
+    with locks.hold_all(c["id"] for c in campaigns.list_campaigns()):
         yield
 
 
