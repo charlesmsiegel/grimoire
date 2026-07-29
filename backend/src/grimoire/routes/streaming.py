@@ -98,7 +98,23 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
                 on_error(watcher)
             yield _sse({"error": {"detail": exc.detail, "kind": exc.kind}})
             return
-        for frame in finalize(watcher):
+        try:
+            # list(), not a bare call: finalize() runs OUTSIDE the try above,
+            # and if it ever returns a generator, guarding only the call would
+            # let StoreBusy escape from the `for` below -- outside this handler,
+            # aborting the stream with no frame emitted at all.
+            frames = list(finalize(watcher))
+        except store.locks.StoreBusy as exc:
+            # Deliberately NOT on_error: that persists watcher.narration, and
+            # narration whose roll fence has no proposal record destroys the
+            # proposal-before-narration guarantee this ordering exists for.
+            # So persist neither the narration nor a new proposal; the turn is
+            # lost and the user re-sends. A lost turn is recoverable, a
+            # transcript whose mechanical decision point has no proposal is
+            # not (#234).
+            yield _sse({"error": {"detail": str(exc), "kind": "busy"}})
+            return
+        for frame in frames:
             yield frame
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

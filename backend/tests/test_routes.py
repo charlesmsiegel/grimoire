@@ -5569,3 +5569,79 @@ def test_turn_override_still_reaches_the_cascade(client):
     finally:
         store.context.build_messages = real
     assert captured["turn"] == {"response_preset": "terse"}
+
+
+# ---- contention during adjudication (#234) ----
+
+
+def test_adjudication_contention_is_a_409_not_a_check_error(client, monkeypatch):
+    """resolve_check takes the campaign lock internally. Contention is not a
+    check failure and must not be dressed up as one -- the broad
+    `except Exception` around resolve_check would otherwise report it as
+    check_error, which tells the user to go fix a check that is fine."""
+    cid, sid, _ = _mech_scene(client)
+    _emit_fence(client, cid, sid,
+                '{"check": "brawl", "actor": "characters:mara", "difficulty": 6}')
+    rec = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+
+    def busy(*a, **k):
+        raise store.locks.CampaignBusy(cid)
+
+    monkeypatch.setattr(store.checks, "resolve_check", busy)
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal", json={
+        "proposal": rec["id"], "action": "accept", "check": "brawl",
+        "actor": "characters:mara", "difficulty": 6, "modifier": 0})
+
+    assert resp.status_code == 409, resp.text
+    assert "check_error" not in resp.text
+    # reverted, so the record is adjudicable again rather than stuck
+    after = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert after["status"] == "pending"
+
+
+def test_adjudication_leaves_resolving_when_the_revert_is_also_busy(client, monkeypatch):
+    """If the revert itself contends, the record stays `resolving`. That needs
+    no new machinery: `resolving` is in proposals.NON_TERMINAL, so the next
+    send's supersede() retires it, and until then the route answers 409
+    'adjudication in progress', which is accurate.
+
+    Characterization, not a regression guard: verified that this also passes
+    without the StoreBusy handler above, because the broad path's own
+    transition() then raises the same CampaignBusy and reaches the same 409.
+    It is here to pin the recoverability that makes "best effort revert" an
+    acceptable answer -- if `resolving` ever leaves NON_TERMINAL, a contended
+    revert starts stranding proposals and this goes red.
+    """
+    cid, sid, _ = _mech_scene(client)
+    _emit_fence(client, cid, sid,
+                '{"check": "brawl", "actor": "characters:mara", "difficulty": 6}')
+    rec = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+
+    def busy(*a, **k):
+        raise store.locks.CampaignBusy(cid)
+
+    # The revert must fail, but the CLAIM (pending -> resolving) must succeed --
+    # claim() goes through transition() too, so patching every call would stop
+    # the record ever reaching `resolving` and the assertion below would be
+    # testing nothing. Let the first transition through, break the rest.
+    real_transition = store.proposals.transition
+    seen = []
+
+    def flaky(cid_, sid_, pid_, expect, target, *a, **k):
+        seen.append(target)
+        if len(seen) == 1:
+            return real_transition(cid_, sid_, pid_, expect, target, *a, **k)
+        raise store.locks.CampaignBusy(cid_)
+
+    monkeypatch.setattr(store.checks, "resolve_check", busy)
+    monkeypatch.setattr(store.proposals, "transition", flaky)
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal", json={
+        "proposal": rec["id"], "action": "accept", "check": "brawl",
+        "actor": "characters:mara", "difficulty": 6, "modifier": 0})
+
+    assert resp.status_code == 409, resp.text
+    assert seen and seen[0] == "resolving", f"the claim never landed: {seen}"
+    monkeypatch.setattr(store.proposals, "transition", real_transition)
+    after = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert after["status"] == "resolving", "the failed revert should leave it here"
+    assert after["status"] in store.proposals.NON_TERMINAL  # the next send retires it
