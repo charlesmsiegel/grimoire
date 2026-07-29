@@ -58,13 +58,58 @@ function dirOf(path: string): string {
 }
 
 /**
- * Every module specifier in a file, via TypeScript's own preprocessor: it
- * covers static imports, `export … from`, `require` and dynamic `import()`
- * (including template-literal and comment-interrupted forms), and — unlike a
- * regex — never mistakes a specifier-shaped comment or string for an import.
+ * Every specifier that survives to the emitted JavaScript, via the TypeScript
+ * AST. Static imports, `export … from`, side-effect imports and dynamic
+ * `import()` all count; unlike a regex this never mistakes a
+ * specifier-shaped comment or string for an import.
+ *
+ * Type-only edges are excluded deliberately. `import type { X }`, `export
+ * type { X } from`, and a clause whose every named binding is `type X` are
+ * erased at emit, so they cannot participate in an initialization cycle —
+ * counting them would reject a valid change (a section needing only a *type*
+ * from ModuleEditor) as a runtime cycle that does not exist.
  */
-const specifiers = (code: string) =>
-  ts.preProcessFile(code, true, true).importedFiles.map((f) => f.fileName);
+function specifiers(code: string): string[] {
+  const src = ts.createSourceFile("f.tsx", code, ts.ScriptTarget.Latest,
+                                  true, ts.ScriptKind.TSX);
+  const found: string[] = [];
+  const literal = (n: ts.Node | undefined) =>
+    n && ts.isStringLiteral(n) ? n.text : undefined;
+
+  for (const st of src.statements) {
+    if (ts.isImportDeclaration(st)) {
+      const clause = st.importClause;
+      if (clause?.isTypeOnly) continue;                    // import type { … }
+      const named = clause?.namedBindings;
+      // A clause with only `{ type A, type B }` and no default/namespace
+      // binding emits nothing either.
+      if (named && ts.isNamedImports(named) && !clause?.name &&
+          named.elements.length > 0 &&
+          named.elements.every((e) => e.isTypeOnly)) continue;
+      const spec = literal(st.moduleSpecifier);
+      if (spec) found.push(spec);
+    } else if (ts.isExportDeclaration(st)) {
+      if (st.isTypeOnly) continue;                         // export type … from
+      const clause = st.exportClause;
+      if (clause && ts.isNamedExports(clause) && clause.elements.length > 0 &&
+          clause.elements.every((e) => e.isTypeOnly)) continue;
+      const spec = literal(st.moduleSpecifier);
+      if (spec) found.push(spec);
+    }
+  }
+
+  // Dynamic import() can appear anywhere, and is always a runtime edge.
+  const walk = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) &&
+        node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+      const spec = literal(node.arguments[0]);
+      if (spec) found.push(spec);
+    }
+    ts.forEachChild(node, walk);
+  };
+  ts.forEachChild(src, walk);
+  return found;
+}
 
 /**
  * TypeScript lets a specifier name the file that will be *emitted*, so
@@ -79,8 +124,18 @@ const JS_TO_TS: Record<string, string[]> = {
   ".cjs": [".cts"],
 };
 
+/**
+ * Vite queries that turn the target into data rather than executing it:
+ * `./Foo.tsx?raw` yields Foo's *source text* as a string and never evaluates
+ * Foo. Such a request is an asset edge, not an initialization edge — resolving
+ * it to the underlying module would invent a cycle that the build never has.
+ * (This file's own `import.meta.glob(..., "?raw")` is exactly that case.)
+ */
+const NON_EXECUTING_QUERY = /[?&](raw|url|inline)(&|$)/;
+
 /** Resolve a relative specifier to a src-relative source path, or null. */
 function resolve(from: string, spec: string): string | null {
+  if (NON_EXECUTING_QUERY.test(spec)) return null;
   const base = normalize(dirOf(from) + "/" + spec.split("?")[0]);
   if (base === null) return null;
   // `base === ""` is the src root itself — a bare `".."` from a component —
@@ -120,6 +175,9 @@ const GRAPH = new Map(
  * keeps a new asset extension from tripping the assertion below.
  */
 function isCodeSpecifier(spec: string): boolean {
+  // `./Foo.tsx?raw` names a module file but imports its text, so `resolve`
+  // deliberately returns null for it — it must not count as a lost edge.
+  if (NON_EXECUTING_QUERY.test(spec)) return false;
   const name = spec.split("?")[0].split("/").pop() ?? "";
   if (/^\.*$/.test(name)) return true; // a bare `.` or `..` directory target
   const dot = name.lastIndexOf(".");
@@ -171,6 +229,37 @@ describe("module-editor import graph", () => {
       "components/ModuleDisplayEditor.tsx",
       "components/moduleEditShared.tsx",
     ]));
+  });
+
+  it("counts only edges that survive to the emitted JavaScript", () => {
+    // Type-only edges are erased at emit and cannot cause an initialization
+    // cycle. Counting them would fail a valid change — a section importing
+    // only a *type* from ModuleEditor — as a runtime cycle that isn't there.
+    expect(specifiers(`import { A } from "./v";`)).toEqual(["./v"]);
+    expect(specifiers(`import type { A } from "./t";`)).toEqual([]);
+    expect(specifiers(`import { type A, type B } from "./t";`)).toEqual([]);
+    expect(specifiers(`import { type A, B } from "./v";`)).toEqual(["./v"]);
+    expect(specifiers(`import D, { type A } from "./v";`)).toEqual(["./v"]);
+    expect(specifiers(`export type { A } from "./t";`)).toEqual([]);
+    expect(specifiers(`export { A } from "./v";`)).toEqual(["./v"]);
+    expect(specifiers(`import "./side-effect";`)).toEqual(["./side-effect"]);
+    expect(specifiers(`const f = () => import("./dyn");`)).toEqual(["./dyn"]);
+    // …and no false positives from comments or ordinary strings.
+    expect(specifiers(`// import { A } from "./c";\nconst s = 'from "./s"';`))
+      .toEqual([]);
+  });
+
+  it("treats non-executing Vite queries as asset edges", () => {
+    // `?raw` hands over the file's text; the target module never evaluates,
+    // so it cannot be part of an initialization cycle.
+    const from = "components/ModuleEditor.tsx";
+    expect(resolve(from, "./ModuleSchemaEditor.tsx?raw")).toBeNull();
+    expect(resolve(from, "./ModuleSchemaEditor.tsx?url")).toBeNull();
+    expect(resolve(from, "./ModuleSchemaEditor.tsx")).toBe(
+      "components/ModuleSchemaEditor.tsx");
+    // …and the completeness assertion must agree, or a `?raw` import would
+    // register as an edge the resolver lost.
+    expect(isCodeSpecifier("./ModuleSchemaEditor.tsx?raw")).toBe(false);
   });
 
   it("resolves the specifier forms the bundler accepts", () => {
