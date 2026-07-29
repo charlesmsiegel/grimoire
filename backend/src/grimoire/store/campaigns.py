@@ -56,12 +56,18 @@ _NO_WORLD = "(no world)"
 def world_root_of(cid: str) -> Path:
     """The root of the campaign's world, or an unoccupiable path if it has none.
 
-    Raises CampaignNotFound for a campaign that isn't there. Callers holding a
-    world id they know is set should use `worlds.world_root` directly; this is
-    for the ones reading a campaign's `world` meta, which may be empty.
+    A stored `world` the guard refuses to resolve — a restored or hand-edited
+    campaign can carry one — counts as "no world" rather than raising: a world
+    directory that has been deleted already reads as inheriting nothing, and a
+    reference that cannot name one is no different. Raises CampaignNotFound
+    for a campaign that isn't there. Callers holding a world id they know is
+    set should use `worlds.world_root` directly.
     """
     wid = read_campaign(cid)["meta"].get("world", "")
-    return worlds.world_root(wid) if wid else campaign_meta_path(cid) / _NO_WORLD
+    try:
+        return worlds.world_root(wid)
+    except worlds.WorldNotFound:
+        return campaign_meta_path(cid) / _NO_WORLD
 
 
 def campaign_exists(cid: str) -> bool:
