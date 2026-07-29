@@ -111,7 +111,7 @@ android/                          ← new top-level Gradle project
 │         └─ uvicorn (pure-python, single worker)                │
 │              └─ create_app()  ← identical FastAPI app          │
 │                   ├─ StaticFiles → extracted frontend assets   │
-│                   ├─ /api/*     → routes.py, store/*           │
+│                   ├─ /api/*     → routes/*, store/*            │
 │                   └─ httpx ──HTTPS──► openrouter.ai / chub.ai  │
 │  HOME → app storage, so the store root resolves on-device      │
 └────────────────────────────────────────────────────────────────┘
@@ -204,7 +204,7 @@ platforms, because both platforms run that exact code.
 ## 6. Changes required in the existing codebase
 
 Deliberately tiny; each also makes the desktop build more relocatable.
-Items 1, 2 and 5 (plus the `routes._dump` shim from §7 risk 1) shipped together
+Items 1, 2 and 5 (plus the `routes.common._dump` shim from §7 risk 1) shipped together
 with the `android/` scaffold:
 
 1. **`prompts.py`:** `TEMPLATES_DIR` is `Path(__file__)…/templates` (repo-relative).
@@ -224,13 +224,13 @@ with the `android/` scaffold:
    worker — uvloop/httptools don't build there and a single local client
    doesn't need them) and skips tiktoken (heuristic fallback). ✅
 
-Nothing in `routes.py` or `store/` changes.
+Nothing in `routes/` or `store/` changes.
 
 ## 7. Risks, with mitigations
 
 | # | Risk | Severity | Mitigation |
 |---|------|----------|------------|
-| 1 | **`pydantic-core` wheel on Android.** `fastapi>=0.110` → pydantic v2 → Rust `pydantic-core`. Chaquopy's package repo may not carry it. | **Medium — fallback proven** (still the Phase 0 device check) | In order: (a) check Chaquopy's repo / recent releases; (b) build the wheel ourselves once per pydantic upgrade with maturin + Android NDK (`aarch64-linux-android`) — pydantic-core is a clean maturin build, and Chaquopy accepts local wheel dirs via `pip { options "--find-links", … }`; (c) pin the pure-python pydantic 1.10 line — FastAPI still dual-supports v1. The codebase was audited for this: ~50 request models that are plain typed fields (no `Field`, validators, or `ConfigDict`), and the only v2-specific API (`model_dump()`, 4 call sites) is wrapped in a v1/v2-agnostic `routes._dump()` helper — so (c) is an install-time pin, not a code change. **Verified:** the full 738-test backend suite passes under pydantic 1.10 / FastAPI 0.115 / plain uvicorn / no tiktoken — i.e. under the exact Android dependency set. Dataclasses are *not* a fallback: the pydantic dependency is structural to FastAPI's request parsing, not to our models. |
+| 1 | **`pydantic-core` wheel on Android.** `fastapi>=0.110` → pydantic v2 → Rust `pydantic-core`. Chaquopy's package repo may not carry it. | **Medium — fallback proven** (still the Phase 0 device check) | In order: (a) check Chaquopy's repo / recent releases; (b) build the wheel ourselves once per pydantic upgrade with maturin + Android NDK (`aarch64-linux-android`) — pydantic-core is a clean maturin build, and Chaquopy accepts local wheel dirs via `pip { options "--find-links", … }`; (c) pin the pure-python pydantic 1.10 line — FastAPI still dual-supports v1. The codebase was audited for this: ~50 request models that are plain typed fields (no `Field`, validators, or `ConfigDict`), and the only v2-specific API (`model_dump()`, 4 call sites) is wrapped in a v1/v2-agnostic `routes.common._dump()` helper — so (c) is an install-time pin, not a code change. **Verified:** the full 738-test backend suite passes under pydantic 1.10 / FastAPI 0.115 / plain uvicorn / no tiktoken — i.e. under the exact Android dependency set. Dataclasses are *not* a fallback: the pydantic dependency is structural to FastAPI's request parsing, not to our models. |
 | 2 | **`tiktoken` wheel (Rust).** | Low | Ship without it — `count_tokens` already falls back to `len//4` (context.py:439). Optionally build the wheel later (same maturin path) for exact budgeting. |
 | 3 | **`Pillow` wheel (C).** | Low | In Chaquopy's official repo. Thumbnails (`store/thumbs.py`) work. |
 | 4 | Remaining deps (`httpx`, `jinja2`, `holidays`, `pyluach`, `certifi`, `python-multipart`, `uvicorn` sans extras) | None | Pure Python. |
