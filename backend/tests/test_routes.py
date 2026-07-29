@@ -2222,6 +2222,22 @@ def test_absorb_reports_an_unreadable_npc_card_as_a_dossier_failure(client):
     assert body["dossiers"]["failed"][0]["reason"].startswith("CharacterNotFound")
 
 
+def test_refresh_dossiers_reports_an_unreadable_scene_cast(client, monkeypatch):
+    # The outer boundary: the phase can't even enumerate who was present. Driven
+    # against the helper rather than the route, because absorb reads the cast
+    # earlier too -- patching it globally would blow up before this phase runs.
+    import asyncio
+
+    _, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    monkeypatch.setattr(store.appearances, "scene_cast",
+                        lambda *a: (_ for _ in ()).throw(OSError("appearances.json is garbled")))
+    out = asyncio.run(routes._refresh_dossiers(cid, sid, "transcript", _DossierFake(), {}))
+    assert out == {
+        "status": "failed", "reason": "could not read the scene cast: appearances.json is garbled",
+        "refreshed": [], "failed": []}
+
+
 def test_absorb_dossiers_are_skipped_with_no_npcs_present(client):
     _, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
