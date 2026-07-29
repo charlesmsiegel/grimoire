@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from grimoire.llm import LLMError
+from grimoire.llm_errors import LLMError
 from grimoire.openai_compatible import OpenAICompatibleClient, OpenAICompatibleError, _strict_messages
 
 SSE_BODY = (

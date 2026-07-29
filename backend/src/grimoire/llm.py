@@ -1,24 +1,19 @@
-"""Provider-agnostic LLM surface: shared error type and (Task 4) dispatch facade."""
+"""Provider-agnostic LLM surface: the dispatch facade over the providers.
+
+The shared error type lives in `llm_errors.py`, not here — see its docstring.
+"""
 
 from __future__ import annotations
 
-
-class LLMError(Exception):
-    def __init__(self, kind: str, detail: str = ""):
-        super().__init__(detail or kind)
-        self.kind = kind  # missing_key | auth | rate_limit | network | bad_response | missing_dependency
-        self.detail = detail or kind
+from .claude_agent import ClaudeAgentClient
+from .openai_compatible import OpenAICompatibleClient
+from .openrouter import OpenRouterClient
 
 
 class LLMClient:
     """Dispatches each call to the resolved connection's kind."""
 
     def __init__(self, openrouter=None, claude=None, openai_compatible=None):
-        # Imported here rather than at module top: openrouter.py imports
-        # LLMError from this module, so top-level imports would be circular.
-        from .claude_agent import ClaudeAgentClient
-        from .openrouter import OpenRouterClient
-        from .openai_compatible import OpenAICompatibleClient
         self._openrouter = openrouter if openrouter is not None else OpenRouterClient()
         self._claude = claude if claude is not None else ClaudeAgentClient()
         self._openai_compatible = (openai_compatible if openai_compatible is not None
