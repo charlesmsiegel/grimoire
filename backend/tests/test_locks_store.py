@@ -814,3 +814,58 @@ def test_a_contended_create_scene_leaves_no_scene_behind(monkeypatch, tmp_path):
 
     after = sorted(q.name for q in d.glob("*")) if d.exists() else []
     assert after == before, "a scene file survived a contended create"
+
+
+@pytest.mark.parametrize("route,payload", [
+    ("roll", {"notation": "1d20", "label": "Perception"}),
+    ("check", {"check": "brawl", "actor": "characters:mara", "difficulty": 6}),
+])
+def test_a_manual_roll_and_its_transcript_line_share_one_hold(
+        monkeypatch, tmp_path, route, payload):
+    """The roll and its transcript line must commit under ONE hold.
+
+    Both writes take the campaign lock anyway, but separately: contention
+    arriving between them returns 409 with the roll already durable and no
+    transcript line, so the retry the 409 invites logs a SECOND roll while the
+    first stays invisible forever.
+
+    Asserting on depth rather than on an observable failure, because the
+    failure is not reachable from a test: a permanently-held lock makes
+    `rolls.append` raise first and nothing is written either way, and there is
+    no way to make contention arrive *between* two calls from outside.
+
+    The spies stand in front of the real mutators, so they observe the depth
+    the ROUTE established -- 1 when the route wraps both writes in one hold, 0
+    when each mutator is left to take its own. That zero-versus-one is the
+    whole property, and it is verified red-green.
+    """
+    from fastapi.testclient import TestClient
+
+    from grimoire import main
+    from grimoire.store import rolls
+
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+    sheets.write(cid, "characters", "mara", "medium", None, expected=None)
+    client = TestClient(main.create_app())
+    sid = scenes.create_scene(cid, "Saltmarch")
+
+    depths = []
+    real_append_roll = rolls.append
+    real_append_msg = scenes.append_message
+
+    def spy_roll(*a, **k):
+        depths.append(("rolls", locks.campaign_lock(cid)._depth))
+        return real_append_roll(*a, **k)
+
+    def spy_msg(*a, **k):
+        depths.append(("scene", locks.campaign_lock(cid)._depth))
+        return real_append_msg(*a, **k)
+
+    monkeypatch.setattr(rolls, "append", spy_roll)
+    monkeypatch.setattr(scenes, "append_message", spy_msg)
+
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/{route}", json=payload)
+    assert r.status_code == 200, r.text
+    assert [k for k, _ in depths] == ["rolls", "scene"], depths
+    assert all(d >= 1 for _, d in depths), \
+        f"each write took its own lock instead of sharing the route's: {depths}"

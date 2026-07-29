@@ -217,3 +217,30 @@ def test_inode_mismatch_retries_respect_the_deadline_and_leak_nothing(
     assert time.monotonic() - started < 1.0, "NO_WAIT spun on the mismatch path"
     assert proclock.acquire(lock, time.monotonic() + 0.3) is None
     assert _open_fds() - before < 5, "mismatch retries leaked descriptors"
+
+
+def test_android_uses_the_configured_home_not_the_passwd_entry(monkeypatch, tmp_path):
+    """android_entry.start_server points $HOME at the app's writable files dir,
+    while Android's synthesized passwd record reports `/`. Consulting passwd
+    there would put the lock dir at /.local/state/grimoire/locks -- unwritable,
+    and since a lock's first act is mkdir, startup would die with
+    PermissionError before ever reaching a lock."""
+    app_home = tmp_path / "app-files"
+    app_home.mkdir()
+    monkeypatch.setattr(proclock, "_on_android", lambda: True)
+    monkeypatch.setenv("HOME", str(app_home))
+    monkeypatch.setenv("USERPROFILE", str(app_home))
+    assert app_home in proclock.lock_dir().parents
+
+
+def test_an_unusable_passwd_home_falls_back_to_the_environment(monkeypatch, tmp_path):
+    """The same guard, without needing the platform probe: a passwd entry
+    pointing at `/` (or anywhere that is not a real directory) is not usable."""
+    if sys.platform == "win32":
+        pytest.skip("passwd is POSIX-only")
+    fake_home = tmp_path / "env-home"
+    fake_home.mkdir()
+    monkeypatch.setattr(proclock.pwd, "getpwuid",
+                        lambda uid: type("E", (), {"pw_dir": "/"})())
+    monkeypatch.setenv("HOME", str(fake_home))
+    assert fake_home in proclock.lock_dir().parents

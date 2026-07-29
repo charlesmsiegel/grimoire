@@ -35,6 +35,7 @@ from __future__ import annotations
 import json
 
 from fastapi.responses import StreamingResponse
+from starlette.concurrency import run_in_threadpool
 
 from .. import store
 from ..llm import LLMClient
@@ -96,7 +97,7 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
             watcher.finish()
             if on_error is not None:
                 try:
-                    on_error(watcher)
+                    await run_in_threadpool(on_error, watcher)
                 except store.locks.StoreBusy:
                     # on_error persists the partial reply, which now takes a
                     # cross-process lock and can therefore raise (#234). The
@@ -108,11 +109,19 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
             yield _sse({"error": {"detail": exc.detail, "kind": exc.kind}})
             return
         try:
+            # In a worker thread, not inline (#234). `finalize` is synchronous
+            # and now waits on a cross-process lock, whose retry loop sleeps for
+            # up to LOCK_TIMEOUT. This is an async generator driven by the event
+            # loop, so an inline call would block that loop for the full 30s --
+            # freezing every unrelated request and every other live stream on
+            # this backend, not just the contended campaign.
+            #
             # list(), not a bare call: finalize() runs OUTSIDE the try above,
             # and if it ever returns a generator, guarding only the call would
             # let StoreBusy escape from the `for` below -- outside this handler,
-            # aborting the stream with no frame emitted at all.
-            frames = list(finalize(watcher))
+            # aborting the stream with no frame emitted at all. Materializing in
+            # the worker also keeps any lazy body off the event loop.
+            frames = await run_in_threadpool(lambda: list(finalize(watcher)))
         except store.locks.StoreBusy as exc:
             # Deliberately NOT routed through on_error: that persists
             # watcher.narration, and narration whose roll fence has no proposal
