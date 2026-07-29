@@ -107,6 +107,8 @@ def _list_dir(directory: Path, built_in: bool) -> list[dict]:
     if not directory.exists():
         return out
     for p in sorted(directory.glob("*.md")):
+        if not safe_id(p.stem):
+            continue   # see styles._list_dir
         meta = _read_meta(p)
         if meta is None:
             row, damage = _damaged(p.stem, built_in)

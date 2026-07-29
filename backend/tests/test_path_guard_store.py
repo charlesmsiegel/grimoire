@@ -442,3 +442,94 @@ def test_startup_migration_survives_an_unusable_campaign_directory(monkeypatch, 
     (d / "campaign.md").write_text("---\nname: Nope\nworld: realm\n---\n", encoding="utf-8")
     migrations.migrate_scene_ids()          # must not raise
     TestClient(create_app()).get("/api/campaigns")   # lifespan runs on first request
+
+
+# ---- round 6 of the review: enumeration/lookup agreement, checked exhaustively
+
+# Round 5 filtered the record-level listings and the summary claimed "every
+# enumeration"; round 6 found three more a level down (version ids, style and
+# preset catalogs, image names). Grepping for listings is what missed them, so
+# this checks the property directly instead: plant an artifact at every level,
+# make the shared guard reject it, and require that no listing returns it or
+# raises. Portable -- a name the guard genuinely rejects is not creatable on
+# Windows, so the guard is what changes here, not the name.
+MARK = "zz-unusable"
+
+
+def _reject_mark(monkeypatch):
+    from grimoire import store as store_pkg
+    from grimoire.store import paths as paths_mod
+    real = paths_mod.safe_id
+
+    def guarded(value):
+        return real(value) and MARK not in str(value)
+
+    for name in dir(store_pkg):
+        mod = getattr(store_pkg, name, None)
+        if hasattr(mod, "safe_id"):
+            monkeypatch.setattr(mod, "safe_id", guarded)
+
+
+def test_no_listing_hands_back_an_id_its_own_lookups_refuse(monkeypatch, tmp_path):
+    from grimoire.store import (assets, greetings, llm_connections, response_presets,
+                                scenes, sheets, styles)
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    wroot = worlds.world_root(wid)
+    cid = campaigns.create_campaign("Saltmarch", wid)
+    ch, vid = characters.create_character(wroot, "Seraphine")
+    pc, _ = pcs.create_pc(wroot, "Mara", [])
+    entities.create_entity(wroot, "lore", "Salt Pact", "the pact")
+    greetings.create_greeting(wroot, "Hello", ch, vid, "hi")
+    scenes.create_scene(cid, "Opening")
+    png = b"\x89PNG\r\n\x1a\n" + b"0" * 32
+    assets.put_image(wroot, ch, vid, assets.AVATAR, png, "png")
+
+    (characters._char_dir(wroot, ch) / f"{MARK}.json").write_text(
+        '{"data":{"name":"N"}}', encoding="utf-8")
+    (pcs._pc_dir(wroot, pc) / f"{MARK}.md").write_text("---\nname: N\n---\n", encoding="utf-8")
+    (assets._dir(wroot, ch, vid) / f"{MARK}.png").write_bytes(png)
+    for d in (styles._custom_dir(), response_presets._custom_dir()):
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"{MARK}.md").write_text("---\nname: N\n---\nbody\n", encoding="utf-8")
+    (tmp_path / "worlds" / MARK).mkdir(parents=True)
+    (tmp_path / "worlds" / MARK / "world.md").write_text("---\nname: N\n---\n", encoding="utf-8")
+    (tmp_path / "campaigns" / MARK).mkdir(parents=True)
+    (tmp_path / "campaigns" / MARK / "campaign.md").write_text(
+        "---\nname: N\nworld: realm\n---\n", encoding="utf-8")
+    (wroot / "lore" / f"{MARK}.md").write_text("---\nname: N\n---\n", encoding="utf-8")
+
+    _reject_mark(monkeypatch)
+
+    listings = {
+        "worlds": lambda: [w["id"] for w in worlds.list_worlds()],
+        "campaigns": lambda: [c["id"] for c in campaigns.list_campaigns()],
+        "characters": lambda: [c["id"] for c in characters.list_characters(wroot)],
+        "character versions": lambda: [v["id"] for c in characters.list_characters(wroot)
+                                       for v in c["versions"]],
+        "character detail versions": lambda: [v["id"] for v in
+                                              characters.read_character(wroot, ch)["versions"]],
+        "character refs": lambda: characters.character_refs(wroot),
+        "pcs": lambda: [p["id"] for p in pcs.list_pcs(wroot)],
+        "pc versions": lambda: [v["id"] for v in pcs.read_pc(wroot, pc)["versions"]],
+        "pc refs": lambda: pcs.pc_refs(wroot),
+        "entities": lambda: [e["id"] for e in entities.list_entities(wroot, "lore")],
+        "entity refs": lambda: [e for _k, e in entities.all_refs(wroot)],
+        "greetings": lambda: [g["id"] for g in greetings.list_greetings(wroot)],
+        "scenes": lambda: [s["id"] for s in scenes.list_scenes(cid)],
+        "styles": lambda: [s["id"] for s in styles.list_styles()],
+        "response presets": lambda: [p["id"] for p in response_presets.list_presets()],
+        "images": lambda: [i["name"] for i in assets.list_images(wroot, ch, vid)],
+        "llm connections": lambda: [c.get("id") for c in llm_connections.list_connections()],
+        "sheet refs": lambda: [e for _k, e in sheets.list_refs(cid)],
+    }
+    leaked = {}
+    for label, fn in listings.items():
+        try:
+            got = fn()
+        except Exception as exc:                     # a listing must never raise for this
+            leaked[label] = f"{type(exc).__name__}: {exc}"
+            continue
+        if any(x and MARK in str(x) for x in got):
+            leaked[label] = got
+    assert not leaked, f"listings disagree with their lookups: {leaked}"
