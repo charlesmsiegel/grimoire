@@ -720,6 +720,24 @@ test("double-clicking Save summary commits once", async () => {
   await waitFor(() => expect(screen.queryByLabelText("Scene summary")).toBeNull());
 });
 
+test("a review saves to the scene it was absorbed from, not the selected one", async () => {
+  // Switching scenes leaves the review panel open, so a save issued afterwards
+  // would otherwise be routed at the newly selected scene (#235).
+  (api.listScenes as any).mockResolvedValue([
+    { id: "s1", title: "One", model: "", created: "", updated: "", date: "" },
+    { id: "s2", title: "Two", model: "", created: "", updated: "", date: "" }]);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await screen.findByLabelText("Scene summary");
+  fireEvent.click(screen.getByText(/Two/));                        // switch scenes
+  await waitFor(() => expect(api.getScene).toHaveBeenCalledWith("run", "s2"));
+  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  await waitFor(() => expect(api.saveChronicle).toHaveBeenCalled());
+  expect((api.saveChronicle as any).mock.calls[0][1]).toBe("s1");
+});
+
 test("a failed save offers a retry that saves, not one that generates a reply", async () => {
   // The shared error banner's Retry calls api.retry (chat generation). Routing a
   // save failure there would invite the user to generate another reply with the

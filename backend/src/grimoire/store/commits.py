@@ -67,9 +67,10 @@ def lookup(cid: str, token: str) -> dict | None:
     """This token's ledger entry, or None when it is unseen.
 
     An entry is ``{"done": bool, "result": dict | None, "fingerprint": str,
-    "at": iso}``. ``done`` is False between ``reserve`` and ``record`` -- the
-    commit began and its outcome is unknown, which is exactly the state a replay
-    must not run again.
+    "sid": str, "at": iso}``. The ledger is campaign-scoped, so ``sid`` is what
+    keeps one scene's spent token from answering for another's save. ``done``
+    is False between ``reserve`` and ``record`` -- the commit began and its
+    outcome is unknown, which is exactly the state a replay must not run again.
 
     An empty token is always unseen: a client that sends none opts out of the
     guard, and must not collide with every other tokenless save.
@@ -84,7 +85,8 @@ def lookup(cid: str, token: str) -> dict | None:
 
 def _prune(data: dict) -> dict:
     """Drop completed entries past RETAIN_DAYS. Reservations are kept."""
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=RETAIN_DAYS))         .strftime("%Y-%m-%dT%H:%M:%SZ")
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(days=RETAIN_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
     return {t: e for t, e in data.items()
             if not (isinstance(e, dict) and e.get("done")
                     and str(e.get("at", "")) < cutoff)}
@@ -96,7 +98,7 @@ def _put(cid: str, token: str, entry: dict) -> None:
     atomic.write_text(_path(cid), json.dumps(data, indent=2) + "\n")
 
 
-def reserve(cid: str, token: str, fp: str = "") -> None:
+def reserve(cid: str, token: str, fp: str = "", sid: str = "") -> None:
     """Claim the token before the first non-idempotent write.
 
     Recording only *after* the effects leaves a window: a crash in between (or a
@@ -106,11 +108,11 @@ def reserve(cid: str, token: str, fp: str = "") -> None:
     """
     if not token:
         return
-    _put(cid, token, {"done": False, "result": None, "fingerprint": fp})
+    _put(cid, token, {"done": False, "result": None, "fingerprint": fp, "sid": sid})
 
 
-def record(cid: str, token: str, result: dict, fp: str = "") -> None:
+def record(cid: str, token: str, result: dict, fp: str = "", sid: str = "") -> None:
     """Complete the reservation with what this token's save returned."""
     if not token:
         return
-    _put(cid, token, {"done": True, "result": result, "fingerprint": fp})
+    _put(cid, token, {"done": True, "result": result, "fingerprint": fp, "sid": sid})

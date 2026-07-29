@@ -127,6 +127,10 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   const [drawer, setDrawer] = useState<DrawerTarget | null>(null);
   const [showChanges, setShowChanges] = useState(false);
   const [absorb, setAbsorb] = useState<SceneAbsorb | null>(null);
+  // The scene this review was absorbed FROM. Switching scenes leaves the panel
+  // open, so saving against the currently selected scene would commit scene A's
+  // review onto scene B (#235).
+  const [absorbSid, setAbsorbSid] = useState<string | null>(null);
   const [absorbing, setAbsorbing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editRows, setEditRows] = useState<(StagedEdit & { approved: boolean })[]>([]);
@@ -535,6 +539,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
         a = await api.absorbScene(cid, activeId, true);
       }
       setAbsorb(a);
+      setAbsorbSid(activeId);
       setEditRows(a.edits.map((e) => ({ ...e, approved: true })));
     } catch (err: any) {
       setError(err.detail ?? String(err));
@@ -548,14 +553,15 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   // latch is what keeps a double-click from being a double-commit. A failed save
   // leaves the review standing so it can be retried rather than silently lost.
   async function saveAbsorb() {
-    if (!absorb || !activeId || saving) return;
+    const sid = absorbSid ?? activeId;
+    if (!absorb || !sid || saving) return;
     setSaving(true);
     setSaveError(null);
     // captured before editRows is cleared below -- failures only carry
     // id/reason/kind, so the row's label has to come from what was on screen.
     const labels = new Map(editRows.map((e) => [e.id, e.label]));
     try {
-      const res = await api.saveChronicle(cid, activeId, {
+      const res = await api.saveChronicle(cid, sid, {
         one_line: absorb.one_line, summary: absorb.summary, keywords: absorb.keywords,
         timeline_events: absorb.timeline_events,
         edits: editRows.filter((e) => e.approved).map(({ approved, ...e }) => e),
@@ -564,6 +570,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
         commit_token: absorb.commit_token });
       setEditFailures(res.failures.map((f) => ({ ...f, label: labels.get(f.id) ?? f.id })));
       setAbsorb(null);
+      setAbsorbSid(null);
       setEditRows([]);
       setCtxKey((n) => n + 1);
     } catch (err: any) {
@@ -919,7 +926,8 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
             )}
             <div className="form-actions">
               <button className="subtle" disabled={saving}
-                      onClick={() => { setAbsorb(null); setEditRows([]); setEditFailures([]); setSaveError(null); }}>Cancel</button>
+                      onClick={() => { setAbsorb(null); setAbsorbSid(null); setEditRows([]);
+                                       setEditFailures([]); setSaveError(null); }}>Cancel</button>
               <button className="primary" onClick={saveAbsorb} disabled={saving}>
                 {saving ? "Saving…" : "Save summary"}</button>
             </div>

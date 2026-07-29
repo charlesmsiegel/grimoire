@@ -489,6 +489,16 @@ def put_chronicle(cid: str, sid: str, body: ChronicleSave):
         # Inside the lock: two saves racing on one token must not both miss.
         prior = store.commits.lookup(cid, body.commit_token)
         if prior is not None:
+            if prior.get("sid") and prior["sid"] != sid:
+                # The review panel survives a scene switch, so a retry can carry
+                # scene A's token to scene B's route. The ledger is
+                # campaign-scoped; without this, B's save would return A's
+                # result and write nothing.
+                raise HTTPException(
+                    status_code=409,
+                    detail={"detail": "this save was already committed for a different "
+                                      "scene — reopen that scene's review",
+                            "kind": "commit_scene_mismatch"})
             if prior.get("fingerprint") and prior["fingerprint"] != fp:
                 # The review stayed editable after the failed save, and this
                 # retry carries different content. Returning the first result
@@ -515,12 +525,12 @@ def put_chronicle(cid: str, sid: str, body: ChronicleSave):
         # Claimed BEFORE the first non-idempotent write (the chronicle entry
         # above is keyed by scene id and merely overwrites); every append below
         # is covered by the reservation.
-        store.commits.reserve(cid, body.commit_token, fp)
+        store.commits.reserve(cid, body.commit_token, fp, sid)
         store.chronicle.append_timeline(cid, body.timeline_events)
         store.scenes.mark_absorbed(cid, sid, body.one_line, body.summary)
         applied, failures = store.absorb.apply_edits(cid, body.edits, sid)
         result = {**record, "applied": applied, "failures": failures}
-        store.commits.record(cid, body.commit_token, result, fp)
+        store.commits.record(cid, body.commit_token, result, fp, sid)
     return result
 
 
