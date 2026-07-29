@@ -45,6 +45,9 @@ def test_unsafe_and_unsupported_rejected(tmp_path):
         # reserved: the recovery in #253 treats a file under this name as crash
         # residue, and the old swap would have clobbered a real image there anyway
         assets.put_image(tmp_path, "sera", "default", "promote-tmp", b"a", "png")
+    with pytest.raises(ValueError):
+        # case variants too: on Windows and macOS this is the same file
+        assets.put_image(tmp_path, "sera", "default", "Promote-Tmp", b"a", "png")
     assert assets.image_path(tmp_path, "..", "default", "avatar") is None  # unsafe cid
 
 
@@ -391,6 +394,54 @@ def test_a_stranded_temp_beside_a_live_avatar_becomes_a_gallery_image(tmp_path):
     assert assets.image_path(tmp_path, "sera", "default", assets.AVATAR).read_bytes() == b"LIVE"
     assert assets.image_path(tmp_path, "sera", "default", "gallery_1").read_bytes() == b"KEEP"
     assert assets.image_path(tmp_path, "sera", "default", "gallery_2").read_bytes() == b"STRANDED"
+
+
+def test_the_newest_stranded_temp_is_the_one_that_becomes_the_avatar(tmp_path):
+    """Two interrupted promotions leave two temps. The freshest is the one the
+    user was promoting, so it gets the avatar slot -- picking by sorted name
+    would hand it to whichever extension sorts first (#253 says image_path
+    prefers the newest mtime, so recovery has a sensible target)."""
+    import os
+
+    # .png sorts first but is the OLDER file, so name order and mtime order
+    # disagree -- which is the whole point of the assertion below.
+    d = _stranded(tmp_path, ext="png", data=b"OLDER")
+    (d / "promote-tmp.webp").write_bytes(b"NEWER")
+    older = d / "promote-tmp.png"
+    os.utime(older, ns=(older.stat().st_atime_ns,
+                        (d / "promote-tmp.webp").stat().st_mtime_ns - 10_000_000_000))
+
+    assert _named(assets.list_images(tmp_path, "sera", "default")) == [
+        ("avatar", "webp"), ("gallery_1", "png")]
+    assert assets.image_path(tmp_path, "sera", "default", assets.AVATAR).read_bytes() == b"NEWER"
+    assert assets.image_path(tmp_path, "sera", "default", "gallery_1").read_bytes() == b"OLDER"
+
+
+def test_recovery_re_decides_when_its_chosen_slot_is_taken(tmp_path, monkeypatch):
+    """The slot is chosen before the lock is held, so an upload can take it in
+    between. Recovery must pick another slot, not skip the temp (leaving it
+    stranded) and not rename onto the upload's file -- POSIX rename replaces
+    silently, so that would eat the upload."""
+    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"LIVE", "png")
+    d = _stranded(tmp_path)
+    real_free, raced = assets._free_gallery, []
+
+    def racing(dd):
+        slot = real_free(dd)
+        if not raced:  # exactly once: an upload publishes the slot we just chose
+            raced.append(slot)
+            (dd / f"{slot}.png").write_bytes(b"UPLOADED")
+        return slot
+
+    monkeypatch.setattr(assets, "_free_gallery", racing)
+    assets.list_images(tmp_path, "sera", "default")
+    monkeypatch.undo()
+
+    assert (d / f"{raced[0]}.png").read_bytes() == b"UPLOADED"  # not clobbered
+    assert not list(d.glob("promote-tmp.*")), "the temp was left stranded"
+    assert assets.image_path(tmp_path, "sera", "default", assets.AVATAR).read_bytes() == b"LIVE"
+    recovered = [p for p in _image_files(tmp_path) if p.read_bytes() == b"STRANDED"]
+    assert len(recovered) == 1 and recovered[0].stem.startswith("gallery_")
 
 
 def test_a_failed_recovery_never_breaks_the_read(tmp_path, monkeypatch):

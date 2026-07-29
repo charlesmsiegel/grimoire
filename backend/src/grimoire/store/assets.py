@@ -35,7 +35,12 @@ def _safe_name(name: str) -> bool:
     # the name was never usable. Reserving it is what lets
     # `_heal_stranded_promotion` treat such a file as crash residue rather than
     # as somebody's image (PR review).
-    return (_safe(name) and "." not in name and name != _PROMOTE_TMP
+    #
+    # Case-folded, because the reservation has to hold on the filesystem's terms
+    # rather than Python's: on Windows and macOS `Promote-Tmp.png` *is*
+    # `promote-tmp.png`, so a case variant would otherwise slip an image into the
+    # name the recovery scan claims (PR review).
+    return (_safe(name) and "." not in name and name.casefold() != _PROMOTE_TMP
             and not any(c in name for c in "*?[]"))
 
 
@@ -108,6 +113,22 @@ def _free_gallery(d: Path) -> str:
     return f"gallery_{n}"
 
 
+def _newest_stranded(d: Path) -> Path | None:
+    """The stranded temp to rescue next, newest first.
+
+    Newest first for the same reason ``image_path`` breaks its ties that way,
+    and because the issue said so outright: with more than one temp (two
+    interrupted promotions), the freshest is the one the user was promoting, so
+    it is the one that should become the avatar. Sorted-by-name would hand that
+    slot to whichever extension happens to sort first (PR review).
+    """
+    strays = [p for p in d.glob(f"{_PROMOTE_TMP}.*") if _norm_ext(p.suffix)]
+    return max(strays, key=lambda p: (_mtime_ns(p), p.name)) if strays else None
+
+
+_HEAL_PASSES = 16  # one rename per pass, plus room to re-decide on a lost race
+
+
 def _heal_stranded_promotion(d: Path) -> None:
     """Rescue an image a pre-#253 promotion left under ``promote-tmp<ext>``.
 
@@ -121,30 +142,51 @@ def _heal_stranded_promotion(d: Path) -> None:
     Promotion cannot produce this state any more -- there is no temp -- so this
     exists purely to repair stores damaged before the fix, and it does it where
     the issue asked for it: on the directory scan, completing or restoring the
-    swap. It only ever renames onto a free name; nothing is overwritten or
-    deleted, and a failure (read-only store, racing sync client) is swallowed
-    so a read never fails over cleanup that the next scan can retry.
+    swap.
 
-    - No avatar: the temp becomes the avatar. That was the swap's destination,
-      so this finishes the promotion the user asked for.
+    - No avatar: the newest temp becomes the avatar. That was the swap's
+      destination, so this finishes the promotion the user asked for.
     - Avatar present: the crash came before the avatar moved, and *which* slot
       the temp was taken from is unrecoverable (the fixed name never encoded
       it), so it lands in the next free gallery slot -- visible again, and the
       working avatar is left alone.
+
+    Renames only, onto a name held under its own lock and verified free while
+    held: an in-process upload cannot have its file replaced by this (choosing
+    the slot unlocked and renaming onto it could, and on POSIX ``rename``
+    replaces silently -- PR review). A second process racing the same directory
+    is unguarded, as it is everywhere else in this module. Nothing is ever
+    deleted, and a failure (read-only store, a sync client holding the file) is
+    swallowed: a read must not fail over repair the next scan can retry.
+
+    One caveat this cannot resolve: ``_safe_name`` accepted ``promote-tmp``
+    before it was reserved, so a store *could* hold a genuine image somebody
+    uploaded under that name, and nothing distinguishes it from crash residue.
+    Adopting it is still the better outcome -- the bytes are kept, and the file
+    moves from a name no part of the UI renders to one it does.
     """
     if not any(d.glob(f"{_PROMOTE_TMP}.*")):
         return  # the overwhelmingly common case: one glob, no locks, no writes
-    with _image_locks_held(d, _PROMOTE_TMP, AVATAR):
-        for p in sorted(d.glob(f"{_PROMOTE_TMP}.*")):  # re-glob under the lock
-            if not _norm_ext(p.suffix):
-                continue
-            stem = AVATAR if not any(d.glob(f"{AVATAR}.*")) else _free_gallery(d)
-            target = d / f"{stem}{p.suffix}"
+    for _ in range(_HEAL_PASSES):
+        stray = _newest_stranded(d)
+        if stray is None:
+            return
+        slot = AVATAR if not any(d.glob(f"{AVATAR}.*")) else _free_gallery(d)
+        # Both choices above were read unlocked, so lock every name they name --
+        # in the module's one global order -- and only then act on them.
+        with _image_locks_held(d, _PROMOTE_TMP, AVATAR, slot):
+            if not stray.exists():
+                continue  # another thread rescued this one
+            recheck = AVATAR if not any(d.glob(f"{AVATAR}.*")) else _free_gallery(d)
+            if recheck != slot:
+                continue  # an avatar appeared, or the slot was taken: re-decide
+            target = d / f"{slot}{stray.suffix}"
+            if target.exists():
+                continue  # same stem, other extension: pick another slot
             try:
-                if not target.exists():
-                    p.rename(target)
+                stray.rename(target)
             except OSError:
-                pass
+                return  # read-only store or a held file; the next scan retries
 
 
 def _mtime_ns(p: Path) -> int:
