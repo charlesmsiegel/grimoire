@@ -173,13 +173,14 @@ def test_no_wait_returns_immediately(tmp_path):
         p.wait(timeout=10)
 
 
-def test_a_permanent_error_propagates_rather_than_timing_out(tmp_path, monkeypatch):
+@pytest.mark.parametrize("errcode", [38, 37])   # ENOSYS, ENOLCK
+def test_a_permanent_error_propagates_rather_than_timing_out(tmp_path, monkeypatch, errcode):
     """A filesystem that cannot lock, or a directory we may not write, must not
     be reported as contention."""
     lock = proclock.lock_path(tmp_path, "t", "permanent")
 
     def boom(fd):
-        raise OSError(38, "Function not implemented")  # ENOSYS
+        raise OSError(errcode, "permanent lock failure")
 
     monkeypatch.setattr(proclock, "_try_lock", boom)
     with pytest.raises(OSError):

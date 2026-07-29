@@ -99,12 +99,16 @@ def lock_path(root: Path, domain: str, name: str) -> Path:
     against each other, a spurious wait rather than a lost lock.
     """
     d = lock_dir() / _store_key(root)
-    d.mkdir(parents=True, exist_ok=True)
+    # mode= on creation closes the window where a freshly made directory is
+    # briefly group/world-readable; the chmod then covers a directory that
+    # already existed with wider permissions (mkdir's mode is also masked by
+    # the umask, so it is not sufficient on its own).
+    d.mkdir(parents=True, exist_ok=True, mode=0o700)
     if not _WINDOWS:
         try:
             os.chmod(d, 0o700)
         except OSError:
-            pass                      # best effort; an existing dir may be ours already
+            pass                      # best effort; an existing dir may not be ours
     slug = _UNSAFE.sub("-", name)[:_MAX_NAME_HINT]
     keyed = f"{domain}\0{name}".encode("utf-8", "surrogateescape")
     digest = hashlib.sha256(keyed).hexdigest()[:16]

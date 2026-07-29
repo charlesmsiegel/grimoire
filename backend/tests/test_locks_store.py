@@ -721,3 +721,96 @@ def test_lock_domains_are_folded_into_the_digest(tmp_path):
     b = proclock.lock_path(tmp_path, "domain", "x")
     assert a != b
     assert a.name.split("-")[-1] != b.name.split("-")[-1]   # digests differ
+
+
+def test_a_held_module_edit_lock_blocks_a_real_publication(monkeypatch, tmp_path):
+    """`with module_edit._M` proves the object is shared; this proves the thing
+    users actually hit. A child holds the module-edit lock and a real
+    publication entry point must refuse rather than swap a pack under it."""
+    from grimoire.store import module_edit
+
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    p = _hold_in_child(tmp_path, "module_edit_lock()")
+    try:
+        monkeypatch.setattr(locks, "LOCK_TIMEOUT", 0.5)
+        with pytest.raises(locks.ModuleEditBusy):
+            module_edit.create_module("Blocked Pack")
+    finally:
+        p.kill()
+        p.wait(timeout=10)
+
+
+def test_a_non_owner_release_does_not_drop_cross_process_exclusion(monkeypatch, tmp_path):
+    """The in-process half of this is covered above. The half that matters for
+    #234 is that a stray release from another thread cannot unlock the FILE --
+    which only another process can observe."""
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+    lock = locks.campaign_lock(cid)
+    factory = "campaign_lock(%r)" % cid
+    with lock:
+        errs = []
+
+        def stranger():
+            try:
+                lock.release()
+            except RuntimeError as e:
+                errs.append(e)
+
+        t = threading.Thread(target=stranger)
+        t.start()
+        t.join(timeout=5)
+        assert errs, "a non-owner release must raise"
+        assert _probe(tmp_path, factory) == "BUSY", \
+            "a stray release unlocked the file for another process"
+    assert _probe(tmp_path, factory) == "GOT", "still releasable by its owner"
+
+
+def test_another_thread_can_acquire_after_our_acquire_timed_out(monkeypatch, tmp_path):
+    """Retrying from the same thread would succeed even if the timed-out
+    acquire had left the reentrant RLock held by us -- an RLock lets its owner
+    back in. Only a DIFFERENT thread proves it was really released."""
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+    p = _hold_in_child(tmp_path, "campaign_lock(%r)" % cid)
+    try:
+        assert locks.campaign_lock(cid).acquire(timeout=0.3) is False
+    finally:
+        p.kill()
+        p.wait(timeout=10)
+
+    got = []
+
+    def other_thread():
+        lock = locks.campaign_lock(cid)
+        deadline = time.monotonic() + 15
+        while not lock.acquire(timeout=0.2):
+            if time.monotonic() > deadline:
+                return
+        got.append(True)
+        lock.release()
+
+    t = threading.Thread(target=other_thread)
+    t.start()
+    t.join(timeout=30)
+    assert got, "the timed-out acquire stranded the lock against other threads"
+
+
+def test_a_contended_create_scene_leaves_no_scene_behind(monkeypatch, tmp_path):
+    """create_scene runs its whole body under the lock (#254), so contention
+    must strike before the first durable write -- no orphaned scene file, and
+    no scene without the audit baseline that capture_baseline now refuses to
+    skip silently."""
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+    d = campaigns.campaign_root(cid) / "scenes"
+    before = sorted(p.name for p in d.glob("*")) if d.exists() else []
+
+    p = _hold_in_child(tmp_path, "campaign_lock(%r)" % cid)
+    try:
+        monkeypatch.setattr(locks, "LOCK_TIMEOUT", 0.5)
+        with pytest.raises(locks.CampaignBusy):
+            scenes.create_scene(cid, "Saltmarch")
+    finally:
+        p.kill()
+        p.wait(timeout=10)
+
+    after = sorted(q.name for q in d.glob("*")) if d.exists() else []
+    assert after == before, "a scene file survived a contended create"

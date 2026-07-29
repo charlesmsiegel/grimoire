@@ -175,15 +175,30 @@ class _ProcessScopedLock:
             self._depth = 1
             return True
         except BaseException:
-            # Two cases, and the handler must cover both: the lock was taken
-            # but never installed (local `fd`), or it WAS installed and an
-            # asynchronous exception landed before depth reached 1 (`self._fd`
-            # set with depth 0, which release() would never clean up).
-            if fd is None and self._depth == 0 and self._fd is not None:
-                fd, self._fd = self._fd, None
-            if fd is not None:
-                proclock.release(fd)        # else it leaks for the process's life
-            self._rlock.release()           # never strand the thread lock
+            # Three windows, and the handler has to tell them apart. `depth`
+            # is the discriminator because it is the thing `release()` keys on.
+            if self._depth > 0:
+                # We had already established (or incremented) the hold when the
+                # exception landed -- an asynchronous one, after `depth = 1` or
+                # after the reentrant `depth += 1`. The object is *consistent*
+                # here, so unwind it the normal way. Doing what the two
+                # branches below do instead would release the thread lock while
+                # leaving depth > 0 and the fd installed: the lock would then
+                # claim to be held with no thread owning it, and the next
+                # acquire would see depth > 0 and skip the file lock entirely,
+                # silently dropping cross-process exclusion. Worse than a leak.
+                self.release()
+            else:
+                # Either the file lock was taken but never installed (local
+                # `fd`), or it was installed and the exception landed before
+                # depth reached 1 (`self._fd` set with depth 0, which
+                # `release()` would never clean up). Both leak for the life of
+                # the process if not reclaimed here.
+                if fd is None and self._fd is not None:
+                    fd, self._fd = self._fd, None
+                if fd is not None:
+                    proclock.release(fd)
+                self._rlock.release()       # never strand the thread lock
             raise
 
     def release(self) -> None:
