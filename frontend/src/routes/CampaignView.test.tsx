@@ -132,6 +132,7 @@ beforeEach(() => {
     one_line: "They met.", summary: "A met B.", keywords: ["salt"],
     timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
+    dossiers: { status: "skipped", reason: null, refreshed: [], failed: [] },
     edits: [{ id: "character_state:seraphine", kind: "character_state",
       target: { kind: "characters", id: "seraphine" }, label: "Seraphine — current state",
       field: "current_state", before: "Wary.", after: "Loyal now.", authored: false }] });
@@ -675,6 +676,7 @@ test("character_state row renders a multi-section knowledge body in its textarea
   (api.absorbScene as any).mockResolvedValue({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
+    dossiers: { status: "skipped", reason: null, refreshed: [], failed: [] },
     edits: [{ id: "character_state:seraphine", kind: "character_state",
       target: { kind: "characters", id: "seraphine" }, label: "Seraphine — current state",
       field: "current_state", authored: false,
@@ -697,6 +699,7 @@ test("plot rows are editable and sent with payload on save", async () => {
   (api.absorbScene as any).mockResolvedValue({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
+    dossiers: { status: "skipped", reason: null, refreshed: [], failed: [] },
     edits: [{ id: "plot:the-map", kind: "plot",
       target: { kind: "plot", id: "the-map" }, label: "The map — advanced",
       field: "beat", before: "open — Elara got it.", after: "It is a forgery.",
@@ -720,6 +723,7 @@ test("new_character proposal renders editable card and provenance fields and sav
   (api.absorbScene as any).mockResolvedValue({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
+    dossiers: { status: "skipped", reason: null, refreshed: [], failed: [] },
     edits: [{ id: "new_character:old-bram", kind: "new_character",
       target: { kind: "characters", id: "" }, label: "New character — Old Bram",
       field: "description", before: "", after: "[character(\"Old Bram\") {}]", authored: false,
@@ -770,6 +774,7 @@ test("new_location shows the setting checkbox only when the scene has no locatio
   (api.absorbScene as any).mockResolvedValue({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
+    dossiers: { status: "skipped", reason: null, refreshed: [], failed: [] },
     edits: [{ id: "new_location:the-crypt", kind: "new_location",
       target: { kind: "locations", id: "" }, label: "New location — The Crypt",
       field: "body", before: "", after: "A cold crypt.", authored: false,
@@ -791,6 +796,7 @@ test("new_location hides the setting checkbox when the scene already has a locat
   (api.absorbScene as any).mockResolvedValue({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "Old Dock", date: "",
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
+    dossiers: { status: "skipped", reason: null, refreshed: [], failed: [] },
     edits: [{ id: "new_location:the-crypt", kind: "new_location",
       target: { kind: "locations", id: "" }, label: "New location — The Crypt",
       field: "body", before: "", after: "A cold crypt.", authored: false,
@@ -808,6 +814,7 @@ test("relationship rows are read-only and sent with payload on save", async () =
   (api.absorbScene as any).mockResolvedValue({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
+    dossiers: { status: "skipped", reason: null, refreshed: [], failed: [] },
     edits: [{ id: "feeling:characters:a->characters:b", kind: "relationship",
       target: { kind: "relationships", id: "characters:a->characters:b" }, label: "Ann → Bo",
       field: "feeling", before: "trust 1, affection 1, tension 3", after: "trust 4, affection 3, tension 1",
@@ -835,6 +842,7 @@ test("mechanics: warnings render with a ⚠ prefix; a clean run shows the hint i
   (api.absorbScene as any).mockResolvedValue({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "ok", reason: null, warnings: ["Mara claimed a hit with no roll"], dropped: [] },
+    dossiers: { status: "skipped", reason: null, refreshed: [], failed: [] },
     edits: [] });
   const { unmount } = renderCampaign();
   await screen.findByText("hi");
@@ -846,6 +854,7 @@ test("mechanics: warnings render with a ⚠ prefix; a clean run shows the hint i
   (api.absorbScene as any).mockResolvedValue({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
+    dossiers: { status: "skipped", reason: null, refreshed: [], failed: [] },
     edits: [] });
   renderCampaign();
   await screen.findByText("hi");
@@ -859,6 +868,7 @@ test("skipped mechanics renders no mechanics section", async () => {
   (api.absorbScene as any).mockResolvedValue({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "skipped", reason: null, warnings: [], dropped: [] },
+    dossiers: { status: "skipped", reason: null, refreshed: [], failed: [] },
     edits: [] });
   renderCampaign();
   await screen.findByText("hi");
@@ -876,6 +886,7 @@ test("failed mechanics shows a notice with Retry validation; retry replaces shee
   (api.absorbScene as any).mockResolvedValue({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "failed", reason: "boom", warnings: [], dropped: [] },
+    dossiers: { status: "skipped", reason: null, refreshed: [], failed: [] },
     edits: [] });
   (api.retryAudit as any).mockResolvedValue({
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
@@ -896,6 +907,7 @@ test("a rejected retryAudit surfaces an error and leaves the mechanics notice/ro
   (api.absorbScene as any).mockResolvedValue({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "failed", reason: "boom", warnings: [], dropped: [] },
+    dossiers: { status: "skipped", reason: null, refreshed: [], failed: [] },
     edits: [] });
   (api.retryAudit as any).mockRejectedValue({ detail: "audit retry blew up" });
   renderCampaign();
@@ -918,6 +930,7 @@ test("unapproved non-sheet rows survive Retry validation without duplicating", a
   (api.absorbScene as any).mockResolvedValue({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "failed", reason: "boom", warnings: [], dropped: [] },
+    dossiers: { status: "skipped", reason: null, refreshed: [], failed: [] },
     edits: [LORE_EDIT] });
   (api.retryAudit as any).mockResolvedValue({
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
@@ -945,6 +958,7 @@ test("degraded mechanics shows a notice listing dropped findings", async () => {
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "degraded", reason: null, warnings: [],
       dropped: [{ id: "characters:mara", field: "athletics", reason: "static tamper" }] },
+    dossiers: { status: "skipped", reason: null, refreshed: [], failed: [] },
     edits: [] });
   renderCampaign();
   await screen.findByText("hi");
@@ -953,12 +967,61 @@ test("degraded mechanics shows a notice listing dropped findings", async () => {
   expect(screen.getByText(/characters:mara athletics: static tamper/)).toBeInTheDocument();
 });
 
+const absorbWithDossiers = (dossiers: unknown) =>
+  (api.absorbScene as any).mockResolvedValue({
+    one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
+    mechanics: { status: "skipped", reason: null, warnings: [], dropped: [] },
+    dossiers, edits: [] });
+
+test("failed dossier refreshes are listed per NPC instead of passing silently", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  absorbWithDossiers({ status: "degraded", reason: "some dossiers could not be refreshed",
+    refreshed: ["mara"], failed: [{ id: "winifred", reason: "rate limited" }] });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await screen.findByText("Some NPC dossiers could not be refreshed");
+  expect(screen.getByText(/winifred: rate limited/)).toBeInTheDocument();
+});
+
+test("a whole-phase dossier failure shows its reason", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  absorbWithDossiers({ status: "failed", reason: "dossier refresh failed: no cast",
+    refreshed: [], failed: [] });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await screen.findByText("NPC dossier refresh failed: dossier refresh failed: no cast");
+});
+
+test("clean and skipped dossier phases render no notice", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  absorbWithDossiers({ status: "ok", reason: null, refreshed: ["mara"], failed: [] });
+  const { unmount } = renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await screen.findByText("Review scene summary");
+  expect(screen.queryByText(/dossier/i)).toBeNull();
+  unmount();
+
+  absorbWithDossiers({ status: "skipped", reason: "no npcs present", refreshed: [], failed: [] });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await screen.findByText("Review scene summary");
+  expect(screen.queryByText(/dossier/i)).toBeNull();
+});
+
 test("sheet edits render read-only with the note and survive save", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
   (api.absorbScene as any).mockResolvedValue({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
+    dossiers: { status: "skipped", reason: null, refreshed: [], failed: [] },
     edits: [SHEET_EDIT] });
   (api.saveChronicle as any).mockResolvedValue({ id: "s1", one_line: "o", summary: "s", keywords: [],
     cast: [], location: "", date: "", absorbed: "t",
@@ -982,6 +1045,7 @@ test("sheet_failures from save render a notice", async () => {
   (api.absorbScene as any).mockResolvedValue({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
+    dossiers: { status: "skipped", reason: null, refreshed: [], failed: [] },
     edits: [SHEET_EDIT] });
   (api.saveChronicle as any).mockResolvedValue({ id: "s1", one_line: "o", summary: "s", keywords: [],
     cast: [], location: "", date: "", absorbed: "t", applied: [],

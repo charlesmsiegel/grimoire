@@ -774,6 +774,14 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
                   <p className="field-hint" key={i}>{d.id} {d.field ?? ""}: {d.reason}</p>))}
                 <button onClick={retryAudit}>Retry validation</button>
               </div>)}
+            {(absorb.dossiers.status === "failed" || absorb.dossiers.status === "degraded") && (
+              <div className="mechanics-notice">
+                <p>{absorb.dossiers.failed.length === 0
+                    ? `NPC dossier refresh failed: ${absorb.dossiers.reason}`
+                    : "Some NPC dossiers could not be refreshed"}</p>
+                {absorb.dossiers.failed.map((d, i) => (
+                  <p className="field-hint" key={i}>{d.id}: {d.reason}</p>))}
+              </div>)}
             {editRows.length > 0 && (
               <div className="absorb-edits">
                 <h5>Proposed changes</h5>
