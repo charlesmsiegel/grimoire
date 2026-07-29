@@ -40,18 +40,29 @@ def build_prompt(transcript: str, facts: dict, state_snapshot: dict | None = Non
                 group_snapshot=group_snapshot, transcript=transcript)}]
 
 
-def _obj(text: str) -> dict:
+def extract_object(text: str) -> dict | None:
+    """The JSON object embedded in a reply, tolerating prose or a markdown
+    fence around it. None when there is no decodable object at all.
+
+    None rather than {} — and public rather than private — because "the model
+    returned no JSON" (a format failure: it refused, or wrote prose, or got
+    truncated) and "the model returned an empty object" (an extraction failure:
+    it understood the format and found nothing to say) have different causes
+    and different fixes. parse_output cannot tell them apart on its own; both
+    arrive as a dict of empty defaults. evals/graders.py reports them
+    separately, which is only possible if this function keeps the difference.
+    """
     start, end = text.find("{"), text.rfind("}")
     raw = text[start:end + 1] if start != -1 and end > start else ""
     try:
         obj = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
-        obj = {}
-    return obj if isinstance(obj, dict) else {}
+        return None
+    return obj if isinstance(obj, dict) else None
 
 
 def parse_output(text: str) -> dict:
-    obj = _obj(text)
+    obj = extract_object(text) or {}
 
     def _str(e, f):
         # A JSON `null` is a present-but-empty value the model uses interchangeably with

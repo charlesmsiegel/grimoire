@@ -1,0 +1,34 @@
+{
+  "one_line": "Winifred admitted she knows about the ledger, and Seraphine stopped pretending she didn't.",
+  "summary": "On the pier after dark, Winifred asked whose crates were being moved and Seraphine deflected, giving her until midnight and no further. When Winifred said outright that she knew about the ledger, Seraphine dropped the deflection and admitted, obliquely, that it is why she does not sleep. Mara watched the exchange without joining it.",
+  "keywords": ["ledger", "pier", "midnight", "smuggling"],
+  "timeline_events": [
+    {"date": "2026-07-05", "text": "Winifred tells Seraphine she knows the ledger exists."}
+  ],
+  "character_state_edits": [
+    {"id": "characters/seraphine-vale",
+     "current_state": "Rattled. Winifred knows about the ledger and she no longer has the option of pretending otherwise.",
+     "knows": "The ledger is real.\nWinifred knows the ledger is real.",
+     "suspects": "The Guild is watching the pier."}
+  ],
+  "group_state_edits": [],
+  "lore_edits": [
+    {"id": "the-ledger",
+     "append": "Seraphine Vale's reaction to it being named aloud suggests she has either seen it or knows precisely where it is."}
+  ],
+  "authored_edits": [],
+  "relationship_deltas": [
+    {"from": "characters/seraphine-vale", "to": "pcs/winifred",
+     "trust": 3, "affection": 3, "tension": 3,
+     "note": "candour forced rather than offered"}
+  ],
+  "bond_changes": [],
+  "plot_movements": [
+    {"id": "find-the-ledger", "title": "Find the ledger", "status": "advanced",
+     "beat": "Winifred named the ledger to Seraphine and got a reaction instead of a denial."}
+  ],
+  "new_characters": [],
+  "new_locations": [],
+  "new_lore": [],
+  "weather_edits": []
+}
