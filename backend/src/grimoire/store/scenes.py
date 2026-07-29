@@ -242,6 +242,8 @@ def list_scenes(cid: str) -> list[dict]:
     d = _scenes_dir(cid)
     if d.exists():
         for p in d.glob("*.md"):
+            if not safe_id(p.stem):   # enumeration agrees with the resolvers
+                continue
             meta = parse_frontmatter_head(p)  # never reads the transcript body
             history = [x for x in meta.get("time_history", "").split(",") if x]
             out.append({

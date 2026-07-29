@@ -231,7 +231,8 @@ def list_characters(root: Path) -> list[dict]:
     out: list[dict] = []
     d = _chars_dir(root)
     if d.exists():
-        for cd in sorted(p for p in d.iterdir() if p.is_dir() and (p / "character.md").exists()):
+        for cd in sorted(p for p in d.iterdir()
+                         if p.is_dir() and (p / "character.md").exists() and safe_id(p.name)):
             cid = cd.name
             meta, _ = parse_frontmatter(_meta_path(root, cid).read_text(encoding="utf-8"))
             default = meta.get("default_version", "")
@@ -326,14 +327,16 @@ def dir_hash(root: Path, cid: str) -> str | None:
 
 def character_count(root: Path) -> int:
     d = _chars_dir(root)
-    return sum(1 for p in d.iterdir() if p.is_dir() and (p / "character.md").exists()) if d.exists() else 0
+    return sum(1 for p in d.iterdir()
+               if p.is_dir() and (p / "character.md").exists() and safe_id(p.name)) if d.exists() else 0
 
 
 def character_refs(root: Path) -> list[str]:
     d = _chars_dir(root)
     if not d.exists():
         return []
-    return sorted(p.name for p in d.iterdir() if p.is_dir() and (p / "character.md").exists())
+    return sorted(p.name for p in d.iterdir()
+                  if p.is_dir() and (p / "character.md").exists() and safe_id(p.name))
 
 
 def find_unlinked_versions(root: Path) -> list[dict]:

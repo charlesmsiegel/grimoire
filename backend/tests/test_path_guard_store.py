@@ -7,6 +7,7 @@ instead. Anything that isn't an HTTP path parameter -- a request body field, a
 CLI script, a batch importer -- got no protection at all.
 """
 
+import os
 import re
 
 import pytest
@@ -340,3 +341,104 @@ def test_no_route_500s_on_an_unsafe_id(monkeypatch, tmp_path, method, path, unfi
         url = url.replace("{" + name + "}", value)
     client = TestClient(create_app(), raise_server_exceptions=False)
     assert client.request(method, url, json={}).status_code != 500
+
+
+# ---- round 5 of the review
+
+# Win32 trims trailing dots and spaces off a path component, so `realm.` and
+# `realm ` both open `realm`. An id that aliases another id is not a distinct
+# child, whatever the platform -- and a store is synced between them.
+WINDOWS_ALIASES = ["realm.", "realm ", "realm...", "realm. ", "realm .", " "]
+
+
+@pytest.mark.parametrize("value", WINDOWS_ALIASES)
+def test_safe_id_rejects_windows_normalized_names(value):
+    assert not safe_id(value)
+
+
+@pytest.mark.parametrize("value", [".hidden", "a.b", "realm-2", "a b"])
+def test_safe_id_still_accepts_interior_dots_and_spaces(value):
+    # only the trailing position is normalized away; interior ones are fine
+    assert safe_id(value)
+
+
+def test_a_world_in_use_cannot_be_deleted_through_a_normalized_alias(monkeypatch, tmp_path):
+    """The alias bypassed the in-use guard and destroyed a live world.
+
+    `delete_world("realm.")` opened `worlds/realm` on Windows, but compared the
+    raw `realm.` against campaigns' stored `realm` references, concluded the
+    world was unused, and rmtree'd it out from under the campaign.
+    """
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    entities.create_entity(worlds.world_root(wid), "lore", "Salt Pact", "the pact")
+    campaigns.create_campaign("Saltmarch", wid)
+    for alias in ("realm.", "realm ", "realm..."):
+        with pytest.raises(worlds.WorldNotFound):
+            worlds.delete_world(alias)
+    assert worlds.world_root(wid).exists()               # still there
+    assert entities.list_entities(worlds.world_root(wid), "lore")
+
+
+def test_deleting_a_world_alias_is_a_404(monkeypatch, tmp_path):
+    home(monkeypatch, tmp_path)
+    worlds.create_world("Realm")
+    client = TestClient(create_app(), raise_server_exceptions=False)
+    assert client.delete("/api/worlds/realm.").status_code == 404
+    assert worlds.world_root("realm").exists()
+
+
+# A directory whose name no id can address is only creatable where the OS
+# permits it; Windows rejects every such name at mkdir, so the store can only
+# acquire one by being synced or restored from a POSIX machine.
+posix_only = pytest.mark.skipif(os.name == "nt",
+                                reason="Windows cannot create a directory with an unusable name")
+UNUSABLE_DIR = "C:evil"
+
+
+@posix_only
+def test_listings_skip_unusable_directory_names(monkeypatch, tmp_path):
+    """Enumeration must not hand out ids the resolvers refuse.
+
+    Every listing feeds its ids straight back into a guarded resolver, so a
+    single unusable directory would turn a whole list request into a 500.
+    """
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    cid = campaigns.create_campaign("Saltmarch", wid)
+    wroot = worlds.world_root(wid)
+    characters.create_character(wroot, "Seraphine")
+    pcs.create_pc(wroot, "Mara", [])
+    entities.create_entity(wroot, "lore", "Salt Pact", "the pact")
+
+    for base, marker in ((tmp_path / "worlds", "world.md"),
+                         (tmp_path / "campaigns", "campaign.md"),
+                         (wroot / "characters", "character.md"),
+                         (wroot / "pcs", "pc.md")):
+        d = base / UNUSABLE_DIR
+        d.mkdir(parents=True, exist_ok=True)
+        (d / marker).write_text("---\nname: Nope\n---\n", encoding="utf-8")
+    (wroot / "lore" / f"{UNUSABLE_DIR}.md").write_text("---\nname: Nope\n---\n", encoding="utf-8")
+
+    assert [w["id"] for w in worlds.list_worlds()] == [wid]
+    assert [c["id"] for c in campaigns.list_campaigns()] == [cid]
+    assert [c["id"] for c in characters.list_characters(wroot)] == ["seraphine"]
+    assert characters.character_refs(wroot) == ["seraphine"]
+    assert [p["id"] for p in pcs.list_pcs(wroot)] == ["mara"]
+    assert pcs.pc_refs(wroot) == ["mara"]
+    assert [e["id"] for e in entities.list_entities(wroot, "lore")] == ["salt-pact"]
+
+
+@posix_only
+def test_startup_migration_survives_an_unusable_campaign_directory(monkeypatch, tmp_path):
+    # migrate_scene_ids runs in the app lifespan: an uncaught CampaignNotFound
+    # here aborts startup, so one stray directory would stop the server booting
+    from grimoire.store import migrations
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    campaigns.create_campaign("Saltmarch", wid)
+    d = tmp_path / "campaigns" / UNUSABLE_DIR
+    d.mkdir(parents=True)
+    (d / "campaign.md").write_text("---\nname: Nope\nworld: realm\n---\n", encoding="utf-8")
+    migrations.migrate_scene_ids()          # must not raise
+    TestClient(create_app()).get("/api/campaigns")   # lifespan runs on first request

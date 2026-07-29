@@ -105,7 +105,9 @@ def list_campaigns() -> list[dict]:
     if base.exists():
         for d in sorted(base.iterdir()):
             mp = d / "campaign.md"
-            if not d.is_dir() or not mp.exists():
+            # see worlds.list_worlds: enumeration agrees with the resolvers, so a
+            # stray directory can't abort a listing -- or the startup migration
+            if not d.is_dir() or not mp.exists() or not safe_id(d.name):
                 continue
             meta, _ = parse_frontmatter(mp.read_text(encoding="utf-8"))
             out.append({
