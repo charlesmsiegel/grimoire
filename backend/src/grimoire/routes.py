@@ -3125,7 +3125,7 @@ async def _refresh_dossiers(cid: str, sid: str, transcript: str,
         cast = store.appearances.scene_cast(cid, sid)
         croot = store.campaigns.campaign_root(cid)
     except Exception as exc:  # noqa: BLE001 -- an unreadable cast is a failed phase, not a 500
-        return {**out, "status": "failed", "reason": f"dossier refresh failed: {exc}"}
+        return {**out, "status": "failed", "reason": f"could not read the scene cast: {exc}"}
     for a in cast:
         if a["kind"] != "characters" or a["role"] != "npc":
             continue  # dossiers feed the npc-only "Active elsewhere" tier; skip player cards
