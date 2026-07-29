@@ -303,20 +303,29 @@ async def _run_audit(cid: str, sid: str, client: LLMClient, conn: dict,
                    "warnings": parsed["warnings"], "dropped": dropped}
 
 
-async def _refresh_dossiers(cid: str, sid: str, transcript: str,
-                            client: LLMClient, conn: dict, budget: _Budget) -> dict:
-    """Refresh every present NPC's campaign dossier from this scene, reporting
-    the outcome. Never raises -- a dossier failure must not fail absorb -- but
-    it is no longer silent either: failures come back as a status the inspector
-    renders, mirroring _run_audit's shape, so a user whose dossiers quietly
-    stopped updating sees it on the very first absorb rather than never."""
+async def _stage_dossiers(cid: str, sid: str, transcript: str, client: LLMClient,
+                          conn: dict, budget: _Budget) -> tuple[list[dict], dict]:
+    """Propose a refreshed campaign dossier for every present NPC, reporting the
+    outcome.
+
+    The LLM call happens here; the WRITE does not (#235). Each dossier comes back
+    as a StagedEdit that lands with the rest of the batch in PUT /chronicle, so an
+    absorb that dies partway through this loop -- or a reviewer who hits Cancel --
+    leaves nothing behind. `proposed` therefore names the NPCs whose dossier was
+    generated, not written; an NPC whose paragraph came back unchanged is proposed
+    with no edit to show for it.
+
+    Never raises -- a dossier failure must not fail absorb -- but it is not silent
+    either: failures (#236) and budget skips (#243) come back as a status the
+    inspector renders, mirroring _run_audit's shape."""
     out: dict = {"status": "skipped", "reason": None,
-                 "refreshed": [], "failed": [], "skipped": []}
+                 "proposed": [], "failed": [], "skipped": []}
+    edits: list[dict] = []
     try:
         cast = store.appearances.scene_cast(cid, sid)
         croot = store.appearances.locked_actor_root(cid)   # cast actors are locked, so campaign-side
     except Exception as exc:  # noqa: BLE001 -- an unreadable cast is a failed phase, not a 500
-        return {**out, "status": "failed", "reason": f"could not read the scene cast: {exc}"}
+        return [], {**out, "status": "failed", "reason": f"could not read the scene cast: {exc}"}
     for i, a in enumerate(cast):
         if a["kind"] != "characters" or a["role"] != "npc":
             continue  # dossiers feed the npc-only "Active elsewhere" tier; skip player cards
@@ -331,7 +340,8 @@ async def _refresh_dossiers(cid: str, sid: str, transcript: str,
             name = store.characters.read_character(croot, a["id"])["meta"].get("name", a["id"])
             msgs = store.dossiers.build_prompt(name, store.dossiers.read(croot, a["id"]), transcript)
             d_text = await budget.run(client.complete(msgs, conn))
-            store.dossiers.write(croot, a["id"], store.dossiers.parse_output(d_text))
+            edit = store.dossiers.stage_edit(croot, a["id"], name,
+                                             store.dossiers.parse_output(d_text))
         except Exception as exc:  # noqa: BLE001 -- LLMError, store errors, anything
             # Type-prefixed: a bare str() is useless for the store's own errors
             # (CharacterNotFound("aese") stringifies to just "aese").
@@ -340,30 +350,49 @@ async def _refresh_dossiers(cid: str, sid: str, transcript: str,
                 "id": a["id"],
                 "reason": f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__})
         else:
-            out["refreshed"].append(a["id"])
-    if not out["refreshed"] and not out["failed"] and not out["skipped"]:
-        return {**out, "reason": "no npcs present"}
-    if not out["refreshed"]:
+            out["proposed"].append(a["id"])
+            if edit:
+                edits.append(edit)
+    if not out["proposed"] and not out["failed"] and not out["skipped"]:
+        return edits, {**out, "reason": "no npcs present"}
+    if not out["proposed"]:
         # A budget that ran out before the first call is a different story from
         # calls that were made and went wrong; say which one happened.
-        return {**out, "status": "failed",
-                "reason": "no dossier could be refreshed" if out["failed"] else
-                          "the absorb time budget ran out before any dossier could be refreshed"}
+        return edits, {**out, "status": "failed",
+                       "reason": "no dossier could be prepared" if out["failed"] else
+                                 "the absorb time budget ran out before any dossier "
+                                 "could be prepared"}
     if out["failed"]:  # the more specific story when both happened; `skipped` still lists the rest
-        return {**out, "status": "degraded", "reason": "some dossiers could not be refreshed"}
+        return edits, {**out, "status": "degraded",
+                       "reason": "some dossiers could not be prepared"}
     if out["skipped"]:
-        return {**out, "status": "degraded",
-                "reason": "the absorb time budget ran out before the rest could be refreshed"}
-    return {**out, "status": "ok"}
+        return edits, {**out, "status": "degraded",
+                       "reason": "the absorb time budget ran out before the rest "
+                                 "could be prepared"}
+    return edits, {**out, "status": "ok"}
+
+
+def _already_absorbed(cid: str, sid: str) -> bool:
+    try:
+        return sid in store.chronicle.read_chronicle(cid)
+    except Exception:  # noqa: BLE001 — a garbled chronicle can't prove a prior absorb
+        return False
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/absorb")
-async def post_absorb(cid: str, sid: str,
+async def post_absorb(cid: str, sid: str, force: bool = False,
                       client: LLMClient = Depends(get_llm)):
     scene = _require_scene(cid, sid)
     conn = _require_connection()
     if not scene["messages"]:
         raise HTTPException(status_code=400, detail="nothing to absorb")
+    # Absorb is not idempotent: lore edits append and plot movements add a beat,
+    # so a second pass over the same scene duplicates both. Refuse by default
+    # (before spending a token) and make the re-run an explicit choice (#235).
+    if _already_absorbed(cid, sid) and not force:
+        raise HTTPException(
+            status_code=409,
+            detail={"detail": "this scene has already been absorbed", "kind": "already_absorbed"})
     facts = store.chronicle.scene_facts(cid, sid)
     transcript = store.chronicle.transcript_text(scene["messages"])
     messages = store.absorb.build_prompt(
@@ -379,9 +408,10 @@ async def post_absorb(cid: str, sid: str,
         raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
     parsed = store.absorb.parse_output(text)
     edits = store.absorb.materialize(cid, sid, parsed)
-    # Phase 2: refresh each present NPC's campaign dossier from this scene
-    # (never raises -- see _refresh_dossiers' own failure boundary).
-    dossiers = await _refresh_dossiers(cid, sid, transcript, client, conn, budget)
+    # Phase 2: propose each present NPC's refreshed campaign dossier -- staged, not
+    # written (never raises -- see _stage_dossiers' own failure boundary).
+    dossier_edits, dossiers = await _stage_dossiers(cid, sid, transcript, client, conn, budget)
+    edits += dossier_edits
     # Phase 5: audit the scene's mechanics against the sheeted cast (never
     # raises -- see _run_audit's own failure boundary).
     audit_edits, mechanics = await _run_audit(cid, sid, client, conn, budget)

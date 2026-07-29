@@ -509,13 +509,26 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     await runStream(activeId, (onEvent) => api.resolveProposal(cid, activeId!, body, onEvent));
   }
 
+  // A scene already in the chronicle comes back as 409 "already_absorbed" rather
+  // than silently re-absorbing: lore edits append and plot movements add a beat,
+  // so a second pass duplicates both (#235). Confirm, then retry with force.
   async function endScene() {
     if (!activeId || absorbing) return;
     setAbsorbing(true);
     setError(null);
     setSheetFailures([]);
     try {
-      const a = await api.absorbScene(cid, activeId);
+      let a;
+      try {
+        a = await api.absorbScene(cid, activeId);
+      } catch (err: any) {
+        if (err?.kind !== "already_absorbed") throw err;
+        if (!window.confirm(
+          "This scene has already been absorbed. Absorbing again re-proposes every " +
+          "change from scratch, so appended lore and plot beats can end up duplicated. " +
+          "Absorb it again?")) return;
+        a = await api.absorbScene(cid, activeId, true);
+      }
       setAbsorb(a);
       setEditRows(a.edits.map((e) => ({ ...e, approved: true })));
     } catch (err: any) {
@@ -776,11 +789,13 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
               </div>)}
             {(absorb.dossiers.status === "failed" || absorb.dossiers.status === "degraded") && (
               <div className="mechanics-notice">
+                {/* "prepared", not "refreshed": the dossier is staged here and only
+                    written when the review is saved (#235). */}
                 <p>{absorb.dossiers.failed.length === 0
                     ? `NPC dossier refresh failed: ${absorb.dossiers.reason}`
                     : absorb.dossiers.status === "failed"
-                      ? "No NPC dossier could be refreshed"
-                      : "Some NPC dossiers could not be refreshed"}</p>
+                      ? "No NPC dossier could be prepared"
+                      : "Some NPC dossiers could not be prepared"}</p>
                 {absorb.dossiers.failed.map((d, i) => (
                   <p className="field-hint" key={i}>{d.id}: {d.reason}</p>))}
                 {absorb.dossiers.skipped.length > 0 && (
