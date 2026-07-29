@@ -603,8 +603,15 @@ def apply_edits(cid: str, edits: list[dict],
             elif kind == "group_state":
                 groupstate.write_state(croot, target["id"], after)
             elif kind == "dossier":
+                # This row reaches us from a client-supplied PUT body, and
+                # dossiers.write() creates its parent dir -- so the target has to
+                # name a character that actually exists, or a forged row conjures
+                # a dossier-only phantom under characters/.
                 if not after.strip():
                     continue  # a blank reply must not erase a good dossier
+                if target.get("kind") != "characters":
+                    continue
+                characters.read_character(overlay.char_root(cid, target["id"]), target["id"])
                 dossiers.write(croot, target["id"], after)
             elif kind == "lore":
                 overlay.update_entity(cid, target["kind"], target["id"], body=after)

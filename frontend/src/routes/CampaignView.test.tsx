@@ -668,7 +668,8 @@ test("re-absorbing a scene asks for confirmation, then retries with force", asyn
     .mockResolvedValueOnce({
       one_line: "Again.", summary: "s", keywords: [], timeline_events: [],
       cast: [], location: "", date: "", edits: [],
-      mechanics: { status: "ok", reason: null, warnings: [], dropped: [] } });
+      mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
+      dossiers: { status: "skipped", reason: null, proposed: [], failed: [] } });
   const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
   renderCampaign();
   await screen.findByText("hi");
@@ -736,6 +737,7 @@ test("a staged dossier is editable and sent with the save", async () => {
   (api.absorbScene as any).mockResolvedValue({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
+    dossiers: { status: "ok", reason: null, proposed: ["seraphine"], failed: [] },
     edits: [{ id: "dossier:seraphine", kind: "dossier",
       target: { kind: "characters", id: "seraphine" }, label: "Seraphine — campaign dossier",
       field: "dossier", authored: false,
