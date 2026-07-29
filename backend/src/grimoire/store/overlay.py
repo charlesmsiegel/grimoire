@@ -52,11 +52,11 @@ def croot_of(cid: str) -> Path:
 
 def wroot_of(cid: str) -> Path:
     """The campaign's world root. May not exist — the world was deleted
-    before the guard against that existed. Or, if the campaign's `world` meta
-    is empty, `world_root_or_missing` yields a path that never exists.
+    before the guard against that existed. Or, if the campaign records no
+    world, `campaigns.world_root_of` yields a path nothing can occupy.
     Either way, nothing here raises for it — every resolver below just reads
     a path that doesn't hold the expected records as holding none."""
-    return worlds.world_root_or_missing(campaigns.read_campaign(cid)["meta"].get("world", ""))
+    return campaigns.world_root_of(cid)
 
 
 # ---- tombstones ----

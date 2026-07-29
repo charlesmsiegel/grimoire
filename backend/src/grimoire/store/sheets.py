@@ -517,8 +517,7 @@ def seed(cid: str) -> int:
     mid = modules.resolve(cid)
     if mid is None:
         return 0
-    meta = campaigns.read_campaign(cid)["meta"]
-    src = worlds.world_root_or_missing(meta.get("world", "")) / "sheets" / mid
+    src = campaigns.world_root_of(cid) / "sheets" / mid
     if not src.is_dir():
         return 0
     dst = _campaign_dir(cid)
