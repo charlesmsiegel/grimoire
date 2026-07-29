@@ -401,6 +401,9 @@ def post_copy_campaign_image_from_greeting(cid: str, char: str, vid: str, body: 
     # or a campaign-side copy can reuse a name that shadows one of them
     taken_names = {i["name"] for i in store.overlay.list_images(cid, char, vid)}
     try:
+        # overlay-ok: the two things this reads are handed in already resolved --
+        # src_root from overlay.image_root and taken_names from the overlay union
+        # above; `root` is only the destination the copy writes to
         stored = store.image_subjects.copy_to_character(root, body.gid, body.name, char, vid, body.slot,
                                                          src_root=src_root, taken_names=taken_names)
     except FileNotFoundError:
