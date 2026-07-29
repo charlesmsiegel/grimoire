@@ -1,56 +1,64 @@
+import ts from "typescript";
+
 // The module-editor files once formed a five-file import cycle: ModuleEditor
 // imported all four section components, and every section imported the shared
 // save/dry-run helpers back out of ModuleEditor. The helpers now live here in
 // moduleEditShared, so the arrows run one way.
 //
-// This guards that by building the real import graph — every relative import
-// in every source file reachable from the module-editor entry points — and
-// looking for a cycle, rather than grepping for one import spelling. A new
-// section file, a transitive cycle through a third module, or a dynamic
-// `import()` back into ModuleEditor all fail this test.
+// This guards that by building the real import graph — every source file under
+// src/, scanned with TypeScript's own preprocessor — and asking, for each
+// module-editor file, whether a path leads from it back to itself. A new
+// section file, a transitive cycle through a third module, a re-export or a
+// dynamic `import()` back into ModuleEditor all fail this test.
 
 const RAW = import.meta.glob("../**/*.{ts,tsx}", {
   query: "?raw", import: "default", eager: true,
 }) as Record<string, string>;
 
-/** Collapse `.`/`..` segments; paths are src-relative, e.g. `components/Field.tsx`. */
-function normalize(path: string): string {
+/**
+ * Collapse `.`/`..` segments. Paths are src-relative (`components/Field.tsx`);
+ * a path that escapes src has no src-relative form, so it returns null rather
+ * than silently clamping to a different file.
+ */
+function normalize(path: string): string | null {
   const out: string[] = [];
   for (const seg of path.split("/")) {
     if (seg === "" || seg === ".") continue;
-    else if (seg === "..") out.pop();
+    else if (seg === "..") { if (!out.pop()) return null; }
     else out.push(seg);
   }
   return out.join("/");
 }
 
-// import.meta.glob keys are relative to this file (src/components/).
+// import.meta.glob keys are relative to this file (src/components/). Test
+// files stay in the graph — excluding them would silently drop any edge that
+// pointed at one — they just aren't cycle roots.
 const SOURCES = new Map(
-  Object.entries(RAW)
-    .map(([key, code]) => [normalize("components/" + key), code] as const)
-    .filter(([path]) => !path.includes(".test.")),
+  Object.entries(RAW).flatMap(([key, code]) => {
+    const path = normalize("components/" + key);
+    return path ? [[path, code] as const] : [];
+  }),
 );
 
-const dirOf = (path: string) => path.slice(0, path.lastIndexOf("/"));
-
-/** Every `from "…"`, bare `import "…"` and dynamic `import("…")` specifier. */
-function specifiers(code: string): string[] {
-  const found: string[] = [];
-  const patterns = [
-    /\bfrom\s*["']([^"']+)["']/g,
-    /\bimport\s*["']([^"']+)["']/g,
-    /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g,
-  ];
-  for (const re of patterns) {
-    for (const m of code.matchAll(re)) found.push(m[1]);
-  }
-  return found;
+/** Directory of a src-relative path; `""` for a file at the src root. */
+function dirOf(path: string): string {
+  const cut = path.lastIndexOf("/");
+  return cut < 0 ? "" : path.slice(0, cut);
 }
+
+/**
+ * Every module specifier in a file, via TypeScript's own preprocessor: it
+ * covers static imports, `export … from`, `require` and dynamic `import()`
+ * (including template-literal and comment-interrupted forms), and — unlike a
+ * regex — never mistakes a specifier-shaped comment or string for an import.
+ */
+const specifiers = (code: string) =>
+  ts.preProcessFile(code, true, true).importedFiles.map((f) => f.fileName);
 
 /** Resolve a relative specifier to a src-relative source path, or null. */
 function resolve(from: string, spec: string): string | null {
-  if (!spec.startsWith(".")) return null; // bare package import
   const base = normalize(dirOf(from) + "/" + spec.split("?")[0]);
+  if (base === null) return null;
   for (const candidate of [base, `${base}.ts`, `${base}.tsx`,
                            `${base}/index.ts`, `${base}/index.tsx`]) {
     if (SOURCES.has(candidate)) return candidate;
@@ -58,37 +66,48 @@ function resolve(from: string, spec: string): string | null {
   return null;
 }
 
-const ENTRY_POINTS = [...SOURCES.keys()].filter((p) =>
-  /^components\/[Mm]odule\w*\.tsx$/.test(p));
+const isRelative = (spec: string) => spec.startsWith(".");
 
-/** Depth-first search for a cycle; returns the offending path, or null. */
-function findCycle(): string[] | null {
-  const done = new Set<string>();
-  const stack: string[] = [];
-  const onStack = new Set<string>();
+/** path -> the source files it imports. */
+const GRAPH = new Map(
+  [...SOURCES].map(([path, code]) => [
+    path,
+    specifiers(code).filter(isRelative)
+      .map((spec) => resolve(path, spec))
+      .filter((dep): dep is string => dep !== null),
+  ]),
+);
 
-  const visit = (path: string): string[] | null => {
-    if (onStack.has(path)) return [...stack.slice(stack.indexOf(path)), path];
-    if (done.has(path)) return null;
-    stack.push(path);
-    onStack.add(path);
-    for (const spec of specifiers(SOURCES.get(path)!)) {
-      const next = resolve(path, spec);
-      if (!next) continue;
-      const cycle = visit(next);
-      if (cycle) return cycle;
+/** Relative specifiers that resolved to nothing — assets, or a dropped edge. */
+const UNRESOLVED = [...SOURCES].flatMap(([path, code]) =>
+  specifiers(code).filter(isRelative)
+    .filter((spec) => resolve(path, spec) === null)
+    .map((spec) => `${path} -> ${spec}`));
+
+const ASSET = /\.(css|svg|png|jpe?g|gif|webp|woff2?|json|md)(\?|$)/;
+
+const MODULE_EDITOR = /^components\/[Mm]odule\w*\.tsx$/;
+const ENTRY_POINTS = [...SOURCES.keys()]
+  .filter((p) => MODULE_EDITOR.test(p) && !p.includes(".test."));
+
+/**
+ * A path from `entry` back to `entry`, or null. Memoizing fully-explored
+ * nodes is sound because the target is fixed: a node explored without
+ * reaching `entry` can never reach it.
+ */
+function cycleThrough(entry: string): string[] | null {
+  const exhausted = new Set<string>();
+  const walk = (path: string, trail: string[]): string[] | null => {
+    for (const dep of GRAPH.get(path) ?? []) {
+      if (dep === entry) return [...trail, dep];
+      if (exhausted.has(dep)) continue;
+      exhausted.add(dep);
+      const found = walk(dep, [...trail, dep]);
+      if (found) return found;
     }
-    stack.pop();
-    onStack.delete(path);
-    done.add(path);
     return null;
   };
-
-  for (const entry of ENTRY_POINTS) {
-    const cycle = visit(entry);
-    if (cycle) return cycle;
-  }
-  return null;
+  return walk(entry, [entry]);
 }
 
 describe("module-editor import graph", () => {
@@ -105,8 +124,14 @@ describe("module-editor import graph", () => {
     ]));
   });
 
-  it("has no import cycle", () => {
-    const cycle = findCycle();
+  it("drops no edge it could not resolve", () => {
+    // Every unresolved relative specifier must be an asset, not a module the
+    // resolver failed on — otherwise the graph has invisible holes.
+    expect(UNRESOLVED.filter((u) => !ASSET.test(u))).toEqual([]);
+  });
+
+  it.each(ENTRY_POINTS)("%s is in no import cycle", (entry) => {
+    const cycle = cycleThrough(entry);
     expect(cycle, cycle ? `cycle: ${cycle.join(" -> ")}` : "").toBeNull();
   });
 });
