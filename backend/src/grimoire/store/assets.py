@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import threading
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from . import atomic
 
@@ -66,6 +67,22 @@ def _image_lock(d: Path, name: str) -> threading.RLock:
     key = str(d / name)
     with _registry_guard:
         return _image_locks.setdefault(key, threading.RLock())
+
+
+@contextmanager
+def _image_locks_held(d: Path, *names: str):
+    """Hold the per-image locks of several logical images at once.
+
+    ``promote_image`` mutates two of them (the promoted slot and the avatar
+    slot), so it has to hold both for the whole swap or an upload can land in
+    the middle of it. Acquiring them in sorted order is what keeps two
+    promotions in flight -- ``promote(gallery_1)`` and ``promote(gallery_2)``,
+    each also wanting ``avatar`` -- from deadlocking against each other.
+    """
+    with ExitStack() as stack:
+        for n in sorted(set(names)):
+            stack.enter_context(_image_lock(d, n))
+        yield
 
 
 def _mtime_ns(p: Path) -> int:
@@ -213,17 +230,53 @@ def delete_image(root: Path, cid: str, vid: str, name: str, base: str = "charact
 
 
 def promote_image(root: Path, cid: str, vid: str, name: str, base: str = "characters") -> None:
-    """Make <name> the avatar; the old avatar takes <name>'s slot (swap, nothing lost)."""
+    """Make <name> the avatar; the old avatar takes <name>'s slot (swap, nothing lost).
+
+    Publish each side through ``put_image``; do not shuffle the two files
+    through a temp name. This used to be three renames through a fixed
+    ``promote-tmp<ext>`` (#253): each rename was atomic, the *sequence* was
+    not, so a crash after the second one left the promoted image parked under a
+    name nothing ever looks for and **no avatar at all** -- silent, never
+    self-healing, and the fixed temp name meant two concurrent promotions in
+    one process fought over one path. No amount of write atomicity fixes that;
+    every individual step already succeeded.
+
+    Republishing removes the temp, and with it the interval in which the avatar
+    is unresolvable: the avatar slot holds either the old image or the new one
+    at every instant, and each ``put_image`` writes before it drops the
+    other-extension sibling it replaces. The residue of a crash between the two
+    publishes is a duplicate rather than a hole -- the promoted image is the
+    avatar, and its gallery slot still holds a copy of it instead of receiving
+    the demoted one. Keeping *both* copies across a crash would need a third
+    slot (a same-extension swap cannot avoid one) and therefore a temp-file
+    recovery protocol; a duplicate image is worth less than that.
+
+    Both locks are held across the whole swap, so an upload to either slot
+    cannot interleave with it.
+    """
     if name == AVATAR:
         return
-    src = image_path(root, cid, vid, name, base)
-    if src is None:
-        raise FileNotFoundError(name)
-    cur = image_path(root, cid, vid, AVATAR, base)
+    if not (_safe(cid) and _safe(vid) and _safe_name(name)):
+        raise FileNotFoundError(name)  # no logical image can live under such a name
     d = _dir(root, cid, vid, base)
-    tmp = d / f"promote-tmp{src.suffix}"
-    src.rename(tmp)
-    if cur is not None:
-        cur.rename(d / f"{name}{cur.suffix}")
-    tmp.rename(d / f"{AVATAR}{src.suffix}")
+    with _image_locks_held(d, name, AVATAR):
+        src = image_path(root, cid, vid, name, base)
+        if src is None:
+            raise FileNotFoundError(name)
+        cur = image_path(root, cid, vid, AVATAR, base)
+        # Both extensions are checked before anything is written: put_image
+        # rejects a non-allowlisted one, and discovering that halfway through
+        # would leave a half-swap. Only an externally-placed file can have one.
+        for p in (src, cur):
+            if p is not None and not _norm_ext(p.suffix):
+                raise ValueError(f"unsupported image type: {p.name}")
+        promoted = (src.read_bytes(), src.suffix)
+        demoted = (cur.read_bytes(), cur.suffix) if cur is not None else None
+        put_image(root, cid, vid, AVATAR, promoted[0], promoted[1], base)
+        if demoted is None:
+            # Nothing to swap back in; the promoted image only lives in the
+            # avatar slot now, matching the rename this replaced.
+            delete_image(root, cid, vid, name, base)
+        else:
+            put_image(root, cid, vid, name, demoted[0], demoted[1], base)
     clear_focus(root, cid, vid, base)
