@@ -1,0 +1,946 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>grimoire#fix-241-split-routes — Review</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#faf7f2; --bg-grid:rgba(120,90,60,0.05); --surface:#ffffff; --surface-2:#f2ede4;
+  --border:rgba(90,70,50,0.16); --border-strong:rgba(90,70,50,0.34);
+  --text:#2b2620; --text-dim:#6d6357; --text-faint:#9a8f81;
+  --accent:#8a5a2b; --accent-dim:rgba(138,90,43,0.10);
+  --good:#3e7d4f; --good-dim:rgba(62,125,79,0.11);
+  --warn:#a06b14; --warn-dim:rgba(160,107,20,0.12);
+  --bad:#b04030; --bad-dim:rgba(176,64,48,0.10);
+  --violet:#6a5590;
+  --heat-lo:#e4dccd; --heat-hi:#b04030;
+  --add:#3e7d4f; --add-dim:rgba(62,125,79,0.13);
+  --del:#b04030; --del-dim:rgba(176,64,48,0.12);
+  --mono:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  --sans:'IBM Plex Sans',system-ui,-apple-system,sans-serif;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#1c1915; --bg-grid:rgba(220,190,150,0.045); --surface:#26221c; --surface-2:#2f2a22;
+    --border:rgba(220,195,160,0.14); --border-strong:rgba(220,195,160,0.30);
+    --text:#e8e1d5; --text-dim:#a89c8b; --text-faint:#776d5f;
+    --accent:#d3a161; --accent-dim:rgba(211,161,97,0.13);
+    --good:#7bbd8b; --good-dim:rgba(123,189,139,0.13);
+    --warn:#d9a84e; --warn-dim:rgba(217,168,78,0.14);
+    --bad:#dd7a66; --bad-dim:rgba(221,122,102,0.14);
+    --violet:#a893cf;
+    --heat-lo:#3d372c; --heat-hi:#dd7a66;
+    --add:#7bbd8b; --add-dim:rgba(123,189,139,0.14);
+    --del:#dd7a66; --del-dim:rgba(221,122,102,0.14);
+  }
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{
+  font-family:var(--sans); background:var(--bg); color:var(--text);
+  background-image:linear-gradient(var(--bg-grid) 1px,transparent 1px),linear-gradient(90deg,var(--bg-grid) 1px,transparent 1px);
+  background-size:32px 32px; line-height:1.55; font-size:15px;
+}
+header.doc{padding:34px 28px 0; max-width:1280px; margin:0 auto}
+.doc-label{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);display:flex;align-items:center;gap:8px}
+.doc-label::before{content:"";width:8px;height:8px;background:var(--accent);border-radius:2px;display:inline-block}
+h1.doc-title{font-size:30px;font-weight:700;letter-spacing:-.02em;margin-top:8px}
+.doc-sub{color:var(--text-dim);margin-top:6px;max-width:900px}
+.doc-meta{font-family:var(--mono);font-size:12px;color:var(--text-faint);margin-top:10px}
+nav.tabs{
+  position:sticky;top:0;z-index:50;background:color-mix(in srgb,var(--bg) 88%,transparent);
+  backdrop-filter:blur(8px);border-bottom:1px solid var(--border);
+  margin-top:22px;padding:0 28px;display:flex;gap:2px;overflow-x:auto;
+  max-width:1280px;margin-left:auto;margin-right:auto;scrollbar-width:thin;
+}
+nav.tabs button{
+  appearance:none;background:none;border:none;border-bottom:2px solid transparent;
+  color:var(--text-dim);font-family:var(--mono);font-size:12.5px;letter-spacing:.02em;
+  padding:12px 14px;cursor:pointer;white-space:nowrap;transition:color .15s;
+}
+nav.tabs button:hover{color:var(--text)}
+nav.tabs button[aria-selected="true"]{color:var(--accent);border-bottom-color:var(--accent)}
+nav.tabs button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+main{max-width:1280px;margin:0 auto;padding:26px 28px 80px}
+.panel{display:none;animation:fadeUp .25s ease both}
+.panel.active{display:block}
+@keyframes fadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}
+
+/* ---------- content primitives ---------- */
+.panel h2{font-size:21px;font-weight:600;letter-spacing:-.01em;margin:26px 0 10px}
+.panel h2:first-child{margin-top:0}
+.panel h3{font-size:16px;font-weight:600;margin:22px 0 8px}
+.panel p{margin:8px 0;max-width:940px;color:var(--text)}
+.panel ul,.panel ol{margin:8px 0 8px 22px;max-width:940px}
+.panel li{margin:4px 0}
+.dim{color:var(--text-dim)} .faint{color:var(--text-faint)}
+code,.mono{font-family:var(--mono);font-size:.92em}
+p code,li code,td code{background:var(--surface-2);border:1px solid var(--border);border-radius:4px;padding:1px 5px}
+pre{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px 16px;overflow-x:auto;font-family:var(--mono);font-size:13px;line-height:1.5;margin:10px 0}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 20px;margin:12px 0}
+.card.hero{border-color:var(--border-strong);background:linear-gradient(180deg,var(--accent-dim),var(--surface) 60%)}
+.grid{display:grid;gap:14px;margin:12px 0}
+.grid.cols-2{grid-template-columns:repeat(auto-fit,minmax(340px,1fr))}
+.grid.cols-3{grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+.grid>*{min-width:0}
+.kpis{display:flex;flex-wrap:wrap;gap:12px;margin:12px 0}
+.kpi{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 18px;min-width:130px}
+.kpi .n{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.kpi .l{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-dim);margin-top:2px}
+.kpi.warn .n{color:var(--warn)} .kpi.bad .n{color:var(--bad)} .kpi.good .n{color:var(--good)} .kpi.accent .n{color:var(--accent)}
+.badge{display:inline-block;font-family:var(--mono);font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--border);vertical-align:1px;white-space:nowrap}
+.badge.good{color:var(--good);background:var(--good-dim);border-color:transparent}
+.badge.warn{color:var(--warn);background:var(--warn-dim);border-color:transparent}
+.badge.bad{color:var(--bad);background:var(--bad-dim);border-color:transparent}
+.badge.accent{color:var(--accent);background:var(--accent-dim);border-color:transparent}
+.badge.neutral{color:var(--text-dim);background:var(--surface-2);border-color:transparent}
+.callout{border-left:3px solid var(--accent);background:var(--accent-dim);border-radius:0 8px 8px 0;padding:12px 16px;margin:12px 0;max-width:940px}
+.callout.warn{border-color:var(--warn);background:var(--warn-dim)}
+.callout.bad{border-color:var(--bad);background:var(--bad-dim)}
+.callout.good{border-color:var(--good);background:var(--good-dim)}
+details{border:1px solid var(--border);border-radius:8px;margin:10px 0;background:var(--surface)}
+details summary{cursor:pointer;padding:10px 16px;font-weight:500;color:var(--text-dim)}
+details[open] summary{border-bottom:1px solid var(--border);color:var(--text)}
+details .body{padding:12px 16px}
+
+/* tables */
+.tbl-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:10px;margin:12px 0;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+thead th{
+  position:sticky;top:0;background:var(--surface-2);text-align:left;font-family:var(--mono);
+  font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-dim);
+  padding:9px 14px;border-bottom:1px solid var(--border-strong);white-space:nowrap;
+}
+tbody td{padding:8px 14px;border-bottom:1px solid var(--border);vertical-align:top;overflow-wrap:break-word}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:nth-child(even){background:color-mix(in srgb,var(--surface-2) 45%,transparent)}
+tbody tr:hover{background:var(--accent-dim)}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;font-family:var(--mono);font-size:12.5px}
+table.sortable thead th{cursor:pointer;user-select:none}
+table.sortable thead th::after{content:"↕";opacity:.35;margin-left:6px;font-size:10px}
+table.sortable thead th.asc::after{content:"↑";opacity:1;color:var(--accent)}
+table.sortable thead th.desc::after{content:"↓";opacity:1;color:var(--accent)}
+
+/* CSS bars inside tables */
+.bar{position:relative;background:var(--surface-2);border-radius:4px;height:14px;min-width:120px;overflow:hidden}
+.bar>i{position:absolute;inset:0 auto 0 0;background:var(--accent);border-radius:4px}
+.bar.warn>i{background:var(--warn)} .bar.bad>i{background:var(--bad)} .bar.good>i{background:var(--good)}
+/* diff add/del split bar: use two <i> with classes a and d */
+.dbar{position:relative;display:flex;background:var(--surface-2);border-radius:4px;height:14px;min-width:120px;overflow:hidden}
+.dbar>i.a{background:var(--add)} .dbar>i.d{background:var(--del)}
+.plusminus{font-family:var(--mono);font-size:12px;white-space:nowrap}
+.plusminus .p{color:var(--add)} .plusminus .m{color:var(--del)}
+.diff-snippet{background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow-x:auto;font-family:var(--mono);font-size:12.5px;line-height:1.5;margin:10px 0}
+.diff-snippet .fh{background:var(--surface-2);padding:6px 12px;border-bottom:1px solid var(--border);font-size:11.5px;color:var(--text-dim)}
+.diff-snippet .ln{display:block;padding:1px 12px;white-space:pre}
+.diff-snippet .ln.add{background:var(--add-dim);color:var(--text)}
+.diff-snippet .ln.del{background:var(--del-dim);color:var(--text)}
+.diff-snippet .ln.ctx{color:var(--text-dim)}
+
+/* ---------- viz containers ---------- */
+.viz{position:relative;border:1px solid var(--border);border-radius:10px;background:var(--surface);margin:12px 0;overflow:hidden}
+.viz svg{display:block;width:100%;height:100%}
+.viz .zoombar{position:absolute;top:10px;right:10px;display:flex;gap:6px;z-index:5}
+.viz .zoombar button{width:28px;height:28px;border-radius:6px;border:1px solid var(--border-strong);background:var(--surface-2);color:var(--text);font-family:var(--mono);cursor:pointer;font-size:14px;line-height:1}
+.viz .zoombar button:hover{background:var(--accent-dim);color:var(--accent)}
+.viz .legend{position:absolute;left:12px;bottom:10px;display:flex;flex-wrap:wrap;gap:10px;font-family:var(--mono);font-size:11px;color:var(--text-dim);background:color-mix(in srgb,var(--surface) 80%,transparent);padding:4px 8px;border-radius:6px;max-width:70%}
+.legend .sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+.viz-tip{position:fixed;pointer-events:none;z-index:200;background:var(--surface-2);border:1px solid var(--border-strong);border-radius:8px;padding:8px 12px;font-family:var(--mono);font-size:12px;color:var(--text);box-shadow:0 6px 24px rgba(0,0,0,.35);display:none;max-width:380px}
+.mermaid-wrap{position:relative;border:1px solid var(--border);border-radius:10px;background:var(--surface);margin:12px 0;overflow:hidden;min-height:120px}
+.mermaid-wrap .mviewport{overflow:hidden;cursor:grab;padding:14px}
+.mermaid-wrap .mviewport.dragging{cursor:grabbing}
+.mermaid{font-family:var(--sans)}
+.mermaid[data-processed="true"]{display:flex;justify-content:center}
+footer.doc{max-width:1280px;margin:0 auto;padding:0 28px 34px;color:var(--text-faint);font-family:var(--mono);font-size:11.5px}
+@media(max-width:720px){header.doc,main,nav.tabs,footer.doc{padding-left:16px;padding-right:16px} h1.doc-title{font-size:24px}}
+</style>
+</head>
+<body>
+<header class="doc">
+  <div class="doc-label">PULL REQUEST REVIEW</div>
+  <h1 class="doc-title">grimoire#fix-241-split-routes — Review</h1>
+  <p class="doc-sub">Split routes.py (4,360 lines, 252 routes) into a routes/ package</p>
+  <div class="doc-meta">base main @ b5b14cf0 → 7eb0f186 · +4861/−4416 · rebased 2026-07-29</div>
+</header>
+<nav class="tabs" role="tablist"><button role="tab" data-tab="summary" aria-selected="true" aria-controls="summary">Summary</button>
+<button role="tab" data-tab="footprint" aria-selected="false" aria-controls="footprint">Footprint</button>
+<button role="tab" data-tab="contracts-tests" aria-selected="false" aria-controls="contracts-tests">Contracts &amp; Tests</button>
+<button role="tab" data-tab="blast-radius" aria-selected="false" aria-controls="blast-radius">Blast Radius</button>
+<button role="tab" data-tab="flow-impact" aria-selected="false" aria-controls="flow-impact">Flow Impact</button>
+<button role="tab" data-tab="review-walkthrough" aria-selected="false" aria-controls="review-walkthrough">Review Walkthrough</button></nav>
+<main><section class="panel active" id="summary" role="tabpanel">
+
+<div class="card hero">
+  <h2>A pure structural split — with one real dispatch regression, caught and fixed inside the branch</h2>
+  <p><code>backend/src/grimoire/routes.py</code> (4,360 lines, 252 routes) is deleted and replaced by a
+  13-module <code>routes/</code> package. Handler bodies are <strong>byte-identical</strong>: they were sliced by
+  line range, not retyped. The HTTP surface is unchanged — all 256 routes keep the same method, path
+  <em>and handler function</em>.</p>
+  <p>The one behavioral change is not in any handler: it is in <em>registration order</em>. FastAPI matches
+  in registration order and never backtracks, so splitting one ordered file into ten included routers
+  reshuffles which route wins when two patterns overlap. Commit <code>eb1aca2b</code> flipped the winner on
+  three POST URL shapes; <code>dcb86eb9</code> restored them by reordering the includes. A residual 405
+  <code>Allow</code>-header difference (8 of 1,152 probed outcomes) is documented and accepted.</p>
+</div>
+
+<div class="kpis">
+  <div class="kpi"><b>256</b><span>routes, before and after</span></div>
+  <div class="kpi"><b>0</b><span>handler dispatch changes (1,152 probes)</span></div>
+  <div class="kpi"><b>0</b><span>signature changes</span></div>
+  <div class="kpi"><b>8</b><span>405 <code>Allow</code> headers differ</span></div>
+</div>
+
+<div class="card">
+  <h3>Claimed vs. actual</h3>
+  <p>Checked against the branch's three commit messages, written before this report.</p>
+  <div class="tbl-wrap"><table class="sortable">
+    <thead><tr><th>Claim</th><th>Verdict</th><th>Evidence</th></tr></thead>
+    <tbody>
+      <tr><td>"Route handler bodies moved verbatim"</td><td><span class="badge good">holds</span></td>
+        <td>Line-multiset diff of old file vs. new package: the only removed non-blank lines are the old
+        import header, 12 ordering comments, and a 3-line dead helper.</td></tr>
+      <tr><td>"URL surface is byte-identical (256 routes)"</td><td><span class="badge good">holds</span></td>
+        <td>The (method, path) → handler-function-name map is equal before and after, all 256 entries.</td></tr>
+      <tr><td>"all 49 intersecting pairs resolve exactly as before"</td><td><span class="badge good">holds</span></td>
+        <td>Independently reconstructed; also confirmed by an adversarial reviewer that reached the same
+        49 pairs / 7 crossing pairs / 0 winner changes.</td></tr>
+      <tr><td>"the scattered ordering convention becomes one enforced rule"</td><td><span class="badge good">holds</span></td>
+        <td><code>backend/src/grimoire/routes/__init__.py:64</code> includes <code>entities</code> last;
+        <code>backend/tests/test_route_order.py</code> has 6 tests, all mutation-verified.</td></tr>
+      <tr><td>"a precondition for making the proposal invariant enforceable"</td><td><span class="badge warn">precondition only</span></td>
+        <td>Correct as stated, but see the callout below — the invariant itself is still conventional.</td></tr>
+    </tbody>
+  </table></div>
+</div>
+
+<div class="callout warn">
+  <strong>The issue's real goal is only half-delivered — and the branch says so.</strong> Issue #241 frames the
+  split as "a precondition for making the proposal invariant enforceable rather than conventional". The
+  machinery is now co-located in <code>backend/src/grimoire/routes/streaming.py</code>, and the invariant's
+  docstring at <code>backend/src/grimoire/routes/streaming.py:122</code> now enumerates its call sites. But
+  nothing <em>enforces</em> it: a new <code>proposals.new</code> / <code>proposals.supersede</code> call site
+  that skips <code>_heal_current_proposal</code> still compiles and still passes the suite. Five call sites
+  remain, now spread across two modules
+  (<code>backend/src/grimoire/routes/streaming.py:150</code>, <code>:182</code> and
+  <code>backend/src/grimoire/routes/scenes.py:117</code>, <code>:144</code>, <code>:158</code>) — arguably
+  one notch <em>harder</em> to eyeball than when all five sat in one file. Reviewers should not read this PR
+  as closing that risk.
+</div>
+
+<div class="callout good">
+  <strong>Rebased onto <code>main</code> @ <code>b5b14cf0</code>.</strong> Between this branch starting and
+  the rebase, <code>main</code> landed five commits that edited <code>routes.py</code> — the file this PR
+  deletes. Rather than resolve that as a conflict (which drops upstream work silently), the split was
+  <em>re-derived</em> from <code>main</code>'s current <code>routes.py</code> by symbol name, so each route
+  carried its upstream edits into its new module. Everything main added is present:
+  <code>_refresh_dossiers</code> and the reworked <code>post_absorb</code> (#236) in
+  <code>backend/src/grimoire/routes/scenes.py</code>, the four <code>ValueError</code> promote handlers
+  (#253), the <code>store.campaign_climate</code> extraction (#237), and <code>LLMError</code>'s move to
+  <code>backend/src/grimoire/llm_errors.py</code> (#239). Verified structurally: the (method, path) →
+  handler-function map is identical to <code>main</code>'s for all 256 routes.
+</div>
+
+<div class="card">
+  <h3>Change classification: refactor, with a self-contained bugfix</h3>
+  <p>Not mixed in the problematic sense — every file serves the one concern.</p>
+  <ul>
+    <li><strong>The move</strong> — 13 new modules under <code>backend/src/grimoire/routes/</code>, one deletion.</li>
+    <li><strong>The ordering fix</strong> — <code>backend/src/grimoire/routes/__init__.py:60-64</code> plus
+      <code>backend/tests/test_route_order.py</code> (new, 182 lines).</li>
+    <li><strong>Consumer updates forced by the package boundary</strong> —
+      <code>scripts/verify_templates.py</code> read <code>routes.py</code> as a file;
+      <code>backend/tests/test_routes.py</code> and <code>backend/tests/test_module_edit.py</code> patched
+      private helpers through the module object.</li>
+    <li><strong>Prose</strong> — <code>docs/android-architecture.md</code>, <code>CLAUDE.md</code>,
+      <code>backend/src/grimoire/store/locks.py</code>, <code>backend/src/grimoire/store/playing.py</code>,
+      two Jinja templates.</li>
+  </ul>
+  <p>One incidental deletion rides along: <code>_entity_images_list</code>, dead because both entity-image
+  list routes inline the <code>store.assets.list_images</code> call. Verified by repo-wide search before
+  removal.</p>
+</div>
+
+<div class="card">
+  <h3>What did <em>not</em> change, where a reader might expect it to</h3>
+  <div class="tbl-wrap"><table>
+    <thead><tr><th>Not changed</th><th>Assessment</th></tr></thead>
+    <tbody>
+      <tr><td><code>backend/src/grimoire/main.py</code> — still <code>from .routes import router</code></td>
+        <td><span class="badge good">correct</span> The package re-exports <code>router</code>, so the mount
+        at <code>backend/src/grimoire/main.py:59</code> is untouched. Nice property: the app assembly never
+        learned about the split.</td></tr>
+      <tr><td>No new tests for any <em>handler</em></td>
+        <td><span class="badge good">appropriate</span> No handler logic changed. The 2,144 tests already on
+        <code>main</code> are the regression net; the 6 new tests target the one thing that <em>did</em>
+        change (ordering).</td></tr>
+      <tr><td>No frontend change</td>
+        <td><span class="badge good">correct</span> The HTTP contract is identical, and nothing in
+        <code>frontend/src</code> reads the <code>Allow</code> header.</td></tr>
+      <tr><td>The proposal invariant is not mechanically enforced</td>
+        <td><span class="badge warn">out of scope, but unclosed</span> See callout above.</td></tr>
+      <tr><td><code>grimoire.routes.&lt;Model&gt;</code> no longer importable</td>
+        <td><span class="badge neutral">deliberate</span> <code>__init__</code> exports only
+        <code>router</code>, <code>get_llm</code>, <code>get_openai_compatible_client</code>. Internal
+        callers were migrated; grimoire ships as an app, not a library, so there is no external importer to
+        break.</td></tr>
+    </tbody>
+  </table></div>
+</div>
+
+</section>
+<section class="panel" id="footprint" role="tabpanel">
+
+
+<div class="kpis">
+  <div class="kpi accent"><div class="n">31</div><div class="l">files changed</div></div>
+  <div class="kpi good"><div class="n">+4,861</div><div class="l">additions</div></div>
+  <div class="kpi bad"><div class="n">−4,416</div><div class="l">deletions</div></div>
+  <div class="kpi"><div class="n">4</div><div class="l">commits</div></div>
+  <div class="kpi bad"><div class="n">11</div><div class="l">directories touched</div></div>
+</div>
+<div class="callout"><b>Footprint shape: shotgun — spread across many directories.</b> A tightly clustered change usually means one concern; a diff smeared across many directories can indicate shotgun surgery — one logical change forced through poorly separated modules — or several unrelated changes bundled into one PR.</div>
+
+<h2>Change map</h2>
+<p class="dim">Area = lines changed · color = heuristic risk score · hover for details.</p>
+<div class="viz" data-render="treemap" style="height:480px"></div>
+<script type="application/json">{"items":[{"name":"backend/src/grimoire/routes/scenes.py","value":545,"metric":13,"meta":"+545/\u22120 \u00b7 source"},{"name":"backend/src/grimoire/routes/campaigns.py","value":611,"metric":11,"meta":"+611/\u22120 \u00b7 source"},{"name":"backend/src/grimoire/routes/streaming.py","value":314,"metric":11,"meta":"+314/\u22120 \u00b7 source"},{"name":"backend/src/grimoire/routes/weather.py","value":300,"metric":8,"meta":"+300/\u22120 \u00b7 source"},{"name":"backend/src/grimoire/routes/modules.py","value":213,"metric":8,"meta":"+213/\u22120 \u00b7 source"},{"name":"backend/src/grimoire/routes/worlds.py","value":344,"metric":7,"meta":"+344/\u22120 \u00b7 source"},{"name":"backend/src/grimoire/routes/mechanics.py","value":281,"metric":6,"meta":"+281/\u22120 \u00b7 source"},{"name":"backend/src/grimoire/routes/common.py","value":146,"metric":6,"meta":"+146/\u22120 \u00b7 source"},{"name":"backend/src/grimoire/routes/models.py","value":472,"metric":5,"meta":"+472/\u22120 \u00b7 source"},{"name":"backend/src/grimoire/routes/greetings.py","value":295,"metric":5,"meta":"+295/\u22120 \u00b7 source"},{"name":"backend/src/grimoire/routes.py","value":4360,"metric":4,"meta":"+0/\u22124360 \u00b7 source"},{"name":"backend/src/grimoire/routes/config.py","value":377,"metric":4,"meta":"+377/\u22120 \u00b7 source"},{"name":"backend/src/grimoire/routes/characters.py","value":354,"metric":3,"meta":"+354/\u22120 \u00b7 source"},{"name":"android/app/build.gradle.kts","value":2,"metric":2,"meta":"+1/\u22121 \u00b7 dependencies"},{"name":"backend/src/grimoire/routes/entities.py","value":304,"metric":1,"meta":"+304/\u22120 \u00b7 source"},{"name":"backend/src/grimoire/routes/__init__.py","value":64,"metric":1,"meta":"+64/\u22120 \u00b7 source"},{"name":"scripts/verify_templates.py","value":11,"metric":1,"meta":"+6/\u22125 \u00b7 source"},{"name":"backend/src/grimoire/store/locks.py","value":4,"metric":1,"meta":"+2/\u22122 \u00b7 source"},{"name":"backend/src/grimoire/store/playing.py","value":2,"metric":1,"meta":"+1/\u22121 \u00b7 source"},{"name":"templates/scene/roll_declined.j2","value":2,"metric":1,"meta":"+1/\u22121 \u00b7 source"},{"name":"templates/scene/roll_result.j2","value":2,"metric":1,"meta":"+1/\u22121 \u00b7 source"},{"name":"backend/tests/test_route_order.py","value":182,"metric":0,"meta":"+182/\u22120 \u00b7 test"},{"name":"backend/tests/test_routes.py","value":53,"metric":0,"meta":"+26/\u221227 \u00b7 test"},{"name":"backend/tests/test_module_edit.py","value":15,"metric":0,"meta":"+9/\u22126 \u00b7 test"},{"name":"docs/android-architecture.md","value":8,"metric":0,"meta":"+4/\u22124 \u00b7 docs"},{"name":"backend/tests/test_atomic_guard.py","value":4,"metric":0,"meta":"+2/\u22122 \u00b7 test"},{"name":"templates/README.md","value":4,"metric":0,"meta":"+2/\u22122 \u00b7 docs"},{"name":"CLAUDE.md","value":2,"metric":0,"meta":"+1/\u22121 \u00b7 docs"},{"name":"android/README.md","value":2,"metric":0,"meta":"+1/\u22121 \u00b7 docs"},{"name":"backend/tests/test_locks_store.py","value":2,"metric":0,"meta":"+1/\u22121 \u00b7 test"},{"name":"backend/tests/test_weather_routes.py","value":2,"metric":0,"meta":"+1/\u22121 \u00b7 test"}],"valueLabel":"lines changed","metricLabel":"risk score"}</script>
+
+<h2>By category</h2>
+<div class="tbl-wrap"><table>
+<thead><tr><th>Category</th><th class="num">Files</th><th class="num">+/−</th><th>Volume</th></tr></thead>
+<tbody><tr><td><span class='badge accent'>source</span></td><td class='num'>20</td><td class='num'><span class='plusminus'><span class='p'>+4,631</span> <span class='m'>−4,370</span></span></td><td><div class="bar "><i style="width:100.0%"></i></div></td></tr>
+<tr><td><span class='badge good'>test</span></td><td class='num'>6</td><td class='num'><span class='plusminus'><span class='p'>+221</span> <span class='m'>−37</span></span></td><td><div class="bar "><i style="width:2.9%"></i></div></td></tr>
+<tr><td><span class='badge neutral'>docs</span></td><td class='num'>4</td><td class='num'><span class='plusminus'><span class='p'>+8</span> <span class='m'>−8</span></span></td><td><div class="bar "><i style="width:1.5%"></i></div></td></tr>
+<tr><td><span class='badge warn'>dependencies</span></td><td class='num'>1</td><td class='num'><span class='plusminus'><span class='p'>+1</span> <span class='m'>−1</span></span></td><td><div class="bar "><i style="width:1.5%"></i></div></td></tr></tbody></table></div>
+
+<h2>Files, risk-ordered</h2>
+<p class="dim">Reviewer attention is a budget — spend it top-down. Score combines category weight, risky patterns in added lines, signature changes, and large removals. Heuristic, not verdict.</p>
+<div class="tbl-wrap"><table class="sortable">
+<thead><tr><th>File</th><th>Category</th><th class="num">+/−</th><th>Change</th><th class="num">Risk</th><th>Why</th></tr></thead>
+<tbody><tr><td><code>backend/src/grimoire/routes/scenes.py</code> <span class='badge good'>new</span></td><td><span class='badge accent'>source</span></td><td class='num'><span class='plusminus'><span class='p'>+545</span> <span class='m'>−0</span></span></td><td data-sort='545'><div class='dbar'><i class='a' style='width:12.5%'></i><i class='d' style='width:0.0%'></i></div></td><td class='num'>13</td><td class='dim' style='font-size:12px'>retries/timeouts×7, security×5, concurrency×3</td></tr><tr><td><code>backend/src/grimoire/routes/campaigns.py</code> <span class='badge good'>new</span></td><td><span class='badge accent'>source</span></td><td class='num'><span class='plusminus'><span class='p'>+611</span> <span class='m'>−0</span></span></td><td data-sort='611'><div class='dbar'><i class='a' style='width:14.0%'></i><i class='d' style='width:0.0%'></i></div></td><td class='num'>11</td><td class='dim' style='font-size:12px'>security×2, concurrency×6</td></tr><tr><td><code>backend/src/grimoire/routes/streaming.py</code> <span class='badge good'>new</span></td><td><span class='badge accent'>source</span></td><td class='num'><span class='plusminus'><span class='p'>+314</span> <span class='m'>−0</span></span></td><td data-sort='314'><div class='dbar'><i class='a' style='width:7.2%'></i><i class='d' style='width:0.0%'></i></div></td><td class='num'>11</td><td class='dim' style='font-size:12px'>concurrency×10, retries/timeouts×4, transactions×6</td></tr><tr><td><code>backend/src/grimoire/routes/weather.py</code> <span class='badge good'>new</span></td><td><span class='badge accent'>source</span></td><td class='num'><span class='plusminus'><span class='p'>+300</span> <span class='m'>−0</span></span></td><td data-sort='300'><div class='dbar'><i class='a' style='width:6.9%'></i><i class='d' style='width:0.0%'></i></div></td><td class='num'>8</td><td class='dim' style='font-size:12px'>security×1, concurrency×3</td></tr><tr><td><code>backend/src/grimoire/routes/modules.py</code> <span class='badge good'>new</span></td><td><span class='badge accent'>source</span></td><td class='num'><span class='plusminus'><span class='p'>+213</span> <span class='m'>−0</span></span></td><td data-sort='213'><div class='dbar'><i class='a' style='width:4.9%'></i><i class='d' style='width:0.0%'></i></div></td><td class='num'>8</td><td class='dim' style='font-size:12px'>security×1, concurrency×4</td></tr><tr><td><code>backend/src/grimoire/routes/worlds.py</code> <span class='badge good'>new</span></td><td><span class='badge accent'>source</span></td><td class='num'><span class='plusminus'><span class='p'>+344</span> <span class='m'>−0</span></span></td><td data-sort='344'><div class='dbar'><i class='a' style='width:7.9%'></i><i class='d' style='width:0.0%'></i></div></td><td class='num'>7</td><td class='dim' style='font-size:12px'>concurrency×7, transactions×1</td></tr><tr><td><code>backend/src/grimoire/routes/mechanics.py</code> <span class='badge good'>new</span></td><td><span class='badge accent'>source</span></td><td class='num'><span class='plusminus'><span class='p'>+281</span> <span class='m'>−0</span></span></td><td data-sort='281'><div class='dbar'><i class='a' style='width:6.4%'></i><i class='d' style='width:0.0%'></i></div></td><td class='num'>6</td><td class='dim' style='font-size:12px'>concurrency×3, retries/timeouts×1</td></tr><tr><td><code>backend/src/grimoire/routes/common.py</code> <span class='badge good'>new</span></td><td><span class='badge accent'>source</span></td><td class='num'><span class='plusminus'><span class='p'>+146</span> <span class='m'>−0</span></span></td><td data-sort='146'><div class='dbar'><i class='a' style='width:3.3%'></i><i class='d' style='width:0.0%'></i></div></td><td class='num'>6</td><td class='dim' style='font-size:12px'>caching×4, security×1</td></tr><tr><td><code>backend/src/grimoire/routes/models.py</code> <span class='badge good'>new</span></td><td><span class='badge accent'>source</span></td><td class='num'><span class='plusminus'><span class='p'>+472</span> <span class='m'>−0</span></span></td><td data-sort='472'><div class='dbar'><i class='a' style='width:10.8%'></i><i class='d' style='width:0.0%'></i></div></td><td class='num'>5</td><td class='dim' style='font-size:12px'>retries/timeouts×1, security×1</td></tr><tr><td><code>backend/src/grimoire/routes/greetings.py</code> <span class='badge good'>new</span></td><td><span class='badge accent'>source</span></td><td class='num'><span class='plusminus'><span class='p'>+295</span> <span class='m'>−0</span></span></td><td data-sort='295'><div class='dbar'><i class='a' style='width:6.8%'></i><i class='d' style='width:0.0%'></i></div></td><td class='num'>5</td><td class='dim' style='font-size:12px'>security×1, caching×1</td></tr><tr><td><code>backend/src/grimoire/routes.py</code> <span class='badge bad'>deleted</span></td><td><span class='badge accent'>source</span></td><td class='num'><span class='plusminus'><span class='p'>+0</span> <span class='m'>−4360</span></span></td><td data-sort='4360'><div class='dbar'><i class='a' style='width:0.0%'></i><i class='d' style='width:100.0%'></i></div></td><td class='num'>4</td><td class='dim' style='font-size:12px'>removed-symbol×393, large-removal</td></tr><tr><td><code>backend/src/grimoire/routes/config.py</code> <span class='badge good'>new</span></td><td><span class='badge accent'>source</span></td><td class='num'><span class='plusminus'><span class='p'>+377</span> <span class='m'>−0</span></span></td><td data-sort='377'><div class='dbar'><i class='a' style='width:8.6%'></i><i class='d' style='width:0.0%'></i></div></td><td class='num'>4</td><td class='dim' style='font-size:12px'>security×1</td></tr><tr><td><code>backend/src/grimoire/routes/characters.py</code> <span class='badge good'>new</span></td><td><span class='badge accent'>source</span></td><td class='num'><span class='plusminus'><span class='p'>+354</span> <span class='m'>−0</span></span></td><td data-sort='354'><div class='dbar'><i class='a' style='width:8.1%'></i><i class='d' style='width:0.0%'></i></div></td><td class='num'>3</td><td class='dim' style='font-size:12px'>transactions×1</td></tr><tr><td><code>android/app/build.gradle.kts</code> </td><td><span class='badge warn'>dependencies</span></td><td class='num'><span class='plusminus'><span class='p'>+1</span> <span class='m'>−1</span></span></td><td data-sort='2'><div class='dbar'><i class='a' style='width:0.0%'></i><i class='d' style='width:0.0%'></i></div></td><td class='num'>2</td><td class='dim' style='font-size:12px'>dependencies</td></tr><tr><td><code>backend/src/grimoire/routes/entities.py</code> <span class='badge good'>new</span></td><td><span class='badge accent'>source</span></td><td class='num'><span class='plusminus'><span class='p'>+304</span> <span class='m'>−0</span></span></td><td data-sort='304'><div class='dbar'><i class='a' style='width:7.0%'></i><i class='d' style='width:0.0%'></i></div></td><td class='num'>1</td><td class='dim' style='font-size:12px'></td></tr><tr><td><code>backend/src/grimoire/routes/__init__.py</code> <span class='badge good'>new</span></td><td><span class='badge accent'>source</span></td><td class='num'><span class='plusminus'><span class='p'>+64</span> <span class='m'>−0</span></span></td><td data-sort='64'><div class='dbar'><i class='a' style='width:1.5%'></i><i class='d' style='width:0.0%'></i></div></td><td class='num'>1</td><td class='dim' style='font-size:12px'></td></tr><tr><td><code>scripts/verify_templates.py</code> </td><td><span class='badge accent'>source</span></td><td class='num'><span class='plusminus'><span class='p'>+6</span> <span class='m'>−5</span></span></td><td data-sort='11'><div class='dbar'><i class='a' style='width:0.1%'></i><i class='d' style='width:0.1%'></i></div></td><td class='num'>1</td><td class='dim' style='font-size:12px'></td></tr><tr><td><code>backend/src/grimoire/store/locks.py</code> </td><td><span class='badge accent'>source</span></td><td class='num'><span class='plusminus'><span class='p'>+2</span> <span class='m'>−2</span></span></td><td data-sort='4'><div class='dbar'><i class='a' style='width:0.0%'></i><i class='d' style='width:0.0%'></i></div></td><td class='num'>1</td><td class='dim' style='font-size:12px'></td></tr><tr><td><code>backend/src/grimoire/store/playing.py</code> </td><td><span class='badge accent'>source</span></td><td class='num'><span class='plusminus'><span class='p'>+1</span> <span class='m'>−1</span></span></td><td data-sort='2'><div class='dbar'><i class='a' style='width:0.0%'></i><i class='d' style='width:0.0%'></i></div></td><td class='num'>1</td><td class='dim' style='font-size:12px'></td></tr><tr><td><code>templates/scene/roll_declined.j2</code> </td><td><span class='badge accent'>source</span></td><td class='num'><span class='plusminus'><span class='p'>+1</span> <span class='m'>−1</span></span></td><td data-sort='2'><div class='dbar'><i class='a' style='width:0.0%'></i><i class='d' style='width:0.0%'></i></div></td><td class='num'>1</td><td class='dim' style='font-size:12px'></td></tr><tr><td><code>templates/scene/roll_result.j2</code> </td><td><span class='badge accent'>source</span></td><td class='num'><span class='plusminus'><span class='p'>+1</span> <span class='m'>−1</span></span></td><td data-sort='2'><div class='dbar'><i class='a' style='width:0.0%'></i><i class='d' style='width:0.0%'></i></div></td><td class='num'>1</td><td class='dim' style='font-size:12px'></td></tr><tr><td><code>backend/tests/test_route_order.py</code> <span class='badge good'>new</span></td><td><span class='badge good'>test</span></td><td class='num'><span class='plusminus'><span class='p'>+182</span> <span class='m'>−0</span></span></td><td data-sort='182'><div class='dbar'><i class='a' style='width:4.2%'></i><i class='d' style='width:0.0%'></i></div></td><td class='num'>0</td><td class='dim' style='font-size:12px'></td></tr><tr><td><code>backend/tests/test_routes.py</code> </td><td><span class='badge good'>test</span></td><td class='num'><span class='plusminus'><span class='p'>+26</span> <span class='m'>−27</span></span></td><td data-sort='53'><div class='dbar'><i class='a' style='width:0.6%'></i><i class='d' style='width:0.6%'></i></div></td><td class='num'>0</td><td class='dim' style='font-size:12px'></td></tr><tr><td><code>backend/tests/test_module_edit.py</code> </td><td><span class='badge good'>test</span></td><td class='num'><span class='plusminus'><span class='p'>+9</span> <span class='m'>−6</span></span></td><td data-sort='15'><div class='dbar'><i class='a' style='width:0.2%'></i><i class='d' style='width:0.1%'></i></div></td><td class='num'>0</td><td class='dim' style='font-size:12px'></td></tr><tr><td><code>docs/android-architecture.md</code> </td><td><span class='badge neutral'>docs</span></td><td class='num'><span class='plusminus'><span class='p'>+4</span> <span class='m'>−4</span></span></td><td data-sort='8'><div class='dbar'><i class='a' style='width:0.1%'></i><i class='d' style='width:0.1%'></i></div></td><td class='num'>0</td><td class='dim' style='font-size:12px'></td></tr><tr><td><code>backend/tests/test_atomic_guard.py</code> </td><td><span class='badge good'>test</span></td><td class='num'><span class='plusminus'><span class='p'>+2</span> <span class='m'>−2</span></span></td><td data-sort='4'><div class='dbar'><i class='a' style='width:0.0%'></i><i class='d' style='width:0.0%'></i></div></td><td class='num'>0</td><td class='dim' style='font-size:12px'></td></tr><tr><td><code>templates/README.md</code> </td><td><span class='badge neutral'>docs</span></td><td class='num'><span class='plusminus'><span class='p'>+2</span> <span class='m'>−2</span></span></td><td data-sort='4'><div class='dbar'><i class='a' style='width:0.0%'></i><i class='d' style='width:0.0%'></i></div></td><td class='num'>0</td><td class='dim' style='font-size:12px'></td></tr><tr><td><code>CLAUDE.md</code> </td><td><span class='badge neutral'>docs</span></td><td class='num'><span class='plusminus'><span class='p'>+1</span> <span class='m'>−1</span></span></td><td data-sort='2'><div class='dbar'><i class='a' style='width:0.0%'></i><i class='d' style='width:0.0%'></i></div></td><td class='num'>0</td><td class='dim' style='font-size:12px'></td></tr><tr><td><code>android/README.md</code> </td><td><span class='badge neutral'>docs</span></td><td class='num'><span class='plusminus'><span class='p'>+1</span> <span class='m'>−1</span></span></td><td data-sort='2'><div class='dbar'><i class='a' style='width:0.0%'></i><i class='d' style='width:0.0%'></i></div></td><td class='num'>0</td><td class='dim' style='font-size:12px'></td></tr><tr><td><code>backend/tests/test_locks_store.py</code> </td><td><span class='badge good'>test</span></td><td class='num'><span class='plusminus'><span class='p'>+1</span> <span class='m'>−1</span></span></td><td data-sort='2'><div class='dbar'><i class='a' style='width:0.0%'></i><i class='d' style='width:0.0%'></i></div></td><td class='num'>0</td><td class='dim' style='font-size:12px'></td></tr><tr><td><code>backend/tests/test_weather_routes.py</code> </td><td><span class='badge good'>test</span></td><td class='num'><span class='plusminus'><span class='p'>+1</span> <span class='m'>−1</span></span></td><td data-sort='2'><div class='dbar'><i class='a' style='width:0.0%'></i><i class='d' style='width:0.0%'></i></div></td><td class='num'>0</td><td class='dim' style='font-size:12px'></td></tr></tbody></table></div>
+<details><summary>4 commits in range</summary><div class='body'><ul><li><code>7eb0f186</code> Add the #241 review report</li><li><code>4c388725</code> Close the gaps the adversarial review found (#241)</li><li><code>dcb86eb9</code> Fix a route-precedence flip the split introduced (#241)</li><li><code>eb1aca2b</code> Split routes.py into a routes/ package (#241)</li></ul></div></details>
+
+
+</section>
+<section class="panel" id="contracts-tests" role="tabpanel">
+
+
+<div class='callout bad'><b>1 contract-surface file touched</b> (schema, API definitions, dependency manifests). These outlive the code that reads them and deserve several times the scrutiny of internal changes.</div>
+<div class="tbl-wrap"><table><thead><tr><th>File</th><th>Kind</th><th class="num">+/−</th></tr></thead><tbody><tr><td><code>android/app/build.gradle.kts</code></td><td><span class='badge warn'>dependencies</span></td><td class='num'><span class='plusminus'><span class='p'>+1</span> <span class='m'>−1</span></span></td></tr></tbody></table></div>
+<h3>Removed symbols</h3>
+<div class="tbl-wrap"><table><thead><tr><th>File</th><th>Symbol</th><th>Removed definition</th></tr></thead><tbody><tr><td><code>backend/src/grimoire/routes.py</code></td><td><code>_dump</code> <span class='badge neutral'>internal</span></td><td><div class='diff-snippet' style='margin:0'><span class='ln del'>- def _dump(model: BaseModel) -&gt; dict:</span></div></td></tr><tr><td><code>backend/src/grimoire/routes.py</code></td><td><code>_turn_override</code> <span class='badge neutral'>internal</span></td><td><div class='diff-snippet' style='margin:0'><span class='ln del'>- def _turn_override(body) -&gt; dict | None:</span></div></td></tr><tr><td><code>backend/src/grimoire/routes.py</code></td><td><code>get_llm</code> <span class='badge warn'>public?</span></td><td><div class='diff-snippet' style='margin:0'><span class='ln del'>- def get_llm() -&gt; LLMClient:</span></div></td></tr><tr><td><code>backend/src/grimoire/routes.py</code></td><td><code>get_openai_compatible_client</code> <span class='badge warn'>public?</span></td><td><div class='diff-snippet' style='margin:0'><span class='ln del'>- def get_openai_compatible_client() -&gt; OpenAICompatibleClient:</span></div></td></tr><tr><td><code>backend/src/grimoire/routes.py</code></td><td><code>ConfigUpdate</code> <span class='badge warn'>public?</span></td><td><div class='diff-snippet' style='margin:0'><span class='ln del'>- class ConfigUpdate(BaseModel):</span></div></td></tr><tr><td><code>backend/src/grimoire/routes.py</code></td><td><code>ConnectionCreate</code> <span class='badge warn'>public?</span></td><td><div class='diff-snippet' style='margin:0'><span class='ln del'>- class ConnectionCreate(BaseModel):</span></div></td></tr><tr><td><code>backend/src/grimoire/routes.py</code></td><td><code>ConnectionUpdate</code> <span class='badge warn'>public?</span></td><td><div class='diff-snippet' style='margin:0'><span class='ln del'>- class ConnectionUpdate(BaseModel):</span></div></td></tr><tr><td><code>backend/src/grimoire/routes.py</code></td><td><code>DataDirUpdate</code> <span class='badge warn'>public?</span></td><td><div class='diff-snippet' style='margin:0'><span class='ln del'>- class DataDirUpdate(BaseModel):</span></div></td></tr><tr><td><code>backend/src/grimoire/routes.py</code></td><td><code>StyleCreate</code> <span class='badge warn'>public?</span></td><td><div class='diff-snippet' style='margin:0'><span class='ln del'>- class StyleCreate(BaseModel):</span></div></td></tr><tr><td><code>backend/src/grimoire/routes.py</code></td><td><code>StyleUpdate</code> <span class='badge warn'>public?</span></td><td><div class='diff-snippet' style='margin:0'><span class='ln del'>- class StyleUpdate(BaseModel):</span></div></td></tr><tr><td><code>backend/src/grimoire/routes.py</code></td><td><code>ResponseSettings</code> <span class='badge warn'>public?</span></td><td><div class='diff-snippet' style='margin:0'><span class='ln del'>- class ResponseSettings(BaseModel):</span></div></td></tr><tr><td><code>backend/src/grimoire/routes.py</code></td><td><code>ResponsePresetCreate</code> <span class='badge warn'>public?</span></td><td><div class='diff-snippet' style='margin:0'><span class='ln del'>- class ResponsePresetCreate(BaseModel):</span></div></td></tr><tr><td><code>backend/src/grimoire/routes.py</code></td><td><code>ResponsePresetUpdate</code> <span class='badge warn'>public?</span></td><td><div class='diff-snippet' style='margin:0'><span class='ln del'>- class ResponsePresetUpdate(BaseModel):</span></div></td></tr><tr><td><code>backend/src/grimoire/routes.py</code></td><td><code>RegenerateBody</code> <span class='badge warn'>public?</span></td><td><div class='diff-snippet' style='margin:0'><span class='ln del'>- class RegenerateBody(BaseModel):</span></div></td></tr><tr><td><code>backend/src/grimoire/routes.py</code></td><td><code>RetryBody</code> <span class='badge warn'>public?</span></td><td><div class='diff-snippet' style='margin:0'><span class='ln del'>- class RetryBody(BaseModel):</span></div></td></tr><tr><td><code>backend/src/grimoire/routes.py</code></td><td><code>NameBody</code> <span class='badge warn'>public?</span></td><td><div class='diff-snippet' style='margin:0'><span class='ln del'>- class NameBody(BaseModel):</span></div></td></tr><tr><td><code>backend/src/grimoire/routes.py</code></td><td><code>RollBody</code> <span class='badge warn'>public?</span></td><td><div class='diff-snippet' style='margin:0'><span class='ln del'>- class RollBody(BaseModel):</span></div></td></tr><tr><td><code>backend/src/grimoire/routes.py</code></td><td><code>ProposalAction</code> <span class='badge warn'>public?</span></td><td><div class='diff-snippet' style='margin:0'><span class='ln del'>- class ProposalAction(BaseModel):</span></div></td></tr><tr><td><code>backend/src/grimoire/routes.py</code></td><td><code>CheckBody</code> <span class='badge warn'>public?</span></td><td><div class='diff-snippet' style='margin:0'><span class='ln del'>- class CheckBody(BaseModel):</span></div></td></tr><tr><td><code>backend/src/grimoire/routes.py</code></td><td><code>NewCampaign</code> <span class='badge warn'>public?</span></td><td><div class='diff-snippet' style='margin:0'><span class='ln del'>- class NewCampaign(BaseModel):</span></div></td></tr><tr><td><code>backend/src/grimoire/routes.py</code></td><td><code>WeatherOverride</code> <span class='badge warn'>public?</span></td><td><div class='diff-snippet' style='margin:0'><span class='ln del'>- class WeatherOverride(BaseModel):</span></div></td></tr><tr><td><code>backend/src/grimoire/routes.py</code></td><td><code>CampaignClimate</code> <span class='badge warn'>public?</span></td><td><div class='diff-snippet' style='margin:0'><span class='ln del'>- class CampaignClimate(BaseModel):</span></div></td></tr><tr><td><code>backend/src/grimoire/routes.py</code></td><td><code>WeatherRange</code> <span class='badge warn'>public?</span></td><td><div class='diff-snippet' style='margin:0'><span class='ln del'>- class WeatherRange(BaseModel):</span></div></td></tr><tr><td><code>backend/src/grimoire/routes.py</code></td><td><code>ModuleCreate</code> <span class='badge warn'>public?</span></td><td><div class='diff-snippet' style='margin:0'><span class='ln del'>- class ModuleCreate(BaseModel):</span></div></td></tr><tr><td><code>backend/src/grimoire/routes.py</code></td><td><code>ModuleManifestBody</code> <span class='badge warn'>public?</span></td><td><div class='diff-snippet' style='margin:0'><span class='ln del'>- class ModuleManifestBody(BaseModel):</span></div></td></tr><tr><td><code>backend/src/grimoire/routes.py</code></td><td><code>ModuleGroupBody</code> <span class='badge warn'>public?</span></td><td><div class='diff-snippet' style='margin:0'><span class='ln del'>- class ModuleGroupBody(BaseModel):</span></div></td></tr><tr><td><code>backend/src/grimoire/routes.py</code></td><td><code>ModuleSheetTypeBody</code> <span class='badge warn'>public?</span></td><td><div class='diff-snippet' style='margin:0'><span class='ln del'>- class ModuleSheetTypeBody(BaseModel):</span></div></td></tr><tr><td><code>backend/src/grimoire/routes.py</code></td><td><code>ModuleCheckBody</code> <span class='badge warn'>public?</span></td><td><div class='diff-snippet' style='margin:0'><span class='ln del'>- class ModuleCheckBody(BaseModel):</span></div></td></tr><tr><td><code>backend/src/grimoire/routes.py</code></td><td><code>ModuleDefaultsBody</code> <span class='badge warn'>public?</span></td><td><div class='diff-snippet' style='margin:0'><span class='ln del'>- class ModuleDefaultsBody(BaseModel):</span></div></td></tr><tr><td><code>backend/src/grimoire/routes.py</code></td><td><code>ModuleRuleBody</code> <span class='badge warn'>public?</span></td><td><div class='diff-snippet' style='margin:0'><span class='ln del'>- class ModuleRuleBody(BaseModel):</span></div></td></tr></tbody></table></div>
+<h2>Test delta</h2>
+<p class="dim">Match is heuristic: a changed test counts as covering a source file if it shares a name stem or mentions the file's changed symbols. 15 of 19 changed source files have matching test changes.</p>
+<div class='callout warn'><b>4 changed source files have no corresponding test change.</b> A modified conditional with untouched tests means the tests never pinned that behavior down — the change is effectively unverified.</div>
+<div class="tbl-wrap"><table class="sortable"><thead><tr><th>Changed file — no test change found</th><th class="num">+/−</th><th>Risk signals</th></tr></thead><tbody><tr><td><code>scripts/verify_templates.py</code></td><td class='num'><span class='plusminus'><span class='p'>+6</span> <span class='m'>−5</span></span></td><td class='dim'>—</td></tr><tr><td><code>backend/src/grimoire/store/playing.py</code></td><td class='num'><span class='plusminus'><span class='p'>+1</span> <span class='m'>−1</span></span></td><td class='dim'>—</td></tr><tr><td><code>templates/scene/roll_declined.j2</code></td><td class='num'><span class='plusminus'><span class='p'>+1</span> <span class='m'>−1</span></span></td><td class='dim'>—</td></tr><tr><td><code>templates/scene/roll_result.j2</code></td><td class='num'><span class='plusminus'><span class='p'>+1</span> <span class='m'>−1</span></span></td><td class='dim'>—</td></tr></tbody></table></div>
+
+
+
+</section>
+<section class="panel" id="blast-radius" role="tabpanel">
+
+
+<div class="kpis">
+  <div class="kpi accent"><div class="n">40 of 392</div><div class="l">changed symbols traced</div></div>
+  <div class="kpi good"><div class="n">0</div><div class="l">untouched caller files (non-test)</div></div>
+  <div class="kpi"><div class="n">3</div><div class="l">untouched test caller files</div></div>
+</div>
+<div class='callout good'><b>All detected call sites of changed symbols are inside this diff.</b> The change is self-contained at the symbol level (name-match analysis; dynamic dispatch and reflection are invisible to it).</div>
+<p class='dim'>352 further changed symbol(s) beyond the --max-symbols=40 cap were NOT traced.</p>
+<h2>Caller graph</h2>
+<p class="dim">Arrows point from caller to changed definition. Node color: changed in this diff vs untouched. Matching is textual (<code>name(</code> / <code>.name</code>) — precise enough to point a reviewer, not a proof.</p>
+<div class="viz" data-render="forcegraph" style="height:560px"></div>
+<script type="application/json">{"nodes":[{"id":"backend/src/grimoire/routes.py","label":"routes.py","group":"changed","size":1,"meta":"in this diff"},{"id":"backend/src/grimoire/routes/modules.py","label":"modules.py","group":"changed","size":19,"meta":"in this diff"},{"id":"backend/src/grimoire/routes/worlds.py","label":"worlds.py","group":"changed","size":3,"meta":"in this diff"},{"id":"backend/tests/test_campaigns_store.py","label":"test_campaigns_store.py","group":"test (untouched)","size":5,"meta":"NOT in this diff"},{"id":"backend/tests/test_sheets_store.py","label":"test_sheets_store.py","group":"test (untouched)","size":4,"meta":"NOT in this diff"},{"id":"backend/tests/test_worlds_store.py","label":"test_worlds_store.py","group":"test (untouched)","size":3,"meta":"NOT in this diff"},{"id":"backend/src/grimoire/routes/greetings.py","label":"greetings.py","group":"changed","size":3,"meta":"in this diff"},{"id":"backend/src/grimoire/routes/config.py","label":"config.py","group":"changed","size":3,"meta":"in this diff"},{"id":"backend/tests/test_routes.py","label":"test_routes.py","group":"changed","size":2,"meta":"in this diff"},{"id":"backend/src/grimoire/routes/entities.py","label":"entities.py","group":"changed","size":4,"meta":"in this diff"},{"id":"backend/src/grimoire/routes/campaigns.py","label":"campaigns.py","group":"changed","size":2,"meta":"in this diff"},{"id":"backend/src/grimoire/routes/weather.py","label":"weather.py","group":"changed","size":4,"meta":"in this diff"}],"links":[{"source":"backend/src/grimoire/routes/modules.py","target":"backend/src/grimoire/routes.py","weight":18},{"source":"backend/src/grimoire/routes/worlds.py","target":"backend/src/grimoire/routes.py","weight":2},{"source":"backend/tests/test_campaigns_store.py","target":"backend/src/grimoire/routes.py","weight":4},{"source":"backend/tests/test_sheets_store.py","target":"backend/src/grimoire/routes.py","weight":3},{"source":"backend/tests/test_worlds_store.py","target":"backend/src/grimoire/routes.py","weight":2},{"source":"backend/src/grimoire/routes/greetings.py","target":"backend/src/grimoire/routes.py","weight":2},{"source":"backend/src/grimoire/routes/config.py","target":"backend/src/grimoire/routes.py","weight":2},{"source":"backend/tests/test_routes.py","target":"backend/src/grimoire/routes.py","weight":1},{"source":"backend/src/grimoire/routes/entities.py","target":"backend/src/grimoire/routes.py","weight":3},{"source":"backend/src/grimoire/routes/campaigns.py","target":"backend/src/grimoire/routes.py","weight":1},{"source":"backend/src/grimoire/routes/weather.py","target":"backend/src/grimoire/routes.py","weight":3}]}</script>
+<h2>Symbols, ordered by untouched callers</h2>
+<div class="tbl-wrap"><table class="sortable">
+<thead><tr><th>Symbol</th><th>Defined in</th><th class="num">Caller files</th><th class="num">Untouched (non-test)</th><th class="num">In tests</th><th>Untouched callers</th></tr></thead>
+<tbody><tr><td><code>delete_world</code> <span class='badge bad'>removed</span></td><td><code>backend/src/grimoire/routes.py</code></td><td class='num'>4</td><td class='num'>0</td><td class='num'>3</td><td></td></tr><tr><td><code>_public_config</code> <span class='badge bad'>removed</span></td><td><code>backend/src/grimoire/routes.py</code></td><td class='num'>2</td><td class='num'>0</td><td class='num'>0</td><td></td></tr><tr><td><code>_module_edit_call</code> <span class='badge bad'>removed</span></td><td><code>backend/src/grimoire/routes.py</code></td><td class='num'>1</td><td class='num'>0</td><td class='num'>0</td><td></td></tr><tr><td><code>_greeting_image_urls</code> <span class='badge bad'>removed</span></td><td><code>backend/src/grimoire/routes.py</code></td><td class='num'>1</td><td class='num'>0</td><td class='num'>0</td><td></td></tr><tr><td><code>_image_kind_or_404</code> <span class='badge bad'>removed</span></td><td><code>backend/src/grimoire/routes.py</code></td><td class='num'>1</td><td class='num'>0</td><td class='num'>0</td><td></td></tr><tr><td><code>_campaign_wroot</code> <span class='badge bad'>removed</span></td><td><code>backend/src/grimoire/routes.py</code></td><td class='num'>1</td><td class='num'>0</td><td class='num'>0</td><td></td></tr><tr><td><code>_weather_axes</code> <span class='badge bad'>removed</span></td><td><code>backend/src/grimoire/routes.py</code></td><td class='num'>1</td><td class='num'>0</td><td class='num'>0</td><td></td></tr><tr><td><code>post_audit</code> <span class='badge bad'>removed</span></td><td><code>backend/src/grimoire/routes.py</code></td><td class='num'>0</td><td class='num'>0</td><td class='num'>0</td><td></td></tr><tr><td><code>get_changes</code> <span class='badge bad'>removed</span></td><td><code>backend/src/grimoire/routes.py</code></td><td class='num'>0</td><td class='num'>0</td><td class='num'>0</td><td></td></tr><tr><td><code>delete_campaign_greeting</code> <span class='badge bad'>removed</span></td><td><code>backend/src/grimoire/routes.py</code></td><td class='num'>0</td><td class='num'>0</td><td class='num'>0</td><td></td></tr><tr><td><code>_entity_images_list</code> <span class='badge bad'>removed</span></td><td><code>backend/src/grimoire/routes.py</code></td><td class='num'>0</td><td class='num'>0</td><td class='num'>0</td><td></td></tr><tr><td><code>StyleCreate</code> <span class='badge bad'>removed</span></td><td><code>backend/src/grimoire/routes.py</code></td><td class='num'>0</td><td class='num'>0</td><td class='num'>0</td><td></td></tr><tr><td><code>list_world_images</code> <span class='badge bad'>removed</span></td><td><code>backend/src/grimoire/routes.py</code></td><td class='num'>0</td><td class='num'>0</td><td class='num'>0</td><td></td></tr><tr><td><code>put_module_content</code> <span class='badge bad'>removed</span></td><td><code>backend/src/grimoire/routes.py</code></td><td class='num'>0</td><td class='num'>0</td><td class='num'>0</td><td></td></tr><tr><td><code>put_campaign_response</code> <span class='badge bad'>removed</span></td><td><code>backend/src/grimoire/routes.py</code></td><td class='num'>0</td><td class='num'>0</td><td class='num'>0</td><td></td></tr><tr><td><code>get_world_character_appearances</code> <span class='badge bad'>removed</span></td><td><code>backend/src/grimoire/routes.py</code></td><td class='num'>0</td><td class='num'>0</td><td class='num'>0</td><td></td></tr><tr><td><code>get_scene_context</code> <span class='badge bad'>removed</span></td><td><code>backend/src/grimoire/routes.py</code></td><td class='num'>0</td><td class='num'>0</td><td class='num'>0</td><td></td></tr><tr><td><code>get_scene</code> <span class='badge bad'>removed</span></td><td><code>backend/src/grimoire/routes.py</code></td><td class='num'>0</td><td class='num'>0</td><td class='num'>0</td><td></td></tr><tr><td><code>get_character_export</code> <span class='badge bad'>removed</span></td><td><code>backend/src/grimoire/routes.py</code></td><td class='num'>0</td><td class='num'>0</td><td class='num'>0</td><td></td></tr><tr><td><code>post_world_pc</code> <span class='badge bad'>removed</span></td><td><code>backend/src/grimoire/routes.py</code></td><td class='num'>0</td><td class='num'>0</td><td class='num'>0</td><td></td></tr><tr><td><code>get_scene_checks</code> <span class='badge bad'>removed</span></td><td><code>backend/src/grimoire/routes.py</code></td><td class='num'>0</td><td class='num'>0</td><td class='num'>0</td><td></td></tr><tr><td><code>post_module_duplicate</code> <span class='badge bad'>removed</span></td><td><code>backend/src/grimoire/routes.py</code></td><td class='num'>0</td><td class='num'>0</td><td class='num'>0</td><td></td></tr><tr><td><code>delete_campaign_sheet</code> <span class='badge bad'>removed</span></td><td><code>backend/src/grimoire/routes.py</code></td><td class='num'>0</td><td class='num'>0</td><td class='num'>0</td><td></td></tr><tr><td><code>ModuleLayoutBody</code> <span class='badge bad'>removed</span></td><td><code>backend/src/grimoire/routes.py</code></td><td class='num'>0</td><td class='num'>0</td><td class='num'>0</td><td></td></tr><tr><td><code>put_world_tag</code> <span class='badge bad'>removed</span></td><td><code>backend/src/grimoire/routes.py</code></td><td class='num'>0</td><td class='num'>0</td><td class='num'>0</td><td></td></tr><tr><td><code>MarkBody</code> <span class='badge bad'>removed</span></td><td><code>backend/src/grimoire/routes.py</code></td><td class='num'>0</td><td class='num'>0</td><td class='num'>0</td><td></td></tr><tr><td><code>get_config</code> <span class='badge bad'>removed</span></td><td><code>backend/src/grimoire/routes.py</code></td><td class='num'>0</td><td class='num'>0</td><td class='num'>0</td><td></td></tr><tr><td><code>post_roll_replay</code> <span class='badge bad'>removed</span></td><td><code>backend/src/grimoire/routes.py</code></td><td class='num'>0</td><td class='num'>0</td><td class='num'>0</td><td></td></tr><tr><td><code>post_connection_models_refresh</code> <span class='badge bad'>removed</span></td><td><code>backend/src/grimoire/routes.py</code></td><td class='num'>0</td><td class='num'>0</td><td class='num'>0</td><td></td></tr><tr><td><code>CheckBody</code> <span class='badge bad'>removed</span></td><td><code>backend/src/grimoire/routes.py</code></td><td class='num'>0</td><td class='num'>0</td><td class='num'>0</td><td></td></tr></tbody></table></div>
+
+
+</section>
+<section class="panel" id="flow-impact" role="tabpanel">
+
+<div class="callout good">
+  <strong>No runtime flow changed inside any handler.</strong> Every request that reaches a handler reaches
+  the <em>same</em> handler, executing the same bytes. The only flow this PR alters is the one that runs
+  <em>before</em> any handler: URL → route matching. That flow is diagrammed below, because it is where the
+  branch's one real regression lived.
+</div>
+
+<div class="card">
+  <h3>The flow that changed: route resolution</h3>
+  <p>FastAPI walks routes in registration order and takes the first full match. One ordered file became ten
+  included routers, so the walk order is now a property of
+  <code>backend/src/grimoire/routes/__init__.py:60-64</code> rather than of line numbers.</p>
+  <div class="grid cols-2">
+    <div>
+      <h4>Before — one file, line order</h4>
+      <div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">
+flowchart TD
+  R["POST /campaigns/c/scenes/instantiate/cast/batch"] --> A["routes.py line 3588<br/>/campaigns/{cid}/scenes/{sid}/cast/batch"]
+  A -->|"full match — first wins"| H1["post_scene_cast_batch"]
+  A -.->|"never reached"| B["routes.py line 4103<br/>/campaigns/{cid}/{kind}/instantiate/{mid}/{content_id}"]
+  B -.-> H2["post_campaign_instantiate"]
+</pre></div></div>
+    </div>
+    <div>
+      <h4>After 80b099e7 — include order, wrong</h4>
+      <div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">
+flowchart TD
+  R["POST /campaigns/c/scenes/instantiate/cast/batch"] --> B["campaigns.router included 6th<br/>/campaigns/{cid}/{kind}/instantiate/{mid}/{content_id}"]
+  B -->|"full match — first wins"| H2["post_campaign_instantiate"]
+  B -.->|"never reached"| A["scenes.router included 7th<br/>/campaigns/{cid}/scenes/{sid}/cast/batch"]
+  A -.-> H1["post_scene_cast_batch"]
+</pre></div></div>
+    </div>
+  </div>
+  <p>Both patterns have six segments, and neither is more general than the other: each has a literal where
+  the other has a parameter. No shadowing rule catches that — it needs an <em>intersection</em> test. The
+  fix moves <code>campaigns</code> after <code>scenes</code> and <code>mechanics</code>:</p>
+  <div class="diff-snippet"><div class="fh">backend/src/grimoire/routes/__init__.py — lines 60-64</div>
+<span class="ln ctx"> for _domain in (config, modules, worlds, characters, greetings,</span>
+<span class="ln del">-                campaigns, scenes, weather, mechanics):</span>
+<span class="ln add">+                scenes, weather, mechanics, campaigns):</span>
+<span class="ln ctx">     router.include_router(_domain.router)</span>
+<span class="ln ctx"> </span>
+<span class="ln ctx"> router.include_router(entities.router)  # keep last: generic /{kind} catch-alls</span>
+  </div>
+</div>
+
+<div class="card">
+  <h3>What moved</h3>
+  <div class="tbl-wrap"><table>
+    <thead><tr><th>Change</th><th>Where</th><th>Effect on the flow</th></tr></thead>
+    <tbody>
+      <tr><td>Ordering authority moves from line numbers to include order</td>
+        <td><code>backend/src/grimoire/routes/__init__.py:60-64</code></td>
+        <td>Same matching semantics; the ordering decision is now explicit and testable rather than implicit
+        in where a function happened to be typed.</td></tr>
+      <tr><td>Generic <code>/{kind}</code> catch-alls isolated into one router, included last</td>
+        <td><code>backend/src/grimoire/routes/entities.py:234</code></td>
+        <td>Replaces 12 repeated "declared before the generic routes" comments with one invariant.</td></tr>
+      <tr><td>3 crossing URL shapes reverted to their original winner</td>
+        <td><code>dcb86eb9</code></td>
+        <td>Restores pre-split dispatch for <code>.../scenes/instantiate/cast/batch</code>,
+        <code>.../scenes/instantiate/suggestions/dismiss</code>,
+        <code>.../sheets/instantiate/{e}/advance</code>.</td></tr>
+      <tr><td>405 <code>Allow</code> derivation</td>
+        <td>router-level, unchangeable without restoring the old interleave</td>
+        <td>8 of 1,152 probed (method, URL) outcomes report a different <code>Allow</code>. Status stays 405;
+        no handler runs in either case.</td></tr>
+    </tbody>
+  </table></div>
+</div>
+
+<div class="card">
+  <h3>Unchanged: the persisted-turn flow</h3>
+  <p>Worth stating explicitly because this is the machinery the issue singled out, and it now lives in a new
+  file. The sequence is identical — only the module names on the participants changed.</p>
+  <div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">
+sequenceDiagram
+  participant C as client
+  participant S as routes/scenes.py
+  participant T as routes/streaming.py
+  participant P as store.proposals
+  C->>S: POST /scenes/{sid}/chat
+  S->>T: _heal_current_proposal (line 116)
+  Note over S,P: retirement paths heal before superseding
+  S->>P: proposals.supersede
+  S->>T: _chat_stream
+  T->>T: _fence_stream — watch for ```roll
+  alt fence closed
+    T->>P: campaign_lock, _make_proposal, heal, proposals.new
+    T->>T: _persist_reply (pre-fence narration)
+  else plain turn
+    T->>T: _persist_reply
+  end
+  T-->>C: SSE frames
+</pre></div></div>
+  <p>Both lock boundaries and both <code>_heal_current_proposal</code> guards survive the move intact
+  (<code>backend/src/grimoire/routes/streaming.py:150</code> and <code>:182</code>). The cross-module call
+  <code>scenes → streaming</code> is a plain function call in the same process — no new boundary, no new
+  failure mode.</p>
+</div>
+
+</section>
+<section class="panel" id="review-walkthrough" role="tabpanel">
+
+<div class="callout warn">
+  <strong>Read the automated tabs with a pure-move correction applied.</strong> Footprint ranks
+  <code>backend/src/grimoire/routes/scenes.py</code> (+545/−0) and <code>backend/src/grimoire/routes/campaigns.py</code> (+611/−0) as the highest-risk
+  files, citing "concurrency×7", "retries/timeouts×7" and so on. Every one of those hits is a
+  <em>moved</em> line: a deleted file plus new files means 100% of the old content reads as "added". Blast
+  Radius has the same artifact — it classifies all 40 traced symbols as <code>removed</code> and could not
+  trace 352 of 392. Neither tool can see that the content is identical. The line-multiset check below is the
+  evidence that closes that gap.
+</div>
+
+<div class="card">
+  <h3>Evidence that the move is verbatim</h3>
+  <p>Comparing non-blank line multisets of the old <code>routes.py</code> against the whole new package,
+  every removed line falls into exactly three buckets — there is no fourth:</p>
+  <div class="tbl-wrap"><table>
+    <thead><tr><th>Removed lines</th><th>Count</th><th>Why</th></tr></thead>
+    <tbody>
+      <tr><td>Old module docstring + import header</td><td class="num">5</td><td>Replaced per-module.</td></tr>
+      <tr><td>"declared before the generic /{kind} routes" comments</td><td class="num">~26</td>
+        <td>Superseded by the include-order rule + <code>backend/tests/test_route_order.py</code>.</td></tr>
+      <tr><td>Crash-window banner comment</td><td class="num">21</td>
+        <td>Moved verbatim into the <code>backend/src/grimoire/routes/streaming.py</code> module docstring.</td></tr>
+      <tr><td><code>_entity_images_list</code> body</td><td class="num">3</td>
+        <td>Dead code — see below.</td></tr>
+      <tr><td><strong>Any handler logic</strong></td><td class="num">0</td>
+        <td>&mdash;</td></tr>
+    </tbody>
+  </table></div>
+</div>
+
+<div class="card">
+  <h3>Per-file verdicts</h3>
+  <div class="tbl-wrap"><table>
+    <thead><tr><th>File</th><th>Verdict</th><th>What a reviewer should actually check</th></tr></thead>
+    <tbody>
+      <tr><td><code>backend/src/grimoire/routes/__init__.py</code></td>
+        <td><span class="badge accent">the only file that needs real review</span></td>
+        <td>64 lines, and all of the PR's behavioral risk. The include tuple at lines 60-64 <em>is</em> the
+        route-precedence policy. Read the docstring's two ordering rules and confirm the tuple matches.</td></tr>
+      <tr><td><code>backend/tests/test_route_order.py</code></td>
+        <td><span class="badge good">strong, and mutation-verified</span></td>
+        <td>6 tests. Confirm <code>CROSSING_PAIRS</code> (line 81) is treated as behaviour-pinning, not
+        preference — the winners are whatever the pre-split file produced.</td></tr>
+      <tr><td><code>backend/src/grimoire/routes/scenes.py</code>, <code>backend/src/grimoire/routes/campaigns.py</code>, <code>backend/src/grimoire/routes/streaming.py</code></td>
+        <td><span class="badge good">no review needed line-by-line</span></td>
+        <td>Pure moves. Spend the time on module <em>assignment</em> instead: does each route sit in a module
+        whose docstring honestly describes it?</td></tr>
+      <tr><td><code>backend/src/grimoire/routes/entities.py</code></td>
+        <td><span class="badge accent">architecturally load-bearing</span></td>
+        <td>Holds every generic <code>/{kind}</code> catch-all. Its "must be included last" contract is the
+        whole ordering rule; the module docstring states it and line 234 marks the generic block.</td></tr>
+      <tr><td><code>backend/tests/test_routes.py</code> (+25/−26)</td>
+        <td><span class="badge good">correct, and the subtle part of the PR</span></td>
+        <td>Patch targets moved from <code>routes.X</code> to the owning submodule. This is not cosmetic —
+        see the invariant note below.</td></tr>
+      <tr><td><code>scripts/verify_templates.py</code></td>
+        <td><span class="badge good">fixed</span></td>
+        <td>Was <code>read_text()</code> on <code>routes.py</code>; now globs the package. Verified: 54/54
+        checks still pass, so the four template-render assertions still bind.</td></tr>
+      <tr><td><code>docs/android-architecture.md</code>, <code>CLAUDE.md</code>, <code>backend/src/grimoire/store/locks.py</code>, <code>backend/src/grimoire/store/playing.py</code>, 2 templates</td>
+        <td><span class="badge good">complete</span></td>
+        <td>Prose pointers. <code>backend/tests/test_module_references.py</code> mechanically requires every
+        <code>&lt;name&gt;.py</code> named in <code>grimoire/</code> prose to exist, so a missed
+        <code>routes.py</code> mention there would fail the suite.</td></tr>
+    </tbody>
+  </table></div>
+</div>
+
+<div class="card">
+  <h3>Asymmetry checklist</h3>
+  <div class="tbl-wrap"><table>
+    <thead><tr><th>Opened…</th><th>…closed?</th><th>Verdict</th></tr></thead>
+    <tbody>
+      <tr><td>Symbol moved (every route handler + ~40 helpers)</td>
+        <td>All callers updated?</td>
+        <td><span class="badge good">yes</span> Blast Radius reports no untouched callers against this
+          base. It did flag one before the rebase — <code>backend/src/grimoire/store/module_edit.py</code>
+          for <code>delete_module</code> — which was a textual name collision: that file
+          <em>defines its own</em> <code>delete_module</code> at
+          <code>backend/src/grimoire/store/module_edit.py:115</code> and calls
+          <code>modules.delete_module</code> at <code>:125</code>, the store's, not the route's. Worth
+          knowing the check is that fragile even when it comes back clean.</td></tr>
+      <tr><td>Locks acquired in moved code</td><td>Released on all paths?</td>
+        <td><span class="badge good">unchanged</span> Both <code>campaign_lock</code> blocks moved intact as
+          <code>with</code> statements (<code>backend/src/grimoire/routes/streaming.py:150</code>,
+          <code>:182</code>); <code>backend/tests/test_module_edit.py</code> smoke-checks their presence.</td></tr>
+      <tr><td>Module-level singletons (<code>_llm</code>, <code>_openai_compatible_client</code>)</td>
+        <td>Still one instance, same identity?</td>
+        <td><span class="badge good">yes</span> Defined once in <code>backend/src/grimoire/routes/common.py</code>;
+          <code>get_llm</code> is imported by object, so the ~55 <code>dependency_overrides</code> keys in the
+          test suite still match. A duplicate provider here would have silently sent tests to the real LLM.</td></tr>
+      <tr><td>New import edges between route modules</td><td>Acyclic?</td>
+        <td><span class="badge good">yes</span> One direction only: domains → <code>common</code>/<code>models</code>,
+          and <code>scenes</code>/<code>mechanics</code>/<code>greetings</code> → <code>streaming</code>.
+          <code>common</code> imports no sibling by construction.</td></tr>
+      <tr><td>Dead code removed (<code>_entity_images_list</code>)</td><td>Verified dead?</td>
+        <td><span class="badge good">yes</span> Repo-wide search found only its definition; both list routes
+          inline <code>store.assets.list_images</code>.</td></tr>
+      <tr><td>Route registration order became implicit policy</td><td>Tested?</td>
+        <td><span class="badge good">yes</span> <code>backend/tests/test_route_order.py:65</code>,
+          <code>:99</code>, <code>:121</code>, <code>:140</code>, <code>:152</code>, <code>:165</code>.</td></tr>
+      <tr><td>405 <code>Allow</code> header derivation changed</td><td>Disclosed?</td>
+        <td><span class="badge warn">disclosed, not fixed</span> Documented in the
+          <code>backend/src/grimoire/routes/__init__.py</code> docstring. Not covered by a test — the
+          ordering tests deliberately skip pairs whose methods don't intersect.</td></tr>
+    </tbody>
+  </table></div>
+</div>
+
+<div class="callout bad">
+  <strong>Invariant impact — a new failure mode that has no test.</strong> Before the split, monkeypatching
+  <code>routes._persist_reply</code> affected every call site, because definition and use shared one module
+  namespace. Now importers bind by value, so a patch only reaches call sites in the module that looked the
+  name up. The PR handles this correctly for the tests that exist (they patch
+  <code>routes.streaming._persist_reply</code> and <code>routes.mechanics._continuation_messages</code>) and
+  documents it in the <code>backend/src/grimoire/routes/streaming.py</code> docstring. The residual hazard is future work: a test
+  that patches <code>routes.streaming._persist_reply</code> and then exercises
+  <code>POST /scenes/{sid}/first-post</code> will silently <em>not</em> patch it, because
+  <code>backend/src/grimoire/routes/greetings.py:15</code> holds its own reference and calls it at
+  <code>backend/src/grimoire/routes/greetings.py:294</code>. A silently-ineffective patch in a crash-recovery
+  test is the bad kind of failure — the test still passes.
+</div>
+
+<div class="card hero">
+  <h3>Verdict: merge-ready</h3>
+  <p>The riskiest possible refactor shape — moving 4,317 lines of a live HTTP surface — carried out with
+  verbatim slicing and verified at the level that matters (handler dispatch, not file diff). The one real
+  regression was found and fixed inside the branch, and the test that missed it was strengthened until it
+  catches it.</p>
+  <h4>Should-fix (non-blocking)</h4>
+  <ol>
+    <li><strong>The by-value patch trap has documentation but no guard.</strong>
+      <code>backend/src/grimoire/routes/greetings.py:294</code> is currently the only call site outside the
+      defining module. A one-line test asserting <code>greetings._persist_reply is streaming._persist_reply</code>
+      would at least fail loudly if a future refactor makes them diverge.</li>
+    <li><strong>405 <code>Allow</code> drift is untested.</strong> The 8 affected combinations all need
+      impossible path segments today, but nothing prevents future drift from growing that number silently.
+      Extending the probe used to measure it (all patterns × all intersection witnesses × all methods) into a
+      test would pin it.</li>
+  </ol>
+  <h4>Nits</h4>
+  <ol>
+    <li><code>backend/src/grimoire/routes/campaigns.py</code> at 611 lines is still the largest module;
+      <code>backend/src/grimoire/routes/scenes.py</code> at 545 is second. Both are well inside reviewable range, but neither is a natural floor — the campaign
+      character/PC block could split again if it grows.</li>
+    <li>The heuristics in <code>backend/tests/test_route_order.py</code> treat every <code>{param}</code> as
+      an unconstrained one-segment wildcard. Correct today (no path converters anywhere in the app), latent
+      if one is ever introduced.</li>
+  </ol>
+  <h4>Verification run</h4>
+  <p>2,145 backend tests pass, 4 skipped, at every one of the four commits. One failure,
+  <code>backend/tests/test_weather_draw.py</code>'s <code>test_end_to_end_regression_fixture</code>, is a
+  float-precision mismatch that also fails on <code>main</code> — unrelated to this branch, and neither the
+  implementation nor the fixture is touched by it.</p>
+</div>
+
+</section></main>
+<footer class="doc">Generated by pr-visualization. Automated tabs: Footprint, Contracts &amp; Tests, Blast Radius (heuristic, name-based) — read them with the pure-move correction in the Walkthrough. Judgment tabs authored from diff reading; citations verified.</footer>
+<div class="viz-tip" id="viz-tip"></div>
+<script>
+/* ============ tabs ============ */
+(function(){
+  const btns=[...document.querySelectorAll('nav.tabs button')];
+  const panels=[...document.querySelectorAll('.panel')];
+  function activate(id,push){
+    btns.forEach(b=>b.setAttribute('aria-selected',b.dataset.tab===id?'true':'false'));
+    panels.forEach(p=>p.classList.toggle('active',p.id===id));
+    if(push){try{history.replaceState(null,'','#'+id)}catch(e){}}
+    window.dispatchEvent(new CustomEvent('tab:shown',{detail:{id}}));
+  }
+  btns.forEach(b=>b.addEventListener('click',()=>activate(b.dataset.tab,true)));
+  const initial=location.hash&&panels.some(p=>'#'+p.id===location.hash)?location.hash.slice(1):(panels[0]&&panels[0].id);
+  if(initial)activate(initial,false);
+  window.addEventListener('hashchange',()=>{const h=location.hash.slice(1);if(panels.some(p=>p.id===h))activate(h,false);});
+})();
+
+/* ============ helpers ============ */
+const cssVar=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const tip=document.getElementById('viz-tip');
+function showTip(html,x,y){tip.innerHTML=html;tip.style.display='block';
+  const r=tip.getBoundingClientRect();
+  tip.style.left=Math.min(x+14,innerWidth-r.width-10)+'px';
+  tip.style.top=Math.min(y+14,innerHeight-r.height-10)+'px';}
+function hideTip(){tip.style.display='none'}
+function lerpColor(a,b,t){
+  const pa=hex(a),pb=hex(b);
+  return `rgb(${pa.map((v,i)=>Math.round(v+(pb[i]-v)*t)).join(',')})`;
+  function hex(h){h=h.replace('#','');if(h.length===3)h=h.split('').map(c=>c+c).join('');
+    return [0,2,4].map(i=>parseInt(h.slice(i,i+2),16));}
+}
+function fmt(n){return n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e4?(n/1e3).toFixed(0)+'k':n>=1e3?(n/1e3).toFixed(1)+'k':String(n)}
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+
+/* sortable tables */
+document.querySelectorAll('table.sortable').forEach(tb=>{
+  tb.querySelectorAll('thead th').forEach((th,ci)=>{
+    th.addEventListener('click',()=>{
+      const dir=th.classList.contains('asc')?'desc':'asc';
+      tb.querySelectorAll('thead th').forEach(h=>h.classList.remove('asc','desc'));
+      th.classList.add(dir);
+      const rows=[...tb.querySelectorAll('tbody tr')];
+      const val=r=>{const td=r.children[ci];if(!td)return '';
+        const d=td.dataset.sort!==undefined?td.dataset.sort:td.textContent.trim();
+        const n=parseFloat(String(d).replace(/[,%]/g,''));return isNaN(n)?String(d).toLowerCase():n;};
+      rows.sort((a,b)=>{const va=val(a),vb=val(b);
+        const c=(typeof va==='number'&&typeof vb==='number')?va-vb:String(va).localeCompare(String(vb));
+        return dir==='asc'?c:-c;});
+      const tbody=tb.querySelector('tbody');rows.forEach(r=>tbody.appendChild(r));
+    });
+  });
+});
+
+/* pan/zoom for a container holding an inner element (svg group or div) */
+function panZoom(viewport,apply,getState){
+  let drag=null;
+  viewport.addEventListener('wheel',e=>{
+    if(!e.ctrlKey&&!e.metaKey)return;e.preventDefault();
+    const s=getState();const f=e.deltaY<0?1.15:1/1.15;
+    const r=viewport.getBoundingClientRect(),mx=e.clientX-r.left,my=e.clientY-r.top;
+    s.x=mx-(mx-s.x)*f; s.y=my-(my-s.y)*f; s.k=Math.max(.15,Math.min(8,s.k*f)); apply();
+  },{passive:false});
+  viewport.addEventListener('mousedown',e=>{
+    if(e.target.closest('.zoombar')||e.target.dataset.draggable)return;
+    drag={sx:e.clientX,sy:e.clientY,ox:getState().x,oy:getState().y};
+    viewport.classList.add('dragging');
+  });
+  window.addEventListener('mousemove',e=>{if(!drag)return;
+    const s=getState();s.x=drag.ox+e.clientX-drag.sx;s.y=drag.oy+e.clientY-drag.sy;apply();});
+  window.addEventListener('mouseup',()=>{drag=null;viewport.classList.remove('dragging')});
+}
+function addZoombar(container,zoomIn,zoomOut,reset){
+  const bar=document.createElement('div');bar.className='zoombar';
+  [['+',zoomIn],['−',zoomOut],['⟲',reset]].forEach(([t,fn])=>{
+    const b=document.createElement('button');b.textContent=t;b.title=t==='⟲'?'Reset view':(t==='+'?'Zoom in':'Zoom out');
+    b.addEventListener('click',fn);bar.appendChild(b);});
+  container.appendChild(bar);
+}
+
+/* ============ force-directed graph ============ */
+/* data: {nodes:[{id,label,group,size,fanIn,fanOut,meta}], links:[{source,target,cycle,weight}], groups:{name:colorKey}} */
+function renderForceGraph(container,data){
+  const W=container.clientWidth||900,H=container.clientHeight||560;
+  const groupNames=[...new Set(data.nodes.map(n=>n.group||''))];
+  const palette=[cssVar('--accent'),cssVar('--good'),cssVar('--warn'),cssVar('--violet'),cssVar('--bad'),'#5ec2c9','#c98fb8','#8fb0c9'];
+  const gcolor={};groupNames.forEach((g,i)=>gcolor[g]=palette[i%palette.length]);
+  const nodes=data.nodes.map(n=>({...n,x:W/2+(Math.random()-0.5)*W*0.7,y:H/2+(Math.random()-0.5)*H*0.7,vx:0,vy:0}));
+  const idx={};nodes.forEach((n,i)=>idx[n.id]=i);
+  const links=data.links.filter(l=>idx[l.source]!==undefined&&idx[l.target]!==undefined)
+    .map(l=>({...l,s:idx[l.source],t:idx[l.target]}));
+  const maxSize=Math.max(1,...nodes.map(n=>n.size||1));
+  const R=n=>6+14*Math.sqrt((n.size||1)/maxSize);
+  /* simulate */
+  const iter=nodes.length>60?220:320;
+  for(let k=0;k<iter;k++){
+    const t=1-k/iter, rep=9000*t+900;
+    for(let i=0;i<nodes.length;i++)for(let j=i+1;j<nodes.length;j++){
+      const a=nodes[i],b=nodes[j];let dx=a.x-b.x,dy=a.y-b.y;let d2=dx*dx+dy*dy||1;
+      if(d2<250000){const f=rep/d2;dx*=f;dy*=f;a.vx+=dx;a.vy+=dy;b.vx-=dx;b.vy-=dy;}
+    }
+    links.forEach(l=>{const a=nodes[l.s],b=nodes[l.t];
+      const dx=b.x-a.x,dy=b.y-a.y,d=Math.sqrt(dx*dx+dy*dy)||1;
+      const want=90+R(a)+R(b);const f=0.02*(d-want)/d;
+      a.vx+=dx*f;a.vy+=dy*f;b.vx-=dx*f;b.vy-=dy*f;});
+    nodes.forEach(n=>{
+      n.vx+=(W/2-n.x)*0.0035;n.vy+=(H/2-n.y)*0.0035;
+      n.x+=Math.max(-14,Math.min(14,n.vx));n.y+=Math.max(-14,Math.min(14,n.vy));
+      n.vx*=0.6;n.vy*=0.6;});
+  }
+  /* fit */
+  const xs=nodes.map(n=>n.x),ys=nodes.map(n=>n.y);
+  const pad=60,minx=Math.min(...xs)-pad,maxx=Math.max(...xs)+pad,miny=Math.min(...ys)-pad,maxy=Math.max(...ys)+pad;
+  const fitK=Math.min(W/(maxx-minx),H/(maxy-miny),1.6);
+  const st={k:fitK,x:(W-(maxx+minx)*fitK)/2,y:(H-(maxy+miny)*fitK)/2};
+  const init={...st};
+  const svgNS='http://www.w3.org/2000/svg';
+  const svg=document.createElementNS(svgNS,'svg');svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
+  const defs=document.createElementNS(svgNS,'defs');
+  defs.innerHTML=`<marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" fill="${cssVar('--text-faint')}"/></marker>
+  <marker id="arr-cyc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" fill="${cssVar('--bad')}"/></marker>`;
+  svg.appendChild(defs);
+  const g=document.createElementNS(svgNS,'g');svg.appendChild(g);
+  const apply=()=>g.setAttribute('transform',`translate(${st.x},${st.y}) scale(${st.k})`);
+  const edgeEls=[],nodeEls=[];
+  links.forEach(l=>{
+    const p=document.createElementNS(svgNS,'path');
+    p.setAttribute('stroke',l.cycle?cssVar('--bad'):cssVar('--text-faint'));
+    p.setAttribute('stroke-opacity',l.cycle?'0.9':'0.4');
+    p.setAttribute('stroke-width',l.cycle?2:Math.min(3,0.7+Math.log2(1+(l.weight||1))*0.5));
+    p.setAttribute('fill','none');
+    p.setAttribute('marker-end',l.cycle?'url(#arr-cyc)':'url(#arr)');
+    g.appendChild(p);edgeEls.push(p);
+  });
+  nodes.forEach(n=>{
+    const grp=document.createElementNS(svgNS,'g');grp.style.cursor='grab';grp.dataset.draggable='1';
+    const c=document.createElementNS(svgNS,'circle');
+    c.setAttribute('r',R(n));c.setAttribute('fill',gcolor[n.group||'']);
+    c.setAttribute('fill-opacity','0.85');c.setAttribute('stroke',cssVar('--bg'));c.setAttribute('stroke-width','1.5');
+    c.dataset.draggable='1';
+    const t=document.createElementNS(svgNS,'text');
+    t.textContent=n.label||n.id;t.setAttribute('font-size','11');t.setAttribute('font-family',cssVar('--mono'));
+    t.setAttribute('fill',cssVar('--text'));t.setAttribute('text-anchor','middle');t.setAttribute('dy',R(n)+13);
+    t.style.pointerEvents='none';
+    grp.appendChild(c);grp.appendChild(t);g.appendChild(grp);nodeEls.push(grp);
+    grp.addEventListener('mouseenter',e=>{
+      showTip(`<b>${esc(n.label||n.id)}</b><br>${n.meta?esc(n.meta)+'<br>':''}fan-in ${n.fanIn??'–'} · fan-out ${n.fanOut??'–'}${n.size?` · ${fmt(n.size)} loc`:''}`,e.clientX,e.clientY);
+      hl(n.id);});
+    grp.addEventListener('mousemove',e=>showTip(tip.innerHTML,e.clientX,e.clientY));
+    grp.addEventListener('mouseleave',()=>{hideTip();hl(null)});
+    let dragN=null;
+    grp.addEventListener('mousedown',e=>{e.stopPropagation();dragN={mx:e.clientX,my:e.clientY,ox:n.x,oy:n.y};});
+    window.addEventListener('mousemove',e=>{if(!dragN)return;
+      n.x=dragN.ox+(e.clientX-dragN.mx)/st.k;n.y=dragN.oy+(e.clientY-dragN.my)/st.k;draw();});
+    window.addEventListener('mouseup',()=>dragN=null);
+  });
+  function hl(id){
+    if(id===null){edgeEls.forEach((p,i)=>p.setAttribute('stroke-opacity',links[i].cycle?'0.9':'0.4'));
+      nodeEls.forEach(el=>el.style.opacity='1');return;}
+    const near=new Set([id]);
+    links.forEach(l=>{if(l.source===id)near.add(l.target);if(l.target===id)near.add(l.source)});
+    edgeEls.forEach((p,i)=>{const l=links[i];
+      p.setAttribute('stroke-opacity',(l.source===id||l.target===id)?'1':'0.08');});
+    nodeEls.forEach((el,i)=>el.style.opacity=near.has(nodes[i].id)?'1':'0.25');
+  }
+  function draw(){
+    links.forEach((l,i)=>{const a=nodes[l.s],b=nodes[l.t];
+      const dx=b.x-a.x,dy=b.y-a.y,d=Math.sqrt(dx*dx+dy*dy)||1;
+      const tx=b.x-dx/d*(R(b)+3),ty=b.y-dy/d*(R(b)+3);
+      const sx=a.x+dx/d*R(a),sy=a.y+dy/d*R(a);
+      const mx=(sx+tx)/2-dy/d*10,my=(sy+ty)/2+dx/d*10;
+      edgeEls[i].setAttribute('d',`M${sx},${sy} Q${mx},${my} ${tx},${ty}`);});
+    nodes.forEach((n,i)=>nodeEls[i].setAttribute('transform',`translate(${n.x},${n.y})`));
+  }
+  draw();apply();
+  container.appendChild(svg);
+  panZoom(container,apply,()=>st);
+  addZoombar(container,
+    ()=>{st.k=Math.min(8,st.k*1.25);apply()},
+    ()=>{st.k=Math.max(.15,st.k/1.25);apply()},
+    ()=>{Object.assign(st,init);apply()});
+  if(groupNames.length>1||data.legendExtra){
+    const leg=document.createElement('div');leg.className='legend';
+    groupNames.forEach(gn=>{leg.innerHTML+=`<span><i class="sw" style="background:${gcolor[gn]}"></i>${esc(gn||'(root)')}</span>`});
+    if(data.legendExtra)leg.innerHTML+=data.legendExtra;
+    container.appendChild(leg);
+  }
+}
+
+/* ============ squarified treemap ============ */
+/* data: {items:[{name,value,metric,meta}], metricLabel, metricMax} — value drives area, metric drives heat color */
+function renderTreemap(container,data){
+  const W=container.clientWidth||900,H=container.clientHeight||520;
+  const items=data.items.filter(d=>d.value>0).sort((a,b)=>b.value-a.value);
+  const total=items.reduce((s,d)=>s+d.value,0)||1;
+  const mmax=data.metricMax??Math.max(1,...items.map(d=>d.metric||0));
+  const rects=[];
+  (function squarify(list,x,y,w,h){
+    if(!list.length)return;
+    if(list.length===1){rects.push({d:list[0],x,y,w,h});return;}
+    let row=[],rest=list.slice(),best=Infinity;
+    while(rest.length){
+      const cand=row.concat(rest[0]);
+      const sum=cand.reduce((s,d)=>s+d.value,0);
+      const side=Math.min(w,h);
+      const scale=(w*h)*(sum/list.reduce((s,d)=>s+d.value,0));
+      const len=scale/side;
+      const worst=Math.max(...cand.map(d=>{
+        const a=(d.value/sum)*side*len;const r=Math.max(len*len/ (a/side*side/ (a/len)||1),1);
+        const iw=(d.value/sum)*side, ratio=Math.max(len/iw,iw/len);return ratio;}));
+      if(worst<=best){best=worst;row=cand;rest.shift();}
+      else break;
+    }
+    const sum=row.reduce((s,d)=>s+d.value,0);
+    const frac=sum/list.reduce((s,d)=>s+d.value,0);
+    if(w>=h){const cw=w*frac;let cy=y;
+      row.forEach(d=>{const ch=h*(d.value/sum);rects.push({d,x,y:cy,w:cw,h:ch});cy+=ch;});
+      squarify(rest,x+cw,y,w-cw,h);
+    }else{const ch=h*frac;let cx=x;
+      row.forEach(d=>{const cw=w*(d.value/sum);rects.push({d,x:cx,y,w:cw,h:ch});cx+=cw;});
+      squarify(rest,x,y+ch,w,h-ch);
+    }
+  })(items,0,0,W,H);
+  const svgNS='http://www.w3.org/2000/svg';
+  const svg=document.createElementNS(svgNS,'svg');svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
+  const lo=cssVar('--heat-lo'),hi=cssVar('--heat-hi');
+  rects.forEach(r=>{
+    const t=Math.pow(Math.min(1,(r.d.metric||0)/mmax),0.6);
+    const g=document.createElementNS(svgNS,'g');
+    const rc=document.createElementNS(svgNS,'rect');
+    rc.setAttribute('x',r.x+1);rc.setAttribute('y',r.y+1);
+    rc.setAttribute('width',Math.max(0,r.w-2));rc.setAttribute('height',Math.max(0,r.h-2));
+    rc.setAttribute('rx',3);rc.setAttribute('fill',lerpColor(lo,hi,t));
+    rc.setAttribute('stroke',cssVar('--bg'));rc.setAttribute('stroke-width','1');
+    g.appendChild(rc);
+    if(r.w>66&&r.h>22){
+      const tx=document.createElementNS(svgNS,'text');
+      const nm=r.d.name.split('/').pop();
+      tx.textContent=nm.length>Math.floor(r.w/6.6)?nm.slice(0,Math.floor(r.w/6.6)-1)+'…':nm;
+      tx.setAttribute('x',r.x+7);tx.setAttribute('y',r.y+16);
+      tx.setAttribute('font-size','11');tx.setAttribute('font-family',cssVar('--mono'));
+      tx.setAttribute('fill',t>0.55?'#fff':cssVar('--text'));tx.style.pointerEvents='none';
+      g.appendChild(tx);
+    }
+    g.addEventListener('mouseenter',e=>{rc.setAttribute('stroke',cssVar('--text'));
+      showTip(`<b>${esc(r.d.name)}</b><br>${esc(data.valueLabel||'size')}: ${fmt(r.d.value)}<br>${esc(data.metricLabel||'metric')}: ${fmt(r.d.metric||0)}${r.d.meta?'<br>'+esc(r.d.meta):''}`,e.clientX,e.clientY);});
+    g.addEventListener('mousemove',e=>showTip(tip.innerHTML,e.clientX,e.clientY));
+    g.addEventListener('mouseleave',()=>{rc.setAttribute('stroke',cssVar('--bg'));hideTip();});
+    svg.appendChild(g);
+  });
+  container.appendChild(svg);
+  const leg=document.createElement('div');leg.className='legend';
+  leg.innerHTML=`<span>area = ${esc(data.valueLabel||'size')}</span><span><i class="sw" style="background:${lo}"></i>low ${esc(data.metricLabel||'')}</span><span><i class="sw" style="background:${hi}"></i>high ${esc(data.metricLabel||'')}</span>`;
+  container.appendChild(leg);
+}
+
+/* ============ auto-init viz blocks ============ */
+document.querySelectorAll('.viz[data-render]').forEach(el=>{
+  const dataEl=el.nextElementSibling;
+  if(!dataEl||dataEl.type!=='application/json')return;
+  let data;try{data=JSON.parse(dataEl.textContent)}catch(e){el.textContent='data parse error';return}
+  const render=()=>{
+    if(el.dataset.done)return;el.dataset.done='1';
+    try{
+      if(el.dataset.render==='forcegraph')renderForceGraph(el,data);
+      else if(el.dataset.render==='treemap')renderTreemap(el,data);
+    }catch(e){el.innerHTML='<p style="padding:16px" class="dim">render error: '+esc(e.message)+'</p>';}
+  };
+  const panel=el.closest('.panel');
+  if(panel&&panel.classList.contains('active'))render();
+  else window.addEventListener('tab:shown',ev=>{if(panel&&ev.detail.id===panel.id)render();});
+});
+
+/* ============ mermaid (lazy per tab, with pan/zoom) ============ */
+(function(){
+  if(!document.querySelector('.mermaid'))return;
+  const s=document.createElement('script');
+  s.src='https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js';
+  s.onload=()=>{
+    if(typeof mermaid==='undefined'){document.querySelectorAll('.mermaid').forEach(n=>{n.style.cssText='white-space:pre;font-family:var(--mono);font-size:12px;padding:14px;overflow-x:auto';});return;}
+    mermaid.initialize({startOnLoad:false,securityLevel:'loose',theme:'base',
+      themeVariables:{
+        primaryColor:cssVar('--surface-2'),primaryTextColor:cssVar('--text'),
+        primaryBorderColor:cssVar('--border-strong'),lineColor:cssVar('--text-dim'),
+        secondaryColor:cssVar('--accent-dim'),tertiaryColor:cssVar('--surface'),
+        background:cssVar('--surface'),mainBkg:cssVar('--surface-2'),
+        nodeTextColor:cssVar('--text'),fontFamily:cssVar('--sans'),fontSize:'14px',
+        actorBkg:cssVar('--surface-2'),actorBorder:cssVar('--accent'),actorTextColor:cssVar('--text'),
+        signalColor:cssVar('--text-dim'),signalTextColor:cssVar('--text'),
+        labelBoxBkgColor:cssVar('--surface-2'),labelTextColor:cssVar('--text'),
+        loopTextColor:cssVar('--text-dim'),noteBkgColor:cssVar('--warn-dim'),noteTextColor:cssVar('--text'),noteBorderColor:cssVar('--warn'),
+        clusterBkg:cssVar('--accent-dim'),clusterBorder:cssVar('--border-strong'),titleColor:cssVar('--text'),
+        edgeLabelBackground:cssVar('--surface')
+      }});
+    async function renderIn(panel){
+      const nodes=[...panel.querySelectorAll('.mermaid:not([data-processed])')];
+      if(!nodes.length)return;
+      try{await mermaid.run({nodes});}catch(e){/* leaves source visible */}
+      nodes.forEach(n=>{
+        const wrap=n.closest('.mermaid-wrap');if(!wrap||wrap.dataset.pz)return;wrap.dataset.pz='1';
+        const vp=wrap.querySelector('.mviewport')||wrap;
+        const svg=n.querySelector('svg');if(!svg)return;
+        svg.style.maxWidth='none';
+        const st={k:1,x:0,y:0},init={k:1,x:0,y:0};
+        const apply=()=>{svg.style.transformOrigin='0 0';svg.style.transform=`translate(${st.x}px,${st.y}px) scale(${st.k})`};
+        panZoom(vp,apply,()=>st);
+        addZoombar(wrap,()=>{st.k=Math.min(8,st.k*1.25);apply()},()=>{st.k=Math.max(.2,st.k/1.25);apply()},()=>{Object.assign(st,init);apply()});
+      });
+    }
+    const active=document.querySelector('.panel.active');if(active)renderIn(active);
+    window.addEventListener('tab:shown',e=>{const p=document.getElementById(e.detail.id);if(p)renderIn(p);});
+  };
+  s.onerror=()=>{document.querySelectorAll('.mermaid').forEach(n=>{n.style.cssText='white-space:pre;font-family:var(--mono);font-size:12px;padding:14px;overflow-x:auto';});};
+  document.head.appendChild(s);
+})();
+</script>
+</body>
+</html>
