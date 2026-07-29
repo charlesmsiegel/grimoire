@@ -347,16 +347,19 @@ def test_read_character_patches_images_from_union(monkeypatch, tmp_path):
 
 # ---- #247: materialization records the sync base before it commits the copy ----
 
-def _manifest_when(monkeypatch, cid, target: Path) -> dict:
-    """Capture the campaign manifest as it stands the moment `target` is
-    written. `target` is the write that commits a materialization, so whatever
-    this captures is what a crash immediately before it would leave behind."""
+def _at_commit(monkeypatch, cid, target: Path, sibling_dir: Path = None, glob: str = None) -> dict:
+    """Capture the state the moment `target` is written. `target` is the write
+    that commits a materialization, so this is what a crash immediately before
+    it would leave behind: the manifest, and optionally which files in
+    `sibling_dir` had already landed."""
     seen: dict = {}
     real = atomic.write_text
 
     def spy(path, text):
-        if Path(path) == target:
+        if Path(path) == target and "manifest" not in seen:
             seen["manifest"] = campaigns.read_manifest(cid)
+            if sibling_dir is not None:
+                seen["siblings"] = sorted(p.name for p in sibling_dir.glob(glob))
         real(path, text)
 
     monkeypatch.setattr(atomic, "write_text", spy)
@@ -374,20 +377,33 @@ def _fail_writing(monkeypatch, target: Path) -> None:
     monkeypatch.setattr(atomic, "write_text", spy)
 
 
+def _fail_after_writing(monkeypatch, target: Path) -> None:
+    """Raise once `target` has landed — the shape of an asynchronous exception
+    (Ctrl-C, a worker shutdown) arriving after the commit write returned."""
+    real = atomic.write_text
+
+    def spy(path, text):
+        real(path, text)
+        if Path(path) == target:
+            raise KeyboardInterrupt("interrupted after the commit")
+
+    monkeypatch.setattr(atomic, "write_text", spy)
+
+
 def test_materialize_entity_records_base_before_the_copy(monkeypatch, tmp_path):
     """A copy with no recorded base is invisible to sync forever: every ref
     the engine considers comes from the manifest, so world edits to that
     record are never offered again."""
     _wid, wroot, cid, eid = _pair(monkeypatch, tmp_path)
     _thin(cid, "lore", eid)
-    seen = _manifest_when(monkeypatch, cid, campaigns.campaign_root(cid) / "lore" / f"{eid}.md")
+    seen = _at_commit(monkeypatch, cid, campaigns.campaign_root(cid) / "lore" / f"{eid}.md")
     overlay.materialize_entity(cid, "lore", eid)
     assert seen["manifest"][f"lore/{eid}"] == entities.entity_hash(wroot, "lore", eid)
 
 
 def test_materialize_plotmap_records_base_before_the_copy(monkeypatch, tmp_path):
     wroot, cid, _gid = _greeting_pair(monkeypatch, tmp_path)
-    seen = _manifest_when(monkeypatch, cid, campaigns.campaign_root(cid) / "plotmap.json")
+    seen = _at_commit(monkeypatch, cid, campaigns.campaign_root(cid) / "plotmap.json")
     overlay.materialize_plotmap(cid)
     assert seen["manifest"]["plotmap"] == greetings.plotmap_hash(wroot)
 
@@ -397,10 +413,11 @@ def test_materialize_actor_records_base_before_the_meta_file(monkeypatch, tmp_pa
     it), so it is the commit point the base has to precede -- not merely the
     first version file."""
     wroot, cid, aid = _actor_pair(monkeypatch, tmp_path)
-    meta = campaigns.campaign_root(cid) / "characters" / aid / "character.md"
-    seen = _manifest_when(monkeypatch, cid, meta)
+    d = campaigns.campaign_root(cid) / "characters" / aid
+    seen = _at_commit(monkeypatch, cid, d / "character.md", d, "*.json")
     overlay.materialize_actor(cid, "characters", aid)
     assert seen["manifest"][f"characters/{aid}"] == characters.dir_hash(wroot, aid)
+    assert seen["siblings"] == ["dark.json", "default.json"]   # every card, too
 
 
 def test_materialize_pc_writes_every_version_before_the_meta_file(monkeypatch, tmp_path):
@@ -458,6 +475,39 @@ def test_failed_copy_restores_a_base_it_overwrote(monkeypatch, tmp_path):
     with pytest.raises(OSError):
         overlay.materialize_entity(cid, "lore", eid)
     assert campaigns.read_manifest(cid)[f"lore/{eid}"] == "older"
+
+
+def test_interrupt_after_the_copy_lands_keeps_the_base(monkeypatch, tmp_path):
+    """The undo must not recreate the bug it exists to prevent. Once the copy
+    is on disk the materialization has happened, whatever is raised next."""
+    _wid, wroot, cid, eid = _pair(monkeypatch, tmp_path)
+    _thin(cid, "lore", eid)
+    _fail_after_writing(monkeypatch, campaigns.campaign_root(cid) / "lore" / f"{eid}.md")
+    with pytest.raises(KeyboardInterrupt):
+        overlay.materialize_entity(cid, "lore", eid)
+    assert campaigns.read_manifest(cid)[f"lore/{eid}"] == entities.entity_hash(wroot, "lore", eid)
+
+
+def test_interrupt_after_the_actor_meta_lands_keeps_the_base(monkeypatch, tmp_path):
+    wroot, cid, aid = _actor_pair(monkeypatch, tmp_path)
+    _fail_after_writing(monkeypatch, campaigns.campaign_root(cid) / "characters" / aid / "character.md")
+    with pytest.raises(KeyboardInterrupt):
+        overlay.materialize_actor(cid, "characters", aid)
+    assert campaigns.read_manifest(cid)[f"characters/{aid}"] == characters.dir_hash(wroot, aid)
+
+
+def test_retry_after_an_interrupted_actor_copy_drops_stale_versions(monkeypatch, tmp_path):
+    """An interrupted copy leaves version files behind with no meta. If the
+    world purges a version before the retry, copying over the residue would
+    resurrect it -- and the base, taken from the world, would not match."""
+    wroot, cid, aid = _actor_pair(monkeypatch, tmp_path)
+    d = campaigns.campaign_root(cid) / "characters" / aid
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "dark.json").write_text("stale card\n", encoding="utf-8")   # residue, no character.md
+    characters.delete_version(wroot, aid, "dark")                    # world purges it meanwhile
+    overlay.materialize_actor(cid, "characters", aid)
+    assert not (d / "dark.json").exists()
+    assert characters.dir_hash(campaigns.campaign_root(cid), aid) == campaigns.read_manifest(cid)[f"characters/{aid}"]
 
 
 def test_base_without_a_copy_reads_through_and_rebases(monkeypatch, tmp_path):
