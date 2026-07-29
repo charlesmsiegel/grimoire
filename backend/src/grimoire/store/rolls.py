@@ -8,7 +8,9 @@ changes.py; entries are never rewritten or deleted, so ids are positional.
 
 Every writer (`append`, `find_by_proposal`, `find_or_append_by_proposal`, and
 the existing `repoint_scenes`) takes the same module-local per-campaign lock
-(the `_LOCKS`/`_LOCKS_GUARD` pattern from proposals.py). **That lock** is what
+(its own `_LOCKS`/`_LOCKS_GUARD` registry below — note this is NOT
+`locks.campaign_lock`, which #245 made the shared domain for sheets, audit and
+proposals; rolls still keeps a private one). **That lock** is what
 keeps concurrent writers from losing entries or racing each other's
 read-modify-write; the crash-safe write via `store.atomic` is a separate
 property and does not serialize anything on its own (#233 — this docstring used
