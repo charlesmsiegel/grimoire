@@ -2352,6 +2352,29 @@ def test_editing_the_review_after_a_committed_save_is_refused(client):
                       json=save).status_code == 200
 
 
+def test_a_token_committed_for_one_scene_is_refused_for_another(client):
+    """The ledger is campaign-scoped, and the review panel survives a scene
+    switch. Without the scene bound to the entry, retrying after a lost response
+    on a different scene returns the first scene's result and writes nothing."""
+    _, cid = _campaign(client)
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    first = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "One"}).json()["id"]
+    second = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Two"}).json()["id"]
+    store.scenes.append_message(cid, first, "user", "We poured the tea.")
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
+        '{"one_line": "o", "summary": "s", "keywords": [], "timeline_events": []}')
+    body = client.post(f"/api/campaigns/{cid}/scenes/{first}/absorb").json()
+    save = {"one_line": "o", "summary": "s", "keywords": [], "timeline_events": [],
+            "edits": body["edits"], "commit_token": body["commit_token"]}
+    assert client.put(f"/api/campaigns/{cid}/scenes/{first}/chronicle",
+                      json=save).status_code == 200
+
+    r = client.put(f"/api/campaigns/{cid}/scenes/{second}/chronicle", json=save)
+    assert r.status_code == 409 and r.json()["kind"] == "commit_scene_mismatch"
+    assert second not in store.chronicle.read_chronicle(cid)
+    assert store.scenes.read_scene(cid, second)["meta"].get("done") != "true"
+
+
 def test_a_save_without_a_token_still_commits(client):
     """The token is the UI's guard, not a new requirement: a body without one
     behaves exactly as before."""
