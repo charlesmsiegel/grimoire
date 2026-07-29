@@ -75,7 +75,7 @@ def test_locking_writes_nothing_into_the_store(tmp_path):
     store = tmp_path / "store"
     store.mkdir()
     before = set(store.rglob("*"))
-    fd = proclock.acquire(proclock.lock_path(store, "campaign-a"), None)
+    fd = proclock.acquire(proclock.lock_path(store, "t", "campaign-a"), None)
     try:
         assert set(store.rglob("*")) == before
     finally:
@@ -97,9 +97,9 @@ def test_lock_path_separates_stores_and_names(tmp_path):
     a, b = tmp_path / "store-a", tmp_path / "store-b"
     a.mkdir()
     b.mkdir()
-    assert proclock.lock_path(a, "run") != proclock.lock_path(b, "run")
-    assert proclock.lock_path(a, "run") != proclock.lock_path(a, "other")
-    assert proclock.lock_path(a, "run") == proclock.lock_path(a, "run")
+    assert proclock.lock_path(a, "t", "run") != proclock.lock_path(b, "t", "run")
+    assert proclock.lock_path(a, "t", "run") != proclock.lock_path(a, "t", "other")
+    assert proclock.lock_path(a, "t", "run") == proclock.lock_path(a, "t", "run")
 
 
 @pytest.mark.parametrize("hostile", [
@@ -114,15 +114,15 @@ def test_lock_path_cannot_escape_the_lock_directory(tmp_path, hostile):
     """The cid reaches us from a route parameter. What matters is not that
     the name looks tidy but that the resolved path stays inside the lock
     directory -- a literal '..' *within* a filename traverses nothing."""
-    d = proclock.lock_path(tmp_path, "x").parent
-    p = proclock.lock_path(tmp_path, hostile)
+    d = proclock.lock_path(tmp_path, "t", "x").parent
+    p = proclock.lock_path(tmp_path, "t", hostile)
     assert p.parent == d
     assert d.resolve() in p.resolve().parents
     assert p.name.endswith(".lock")
 
 
 def test_lock_path_bounds_the_component_length(tmp_path):
-    p = proclock.lock_path(tmp_path, "x" * 500)
+    p = proclock.lock_path(tmp_path, "t", "x" * 500)
     assert len(p.name) < 100
 
 
@@ -130,7 +130,7 @@ def test_lock_path_bounds_the_component_length(tmp_path):
 
 
 def test_acquire_and_release_roundtrip(tmp_path):
-    lock = proclock.lock_path(tmp_path, "roundtrip")
+    lock = proclock.lock_path(tmp_path, "t", "roundtrip")
     fd = proclock.acquire(lock, None)
     assert isinstance(fd, int)
     proclock.release(fd)
@@ -139,7 +139,7 @@ def test_acquire_and_release_roundtrip(tmp_path):
 
 
 def test_a_second_process_is_excluded(tmp_path):
-    lock = proclock.lock_path(tmp_path, "excluded")
+    lock = proclock.lock_path(tmp_path, "t", "excluded")
     p = _holder(lock)
     try:
         assert proclock.acquire(lock, time.monotonic() + 0.5) is None
@@ -150,7 +150,7 @@ def test_a_second_process_is_excluded(tmp_path):
 
 def test_the_lock_is_released_when_the_holder_dies(tmp_path):
     """No stale-lock reaping: the kernel releases on process death."""
-    lock = proclock.lock_path(tmp_path, "died")
+    lock = proclock.lock_path(tmp_path, "t", "died")
     p = _holder(lock)
     p.kill()
     p.wait(timeout=10)
@@ -162,7 +162,7 @@ def test_the_lock_is_released_when_the_holder_dies(tmp_path):
 
 def test_no_wait_returns_immediately(tmp_path):
     """NO_WAIT must make ONE attempt. Passing None here would retry forever."""
-    lock = proclock.lock_path(tmp_path, "nowait")
+    lock = proclock.lock_path(tmp_path, "t", "nowait")
     p = _holder(lock)
     try:
         started = time.monotonic()
@@ -176,7 +176,7 @@ def test_no_wait_returns_immediately(tmp_path):
 def test_a_permanent_error_propagates_rather_than_timing_out(tmp_path, monkeypatch):
     """A filesystem that cannot lock, or a directory we may not write, must not
     be reported as contention."""
-    lock = proclock.lock_path(tmp_path, "permanent")
+    lock = proclock.lock_path(tmp_path, "t", "permanent")
 
     def boom(fd):
         raise OSError(38, "Function not implemented")  # ENOSYS
@@ -187,7 +187,7 @@ def test_a_permanent_error_propagates_rather_than_timing_out(tmp_path, monkeypat
 
 
 def test_repeated_timeouts_leak_no_descriptors(tmp_path):
-    lock = proclock.lock_path(tmp_path, "fdleak")
+    lock = proclock.lock_path(tmp_path, "t", "fdleak")
     p = _holder(lock)
     try:
         proclock.acquire(lock, proclock.NO_WAIT)          # warm any lazy state
@@ -208,7 +208,7 @@ def test_inode_mismatch_retries_respect_the_deadline_and_leak_nothing(
         tmp_path, monkeypatch):
     """A file replaced under us must not make a NO_WAIT acquire spin forever,
     and each discarded attempt must close its descriptor."""
-    lock = proclock.lock_path(tmp_path, "mismatch")
+    lock = proclock.lock_path(tmp_path, "t", "mismatch")
     monkeypatch.setattr(proclock, "_same_file", lambda fd, path: False)
     before = _open_fds()
     started = time.monotonic()

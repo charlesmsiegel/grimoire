@@ -80,8 +80,16 @@ def _store_key(root: Path) -> str:
     return hashlib.sha256(norm.encode("utf-8", "surrogateescape")).hexdigest()[:16]
 
 
-def lock_path(root: Path, name: str) -> Path:
+def lock_path(root: Path, domain: str, name: str) -> Path:
     """Resolve (and create the directory for) one lock file.
+
+    ``domain`` separates lock namespaces that must never collide. Without it a
+    campaign whose id happens to be ``module-edit`` would hash to the same file
+    as the global module-edit lock -- and since module publication takes the
+    module-edit lock and *then* every campaign lock, that campaign would make
+    publication block on itself until the timeout, and could make journal
+    recovery skip forever. The domain is folded into the digest, not just the
+    readable prefix, so it cannot be spoofed by a crafted name.
 
     ``name`` reaches us from a route parameter, so it is sanitized *and* hash
     suffixed: sanitizing alone would collide distinct ids, while the 64-bit
@@ -98,8 +106,9 @@ def lock_path(root: Path, name: str) -> Path:
         except OSError:
             pass                      # best effort; an existing dir may be ours already
     slug = _UNSAFE.sub("-", name)[:_MAX_NAME_HINT]
-    digest = hashlib.sha256(name.encode("utf-8", "surrogateescape")).hexdigest()[:16]
-    return d / f"{slug}-{digest}.lock"
+    keyed = f"{domain}\0{name}".encode("utf-8", "surrogateescape")
+    digest = hashlib.sha256(keyed).hexdigest()[:16]
+    return d / f"{_UNSAFE.sub('-', domain)}-{slug}-{digest}.lock"
 
 
 def _try_lock(fd: int) -> bool:
@@ -166,24 +175,34 @@ def acquire(path: Path, deadline) -> int | None:
     """
     while True:
         fd = os.open(str(path), os.O_CREAT | os.O_RDWR, 0o600)
+        got = False
         try:
             got = _try_lock(fd)
+            if got:
+                if _WINDOWS or _same_file(fd, path):
+                    return fd
+                # Someone replaced the file under us. Defence in depth only --
+                # the chosen directory is not one anything cleans -- and not a
+                # proof: an unlink between this check and the return is still
+                # possible.
+                release(fd)
+                got = False
+                # Retrying must still respect the caller's deadline: a file
+                # being replaced repeatedly would otherwise make a NO_WAIT or
+                # expired acquisition spin forever.
+                if _expired(deadline):
+                    return None
+                continue
         except BaseException:
-            os.close(fd)
+            # The whole post-open span is guarded, not just _try_lock: a raise
+            # from _same_file (or a KeyboardInterrupt anywhere in here) would
+            # otherwise leak the descriptor AND the kernel lock, blocking this
+            # store's lock for the life of the process.
+            if got:
+                release(fd)           # unlocks and closes
+            else:
+                os.close(fd)
             raise
-        if got:
-            if _WINDOWS or _same_file(fd, path):
-                return fd
-            # Someone replaced the file under us. Defence in depth only -- the
-            # chosen directory is not one anything cleans -- and not a proof:
-            # an unlink between this check and the return is still possible.
-            release(fd)
-            # Retrying must still respect the caller's deadline: a file being
-            # replaced repeatedly would otherwise make a NO_WAIT or expired
-            # acquisition spin forever.
-            if _expired(deadline):
-                return None
-            continue
         os.close(fd)
         if _expired(deadline):
             return None

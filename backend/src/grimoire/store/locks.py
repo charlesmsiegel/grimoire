@@ -132,7 +132,8 @@ class _ProcessScopedLock:
     syscalls no userspace deadline can interrupt.
     """
 
-    def __init__(self, name: str, busy: type[StoreBusy]):
+    def __init__(self, domain: str, name: str, busy: type[StoreBusy]):
+        self._domain = domain
         self._name = name
         self._busy = busy
         self._rlock = threading.RLock()
@@ -142,7 +143,9 @@ class _ProcessScopedLock:
     def _path(self):
         # Resolved per outermost acquisition, never cached: home() resolves
         # live on every call and the Storage location can change at runtime.
-        return proclock.lock_path(paths.home(), self._name)
+        # The domain keeps a campaign id from ever colliding with the
+        # module-edit lock -- see proclock.lock_path.
+        return proclock.lock_path(paths.home(), self._domain, self._name)
 
     def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
         if timeout != -1 and timeout < 0:   # RLock parity: -1 is the only
@@ -229,11 +232,11 @@ def campaign_lock(cid: str) -> _ProcessScopedLock:
     with _registry_guard:
         lock = _campaign_locks.get(cid)
         if lock is None:
-            lock = _campaign_locks[cid] = _ProcessScopedLock(cid, CampaignBusy)
+            lock = _campaign_locks[cid] = _ProcessScopedLock("campaign", cid, CampaignBusy)
         return lock
 
 
-_module_edit = _ProcessScopedLock("module-edit", ModuleEditBusy)
+_module_edit = _ProcessScopedLock("domain", "module-edit", ModuleEditBusy)
 
 
 def module_edit_lock() -> _ProcessScopedLock:

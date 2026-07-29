@@ -632,28 +632,40 @@ def test_hold_all_unwinds_everything_when_a_later_lock_is_busy(monkeypatch, tmp_
         p.wait(timeout=10)
 
 
-def test_hold_all_is_bounded_by_one_timeout_not_n(monkeypatch, tmp_path):
-    """Per-lock deadlines would give an N x LOCK_TIMEOUT convoy.
+def test_hold_all_spends_one_shared_deadline_across_the_whole_span(monkeypatch, tmp_path):
+    """The budget must be shared: time spent on an earlier lock has to come out
+    of what is left for a later one.
 
-    THREE contended locks, not one: with a single contended lock a per-lock
-    implementation waits exactly the same total time as a single-deadline one,
-    so the test would pass either way.
+    Getting this test to discriminate took two tries. Contending several locks
+    proves nothing, because hold_all raises on the FIRST failure either way, so
+    per-lock and shared deadlines take the same wall-clock. What separates them
+    is a SLOW-but-successful early acquisition followed by a contended one:
+    with a shared deadline the contended lock inherits only the remainder and
+    fails fast; with a per-lock deadline it starts a fresh full timeout.
     """
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    holders = [_hold_in_child(tmp_path, "campaign_lock(%r)" % c)
-               for c in ("aaa", "bbb", "ccc")]
+    p = _hold_in_child(tmp_path, "campaign_lock('zzz')")
     try:
-        monkeypatch.setattr(locks, "LOCK_TIMEOUT", 1.0)
+        monkeypatch.setattr(locks, "LOCK_TIMEOUT", 2.0)
+        real = locks.campaign_lock
+
+        def slow(cid):
+            lock = real(cid)
+            if cid == "aaa":
+                time.sleep(1.7)        # eats most of the shared budget
+            return lock
+
+        monkeypatch.setattr(locks, "campaign_lock", slow)
         started = time.monotonic()
         with pytest.raises(locks.CampaignBusy):
-            with locks.hold_all(["aaa", "bbb", "ccc"]):
+            with locks.hold_all(["aaa", "zzz"]):   # sorted: aaa first, then zzz
                 pass
         elapsed = time.monotonic() - started
-        assert elapsed < 2.0, "took %.1fs: a per-lock deadline convoy" % elapsed
+        # shared: ~1.7 + ~0.3 = ~2.0s. per-lock: ~1.7 + a fresh 2.0 = ~3.7s.
+        assert elapsed < 3.0, "took %.1fs: each lock got its own deadline" % elapsed
     finally:
-        for p in holders:
-            p.kill()
-            p.wait(timeout=10)
+        p.kill()
+        p.wait(timeout=10)
 
 
 def test_a_second_process_cannot_hold_the_module_edit_lock(monkeypatch, tmp_path):
@@ -676,3 +688,36 @@ def test_a_second_process_cannot_hold_the_module_edit_lock(monkeypatch, tmp_path
     finally:
         p.kill()
         p.wait(timeout=10)
+
+
+def test_a_campaign_named_module_edit_does_not_collide_with_the_module_lock(
+        monkeypatch, tmp_path):
+    """Lock namespaces must not overlap.
+
+    Without a domain in the lock path, a campaign whose id is literally
+    `module-edit` hashes to the same file as the global module-edit lock. Module
+    publication takes the module-edit lock and THEN every campaign lock, so that
+    campaign would make publication block on itself for the full timeout and
+    could make journal recovery skip forever. Nothing else in the suite would
+    have noticed.
+    """
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    assert (locks.campaign_lock("module-edit")._path()
+            != locks.module_edit_lock()._path())
+
+    # and the real consequence: holding one must not block the other
+    with locks.module_edit_lock():
+        monkeypatch.setattr(locks, "LOCK_TIMEOUT", 2.0)
+        with locks.campaign_lock("module-edit"):
+            pass
+
+
+def test_lock_domains_are_folded_into_the_digest(tmp_path):
+    """Not merely into the readable prefix -- otherwise a crafted campaign id
+    could still be made to hash onto another domain's file."""
+    from grimoire.store import proclock
+
+    a = proclock.lock_path(tmp_path, "campaign", "x")
+    b = proclock.lock_path(tmp_path, "domain", "x")
+    assert a != b
+    assert a.name.split("-")[-1] != b.name.split("-")[-1]   # digests differ

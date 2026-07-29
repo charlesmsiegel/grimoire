@@ -95,7 +95,16 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
         except LLMError as exc:
             watcher.finish()
             if on_error is not None:
-                on_error(watcher)
+                try:
+                    on_error(watcher)
+                except store.locks.StoreBusy:
+                    # on_error persists the partial reply, which now takes a
+                    # cross-process lock and can therefore raise (#234). The
+                    # response has already started, so the global 409 handler
+                    # cannot convert it -- letting it escape would truncate the
+                    # stream with no error frame at all. The partial reply is
+                    # lost; the frame below still tells the user why.
+                    pass
             yield _sse({"error": {"detail": exc.detail, "kind": exc.kind}})
             return
         try:
@@ -105,13 +114,21 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
             # aborting the stream with no frame emitted at all.
             frames = list(finalize(watcher))
         except store.locks.StoreBusy as exc:
-            # Deliberately NOT on_error: that persists watcher.narration, and
-            # narration whose roll fence has no proposal record destroys the
-            # proposal-before-narration guarantee this ordering exists for.
-            # So persist neither the narration nor a new proposal; the turn is
-            # lost and the user re-sends. A lost turn is recoverable, a
-            # transcript whose mechanical decision point has no proposal is
-            # not (#234).
+            # Deliberately NOT routed through on_error: that persists
+            # watcher.narration, and narration whose roll fence has no proposal
+            # record destroys the proposal-before-narration guarantee this
+            # ordering exists for.
+            #
+            # What this does NOT claim (review caught the overclaim): that
+            # nothing was persisted. `finalize` is not transactional --
+            # `_chat_stream` writes the proposal under one lock, releases it,
+            # then `_persist_reply` takes it again, so contention on that second
+            # acquisition leaves a proposal on disk with no narration. That is
+            # the *sanctioned* direction: it is exactly the recoverable state
+            # the documented fence crash-window already produces, and the
+            # opposite order is the one that loses data. What is guaranteed is
+            # that the busy path adds no narration without its proposal, and
+            # that the stream ends with a frame saying so instead of dying (#234).
             yield _sse({"error": {"detail": str(exc), "kind": "busy"}})
             return
         for frame in frames:
