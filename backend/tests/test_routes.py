@@ -2273,7 +2273,7 @@ def test_refresh_dossiers_reports_an_unreadable_scene_cast(client, monkeypatch):
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
     monkeypatch.setattr(store.appearances, "scene_cast",
                         lambda *a: (_ for _ in ()).throw(OSError("appearances.json is garbled")))
-    out = asyncio.run(routes._refresh_dossiers(cid, sid, "transcript", _DossierFake(), {}))
+    out = asyncio.run(routes.scenes._refresh_dossiers(cid, sid, "transcript", _DossierFake(), {}))
     assert out == {
         "status": "failed", "reason": "could not read the scene cast: appearances.json is garbled",
         "refreshed": [], "failed": []}
@@ -3727,7 +3727,7 @@ def test_world_module_rebind_clears_non_overridden_campaign_baselines(client):
 
 
 def test_campaign_module_put_serializes_on_campaign_lock(client, module_scene):
-    """Paused-writer proof for put_campaign_module (routes.py ~2952-2962): the
+    """Paused-writer proof for put_campaign_module (routes/mechanics.py): the
     rebind (set_campaign_module + clear_baselines) runs under locks.campaign_lock(cid),
     so a rebind PUT genuinely blocks behind any writer already holding that
     campaign's sheet lock instead of racing it and landing a stale-baseline
@@ -3753,7 +3753,7 @@ def test_campaign_module_put_serializes_on_campaign_lock(client, module_scene):
 
 
 def test_world_module_put_serializes_on_affected_campaign_lock(client):
-    """Paused-writer proof for put_world_module (routes.py ~505-534): it takes
+    """Paused-writer proof for put_world_module (routes/worlds.py): it takes
     every affected (non-overridden) campaign's sheet lock via an ExitStack
     before rebinding, so a concurrent writer holding one of those campaigns'
     locks blocks the whole PUT -- not just that one campaign's slice of it.
@@ -4065,7 +4065,7 @@ def test_sheet_delete_cas(client):
 
 def test_instantiate_still_creates_sheeted_content(client, tmp_path):
     # Regression for the instantiate route's server-side expected=None call
-    # (routes.py post_campaign_instantiate) plus its rollback path: a fresh
+    # (routes/campaigns.py post_campaign_instantiate) plus its rollback path: a fresh
     # entity is created this request, so the internal sheets.write can never
     # collide with an existing sheet -- both the entity and its sheet must
     # exist afterwards. Reuses test_instantiate_into_campaign's fixture
@@ -4272,7 +4272,7 @@ def test_new_send_supersedes(client):
 
 # a send that dies on the missing-key guard must not have durably retired the
 # user's pending chip first — supersede only runs once the send is actually
-# going to happen (routes.py: after _require_scene *and* _require_connection).
+# going to happen (routes/scenes.py: after _require_scene *and* _require_connection).
 def test_chat_missing_key_does_not_supersede_pending_proposal(client):
     cid, sid, _ = _mech_scene(client)
     rec = _pending(client, cid, sid)
@@ -4361,7 +4361,7 @@ def test_follow_up_fence_handoff(client):
 def test_recovery_get_after_resolved(client, monkeypatch):
     cid, sid, _ = _mech_scene(client)
     rec = _pending(client, cid, sid)
-    monkeypatch.setattr(routes, "_continuation_messages",
+    monkeypatch.setattr(routes.mechanics, "_continuation_messages",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no continuation")))
     with pytest.raises(RuntimeError):
         client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal", json=_accept_body(rec))
@@ -4439,15 +4439,15 @@ def test_accept_crash_before_roll_id_heals_on_retry(client, monkeypatch):
 def test_accept_crash_before_continuation_heals(client, monkeypatch):
     cid, sid, _ = _mech_scene(client)
     rec = _pending(client, cid, sid)
-    real_cont = routes._continuation_messages
-    monkeypatch.setattr(routes, "_continuation_messages",
+    real_cont = routes.mechanics._continuation_messages
+    monkeypatch.setattr(routes.mechanics, "_continuation_messages",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no continuation")))
     with pytest.raises(RuntimeError):
         client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal", json=_accept_body(rec))
     rec_mid = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
     assert rec_mid["status"] == "resolved"
     assert len(_roll_lines(client, cid, sid)) == 1
-    monkeypatch.setattr(routes, "_continuation_messages", real_cont)  # not undo(): see above
+    monkeypatch.setattr(routes.mechanics, "_continuation_messages", real_cont)  # not undo(): see above
 
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["Continued."])
     resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal", json=_accept_body(rec))
@@ -4511,12 +4511,12 @@ def test_concurrent_resolved_retries_persist_once(client, monkeypatch):
     import threading
     cid, sid, _ = _mech_scene(client)
     rec = _pending(client, cid, sid)
-    real_cont = routes._continuation_messages
-    monkeypatch.setattr(routes, "_continuation_messages",
+    real_cont = routes.mechanics._continuation_messages
+    monkeypatch.setattr(routes.mechanics, "_continuation_messages",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")))
     with pytest.raises(RuntimeError):
         client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal", json=_accept_body(rec))
-    monkeypatch.setattr(routes, "_continuation_messages", real_cont)  # not undo()
+    monkeypatch.setattr(routes.mechanics, "_continuation_messages", real_cont)  # not undo()
 
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["cont"])
     codes = []
@@ -4541,11 +4541,11 @@ def test_concurrent_resolved_retries_persist_once(client, monkeypatch):
 def test_crash_mid_continuation_persist_heals(client, monkeypatch):
     cid, sid, _ = _mech_scene(client)
     rec = _pending(client, cid, sid)
-    real_persist = routes._persist_reply
+    real_persist = routes.streaming._persist_reply
     def boom_persist(c, s, text):
         store.scenes.append_message(c, s, "assistant", "PARTIAL")
         raise RuntimeError("crash mid persist")
-    monkeypatch.setattr(routes, "_persist_reply", boom_persist)
+    monkeypatch.setattr(routes.streaming, "_persist_reply", boom_persist)
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["full continuation"])
     try:
         client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal", json=_accept_body(rec))
@@ -4555,7 +4555,7 @@ def test_crash_mid_continuation_persist_heals(client, monkeypatch):
     assert rec_mid["status"] == "resolved" and "narration_intent" in rec_mid
     assert any(m["content"] == "PARTIAL"
                for m in client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"])
-    monkeypatch.setattr(routes, "_persist_reply", real_persist)  # not undo()
+    monkeypatch.setattr(routes.streaming, "_persist_reply", real_persist)  # not undo()
 
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["full continuation"])
     resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal", json=_accept_body(rec))
@@ -4572,17 +4572,17 @@ def test_crash_mid_continuation_persist_heals(client, monkeypatch):
 def test_manual_roll_in_crash_window_survives_trim(client, monkeypatch):
     cid, sid, _ = _mech_scene(client)
     rec = _pending(client, cid, sid)
-    real_persist = routes._persist_reply
+    real_persist = routes.streaming._persist_reply
     def boom_persist(c, s, text):
         store.scenes.append_message(c, s, "assistant", "PARTIAL")
         raise RuntimeError("crash")
-    monkeypatch.setattr(routes, "_persist_reply", boom_persist)
+    monkeypatch.setattr(routes.streaming, "_persist_reply", boom_persist)
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["cont"])
     try:
         client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal", json=_accept_body(rec))
     except Exception:  # noqa: BLE001
         pass
-    monkeypatch.setattr(routes, "_persist_reply", real_persist)  # not undo()
+    monkeypatch.setattr(routes.streaming, "_persist_reply", real_persist)  # not undo()
     mr = client.post(f"/api/campaigns/{cid}/scenes/{sid}/check",
                      json={"check": "perception", "actor": "characters:mara"})
     assert mr.status_code == 200
@@ -4650,7 +4650,7 @@ def test_project_resolution_none_when_record_replaced(client):
     store.proposals.new(cid, sid, {"check": "brawl", "actor": "characters:mara",
                                    "problems": []})
 
-    result = routes._project_resolution(cid, sid, old_pid)
+    result = routes.streaming._project_resolution(cid, sid, old_pid)
     assert result is None
     assert [e for e in client.get(f"/api/campaigns/{cid}/rolls").json()
             if e.get("proposal") == old_pid] == []
@@ -4673,7 +4673,7 @@ def test_superseded_same_id_still_projects(client):
     store.proposals.supersede(cid, sid)  # same id — no new() call follows
     assert store.proposals.get(cid, sid)["status"] == "superseded"
 
-    result = routes._project_resolution(cid, sid, pid)
+    result = routes.streaming._project_resolution(cid, sid, pid)
     assert result is not None and "roll_id" in result and "line_intent" in result
     tagged = [e for e in client.get(f"/api/campaigns/{cid}/rolls").json()
               if e.get("proposal") == pid]
@@ -4701,7 +4701,7 @@ def test_superseded_same_id_projection_persists_metadata(client):
     cid, sid, _ = _mech_scene(client)
     rec, pid = _resolve_then_supersede(client, cid, sid)
 
-    result = routes._project_resolution(cid, sid, pid)
+    result = routes.streaming._project_resolution(cid, sid, pid)
     assert result is not None
 
     stored = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
@@ -4732,7 +4732,7 @@ def test_superseded_same_id_crash_before_line_heals_on_stale_post(client, monkey
         return real_append(*a, **k)
     monkeypatch.setattr(store.scenes, "append_message", flaky_append)
     with pytest.raises(RuntimeError):
-        routes._project_resolution(cid, sid, pid)
+        routes.streaming._project_resolution(cid, sid, pid)
     # restore only this attr — never monkeypatch.undo() (shared GRIMOIRE_HOME)
     monkeypatch.setattr(store.scenes, "append_message", real_append)
 
@@ -4797,7 +4797,7 @@ def test_new_fence_replacement_heals_crashed_projection(client, monkeypatch):
         return real_append(*a, **k)
     monkeypatch.setattr(store.scenes, "append_message", flaky_append)
     with pytest.raises(RuntimeError):
-        routes._project_resolution(cid, sid, pid)
+        routes.streaming._project_resolution(cid, sid, pid)
     # restore only this attr — never monkeypatch.undo() (shared GRIMOIRE_HOME)
     monkeypatch.setattr(store.scenes, "append_message", real_append)
     assert _roll_lines(client, cid, sid) == []          # roll tagged, no line
@@ -4868,7 +4868,7 @@ def _resolve_with_crashed_line(client, cid, sid, monkeypatch):
         return real_append(*a, **k)
     monkeypatch.setattr(store.scenes, "append_message", flaky_append)
     with pytest.raises(RuntimeError):
-        routes._project_resolution(cid, sid, pid)
+        routes.streaming._project_resolution(cid, sid, pid)
     # restore only this attr — never monkeypatch.undo() (shared GRIMOIRE_HOME)
     monkeypatch.setattr(store.scenes, "append_message", real_append)
     mid = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
@@ -5245,11 +5245,10 @@ def test_turn_override_still_reaches_the_cascade(client):
         return real(cid_, sid_, turn=turn)
 
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["ok"])
-    import grimoire.routes as routes_mod
-    routes_mod.store.context.build_messages = spy
+    store.context.build_messages = spy
     try:
         client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat",
                     json={"content": "hi", "response": {"response_preset": "terse"}})
     finally:
-        routes_mod.store.context.build_messages = real
+        store.context.build_messages = real
     assert captured["turn"] == {"response_preset": "terse"}

@@ -3,7 +3,7 @@ import importlib
 import pytest
 from fastapi.testclient import TestClient
 
-from grimoire import routes, store
+from grimoire import store
 from grimoire.main import create_app
 
 

@@ -67,7 +67,7 @@ chaquopy {
             // pydantic is pinned to the pure-python 1.10 line: pydantic v2's
             // Rust core has no Android wheel in Chaquopy 15's repository
             // (docs/android-architecture.md §7 risk 1, fallback 2). FastAPI
-            // supports both lines, and routes.py is v1/v2-agnostic (_dump).
+            // supports both lines, and the routes package is v1/v2-agnostic (_dump).
             install("pydantic==1.10.*")
             install("fastapi>=0.110")
             install("uvicorn>=0.29")

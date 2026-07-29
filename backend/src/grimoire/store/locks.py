@@ -17,14 +17,14 @@ Who takes it:
   ``delete``, ``set_field``, ``advance``);
 - ``audit.capture_baseline`` / ``audit.apply_delta``;
 - every ``proposals`` state transition, and the routes that wrap a whole
-  derive-and-persist span (``routes.py`` proposal finalizers) so a proposal
+  derive-and-persist span (``routes/streaming.py`` proposal finalizers) so a proposal
   cannot be derived from a pack that is swapped away before it lands;
 - ``module_edit`` publication and the world-module rebind route, the only
   actors that hold *every* campaign's lock at once, across the swap;
   ``PUT /campaigns/{cid}/module`` holds just that campaign's;
 - read paths that must not observe a half-published pack:
   ``checks.resolve_check``, ``context._mechanics``,
-  ``routes._continuation_rule_bodies``.
+  ``routes.mechanics._continuation_rule_bodies``.
 
 Ordering rules (deadlock avoidance):
 
