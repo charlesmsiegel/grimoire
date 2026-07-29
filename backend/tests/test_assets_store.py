@@ -444,6 +444,41 @@ def test_recovery_re_decides_when_its_chosen_slot_is_taken(tmp_path, monkeypatch
     assert len(recovered) == 1 and recovered[0].stem.startswith("gallery_")
 
 
+def test_recovery_repairs_every_temp_even_on_a_tight_retry_budget(tmp_path, monkeypatch):
+    """The budget bounds lost races, not work done. Budgeting total passes
+    instead left a directory holding more temps than the budget with one still
+    stranded after an uncontended scan (PR review)."""
+    d = _stranded(tmp_path, ext="png", data=b"one")
+    for ext, data in (("webp", b"two"), ("jpg", b"three"), ("gif", b"four")):
+        (d / f"promote-tmp.{ext}").write_bytes(data)
+    monkeypatch.setattr(assets, "_HEAL_RETRIES", 1)  # no room for a single retry
+
+    assets.list_images(tmp_path, "sera", "default")
+
+    assert not list(d.glob("promote-tmp.*")), "a temp was left behind"
+    assert sorted(p.read_bytes() for p in _image_files(tmp_path)) == [
+        b"four", b"one", b"three", b"two"]
+
+
+def test_recovery_skips_a_gallery_slot_a_case_variant_already_holds(tmp_path):
+    """`Gallery_1.png` and `gallery_1.png` are one file on Windows and macOS, so
+    a case-sensitive occupancy check would keep choosing a slot that cannot be
+    claimed -- recovery would find its target there every pass and give up
+    without repairing anything."""
+    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"LIVE", "png")
+    d = tmp_path / "characters" / "sera" / "assets" / "default"
+    (d / "Gallery_1.png").write_bytes(b"MIXED-CASE")
+    (d / "promote-tmp.png").write_bytes(b"STRANDED")
+
+    assets.list_images(tmp_path, "sera", "default")
+
+    assert not list(d.glob("promote-tmp.*")), "the temp was left stranded"
+    assert (d / "Gallery_1.png").read_bytes() == b"MIXED-CASE"  # untouched
+    recovered = [p for p in _image_files(tmp_path) if p.read_bytes() == b"STRANDED"]
+    assert len(recovered) == 1
+    assert recovered[0].stem.casefold() not in ("gallery_1", "avatar")
+
+
 def test_a_failed_recovery_never_breaks_the_read(tmp_path, monkeypatch):
     """The heal is cleanup on a read path: a read-only store or a sync client
     holding the file must degrade to "no avatar yet", not raise at the caller."""
