@@ -245,9 +245,17 @@ def _image_files(tmp_path, cid="sera", vid="default"):
 def _fail_after(monkeypatch, allowed: int):
     """Crash simulator: let `allowed` filesystem mutations through, then raise.
 
-    Hooks both `Path.rename` and `atomic.write_bytes` on purpose, so the test
-    pins an invariant rather than an implementation -- promotion may move bytes
-    either way, and the cut still lands between two of its steps.
+    Hooks both `Path.rename` and `atomic.write_bytes` on purpose, so the cut
+    lands between two of promotion's steps whichever way it moves bytes -- a
+    rename dance and a republish are both covered, which is what makes this a
+    test of the invariant and not of one implementation of it.
+
+    Each hooked call is one indivisible event; the windows *inside* an atomic
+    write (a failed replace, a failed write, a leftover temp) are
+    `test_atomic.py`'s -- see `test_replace_failure_leaves_the_previous_record
+    _intact`, `test_write_failure_leaves_the_previous_record_intact` and
+    `test_temp_files_are_invisible_to_the_record_listers` (PR review asked
+    where that coverage lives).
     """
     from grimoire.store import atomic
 
