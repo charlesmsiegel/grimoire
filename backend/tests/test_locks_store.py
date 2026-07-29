@@ -113,10 +113,34 @@ def test_audit_baselines_serialize_on_the_campaign_lock(monkeypatch, tmp_path):
     assert sid in audit.read_baselines(cid)
 
 
+def test_scene_writes_serialize_on_the_campaign_lock(monkeypatch, tmp_path):
+    """Scene mutation joins the same domain (#254) rather than opening a second
+    registry: the flows that persist a reply already hold the campaign lock
+    (routes._continuation_stream), so a scene-only lock would add a second
+    ordering to get wrong for no gain."""
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Saltmarch")
+    assert _blocks_while_held(cid, lambda: scenes.append_message(cid, sid, "user", "hi"))
+    assert _blocks_while_held(
+        cid, lambda: scenes.append_reply(cid, sid, [{"speaker": None, "content": "ok"}]))
+    assert _blocks_while_held(cid, lambda: scenes.edit_message(cid, sid, 0, "edited"))
+
+
+def test_a_campaign_lock_holder_can_still_write_a_scene(monkeypatch, tmp_path):
+    """Reentrancy is load-bearing, not incidental: proposals.commit_narration
+    persists the reply through a callback while holding this lock, and
+    scenes.create_scene captures an audit baseline that takes it again."""
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+    with locks.campaign_lock(cid):
+        sid = scenes.create_scene(cid, "Nested")
+        scenes.append_message(cid, sid, "user", "no deadlock")
+    assert len(scenes.read_scene(cid, sid)["messages"]) == 1
+
+
 # ---- placement: the registry lives here and nowhere else (#245) ----
 
 
-@pytest.mark.parametrize("mod", [sheets, proposals, audit])
+@pytest.mark.parametrize("mod", [sheets, proposals, audit, scenes])
 def test_borrowers_neither_re_export_nor_re_implement_the_registry(mod):
     """The lock domain is discoverable from store/locks.py only if no module
     re-exports or re-implements it: `sheets.lock_for()` was the old name and
