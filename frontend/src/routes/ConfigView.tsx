@@ -13,6 +13,8 @@ export default function ConfigView() {
   const [systemPrompt, setSystemPrompt] = useState("");
   const [userLabel, setUserLabel] = useState("");
   const [assistantLabel, setAssistantLabel] = useState("");
+  const [llmTimeout, setLlmTimeout] = useState("");
+  const [absorbBudget, setAbsorbBudget] = useState("");
   const [saved, setSaved] = useState(false);
 
   const [dataDir, setDataDir] = useState<DataDirInfo | null>(null);
@@ -26,6 +28,8 @@ export default function ConfigView() {
       setSystemPrompt(c.system_prompt);
       setUserLabel(c.user_label);
       setAssistantLabel(c.assistant_label);
+      setLlmTimeout(c.llm_timeout);
+      setAbsorbBudget(c.absorb_budget);
     });
     api.getDataDir().then((d) => {
       setDataDir(d);
@@ -49,7 +53,7 @@ export default function ConfigView() {
 
   if (!config) return <div className="page page-narrow config">Loading…</div>;
 
-  async function save(fields: Partial<{ theme: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string; active_connection_id: string }>) {
+  async function save(fields: Partial<{ theme: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string; active_connection_id: string; llm_timeout: string; absorb_budget: string }>) {
     const next = await api.putConfig(fields);
     setConfig(next);
     setSaved(true);
@@ -121,6 +125,27 @@ export default function ConfigView() {
         model list) on the <Link to="/connections">Connections</Link> page.
       </p>
 
+      <div className="section-label">Timeouts</div>
+      <div className="field-row">
+        <div className="field">
+          <label htmlFor="cfg-llm-timeout">No-reply timeout (seconds)</label>
+          <input id="cfg-llm-timeout" type="text" inputMode="numeric" value={llmTimeout}
+                 placeholder="120" onChange={(e) => setLlmTimeout(e.target.value)} />
+        </div>
+        <div className="field">
+          <label htmlFor="cfg-absorb-budget">Absorb budget (seconds)</label>
+          <input id="cfg-absorb-budget" type="text" inputMode="numeric" value={absorbBudget}
+                 placeholder="600" onChange={(e) => setAbsorbBudget(e.target.value)} />
+        </div>
+      </div>
+      <p className="field-hint">
+        How long a generation may go without sending anything before it is abandoned, and
+        how long one end-of-scene absorb (extraction, dossiers, mechanics audit) may take
+        in total — past the budget, the remaining dossier refreshes are skipped and the
+        audit reports as failed, leaving the absorb itself intact. Set either to
+        <code> 0</code> to remove the limit, e.g. for a slow local endpoint.
+      </p>
+
       <div className="section-label">System prompt</div>
       <label className="sr-only" htmlFor="cfg-system-prompt">
         System prompt (sent with every scene)
@@ -178,6 +203,7 @@ export default function ConfigView() {
           onClick={() => save({
             system_prompt: systemPrompt,
             user_label: userLabel, assistant_label: assistantLabel,
+            llm_timeout: llmTimeout, absorb_budget: absorbBudget,
           })}
         >
           Save
