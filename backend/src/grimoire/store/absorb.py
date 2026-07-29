@@ -488,6 +488,11 @@ def _weather_edits(cid: str, sid: str, parsed: dict) -> list[dict]:
     return out
 
 
+class _DossierTargetGone(Exception):
+    """A dossier edit whose character disappeared between staging and saving.
+    Distinguished from an I/O failure so the reviewer is told which happened."""
+
+
 _BROWSABLE_KINDS = ("character_state", "dossier", "lore", "authored", "new_character",
                     "new_location", "new_lore")
 
@@ -614,7 +619,6 @@ def apply_edits(cid: str, edits: list[dict],
                     continue  # a blank reply must not erase a good dossier
                 if target.get("kind") != "characters":
                     continue
-                characters.read_character(overlay.char_root(cid, target["id"]), target["id"])
                 # Staging the dossier (#235) moved the write from absorb time to
                 # save time, so the write order is now the SAVE order and can
                 # invert the absorb order: two reviews open on the same NPC, the
@@ -622,18 +626,29 @@ def apply_edits(cid: str, edits: list[dict],
                 # earlier-scene state. The staged `before` dates the proposal --
                 # if it no longer matches, a newer dossier already landed and
                 # this one is stale. (Replaying one save twice lands here too.)
-                # Read AND write inside one handler: the conflict check reads
-                # first, and a read that raised would otherwise fall through to
-                # the generic per-edit skip below. Either way the chronicle is
-                # already recorded and the reviewer's panel closes on a 200, so
-                # a swallowed failure loses an approved dossier silently.
+                #
+                # The existence check, the read and the write share ONE handler:
+                # anything that escaped it would fall through to the generic
+                # per-edit skip below, and by then the chronicle is recorded and
+                # the reviewer's panel closes on a 200 -- so a swallowed failure
+                # loses an approved dossier without ever saying so.
                 try:
+                    try:
+                        characters.read_character(
+                            overlay.char_root(cid, target["id"]), target["id"])
+                    except characters.CharacterNotFound:
+                        raise _DossierTargetGone(
+                            "that character no longer exists in this campaign") from None
                     if dossiers.read(croot, target["id"]) != e.get("before", ""):
                         failures.append({
                             "id": e.get("id", ""), "kind": "conflict",
                             "reason": "this dossier changed since the scene was absorbed"})
                         continue
                     dossiers.write(croot, target["id"], after)
+                except _DossierTargetGone as exc:
+                    failures.append({"id": e.get("id", ""), "kind": "error",
+                                     "reason": str(exc)})
+                    continue
                 except Exception as exc:  # noqa: BLE001 -- full disk, permissions, ...
                     failures.append({"id": e.get("id", ""), "kind": "error",
                                      "reason": f"could not update the dossier: {exc}"})
