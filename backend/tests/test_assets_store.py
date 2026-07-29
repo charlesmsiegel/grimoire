@@ -41,6 +41,10 @@ def test_unsafe_and_unsupported_rejected(tmp_path):
         assets.put_image(tmp_path, "sera", "default", "*", b"a", "png")  # glob metacharacter
     with pytest.raises(ValueError):
         assets.put_image(tmp_path, "sera", "default", "avatar", b"a", "svg")  # not allowlisted
+    with pytest.raises(ValueError):
+        # reserved: the recovery in #253 treats a file under this name as crash
+        # residue, and the old swap would have clobbered a real image there anyway
+        assets.put_image(tmp_path, "sera", "default", "promote-tmp", b"a", "png")
     assert assets.image_path(tmp_path, "..", "default", "avatar") is None  # unsafe cid
 
 
@@ -351,6 +355,65 @@ def test_promoting_a_file_of_an_unsupported_type_changes_nothing(tmp_path):
 
     assert assets.image_path(tmp_path, "sera", "default", assets.AVATAR).read_bytes() == b"OLD"
     assert (d / "gallery_1.bmp").read_bytes() == b"NEW"
+
+
+def _stranded(tmp_path, ext="png", data=b"STRANDED"):
+    """The wreckage a pre-#253 promotion left when it crashed mid-swap."""
+    d = tmp_path / "characters" / "sera" / "assets" / "default"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"promote-tmp.{ext}").write_bytes(data)
+    return d
+
+
+def test_a_stranded_pre_fix_temp_is_adopted_as_the_avatar(tmp_path):
+    """The damage the old swap could leave: the promoted image on disk under
+    `promote-tmp`, no avatar, and nothing in the app looking for it -- image_path
+    globs `<name>.*` and the editor renders only avatar/gallery_N, so the user's
+    only recovery was to re-upload (#253). The directory scan adopts it."""
+    d = _stranded(tmp_path)
+    p = assets.image_path(tmp_path, "sera", "default", assets.AVATAR)
+    assert p is not None and p.read_bytes() == b"STRANDED"
+    assert p.name == "avatar.png"
+    assert not list(d.glob("promote-tmp.*"))
+    assert _named(assets.list_images(tmp_path, "sera", "default")) == [("avatar", "png")]
+
+
+def test_a_stranded_temp_beside_a_live_avatar_becomes_a_gallery_image(tmp_path):
+    """Crashing before the avatar moved leaves a working avatar plus a temp
+    whose original slot is unrecoverable. It must not displace the avatar; a
+    free gallery slot makes it visible again and overwrites nothing."""
+    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"LIVE", "png")
+    assets.put_image(tmp_path, "sera", "default", "gallery_1", b"KEEP", "png")
+    _stranded(tmp_path, ext="webp")
+
+    assert _named(assets.list_images(tmp_path, "sera", "default")) == [
+        ("avatar", "png"), ("gallery_1", "png"), ("gallery_2", "webp")]
+    assert assets.image_path(tmp_path, "sera", "default", assets.AVATAR).read_bytes() == b"LIVE"
+    assert assets.image_path(tmp_path, "sera", "default", "gallery_1").read_bytes() == b"KEEP"
+    assert assets.image_path(tmp_path, "sera", "default", "gallery_2").read_bytes() == b"STRANDED"
+
+
+def test_a_failed_recovery_never_breaks_the_read(tmp_path, monkeypatch):
+    """The heal is cleanup on a read path: a read-only store or a sync client
+    holding the file must degrade to "no avatar yet", not raise at the caller."""
+    _stranded(tmp_path)
+
+    def no_rename(self, target):
+        raise OSError("read-only store")
+
+    monkeypatch.setattr(assets.Path, "rename", no_rename)
+    assert assets.image_path(tmp_path, "sera", "default", assets.AVATAR) is None
+    assert _named(assets.list_images(tmp_path, "sera", "default")) == [("promote-tmp", "png")]
+
+
+def test_recovery_leaves_a_normal_directory_alone(tmp_path):
+    """No temp, no writes: the scan must not touch a healthy directory."""
+    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"a", "png")
+    d = tmp_path / "characters" / "sera" / "assets" / "default"
+    before = {p.name: p.stat().st_mtime_ns for p in d.iterdir()}
+    assert assets.image_path(tmp_path, "sera", "default", "gallery_9") is None  # a miss
+    assets.list_images(tmp_path, "sera", "default")
+    assert {p.name: p.stat().st_mtime_ns for p in d.iterdir()} == before
 
 
 def test_concurrent_promotions_neither_collide_nor_lose_an_image(tmp_path):
