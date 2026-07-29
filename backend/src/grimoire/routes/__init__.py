@@ -18,12 +18,21 @@ One ``APIRouter`` per domain, composed here into the single ``router`` that
   ``mechanics``   rolls, roll proposals, checks, campaign module and sheets
   ``entities``    the generic /{kind} entity surface for both scopes
 
-ORDERING: ``entities`` registers ``/worlds/{wid}/{kind}`` and
-``/campaigns/{cid}/{kind}``, which capture any third path segment, so it is
-included **last** — a literal-segment route registered after it would never be
-reached. Nothing else here is order-sensitive, and
-``tests/test_route_order.py`` fails if any route ends up shadowed by an earlier
-one, so the rule is checked rather than remembered.
+ORDERING: FastAPI matches in registration order and never backtracks, so the
+include order below is load-bearing in two ways.
+
+1. ``entities`` registers ``/worlds/{wid}/{kind}`` and ``/campaigns/{cid}/{kind}``,
+   which capture any third path segment, so it goes **last** — a literal-segment
+   route registered after it would never be reached.
+2. Nine pairs of patterns *cross*: neither is more general, but a concrete URL
+   exists that both match (e.g. ``POST /campaigns/c/scenes/instantiate/cast/batch``
+   matches both ``/campaigns/{cid}/scenes/{sid}/cast/batch`` and
+   ``/campaigns/{cid}/{kind}/instantiate/{mid}/{content_id}``). Which one wins is
+   decided purely by this order — hence ``campaigns`` after ``scenes`` and
+   ``mechanics``.
+
+``tests/test_route_order.py`` checks both: it fails if any route is shadowed by
+an earlier one, and it pins the winner of every crossing pair.
 """
 
 from __future__ import annotations
@@ -39,7 +48,7 @@ __all__ = ["router", "get_llm", "get_openai_compatible_client"]
 router = APIRouter()
 
 for _domain in (config, modules, worlds, characters, greetings,
-                campaigns, scenes, weather, mechanics):
+                scenes, weather, mechanics, campaigns):
     router.include_router(_domain.router)
 
 router.include_router(entities.router)  # keep last: generic /{kind} catch-alls
