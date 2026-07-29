@@ -449,6 +449,26 @@ def test_apply_edits_skips_a_stale_dossier(monkeypatch, tmp_path):
     assert dossiers.read(croot, ch) == "Seraphine rides with the party."
 
 
+def test_a_character_vanishing_before_the_save_is_reported(monkeypatch, tmp_path):
+    """The existence check sat outside the dossier failure handler, so a
+    character deleted between staging and saving dropped an approved edit into
+    the generic per-edit skip -- silently, with the save reading as a success."""
+    from grimoire.store import dossiers
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    ch = _char(croot, "Seraphine")
+    dossiers.write(croot, ch, "Seraphine is wary.")
+    (croot / "characters" / ch / "character.md").unlink()      # deleted since staging
+    applied, failures = absorb.apply_edits(cid, [
+        {"id": f"dossier:{ch}", "kind": "dossier",
+         "target": {"kind": "characters", "id": ch}, "field": "dossier",
+         "before": "Seraphine is wary.", "after": "Seraphine is loyal."}])
+    assert applied == []
+    assert [(f["id"], f["kind"]) for f in failures] == [(f"dossier:{ch}", "error")]
+    assert "no longer exists" in failures[0]["reason"]
+    assert dossiers.read(croot, ch) == "Seraphine is wary."    # untouched
+
+
 def test_a_dossier_read_failure_is_reported(monkeypatch, tmp_path):
     """The conflict check reads before it writes, and that read sits inside the
     generic per-edit `except`. A permissions or I/O error there would drop an
