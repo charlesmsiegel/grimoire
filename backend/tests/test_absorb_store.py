@@ -430,6 +430,39 @@ def test_apply_edits_writes_dossier(monkeypatch, tmp_path):
     assert dossiers.read(croot, ch) == "Seraphine now walks with the party."
 
 
+def test_apply_edits_skips_a_stale_dossier(monkeypatch, tmp_path):
+    """Staging the dossier instead of writing it at absorb time means the write
+    order is now the SAVE order, which can invert the absorb order: two reviews
+    open on the same NPC, the newer one saved first, and the older one would
+    overwrite it with earlier-scene state. The staged `before` is the check."""
+    from grimoire.store import dossiers
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    ch = _char(croot, "Seraphine")
+    dossiers.write(croot, ch, "Seraphine rides with the party.")   # a newer review landed
+    applied, _ = absorb.apply_edits(cid, [
+        {"id": f"dossier:{ch}", "kind": "dossier",
+         "target": {"kind": "characters", "id": ch}, "field": "dossier",
+         "before": "Seraphine is wary.",                           # staged against the old text
+         "after": "Seraphine is slightly less wary."}])
+    assert applied == []
+    assert dossiers.read(croot, ch) == "Seraphine rides with the party."
+
+
+def test_apply_edits_writes_a_dossier_whose_before_still_matches(monkeypatch, tmp_path):
+    from grimoire.store import dossiers
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    ch = _char(croot, "Seraphine")
+    dossiers.write(croot, ch, "Seraphine is wary.")
+    applied, _ = absorb.apply_edits(cid, [
+        {"id": f"dossier:{ch}", "kind": "dossier",
+         "target": {"kind": "characters", "id": ch}, "field": "dossier",
+         "before": "Seraphine is wary.", "after": "Seraphine now rides with the party."}])
+    assert applied == [f"dossier:{ch}"]
+    assert dossiers.read(croot, ch) == "Seraphine now rides with the party."
+
+
 def test_apply_edits_skips_empty_dossier(monkeypatch, tmp_path):
     """An empty `after` would blank a good dossier -- skip rather than erase."""
     from grimoire.store import dossiers
@@ -482,10 +515,11 @@ def test_apply_edits_dossier_rejects_a_non_character_target(monkeypatch, tmp_pat
 
 
 def test_apply_edits_records_dossier_in_changes(monkeypatch, tmp_path):
-    from grimoire.store import scenes
+    from grimoire.store import dossiers, scenes
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     ch = _char(croot, "Seraphine")
+    dossiers.write(croot, ch, "Wary.")     # the text the edit was staged against
     sid = scenes.create_scene(cid, "S")
     absorb.apply_edits(cid, [
         {"id": f"dossier:{ch}", "kind": "dossier",
