@@ -91,6 +91,7 @@ import grimoire
 # The LLM gateway: the facade plus the three providers it dispatches to, and the
 # error module they all share.
 GATEWAY_MODULES = ("llm", "llm_errors", "openrouter", "claude_agent", "openai_compatible")
+PROVIDERS = ("claude_agent", "openai_compatible", "openrouter")
 
 
 def _sibling_imports(name: str) -> set[str]:
@@ -140,9 +141,45 @@ def _find_cycle(graph: dict[str, set[str]]) -> list[str] | None:
     return None
 
 
+def _reachable_graph() -> dict[str, set[str]]:
+    """Everything the gateway can reach, not just the five gateway modules.
+
+    Restricting the graph to the gateway would miss a cycle routed through a
+    helper (provider → prompts → llm), so this walks outward from the gateway
+    until it runs dry. Subpackages are not followed: `store/` carries its own
+    known file-level cycle, and no gateway module imports it — if one ever
+    does, that edge is simply not traced rather than failing this test for an
+    unrelated reason.
+    """
+    pkg = Path(grimoire.__file__).parent
+    graph: dict[str, set[str]] = {}
+    queue = list(GATEWAY_MODULES)
+    while queue:
+        name = queue.pop()
+        if name in graph:
+            continue
+        graph[name] = {m for m in _sibling_imports(name) if (pkg / f"{m}.py").is_file()}
+        queue.extend(graph[name])
+    return graph
+
+
 def test_llm_gateway_imports_are_acyclic():
-    """Regression for #239: LLMError lives in its own leaf module so that
-    llm.py can import the providers at module scope."""
-    graph = {m: _sibling_imports(m) & set(GATEWAY_MODULES) for m in GATEWAY_MODULES}
-    cycle = _find_cycle(graph)
+    """Regression for #239: LLMError lives in its own leaf module, so nothing
+    the gateway reaches can import its way back into the gateway."""
+    cycle = _find_cycle(_reachable_graph())
     assert cycle is None, "import cycle: " + " -> ".join(cycle or [])
+
+
+def test_llm_errors_stays_a_leaf():
+    """The whole fix rests on this module importing nothing from the package."""
+    assert _sibling_imports("llm_errors") == set()
+
+
+def test_llm_imports_its_providers_at_module_scope():
+    """#239 asked for the deferred imports to go, not just for the cycle to be
+    survivable: an acyclic graph is equally happy with them back inside
+    __init__, so pin the module body itself."""
+    tree = ast.parse(Path(grimoire.__file__).with_name("llm.py").read_text(encoding="utf-8"))
+    body_imports = {node.module for node in tree.body
+                    if isinstance(node, ast.ImportFrom) and node.level == 1}
+    assert set(PROVIDERS) <= body_imports
