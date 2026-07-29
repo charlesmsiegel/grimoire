@@ -985,15 +985,28 @@ test("failed dossier refreshes are listed per NPC instead of passing silently", 
   expect(screen.getByText(/winifred: rate limited/)).toBeInTheDocument();
 });
 
+test("every NPC failing reads as total failure, not partial", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  absorbWithDossiers({ status: "failed", reason: "no dossier could be refreshed",
+    refreshed: [], failed: [{ id: "winifred", reason: "LLMError: rate limited" }] });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await screen.findByText("No NPC dossier could be refreshed");
+  expect(screen.queryByText(/Some NPC dossiers/)).toBeNull();
+  expect(screen.getByText(/winifred: LLMError: rate limited/)).toBeInTheDocument();
+});
+
 test("a whole-phase dossier failure shows its reason", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
-  absorbWithDossiers({ status: "failed", reason: "dossier refresh failed: no cast",
+  absorbWithDossiers({ status: "failed", reason: "could not read the scene cast: boom",
     refreshed: [], failed: [] });
   renderCampaign();
   await screen.findByText("hi");
   fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
-  await screen.findByText("NPC dossier refresh failed: dossier refresh failed: no cast");
+  await screen.findByText("NPC dossier refresh failed: could not read the scene cast: boom");
 });
 
 test("clean and skipped dossier phases render no notice", async () => {

@@ -778,7 +778,9 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
               <div className="mechanics-notice">
                 <p>{absorb.dossiers.failed.length === 0
                     ? `NPC dossier refresh failed: ${absorb.dossiers.reason}`
-                    : "Some NPC dossiers could not be refreshed"}</p>
+                    : absorb.dossiers.status === "failed"
+                      ? "No NPC dossier could be refreshed"
+                      : "Some NPC dossiers could not be refreshed"}</p>
                 {absorb.dossiers.failed.map((d, i) => (
                   <p className="field-hint" key={i}>{d.id}: {d.reason}</p>))}
               </div>)}
