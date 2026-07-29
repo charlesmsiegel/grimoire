@@ -16,7 +16,6 @@ import io
 import json
 import re
 import shutil
-import threading
 import uuid
 import zipfile
 from contextlib import contextmanager
@@ -26,7 +25,10 @@ from . import atomic, campaigns, locks, modules, proposals, sheets, worlds
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import home, slugify, uniquify
 
-_M = threading.RLock()
+# Cross-process (#234): pack publication rewrites a whole directory in the
+# shared user library, so a second backend must be excluded, not just a second
+# thread. Reentrant, which _apply -> recover() requires.
+_M = locks.module_edit_lock()
 
 
 class _RenameCollision(Exception):
