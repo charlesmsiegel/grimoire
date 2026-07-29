@@ -1,14 +1,22 @@
-"""The one ordering rule the routes package has, checked instead of remembered.
+"""The ordering rules the routes package has, checked instead of remembered.
 
-``/worlds/{wid}/{kind}`` and ``/campaigns/{cid}/{kind}`` capture any third path
-segment, so a literal-segment route registered after them is unreachable —
-FastAPI matches in registration order and never backtracks to a better fit.
-Before the package split that rule lived in a dozen "declared before the
-generic /{kind} routes" comments; now ``routes.__init__`` includes
-``entities`` last and this test fails if anything ends up shadowed.
+FastAPI matches routes in registration order and never backtracks to a better
+fit, so `routes.__init__`'s include order decides two things:
+
+  * `/worlds/{wid}/{kind}` and `/campaigns/{cid}/{kind}` capture any third path
+    segment, so a literal-segment route registered after them is unreachable;
+  * where two patterns *cross* — neither more general, but some concrete URL
+    matches both — whichever is registered first wins.
+
+Before the package split the first rule lived in a dozen "declared before the
+generic /{kind} routes" comments and the second was invisible. Both are checked
+here.
 """
 
 from __future__ import annotations
+
+import importlib
+import pkgutil
 
 from grimoire.main import app
 from grimoire.routes import entities, router
@@ -45,6 +53,15 @@ def _generalizes(a: str, b: str) -> bool:
     return looser
 
 
+def _intersects(a: str, b: str) -> bool:
+    """True if some concrete URL matches both patterns."""
+    sa, sb = a.split("/"), b.split("/")
+    if len(sa) != len(sb) or a == b:
+        return False
+    return all(x.startswith("{") or y.startswith("{") or x == y
+               for x, y in zip(sa, sb))
+
+
 def test_no_route_is_shadowed_by_an_earlier_one():
     table = _table()
     shadowed = []
@@ -56,31 +73,88 @@ def test_no_route_is_shadowed_by_an_earlier_one():
     assert not shadowed, "\n".join(shadowed)
 
 
+# Pairs where neither pattern is more general than the other, but a concrete URL
+# matches both — so which handler runs is decided by include order alone and
+# nothing else would catch a change. Each entry is (winner, loser); the winners
+# are the ones that were in effect before the routes package was split out
+# (#241), so this pins existing behaviour rather than asserting a preference.
+CROSSING_PAIRS = [
+    ("/api/worlds/{wid}/sheets/{mid}/{kind}/{eid}",
+     "/api/worlds/{wid}/{kind}/{eid}/images/{name}"),
+    ("/api/worlds/{wid}/{kind}/instantiate/{mid}/{content_id}",
+     "/api/worlds/{wid}/characters/{cid}/tagline/generate"),
+    ("/api/campaigns/{cid}/scenes/{sid}/cast/batch",
+     "/api/campaigns/{cid}/{kind}/instantiate/{mid}/{content_id}"),
+    ("/api/campaigns/{cid}/scenes/{sid}/suggestions/dismiss",
+     "/api/campaigns/{cid}/{kind}/instantiate/{mid}/{content_id}"),
+    ("/api/campaigns/{cid}/sheets/{kind}/{eid}",
+     "/api/campaigns/{cid}/{kind}/{eid}/images"),
+    ("/api/campaigns/{cid}/sheets/{kind}/{eid}/creation",
+     "/api/campaigns/{cid}/{kind}/{eid}/images/{name}"),
+    ("/api/campaigns/{cid}/sheets/{kind}/{eid}/advance",
+     "/api/campaigns/{cid}/{kind}/instantiate/{mid}/{content_id}"),
+]
+
+
+def test_crossing_routes_keep_their_winner():
+    order = {}
+    for i, (_, path) in enumerate(_table()):
+        order.setdefault(path, i)
+    for winner, loser in CROSSING_PAIRS:
+        assert winner in order, f"{winner} no longer exists"
+        assert loser in order, f"{loser} no longer exists"
+        assert order[winner] < order[loser], (
+            f"{winner} used to win over {loser} but is now registered after it; "
+            f"a URL matching both now reaches the wrong handler")
+
+
+def test_the_crossing_pair_list_is_complete():
+    """A new route that crosses an existing one must be added to CROSSING_PAIRS
+    (with a decision about which should win), not left ordered by luck."""
+    table = _table()
+    listed = {frozenset(p) for p in CROSSING_PAIRS}
+    unlisted = []
+    for i, (methods_a, path_a) in enumerate(table):
+        for methods_b, path_b in table[i + 1:]:
+            if (methods_a & methods_b and _intersects(path_a, path_b)
+                    and not _generalizes(path_a, path_b)
+                    and not _generalizes(path_b, path_a)
+                    and frozenset((path_a, path_b)) not in listed):
+                unlisted.append(
+                    f"{path_a} crosses {path_b} ({sorted(methods_a & methods_b)})")
+    assert not unlisted, (
+        "these route patterns overlap ambiguously and are not pinned in "
+        "CROSSING_PAIRS:\n" + "\n".join(sorted(set(unlisted))))
+
+
 def test_the_generic_entity_routes_are_included_last():
-    """The include order in routes.__init__ is what keeps the rule above true;
+    """The include order in routes.__init__ is what keeps the rules above true;
     assert it directly so a re-ordered include fails here with a clear reason
-    even if no literal route happens to be shadowed yet."""
+    even if nothing happens to be shadowed yet."""
     generic = {r.path for r in entities.router.routes}
-    table = [p for _, p in _table()]
-    last_specific = max(i for i, p in enumerate(table) if f"/api{p[4:]}" and p.startswith("/api")
-                        and p[4:] not in generic)
-    first_generic = min(i for i, p in enumerate(table)
-                        if p.startswith("/api") and p[4:] in generic)
+    table = [p for _, p in _table() if p.startswith("/api")]
+    last_specific = max(i for i, p in enumerate(table) if p[4:] not in generic)
+    first_generic = min(i for i, p in enumerate(table) if p[4:] in generic)
     assert first_generic > last_specific, (
         f"a non-generic route ({table[last_specific]}) is registered after the "
         f"generic /{{kind}} routes (first at {table[first_generic]})")
 
 
 def test_every_domain_router_is_composed():
-    """A new module that nobody includes contributes no routes and no test
-    fails — so check the assembled router carries every submodule's routes."""
-    from grimoire.routes import (campaigns, characters, config, greetings, mechanics,
-                                 modules, scenes, weather, worlds)
+    """A module that nobody includes contributes no routes and no other test
+    fails — so walk the package and check each router made it in."""
+    import grimoire.routes as pkg
 
     composed = {(frozenset(m), p) for m, p in _table() if p.startswith("/api")}
-    for mod in (config, modules, worlds, characters, greetings, campaigns, scenes,
-                weather, mechanics, entities):
-        for route in mod.router.routes:
+    found = 0
+    for info in pkgutil.iter_modules(pkg.__path__):
+        mod = importlib.import_module(f"{pkg.__name__}.{info.name}")
+        sub = getattr(mod, "router", None)
+        if sub is None:  # common / models / streaming hold no routes
+            continue
+        found += 1
+        for route in sub.routes:
             assert (frozenset(route.methods), f"/api{route.path}") in composed, \
                 f"{mod.__name__} route {route.path} is not in the composed router"
+    assert found >= 10, f"only found {found} domain routers; did the package move?"
     assert len(router.routes) > 0

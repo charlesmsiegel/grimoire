@@ -22,6 +22,12 @@ disproportionate for a local single-user store.
 
 This module holds no routes; ``scenes``, ``mechanics`` and ``greetings``
 import from it.
+
+A note for tests that patch the helpers below: importers bind them by value
+(``from .streaming import _persist_reply``), so patch the module where the name
+is *looked up*, not necessarily where it is defined. Patching
+``routes.streaming._persist_reply`` covers the turn strategies here but not
+``greetings.post_first_post``, which holds its own reference.
 """
 
 from __future__ import annotations
