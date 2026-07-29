@@ -14,20 +14,37 @@ from .. import prompts
 from . import atomic
 
 
+class BadDossierId(Exception):
+    """An id that could escape the characters directory."""
+
+
+def _safe_id(cid: str) -> bool:
+    """Reject ids that could escape the characters directory (defense in depth,
+    mirroring entities._safe_id). Dossier ids now arrive on client-supplied
+    PUT /chronicle edit rows, not just from the scene cast."""
+    return isinstance(cid, str) and cid not in ("", ".", "..") \
+        and "/" not in cid and "\\" not in cid
+
+
 def dossier_path(croot: Path, cid: str) -> Path:
     # overlay-ok: dossier.md is campaign-local, merely filed inside the actor's
     # dir for locality — it is never inherited from the world, so there is
     # nothing for store/overlay.py to resolve here
+    if not _safe_id(cid):
+        raise BadDossierId(cid)
     return croot / "characters" / cid / "dossier.md"
 
 
 def read(croot: Path, cid: str) -> str:
-    p = dossier_path(croot, cid)
+    try:
+        p = dossier_path(croot, cid)
+    except BadDossierId:
+        return ""              # nothing can live there: read like a missing file
     return p.read_text(encoding="utf-8").strip() if p.exists() else ""
 
 
 def write(croot: Path, cid: str, text: str) -> None:
-    p = dossier_path(croot, cid)
+    p = dossier_path(croot, cid)     # raises BadDossierId before mkdir touches disk
     p.parent.mkdir(parents=True, exist_ok=True)
     atomic.write_text(p, text.strip() + "\n")
 

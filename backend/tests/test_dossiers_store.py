@@ -19,6 +19,23 @@ def test_write_then_read_roundtrip(monkeypatch, tmp_path):
     assert dossiers.read(root, "aese") == "Aese now trusts the owner."
 
 
+def test_write_rejects_ids_that_escape_the_characters_dir(monkeypatch, tmp_path):
+    """A dossier edit arrives in a client-supplied PUT body, so its target id is
+    untrusted: an id with a separator must not write outside the campaign."""
+    import pytest
+    root = _root(monkeypatch, tmp_path)
+    outside = tmp_path / "pwned.md"
+    for bad in ("../../pwned", "..\\..\\pwned", "..", ".", ""):
+        with pytest.raises(dossiers.BadDossierId):
+            dossiers.write(root, bad, "owned")
+    assert not outside.exists()
+
+
+def test_read_rejects_ids_that_escape_the_characters_dir(monkeypatch, tmp_path):
+    root = _root(monkeypatch, tmp_path)
+    assert dossiers.read(root, "../../anything") == ""
+
+
 def test_build_prompt_includes_name_prior_and_transcript():
     msgs = dossiers.build_prompt("Aese", "was shy", "USER: hi\nAESE: *waves*")
     assert msgs[0]["role"] == "system"

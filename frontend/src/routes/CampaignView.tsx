@@ -128,6 +128,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   const [showChanges, setShowChanges] = useState(false);
   const [absorb, setAbsorb] = useState<SceneAbsorb | null>(null);
   const [absorbing, setAbsorbing] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [editRows, setEditRows] = useState<(StagedEdit & { approved: boolean })[]>([]);
   const [sheetFailures, setSheetFailures] = useState<
     { id: string; reason: string; kind: "conflict" | "error"; label: string }[]>([]);
@@ -538,19 +539,30 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     }
   }
 
+  // Commit is replayable server-side and plot movements append a beat per apply,
+  // so a second PUT of the same review duplicates them (#235) -- the `saving`
+  // latch is what keeps a double-click from being a double-commit. A failed save
+  // leaves the review standing so it can be retried rather than silently lost.
   async function saveAbsorb() {
-    if (!absorb || !activeId) return;
+    if (!absorb || !activeId || saving) return;
+    setSaving(true);
     // captured before editRows is cleared below -- sheet_failures only carry
     // id/reason/kind, so the row's label has to come from what was on screen.
     const labels = new Map(editRows.map((e) => [e.id, e.label]));
-    const res = await api.saveChronicle(cid, activeId, {
-      one_line: absorb.one_line, summary: absorb.summary, keywords: absorb.keywords,
-      timeline_events: absorb.timeline_events,
-      edits: editRows.filter((e) => e.approved).map(({ approved, ...e }) => e) });
-    setSheetFailures(res.sheet_failures.map((f) => ({ ...f, label: labels.get(f.id) ?? f.id })));
-    setAbsorb(null);
-    setEditRows([]);
-    setCtxKey((n) => n + 1);
+    try {
+      const res = await api.saveChronicle(cid, activeId, {
+        one_line: absorb.one_line, summary: absorb.summary, keywords: absorb.keywords,
+        timeline_events: absorb.timeline_events,
+        edits: editRows.filter((e) => e.approved).map(({ approved, ...e }) => e) });
+      setSheetFailures(res.sheet_failures.map((f) => ({ ...f, label: labels.get(f.id) ?? f.id })));
+      setAbsorb(null);
+      setEditRows([]);
+      setCtxKey((n) => n + 1);
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    } finally {
+      setSaving(false);
+    }
   }
 
   // Replaces absorb.mechanics with a fresh audit and swaps in its sheet
@@ -891,8 +903,10 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
               </div>
             )}
             <div className="form-actions">
-              <button className="subtle" onClick={() => { setAbsorb(null); setEditRows([]); setSheetFailures([]); }}>Cancel</button>
-              <button className="primary" onClick={saveAbsorb}>Save summary</button>
+              <button className="subtle" disabled={saving}
+                      onClick={() => { setAbsorb(null); setEditRows([]); setSheetFailures([]); }}>Cancel</button>
+              <button className="primary" onClick={saveAbsorb} disabled={saving}>
+                {saving ? "Saving…" : "Save summary"}</button>
             </div>
           </div>
         )}
