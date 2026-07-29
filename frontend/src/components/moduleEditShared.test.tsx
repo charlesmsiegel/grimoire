@@ -11,7 +11,18 @@ import ts from "typescript";
 // section file, a transitive cycle through a third module, a re-export or a
 // dynamic `import()` back into ModuleEditor all fail this test.
 
-const RAW = import.meta.glob("../**/*.{ts,tsx}", {
+/**
+ * Every extension a module source can have. Three things must agree on this
+ * set — the glob that loads the sources, the candidates `resolve()` probes,
+ * and the JS→TS substitution below — because a specifier that resolves to
+ * nothing drops its edge from the graph. `GLOB` repeats the list because
+ * `import.meta.glob` needs a literal pattern; the last case in this file
+ * asserts the two never drift apart.
+ */
+const MODULE_EXTS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
+const GLOB = "../**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}";
+
+const RAW = import.meta.glob("../**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}", {
   query: "?raw", import: "default", eager: true,
 }) as Record<string, string>;
 
@@ -75,8 +86,9 @@ function resolve(from: string, spec: string): string | null {
   // `base === ""` is the src root itself — a bare `".."` from a component —
   // where the only candidates are its index files, with no path prefix.
   const candidates = base
-    ? [base, `${base}.ts`, `${base}.tsx`, `${base}/index.ts`, `${base}/index.tsx`]
-    : ["index.ts", "index.tsx"];
+    ? [base, ...MODULE_EXTS.map((e) => base + e),
+       ...MODULE_EXTS.map((e) => `${base}/index${e}`)]
+    : MODULE_EXTS.map((e) => `index${e}`);
   const js = Object.keys(JS_TO_TS).find((ext) => base.endsWith(ext));
   if (js) {
     const stem = base.slice(0, -js.length);
@@ -172,6 +184,21 @@ describe("module-editor import graph", () => {
     expect(resolve(from, "./moduleEditShared")).toBe("components/moduleEditShared.tsx");
     expect(resolve(from, "./moduleEditShared.js")).toBe("components/moduleEditShared.tsx");
     expect(resolve(from, "../index.css")).toBeNull(); // asset, not a module edge
+  });
+
+  it("loads every extension it claims to resolve", () => {
+    // The bug this catches: `.mjs`→`.mts` was added to JS_TO_TS while the glob
+    // still only loaded {ts,tsx}, so the mapping could never hit and a valid
+    // `./foo.mjs` import would fail the completeness case below.
+    const globbed = GLOB.slice(GLOB.indexOf("{") + 1, GLOB.indexOf("}"))
+      .split(",").map((e) => `.${e}`);
+    expect(globbed).toEqual(MODULE_EXTS);
+    for (const targets of Object.values(JS_TO_TS)) {
+      expect(MODULE_EXTS).toEqual(expect.arrayContaining(targets));
+    }
+    // …and the literal passed to import.meta.glob really is GLOB: if it were
+    // not, SOURCES would be missing files this suite depends on.
+    expect(SOURCES.has("components/moduleEditShared.tsx")).toBe(true);
   });
 
   it("drops no edge it could not resolve", () => {
