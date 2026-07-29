@@ -148,7 +148,7 @@ footer.doc{max-width:1280px;margin:0 auto;padding:0 28px 34px;color:var(--text-f
   <div class="doc-label">CODEBASE ATLAS</div>
   <h1 class="doc-title">grimoire — Codebase Atlas</h1>
   <p class="doc-sub">Local-first solo-RPG toolkit: FastAPI + React over a markdown/JSON store, with an LLM as game master</p>
-  <div class="doc-meta">generated 2026-07-29 · f16ff4a · 411 files, 78,651 LOC (docs/ excluded)</div>
+  <div class="doc-meta">generated 2026-07-29 · 51c5e73 · 411 files, 78,651 LOC (docs/ excluded)</div>
 </header>
 <nav class="tabs" role="tablist"><button role="tab" data-tab="overview" aria-selected="true" aria-controls="overview">Overview</button>
 <button role="tab" data-tab="inventory" aria-selected="false" aria-controls="inventory">Inventory</button>
@@ -163,7 +163,7 @@ footer.doc{max-width:1280px;margin:0 auto;padding:0 28px 34px;color:var(--text-f
 
 <div class="card hero">
   <h2>What grimoire is</h2>
-  <p>A <b>local-first, single-user toolkit for running solo tabletop RPG campaigns with an LLM as game master</b>. A FastAPI backend and a React/Vite frontend sit over a <b>filesystem-as-database</b>: every world, campaign, character and scene transcript is a Markdown or JSON file under <code>~/.grimoire</code>, deliberately outside the repository. The same backend is packaged verbatim into an Android WebView shell, so no backend code may assume a repo checkout or a desktop home directory.</p>
+  <p>A <b>local-first, single-user toolkit for running solo tabletop RPG campaigns with an LLM as game master</b>. A FastAPI backend and a React/Vite frontend sit over a <b>filesystem-as-database</b>: every world, campaign, character and scene transcript is a Markdown or JSON file under the <b>resolved data root</b>, deliberately outside the repository. That root is <code>GRIMOIRE_HOME</code> if set, else the user-chosen path in the bootstrap pointer, else <code>~/.grimoire</code> (<code>backend/src/grimoire/store/paths.py:42-50</code>) — so <code>~/.grimoire</code> is the desktop default, not the location. Android and any relocated store resolve elsewhere; backup and migration work must follow <code>home()</code>, not the literal path. The same backend is packaged verbatim into an Android WebView shell, so no backend code may assume a repo checkout or a desktop home directory.</p>
   <p>Architecturally it is a <b>layered monolith with an unusually disciplined persistence layer</b>. The interesting engineering is not the HTTP surface — it is the four mechanisms protecting a store that holds the one asset the app cannot regenerate: a scene transcript. Those are crash-safe writes, per-campaign locking, copy-on-write campaign-over-world resolution, and an idle-bounded streaming LLM facade.</p>
 </div>
 
@@ -182,7 +182,7 @@ footer.doc{max-width:1280px;margin:0 auto;padding:0 28px 34px;color:var(--text-f
 <tr><td><code>backend/src/grimoire/main.py:92</code></td><td>Module-level <code>app = create_app()</code> — the ASGI app. Mounts the built frontend as static files when <code>dist_dir()</code> exists, so one process serves both API and UI.</td></tr>
 <tr><td><code>backend/src/grimoire/main.py:33-55</code></td><td>Lifespan startup: two migrations plus module-edit journal recovery. Each step is individually guarded so lock contention degrades to <i>serve anyway</i> rather than refusing to boot.</td></tr>
 <tr><td><code>backend/src/grimoire/routes/__init__.py</code></td><td>The <code>/api</code> router — 14 route modules aggregated here.</td></tr>
-<tr><td><code>frontend/src/main.tsx</code></td><td>React root; <code>frontend/src/api/client.ts</code> is the single API surface (fan-in 94, the highest in the frontend).</td></tr>
+<tr><td><code>frontend/src/main.tsx</code></td><td>React root; <code>frontend/src/api/client.ts</code> is the surface for backend <code>fetch</code> calls (fan-in 94, the highest in the frontend) — see Boundaries for the two paths around it.</td></tr>
 <tr><td><code>android/</code></td><td>Kotlin WebView shell that packages <code>backend/src</code> and the built frontend through Chaquopy. Contains no grimoire logic by design.</td></tr>
 <tr><td><code>evals/run.py</code></td><td>Prompt-behaviour eval suite; replay mode runs offline inside <code>pytest</code>.</td></tr>
 <tr><td><code>scripts/verify_templates.py</code></td><td>Guard harness asserting prompt builders and <code>templates/</code> agree byte-for-byte.</td></tr>
@@ -212,7 +212,7 @@ flowchart TD
   STORE --> PROMPTS["prompts.py"]
   PROMPTS --> TPL["templates/*.j2"]
   LLM --> PROV["openrouter / claude_agent / openai_compatible"]
-  STORE --> FS["~/.grimoire (markdown + JSON)"]
+  STORE --> FS["resolved data root (markdown + JSON)"]
   STORE --> ATOM["atomic.py · locks.py · overlay.py"]
   ATOM --> FS
 </pre></div></div>
@@ -235,7 +235,7 @@ flowchart TD
   </div>
   <div class="card">
     <h3>Prompts are data, not code</h3>
-    <p>Every <i>authored instruction</i> sent to a model lives in <code>templates/</code> and renders through a 36-line module (<code>backend/src/grimoire/prompts.py</code>) with <code>StrictUndefined</code> and Jinja auto-reload. Prompts are editable live — which is exactly why the eval suite exists. Not everything in the request comes from a template, though: <code>build_messages</code> appends the persisted conversation history verbatim (<code>backend/src/grimoire/store/context.py:652</code>), and <code>build_director_messages</code> appends the caller's note as the final user message (<code>backend/src/grimoire/store/context.py:668</code>). When auditing what a model actually sees — for behaviour or for privacy — read those two alongside <code>templates/</code>.</p>
+    <p>Every <i>authored instruction</i> sent to a model lives in <code>templates/</code> and renders through a 36-line module (<code>backend/src/grimoire/prompts.py</code>) with <code>StrictUndefined</code> and Jinja auto-reload. Prompts are editable live — which is exactly why the eval suite exists. Not everything in the request comes from a template, though: <code>build_messages</code> appends the persisted conversation history verbatim (<code>backend/src/grimoire/store/context.py:652</code>), and <code>build_director_messages</code> appends the caller's note as the final user message (<code>backend/src/grimoire/store/context.py:668</code>). And the provider adapters transform the request again on the way out: <code>backend/src/grimoire/claude_agent.py:24-29</code> flattens every turn into a <code>[role]</code> transcript and appends an <code>[assistant]</code> cue, while <code>backend/src/grimoire/openai_compatible.py:54-80</code> folds system text into user turns. Auditing what a model actually sees — for behaviour or for privacy — means reading <code>templates/</code>, the two context-builder additions, <i>and</i> the adapter for the selected provider.</p>
   </div>
 </div>
 
@@ -246,7 +246,7 @@ flowchart TD
 <details><summary>Scope and method of this atlas</summary><div class="body">
 <p><code>docs/</code> was excluded from all automated analysis. It holds 17 previously generated HTML reports which cite source paths in prose; parsed as code they contributed 328 phantom "runtime load" edges and ranked a report as the codebase's top fan-out file. Excluding them drops the measured tree from 178.6k to 78.6k LOC — the difference is documentation and generated artifacts, not code.</p>
 <p><b>No Coverage tab.</b> No coverage artifact (<i>coverage.xml</i>, <i>lcov.info</i>, <i>coverage.out</i>) exists in the tree, and this skill does not run test suites to manufacture one. The 51% test-LOC share below is a size ratio, not a coverage measurement — it says the suite is large, not that it reaches any particular line.</p>
-<p><b>No LLM Ops tab.</b> The automated detector found zero call sites and zero prompt files, which is wrong: it recognizes vendor SDK method names, and grimoire calls providers through its own <code>httpx</code> clients behind <code>backend/src/grimoire/llm.py</code> while keeping prompts in 57 <code>.j2</code> templates. Rather than ship a tab reading "0 prompt files" for a prompt-driven application, that material is covered in Critical Flows and Invariants. The detector did correctly find seven model ids, all in one frontend picker list (<code>frontend/src/components/ConnectionEditor.tsx:19-25</code>).</p>
+<p><b>No LLM Ops tab.</b> The automated detector found zero call sites and zero prompt files, which is wrong: it recognizes vendor SDK method names, and grimoire calls providers through its own <code>httpx</code> clients behind <code>backend/src/grimoire/llm.py</code> while keeping prompts in 57 <code>.j2</code> templates. Rather than ship a tab reading "0 prompt files" for a prompt-driven application, that material is covered in Critical Flows and Invariants. The detector did find seven model ids in one frontend picker list (<code>frontend/src/components/ConnectionEditor.tsx:19-25</code>), but that is not the full inventory: the backend carries its own <code>DEFAULT_MODEL</code> (<code>backend/src/grimoire/store/config.py:11</code>), used as the fallback when a legacy connection is migrated (<code>backend/src/grimoire/store/llm_connections.py:206</code>). Auditing model selection means reading both.</p>
 <p><b>Hotspots are computed over 50 commits</b> — the clone is shallow, so churn counts compress into a 3–11 range and separate signal poorly. Treat the branch-count and size columns there as the reliable ones.</p>
 </div></details>
 
@@ -599,7 +599,13 @@ sequenceDiagram
   Note over UI: human reviews and edits
   UI->>R: PUT .../chronicle (body carries commit_token)
   R->>R: campaign_lock held across ALL four writes
-  R->>R: ledger lookup - replay, mismatch or incomplete? then 409
+  alt token already completed, same body
+    R-->>UI: stored result replayed - no rewrite
+  else mismatch, changed body, or incomplete
+    R-->>UI: 409 naming the recovery step
+  else first commit
+    R->>R: reserve token before first non-idempotent write
+  end
   R->>D: chronicle, timeline, mark_absorbed, apply_edits
   R-->>UI: applied + failures
 </pre></div></div>
@@ -617,14 +623,14 @@ sequenceDiagram
 
 <div class="card hero">
   <h2>The headline</h2>
-  <p>Concern ownership here is unusually clean for a codebase this size: writes, locking, path resolution and prompt rendering each have exactly one owner, and one of those boundaries is enforced by a <b>test that reads the source tree</b> rather than by convention alone. The reported module cycle is a grouping artifact, though a real file-level cycle does exist inside the store. Two things do not have a single owner: domain-error-to-HTTP mapping is spread across all 14 route modules, and module-pack authoring concentrates five concerns in one 1,134-line file.</p>
+  <p>Concern ownership here is unusually clean for a codebase this size: writes, locking, path resolution and prompt rendering each have exactly one owner, and three of those boundaries are enforced by <b>tests that parse the package's own ASTs</b> rather than by convention alone. The reported module cycle is a grouping artifact, though a real file-level cycle does exist inside the store. Two things do not have a single owner: domain-error-to-HTTP mapping is spread across all 14 route modules, and module-pack authoring concentrates five concerns in one 1,134-line file.</p>
 </div>
 
 <h2>Concern ownership</h2>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>Concern</th><th>Owner</th><th>Verdict</th></tr></thead>
 <tbody>
-<tr><td>Record writes (crash safety)</td><td><code>backend/src/grimoire/store/atomic.py:193</code>, <code>:203</code></td><td><span class="badge good">single owner</span> every Markdown/JSON record write funnels through <code>write_text</code>/<code>write_bytes</code></td></tr>
+<tr><td>Record writes (crash safety)</td><td><code>backend/src/grimoire/store/atomic.py:193</code>, <code>:203</code></td><td><span class="badge good">single owner, guard-enforced</span> every <i>live record</i> write funnels through <code>write_text</code>/<code>write_bytes</code>, and <code>backend/tests/test_atomic_guard.py</code> fails a new plain write. The one store exemption is a staging-tree unzip published as a unit by a later single rename (<code>backend/src/grimoire/store/module_edit.py:218-223</code>), annotated <code>atomic-ok</code> with its reason</td></tr>
 <tr><td>Mutual exclusion</td><td><code>backend/src/grimoire/store/locks.py:238</code>, <code>:265</code></td><td><span class="badge good">single owner</span> one campaign-scoped domain, ordering documented in one docstring</td></tr>
 <tr><td>Data-root resolution</td><td><code>backend/src/grimoire/store/paths.py:42</code></td><td><span class="badge good">single owner</span> <code>home()</code> resolves live on every call; Android portability depends on this</td></tr>
 <tr><td>Campaign-over-world reads</td><td><code>backend/src/grimoire/store/overlay.py</code></td><td><span class="badge good">single owner</span> and mechanically enforced — see below</td></tr>
@@ -674,8 +680,9 @@ sequenceDiagram
 <div class="callout good"><b>The overlay boundary is enforced by a test that reads the source.</b> <code>backend/tests/test_overlay_guard.py:437</code> asserts that every campaign read of an inheritable record goes through <code>overlay</code>, driven by the <code>INHERITED_KINDS</code>/<code>INHERITED_FILES</code> declarations at <code>backend/src/grimoire/store/overlay.py:43-46</code>. Exemptions must be scoped to functions rather than whole files and must state a reason (<code>backend/tests/test_overlay_guard.py:484</code>, <code>:498</code>), and a marker inside a string literal does not count (<code>backend/tests/test_overlay_guard.py:462</code>). This is the strongest boundary in the codebase — a rule that cannot rot silently.</div>
 <div class="callout warn"><b>Test-mock coupling leaks the import mechanism into the contract.</b> <code>backend/src/grimoire/routes/streaming.py:26-31</code> has to warn that importers bind helpers by value, so patching <code>routes.streaming._persist_reply</code> covers the turn strategies but not <code>greetings.post_first_post</code>, which holds its own reference. A documented footgun is better than an undocumented one, but the need for the note signals that <code>from x import y</code> at module scope has made the seam fragile.</div>
 <div class="callout warn"><b><code>backend/src/grimoire/store/context.py</code> reaches across nearly the whole store.</b> Fan-out 57 (<code>backend/src/grimoire/store/context.py:16-22</code>) — appearances, calendars, campaigns, characters, checks, chronicle, dice, dossiers, plot, relationships, sheets, weather and more. It is a legitimate assembler and the code is clearly organized, but it means <i>any</i> store change can affect prompt assembly, and the blast radius of a refactor there is the entire play path.</div>
-<div class="callout"><b>No layering inversion found.</b> Every <code>fetch</code>-based call goes through <code>frontend/src/api/client.ts</code> (fan-in 94, fan-out 2). No store module imports FastAPI; no route module writes files directly. The layer discipline the Overview diagram claims is the discipline the code actually keeps.</div>
+<div class="callout"><b>No layering inversion found.</b> Every <code>fetch</code> to the grimoire <i>backend</i> goes through <code>frontend/src/api/client.ts</code> (fan-in 94, fan-out 2), with the two exceptions below. No store module imports FastAPI; no route module writes files directly. The layer discipline the Overview diagram claims is the discipline the code actually keeps.</div>
 <div class="callout warn"><b>Five backend routes are reached without the API client.</b> The campaign export links are plain <code>&lt;a href download&gt;</code> elements pointing straight at <code>/api/campaigns/{cid}/export.{epub,md.zip,html,txt,json}</code> (<code>frontend/src/routes/CampaignView.tsx:691-695</code>). Correct for browser-driven downloads — a <code>fetch</code> would have to buffer the file — but it means <code>frontend/src/api/client.ts</code> is the single surface for <i>programmatic</i> calls only. Anyone renaming or auditing backend endpoints by grepping the client will miss these five.</div>
+<div class="callout warn"><b>One fetch leaves the app entirely, straight from the browser.</b> <code>frontend/src/api/models.ts:12</code> calls <code>fetch(MODELS_URL)</code> against <code>https://openrouter.ai/api/v1/models</code> — not through the client, and not through the backend at all. It has its own error handling, and it means the browser talks to a third party directly, which is a privacy-relevant fact the "single API surface" framing would hide.</div>
 
 </section>
 <section class="panel" id="invariants" role="tabpanel">
@@ -683,7 +690,7 @@ sequenceDiagram
 
 <div class="card hero">
   <h2>The headline</h2>
-  <p>This codebase states its invariants unusually well — several docstrings are the design document, and the overlay rule is enforced by a test that reads the source tree rather than by convention. The gap is not knowledge, it is <b>automation</b>: there is no CI configuration in the repository, so every guard the project built for itself runs only when a human remembers to run it.</p>
+  <p>This codebase states its invariants unusually well — several docstrings are the design document, and <b>three store-wide rules are enforced by tests that parse the package's own ASTs</b> rather than by convention. The gap is not knowledge, it is <b>automation</b>: there is no CI configuration in the repository, so every guard the project built for itself runs only when a human remembers to run it.</p>
 </div>
 
 <h2>Invariants</h2>
@@ -693,12 +700,12 @@ sequenceDiagram
 <tr>
   <td>A reader of any record sees the whole previous version or the whole new one — never a partial write</td>
   <td><code>backend/src/grimoire/store/atomic.py:193</code>, <code>:203</code></td>
-  <td><span class="badge good">enforced</span> single chokepoint; scope limits stated honestly at <code>backend/src/grimoire/store/atomic.py:12-21</code></td>
+  <td><span class="badge good">enforced by a guard test</span> <code>backend/tests/test_atomic_guard.py</code> fails any new plain <code>write_text</code> in the package; scope limits stated honestly at <code>backend/src/grimoire/store/atomic.py:12-21</code></td>
 </tr>
 <tr>
   <td>Every campaign read of an inheritable record resolves through the overlay</td>
   <td><code>backend/tests/test_overlay_guard.py:437</code> against <code>backend/src/grimoire/store/overlay.py:43-46</code></td>
-  <td><span class="badge good">enforced</span> source-reading test; exemptions must be function-scoped and justified</td>
+  <td><span class="badge good">enforced by a guard test</span> <code>backend/tests/test_overlay_guard.py:437</code>; exemptions must be function-scoped and justified</td>
 </tr>
 <tr>
   <td>Narration is never persisted without the proposal it belongs to</td>
@@ -762,6 +769,9 @@ sequenceDiagram
 </tr>
 </tbody></table></div>
 
+<div class="callout good"><b>The strongest pattern in this codebase: architectural rules enforced by AST-walking tests.</b> Three store-wide invariants are checked by tests that parse the package's own source rather than exercise it — <code>backend/tests/test_atomic_guard.py</code> (every record writer goes through <code>store.atomic</code>, #233), <code>backend/tests/test_overlay_guard.py</code> (every campaign read of an inheritable record goes through <code>overlay</code>, #248), and <code>backend/tests/test_path_guard_store.py</code> (the store never joins a caller-supplied id onto a path unchecked, #240). A human can clear a genuinely-safe call with a <code># atomic-ok:</code> / <code># overlay-ok:</code> comment, and the marker parsing is shared in <code>backend/tests/guard_markers.py</code> so the two guards cannot drift apart. Crucially the exemption is not a rubber stamp: <code>backend/tests/test_atomic_guard.py:155-171</code> fails a bare marker with no reason, and a growing pile of them. Only two exemptions exist in the whole package today.</div>
+<div class="callout"><b>These guards are honest about their reach.</b> <code>backend/tests/test_atomic_guard.py:7-12</code> states plainly that it is a regression check over the write APIs this package uses, not a proof that every writer is covered — code can still reach the disk through a library that takes an output path, and no static check catches that. That self-assessment is the reason to trust the rest.</div>
+
 <h2>Failure handling</h2>
 <div class="callout"><b>No bare <code>except:</code> anywhere in <code>backend/src</code> — but "narrow" is only half the story.</b> Two distinct patterns coexist, and conflating them would misread the failure boundaries:
 <ul>
@@ -770,7 +780,7 @@ sequenceDiagram
 </ul>
 The second pattern is a design decision, not sloppiness: a single unreadable JSON file degrades one section of a prompt instead of failing the turn. But it does mean <b>a systematically corrupt record can be silently omitted from every prompt</b> with nothing logged, and the <code>backend/src/grimoire/store/context.py</code> instances sit directly on the play path.</div>
 <div class="callout"><b>Errors are handled far from their cause by design.</b> Two app-level handlers (<code>backend/src/grimoire/main.py:71-81</code>) convert <code>HTTPException</code> and <code>StoreBusy</code> centrally, which is why ~35 lock call sites carry no error handling. The one place this cannot reach is a response that has already started streaming — handled explicitly at <code>backend/src/grimoire/routes/streaming.py:96-110</code> and <code>:125-141</code>.</div>
-<div class="callout warn"><b>One deliberate silent loss.</b> <code>backend/src/grimoire/routes/streaming.py:101-108</code> swallows <code>StoreBusy</code> while persisting a partial reply after an LLM failure. The user gets an error frame; the partial text does not survive. Correct given the constraint, but it is a data-loss path reachable by ordinary contention.</div>
+<div class="callout warn"><b>One deliberate silent loss.</b> <code>backend/src/grimoire/routes/streaming.py:101-108</code> swallows <code>StoreBusy</code> while persisting a partial reply after an LLM failure. An error frame follows, but it reports only the original LLM failure — nothing says the save failed. Correct given the constraint, but it is a silent data-loss path reachable by ordinary contention.</div>
 <div class="callout warn"><b>Two nominal read paths mutate the filesystem.</b> <code>backend/src/grimoire/store/assets.py:251</code> (<code>image_path</code>) and <code>backend/src/grimoire/store/assets.py:275</code> (<code>list_images</code>) both call <code>_heal_stranded_promotion</code> (<code>backend/src/grimoire/store/assets.py:173</code>), which <i>renames files</i> to rescue an avatar stranded by a pre-#253 crash. The recovery is well-argued — the alternative is serving a 404 over a file that exists — but a GET that renames on disk is a surprise for any caller reasoning about read/write separation, and it is the one place where a read is not side-effect-free.</div>
 <div class="callout warn"><b>Custom-calendar plugin failures are silent.</b> <code>backend/src/grimoire/store/calendars/plugins.py:47</code> catches bare <code>Exception</code> around <code>exec_module</code> and only un-registers the half-imported module. A user's homebrew calendar with a syntax error simply never appears, with no log line and no surfaced error. Since these plugins live outside the repo by design, the user has no other channel telling them why their calendar vanished.</div>
 <div class="callout"><b>Timeouts are present and bounded; retries are not unbounded.</b> The LLM idle bound defaults to 120s (<code>backend/src/grimoire/llm.py:19</code>) and is overridable live from config. Lock acquisition raises <code>StoreBusy</code> after 30s (<code>backend/src/grimoire/store/locks.py:89</code>), and <code>hold_all</code> uses <b>one</b> deadline across N locks rather than N × timeout, avoiding a convoy (<code>backend/src/grimoire/store/locks.py:278-286</code>). Provider cleanup has its own 5s grace before abandonment (<code>backend/src/grimoire/llm.py:24</code>).</div>
@@ -788,7 +798,7 @@ The second pattern is a design decision, not sloppiness: a single unreadable JSO
 <div class="callout bad"><b>1 · No CI configuration exists in the repository.</b> There is no <code>.github/workflows/</code>. pytest, vitest, <code>tsc -b</code>, <code>scripts/verify_templates.py</code> and the eval suite all run only when a human remembers. This is the single highest-leverage gap: the project has built better-than-average guard harnesses and then left their execution to discipline. <code>templates/</code> edits are the sharpest case — Jinja auto-reload means a bad edit takes effect live, with no restart and no code change.</div>
 <div class="callout bad"><b>2 · Synced-folder concurrency is unprotectable and actively recommended.</b> <code>CLAUDE.md</code> suggests pointing the store at a synced folder to share a library across devices; <code>backend/src/grimoire/store/module_edit.py:4-18</code> states that two devices cannot be excluded by any filesystem lock. Conflict-copy resolution is left to OneDrive/Dropbox on their own schedule (<code>backend/src/grimoire/store/atomic.py:20-21</code>). Blast radius is an irreplaceable transcript.</div>
 <div class="callout bad"><b>3 · Four campaign mutators sit outside the lock domain right now, by the module's own admission.</b> <code>backend/src/grimoire/store/locks.py:64-68</code> names them: <code>rename_campaign</code>, <code>set_campaign_response</code>, <code>touch</code> and <code>delete_campaign</code> take no lock at all. Each is an unlocked read-modify-write on campaign metadata (<code>backend/src/grimoire/store/campaigns.py:344-374</code>), so two processes updating one campaign can silently overwrite each other, and a delete can race a concurrent mutation. Atomic replacement guarantees each <i>write</i> lands whole; it does not prevent a lost update. This is the same class of gap as the <code>rolls</code> omission recorded at <code>backend/src/grimoire/store/locks.py:1-14</code>, except these are current rather than historical — and because the list is prose, nothing stops the set from growing. A guard test in the style of <code>backend/tests/test_overlay_guard.py</code> would turn the codebase's most dangerous convention into an enforced one.</div>
-<div class="callout warn"><b>4 · <code>backend/src/grimoire/store/module_edit.py</code> concentrates the most branching in the app.</b> 1,134 lines and 332 branches — the top hotspot on both size and complexity — carrying staging, validation, journaling, crash recovery and publication together. It is also the only code holding every campaign lock at once, so a defect there is a whole-store defect.</div>
+<div class="callout warn"><b>4 · <code>backend/src/grimoire/store/module_edit.py</code> concentrates the most branching in the app.</b> 1,134 lines and 332 branches — the top hotspot on both size and complexity — carrying staging, validation, journaling, crash recovery and publication together. It is also one of only two multi-campaign lock holders, so a defect there is a whole-store defect — the other is the world-module rebind route (<code>backend/src/grimoire/routes/worlds.py:78-90</code>), which gathers every campaign bound to a world and holds them together through <code>hold_all</code>; when every campaign shares that world it too holds the whole store (<code>backend/src/grimoire/store/locks.py:44-46</code>).</div>
 <div class="callout warn"><b>5 · Android portability rules are convention-only.</b> The pydantic v1/v2-agnostic rule and the "no <code>Path.home()</code>" rule are documented in <code>CLAUDE.md</code> and honoured in current code, but no test or lint rule asserts either. A violation passes every check in the repository and surfaces as a broken APK build.</div>
 
 <h2>Closed since the previous atlas</h2>
