@@ -148,7 +148,7 @@ footer.doc{max-width:1280px;margin:0 auto;padding:0 28px 34px;color:var(--text-f
   <div class="doc-label">CODEBASE ATLAS</div>
   <h1 class="doc-title">grimoire — Codebase Atlas</h1>
   <p class="doc-sub">Local-first solo-RPG toolkit: FastAPI + React over a markdown/JSON store, with an LLM as game master</p>
-  <div class="doc-meta">generated 2026-07-29 · 1fdf1b8 · 411 files, 78,651 LOC (docs/ excluded)</div>
+  <div class="doc-meta">generated 2026-07-29 · f16ff4a · 411 files, 78,651 LOC (docs/ excluded)</div>
 </header>
 <nav class="tabs" role="tablist"><button role="tab" data-tab="overview" aria-selected="true" aria-controls="overview">Overview</button>
 <button role="tab" data-tab="inventory" aria-selected="false" aria-controls="inventory">Inventory</button>
@@ -491,7 +491,7 @@ code that names them. Resource edges are found textually: a quoted path is an ed
 <section class="panel" id="flows" role="tabpanel">
 
 
-<p class="dim">Three flows carry the correctness weight in this codebase: the streamed play turn (the only path that writes a transcript, the one artifact that cannot be regenerated), module-pack publication (the only path that holds every campaign's lock at once), and scene absorption (the longest LLM round-trip, and the one that mutates the most records).</p>
+<p class="dim">Three flows carry the correctness weight in this codebase: the streamed play turn (the busiest writer of the transcript, the one artifact that cannot be regenerated — though not its only writer; see Boundaries), module-pack publication (the only path that holds every campaign's lock at once), and scene absorption (the longest LLM round-trip, and the one that mutates the most records).</p>
 
 <h2>1 · A play turn, with roll-fence handoff</h2>
 <p><code>POST /api/campaigns/{cid}/scenes/{sid}/chat</code> — <code>backend/src/grimoire/routes/scenes.py:124</code></p>
@@ -509,7 +509,7 @@ sequenceDiagram
   UI->>R: POST .../chat (SSE)
   R->>D: proposals.supersede - retire any pending decision
   alt pcless scene, or empty send
-    R->>CTX: build_director_messages(note) - ephemeral, never stored
+    R->>CTX: build_director_messages(note) - note not stored; reply still is
   else ordinary turn
     R->>D: stamp_user_speaker + append_message (USER TURN PERSISTED HERE)
     R->>CTX: build_messages(cid, sid, turn)
@@ -541,11 +541,11 @@ sequenceDiagram
 
 <h3>Seams</h3>
 <div class="callout warn"><b>The user's turn is durable before the model is ever called.</b> <code>backend/src/grimoire/routes/scenes.py:143</code> appends the user message, and only then does line 144 build the context. So if context assembly or the provider fails, the transcript already contains the player's turn with no reply — the assistant finalizer is <i>not</i> the only mutator on this path. Macros are deliberately expanded once at persist time (<code>backend/src/grimoire/routes/scenes.py:139-142</code>) so a player's <code>{{roll:1d20}}</code> cannot re-roll on every later context build.</div>
-<div class="callout"><b>Two sends never touch the transcript at all.</b> A pcless scene or an empty send takes the director-note branch (<code>backend/src/grimoire/routes/scenes.py:128-135</code>), which builds ephemeral messages and streams without persisting the prompt. Fence watching is also skipped there by design.</div>
+<div class="callout"><b>On the director-note branch the <i>input</i> is ephemeral — the reply is not.</b> A pcless scene or an empty send takes <code>backend/src/grimoire/routes/scenes.py:128-134</code>, where the note steers one generation and is never written to the transcript. But that branch still returns <code>_chat_stream</code> (<code>backend/src/grimoire/routes/scenes.py:134</code>), which is the ordinary persisted-turn strategy: it watches roll fences and persists the model's narration through <code>_persist_reply</code> exactly as a normal turn does (<code>backend/src/grimoire/routes/streaming.py:149-172</code>). <code>backend/tests/test_routes.py:3724-3726</code> pins both halves — stored messages exist and are all assistant-role, and the note text appears in none of them.</div>
 <div class="callout"><b>Ordering is the guarantee, not atomicity.</b> <code>backend/src/grimoire/routes/streaming.py:125-141</code> is explicit that <code>finalize</code> is <i>not</i> transactional: the proposal is written under one lock, the lock is released, then <code>_persist_reply</code> re-takes it. Contention on that second acquisition leaves a proposal on disk with no narration — the sanctioned direction. The invariant actually held is <b>narration is never persisted without its proposal</b>, never the reverse.</div>
 <div class="callout"><b>The idle bound is deliberately not a total bound.</b> <code>backend/src/grimoire/llm.py:84-104</code> bounds the gap <i>between</i> deltas, so a slow-but-progressing generation is never cut mid-prose. Empty chunks are provider heartbeats: they reset the wait and are dropped rather than forwarded (<code>backend/src/grimoire/llm.py:118</code>). A total-duration ceiling exists only where a caller imposes one.</div>
 <div class="callout warn"><b>Two disclosed crash windows.</b> <code>backend/src/grimoire/routes/streaming.py:5-24</code> documents both — a crash at the initial fence loses the last narration beat but leaves an adjudicable proposal; a crash at a follow-up fence loses the follow-up check. Both are bounded and non-corrupting. Full cross-file journaling was rejected as disproportionate for a local single-user store, which is a defensible call, but it is an accepted risk rather than an absent one.</div>
-<div class="callout warn"><b>A partial reply can be silently lost under cross-process contention.</b> At <code>backend/src/grimoire/routes/streaming.py:101-108</code>, <code>StoreBusy</code> raised while persisting a partial reply is swallowed: the response has already begun streaming, so the global 409 handler cannot reach it. The user still gets an error frame explaining the failure, but the partial text is gone. The comment names this trade-off rather than hiding it.</div>
+<div class="callout warn"><b>A partial reply can be lost with no indication that it was lost.</b> At <code>backend/src/grimoire/routes/streaming.py:101-108</code>, <code>StoreBusy</code> raised while persisting a partial reply is swallowed — the response has already begun streaming, so the global 409 handler cannot reach it. An error frame does follow, but it carries only the <i>original</i> LLM failure: <code>backend/src/grimoire/routes/streaming.py:109</code> emits <code>exc.detail</code> and <code>exc.kind</code> from the <code>LLMError</code>, with nothing about the failed save. So the user learns the generation failed and not that the text they watched stream is gone. The code's own comment — "the frame below still tells the user why" — is true of the LLM error and overstates what the frame conveys about persistence.</div>
 <div class="callout"><b>Blocking work is pushed off the event loop on purpose.</b> <code>backend/src/grimoire/routes/streaming.py:111-124</code> runs <code>finalize</code> in a threadpool because its cross-process lock retry can sleep up to the lock timeout; inline, that would freeze every unrelated request on the backend. Note the <code>list(...)</code> — materializing inside the worker so a lazy generator body cannot leak <code>StoreBusy</code> past the handler.</div>
 
 <h2>2 · Module-pack publication</h2>
@@ -553,23 +553,26 @@ sequenceDiagram
 
 <div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">
 flowchart TD
-  A["module edit request"] --> B["take module_edit lock (_M)"]
+  A["module edit request"] --> B["take module_edit lock _M - held for all of the below"]
   B --> C["recover() - replay or roll back any stale journal"]
   C --> E["copytree to staging, mutate, load + validate"]
-  E --> V{"errors, or dry_run?"}
-  V -->|"yes"| X["return ok=false - no locks ever taken"]
-  V -->|"no"| D["hold_all(cids): every campaign lock, sorted"]
-  D --> P["pre_swap check"]
+  E --> V{"outcome"}
+  V -->|"validation errors"| X["ok=false - campaign locks never taken"]
+  V -->|"dry_run, valid"| Y["ok=true preview - campaign locks never taken"]
+  V -->|"apply"| D["hold_all(cids): every campaign lock, sorted"]
+  D --> P["pre_swap check - blockers return ok=false"]
   P --> F["journal intent"]
   F --> G["whole-directory swap"]
-  G --> H["clear journal, release campaign locks"]
-  G -.->|"crash here"| J["next startup: recover() replays"]
+  G --> M["run migration - every campaign lock still held"]
+  M --> H["unlink journal, release campaign locks"]
+  G -.->|"crash here"| J["next startup: recover() replays swap + migration"]
 </pre></div></div>
 
 <h3>Seams</h3>
 <div class="callout"><b>The lock ordering is documented in exactly one place.</b> <code>backend/src/grimoire/store/locks.py:1-60</code> states the hierarchy: module-edit lock → campaign locks in sorted cid order → audit baseline lock / rolls lock. <code>hold_all</code> (<code>backend/src/grimoire/store/locks.py:265</code>) enforces the sort, so the two multi-campaign holders cannot deadlock against each other. The docstring notes they previously agreed only by accident.</div>
 <div class="callout warn"><b>The lock domain is a hand-maintained list, and it has been wrong before.</b> <code>backend/src/grimoire/store/locks.py:1-14</code> says it outright: a campaign-scoped mutator that keeps a private registry is invisible to the domain and silently outside the exclusion — which is what happened to <code>rolls</code> until it joined. Nothing mechanically enforces membership; the guarantee rests on this docstring being read.</div>
-<div class="callout good"><b>The expensive work happens outside the campaign locks.</b> <code>backend/src/grimoire/store/module_edit.py:564-585</code> copies, mutates, loads and validates the staged pack — and returns early on validation errors or a dry run — before <code>_campaign_locks()</code> is entered at <code>backend/src/grimoire/store/module_edit.py:586</code> for the pre-swap check, journal, swap and migration only. A rejected edit never takes a campaign lock at all, so the every-campaign hold is as short as the design allows.</div>
+<div class="callout good"><b>The expensive work happens outside the <i>campaign</i> locks.</b> <code>backend/src/grimoire/store/module_edit.py:564-585</code> copies, mutates, loads and validates the staged pack, then returns early on validation errors <i>or</i> a valid dry run, before <code>_campaign_locks()</code> is entered at <code>backend/src/grimoire/store/module_edit.py:586</code>. Note the two early exits differ: a pack with errors returns <code>ok=false</code>, while a valid dry run returns a successful preview (<code>ok=true</code>) via <code>backend/src/grimoire/store/module_edit.py:583-585</code>. Neither takes a campaign lock — but staging is not unprotected: the module-edit lock <code>_M</code> is held across the whole function (<code>backend/src/grimoire/store/module_edit.py:564</code>).</div>
+<div class="callout"><b>Migration runs inside the lock, before the journal is cleared.</b> <code>backend/src/grimoire/store/module_edit.py:599-600</code> runs <code>_run_migration</code> and only then unlinks the journal, still holding every campaign lock. So the every-campaign hold covers swap <i>plus</i> migration, not swap alone — and a crash between them is exactly what <code>recover()</code> replays, which is why the journal records the migration alongside the nonce (<code>backend/src/grimoire/store/module_edit.py:592-594</code>).</div>
 <div class="callout warn"><b>Locks protect one machine, not one store — and not every mutation on that machine.</b> Both locks are OS file locks as well as in-process ones, so actors on one machine under one OS user are excluded (<code>backend/src/grimoire/store/module_edit.py:4-18</code>). Two <i>devices</i> sharing a synced folder are not, and cannot be by any filesystem lock. The docstring also lists what the lock does <i>not</i> cover on a single machine (<code>backend/src/grimoire/store/locks.py:64-68</code>) — see the Invariants tab. Since the Configuration page actively encourages pointing the store at a synced folder, this is the gap most likely to be met in real use.</div>
 <div class="callout"><b>Startup degrades to serving, not failing.</b> <code>backend/src/grimoire/main.py:33-55</code> guards each startup step separately and logs at WARNING on contention, because all three steps are idempotent and re-run later. Startup is also the one place the global 409 handler cannot reach.</div>
 
@@ -659,7 +662,7 @@ sequenceDiagram
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>Structure</th><th>Written by</th><th>Note</th></tr></thead>
 <tbody>
-<tr><td>Scene transcripts</td><td><code>backend/src/grimoire/store/scenes.py</code>, via <code>backend/src/grimoire/routes/streaming.py:45</code></td><td><span class="badge bad">irreplaceable</span> the one artifact with no regeneration path — the stated reason for both the lock domain and atomic writes</td></tr>
+<tr><td>Scene transcripts</td><td><code>backend/src/grimoire/store/scenes.py</code> — reached from <b>four</b> route entry points</td><td><span class="badge bad">irreplaceable</span> the one artifact with no regeneration path — the stated reason for both the lock domain and atomic writes. Auditing transcript mutation means reading all four, not just the chat path: <code>backend/src/grimoire/routes/streaming.py:45</code> (<code>_persist_reply</code>, the streamed turn strategies), <code>backend/src/grimoire/routes/scenes.py:143</code> (the user's own turn), <code>backend/src/grimoire/routes/greetings.py:296</code> (adopting a generated opener), and <code>backend/src/grimoire/routes/mechanics.py:40</code> / <code>:202</code> (roll lines appended as assistant messages under <code>ROLL_SPEAKER</code>).</td></tr>
 <tr><td>Module packs</td><td><code>backend/src/grimoire/store/module_edit.py</code> for every routed edit</td><td><span class="badge warn">bypassable</span> the safe path is a journalled whole-directory swap, but <code>backend/src/grimoire/store/modules.py:753</code> (<code>create_module</code>) scaffolds a pack in place with a bare <code>mkdir</code>, and <code>backend/src/grimoire/store/modules.py:767</code> (<code>delete_module</code>) <code>rmtree</code>s one directly. <code>module_edit</code>'s own docstring contrasts itself with the former (<code>backend/src/grimoire/store/module_edit.py:105-106</code>): a crash mid-scaffold there <i>can</i> leave a partial live pack. HTTP routes use the safe wrappers; a CLI, migration or new store caller need not.</td></tr>
 <tr><td>Campaign overlay files (<i>sync.md</i>, <i>deleted.json</i>)</td><td><code>backend/src/grimoire/store/overlay.py</code></td><td>tombstones make an id permanently taken, so nothing resurrects under a reused id</td></tr>
 <tr><td>Roll log &amp; proposals</td><td><code>backend/src/grimoire/store/rolls.py</code>, <code>backend/src/grimoire/store/proposals.py</code></td><td>joined to the campaign lock domain late (<code>backend/src/grimoire/store/locks.py:1-14</code>)</td></tr>
