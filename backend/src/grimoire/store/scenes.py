@@ -141,9 +141,10 @@ def _serialized(fn):
     need a calendar resolve it BEFORE delegating here, because that path
     executes user-authored plugin code (see `_date_hint`).
 
-    In-process only, like every lock in this app. Two processes on a synced
-    store still race — #234 covers that half, and the two want fixing together
-    to be meaningful for a shared library.
+    No longer in-process only: #234 made this lock an OS file lock as well, so
+    two grimoire processes on one machine serialize here too. Two *devices*
+    sharing a synced folder still race — no filesystem lock can cross them,
+    and the sync client resolves it with conflict copies. See `store/locks.py`.
     """
     @functools.wraps(fn)
     def locked(cid, *args, **kwargs):

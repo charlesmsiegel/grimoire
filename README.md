@@ -181,6 +181,14 @@ Because the whole library is just files, you can back it up, version it, or
 one library across devices** — change the **Storage location** on the Config
 page.
 
+One caveat: **do not actively use grimoire on two devices at once.** Sync
+clients resolve simultaneous edits by making conflict copies on their own
+schedule, and grimoire cannot merge those — one side's edit wins and the other
+becomes a stray file. Let the sync settle before switching devices. Two
+grimoire processes *on the same machine* do serialize their campaign edits
+against each other, so running the desktop app and a dev server together is
+fine.
+
 ---
 
 ## Android app
