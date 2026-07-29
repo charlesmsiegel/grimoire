@@ -185,12 +185,28 @@ def version_hash(root: Path, pid: str, vid: str) -> str | None:
         lambda: hashlib.sha256(p.read_text(encoding="utf-8").encode("utf-8")).hexdigest())
 
 
-def _dir_hash_compute(files: list[Path]) -> str:
+def dir_content_hash(files: list[tuple[str, str]]) -> str:
+    """`dir_hash` over (name, text) pairs you are holding rather than files on
+    disk — see `snapshot`."""
     h = hashlib.sha256()
-    for p in files:
-        h.update(p.name.encode("utf-8"))
-        h.update(p.read_text(encoding="utf-8").encode("utf-8"))
+    for name, text in files:
+        h.update(name.encode("utf-8"))
+        h.update(text.encode("utf-8"))
     return h.hexdigest()
+
+
+def snapshot(root: Path, pid: str) -> tuple[str, list[tuple[str, str]]] | None:
+    """One read of the whole PC: its `dir_hash` and the (name, text) pairs that
+    hash covers, meta first. See `characters.snapshot` (#247)."""
+    if not _safe(pid) or not _meta_path(root, pid).exists():
+        return None
+    files = [_meta_path(root, pid)] + [_version_path(root, pid, v) for v in _version_ids(root, pid)]
+    pairs = [(p.name, p.read_text(encoding="utf-8")) for p in files]
+    return dir_content_hash(pairs), pairs
+
+
+def _dir_hash_compute(files: list[Path]) -> str:
+    return dir_content_hash([(p.name, p.read_text(encoding="utf-8")) for p in files])
 
 
 def dir_hash(root: Path, pid: str) -> str | None:

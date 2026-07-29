@@ -127,6 +127,13 @@ def delete_entity(root: Path, kind: str, eid: str) -> None:
     p.unlink()
 
 
+def content_hash(text: str) -> str:
+    """`entity_hash` of a record you are holding rather than one on disk. A
+    copier can then record a sync base that provably describes the bytes it
+    copied, instead of re-reading a source that may have moved (#247)."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def entity_hash(root: Path, kind: str, eid: str) -> str | None:
     if not _safe_id(eid):
         return None
@@ -136,7 +143,7 @@ def entity_hash(root: Path, kind: str, eid: str) -> str | None:
         return None
     return statcache.memo(
         "entity_hash", sig,
-        lambda: hashlib.sha256(p.read_text(encoding="utf-8").encode("utf-8")).hexdigest())
+        lambda: content_hash(p.read_text(encoding="utf-8")))
 
 
 def all_refs(root: Path) -> list[tuple[str, str]]:
