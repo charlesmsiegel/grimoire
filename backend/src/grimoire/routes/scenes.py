@@ -472,12 +472,25 @@ def put_chronicle(cid: str, sid: str, body: ChronicleSave):
     # either wrote -- a guard that stops neither.
     with store.locks.campaign_lock(cid):
         # Inside the lock: two saves racing on one token must not both miss.
-        spent = store.commits.result_for(cid, body.commit_token)
-        if spent is not None:
-            return spent
+        prior = store.commits.lookup(cid, body.commit_token)
+        if prior is not None:
+            if prior["done"]:
+                return prior["result"]
+            # Reserved but never completed: the first attempt got past the point
+            # where its appends land and died before saying what it did. Running
+            # them again is the duplication this token exists to prevent.
+            raise HTTPException(
+                status_code=409,
+                detail={"detail": "an earlier save of this review started and did not "
+                                  "finish — reload the campaign to see what landed",
+                        "kind": "commit_incomplete"})
         record = store.chronicle.absorb(cid, {
             "id": sid, "one_line": body.one_line, "summary": body.summary,
             "keywords": body.keywords, **facts})
+        # Claimed BEFORE the first non-idempotent write (the chronicle entry
+        # above is keyed by scene id and merely overwrites); every append below
+        # is covered by the reservation.
+        store.commits.reserve(cid, body.commit_token)
         store.chronicle.append_timeline(cid, body.timeline_events)
         store.scenes.mark_absorbed(cid, sid, body.one_line, body.summary)
         applied, failures = store.absorb.apply_edits(cid, body.edits, sid)

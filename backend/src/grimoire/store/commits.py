@@ -44,8 +44,12 @@ def _read(cid: str) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def result_for(cid: str, token: str) -> dict | None:
-    """The stored response for a spent token, or None when it is unseen.
+def lookup(cid: str, token: str) -> dict | None:
+    """This token's ledger entry, or None when it is unseen.
+
+    An entry is ``{"done": bool, "result": dict | None}``. ``done`` is False
+    between ``reserve`` and ``record`` -- the commit began and its outcome is
+    unknown, which is exactly the state a replay must not run again.
 
     An empty token is always unseen: a client that sends none opts out of the
     guard, and must not collide with every other tokenless save.
@@ -53,16 +57,35 @@ def result_for(cid: str, token: str) -> dict | None:
     if not token:
         return None
     entry = _read(cid).get(token)
-    return entry if isinstance(entry, dict) else None
+    if not isinstance(entry, dict) or "done" not in entry:
+        return None
+    return entry
 
 
-def record(cid: str, token: str, result: dict) -> None:
-    """Remember what this token's save returned. No-op for an empty token."""
-    if not token:
-        return
+def _put(cid: str, token: str, entry: dict) -> None:
     data = _read(cid)
     data.pop(token, None)                       # re-insert so it counts as newest
-    data[token] = result
+    data[token] = entry
     for stale in list(data)[:-KEEP]:            # dicts keep insertion order
         del data[stale]
     atomic.write_text(_path(cid), json.dumps(data, indent=2) + "\n")
+
+
+def reserve(cid: str, token: str) -> None:
+    """Claim the token before the first non-idempotent write.
+
+    Recording only *after* the effects leaves a window: a crash in between (or a
+    failing ledger write) returns no response while the token still reads as
+    unseen, so the retry re-runs every append. Reserving first makes that window
+    durable -- the replay finds an unfinished entry and refuses instead.
+    """
+    if not token:
+        return
+    _put(cid, token, {"done": False, "result": None})
+
+
+def record(cid: str, token: str, result: dict) -> None:
+    """Complete the reservation with what this token's save returned."""
+    if not token:
+        return
+    _put(cid, token, {"done": True, "result": result})

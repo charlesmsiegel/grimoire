@@ -27,11 +27,11 @@ def _safe_id(cid: str) -> bool:
 
 
 def dossier_path(croot: Path, cid: str) -> Path:
+    if not _safe_id(cid):
+        raise BadDossierId(cid)
     # overlay-ok: dossier.md is campaign-local, merely filed inside the actor's
     # dir for locality — it is never inherited from the world, so there is
     # nothing for store/overlay.py to resolve here
-    if not _safe_id(cid):
-        raise BadDossierId(cid)
     return croot / "characters" / cid / "dossier.md"
 
 
