@@ -1,6 +1,9 @@
+from pathlib import Path
+
 import pytest
 
-from grimoire.store import assets, campaigns, characters, entities, greetings, overlay, pcs, taglines, worlds
+from grimoire.store import (assets, atomic, campaigns, characters, entities, greetings, overlay,
+                            pcs, sync, taglines, worlds)
 
 
 def _pair(monkeypatch, tmp_path):
@@ -320,3 +323,133 @@ def test_read_character_patches_images_from_union(monkeypatch, tmp_path):
     listed = next(c for c in overlay.list_characters(cid) if c["id"] == aid)
     assert listed["has_avatar"] is True
     assert listed["tagline"] == "A hero of legend."
+
+
+# ---- #247: materialization records the sync base before it commits the copy ----
+
+def _manifest_when(monkeypatch, cid, target: Path) -> dict:
+    """Capture the campaign manifest as it stands the moment `target` is
+    written. `target` is the write that commits a materialization, so whatever
+    this captures is what a crash immediately before it would leave behind."""
+    seen: dict = {}
+    real = atomic.write_text
+
+    def spy(path, text):
+        if Path(path) == target:
+            seen["manifest"] = campaigns.read_manifest(cid)
+        real(path, text)
+
+    monkeypatch.setattr(atomic, "write_text", spy)
+    return seen
+
+
+def _fail_writing(monkeypatch, target: Path) -> None:
+    real = atomic.write_text
+
+    def spy(path, text):
+        if Path(path) == target:
+            raise OSError("no space left on device")
+        real(path, text)
+
+    monkeypatch.setattr(atomic, "write_text", spy)
+
+
+def test_materialize_entity_records_base_before_the_copy(monkeypatch, tmp_path):
+    """A copy with no recorded base is invisible to sync forever: every ref
+    the engine considers comes from the manifest, so world edits to that
+    record are never offered again."""
+    _wid, wroot, cid, eid = _pair(monkeypatch, tmp_path)
+    _thin(cid, "lore", eid)
+    seen = _manifest_when(monkeypatch, cid, campaigns.campaign_root(cid) / "lore" / f"{eid}.md")
+    overlay.materialize_entity(cid, "lore", eid)
+    assert seen["manifest"][f"lore/{eid}"] == entities.entity_hash(wroot, "lore", eid)
+
+
+def test_materialize_plotmap_records_base_before_the_copy(monkeypatch, tmp_path):
+    wroot, cid, _gid = _greeting_pair(monkeypatch, tmp_path)
+    seen = _manifest_when(monkeypatch, cid, campaigns.campaign_root(cid) / "plotmap.json")
+    overlay.materialize_plotmap(cid)
+    assert seen["manifest"]["plotmap"] == greetings.plotmap_hash(wroot)
+
+
+def test_materialize_actor_records_base_before_the_meta_file(monkeypatch, tmp_path):
+    """character.md is what makes an actor materialized (`actor_root` keys on
+    it), so it is the commit point the base has to precede -- not merely the
+    first version file."""
+    wroot, cid, aid = _actor_pair(monkeypatch, tmp_path)
+    meta = campaigns.campaign_root(cid) / "characters" / aid / "character.md"
+    seen = _manifest_when(monkeypatch, cid, meta)
+    overlay.materialize_actor(cid, "characters", aid)
+    assert seen["manifest"][f"characters/{aid}"] == characters.dir_hash(wroot, aid)
+
+
+def test_materialize_pc_writes_every_version_before_the_meta_file(monkeypatch, tmp_path):
+    """pc.md is both the commit point and an `*.md` sibling of the version
+    files, so it must be excluded from the copy loop -- written mid-loop it
+    can commit an actor whose later-sorting versions are still missing."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    pid, _ = pcs.create_pc(wroot, "Mara", [])
+    pcs.create_version(wroot, pid, "veteran", pcs.blank_persona("Mara"))   # sorts after pc.md
+    cid = campaigns.create_campaign("C", wid)
+    d = campaigns.campaign_root(cid) / "pcs" / pid
+    seen: dict = {}
+    real = atomic.write_text
+
+    def spy(path, text):
+        if Path(path) == d / "pc.md":
+            seen.setdefault("versions", sorted(p.name for p in d.glob("*.md")))
+        real(path, text)
+
+    monkeypatch.setattr(atomic, "write_text", spy)
+    overlay.materialize_actor(cid, "pcs", pid)
+    assert seen["versions"] == ["default.md", "veteran.md"]
+
+
+def test_materialize_entity_drops_the_base_again_when_the_copy_fails(monkeypatch, tmp_path):
+    """Recording the base first must not strand one: a record that is still
+    fully inherited has to carry no base at all."""
+    _wid, _wroot, cid, eid = _pair(monkeypatch, tmp_path)
+    _thin(cid, "lore", eid)
+    _fail_writing(monkeypatch, campaigns.campaign_root(cid) / "lore" / f"{eid}.md")
+    with pytest.raises(OSError):
+        overlay.materialize_entity(cid, "lore", eid)
+    assert f"lore/{eid}" not in campaigns.read_manifest(cid)
+    assert overlay.read_entity(cid, "lore", eid)["body"] == "world text"   # still inherited
+
+
+def test_materialize_actor_drops_the_base_again_when_the_copy_fails(monkeypatch, tmp_path):
+    wroot, cid, aid = _actor_pair(monkeypatch, tmp_path)
+    _fail_writing(monkeypatch, campaigns.campaign_root(cid) / "characters" / aid / "character.md")
+    with pytest.raises(OSError):
+        overlay.materialize_actor(cid, "characters", aid)
+    assert f"characters/{aid}" not in campaigns.read_manifest(cid)
+    assert overlay.char_root(cid, aid) == wroot                            # still inherited
+
+
+def test_failed_copy_restores_a_base_it_overwrote(monkeypatch, tmp_path):
+    """Undoing the base means putting back what was there, not deleting it --
+    an earlier interrupted attempt can have left one."""
+    _wid, _wroot, cid, eid = _pair(monkeypatch, tmp_path)
+    _thin(cid, "lore", eid)
+    campaigns.write_manifest(cid, {**campaigns.read_manifest(cid), f"lore/{eid}": "older"})
+    _fail_writing(monkeypatch, campaigns.campaign_root(cid) / "lore" / f"{eid}.md")
+    with pytest.raises(OSError):
+        overlay.materialize_entity(cid, "lore", eid)
+    assert campaigns.read_manifest(cid)[f"lore/{eid}"] == "older"
+
+
+def test_base_without_a_copy_reads_through_and_rebases(monkeypatch, tmp_path):
+    """The window a hard crash can still leave -- base written, copy not.
+    It has to be the harmless side: the record stays live-inherited, sync
+    offers nothing on it, and materializing again records a fresh base."""
+    _wid, wroot, cid, eid = _pair(monkeypatch, tmp_path)
+    _thin(cid, "lore", eid)
+    campaigns.write_manifest(cid, {**campaigns.read_manifest(cid), f"lore/{eid}": "interrupted"})
+    entities.update_entity(wroot, "lore", eid, body="world v2")
+    assert overlay.read_entity(cid, "lore", eid)["body"].strip() == "world v2"
+    assert sync.incoming(cid) == []
+    overlay.materialize_entity(cid, "lore", eid)
+    assert campaigns.read_manifest(cid)[f"lore/{eid}"] == entities.entity_hash(wroot, "lore", eid)
+    assert sync.incoming(cid) == []
