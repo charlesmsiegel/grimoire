@@ -25,6 +25,14 @@ Records that are themselves symlinks or hard links are unsupported: unlike
 ``os.replace`` replaces the directory entry. Nothing in grimoire creates linked
 records.
 
+**The temp's pathname is never handed out.** Both writers write through the
+descriptor ``mkstemp`` returns, so there is no interval in which another
+process can unlink the temp and substitute a symlink for our write, our chmod
+and our rename to follow. An earlier version exposed the path for PIL's
+``im.save``; PIL accepts a file object, so ``thumbs`` now encodes to memory and
+calls ``write_bytes``, and the path-yielding context manager is gone rather
+than defended (PR review).
+
 Design: docs/superpowers/specs/2026-07-28-atomic-store-writes-design.md
 """
 
@@ -35,9 +43,7 @@ import os
 import stat
 import tempfile
 import time
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
 
 # Transient Windows sharing failures -- a concurrent reader, an antivirus
 # scanner, or a sync client holding the target for a moment. Everything else
@@ -72,22 +78,59 @@ def _replace(src: str, dst: Path) -> None:
     os.replace(src, dst)  # last attempt: let a still-locked target raise
 
 
-def _carry_mode(tmp_name: str, path: Path) -> None:
-    """Give the replacement the mode the record already had.
+def _carry_metadata(tmp_name: str, path: Path) -> None:
+    """Give the replacement the access metadata the record already had.
 
-    ``mkstemp`` creates 0600. Without this the first atomic write would
-    silently narrow every group/world-readable record to owner-only on Linux,
-    macOS and the Android build. A no-op on Windows, where the bits are
-    vestigial.
+    The surviving file is the temp, not the original inode, so anything the old
+    file carried is lost unless it is copied across. ``mkstemp`` creates 0600,
+    so without this the first atomic write would silently narrow every
+    group/world-readable record to owner-only on Linux, macOS and the Android
+    build.
+
+    Copied where the platform allows: the permission bits, the owning group
+    (uid too, but only a privileged process can change that -- the attempt is
+    harmless and simply fails otherwise), and extended attributes.
+
+    **Not** copied, and accepted: POSIX ACLs proper (``getfacl``/``setfacl``)
+    are not reachable from the standard library at all, and on Windows a
+    target's explicit non-inherited DACL, alternate data streams, and per-file
+    compression/encryption flags are lost -- Win32 has ``ReplaceFileW`` exactly
+    to preserve those, but Python does not expose it without ``ctypes``.
+    Grimoire records are plain files in a user-owned directory that inherit
+    their parent's ACL, so a fresh sibling gets the same treatment; a
+    genuinely ACL-managed shared store is out of scope. (Raised in PR review.)
+
+    Every step is best effort: failing an entire write over a metadata bit
+    would trade a cosmetic problem for a data-loss one.
     """
     try:
-        mode = stat.S_IMODE(os.stat(path).st_mode)
+        src = os.stat(path)
     except OSError:
-        mode = 0o666 & ~_UMASK
+        src = None
+
+    mode = stat.S_IMODE(src.st_mode) if src else 0o666 & ~_UMASK
     try:
         os.chmod(tmp_name, mode)
     except OSError:
-        pass  # best effort; a filesystem without mode bits is not a failure
+        pass
+
+    if src is not None and hasattr(os, "chown"):
+        try:
+            os.chown(tmp_name, src.st_uid, src.st_gid)
+        except (OSError, AttributeError):
+            # Unprivileged: uid can't change. Retry group alone -- that one
+            # usually succeeds and is what shared-group setups depend on.
+            try:
+                os.chown(tmp_name, -1, src.st_gid)
+            except (OSError, AttributeError):
+                pass
+
+    if src is not None and hasattr(os, "listxattr"):
+        try:
+            for attr in os.listxattr(path):
+                os.setxattr(tmp_name, attr, os.getxattr(path, attr))
+        except OSError:
+            pass  # unsupported filesystem, or an attribute we may not copy
 
 
 def _assert_target_writable(path: Path) -> None:
@@ -135,7 +178,7 @@ def _write_through_fd(path: Path, mode: str, encoding: str | None, payload) -> N
         os.fsync(fd)
         os.close(fd)
         closed = True
-        _carry_mode(tmp_name, path)
+        _carry_metadata(tmp_name, path)
         _replace(tmp_name, path)
     except BaseException:
         if not closed:
@@ -161,53 +204,3 @@ def write_bytes(path: Path, data: bytes) -> None:
     """Atomic replacement for ``path.write_bytes(data)``. See ``write_text``."""
     _write_through_fd(path, "wb", None, data)
 
-
-@contextmanager
-def tempfile_for(path: Path) -> Iterator[Path]:
-    """Yield a same-directory temp *path* that replaces ``path`` on clean exit.
-
-    Only for callers that must open the file themselves -- ``thumbs`` hands the
-    path to PIL's ``im.save`` and never holds the bytes. Prefer ``write_text``
-    / ``write_bytes``, which write through the ``mkstemp`` descriptor and so
-    never expose the temp's pathname at all.
-
-    Handing out a pathname reopens a window this module otherwise closes: in a
-    store directory writable by another local account, the temp can be unlinked
-    and replaced with a symlink between the yield and the reopen, and the write,
-    the chmod, and the rename would all follow it. That cannot be *prevented*
-    while the contract is "here is a path" -- so it is detected: the identity of
-    the file mkstemp created is recorded and re-checked before anything is
-    published, and a mismatch aborts without replacing the record.
-    """
-    path = Path(path)
-    _assert_target_writable(path)
-    fd, tmp_name = _mkstemp_beside(path)
-    created = os.fstat(fd)
-    closed = False
-    try:
-        os.close(fd)  # inside the try: a failing close must not leak the temp
-        closed = True
-        yield Path(tmp_name)
-
-        # lstat, not stat: a symlink swapped in must be seen AS a symlink
-        # rather than silently followed to whatever it points at.
-        now = os.lstat(tmp_name)
-        if not stat.S_ISREG(now.st_mode) or (now.st_dev, now.st_ino) != (
-                created.st_dev, created.st_ino):
-            raise OSError(errno.EPERM,
-                          "temp file was replaced while being written", tmp_name)
-        fd = os.open(tmp_name, os.O_RDWR)
-        closed = False
-        os.fsync(fd)
-        os.close(fd)
-        closed = True
-        _carry_mode(tmp_name, path)
-        _replace(tmp_name, path)
-    except BaseException:
-        if not closed:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
-        _discard(tmp_name)
-        raise

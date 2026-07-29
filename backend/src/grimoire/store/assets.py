@@ -11,6 +11,7 @@ by image edits.
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from . import atomic
 
@@ -35,6 +36,36 @@ def _norm_ext(ext: str) -> str:
 
 def _dir(root: Path, cid: str, vid: str, base: str = "characters") -> Path:
     return root / base / cid / "assets" / vid
+
+
+_registry_guard = threading.Lock()
+_image_locks: dict[str, threading.RLock] = {}
+
+
+def _image_lock(d: Path, name: str) -> threading.RLock:
+    """Serialize writes to one logical image (all extensions of `name` in `d`).
+
+    Cleanup is inherently multi-step -- publish the new extension, then remove
+    the stale siblings -- and no filesystem offers an identity-conditional
+    unlink, so "verify this is still the file I snapshotted, then delete it"
+    has a gap no amount of care closes. Two concurrent uploads of different
+    extensions could interleave through it and leave no image at all, which is
+    the exact outcome the write-before-cleanup ordering exists to prevent
+    (PR review). Serializing the sequence is what actually closes it.
+
+    In-process only, like every other lock in this app; two processes on one
+    synced store still race, as they do everywhere else.
+
+    Reentrant, matching ``locks.campaign_lock``: a non-reentrant lock turns
+    any future same-thread nesting (a delete invoked from inside a put, say)
+    into a deadlock, which is a worse failure than the race it guards.
+
+    Get-or-create under a guard: a plain ``if key not in ...`` is a
+    check-then-act race that hands two first-ever callers different locks.
+    """
+    key = str(d / name)
+    with _registry_guard:
+        return _image_locks.setdefault(key, threading.RLock())
 
 
 def _mtime_ns(p: Path) -> int:
@@ -128,38 +159,36 @@ def put_image(root: Path, cid: str, vid: str, name: str, data: bytes, ext: str,
         raise ValueError("unsupported image type")
     d = _dir(root, cid, vid, base)
     d.mkdir(parents=True, exist_ok=True)
-    # Write BEFORE dropping prior-extension files. The reverse order (which
-    # this used to do) loses the image outright if anything fails between the
-    # unlink and the write -- atomicity alone cannot fix an ordering bug.
-    # image_path() breaks the resulting momentary tie by mtime.
     written = d / f"{name}.{ext}"
-    # Snapshot the siblings BEFORE writing, and only ever delete those. Globbing
-    # after the write instead would let two concurrent put_image calls delete
-    # each other's brand-new file -- A writes .jpg, B writes .png, then each
-    # cleanup removes the other's -- leaving no image at all.
-    #
-    # Snapshot the file's IDENTITY, not just its path: a concurrent call can
-    # replace the file at a snapshotted path with its own new image, and
-    # deleting by path alone would then destroy that image instead of the stale
-    # one we meant. Both calls would report success and no avatar would remain.
-    stale = []
-    for p in d.glob(f"{name}.*"):
-        if p == written:
-            continue
-        try:
-            st = p.stat()
-            stale.append((p, st.st_dev, st.st_ino))
-        except OSError:
-            pass  # vanished already; nothing to clean up
-    atomic.write_bytes(written, data)
-    for p, dev, ino in stale:
-        try:
-            st = p.stat()
-            if (st.st_dev, st.st_ino) != (dev, ino):
-                continue  # someone published a new file here; not ours to delete
-            p.unlink()
-        except OSError:
-            pass  # a lost cleanup is self-healing: image_path prefers the newest
+    with _image_lock(d, name):
+        # Write BEFORE dropping prior-extension files. The reverse order (which
+        # this used to do) loses the image outright if anything fails between
+        # the unlink and the write -- atomicity alone cannot fix an ordering
+        # bug. image_path() breaks the resulting momentary tie by mtime.
+        #
+        # Snapshot the siblings' IDENTITY before writing, and delete only those
+        # exact files: the lock keeps concurrent put_image calls out, and the
+        # identity check keeps anything that reaches the directory another way
+        # (an external tool, a sync client) from having its file deleted by
+        # path alone.
+        stale = []
+        for p in d.glob(f"{name}.*"):
+            if p == written:
+                continue
+            try:
+                st = p.stat()
+                stale.append((p, st.st_dev, st.st_ino))
+            except OSError:
+                pass  # vanished already; nothing to clean up
+        atomic.write_bytes(written, data)
+        for p, dev, ino in stale:
+            try:
+                st = p.stat()
+                if (st.st_dev, st.st_ino) != (dev, ino):
+                    continue  # not the file we snapshotted; not ours to delete
+                p.unlink()
+            except OSError:
+                pass  # a lost cleanup self-heals: image_path prefers the newest
     if name == AVATAR:
         clear_focus(root, cid, vid, base)
     return ext
@@ -170,8 +199,15 @@ def delete_image(root: Path, cid: str, vid: str, name: str, base: str = "charact
         return
     d = _dir(root, cid, vid, base)
     if d.exists():
-        for p in d.glob(f"{name}.*"):
-            p.unlink()
+        # Same lock as put_image: a delete racing an upload must not remove the
+        # file the upload just published and leave the caller thinking it wrote
+        # one, nor half-remove a set the upload is mid-way through replacing.
+        with _image_lock(d, name):
+            for p in d.glob(f"{name}.*"):
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
     if name == AVATAR:
         clear_focus(root, cid, vid, base)
 
