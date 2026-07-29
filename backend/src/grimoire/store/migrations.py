@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import appearances, atomic, campaigns, cards, characters, entities, greetings, overlay, scene_ids, scene_refs, scenes, worlds
+from . import appearances, atomic, campaigns, cards, characters, entities, greetings, locks, overlay, scene_ids, scene_refs, scenes, worlds
 from .frontmatter import parse_frontmatter
 from .paths import home, slugify, uniquify
 
@@ -20,6 +20,20 @@ def migrate_scene_ids() -> None:
 
 
 def _migrate_campaign(cid: str) -> None:
+    # The WHOLE migration under the campaign lock, not just the repad() at the
+    # end (#234). Everything above it is destructive -- it reads every legacy
+    # transcript, renames them all, and repoints every reference -- and once
+    # the lock is cross-process a second backend can be serving from this
+    # campaign while we do it: it reads a transcript, we rename the file, its
+    # atomic write recreates the old path, and the campaign now has two
+    # divergent copies of one scene. Two simultaneous startups race the rename
+    # itself and one gets FileNotFoundError. repad() is reentrant, so nesting
+    # under this costs nothing.
+    with locks.campaign_lock(cid):
+        _migrate_campaign_locked(cid)
+
+
+def _migrate_campaign_locked(cid: str) -> None:
     d = campaigns.campaign_root(cid) / "scenes"
     if not d.exists():
         return
