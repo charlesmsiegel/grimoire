@@ -19,10 +19,10 @@ import ts from "typescript";
  * `import.meta.glob` needs a literal pattern; the last case in this file
  * asserts the two never drift apart.
  */
-const MODULE_EXTS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
-const GLOB = "../**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}";
+const MODULE_EXTS = [".mjs", ".js", ".mts", ".ts", ".jsx", ".tsx", ".cjs", ".cts"];
+const GLOB = "../**/*.{mjs,js,mts,ts,jsx,tsx,cjs,cts}";
 
-const RAW = import.meta.glob("../**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}", {
+const RAW = import.meta.glob("../**/*.{mjs,js,mts,ts,jsx,tsx,cjs,cts}", {
   query: "?raw", import: "default", eager: true,
 }) as Record<string, string>;
 
@@ -55,6 +55,33 @@ const SOURCES = new Map(
 function dirOf(path: string): string {
   const cut = path.lastIndexOf("/");
   return cut < 0 ? "" : path.slice(0, cut);
+}
+
+/** A Vite glob pattern as a matcher over src-relative paths. */
+function globToRegExp(pattern: string): RegExp {
+  let out = "";
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i];
+    if (c === "*") {
+      if (pattern[i + 1] === "*") { out += ".*"; i++; if (pattern[i + 1] === "/") i++; }
+      else out += "[^/]*";
+    } else if (c === "{") out += "(";
+    else if (c === "}") out += ")";
+    else if (c === ",") out += "|";
+    else if (c === "?") out += "[^/]";
+    else out += c.replace(/[.+^$()|[\]\\]/g, "\\$&");
+  }
+  return new RegExp(`^${out}$`);
+}
+
+/** Vite glob options that hand over data instead of evaluating the match. */
+function globIsRaw(opts: ts.Node | undefined): boolean {
+  if (!opts || !ts.isObjectLiteralExpression(opts)) return false;
+  return opts.properties.some((p) =>
+    ts.isPropertyAssignment(p) &&
+    ts.isIdentifier(p.name) && (p.name.text === "query" || p.name.text === "as") &&
+    ts.isStringLiteralLike(p.initializer) &&
+    /raw|url|inline/.test(p.initializer.text));
 }
 
 /** Parse each file as what it actually is: `<Foo>x` is a cast in .ts, JSX in .tsx. */
@@ -117,25 +144,33 @@ function specifiers(code: string, path = "f.tsx"): string[] {
   const literal = (n: ts.Node | undefined) =>
     n && ts.isStringLiteralLike(n) ? n.text : undefined;
   let values: Set<string> | null = null;   // computed lazily; only some files need it
+  // Type erasure is a TypeScript compile step. In a .js/.mjs/.jsx file native
+  // ESM evaluates the target for its side effects whether or not the binding
+  // is used, so eliding an "unused" import there would drop a real edge.
+  const kind = scriptKind(path);
+  const erasesTypes = kind === ts.ScriptKind.TS || kind === ts.ScriptKind.TSX;
 
   for (const st of src.statements) {
     if (ts.isImportDeclaration(st)) {
       const clause = st.importClause;
       if (clause?.isTypeOnly) continue;                    // import type { … }
       // A side-effect import (`import "./x"`) has no clause and always emits.
-      if (clause) {
+      if (clause && erasesTypes) {
         const named = clause.namedBindings;
         const bindings = named && ts.isNamedImports(named) ? named.elements : [];
         // Explicitly-marked: `{ type A, type B }` with no default/namespace.
         if (!clause.name && bindings.length > 0 &&
             bindings.every((e) => e.isTypeOnly)) continue;
-        // Usage-elided: every binding is only ever referenced as a type.
-        if (!named || ts.isNamedImports(named)) {
-          values ??= valueNames(src);
-          const names = [clause.name, ...bindings.map((e) => e.name)]
-            .filter((n): n is ts.Identifier => !!n);
-          if (names.length > 0 && !names.some((n) => values!.has(n.text))) continue;
-        }
+        // Usage-elided: every binding is only ever referenced as a type. This
+        // covers default, named and namespace forms — `import * as E from "./x"`
+        // used only as `E.Props` is erased just like the others.
+        values ??= valueNames(src);
+        const names = [
+          clause.name,
+          ...(named && ts.isNamespaceImport(named) ? [named.name] : []),
+          ...bindings.map((e) => e.name),
+        ].filter((n): n is ts.Identifier => !!n);
+        if (names.length > 0 && !names.some((n) => values!.has(n.text))) continue;
       }
       const spec = literal(st.moduleSpecifier);
       if (spec) found.push(spec);
@@ -161,6 +196,67 @@ function specifiers(code: string, path = "f.tsx"): string[] {
   ts.forEachChild(src, walk);
   return found;
 }
+
+/** `import.meta.glob(...)` calls in a file, as {patterns, raw} records. */
+function globCalls(code: string, path: string) {
+  const src = ts.createSourceFile(path, code, ts.ScriptTarget.Latest, true,
+                                  scriptKind(path));
+  const calls: { patterns: string[]; raw: boolean; analyzable: boolean }[] = [];
+  const walk = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) &&
+        node.expression.name.text === "glob" &&
+        ts.isMetaProperty(node.expression.expression)) {
+      const arg = node.arguments[0];
+      const list = !arg ? []
+        : ts.isStringLiteralLike(arg) ? [arg.text]
+        : ts.isArrayLiteralExpression(arg)
+          ? arg.elements.filter(ts.isStringLiteralLike).map((e) => e.text)
+          : [];
+      const literalArg = !!arg && (ts.isStringLiteralLike(arg) ||
+        (ts.isArrayLiteralExpression(arg) &&
+         arg.elements.every((e) => ts.isStringLiteralLike(e))));
+      calls.push({
+        patterns: list,
+        raw: globIsRaw(node.arguments[1]),
+        analyzable: literalArg,
+      });
+    }
+    ts.forEachChild(node, walk);
+  };
+  ts.forEachChild(src, walk);
+  return calls;
+}
+
+/**
+ * Source files a `import.meta.glob` pulls in as *modules*. Vite rewrites an
+ * eager glob into static imports and a lazy one into dynamic imports, so its
+ * matches are real initialization edges — invisible to `specifiers()`, which
+ * sees a method call rather than an import, and invisible to `UNRESOLVED`,
+ * which never receives a specifier for them. A `?raw`/`?url` glob is excluded
+ * for the same reason the equivalent static import is: it yields data, not a
+ * module. (This file's own glob is that case.)
+ */
+function globEdges(code: string, path: string): string[] {
+  const out: string[] = [];
+  for (const call of globCalls(code, path)) {
+    if (call.raw) continue;
+    for (const pattern of call.patterns) {
+      const base = normalize(dirOf(path) + "/" + pattern.split("?")[0]);
+      if (base === null) continue;
+      const re = globToRegExp(base);
+      for (const candidate of SOURCES.keys()) {
+        if (candidate !== path && re.test(candidate)) out.push(candidate);
+      }
+    }
+  }
+  return out;
+}
+
+/** Globs whose pattern isn't a literal, so their edges can't be expanded. */
+const OPAQUE_GLOBS = [...SOURCES].flatMap(([path, code]) =>
+  globCalls(code, path)
+    .filter((c) => !c.raw && !c.analyzable)
+    .map(() => path));
 
 /**
  * TypeScript lets a specifier name the file that will be *emitted*, so
@@ -212,9 +308,10 @@ const isRelative = (spec: string) => spec.startsWith(".");
 const GRAPH = new Map(
   [...SOURCES].map(([path, code]) => [
     path,
-    specifiers(code, path).filter(isRelative)
-      .map((spec) => resolve(path, spec))
-      .filter((dep): dep is string => dep !== null),
+    [...specifiers(code, path).filter(isRelative)
+        .map((spec) => resolve(path, spec))
+        .filter((dep): dep is string => dep !== null),
+     ...globEdges(code, path)],
   ]),
 );
 
@@ -309,6 +406,57 @@ describe("module-editor import graph", () => {
     // …and no false positives from comments or ordinary strings.
     expect(specifiers(`// import { A } from "./c";\nconst s = 'from "./s"';`))
       .toEqual([]);
+  });
+
+  it("does not elide unused imports in native-ESM files", () => {
+    // Type erasure is a TypeScript step. A .js/.mjs module is evaluated for
+    // its side effects whether or not the binding is used, so eliding here
+    // would drop a real runtime edge — and `UNRESOLVED` could not catch it,
+    // because no specifier ever reaches the resolver.
+    const unused = `import { A } from "./ModuleEditor";`;
+    expect(specifiers(unused, "api/thing.js")).toEqual(["./ModuleEditor"]);
+    expect(specifiers(unused, "api/thing.mjs")).toEqual(["./ModuleEditor"]);
+    expect(specifiers(unused, "api/thing.jsx")).toEqual(["./ModuleEditor"]);
+    expect(specifiers(unused, "api/thing.ts")).toEqual([]);   // TS erases it
+  });
+
+  it("applies type-use elision to namespace imports", () => {
+    expect(specifiers(`import * as E from "./t"; let p: E.Props;`)).toEqual([]);
+    expect(specifiers(`import * as E from "./v"; E.go();`)).toEqual(["./v"]);
+  });
+
+  it("follows Vite's extension resolution order", () => {
+    // Vite's default resolve.extensions probes .mjs/.js before .mts/.ts, so an
+    // extensionless specifier with both a .js and a .ts sibling loads the .js.
+    // Ordering MODULE_EXTS differently would silently graph the wrong file.
+    expect(MODULE_EXTS.slice(0, 6))
+      .toEqual([".mjs", ".js", ".mts", ".ts", ".jsx", ".tsx"]);
+  });
+
+  it("counts modules pulled in by import.meta.glob", () => {
+    // Vite rewrites an eager glob into static imports, so its matches are real
+    // initialization edges — invisible to specifiers(), which sees a method
+    // call, and to UNRESOLVED, which never gets a specifier for them.
+    const eager =
+      `const m = import.meta.glob("./Module*Editor.tsx", { eager: true });`;
+    expect(globEdges(eager, "components/X.tsx")).toEqual(
+      expect.arrayContaining([
+        "components/ModuleEditor.tsx", "components/ModuleSchemaEditor.tsx",
+      ]));
+    // A ?raw glob hands over text and never evaluates the match — same rule as
+    // a `?raw` static import. This file's own glob is that case.
+    const raw =
+      `const m = import.meta.glob("./Module*Editor.tsx", { query: "?raw" });`;
+    expect(globEdges(raw, "components/X.tsx")).toEqual([]);
+    // A glob never matches the file it sits in.
+    expect(globEdges(eager, "components/ModuleEditor.tsx"))
+      .not.toContain("components/ModuleEditor.tsx");
+  });
+
+  it("has no glob it cannot expand", () => {
+    // A computed pattern can't be matched against SOURCES, so its edges would
+    // vanish silently. Fail loudly instead of guessing.
+    expect(OPAQUE_GLOBS).toEqual([]);
   });
 
   it("parses each file as its own script kind", () => {
