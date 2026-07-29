@@ -116,7 +116,7 @@ def test_audit_baselines_serialize_on_the_campaign_lock(monkeypatch, tmp_path):
 def test_scene_writes_serialize_on_the_campaign_lock(monkeypatch, tmp_path):
     """Scene mutation joins the same domain (#254) rather than opening a second
     registry: the flows that persist a reply already hold the campaign lock
-    (routes._continuation_stream), so a scene-only lock would add a second
+    (routes.streaming._continuation_stream), so a scene-only lock would add a second
     ordering to get wrong for no gain."""
     _wid, cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "Saltmarch")

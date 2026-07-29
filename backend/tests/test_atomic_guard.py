@@ -21,7 +21,7 @@ import grimoire
 import grimoire.store as store_pkg
 
 STORE = pathlib.Path(store_pkg.__file__).parent
-# The whole package, not just store/: routes.py wrote a campaign's
+# The whole package, not just store/: a route module wrote a campaign's
 # climate.json with a plain write_text, which a store-only scan missed
 # entirely. Anything that writes a record belongs under the same rule.
 PACKAGE = pathlib.Path(grimoire.__file__).parent
@@ -77,7 +77,7 @@ def _write_calls(tree: ast.AST):
         if isinstance(f, ast.Attribute) and f.attr in _PATH_WRITERS:
             # The helper itself is not a raw write. Match the receiver's last
             # name, so `store.atomic.write_text` counts as well as `atomic.` --
-            # routes.py reaches it through the package.
+            # the route modules reach it through the package.
             recv = f.value
             recv_name = recv.id if isinstance(recv, ast.Name) else (
                 recv.attr if isinstance(recv, ast.Attribute) else None)

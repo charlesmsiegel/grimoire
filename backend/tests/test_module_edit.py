@@ -967,19 +967,22 @@ def test_proposal_derivation_excluded_by_edit_lock(monkeypatch, tmp_path):
 
 def test_proposal_route_sites_locked():
     import inspect
-    from grimoire import routes as routes_mod
-    src = inspect.getsource(routes_mod)
+    from grimoire.routes import streaming
+    src = inspect.getsource(streaming)
     for line_marker in ("proposals.new(",):
-        # every proposals.new call site in routes.py sits inside a
+        # every proposals.new call site sits inside a
         # `with store.locks.campaign_lock(` block — enforced by review, smoke-
-        # checked here: the file must contain at least one such wrap.
+        # checked here: the file must contain at least one such wrap. The
+        # proposal finalizers all live in routes/streaming.py, so scanning that
+        # one module (rather than the whole package) keeps the check tight.
+        assert line_marker in src
         assert "locks.campaign_lock(" in src
 
 
 def test_r2_consumers_reference_campaign_lock():
     import inspect
     from grimoire.store import checks as checks_mod, context as context_mod
-    from grimoire import routes as routes_mod
+    from grimoire.routes import mechanics
     assert "campaign_lock" in inspect.getsource(checks_mod.resolve_check)
     assert "campaign_lock" in inspect.getsource(context_mod._mechanics)
-    assert "campaign_lock" in inspect.getsource(routes_mod._continuation_rule_bodies)
+    assert "campaign_lock" in inspect.getsource(mechanics._continuation_rule_bodies)
