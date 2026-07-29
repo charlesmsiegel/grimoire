@@ -11,11 +11,14 @@ Reads never raise on malformed content.
 
 This module also owns projection (``project``) — writing a resolved record's
 roll and 🎲 line into the campaign's roll log and transcript — because the
-two are inseparable: a record with a projectable resolution must never be
-retired (``supersede``) or replaced (``new``) before its projection
-completes, or the roll stands in rolls.json without its transcript line
-forever. Both retirement paths call ``heal`` themselves (#242), so that is a
-guarantee of the state machine rather than a rule each caller must remember.
+two are inseparable: a record with a projectable resolution must never leave
+the projectable states before its projection completes, or the roll stands in
+rolls.json without its transcript line forever. All three exits — retire
+(``supersede``), replace (``new``) and narrate (``commit_narration``, since
+``narrated`` is outside what ``project`` accepts) — call ``heal`` themselves
+(#242), so that is a guarantee of the state machine rather than a rule each
+caller must remember. A guard test keeps this module the sole writer of
+proposals.json, since a direct writer would bypass all three.
 Spec: docs/superpowers/specs/2026-07-12-mechanics-phase4-play-integration-design.md.
 """
 
@@ -243,6 +246,15 @@ def commit_narration(cid: str, sid: str, pid: str, persist) -> bool:
         if (not isinstance(rec, dict) or rec.get("id") != pid
                 or rec.get("status") not in ("resolved", "declined")):
             return False
+        # Third retirement of the projectable state, after supersede/new:
+        # `narrated` is outside project()'s accepted statuses, so a record
+        # narrated before it projected could never project again. Heal after
+        # validation (a lost CAS must leave the record untouched) and re-read,
+        # because heal persists roll_id/line_intent through `update_resolution`
+        # and the stale local `data` would write them straight back out.
+        heal(cid, sid)
+        data = _read(cid)
+        rec = data[sid]
         intent = rec.get("narration_intent")
         if isinstance(intent, int):
             scenes.trim_continuation(cid, sid, intent)

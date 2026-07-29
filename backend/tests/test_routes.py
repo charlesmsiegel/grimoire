@@ -5058,6 +5058,43 @@ def test_new_projects_before_replacing(client):
     assert store.proposals.get(cid, sid)["id"] == fresh["id"]   # replacement landed
 
 
+def test_narrating_projects_before_leaving_the_projectable_states(client):
+    # `narrated` is outside project()'s accepted statuses, so commit_narration
+    # retires the projectable state just like supersede/new: a record narrated
+    # while still unprojected could never project again, and the next new()
+    # would erase the handle with the roll already in rolls.json. Today the
+    # only caller reaches commit_narration through a successful projection —
+    # this asserts the state machine doesn't depend on that ordering.
+    cid, sid, _ = _mech_scene(client)
+    _, pid = _resolved(client, cid, sid)
+    assert client.get(f"/api/campaigns/{cid}/rolls").json() == []   # never projected
+
+    assert store.proposals.commit_narration(
+        cid, sid, pid, lambda: store.scenes.append_message(
+            cid, sid, "assistant", "the blow lands.")) is True
+
+    tagged = [e for e in client.get(f"/api/campaigns/{cid}/rolls").json()
+              if e.get("proposal") == pid]
+    assert len(tagged) == 1                                  # healed on the way out
+    lines = _roll_lines(client, cid, sid)
+    assert len(lines) == 1
+    stored = store.proposals.get(cid, sid)
+    assert stored["status"] == "narrated"
+    # the heal's metadata survived commit_narration's own writes
+    assert stored["resolution"]["roll_id"] == tagged[0]["id"]
+    assert "line_intent" in stored["resolution"]
+    msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    roll_idx = next(i for i, m in enumerate(msgs) if m["content"].startswith("\U0001F3B2"))
+    assert roll_idx < stored["narration_intent"]   # roll line precedes the continuation
+    assert msgs[-1]["content"] == "the blow lands."
+
+    # and the replacement that follows finds nothing left to orphan
+    store.proposals.new(cid, sid, {"check": "brawl"})
+    assert len([e for e in client.get(f"/api/campaigns/{cid}/rolls").json()
+                if e.get("proposal") == pid]) == 1
+    assert len(_roll_lines(client, cid, sid)) == 1
+
+
 def test_supersede_heals_a_half_projected_record(client, monkeypatch):
     # The partial state that motivated the invariant: roll appended, process
     # died before the 🎲 line. A bare supersede must finish the line rather
