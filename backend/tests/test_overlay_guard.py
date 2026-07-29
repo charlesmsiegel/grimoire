@@ -126,6 +126,19 @@ MARKER = "overlay-ok:"
 INHERITED_SEGMENTS = frozenset(overlay.INHERITED_KINDS + overlay.INHERITED_FILES)
 
 
+def _inheritable_literal(value) -> str | None:
+    """The inheritable segment a path literal starts with, if any.
+
+    `pathlib` treats `croot / "characters/alice/character.md"` exactly like the
+    segments joined one at a time, so comparing the whole literal missed it --
+    an ordinary path-formatting choice would have made a raw campaign read
+    invisible. Backslashes count too; a Windows-style literal joins the same."""
+    if not isinstance(value, str):
+        return None
+    head = value.replace("\\", "/").split("/", 1)[0]
+    return head if head in INHERITED_SEGMENTS else None
+
+
 def _last_name(node: ast.AST) -> str | None:
     """The trailing name of a dotted expression: `store.campaigns.campaign_root`
     -> "campaign_root", so package-qualified calls count the same as bare ones."""
@@ -166,7 +179,14 @@ def _own_nodes(body: list):
         node = stack.pop()
         yield node
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue   # its statements belong to its own scope, reached separately
+            # The body belongs to its own scope, reached separately -- but the
+            # decorators and the argument defaults are evaluated *here*, when
+            # the `def` executes, so they are this scope's code. Skipping the
+            # whole node dropped `def f(card=characters.read_card(croot, ...))`.
+            stack.extend(node.decorator_list)
+            a = node.args
+            stack.extend(d for d in a.defaults + a.kw_defaults if d is not None)
+            continue
         stack.extend(ast.iter_child_nodes(node))
 
 
@@ -273,6 +293,20 @@ def _resolver_imports(tree: ast.AST) -> tuple[dict[str, str], dict[str, tuple[st
                 mod = a.name.rsplit(".", 1)[-1]
                 if mod in RESOLVER_MODULES:
                     aliases[a.asname or mod] = mod
+
+    # `read = characters.read_card` is the same call one rename later, and the
+    # detector saw bare names only when an import had bound them. Bind the
+    # canonical pair so `read(croot, ...)` still resolves -- and so a renamed
+    # pure writer stays a pure writer.
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Attribute):
+            continue
+        recv = _last_name(node.value.value)
+        mod = aliases.get(recv, recv if recv in RESOLVER_MODULES else None)
+        if mod:
+            for t in node.targets:
+                if isinstance(t, ast.Name):
+                    direct[t.id] = (mod, node.value.attr)
     return aliases, direct
 
 
@@ -305,15 +339,14 @@ def _unresolved_reads(tree: ast.AST):
         for node in nodes:
             if (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div)
                     and is_croot(node.left) and isinstance(node.right, ast.Constant)
-                    and node.right.value in INHERITED_SEGMENTS):
+                    and _inheritable_literal(node.right.value)):
                 yield node, f'<campaign root> / "{node.right.value}"'
             elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                     and node.func.attr == "joinpath" and is_croot(node.func.value)
-                    and any(isinstance(a, ast.Constant) and a.value in INHERITED_SEGMENTS
-                            for a in node.args)):
+                    and any(_inheritable_literal(getattr(a, "value", None)) for a in node.args)):
                 # the same join, spelled the other way
                 seg = next(a.value for a in node.args
-                           if isinstance(a, ast.Constant) and a.value in INHERITED_SEGMENTS)
+                           if isinstance(a, ast.Constant) and _inheritable_literal(a.value))
                 yield node, f'<campaign root>.joinpath("{seg}", ...)'
             elif isinstance(node, ast.Call) and (hit := resolver_of(node.func)):
                 mod, fn = hit
@@ -563,6 +596,25 @@ def test_a_marker_on_a_nested_call_does_not_exempt_its_parent():
         "the outer call inherited the inner call's marker"
 
 
+def test_a_preceding_marker_block_does_not_exempt_nested_calls():
+    """A comment block above a statement attaches to the statement, so it belongs
+    to the outermost flagged node there. Without that, adding a nested call under
+    an already-marked one silently inherited the exemption."""
+    src = ("def f(cid):\n"
+           "    croot = campaigns.campaign_root(cid)\n"
+           "    # overlay-ok: this reason was written for the outer read only\n"
+           "    return characters.read_card(croot, assets.image_path(croot, a, v))\n")
+    found = list(_unresolved_reads(ast.parse(src)))
+    assert len(found) == 2, f"expected both flagged, got {[w for _n, w in found]}"
+    reasons = {}
+    for node, what in found:
+        others = [n for n, _w in found if n is not node]
+        reasons[what.split("(")[0]] = guard_markers.marker_reason(MARKER, src, node, others)
+    assert reasons["characters.read_card"] is not None, "the outer call lost its own marker"
+    assert reasons["assets.image_path"] is None, \
+        "the nested call inherited the block written for its parent"
+
+
 def test_a_same_line_nested_marker_does_not_exempt_its_parent():
     """Two calls nested on one physical line have identical *line* spans, so
     ownership by span width was false for both and the marker exempted the outer
@@ -580,6 +632,55 @@ def test_a_same_line_nested_marker_does_not_exempt_its_parent():
     assert reasons["assets.image_path"] is not None, "the inner call lost its own marker"
     assert reasons["characters.read_card"] is None, \
         "the outer call on the same line inherited the inner call's marker"
+
+
+def test_a_multi_segment_path_literal_is_still_caught():
+    """`pathlib` joins `"characters/alice"` exactly as it joins the segments one
+    at a time, so an ordinary path-formatting choice hid the read."""
+    for src, why in [
+        ("def f(cid):\n    croot = campaigns.campaign_root(cid)\n"
+         "    return (croot / 'characters/alice/character.md').read_text()\n", "one literal"),
+        ("def f(cid):\n    croot = campaigns.campaign_root(cid)\n"
+         "    return croot.joinpath('characters/alice').exists()\n", "joinpath literal"),
+        ("def f(cid):\n    croot = campaigns.campaign_root(cid)\n"
+         "    return (croot / 'characters\\\\alice').exists()\n", "backslash literal"),
+    ]:
+        assert list(_unresolved_reads(ast.parse(src))), f"missed: {why}"
+
+    # a campaign-local dir that merely starts with a similar word must not fire
+    src = ("def f(cid):\n    croot = campaigns.campaign_root(cid)\n"
+           "    return (croot / 'charactersheets/x').exists()\n")
+    assert not list(_unresolved_reads(ast.parse(src))), "false positive on a prefix match"
+
+
+def test_a_resolver_bound_to_a_local_alias_is_still_caught():
+    """`read = characters.read_card` is the same call one rename later; bare
+    names were recognized only when an import had bound them."""
+    src = ("read = characters.read_card\n"
+           "def f(cid):\n    croot = campaigns.campaign_root(cid)\n"
+           "    return read(croot, aid, vid)\n")
+    assert list(_unresolved_reads(ast.parse(src))), "an aliased resolver callable escaped"
+
+    # and the same rename of a sanctioned writer stays sanctioned
+    src = ("save = assets.put_image\n"
+           "def f(cid):\n    croot = campaigns.campaign_root(cid)\n"
+           "    save(croot, aid, vid, name, data, ext)\n")
+    assert not list(_unresolved_reads(ast.parse(src))), "an aliased pure writer was flagged"
+
+
+def test_a_nested_def_header_is_read_in_the_enclosing_scope():
+    """A default value and a decorator run when the `def` executes, so they are
+    the *enclosing* scope's code. Skipping the whole node dropped them."""
+    for src, why in [
+        ("def outer(cid):\n    croot = campaigns.campaign_root(cid)\n"
+         "    def read(card=characters.read_card(croot, aid, vid)):\n        return card\n"
+         "    return read\n", "argument default"),
+        ("def outer(cid):\n    croot = campaigns.campaign_root(cid)\n"
+         "    @wraps(characters.read_card(croot, aid, vid))\n"
+         "    def read():\n        return 1\n"
+         "    return read\n", "decorator"),
+    ]:
+        assert list(_unresolved_reads(ast.parse(src))), f"missed: {why}"
 
 
 def test_lorebook_commit_is_a_watched_resolver():
