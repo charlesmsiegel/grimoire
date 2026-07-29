@@ -148,7 +148,7 @@ footer.doc{max-width:1280px;margin:0 auto;padding:0 28px 34px;color:var(--text-f
   <div class="doc-label">CODEBASE ATLAS</div>
   <h1 class="doc-title">grimoire — Codebase Atlas</h1>
   <p class="doc-sub">Local-first solo-RPG toolkit: FastAPI + React over a markdown/JSON store, with an LLM as game master</p>
-  <div class="doc-meta">generated 2026-07-29 · 51c5e73 · 411 files, 78,651 LOC (docs/ excluded)</div>
+  <div class="doc-meta">generated 2026-07-29 · 9d6f752 · 411 files, 78,651 LOC (docs/ excluded)</div>
 </header>
 <nav class="tabs" role="tablist"><button role="tab" data-tab="overview" aria-selected="true" aria-controls="overview">Overview</button>
 <button role="tab" data-tab="inventory" aria-selected="false" aria-controls="inventory">Inventory</button>
@@ -491,7 +491,7 @@ code that names them. Resource edges are found textually: a quoted path is an ed
 <section class="panel" id="flows" role="tabpanel">
 
 
-<p class="dim">Three flows carry the correctness weight in this codebase: the streamed play turn (the busiest writer of the transcript, the one artifact that cannot be regenerated — though not its only writer; see Boundaries), module-pack publication (the only path that holds every campaign's lock at once), and scene absorption (the longest LLM round-trip, and the one that mutates the most records).</p>
+<p class="dim">Three flows carry the correctness weight in this codebase: the streamed play turn (the busiest writer of the transcript, the one artifact that cannot be regenerated — though not its only writer; see Boundaries), module-pack publication (one of two paths that can hold every campaign's lock at once), and scene absorption (the longest LLM round-trip, and the one that mutates the most records).</p>
 
 <h2>1 · A play turn, with roll-fence handoff</h2>
 <p><code>POST /api/campaigns/{cid}/scenes/{sid}/chat</code> — <code>backend/src/grimoire/routes/scenes.py:124</code></p>
@@ -505,7 +505,7 @@ sequenceDiagram
   participant G as llm.py _guard
   participant P as provider
   participant W as store/fence.py
-  participant D as ~/.grimoire
+  participant D as data root
   UI->>R: POST .../chat (SSE)
   R->>D: proposals.supersede - retire any pending decision
   alt pcless scene, or empty send
@@ -586,7 +586,7 @@ sequenceDiagram
   participant R as routes/scenes.py
   participant A as store/absorb.py
   participant L as llm.py
-  participant D as ~/.grimoire
+  participant D as data root
   UI->>R: POST .../absorb
   R->>R: _already_absorbed and not force? then 409
   A->>A: build_prompt from templates/absorb/*.j2
@@ -598,21 +598,23 @@ sequenceDiagram
   R-->>UI: edits + commit_token (nothing written yet)
   Note over UI: human reviews and edits
   UI->>R: PUT .../chronicle (body carries commit_token)
-  R->>R: campaign_lock held across ALL four writes
+  R->>R: take campaign_lock, then ledger lookup
   alt token already completed, same body
-    R-->>UI: stored result replayed - no rewrite
+    R-->>UI: stored result replayed - nothing written
   else mismatch, changed body, or incomplete
     R-->>UI: 409 naming the recovery step
   else first commit
-    R->>R: reserve token before first non-idempotent write
+    R->>D: chronicle.absorb - keyed by sid, idempotent overwrite
+    R->>R: reserve token - covers every append below
+    R->>D: append_timeline, mark_absorbed, apply_edits
+    R-->>UI: applied + failures
   end
-  R->>D: chronicle, timeline, mark_absorbed, apply_edits
-  R-->>UI: applied + failures
 </pre></div></div>
 
 <h3>Seams</h3>
 <div class="callout good"><b>Nothing is written until a human approves it.</b> The extraction pass stages dossier and audit edits rather than applying them (<code>backend/src/grimoire/routes/scenes.py:435-441</code>), so a partial or malformed model response costs a token and nothing else. This is a structural improvement over a single write-as-you-go pass.</div>
 <div class="callout good"><b>One lock hold covers all four writes, and the reason is written down.</b> <code>backend/src/grimoire/routes/scenes.py:471-483</code> explains that per-write locking would return 409 <i>after</i> the chronicle record and timeline events were already durable — and the retry that 409 invites would append the timeline events twice. Holding across the sequence means a busy response arrives before the first write, so retrying is safe.</div>
+<div class="callout warn"><b>One write lands before the ledger reservation, deliberately.</b> <code>backend/src/grimoire/routes/scenes.py:522-524</code> writes the chronicle record, and only then does <code>backend/src/grimoire/routes/scenes.py:528</code> reserve the token. The comment in between explains the choice: the chronicle entry is keyed by scene id and merely overwrites, so replaying it is harmless, while every <i>append</i> below the reservation is not. The consequence is a real if benign window — a crash between the two leaves a chronicle write with no ledger entry, and the next attempt redoes it.</div>
 <div class="callout good"><b>Non-idempotency is handled by a commit ledger, not by hoping.</b> Absorb is explicitly not idempotent — lore edits append and plot movements add a beat (<code>backend/src/grimoire/routes/scenes.py:413-416</code>). A <code>commit_token</code> minted with the staged result (<code>backend/src/grimoire/routes/scenes.py:449</code>) is reserved before the first non-idempotent write (<code>backend/src/grimoire/routes/scenes.py:526-528</code>), and the ledger distinguishes four cases: clean replay, scene mismatch, body-changed-after-commit, and reserved-but-never-completed — each with its own 409 and a message telling the user what to do (<code>backend/src/grimoire/routes/scenes.py:489-521</code>).</div>
 <div class="callout warn"><b>Widest blast radius in the app.</b> <code>backend/src/grimoire/store/absorb.py:11-14</code> imports eighteen store modules — appearances, campaigns, characters, chronicle, dossiers, entities, plot, relationships, sheets and more. One malformed model response is parsed into edits across all of them, which is why the <code>absorb</code> eval case checks that every required section is present and that the result materializes into applicable edits (<code>evals/recordings/absorb.truncated.json</code> is the counterexample that must fail).</div>
 <div class="callout good"><b>The staged phases never raise, but they do not fail silently either.</b> Dossier staging and the mechanics audit each own their failure boundary rather than aborting the absorb (<code>backend/src/grimoire/routes/scenes.py:435-441</code>) — and both report what happened as explicit status rather than as an absent result. <code>_stage_dossiers</code> returns <code>failed</code>, <code>degraded</code> or <code>ok</code> with a reason and a per-NPC breakdown (<code>backend/src/grimoire/routes/scenes.py:380-388</code>), and <code>_run_audit</code> returns <code>mechanics.status</code> of <code>failed</code> or <code>skipped</code> with a reason and the sheets it dropped (<code>backend/src/grimoire/routes/scenes.py:273-304</code>). A failed phase is therefore distinguishable in the review panel from a phase that genuinely had nothing to change — which is the point of the design.</div>
@@ -705,7 +707,7 @@ sequenceDiagram
 <tr>
   <td>Every campaign read of an inheritable record resolves through the overlay</td>
   <td><code>backend/tests/test_overlay_guard.py:437</code> against <code>backend/src/grimoire/store/overlay.py:43-46</code></td>
-  <td><span class="badge good">enforced by a guard test</span> <code>backend/tests/test_overlay_guard.py:437</code>; exemptions must be function-scoped and justified</td>
+  <td><span class="badge good">enforced by a guard test</span> exemptions must be function-scoped and carry a stated reason</td>
 </tr>
 <tr>
   <td>Narration is never persisted without the proposal it belongs to</td>
@@ -748,9 +750,9 @@ sequenceDiagram
   <td><span class="badge good">enforced</span> replay evals run offline inside <code>pytest</code></td>
 </tr>
 <tr>
-  <td>Backend code never assumes a repo checkout or a desktop <code>~</code> (Android)</td>
+  <td>Filesystem access goes through the designated resolvers, so no packaged-resource or data path assumes a repo checkout or a desktop <code>~</code> (Android)</td>
   <td><code>backend/src/grimoire/store/paths.py:42</code>, <code>backend/src/grimoire/prompts.py:17-26</code>, <code>backend/src/grimoire/main.py:22-30</code>; one case pinned by <code>backend/tests/test_proclock.py:222</code></td>
-  <td><span class="badge warn">partial</span> the resolvers exist and one path is tested; nothing stops a new <code>Path.home()</code> from being added</td>
+  <td><span class="badge warn">partial</span> the resolvers exist and one path is pinned by a test. Note this is a <i>use-the-resolver</i> rule (<code>CLAUDE.md:75-77</code>), not a ban on <code>Path.home()</code> — the resolver itself is built from it (<code>backend/src/grimoire/store/paths.py:13</code>, <code>:23</code>), and <code>backend/src/grimoire/store/proclock.py:87</code> uses it deliberately for machine-state. What is unguarded is a new caller reaching the disk <i>around</i> the resolvers</td>
 </tr>
 <tr>
   <td>pydantic usage stays v1/v2-agnostic (no <code>model_dump()</code>, <code>Field</code>, validators, <code>ConfigDict</code>)</td>
