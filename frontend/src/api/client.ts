@@ -933,7 +933,7 @@ export const api = {
                   body: { one_line: string; summary: string; keywords: string[];
                           timeline_events: TimelineEvent[]; edits: StagedEdit[] }) =>
     request<ChronicleEntry & { applied: string[];
-      sheet_failures: { id: string; reason: string; kind: "conflict" | "error" }[] }>(
+      failures: { id: string; reason: string; kind: "conflict" | "error" }[] }>(
       "PUT", `/api/campaigns/${cid}/scenes/${sid}/chronicle`, body),
   getChronicle: (cid: string) =>
     request<ChronicleEntry[]>("GET", `/api/campaigns/${cid}/chronicle`),

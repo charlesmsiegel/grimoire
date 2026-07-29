@@ -130,8 +130,12 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   const [absorbing, setAbsorbing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editRows, setEditRows] = useState<(StagedEdit & { approved: boolean })[]>([]);
-  const [sheetFailures, setSheetFailures] = useState<
+  const [editFailures, setEditFailures] = useState<
     { id: string; reason: string; kind: "conflict" | "error"; label: string }[]>([]);
+  // A failed SAVE gets its own surface, not the shared `error` banner: that
+  // banner's Retry is wired to chat generation, so pointing a save failure at
+  // it invites the user to generate another reply with the review still open.
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [chooserOpen, setChooserOpen] = useState(false);
   const [seedPrompt, setSeedPrompt] = useState<{ sid: string; prompt: string } | null>(null);
   // Response-length chip beside Send: the scene's own preset (its saved
@@ -517,7 +521,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     if (!activeId || absorbing) return;
     setAbsorbing(true);
     setError(null);
-    setSheetFailures([]);
+    setEditFailures([]);
     try {
       let a;
       try {
@@ -546,7 +550,8 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   async function saveAbsorb() {
     if (!absorb || !activeId || saving) return;
     setSaving(true);
-    // captured before editRows is cleared below -- sheet_failures only carry
+    setSaveError(null);
+    // captured before editRows is cleared below -- failures only carry
     // id/reason/kind, so the row's label has to come from what was on screen.
     const labels = new Map(editRows.map((e) => [e.id, e.label]));
     try {
@@ -554,12 +559,12 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
         one_line: absorb.one_line, summary: absorb.summary, keywords: absorb.keywords,
         timeline_events: absorb.timeline_events,
         edits: editRows.filter((e) => e.approved).map(({ approved, ...e }) => e) });
-      setSheetFailures(res.sheet_failures.map((f) => ({ ...f, label: labels.get(f.id) ?? f.id })));
+      setEditFailures(res.failures.map((f) => ({ ...f, label: labels.get(f.id) ?? f.id })));
       setAbsorb(null);
       setEditRows([]);
       setCtxKey((n) => n + 1);
     } catch (err: any) {
-      setError(err.detail ?? String(err));
+      setSaveError(err.detail ?? String(err));
     } finally {
       setSaving(false);
     }
@@ -759,13 +764,13 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
           </div>
         )}
         {showChanges && <ChangesPanel cid={cid} />}
-        {sheetFailures.length > 0 && (
+        {editFailures.length > 0 && (
           <div className="mechanics-notice">
-            <p>{sheetFailures.length} sheet change{sheetFailures.length === 1 ? "" : "s"} did not apply</p>
-            {sheetFailures.map((f, i) => (
+            <p>{editFailures.length} change{editFailures.length === 1 ? "" : "s"} did not apply</p>
+            {editFailures.map((f, i) => (
               <p className="field-hint" key={i}>{f.label}: {f.reason} ({f.kind})</p>
             ))}
-            <button className="subtle" onClick={() => setSheetFailures([])}>Dismiss</button>
+            <button className="subtle" onClick={() => setEditFailures([])}>Dismiss</button>
           </div>
         )}
         {absorb && (
@@ -902,9 +907,16 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
                 })}
               </div>
             )}
+            {saveError && (
+              <div className="mechanics-notice">
+                <p>Could not save this review: {saveError}</p>
+                <button className="subtle" onClick={saveAbsorb} disabled={saving}>
+                  Try saving again</button>
+              </div>
+            )}
             <div className="form-actions">
               <button className="subtle" disabled={saving}
-                      onClick={() => { setAbsorb(null); setEditRows([]); setSheetFailures([]); }}>Cancel</button>
+                      onClick={() => { setAbsorb(null); setEditRows([]); setEditFailures([]); setSaveError(null); }}>Cancel</button>
               <button className="primary" onClick={saveAbsorb} disabled={saving}>
                 {saving ? "Saving…" : "Save summary"}</button>
             </div>

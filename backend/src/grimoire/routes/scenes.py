@@ -460,14 +460,19 @@ def put_chronicle(cid: str, sid: str, body: ChronicleSave):
     # applied. Holding it here means a busy response is reported before the
     # first write, so a retry is safe. Reentrant, so the inner acquisitions
     # cost nothing.
+    #
+    # The same hold is what makes apply_edits' dossier branch safe (#235): it
+    # compares the staged `before` with what is stored and then writes, and two
+    # concurrent saves could otherwise both read a matching `before` before
+    # either wrote -- a guard that stops neither.
     with store.locks.campaign_lock(cid):
         record = store.chronicle.absorb(cid, {
             "id": sid, "one_line": body.one_line, "summary": body.summary,
             "keywords": body.keywords, **facts})
         store.chronicle.append_timeline(cid, body.timeline_events)
         store.scenes.mark_absorbed(cid, sid, body.one_line, body.summary)
-        applied, sheet_failures = store.absorb.apply_edits(cid, body.edits, sid)
-    return {**record, "applied": applied, "sheet_failures": sheet_failures}
+        applied, failures = store.absorb.apply_edits(cid, body.edits, sid)
+    return {**record, "applied": applied, "failures": failures}
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}/cast")

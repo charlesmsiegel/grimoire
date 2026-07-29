@@ -138,7 +138,7 @@ beforeEach(() => {
       field: "current_state", before: "Wary.", after: "Loyal now.", authored: false }] });
   (api.saveChronicle as any).mockResolvedValue({ id: "s1", one_line: "They met.",
     summary: "A met B.", keywords: ["salt"], cast: [], location: "", date: "", absorbed: "t",
-    applied: [], sheet_failures: [] });
+    applied: [], failures: [] });
   (api.getChronicle as any).mockResolvedValue([]);
   (api.campaignChanges as any).mockResolvedValue([]);
   (api.listResponsePresets as any).mockResolvedValue([]);
@@ -714,8 +714,29 @@ test("double-clicking Save summary commits once", async () => {
   fireEvent.click(save);
   expect(api.saveChronicle).toHaveBeenCalledTimes(1);
   release({ id: "s1", one_line: "o", summary: "s", keywords: [], cast: [], location: "",
-            date: "", absorbed: "t", applied: [], sheet_failures: [] });
+            date: "", absorbed: "t", applied: [], failures: [] });
   await waitFor(() => expect(screen.queryByLabelText("Scene summary")).toBeNull());
+});
+
+test("a failed save offers a retry that saves, not one that generates a reply", async () => {
+  // The shared error banner's Retry calls api.retry (chat generation). Routing a
+  // save failure there would invite the user to generate another reply with the
+  // unsaved review still open.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  (api.saveChronicle as any).mockRejectedValueOnce(
+    Object.assign(new Error("boom"), { detail: "disk full" }));
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /Save summary/ }));
+  const again = await screen.findByRole("button", { name: /Try saving again/ });
+  (api.saveChronicle as any).mockResolvedValueOnce({
+    id: "s1", one_line: "o", summary: "s", keywords: [], cast: [], location: "",
+    date: "", absorbed: "t", applied: [], failures: [] });
+  fireEvent.click(again);
+  await waitFor(() => expect(api.saveChronicle).toHaveBeenCalledTimes(2));
+  expect(api.retry).not.toHaveBeenCalled();
 });
 
 test("a failed save keeps the review open and shows the error", async () => {
@@ -1146,7 +1167,7 @@ test("sheet edits render read-only with the note and survive save", async () => 
     edits: [SHEET_EDIT] });
   (api.saveChronicle as any).mockResolvedValue({ id: "s1", one_line: "o", summary: "s", keywords: [],
     cast: [], location: "", date: "", absorbed: "t",
-    applied: ["sheet:characters:mara:hp"], sheet_failures: [] });
+    applied: ["sheet:characters:mara:hp"], failures: [] });
   renderCampaign();
   await screen.findByText("hi");
   fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
@@ -1160,7 +1181,7 @@ test("sheet edits render read-only with the note and survive save", async () => 
   expect(screen.queryByText(/did not apply/)).toBeNull();
 });
 
-test("sheet_failures from save render a notice", async () => {
+test("failures from save render a notice", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
   (api.absorbScene as any).mockResolvedValue({
@@ -1170,17 +1191,17 @@ test("sheet_failures from save render a notice", async () => {
     edits: [SHEET_EDIT] });
   (api.saveChronicle as any).mockResolvedValue({ id: "s1", one_line: "o", summary: "s", keywords: [],
     cast: [], location: "", date: "", absorbed: "t", applied: [],
-    sheet_failures: [{ id: "sheet:characters:mara:hp", reason: "changed", kind: "conflict" }] });
+    failures: [{ id: "sheet:characters:mara:hp", reason: "changed", kind: "conflict" }] });
   renderCampaign();
   await screen.findByText("hi");
   fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
   await screen.findByText("Mara — HP");
   fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
-  await screen.findByText("1 sheet change did not apply");
+  await screen.findByText("1 change did not apply");
   expect(screen.getByText(/Mara — HP/)).toBeInTheDocument();
   expect(screen.getByText("Mara — HP: changed (conflict)")).toBeInTheDocument();
 
-  // A stale sheet_failures notice must not survive into the next scene's
+  // A stale failures notice must not survive into the next scene's
   // absorb panel -- opening a new one (End scene) clears it immediately.
   fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
   await waitFor(() => expect(screen.queryByText(/did not apply/)).toBeNull());
