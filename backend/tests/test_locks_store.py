@@ -869,3 +869,52 @@ def test_a_manual_roll_and_its_transcript_line_share_one_hold(
     assert [k for k, _ in depths] == ["rolls", "scene"], depths
     assert all(d >= 1 for _, d in depths), \
         f"each write took its own lock instead of sharing the route's: {depths}"
+
+
+def test_the_chronicle_save_persists_under_one_hold(monkeypatch, tmp_path):
+    """`put_chronicle` writes the chronicle record, the timeline, the scene's
+    absorbed marker and the approved edits -- four independent writes.
+
+    With a lock per write, contention arriving partway returned 409 after the
+    record and timeline were already durable, and the retry that 409 invites
+    appended the timeline events a SECOND time while the first attempt's edits
+    were never applied. One hold means a busy response is reported before the
+    first write.
+
+    Depth is the discriminator for the same reason as the manual-roll test:
+    contention cannot be made to arrive *between* two calls from outside, and
+    the spies stand in front of the real mutators, so they see the depth the
+    ROUTE established -- 1 with the outer hold, 0 without.
+    """
+    from fastapi.testclient import TestClient
+
+    from grimoire import main
+    from grimoire.store import chronicle
+
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+    client = TestClient(main.create_app())
+    sid = scenes.create_scene(cid, "Saltmarch")
+    scenes.append_message(cid, sid, "user", "something happened")
+
+    depths = []
+    real_absorb = chronicle.absorb
+    real_timeline = chronicle.append_timeline
+
+    def spy_absorb(*a, **k):
+        depths.append(("absorb", locks.campaign_lock(cid)._depth))
+        return real_absorb(*a, **k)
+
+    def spy_timeline(*a, **k):
+        depths.append(("timeline", locks.campaign_lock(cid)._depth))
+        return real_timeline(*a, **k)
+
+    monkeypatch.setattr(chronicle, "absorb", spy_absorb)
+    monkeypatch.setattr(chronicle, "append_timeline", spy_timeline)
+
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle", json={
+        "one_line": "They argued.", "summary": "A long argument.",
+        "keywords": [], "timeline_events": [], "edits": []})
+    assert r.status_code == 200, r.text
+    assert [k for k, _ in depths] == ["absorb", "timeline"], depths
+    assert all(d >= 1 for _, d in depths), \
+        f"each write took its own lock instead of sharing the route's: {depths}"

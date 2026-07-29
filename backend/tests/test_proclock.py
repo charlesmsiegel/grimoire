@@ -244,3 +244,56 @@ def test_an_unusable_passwd_home_falls_back_to_the_environment(monkeypatch, tmp_
                         lambda uid: type("E", (), {"pw_dir": "/"})())
     monkeypatch.setenv("HOME", str(fake_home))
     assert fake_home in proclock.lock_dir().parents
+
+
+def test_the_store_key_follows_filesystem_identity_not_spelling(tmp_path):
+    """Two spellings of one directory must key to one lock.
+
+    A path string cannot decide this: normcase folds case on Windows but is a
+    no-op on POSIX, so on a case-INSENSITIVE POSIX volume (the macOS default)
+    `/Users/A/Store` and `/Users/a/store` are one directory with two spellings.
+    Hashing the spelling would put two processes on different lock files while
+    both believed they held the campaign. (st_dev, st_ino) answers correctly on
+    every platform, and this symlink stands in for the same question.
+    """
+    real = tmp_path / "real-store"
+    real.mkdir()
+    link = tmp_path / "aliased-store"
+    try:
+        link.symlink_to(real, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks not permitted here")
+    assert proclock.lock_path(real, "campaign", "c") == \
+        proclock.lock_path(link, "campaign", "c")
+
+
+def test_distinct_stores_still_key_apart(tmp_path):
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    assert proclock.lock_path(a, "campaign", "c") != proclock.lock_path(b, "campaign", "c")
+
+
+def test_a_missing_store_root_still_resolves_a_lock_path(tmp_path):
+    """The stat-based key falls back to the path when the root does not exist
+    yet -- reachable only before the store is created, when there is no data
+    for the lock to protect."""
+    missing = tmp_path / "not-created-yet"
+    p = proclock.lock_path(missing, "campaign", "c")
+    assert p.name.endswith(".lock")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX errno path")
+def test_posix_eacces_from_the_lock_call_counts_as_contention(tmp_path, monkeypatch):
+    """Some platforms -- and any libc emulating flock over fcntl -- report an
+    already-held lock as EACCES. Treating it as permanent would turn ordinary
+    contention into a 500 instead of a 409."""
+    import errno as _errno
+
+    lock = proclock.lock_path(tmp_path, "t", "eacces")
+    monkeypatch.setattr(proclock, "fcntl", type("F", (), {
+        "LOCK_EX": 2, "LOCK_NB": 4, "LOCK_UN": 8,
+        "flock": staticmethod(
+            lambda fd, op: (_ for _ in ()).throw(OSError(_errno.EACCES, "denied"))),
+    }))
+    assert proclock.acquire(lock, proclock.NO_WAIT) is None   # contention, not a raise

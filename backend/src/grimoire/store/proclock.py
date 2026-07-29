@@ -98,12 +98,29 @@ def lock_dir() -> Path:
 
 
 def _store_key(root: Path) -> str:
-    """Identify the store by its resolved path. ``realpath`` resolves symlinks,
-    junctions, DOS 8.3 names and ``subst`` drives; ``normcase`` normalizes case
-    and separators on Windows and is a no-op on POSIX, so genuinely distinct
-    case-sensitive paths stay distinct."""
-    norm = os.path.normcase(os.path.realpath(str(root)))
-    return hashlib.sha256(norm.encode("utf-8", "surrogateescape")).hexdigest()[:16]
+    """Identify the store, preferring filesystem identity over its spelling.
+
+    ``(st_dev, st_ino)`` is the only thing that answers "same directory?"
+    correctly. A path string cannot: ``normcase`` folds case on Windows but is
+    a no-op on POSIX, so on a case-INSENSITIVE POSIX volume (the macOS
+    default) ``/Users/A/Store`` and ``/Users/a/store`` are one directory with
+    two spellings, and hashing the spelling would put two processes on
+    different lock files while both believed they held the campaign. Inode
+    identity also absorbs the residual cases a path never could: bind mounts,
+    a mapped drive versus its UNC form, and hard-linked roots.
+
+    Falls back to the normalized path when the root does not exist yet, which
+    is only reachable before the store is created -- at which point there is
+    no data for the lock to protect, and the two keys converge as soon as it
+    is. ``realpath`` still resolves symlinks, junctions, DOS 8.3 names and
+    ``subst`` drives for that fallback.
+    """
+    try:
+        st = os.stat(str(root))
+        ident = f"{st.st_dev}\0{st.st_ino}"
+    except OSError:
+        ident = os.path.normcase(os.path.realpath(str(root)))
+    return hashlib.sha256(ident.encode("utf-8", "surrogateescape")).hexdigest()[:16]
 
 
 def lock_path(root: Path, domain: str, name: str) -> Path:
@@ -163,7 +180,13 @@ def _try_lock(fd: int) -> bool:
     except OSError as e:
         if _WINDOWS and e.errno in (errno.EACCES, errno.EDEADLOCK):
             return False
-        if not _WINDOWS and e.errno in (errno.EAGAIN, errno.EWOULDBLOCK):
+        # EACCES on POSIX as well as EAGAIN/EWOULDBLOCK: several platforms
+        # (and any libc emulating flock over fcntl) report an already-held
+        # lock as EACCES, and treating that as permanent turns ordinary
+        # contention into a 500 instead of a 409. A genuine permission problem
+        # surfaces earlier, at the os.open above, so EACCES *from the lock
+        # call* is contention in practice.
+        if not _WINDOWS and e.errno in (errno.EAGAIN, errno.EWOULDBLOCK, errno.EACCES):
             return False
         raise
 
