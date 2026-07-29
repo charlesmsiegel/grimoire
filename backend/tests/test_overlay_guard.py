@@ -81,8 +81,14 @@ ROOT_FUNCS = ("campaign_root", "croot_of", "_campaign_root_or_404")
 #: `image_subjects` reads greeting assets and character refs under `<root>/
 #: greetings` (`backend/src/grimoire/store/image_subjects.py:21`), so on a thin
 #: campaign it omits inherited world data exactly like the others.
+#:
+#: `lorebook.commit` is the same shape one level up: it reads existing entities
+#: through `_existing_signatures` to skip duplicates
+#: (`backend/src/grimoire/store/lorebook.py:74`), so on a thin campaign it would
+#: miss inherited entries and create a campaign-side record shadowing them.
+#: Every call site today passes a world root; the entry is preventive.
 RESOLVER_MODULES = ("entities", "characters", "pcs", "greetings", "assets", "taglines",
-                    "appearances", "image_subjects")
+                    "appearances", "image_subjects", "lorebook")
 
 #: Resolver functions that *only* write, named exactly. A pure write belongs on
 #: the campaign root: that is how a record materializes.
@@ -555,6 +561,33 @@ def test_a_marker_on_a_nested_call_does_not_exempt_its_parent():
     assert reasons["assets.image_path"] is not None, "the inner call lost its own marker"
     assert reasons["characters.read_card"] is None, \
         "the outer call inherited the inner call's marker"
+
+
+def test_a_same_line_nested_marker_does_not_exempt_its_parent():
+    """Two calls nested on one physical line have identical *line* spans, so
+    ownership by span width was false for both and the marker exempted the outer
+    call too. Containment is by line and column."""
+    src = ("def f(cid):\n"
+           "    croot = campaigns.campaign_root(cid)\n"
+           "    return characters.read_card(croot, assets.image_path(croot, a, v))  "
+           "# overlay-ok: meant for the inner call only, honestly\n")
+    found = list(_unresolved_reads(ast.parse(src)))
+    assert len(found) == 2, f"expected both flagged, got {[w for _n, w in found]}"
+    reasons = {}
+    for node, what in found:
+        others = [n for n, _w in found if n is not node]
+        reasons[what.split("(")[0]] = guard_markers.marker_reason(MARKER, src, node, others)
+    assert reasons["assets.image_path"] is not None, "the inner call lost its own marker"
+    assert reasons["characters.read_card"] is None, \
+        "the outer call on the same line inherited the inner call's marker"
+
+
+def test_lorebook_commit_is_a_watched_resolver():
+    """It reads existing entities off the root to skip duplicates, so a campaign
+    root would miss inherited entries and create a shadowing record."""
+    src = ("def f(cid):\n    croot = campaigns.campaign_root(cid)\n"
+           "    return lorebook.commit(croot, entries)\n")
+    assert list(_unresolved_reads(ast.parse(src))), "lorebook.commit was not watched"
 
 
 def test_an_alias_chain_is_followed_to_its_end():

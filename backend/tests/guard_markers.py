@@ -42,6 +42,28 @@ def _spans(node: ast.AST) -> tuple[int, int]:
     return node.lineno, getattr(node, "end_lineno", node.lineno)
 
 
+def _extent(node: ast.AST) -> tuple[tuple[int, int], tuple[int, int]]:
+    """((start line, start col), (end line, end col)) — the node's real extent.
+
+    Line numbers alone cannot order two calls written on one physical line;
+    columns can, which is what `_strictly_inside` needs."""
+    return ((node.lineno, node.col_offset),
+            (getattr(node, "end_lineno", node.lineno),
+             getattr(node, "end_col_offset", node.col_offset)))
+
+
+def _strictly_inside(inner: ast.AST, outer: ast.AST) -> bool:
+    """`inner` is contained by `outer` and is not the same extent.
+
+    Comparing line-span *width* looked equivalent and was not: two calls nested
+    on a single line have identical spans, so the width test was false for both
+    and a marker meant for the inner one exempted the outer one as well.
+    """
+    i_start, i_end = _extent(inner)
+    o_start, o_end = _extent(outer)
+    return o_start <= i_start and i_end <= o_end and (i_start, i_end) != (o_start, o_end)
+
+
 def marker_reason(marker: str, src: str, node: ast.AST, others=()) -> str | None:
     """The `# <marker>: <reason>` attached to THIS call, if any.
 
@@ -56,9 +78,11 @@ def marker_reason(marker: str, src: str, node: ast.AST, others=()) -> str | None
     silence a guard by accident and a way to do it on purpose.
 
     `others` is the rest of the flagged nodes in the same file. An inline marker
-    belongs to the *narrowest* flagged node containing it, so a marker written
-    for an inner call — `read_card(image_path(croot, ...)  # marker`, spanning
-    both — cannot also exempt the outer one that happens to span the same line.
+    belongs to the *innermost* flagged node containing it, so a marker written
+    for an inner call — `read_card(croot, image_path(croot, ...))  # marker`,
+    whether split over lines or written on one — cannot also exempt the outer
+    one spanning the same comment. Ownership is decided by AST containment
+    (line *and* column), because on one physical line the line spans are equal.
     """
     comments = _comments_by_line(src)
     start, end = _spans(node)
@@ -68,9 +92,7 @@ def marker_reason(marker: str, src: str, node: ast.AST, others=()) -> str | None
         if not sep:
             continue
         # someone else, strictly inside this node, owns this comment
-        if any(_spans(o)[0] <= lineno <= _spans(o)[1]
-               and (_spans(o)[1] - _spans(o)[0]) < (end - start)
-               and start <= _spans(o)[0] and _spans(o)[1] <= end
+        if any(_spans(o)[0] <= lineno <= _spans(o)[1] and _strictly_inside(o, node)
                for o in others):
             continue
         return reason.strip()
