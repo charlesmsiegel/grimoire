@@ -2143,35 +2143,94 @@ def test_absorb_writes_dossier_for_present_character(client):
     assert r.status_code == 200
     croot = store.campaigns.campaign_root(cid)
     assert "Aese is a shy snowleopardgirl" in store.dossiers.read(croot, "aese")
+    assert r.json()["dossiers"] == {"status": "ok", "reason": None,
+                                    "refreshed": ["aese"], "failed": []}
+
+
+def _cast_npc(client, wid, cid, sid, name, ident):
+    client.post(f"/api/worlds/{wid}/characters", json={"name": name, "version_name": "main"})
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                json={"kind": "characters", "id": ident, "version": "main", "role": "npc"})
+
+
+class _DossierFake:
+    """1st complete() = the prose extraction; every later call is a dossier
+    refresh, failing for any character named in `boom`."""
+
+    def __init__(self, *boom: str):
+        self.boom, self.calls = boom, 0
+
+    async def stream(self, m, cfg):
+        yield "{}"
+
+    async def complete(self, m, cfg):
+        self.calls += 1
+        if self.calls == 1:
+            return '{"one_line": "ok", "summary": "s", "keywords": [], "timeline_events": []}'
+        if any(f"Character: {n}" in m[1]["content"] for n in self.boom):
+            raise RuntimeError("dossier boom")
+        return "A standing paragraph."
 
 
 def test_absorb_survives_dossier_failure(client):
-    # A dossier generation error must not fail the absorb (the loop swallows per character).
+    # A dossier generation error must not fail the absorb -- but it must be
+    # reported, not swallowed: every NPC failing is a "failed" dossier phase.
     wid, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
-    client.post(f"/api/worlds/{wid}/characters", json={"name": "Aese", "version_name": "main"})
-    client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
-                json={"kind": "characters", "id": "aese", "version": "main", "role": "npc"})
+    _cast_npc(client, wid, cid, sid, "Aese", "aese")
     store.scenes.append_message(cid, sid, "user", "hi")
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
-
-    class Fake:  # 1st complete() = extraction (ok); later complete() = dossier (boom)
-        def __init__(self):
-            self.calls = 0
-
-        async def stream(self, m, cfg):
-            yield "{}"
-
-        async def complete(self, m, cfg):
-            self.calls += 1
-            if self.calls == 1:
-                return '{"one_line": "ok", "summary": "s", "keywords": [], "timeline_events": []}'
-            raise RuntimeError("dossier boom")
-
-    client.app.dependency_overrides[routes.get_llm] = lambda: Fake()
+    client.app.dependency_overrides[routes.get_llm] = lambda: _DossierFake("Aese")
     r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
     assert r.status_code == 200 and r.json()["one_line"] == "ok"
     assert store.dossiers.read(store.campaigns.campaign_root(cid), "aese") == ""  # failed write skipped
+    assert r.json()["dossiers"] == {
+        "status": "failed", "reason": "no dossier could be refreshed",
+        "refreshed": [], "failed": [{"id": "aese", "reason": "RuntimeError: dossier boom"}]}
+
+
+def test_absorb_reports_partial_dossier_failure_as_degraded(client):
+    wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    _cast_npc(client, wid, cid, sid, "Aese", "aese")
+    _cast_npc(client, wid, cid, sid, "Winifred", "winifred")
+    store.scenes.append_message(cid, sid, "user", "hi")
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    client.app.dependency_overrides[routes.get_llm] = lambda: _DossierFake("Winifred")
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    assert body["dossiers"] == {
+        "status": "degraded", "reason": "some dossiers could not be refreshed",
+        "refreshed": ["aese"], "failed": [{"id": "winifred", "reason": "RuntimeError: dossier boom"}]}
+    croot = store.campaigns.campaign_root(cid)
+    assert store.dossiers.read(croot, "aese") == "A standing paragraph."
+    assert store.dossiers.read(croot, "winifred") == ""
+
+
+def test_absorb_reports_an_unreadable_npc_card_as_a_dossier_failure(client):
+    # The failure mode the silent loop hid best: one bad character record.
+    wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    _cast_npc(client, wid, cid, sid, "Aese", "aese")
+    store.scenes.append_message(cid, sid, "user", "hi")
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    client.app.dependency_overrides[routes.get_llm] = lambda: _DossierFake()
+    # The cast still names aese, but the campaign-level card read now fails.
+    (store.campaigns.campaign_root(cid) / "characters" / "aese" / "character.md").unlink()
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    assert body["dossiers"]["status"] == "failed"
+    assert [f["id"] for f in body["dossiers"]["failed"]] == ["aese"]
+    assert body["dossiers"]["failed"][0]["reason"].startswith("CharacterNotFound")
+
+
+def test_absorb_dossiers_are_skipped_with_no_npcs_present(client):
+    _, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "We entered.")
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    client.app.dependency_overrides[routes.get_llm] = lambda: _DossierFake()
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    assert body["dossiers"] == {"status": "skipped", "reason": "no npcs present",
+                                "refreshed": [], "failed": []}
 
 
 def test_absorb_empty_scene_is_400(client):
