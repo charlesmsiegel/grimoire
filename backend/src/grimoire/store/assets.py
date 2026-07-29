@@ -19,6 +19,7 @@ from . import atomic
 AVATAR = "avatar"
 FOCUS_FILE = "focus.json"
 _EXTS = {"png", "jpg", "jpeg", "gif", "webp"}
+_PROMOTE_TMP = "promote-tmp"  # the temp name the pre-#253 three-rename swap used
 
 
 def _safe(part: str) -> bool:
@@ -27,7 +28,15 @@ def _safe(part: str) -> bool:
 
 def _safe_name(name: str) -> bool:
     # reject "." (ambiguous with ext) and glob metacharacters (the cleanup/lookup globs name.*)
-    return _safe(name) and "." not in name and not any(c in name for c in "*?[]")
+    #
+    # `promote-tmp` is reserved, not rejected on a whim: the old three-rename
+    # swap renamed onto that exact path, so an image stored under it would have
+    # been clobbered (POSIX) or would have broken every promotion (Windows) --
+    # the name was never usable. Reserving it is what lets
+    # `_heal_stranded_promotion` treat such a file as crash residue rather than
+    # as somebody's image (PR review).
+    return (_safe(name) and "." not in name and name != _PROMOTE_TMP
+            and not any(c in name for c in "*?[]"))
 
 
 def _norm_ext(ext: str) -> str:
@@ -91,6 +100,53 @@ def _image_locks_held(d: Path, *names: str):
         yield
 
 
+def _free_gallery(d: Path) -> str:
+    used = {p.stem for p in d.iterdir() if p.is_file()}
+    n = 1
+    while f"gallery_{n}" in used:
+        n += 1
+    return f"gallery_{n}"
+
+
+def _heal_stranded_promotion(d: Path) -> None:
+    """Rescue an image a pre-#253 promotion left under ``promote-tmp<ext>``.
+
+    That swap renamed the promoted file to a fixed temp name, then the old
+    avatar into its slot, then the temp into the avatar slot. A crash
+    mid-sequence stranded the temp, and nothing in the app looks for it:
+    ``image_path`` globs ``<name>.*``, and the editor renders only ``avatar``
+    and ``gallery_N`` (``CharacterEditor.tsx``, ``EntityEditor.tsx``). So the
+    file sat on disk, invisible, and the user's only recovery was to re-upload.
+
+    Promotion cannot produce this state any more -- there is no temp -- so this
+    exists purely to repair stores damaged before the fix, and it does it where
+    the issue asked for it: on the directory scan, completing or restoring the
+    swap. It only ever renames onto a free name; nothing is overwritten or
+    deleted, and a failure (read-only store, racing sync client) is swallowed
+    so a read never fails over cleanup that the next scan can retry.
+
+    - No avatar: the temp becomes the avatar. That was the swap's destination,
+      so this finishes the promotion the user asked for.
+    - Avatar present: the crash came before the avatar moved, and *which* slot
+      the temp was taken from is unrecoverable (the fixed name never encoded
+      it), so it lands in the next free gallery slot -- visible again, and the
+      working avatar is left alone.
+    """
+    if not any(d.glob(f"{_PROMOTE_TMP}.*")):
+        return  # the overwhelmingly common case: one glob, no locks, no writes
+    with _image_locks_held(d, _PROMOTE_TMP, AVATAR):
+        for p in sorted(d.glob(f"{_PROMOTE_TMP}.*")):  # re-glob under the lock
+            if not _norm_ext(p.suffix):
+                continue
+            stem = AVATAR if not any(d.glob(f"{AVATAR}.*")) else _free_gallery(d)
+            target = d / f"{stem}{p.suffix}"
+            try:
+                if not target.exists():
+                    p.rename(target)
+            except OSError:
+                pass
+
+
 def _mtime_ns(p: Path) -> int:
     """Sort key that tolerates the file vanishing mid-scan. put_image writes
     the new extension and then unlinks the stale sibling, so a concurrent
@@ -111,7 +167,14 @@ def image_path(root: Path, cid: str, vid: str, name: str, base: str = "character
         return None
     matches = sorted(d.glob(f"{name}.*"))
     if not matches:
-        return None
+        if name != AVATAR:
+            return None
+        # A promotion interrupted before #253 may have stranded the avatar under
+        # `promote-tmp`; adopt it rather than serve a 404 over a file we have.
+        _heal_stranded_promotion(d)
+        matches = sorted(d.glob(f"{name}.*"))
+        if not matches:
+            return None
     # Newest wins, not alphabetically-first. put_image writes the new file
     # before unlinking stale other-extension siblings (so a crash can't lose
     # the image), which leaves both present for a moment -- and a plain
@@ -126,6 +189,10 @@ def list_images(root: Path, cid: str, vid: str, base: str = "characters") -> lis
     d = _dir(root, cid, vid, base)
     if not d.exists():
         return []
+    # The "asset directory scan" the recovery in #253 was asked for: a temp the
+    # old promotion stranded gets a reachable name before the listing is built,
+    # so it shows up in the editor instead of staying invisible forever.
+    _heal_stranded_promotion(d)
     out: list[dict] = []
     for p in sorted(d.iterdir()):
         if p.is_file() and _norm_ext(p.suffix):
