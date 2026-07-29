@@ -109,15 +109,36 @@ PURE_WRITERS = frozenset({
     "assets.write_focus",  # writes focus.json, reads nothing
 })
 
-#: Modules allowed to combine the two, because each owns the invariant that
-#: makes a campaign-side read correct. The reason is the point: a new entry
-#: here needs one.
-OWNERS = {
-    "store/overlay.py": "is the resolver -- raw campaign reads are its whole job",
-    "store/campaigns.py": "ensure_campaign_slim rewrites the raw pre-overlay tree",
-    "store/appearances.py": "owns the version lock, which materializes the actor",
-    "store/sync.py": "three-way merge needs the campaign's own copy, unresolved",
-    "store/migrations.py": "one-time migrations run on the raw store layout",
+#: Code allowed to combine the two, because it owns the invariant that makes a
+#: campaign-side read correct -- keyed by file, then by the *function* that owns
+#: it. The reason is the point: a new entry here needs one.
+#:
+#: Scoped to functions rather than whole files on purpose. A file-wide exemption
+#: left the store's largest modules permanently unguarded: `campaigns.py` was
+#: exempt because of `ensure_campaign_slim`, so any unrelated helper added
+#: anywhere else in it inherited the pass. Only `overlay.py` is genuinely
+#: file-wide, and it says why.
+OWNERS: dict[str, dict[str, str]] = {
+    "store/overlay.py": {
+        "*": "is the resolver -- raw campaign reads are its whole job",
+    },
+    "store/campaigns.py": {
+        "ensure_campaign_slim": "rewrites the raw pre-overlay tree, by definition",
+    },
+    "store/appearances.py": {
+        "_set_default": "runs inside _lock, after the copy that materializes the actor",
+    },
+    "store/sync.py": {
+        "incoming": "three-way merge needs the campaign's own copy, unresolved",
+        "_advance": "advances a base against the copy the campaign actually holds",
+        "_actor_incoming": "compares the campaign's actor bytes with the world's",
+        "_plotmap_incoming": "same, for the plot map",
+    },
+    "store/migrations.py": {
+        "_bake_campaign": "a one-time migration, run on the raw store layout",
+        "_repair_character_baselines": "repairs bases against the campaign's own files",
+        "_repair_greeting_baseline": "same, for a greeting",
+    },
 }
 
 MARKER = "overlay-ok:"
@@ -170,20 +191,26 @@ def _is_root_call(node: ast.AST, aliases: frozenset[str] = frozenset(ROOT_FUNCS)
     return isinstance(node, ast.Call) and _last_name(node.func) in aliases
 
 
+#: Anything that introduces its own parameter bindings. A lambda is one, which
+#: is easy to forget because it is an expression: converting a nested `def` to
+#: a lambda used to turn a correctly-shadowed parameter into a false positive.
+SCOPE_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+
+
 def _own_nodes(body: list):
-    """Statements belonging to this scope, not descending into nested defs --
-    each def is walked separately so it can be given its own name set (which
-    starts from its enclosing scope's; see `_scopes`)."""
+    """Statements belonging to this scope, not descending into nested scopes --
+    each is walked separately so it can be given its own name set (which starts
+    from its enclosing scope's; see `_scopes`)."""
     stack = list(body)
     while stack:
         node = stack.pop()
         yield node
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        if isinstance(node, SCOPE_NODES):
             # The body belongs to its own scope, reached separately -- but the
             # decorators and the argument defaults are evaluated *here*, when
             # the `def` executes, so they are this scope's code. Skipping the
             # whole node dropped `def f(card=characters.read_card(croot, ...))`.
-            stack.extend(node.decorator_list)
+            stack.extend(getattr(node, "decorator_list", []))
             a = node.args
             stack.extend(d for d in a.defaults + a.kw_defaults if d is not None)
             continue
@@ -246,7 +273,9 @@ def _scopes(tree: ast.AST, aliases: frozenset[str] = frozenset(ROOT_FUNCS)):
             params = {a.arg for a in args.posonlyargs + args.args + args.kwonlyargs}
             names -= params                       # a parameter shadows the closure
             names |= {a for a in params if a == "croot"}
-        nodes = list(_own_nodes(scope.body))
+        # a lambda's "body" is a single expression, not a list of statements
+        body = scope.body if isinstance(scope.body, list) else [scope.body]
+        nodes = list(_own_nodes(body))
         # To a fixed point, not a fixed number of passes: `_own_nodes` yields in
         # no useful order, so an alias chain (`a = croot; b = a; c = b`) needs as
         # many passes as it has hops. Two passes left the third hop untracked.
@@ -259,7 +288,7 @@ def _scopes(tree: ast.AST, aliases: frozenset[str] = frozenset(ROOT_FUNCS)):
             names |= grown
         yield nodes, names
         for child in nodes:
-            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if isinstance(child, SCOPE_NODES):
                 yield from walk(child, names)
 
     yield from walk(tree, set())
@@ -298,15 +327,30 @@ def _resolver_imports(tree: ast.AST) -> tuple[dict[str, str], dict[str, tuple[st
     # detector saw bare names only when an import had bound them. Bind the
     # canonical pair so `read(croot, ...)` still resolves -- and so a renamed
     # pure writer stays a pure writer.
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Attribute):
-            continue
-        recv = _last_name(node.value.value)
-        mod = aliases.get(recv, recv if recv in RESOLVER_MODULES else None)
-        if mod:
+    #
+    # To a fixed point, like campaign-root names: `reader = read` is a second
+    # ordinary rename, and stopping after one hop left any longer chain
+    # invisible.
+    assigns = [n for n in ast.walk(tree) if isinstance(n, ast.Assign)]
+    while True:
+        grew = False
+        for node in assigns:
+            if isinstance(node.value, ast.Attribute):
+                recv = _last_name(node.value.value)
+                mod = aliases.get(recv, recv if recv in RESOLVER_MODULES else None)
+                canonical = (mod, node.value.attr) if mod else None
+            elif isinstance(node.value, ast.Name):
+                canonical = direct.get(node.value.id)
+            else:
+                canonical = None
+            if canonical is None:
+                continue
             for t in node.targets:
-                if isinstance(t, ast.Name):
-                    direct[t.id] = (mod, node.value.attr)
+                if isinstance(t, ast.Name) and direct.get(t.id) != canonical:
+                    direct[t.id] = canonical
+                    grew = True
+        if not grew:
+            break
     return aliases, direct
 
 
@@ -343,11 +387,14 @@ def _unresolved_reads(tree: ast.AST):
                 yield node, f'<campaign root> / "{node.right.value}"'
             elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                     and node.func.attr == "joinpath" and is_croot(node.func.value)
-                    and any(_inheritable_literal(getattr(a, "value", None)) for a in node.args)):
-                # the same join, spelled the other way
-                seg = next(a.value for a in node.args
-                           if isinstance(a, ast.Constant) and _inheritable_literal(a.value))
-                yield node, f'<campaign root>.joinpath("{seg}", ...)'
+                    and node.args and isinstance(node.args[0], ast.Constant)
+                    and _inheritable_literal(node.args[0].value)):
+                # The same join, spelled the other way -- and only the FIRST
+                # component decides which directory under the campaign root is
+                # entered. Checking every argument reported
+                # `joinpath("scenes", sid, "characters")`, which is campaign-local
+                # under scenes/, as an inheritable read.
+                yield node, f'<campaign root>.joinpath("{node.args[0].value}", ...)'
             elif isinstance(node, ast.Call) and (hit := resolver_of(node.func)):
                 mod, fn = hit
                 # the root as a keyword is the same call
@@ -358,15 +405,31 @@ def _unresolved_reads(tree: ast.AST):
                     yield node, f"{mod}.{fn}(<campaign root>, ...)"
 
 
+def _owning_def(tree: ast.AST, node: ast.AST) -> str:
+    """Name of the innermost `def` containing `node`, or "<module>"."""
+    best = None
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if fn.lineno <= node.lineno <= getattr(fn, "end_lineno", fn.lineno):
+            if best is None or fn.lineno > best.lineno:
+                best = fn
+    return best.name if best else "<module>"
+
+
 def _scan():
     """(relative path, node, description, marker reason) over the whole package."""
     for path in sorted(PACKAGE.rglob("*.py")):
         rel = path.relative_to(PACKAGE).as_posix()
-        if rel in OWNERS:
+        exempt = OWNERS.get(rel, {})
+        if "*" in exempt:
             continue
         src = path.read_text(encoding="utf-8")
-        found = list(_unresolved_reads(ast.parse(src)))
+        tree = ast.parse(src)
+        found = list(_unresolved_reads(tree))
         for node, what in found:
+            if _owning_def(tree, node) in exempt:
+                continue
             others = [n for n, _w in found if n is not node]
             yield rel, node, what, guard_markers.marker_reason(MARKER, src, node, others)
 
@@ -418,11 +481,42 @@ def test_a_marker_inside_a_string_literal_does_not_exempt():
         "a real reason living in a real comment"
 
 
-def test_every_owner_module_exists_and_says_why():
-    """An allowlist entry for a module that moved would silently stop applying."""
-    for rel, reason in OWNERS.items():
-        assert (PACKAGE / rel).exists(), f"OWNERS names a module that is gone: {rel}"
-        assert len(reason) >= 20, f"OWNERS entry for {rel} needs a real reason"
+def test_every_owner_entry_exists_and_says_why():
+    """An entry naming a module or function that moved would silently stop
+    applying — and a renamed function would take its exemption with it."""
+    for rel, funcs in OWNERS.items():
+        path = PACKAGE / rel
+        assert path.exists(), f"OWNERS names a module that is gone: {rel}"
+        defined = {n.name for n in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+                   if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+        for name, reason in funcs.items():
+            assert name == "*" or name in defined, \
+                f"OWNERS names {rel}::{name}, which no longer exists"
+            assert len(reason) >= 20, f"OWNERS entry for {rel}::{name} needs a real reason"
+
+
+def test_owner_exemptions_are_scoped_to_functions_not_whole_files():
+    """A file-wide pass left the store's biggest modules unguarded: `campaigns.py`
+    was exempt for `ensure_campaign_slim`, so anything else added to it inherited
+    that. Only the resolver itself gets a whole file."""
+    whole_file = [rel for rel, funcs in OWNERS.items() if "*" in funcs]
+    assert whole_file == ["store/overlay.py"], \
+        f"only the overlay may be exempt file-wide; also found: {whole_file}"
+
+    # and the scoping must actually bite: a read in a non-exempt function of an
+    # owner file is still an offender
+    src = ("def ensure_campaign_slim(cid):\n"
+           "    croot = campaigns.campaign_root(cid)\n"
+           "    return entities.entity_hash(croot, kind, eid)\n"
+           "def some_new_helper(cid):\n"
+           "    croot = campaigns.campaign_root(cid)\n"
+           "    return characters.read_card(croot, aid, vid)\n")
+    tree = ast.parse(src)
+    owners = OWNERS["store/campaigns.py"]
+    inside = [_owning_def(tree, n) for n, _w in _unresolved_reads(tree)]
+    assert "ensure_campaign_slim" in inside and "some_new_helper" in inside
+    assert "some_new_helper" not in owners, \
+        "the new helper must not be exempt just because it shares a file"
 
 
 def test_the_inheritable_set_comes_from_the_overlay():
@@ -632,6 +726,74 @@ def test_a_same_line_nested_marker_does_not_exempt_its_parent():
     assert reasons["assets.image_path"] is not None, "the inner call lost its own marker"
     assert reasons["characters.read_card"] is None, \
         "the outer call on the same line inherited the inner call's marker"
+
+
+def test_a_marker_must_be_the_comment_not_a_mention_of_it():
+    """`partition` matched the marker anywhere in the comment, so a warning
+    *about* the marker turned the guard off."""
+    src = "x = read(croot)  # do not add overlay-ok: this is still unsafe\n"
+    node = ast.parse(src).body[0]
+    assert guard_markers.marker_reason(MARKER, src, node) is None
+
+    src = "x = read(croot)  # overlay-ok: this one really is campaign-local\n"
+    node = ast.parse(src).body[0]
+    assert guard_markers.marker_reason(MARKER, src, node) == \
+        "this one really is campaign-local"
+
+
+def test_a_marker_shared_by_two_siblings_exempts_neither():
+    """Neither sibling contains the other, so both used to accept the same
+    comment — one reason silencing two calls. Ambiguous placement wins nothing."""
+    src = ("def f(cid):\n"
+           "    croot = campaigns.campaign_root(cid)\n"
+           "    return (characters.read_card(croot, a, v), assets.image_path(croot, a, v))"
+           "  # overlay-ok: which of these two did I mean, honestly\n")
+    found = list(_unresolved_reads(ast.parse(src)))
+    assert len(found) == 2, f"expected both flagged, got {[w for _n, w in found]}"
+    for node, what in found:
+        others = [n for n, _w in found if n is not node]
+        assert guard_markers.marker_reason(MARKER, src, node, others) is None, \
+            f"{what} claimed a marker it shares with a sibling"
+
+
+def test_a_lambda_parameter_shadows_the_enclosing_root():
+    """A lambda binds parameters like a `def`, but is an expression — traversing
+    it in the enclosing scope meant its parameters never shadowed, so an
+    ordinary def→lambda conversion became a false positive."""
+    src = ("def f(cid):\n"
+           "    root = campaigns.campaign_root(cid)\n"
+           "    return lambda root: characters.read_card(root, aid, vid)\n")
+    assert not list(_unresolved_reads(ast.parse(src))), \
+        "the lambda parameter did not shadow the enclosing campaign root"
+
+    # a lambda that really does close over the campaign root is still caught
+    src = ("def f(cid):\n"
+           "    root = campaigns.campaign_root(cid)\n"
+           "    return lambda aid: characters.read_card(root, aid, vid)\n")
+    assert list(_unresolved_reads(ast.parse(src))), "a closing lambda escaped"
+
+    # and a parameter *named* croot stays a campaign root wherever it appears --
+    # that is the naming convention, not the closure, and it outranks shadowing
+    src = "f = lambda croot: characters.read_card(croot, aid, vid)\n"
+    assert list(_unresolved_reads(ast.parse(src))), \
+        "the `croot` parameter convention stopped applying inside a lambda"
+
+
+def test_a_resolver_alias_chain_is_followed_to_its_end():
+    """`reader = read` is a second ordinary rename; one hop was not enough."""
+    src = ("read = characters.read_card\nreader = read\n"
+           "def f(cid):\n    croot = campaigns.campaign_root(cid)\n"
+           "    return reader(croot, aid, vid)\n")
+    assert list(_unresolved_reads(ast.parse(src))), "a two-hop resolver alias escaped"
+
+
+def test_a_later_joinpath_component_is_not_an_inheritable_read():
+    """Only the first component decides which directory under the campaign root
+    is entered. Checking every argument flagged campaign-local scene paths."""
+    src = ("def f(cid, sid):\n    croot = campaigns.campaign_root(cid)\n"
+           "    return croot.joinpath('scenes', sid, 'characters').exists()\n")
+    assert not list(_unresolved_reads(ast.parse(src))), \
+        "a campaign-local path was flagged because a later component was named 'characters'"
 
 
 def test_a_multi_segment_path_literal_is_still_caught():
