@@ -69,6 +69,9 @@ def _list_dir(directory: Path, built_in: bool) -> list[dict]:
     if not directory.exists():
         return out
     for p in sorted(directory.glob("*.md")):
+        if not safe_id(p.stem):
+            continue   # every lookup would 404 it; a picker entry that cannot
+                       # be opened, edited or deleted is worse than no entry
         try:
             meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError):

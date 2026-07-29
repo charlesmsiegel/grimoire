@@ -23,8 +23,19 @@ _EXTS = {"png", "jpg", "jpeg", "gif", "webp"}
 _PROMOTE_TMP = "promote-tmp"  # the temp name the pre-#253 three-rename swap used
 
 
+def _addressable_name(name: str) -> bool:
+    """Can this name be used as an image id at all?
+
+    Reject "." (ambiguous with ext) and glob metacharacters (the cleanup/lookup
+    globs name.*), on top of the shared id guard. Split out from `_safe_name`
+    because listing and writing want different answers about `promote-tmp`:
+    it is not writable, but a stranded one must stay visible (see list_images).
+    """
+    return (safe_id(name) and "." not in name
+            and not any(c in name for c in "*?[]"))
+
+
 def _safe_name(name: str) -> bool:
-    # reject "." (ambiguous with ext) and glob metacharacters (the cleanup/lookup globs name.*)
     #
     # `promote-tmp` is reserved, not rejected on a whim: the old three-rename
     # swap renamed onto that exact path, so an image stored under it would have
@@ -37,8 +48,7 @@ def _safe_name(name: str) -> bool:
     # rather than Python's: on Windows and macOS `Promote-Tmp.png` *is*
     # `promote-tmp.png`, so a case variant would otherwise slip an image into the
     # name the recovery scan claims (PR review).
-    return (safe_id(name) and "." not in name and name.casefold() != _PROMOTE_TMP
-            and not any(c in name for c in "*?[]"))
+    return _addressable_name(name) and name.casefold() != _PROMOTE_TMP
 
 
 def _norm_ext(ext: str) -> str:
@@ -274,7 +284,12 @@ def list_images(root: Path, cid: str, vid: str, base: str = "characters") -> lis
     _heal_stranded_promotion(d)
     out: list[dict] = []
     for p in sorted(d.iterdir()):
-        if p.is_file() and _norm_ext(p.suffix):
+        # filter on addressability, not just the extension: a name image_path
+        # could never resolve would advertise a gallery entry that cannot be
+        # served, promoted or deleted (#259 review). `promote-tmp` is the one
+        # deliberate exception -- unwritable, but a stranded one is shown on
+        # purpose so failed recovery is visible rather than silent (#253).
+        if p.is_file() and _norm_ext(p.suffix) and _addressable_name(p.stem):
             out.append({"name": p.stem, "ext": p.suffix.lstrip(".").lower(),
                         "v": image_version(p)})
     return out
