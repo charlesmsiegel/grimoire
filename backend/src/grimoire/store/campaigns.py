@@ -168,6 +168,10 @@ def create_campaign(name: str, world_id: str, region: str | None = None,
     ensure_home()
     if not worlds.world_exists(world_id):
         raise worlds.WorldNotFound(world_id)
+    # `world_exists` resolves case-insensitively where the filesystem does, so
+    # the caller's spelling may not be the one on disk. Store the canonical one
+    # or the reference is invisible to a later string comparison (#259 review).
+    world_id = worlds.canonical_id(world_id)
     if calendar is not None:
         calendars.get_provider({"provider": calendar})  # unknown id -> CalendarError before anything is created
     from . import campaign_climate, climates

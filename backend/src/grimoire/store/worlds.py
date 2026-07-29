@@ -139,6 +139,50 @@ def names_its_directory(root: Path) -> bool:
         return False
 
 
+def canonical_id(wid: str) -> str:
+    """`wid` respelled the way the filesystem holds it, or unchanged.
+
+    `worlds/REALM` and `worlds/realm` are one directory on Windows and macOS,
+    so a reference stored under either spelling points at the same world.
+    Canonicalizing on the way in keeps every later comparison a plain string
+    compare; `references_world` is what covers the ones already stored.
+    """
+    try:
+        root = world_root(wid)
+    except WorldNotFound:
+        return wid
+    try:
+        for p in root.parent.iterdir():
+            if p.name == wid or (p.is_dir() and p.samefile(root)):
+                return p.name
+    except OSError:
+        pass
+    return wid
+
+
+def references_world(ref: str, root: Path) -> bool:
+    """Does a campaign's stored world reference point at `root`?
+
+    Not a string compare: a store written before `create_campaign`
+    canonicalized can hold `REALM` for the directory `realm`, and missing that
+    is what let `delete_world("realm")` destroy a world still inherited by a
+    campaign (#259 review). `samefile` asks the filesystem instead of guessing
+    at its case or normalization rules.
+    """
+    if not ref:
+        return False
+    try:
+        other = world_root(ref)
+    except WorldNotFound:
+        return False            # cannot name a world at all, so not this one
+    if other == root:
+        return True
+    try:
+        return other.samefile(root)
+    except OSError:
+        return False            # a dangling reference pins nothing
+
+
 def delete_world(wid: str) -> None:
     root = world_root(wid)
     if not world_meta_path(wid).exists() or not names_its_directory(root):
@@ -148,7 +192,8 @@ def delete_world(wid: str) -> None:
     # public listing hides, or hiding one makes its world deletable. A campaign
     # whose reference could not be read (w is None) counts as a user too --
     # deletion is irreversible, so "we could not tell" has to block it.
-    used_by = [name for name, w in campaigns.world_refs() if w == wid or w is None]
+    used_by = [name for name, w in campaigns.world_refs()
+               if w is None or references_world(w, root)]
     if used_by:
         raise WorldInUse(wid, used_by)
     shutil.rmtree(root)
