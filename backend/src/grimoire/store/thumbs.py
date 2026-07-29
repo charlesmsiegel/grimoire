@@ -13,6 +13,7 @@ unreferenced.
 from __future__ import annotations
 
 import hashlib
+import io
 from pathlib import Path
 
 from PIL import Image
@@ -46,11 +47,15 @@ def thumbnail(src: Path, width: int) -> Path | None:
                 im = im.convert("RGBA")
             im.thumbnail((width, width))  # in-place, preserves aspect, no upscale
             out.parent.mkdir(parents=True, exist_ok=True)
-            # concurrent generators just overwrite equal bytes; the shared
-            # helper's random temp name also stops two threads in one process
-            # colliding, which the old pid-based name did not
-            with atomic.tempfile_for(out) as tmp:
-                im.save(tmp, format="WEBP", quality=QUALITY)
+            # Encode to memory, then publish through the shared writer. PIL
+            # accepts a file object, so nothing ever hands out the temp's
+            # *pathname* -- which is what let an attacker with write access to
+            # the cache dir swap a symlink in before im.save() opened it (PR
+            # review). A tile is a few KB; buffering it is free.
+            buf = io.BytesIO()
+            im.save(buf, format="WEBP", quality=QUALITY)
+            # concurrent generators just overwrite equal bytes
+            atomic.write_bytes(out, buf.getvalue())
     except Exception:  # noqa: BLE001 — undecodable/corrupt image: no thumb, caller serves original
         return None
     return out

@@ -65,10 +65,15 @@ def test_write_failure_leaves_the_previous_record_intact(tmp_path):
     p = tmp_path / "scene.md"
     _write_prior(p)
 
-    with pytest.raises(RuntimeError):
-        with atomic.tempfile_for(p) as tmp:
-            tmp.write_text("half a record", encoding="utf-8")
-            raise RuntimeError("crashed mid-write")
+    # Fail after the bytes are in the temp but before anything is published --
+    # the moment the old truncate-then-write could not survive.
+    def boom(fd):
+        raise RuntimeError("crashed mid-write")
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(atomic.os, "fsync", boom)
+        with pytest.raises(RuntimeError):
+            atomic.write_text(p, "half a record")
 
     assert p.read_text(encoding="utf-8") == PRIOR
     assert list(tmp_path.iterdir()) == [p], "a temp file survived the failure"
@@ -78,15 +83,21 @@ def test_temp_files_are_invisible_to_the_record_listers(tmp_path):
     """Every list endpoint in the store globs by extension. A temp that showed
     up as a record would surface a half-written scene in the UI."""
     seen = {}
+    real_fsync = atomic.os.fsync
 
-    with atomic.tempfile_for(tmp_path / "scene.md") as tmp:
-        tmp.write_text("x", encoding="utf-8")
+    def peek(fd):                       # after the write, before the replace
         seen["md"] = list(tmp_path.glob("*.md"))
         seen["json"] = list(tmp_path.glob("*.json"))
-        seen["name"] = tmp.name
+        seen["names"] = [q.name for q in tmp_path.iterdir()]
+        return real_fsync(fd)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(atomic.os, "fsync", peek)
+        atomic.write_text(tmp_path / "scene.md", "x")
 
     assert seen["md"] == [] and seen["json"] == []
-    assert seen["name"].startswith(".") and seen["name"].endswith(".tmp")
+    assert seen["names"], "the temp did not exist during the write"
+    assert all(n.startswith(".") and n.endswith(".tmp") for n in seen["names"])
 
 
 def test_missing_parent_still_raises_file_not_found(tmp_path):
@@ -274,9 +285,15 @@ def test_concurrent_readers_never_see_a_partial_record(tmp_path):
     new = PRIOR + "\n**Seraphine:** a second message\n"
     observed = []
 
-    with atomic.tempfile_for(p) as tmp:
-        tmp.write_text(new, encoding="utf-8")
-        observed.append(p.read_text(encoding="utf-8"))  # mid-write
+    real_fsync = atomic.os.fsync
+
+    def read_mid(fd):                   # temp written, record not yet replaced
+        observed.append(p.read_text(encoding="utf-8"))
+        return real_fsync(fd)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(atomic.os, "fsync", read_mid)
+        atomic.write_text(p, new)
     observed.append(p.read_text(encoding="utf-8"))      # after publish
 
     assert observed == [PRIOR, new]
@@ -288,7 +305,7 @@ def test_reading_the_umask_does_not_race_other_threads(tmp_path):
     creating a file. It must be sampled once, at import."""
     import inspect
 
-    src = inspect.getsource(atomic._carry_mode)
+    src = inspect.getsource(atomic._carry_metadata)
     assert "os.umask" not in src, "umask is being read inside a write call"
     assert isinstance(atomic._UMASK, int)
 
@@ -338,17 +355,78 @@ def test_the_write_helpers_never_expose_the_temp_path(tmp_path, monkeypatch):
     assert len(opened) == 2, f"expected one creating open per write, got {opened}"
 
 
-def test_a_swapped_temp_is_detected_and_nothing_is_published(tmp_path):
-    """tempfile_for must hand out a path (PIL needs one), so the swap cannot be
-    prevented -- it must at least be caught before the record is replaced."""
+def test_no_api_hands_out_the_temp_pathname(tmp_path):
+    """The symlink-swap window existed only because a temp *path* was yielded
+    for PIL to open. PIL takes a file object, so that API is gone rather than
+    defended -- this pins it, since re-adding one would silently reopen the
+    hole."""
+    assert not hasattr(atomic, "tempfile_for"), \
+        "a path-yielding API is back; the swap window comes with it"
+    public = sorted(
+        n for n, v in vars(atomic).items()
+        if not n.startswith("_") and callable(v) and getattr(v, "__module__", "") == atomic.__name__)
+    assert public == ["write_bytes", "write_text"], f"unexpected public API: {public}"
+
+
+def test_group_ownership_and_xattrs_are_carried_over(tmp_path, monkeypatch):
+    """The surviving file is the temp, not the original inode, so anything the
+    old record carried is lost unless copied. Asserted through the syscalls so
+    it is covered on Windows too, where chown/xattrs do not exist."""
     p = tmp_path / "rec.md"
     _write_prior(p)
 
-    with pytest.raises(OSError) as exc:
-        with atomic.tempfile_for(p) as tmp:
-            tmp.unlink()                                   # attacker removes it
-            tmp.write_text("attacker content", encoding="utf-8")  # ...and recreates
-    assert "replaced" in str(exc.value)
+    fake = os.stat_result((0o100640, 0, 0, 1, 4242, 8484, 0, 0, 0, 0))
+    monkeypatch.setattr(atomic.os, "stat", lambda _p: fake)
+    calls = {"chmod": [], "chown": [], "xattr": []}
+    monkeypatch.setattr(atomic.os, "chmod", lambda t, m: calls["chmod"].append(m))
+    monkeypatch.setattr(atomic.os, "chown", lambda t, u, g: calls["chown"].append((u, g)),
+                        raising=False)
+    monkeypatch.setattr(atomic.os, "listxattr", lambda _p: ["user.tag"], raising=False)
+    monkeypatch.setattr(atomic.os, "getxattr", lambda _p, a: b"v", raising=False)
+    monkeypatch.setattr(atomic.os, "setxattr",
+                        lambda t, a, v: calls["xattr"].append((a, v)), raising=False)
 
-    assert p.read_text(encoding="utf-8") == PRIOR, "the record was published anyway"
-    assert list(tmp_path.glob("*.tmp")) == []
+    atomic.write_text(p, "body")
+
+    assert calls["chmod"] == [0o640]
+    assert calls["chown"] == [(4242, 8484)], "uid/gid not carried"
+    assert calls["xattr"] == [("user.tag", b"v")], "xattrs not carried"
+
+
+def test_an_unprivileged_chown_falls_back_to_the_group(tmp_path, monkeypatch):
+    """Only root can change a file's uid. The full chown failing must not lose
+    the group too -- shared-group setups are exactly what this preserves."""
+    p = tmp_path / "rec.md"
+    _write_prior(p)
+    monkeypatch.setattr(atomic.os, "stat",
+                        lambda _p: os.stat_result((0o100644, 0, 0, 1, 4242, 8484, 0, 0, 0, 0)))
+    monkeypatch.setattr(atomic.os, "chmod", lambda t, m: None)
+    attempts = []
+
+    def chown(t, uid, gid):
+        attempts.append((uid, gid))
+        if uid != -1:
+            raise PermissionError("not root")
+
+    monkeypatch.setattr(atomic.os, "chown", chown, raising=False)
+    monkeypatch.setattr(atomic.os, "listxattr", lambda _p: [], raising=False)
+
+    atomic.write_text(p, "body")
+
+    assert attempts == [(4242, 8484), (-1, 8484)], f"no group-only retry: {attempts}"
+
+
+def test_metadata_failures_never_fail_the_write(tmp_path, monkeypatch):
+    """Losing a metadata bit is cosmetic; losing the write is not."""
+    p = tmp_path / "rec.md"
+    _write_prior(p)
+
+    def nope(*a, **kw):
+        raise OSError("unsupported filesystem")
+
+    monkeypatch.setattr(atomic.os, "chmod", nope)
+    monkeypatch.setattr(atomic.os, "chown", nope, raising=False)
+    monkeypatch.setattr(atomic.os, "listxattr", nope, raising=False)
+
+    atomic.write_text(p, "landed anyway")
+    assert p.read_text(encoding="utf-8") == "landed anyway"
