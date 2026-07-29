@@ -286,12 +286,30 @@ def card_hash(root: Path, cid: str, vid: str) -> str | None:
         lambda: hashlib.sha256(p.read_text(encoding="utf-8").encode("utf-8")).hexdigest())
 
 
-def _dir_hash_compute(files: list[Path]) -> str:
+def dir_content_hash(files: list[tuple[str, str]]) -> str:
+    """`dir_hash` over (name, text) pairs you are holding rather than files on
+    disk — see `snapshot`."""
     h = hashlib.sha256()
-    for p in files:
-        h.update(p.name.encode("utf-8"))
-        h.update(p.read_text(encoding="utf-8").encode("utf-8"))
+    for name, text in files:
+        h.update(name.encode("utf-8"))
+        h.update(text.encode("utf-8"))
     return h.hexdigest()
+
+
+def snapshot(root: Path, cid: str) -> tuple[str, list[tuple[str, str]]] | None:
+    """One read of the whole actor: its `dir_hash` and the (name, text) pairs
+    that hash covers, meta first. A copier writes exactly these and records
+    exactly that hash, so the sync base cannot describe content the copy never
+    got even if the source moves mid-copy (#247). None when not an actor."""
+    if not _safe(cid) or not _meta_path(root, cid).exists():
+        return None
+    files = [_meta_path(root, cid)] + [_card_path(root, cid, v) for v in _version_ids(root, cid)]
+    pairs = [(p.name, p.read_text(encoding="utf-8")) for p in files]
+    return dir_content_hash(pairs), pairs
+
+
+def _dir_hash_compute(files: list[Path]) -> str:
+    return dir_content_hash([(p.name, p.read_text(encoding="utf-8")) for p in files])
 
 
 def dir_hash(root: Path, cid: str) -> str | None:

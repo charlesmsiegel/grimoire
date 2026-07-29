@@ -477,6 +477,60 @@ def test_failed_copy_restores_a_base_it_overwrote(monkeypatch, tmp_path):
     assert campaigns.read_manifest(cid)[f"lore/{eid}"] == "older"
 
 
+def _world_moves_when_hashing(monkeypatch, module, name, edit, after: bool = False):
+    """Race simulator: run `edit` on the world around the first time the base
+    hash is taken — `after` it is taken when the copy reads the source later,
+    before when the copy has already read it. Either way it only fires if the
+    base is taken from the live world separately from the bytes being copied,
+    which is the bug; deriving both from one read leaves it inert."""
+    real = getattr(module, name)
+
+    def racing(*a, **kw):
+        monkeypatch.setattr(module, name, real)
+        if after:
+            got = real(*a, **kw)
+            edit()
+            return got
+        edit()
+        return real(*a, **kw)
+
+    monkeypatch.setattr(module, name, racing)
+
+
+def test_recorded_base_describes_the_bytes_that_were_copied(monkeypatch, tmp_path):
+    """A base taken from the world after the copy's source was read can
+    describe content the campaign never got. Sync then sees world == base and
+    skips the record forever — #247's failure mode by another route."""
+    _wid, wroot, cid, eid = _pair(monkeypatch, tmp_path)
+    _thin(cid, "lore", eid)
+    _world_moves_when_hashing(monkeypatch, entities, "entity_hash",
+                              lambda: entities.update_entity(wroot, "lore", eid, body="world v2"))
+    overlay.materialize_entity(cid, "lore", eid)
+    croot = campaigns.campaign_root(cid)
+    assert campaigns.read_manifest(cid)[f"lore/{eid}"] == entities.entity_hash(croot, "lore", eid)
+
+
+def test_recorded_plotmap_base_describes_the_bytes_that_were_copied(monkeypatch, tmp_path):
+    wroot, cid, gid = _greeting_pair(monkeypatch, tmp_path)
+    _world_moves_when_hashing(monkeypatch, greetings, "plotmap_hash",
+                              lambda: greetings.set_edges(wroot, gid, leads_to=["moved"]))
+    overlay.materialize_plotmap(cid)
+    croot = campaigns.campaign_root(cid)
+    assert campaigns.read_manifest(cid)["plotmap"] == greetings.plotmap_hash(croot)
+
+
+def test_recorded_actor_base_describes_the_files_that_were_copied(monkeypatch, tmp_path):
+    """The actor path hashes a whole directory, so it had the race the other
+    way round: base taken first, files read after. A version purged in between
+    left the copy and its base describing different actors."""
+    wroot, cid, aid = _actor_pair(monkeypatch, tmp_path)
+    _world_moves_when_hashing(monkeypatch, characters, "dir_hash",
+                              lambda: characters.delete_version(wroot, aid, "dark"), after=True)
+    overlay.materialize_actor(cid, "characters", aid)
+    croot = campaigns.campaign_root(cid)
+    assert campaigns.read_manifest(cid)[f"characters/{aid}"] == characters.dir_hash(croot, aid)
+
+
 def test_interrupt_after_the_copy_lands_keeps_the_base(monkeypatch, tmp_path):
     """The undo must not recreate the bug it exists to prevent. Once the copy
     is on disk the materialization has happened, whatever is raised next."""
