@@ -235,6 +235,155 @@ def test_concurrent_puts_of_different_extensions_leave_exactly_one_image(tmp_pat
     assert len(survivors) == 1, f"stale siblings left behind: {survivors}"
 
 
+def _image_files(tmp_path, cid="sera", vid="default"):
+    d = tmp_path / "characters" / cid / "assets" / vid
+    return [p for p in d.iterdir()
+            if p.is_file() and p.suffix.lstrip(".").lower() in ("png", "jpg", "jpeg",
+                                                                "gif", "webp")]
+
+
+def _fail_after(monkeypatch, allowed: int):
+    """Crash simulator: let `allowed` filesystem mutations through, then raise.
+
+    Hooks both `Path.rename` and `atomic.write_bytes` on purpose, so the test
+    pins an invariant rather than an implementation -- promotion may move bytes
+    either way, and the cut still lands between two of its steps.
+    """
+    from grimoire.store import atomic
+
+    left = [allowed]
+    real_rename, real_write = assets.Path.rename, atomic.write_bytes
+
+    def spend():
+        if left[0] <= 0:
+            raise OSError("crash")
+        left[0] -= 1
+
+    def rename(self, target):
+        spend()
+        return real_rename(self, target)
+
+    def write_bytes(path, data):
+        spend()
+        return real_write(path, data)
+
+    monkeypatch.setattr(assets.Path, "rename", rename)
+    monkeypatch.setattr(atomic, "write_bytes", write_bytes)
+
+
+@pytest.mark.parametrize("new_ext", ["png", "webp"])
+@pytest.mark.parametrize("allowed", [0, 1, 2, 3])
+def test_a_crash_mid_promotion_always_leaves_a_resolvable_avatar(
+        tmp_path, monkeypatch, allowed, new_ext):
+    """Promotion used to swap through a fixed `promote-tmp<ext>` name in three
+    renames (#253). Each rename was atomic; the sequence was not, so a crash
+    after the second left the promoted image parked under a name nothing ever
+    looks for and NO avatar at all. The avatar slot must always resolve, and
+    nothing may be left behind under an unreachable name."""
+    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"OLD", "png")
+    assets.put_image(tmp_path, "sera", "default", "gallery_1", b"NEW", new_ext)
+
+    _fail_after(monkeypatch, allowed)
+    try:
+        assets.promote_image(tmp_path, "sera", "default", "gallery_1")
+    except OSError:
+        pass
+    monkeypatch.undo()
+
+    p = assets.image_path(tmp_path, "sera", "default", assets.AVATAR)
+    assert p is not None, f"a crash after {allowed} steps left no avatar at all"
+    assert p.read_bytes() in (b"OLD", b"NEW"), "the avatar is neither image"
+    stranded = [q.name for q in _image_files(tmp_path)
+                if q.stem not in ("avatar", "gallery_1")]
+    assert not stranded, f"a crash after {allowed} steps stranded {stranded}"
+
+
+def test_promotion_leaves_one_file_per_slot(tmp_path):
+    """A completed swap across extensions must not leave the old extension of
+    either slot behind -- image_path would tie-break it away, but list_images
+    would show a phantom duplicate."""
+    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"OLD", "png")
+    assets.put_image(tmp_path, "sera", "default", "gallery_1", b"NEW", "webp")
+    assets.promote_image(tmp_path, "sera", "default", "gallery_1")
+    assert _named(assets.list_images(tmp_path, "sera", "default")) == [
+        ("avatar", "webp"), ("gallery_1", "png")]
+
+
+def test_concurrent_promotions_neither_collide_nor_lose_an_image(tmp_path):
+    """The old temp name was the fixed string `promote-tmp<ext>`, so two
+    promotions in one process fought over one path. Whatever order they land
+    in, promotion only ever permutes the images: all three survive, one per
+    slot."""
+    import threading
+
+    payloads = {assets.AVATAR: b"A", "gallery_1": b"B", "gallery_2": b"C"}
+    for name, data in payloads.items():
+        assets.put_image(tmp_path, "sera", "default", name, data, "png")
+
+    start = threading.Barrier(2)
+    errors = []
+
+    def promote(name):
+        try:
+            start.wait(timeout=5)
+            assets.promote_image(tmp_path, "sera", "default", name)
+        except Exception as e:  # noqa: BLE001 - surfaced by the assert below
+            errors.append(e)
+
+    threads = [threading.Thread(target=promote, args=(n,))
+               for n in ("gallery_1", "gallery_2")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=20)
+
+    assert not errors, f"a concurrent promotion raised: {errors}"
+    assert not any(t.is_alive() for t in threads), "a promotion deadlocked"
+    files = _image_files(tmp_path)
+    assert sorted(p.stem for p in files) == ["avatar", "gallery_1", "gallery_2"]
+    assert sorted(p.read_bytes() for p in files) == [b"A", b"B", b"C"]
+
+
+def test_a_promotion_racing_an_upload_does_not_interleave(tmp_path):
+    """Promotion takes the same per-image lock as put_image/delete_image, on
+    both slots it touches, so an upload cannot land in the middle of a swap."""
+    import threading
+
+    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"OLD", "png")
+    assets.put_image(tmp_path, "sera", "default", "gallery_1", b"NEW", "png")
+    start = threading.Barrier(2)
+    errors = []
+
+    def promoter():
+        try:
+            start.wait(timeout=5)
+            for _ in range(20):
+                assets.promote_image(tmp_path, "sera", "default", "gallery_1")
+        except Exception as e:  # noqa: BLE001
+            errors.append(e)
+
+    def uploader():
+        try:
+            start.wait(timeout=5)
+            for _ in range(20):
+                assets.put_image(tmp_path, "sera", "default", assets.AVATAR,
+                                 b"UPLOADED", "jpg")
+        except Exception as e:  # noqa: BLE001
+            errors.append(e)
+
+    threads = [threading.Thread(target=promoter), threading.Thread(target=uploader)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=20)
+
+    assert not errors, f"a concurrent operation raised: {errors}"
+    assert not any(t.is_alive() for t in threads), "an operation deadlocked"
+    assert assets.image_path(tmp_path, "sera", "default", assets.AVATAR) is not None
+    for name in (assets.AVATAR, "gallery_1"):
+        assert len([p for p in _image_files(tmp_path) if p.stem == name]) <= 1
+
+
 def test_a_delete_racing_an_upload_does_not_interleave(tmp_path):
     """delete_image shares put_image's lock, so it removes the whole set or
     none of it -- never half of a set an upload is mid-way through replacing."""
