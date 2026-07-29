@@ -169,10 +169,27 @@ def _version_chub_source(card: dict) -> str:
     return (card.get("data", {}).get("extensions") or {}).get("chub_source", "")
 
 
+def _addressable_default(stored: str, version_ids: list[str]) -> str:
+    """The default version to report, given the versions callers can actually
+    reach.
+
+    Filtering an unaddressable version out of the listing (#259 review) leaves
+    the actor's stored `default_version` pointing at something no longer in the
+    set; the editor then asks for a version that isn't there and for
+    `versions[0]` that doesn't exist either. Report the first addressable
+    version instead, so meta and versions always agree.
+    """
+    return stored if stored in version_ids else (version_ids[0] if version_ids else "")
+
+
 def read_character(root: Path, cid: str) -> dict:
     _require_char(root, cid)
     meta, _ = parse_frontmatter(_meta_path(root, cid).read_text(encoding="utf-8"))
-    default_version = meta.get("default_version", "")
+    version_ids = _version_ids(root, cid)
+    if not version_ids:
+        # every card is unaddressable: nothing here can be opened or edited
+        raise CharacterNotFound(cid)
+    default_version = _addressable_default(meta.get("default_version", ""), version_ids)
     # One-time fallback for data written before chub_source became
     # per-version: a value still sitting in character.md frontmatter only
     # ever applied to the default version, so that's the only place it
@@ -180,7 +197,7 @@ def read_character(root: Path, cid: str) -> dict:
     # shows no link, prompting an explicit (and now easy) re-link.
     legacy_chub_source = meta.get("chub_source", "")
     versions = []
-    for vid in _version_ids(root, cid):
+    for vid in version_ids:
         card = read_card(root, cid, vid)
         chub_source = _version_chub_source(card)
         if not chub_source and vid == default_version:
@@ -237,7 +254,10 @@ def list_characters(root: Path) -> list[dict]:
                          if p.is_dir() and (p / "character.md").exists() and safe_id(p.name)):
             cid = cd.name
             meta, _ = parse_frontmatter(_meta_path(root, cid).read_text(encoding="utf-8"))
-            default = meta.get("default_version", "")
+            version_ids = _version_ids(root, cid)
+            if not version_ids:
+                continue   # see read_character: no addressable card, nothing to show
+            default = _addressable_default(meta.get("default_version", ""), version_ids)
             names = [i["name"] for i in assets.list_images(root, cid, default)]
             try:
                 greeting_count = _card_summary(root, cid, default)["greeting_count"]
@@ -254,7 +274,7 @@ def list_characters(root: Path) -> list[dict]:
                 "greeting_count": greeting_count,
                 "tagline": taglines.read(root, cid),
                 "versions": [{"id": v, "name": _card_summary(root, cid, v)["label"]}
-                             for v in _version_ids(root, cid)],
+                             for v in version_ids],
             })
     return out
 

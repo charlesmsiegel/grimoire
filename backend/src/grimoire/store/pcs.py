@@ -138,10 +138,15 @@ def read_persona(root: Path, pid: str, vid: str) -> dict:
 def read_pc(root: Path, pid: str) -> dict:
     _require_pc(root, pid)
     meta = _read_meta(root, pid)
+    version_ids = _version_ids(root, pid)
+    if not version_ids:
+        raise PCNotFound(pid)   # see characters.read_character
     versions = [{"id": v, "name": read_persona(root, pid, v)["name"], "persona": read_persona(root, pid, v)}
-                for v in _version_ids(root, pid)]
+                for v in version_ids]
+    default = meta.get("default_version", "")
     return {"meta": {"id": pid, "name": meta.get("name", pid), "tags": _tags_of(meta),
-                     "default_version": meta.get("default_version", "")}, "versions": versions}
+                     "default_version": default if default in version_ids else version_ids[0]},
+            "versions": versions}
 
 
 def list_pcs(root: Path) -> list[dict]:
@@ -152,10 +157,14 @@ def list_pcs(root: Path) -> list[dict]:
                          if p.is_dir() and (p / "pc.md").exists() and safe_id(p.name)):
             pid = pd.name
             meta = _read_meta(root, pid)
+            version_ids = _version_ids(root, pid)
+            if not version_ids:
+                continue   # see read_pc: no addressable version, nothing to show
+            default = meta.get("default_version", "")
             out.append({"id": pid, "name": meta.get("name", pid), "tags": _tags_of(meta),
-                        "default_version": meta.get("default_version", ""),
+                        "default_version": default if default in version_ids else version_ids[0],
                         "versions": [{"id": v, "name": read_persona(root, pid, v)["name"]}
-                                     for v in _version_ids(root, pid)]})
+                                     for v in version_ids]})
     return out
 
 
