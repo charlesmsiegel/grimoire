@@ -219,3 +219,32 @@ def test_concurrent_puts_cannot_delete_each_others_images(tmp_path, monkeypatch)
 
     assert assets.image_path(tmp_path, "sera", "default", assets.AVATAR) is not None, \
         "both writers deleted each other's image"
+
+
+def test_cleanup_never_deletes_an_image_published_after_its_snapshot(tmp_path, monkeypatch):
+    """Snapshotting a stale PATH is not enough. With an existing avatar.png:
+    call A (.jpg) snapshots that path, publishes its JPG; call B (.png) then
+    replaces the PNG and removes A's JPG; when A resumes, deleting by path
+    alone would destroy B's brand-new PNG -- both calls succeed and no avatar
+    remains. A must verify the file it snapshotted is still the same file."""
+    from grimoire.store import atomic
+    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"OLD-PNG", "png")
+
+    real_write = atomic.write_bytes
+    inner_done = {"yes": False}
+
+    def interleave(path, data):
+        real_write(path, data)
+        # A has just published its .jpg; B now runs to completion, replacing
+        # the old .png with a new one and cleaning up A's .jpg.
+        if not inner_done["yes"]:
+            inner_done["yes"] = True
+            assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"NEW-PNG", "png")
+
+    monkeypatch.setattr(atomic, "write_bytes", interleave)
+    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"NEW-JPG", "jpg")
+    monkeypatch.undo()
+
+    p = assets.image_path(tmp_path, "sera", "default", assets.AVATAR)
+    assert p is not None, "both writers succeeded but no avatar remains"
+    assert p.read_bytes() != b"OLD-PNG", "the stale image survived instead"
