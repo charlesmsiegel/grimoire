@@ -274,6 +274,14 @@ store from CRLF to LF on its next save, churning a synced folder for nothing.
   worse than the delete-first ordering being replaced. (Found by the
   implementation-stage review.)
 
+  The snapshot must capture each sibling's **identity** (`st_dev`/`st_ino`),
+  not just its pathname, and re-check it before unlinking. Snapshotting paths
+  alone leaves a worse interleaving than the one it fixes: with an existing
+  `avatar.png`, call A (`.jpg`) snapshots that path and publishes its JPG; call
+  B (`.png`) then replaces the PNG and cleans up A's JPG; when A resumes it
+  deletes *B's brand-new PNG* because that path was in its snapshot. Both calls
+  report success and no avatar remains. (Flagged in PR review.)
+
   The residue of that choice, accepted: if both writers snapshot before either
   publishes, neither snapshot contains the other's file and *both* extensions
   survive, so `list_images` reports a duplicate logical name until the next

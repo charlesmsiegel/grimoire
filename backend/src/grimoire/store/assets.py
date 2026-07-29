@@ -136,12 +136,27 @@ def put_image(root: Path, cid: str, vid: str, name: str, data: bytes, ext: str,
     # Snapshot the siblings BEFORE writing, and only ever delete those. Globbing
     # after the write instead would let two concurrent put_image calls delete
     # each other's brand-new file -- A writes .jpg, B writes .png, then each
-    # cleanup removes the other's -- leaving no image at all, which is worse
-    # than the delete-first ordering this replaced.
-    stale = [p for p in d.glob(f"{name}.*") if p != written]
-    atomic.write_bytes(written, data)
-    for p in stale:
+    # cleanup removes the other's -- leaving no image at all.
+    #
+    # Snapshot the file's IDENTITY, not just its path: a concurrent call can
+    # replace the file at a snapshotted path with its own new image, and
+    # deleting by path alone would then destroy that image instead of the stale
+    # one we meant. Both calls would report success and no avatar would remain.
+    stale = []
+    for p in d.glob(f"{name}.*"):
+        if p == written:
+            continue
         try:
+            st = p.stat()
+            stale.append((p, st.st_dev, st.st_ino))
+        except OSError:
+            pass  # vanished already; nothing to clean up
+    atomic.write_bytes(written, data)
+    for p, dev, ino in stale:
+        try:
+            st = p.stat()
+            if (st.st_dev, st.st_ino) != (dev, ino):
+                continue  # someone published a new file here; not ours to delete
             p.unlink()
         except OSError:
             pass  # a lost cleanup is self-healing: image_path prefers the newest
