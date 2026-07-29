@@ -102,6 +102,12 @@ def test_only_the_owning_module_names_the_file():
 
     A grep is how a schema change had to be found. This is the same check a
     reviewer would run by hand, run by the build instead.
+
+    Honest about its reach, like `test_atomic_guard`: this catches the drift
+    that caused the issue — a second module spelling out the filename and the
+    `{"default_climate": ...}` shape for itself. It does *not* prove ownership.
+    A caller can still take `campaign_climate.path(cid)` and read or write it
+    directly without naming the file, which no static check here would see.
     """
     import grimoire
     package = pathlib.Path(grimoire.__file__).parent

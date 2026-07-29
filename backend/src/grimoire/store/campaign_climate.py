@@ -29,7 +29,7 @@ KEY = "default_climate"
 
 
 def path(cid: str) -> Path:
-    """The campaign's climate file.
+    """The campaign's climate file (`weather/overrides.py` is the model).
 
     Campaign-local, deliberately: the weather design *cut* a world-level
     default rather than forgetting one (`docs/superpowers/specs/
@@ -76,6 +76,11 @@ def check_default(climate_id: str) -> None:
     a bad climate *before* it makes a directory, and the file it would be
     written to does not exist yet at that point. Sharing this keeps the
     create-time and update-time rejections from drifting apart.
+
+    So creation validates twice. The alternative is a write path that skips
+    validation, and the whole point of this module is that there isn't one; a
+    second registry scan is cheap, and creation already fails late elsewhere
+    (an invalid calendar raises after the directory exists).
     """
     if climates.get(climate_id) is None:
         raise climates.ClimateError(f"unknown climate: {climate_id!r}")

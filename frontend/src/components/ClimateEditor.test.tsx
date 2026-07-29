@@ -188,6 +188,45 @@ test("deleting a standalone climate discloses the campaigns defaulting to it", a
   confirm.mockRestore();
 });
 
+test("reverting a customized preset discloses what it affects too", async () => {
+  // #237: a revert swaps the tables under everything using the id, so the
+  // audience is the same as a delete's — and a customized *fallback* preset is
+  // the widest case there is, since every campaign with no default of its own
+  // resolves to it. The warning used to be skipped entirely on this path.
+  vi.mocked(api.readClimate).mockResolvedValue(
+    { climate: CLIMATE, builtin: true, custom: true });
+  vi.mocked(api.listClimates).mockResolvedValue({ climates: [
+    { id: "temperate-interior", name: "Temperate Interior", builtin: true, custom: true },
+  ] });
+  vi.mocked(api.climateReferrers).mockResolvedValue({
+    campaigns: [{ id: "saltmarch-chronicle", name: "Saltmarch Chronicle" }], locations: [] });
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  render(<ClimateEditor />);
+  fireEvent.click(await screen.findByText("Temperate Interior"));
+  fireEvent.click(await screen.findByRole("button", { name: "Revert to preset" }));
+  await waitFor(() => expect(confirm).toHaveBeenCalled());
+  expect(confirm.mock.calls[0][0] as string).toContain("Saltmarch Chronicle");
+  expect(api.deleteClimate).not.toHaveBeenCalled();  // declined
+  confirm.mockRestore();
+});
+
+test("a failed referrer lookup blocks a revert as well", async () => {
+  vi.mocked(api.readClimate).mockResolvedValue(
+    { climate: CLIMATE, builtin: true, custom: true });
+  vi.mocked(api.listClimates).mockResolvedValue({ climates: [
+    { id: "temperate-interior", name: "Temperate Interior", builtin: true, custom: true },
+  ] });
+  vi.mocked(api.climateReferrers).mockRejectedValue(new Error("network"));
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+  render(<ClimateEditor />);
+  fireEvent.click(await screen.findByText("Temperate Interior"));
+  fireEvent.click(await screen.findByRole("button", { name: "Revert to preset" }));
+  expect(await screen.findByText(/Could not check what is using this climate/)).toBeInTheDocument();
+  expect(confirm).not.toHaveBeenCalled();
+  expect(api.deleteClimate).not.toHaveBeenCalled();
+  confirm.mockRestore();
+});
+
 test("a failed referrer lookup blocks deletion rather than claiming no impact", async () => {
   // Treating a failed lookup as an empty one would say "Nothing is using it"
   // and delete anyway — an unknown impact presented as no impact.
