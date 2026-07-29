@@ -419,25 +419,19 @@ def test_slim_keeps_diverged_actor_and_ref(monkeypatch, tmp_path):
 
 def test_create_campaign_writes_the_default_climate(monkeypatch, tmp_path):
     home(monkeypatch, tmp_path)
-    import json
-
-    from grimoire.store import climates
+    from grimoire.store import campaign_climate, climates
     worlds.create_world("Realm")
     cid = campaigns.create_campaign("Saltmarch Chronicle", "realm",
                                     climate=climates.FALLBACK_ID)
-    written = json.loads((campaigns.campaign_root(cid) / "climate.json").read_text())
-    assert written == {"default_climate": climates.FALLBACK_ID}
+    assert campaign_climate.read_default(cid) == climates.FALLBACK_ID
 
 
 def test_create_campaign_defaults_the_climate_when_omitted(monkeypatch, tmp_path):
     home(monkeypatch, tmp_path)
-    import json
-
-    from grimoire.store import climates
+    from grimoire.store import campaign_climate, climates
     worlds.create_world("Realm")
     cid = campaigns.create_campaign("Saltmarch Chronicle", "realm")
-    written = json.loads((campaigns.campaign_root(cid) / "climate.json").read_text())
-    assert written == {"default_climate": climates.FALLBACK_ID}
+    assert campaign_climate.read_default(cid) == climates.FALLBACK_ID
 
 
 def test_create_campaign_rejects_an_unknown_climate_before_creating_anything(monkeypatch, tmp_path):

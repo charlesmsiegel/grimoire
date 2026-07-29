@@ -30,8 +30,8 @@ def use_split_year(tmp_path, cid):
     (tmp_path / "climates").mkdir(exist_ok=True)
     (tmp_path / "climates" / "split-year.json").write_text(
         json.dumps(SPLIT_YEAR), encoding="utf-8")
-    (campaigns.campaign_root(cid) / "climate.json").write_text(
-        json.dumps({"default_climate": "split-year"}), encoding="utf-8")
+    from grimoire.store import campaign_climate
+    campaign_climate.write_default(cid, "split-year")
 
 
 def test_resolves_all_three_axes(monkeypatch, tmp_path):

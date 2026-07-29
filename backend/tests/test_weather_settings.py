@@ -1,6 +1,6 @@
 import json
 
-from grimoire.store import campaigns, climates, worlds
+from grimoire.store import campaign_climate, campaigns, climates, worlds
 from grimoire.store.weather import settings
 
 
@@ -40,8 +40,7 @@ def test_campaign_default_is_used_when_set(monkeypatch, tmp_path):
                      "temperature": [{"name": "mild", "weight": 1}],
                      "conditions": [{"name": "clear", "weight": 1}],
                      "wind": [{"name": "calm", "weight": 1}]}]}), encoding="utf-8")
-    (campaigns.campaign_root(cid) / "climate.json").write_text(
-        json.dumps({"default_climate": "saltmarch-fens"}), encoding="utf-8")
+    campaign_climate.write_default(cid, "saltmarch-fens")
     lid = location(cid, "Saltmarch Docks")
     assert settings.resolve(cid, lid)["climate"]["id"] == "saltmarch-fens"
 

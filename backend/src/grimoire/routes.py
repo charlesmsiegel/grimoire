@@ -2001,24 +2001,23 @@ def get_calendar_providers():
 def get_campaign_climate(cid: str):
     """The campaign's default climate id, and the resolved document."""
     _campaign_root_or_404(cid)
-    resolved = store.weather.settings.resolve(cid, None)
-    return {"default_climate": resolved["climate"]["id"], "climate": resolved["climate"]}
+    resolved = store.campaign_climate.resolve_default(cid)
+    return {"default_climate": resolved["id"], "climate": resolved}
 
 
 @router.put("/campaigns/{cid}/climate")
 def put_campaign_climate(cid: str, body: CampaignClimate):
     """Change the default after creation.
 
-    Without this the create-time write is the only thing that ever touches
-    `climate.json`, so a campaign's default is immutable short of hand-editing
+    Without this the create-time write is the only thing that ever sets a
+    campaign's default climate, so it would be immutable short of hand-editing
     the store or tagging every location individually.
     """
     _campaign_root_or_404(cid)
-    if store.climates.get(body.default_climate) is None:
-        raise HTTPException(status_code=400, detail=f"unknown climate: {body.default_climate!r}")
     try:
-        store.atomic.write_text(store.campaigns.campaign_root(cid) / "climate.json",
-                                json.dumps({"default_climate": body.default_climate}))
+        store.campaign_climate.write_default(cid, body.default_climate)
+    except store.climates.ClimateError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"could not write climate: {e}")
     return {"ok": True, "default_climate": body.default_climate}
@@ -2080,14 +2079,14 @@ def _climate_referrers(climate_id: str) -> dict:
     rows = store.campaigns.list_campaigns()
     for row in rows:
         cid = row["id"]
-        try:
-            raw = json.loads((store.campaigns.campaign_root(cid) / "climate.json")
-                             .read_text(encoding="utf-8"))
-            if isinstance(raw, dict) and raw.get("default_climate") == climate_id:
-                campaigns_using.append({"id": cid, "name": row.get("name", cid)})
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError, AttributeError):
-            pass
-        # Not caught either: one unreadable location file aborting the scan
+        # The *effective* default, not whatever the file literally says: a
+        # campaign with no stored default (every one predating the weather work)
+        # or an unreadable one still falls back to the shipped preset, and
+        # reading the file here reported such a campaign as using nothing at
+        # all — precisely the case the editor needs warning about.
+        if store.campaign_climate.resolve_default(cid)["id"] == climate_id:
+            campaigns_using.append({"id": cid, "name": row.get("name", cid)})
+        # Not caught: one unreadable location file aborting the scan
         # would drop every valid reference in that campaign, and the editor
         # would report no impact for a climate those locations use.
         for loc in store.overlay.list_entities(cid, "locations"):
