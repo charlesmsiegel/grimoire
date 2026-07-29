@@ -64,6 +64,44 @@ def _strictly_inside(inner: ast.AST, outer: ast.AST) -> bool:
     return o_start <= i_start and i_end <= o_end and (i_start, i_end) != (o_start, o_end)
 
 
+def _stated_reason(marker: str, comment: str) -> str | None:
+    """The reason, if this comment *is* the marker rather than mentions it.
+
+    `partition` matched the marker anywhere in the comment, so
+    `# do not add overlay-ok: this is still unsafe` read as a valid exemption
+    with the reason "this is still unsafe" -- a warning about the marker turned
+    the guard off. The documented form is `# <marker>: <reason>`, so require it
+    at the start of the comment body.
+    """
+    body = comment.lstrip("#").strip()
+    if not body.startswith(marker):
+        return None
+    return body[len(marker):].strip()
+
+
+def _shares_first_line(a: ast.AST, b: ast.AST) -> bool:
+    """Two nodes begin on the same line and neither contains the other."""
+    return (a.lineno == b.lineno
+            and not _strictly_inside(a, b) and not _strictly_inside(b, a))
+
+
+def _sole_owner(node: ast.AST, lineno: int, others) -> bool:
+    """Whether `node` alone can claim an inline marker on `lineno`.
+
+    It cannot if something strictly inside it also spans that line (the inner
+    call owns its own marker), and it cannot if a *sibling* does either:
+    `(read(croot), image(croot))  # marker` names neither, so honouring it for
+    both would exempt two calls on one reason. Ambiguous placement wins nothing
+    — the author splits the line and says which they meant.
+    """
+    for o in others:
+        if not (_spans(o)[0] <= lineno <= _spans(o)[1]):
+            continue
+        if _strictly_inside(o, node) or _shares_first_line(o, node):
+            return False
+    return True
+
+
 def marker_reason(marker: str, src: str, node: ast.AST, others=()) -> str | None:
     """The `# <marker>: <reason>` attached to THIS call, if any.
 
@@ -88,20 +126,21 @@ def marker_reason(marker: str, src: str, node: ast.AST, others=()) -> str | None
     start, end = _spans(node)
 
     for lineno in range(start, end + 1):
-        _, sep, reason = comments.get(lineno, "").partition(marker)
-        if not sep:
+        reason = _stated_reason(marker, comments.get(lineno, ""))
+        if reason is None:
             continue
-        # someone else, strictly inside this node, owns this comment
-        if any(_spans(o)[0] <= lineno <= _spans(o)[1] and _strictly_inside(o, node)
-               for o in others):
+        # Someone else, strictly inside this node, owns this comment -- or two
+        # siblings both do, in which case nobody does (see _sole_owner).
+        if not _sole_owner(node, lineno, others):
             continue
-        return reason.strip()
+        return reason
 
     # A comment block above a statement attaches to the statement, so it belongs
     # to the OUTERMOST flagged node starting there. Without this, a marker
     # written for `dst.write_bytes(...)` also exempted a call nested inside it on
     # the same first line -- the enclosing-direction twin of the inline case.
-    if any(_strictly_inside(node, o) for o in others):
+    # Siblings sharing that first line are ambiguous the same way.
+    if any(_strictly_inside(node, o) or _shares_first_line(node, o) for o in others):
         return None
 
     # Walk up through contiguous comment lines only; a blank line or any code
@@ -110,8 +149,8 @@ def marker_reason(marker: str, src: str, node: ast.AST, others=()) -> str | None
     lines = src.splitlines()
     i = node.lineno - 1                      # 1-based line above the node
     while i >= 1 and i in comments and lines[i - 1].strip() == comments[i]:
-        _, sep, reason = comments[i].partition(marker)
-        if sep:
-            return reason.strip()
+        reason = _stated_reason(marker, comments[i])
+        if reason is not None:
+            return reason
         i -= 1
     return None
