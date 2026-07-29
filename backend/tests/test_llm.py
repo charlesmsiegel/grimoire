@@ -98,17 +98,23 @@ def _sibling_imports(name: str) -> set[str]:
 
     Deliberately counts function-scope imports too: deferring an import into a
     function is how an import cycle gets worked around, so a check that ignored
-    them would call the workaround "acyclic" and let the cycle back in.
+    them would call the workaround "acyclic" and let the cycle back in. Both
+    spellings of an edge count — `from .llm import x` and `from grimoire.llm
+    import x` reach the same module and cycle the same way.
     """
     src = Path(grimoire.__file__).with_name(f"{name}.py").read_text(encoding="utf-8")
     found: set[str] = set()
     for node in ast.walk(ast.parse(src)):
-        if isinstance(node, ast.ImportFrom) and node.level == 1:
-            if node.module:
+        if isinstance(node, ast.ImportFrom):
+            if node.level == 1 and node.module:  # from .llm import x
                 found.add(node.module)
-            else:  # `from . import x`
+            elif node.level == 1:  # from . import llm
                 found.update(a.name for a in node.names)
-        elif isinstance(node, ast.Import):
+            elif node.level == 0 and node.module == "grimoire":  # from grimoire import llm
+                found.update(a.name for a in node.names)
+            elif node.level == 0 and (node.module or "").startswith("grimoire."):
+                found.add(node.module.split(".", 1)[1])  # from grimoire.llm import x
+        elif isinstance(node, ast.Import):  # import grimoire.llm
             found.update(a.name.split(".", 1)[1] for a in node.names
                          if a.name.startswith("grimoire."))
     return found
