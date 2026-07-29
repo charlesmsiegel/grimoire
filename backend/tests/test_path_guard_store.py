@@ -616,3 +616,100 @@ def test_module_content_with_an_unusable_id_is_reported_not_advertised(monkeypat
     pack = modules.load_pack("pack")
     assert [c["id"] for c in pack["content"]] == ["keep"]
     assert any(MARK in e for e in pack["errors"])
+
+
+# ---- round 8 of the review
+
+def test_an_unreadable_campaign_blocks_world_deletion(monkeypatch, tmp_path):
+    """"We could not read it" must never be reported as "nothing uses it".
+
+    `world_refs` swallowed the decode error and skipped the campaign, so a
+    world its frontmatter referenced became deletable -- the same data loss the
+    unfiltered scan was added to prevent, reintroduced by the scan itself.
+    """
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    cid = campaigns.create_campaign("Saltmarch", wid)
+    mp = campaigns.campaign_meta_path(cid)
+    # valid frontmatter, undecodable body: the reference is still in there
+    mp.write_bytes(f"---\nname: Saltmarch\nworld: {wid}\n---\n".encode() + b"\xff\xfe body")
+
+    assert (("Saltmarch", wid) in campaigns.world_refs())   # recovered, not lost
+    with pytest.raises(worlds.WorldInUse):
+        worlds.delete_world(wid)
+    assert worlds.world_root(wid).exists()
+
+
+def test_a_campaign_that_cannot_be_read_at_all_still_blocks_deletion(monkeypatch, tmp_path):
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    cid = campaigns.create_campaign("Saltmarch", wid)
+    mp = campaigns.campaign_meta_path(cid)
+
+    def unreadable(self, *a, **k):
+        raise OSError("locked by a sync client")
+
+    monkeypatch.setattr(type(mp), "read_text", unreadable)
+    assert (cid, None) in campaigns.world_refs()   # unknown, not absent
+    with pytest.raises(worlds.WorldInUse):
+        worlds.delete_world(wid)
+
+
+def test_export_survives_an_unusable_stored_world(monkeypatch, tmp_path):
+    from grimoire.store import export
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    cid = campaigns.create_campaign("Saltmarch", wid)
+    mp = campaigns.campaign_meta_path(cid)
+    meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
+    meta["world"] = "C:evil"
+    mp.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+
+    data = export.collect(cid)          # must not raise WorldNotFound
+    assert data["world_name"] == ""     # degrades to "no world", like a deleted one
+
+
+def test_an_actor_never_reports_a_default_version_it_does_not_list(monkeypatch, tmp_path):
+    """Filtering a version out of the listing must not leave `default_version`
+    naming it: the editor asks for that version, then falls back to
+    versions[0], and with neither present it crashes."""
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    wroot = worlds.world_root(wid)
+    cid, vid = characters.create_character(wroot, "Seraphine")
+    pid, pvid = pcs.create_pc(wroot, "Mara", [])
+    # a second, unaddressable card that the stored meta points at
+    (characters._char_dir(wroot, cid) / f"{MARK}.json").write_text(
+        '{"data":{"name":"N"}}', encoding="utf-8")
+    (pcs._pc_dir(wroot, pid) / f"{MARK}.md").write_text("---\nname: N\n---\n", encoding="utf-8")
+    for meta_path, key in ((characters._meta_path(wroot, cid), "default_version"),
+                           (pcs._meta_path(wroot, pid), "default_version")):
+        meta, body = parse_frontmatter(meta_path.read_text(encoding="utf-8"))
+        meta[key] = MARK
+        meta_path.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+    _reject_mark(monkeypatch)
+
+    detail = characters.read_character(wroot, cid)
+    listed = [c for c in characters.list_characters(wroot) if c["id"] == cid][0]
+    for payload in (detail["meta"], listed):
+        assert payload["default_version"] == vid
+    assert {v["id"] for v in detail["versions"]} == {vid}
+
+    pc_detail = pcs.read_pc(wroot, pid)
+    pc_listed = [p for p in pcs.list_pcs(wroot) if p["id"] == pid][0]
+    for payload in (pc_detail["meta"], pc_listed):
+        assert payload["default_version"] == pvid
+
+
+def test_an_actor_with_no_addressable_version_is_not_listed(monkeypatch, tmp_path):
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    wroot = worlds.world_root(wid)
+    cid, vid = characters.create_character(wroot, "Seraphine")
+    (characters._char_dir(wroot, cid) / f"{vid}.json").rename(
+        characters._char_dir(wroot, cid) / f"{MARK}.json")
+    _reject_mark(monkeypatch)
+
+    assert [c["id"] for c in characters.list_characters(wroot)] == []
+    with pytest.raises(characters.CharacterNotFound):
+        characters.read_character(wroot, cid)

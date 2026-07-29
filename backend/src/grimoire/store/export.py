@@ -188,8 +188,11 @@ def collect(cid: str, image_prefix: str = "images/") -> dict:
     campaign = campaigns.read_campaign(cid)
     croot = campaigns.campaign_root(cid)
     wid = campaign["meta"].get("world", "")
-    wroot = worlds.world_root(wid) if wid else None
-    if wroot is not None and not wroot.exists():
+    # through world_root_of, not world_root: a campaign can carry a world
+    # reference the guard refuses, and an export must degrade to "no world"
+    # rather than 500 (#259 review)
+    wroot = campaigns.world_root_of(cid)
+    if not wroot.exists():
         wroot = None
     world_name = worlds.read_world(wid)["meta"].get("name", "") if wroot is not None else ""
     provider = calendars.get_provider(calendars.read_calendar(croot)["primary"])
