@@ -6,7 +6,7 @@ from pathlib import Path
 
 from . import appearances, atomic, campaigns, cards, characters, entities, greetings, locks, overlay, scene_ids, scene_refs, scenes, worlds
 from .frontmatter import parse_frontmatter
-from .paths import home, slugify, uniquify
+from .paths import home, safe_id, slugify, uniquify
 
 
 def migrate_scene_ids() -> None:
@@ -39,6 +39,8 @@ def _migrate_campaign_locked(cid: str) -> None:
         return
     legacy, top, width = [], 0, scene_ids.MIN_WIDTH
     for p in d.glob("*.md"):
+        if not safe_id(p.stem):
+            continue   # never rename an id the store cannot address
         parsed = scene_ids.parse_sid(p.stem)
         if parsed:
             top = max(top, parsed["number"])
@@ -105,6 +107,8 @@ def _bake_campaign(cid: str) -> None:
     if not gdir.exists():
         return
     for p in gdir.glob("*.md"):
+        if not safe_id(p.stem):
+            continue   # startup path: an unusable stem must not abort the lifespan
         g = greetings.read_greeting(croot, p.stem)["meta"]
         # a materialized greeting's character may still be world-only, so its
         # name resolves through overlay.char_root, not the bare croot

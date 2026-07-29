@@ -428,6 +428,13 @@ def _load_content(root: Path, sheets: dict, errors: list[str]) -> list[dict]:
             errors.append(f"content/{kind}: unknown kind")
             continue
         for p in sorted(kind_dir.glob("*.md")):
+            if not safe_id(p.stem):
+                # read_content would refuse this id, so listing it would
+                # advertise content whose detail route 404s (#259 review).
+                # Reported rather than silently dropped: unlike a user store,
+                # a module pack is authored, so an unusable id is an error in it.
+                errors.append(f"content/{kind}/{p.stem}: unusable id")
+                continue
             try:
                 text = p.read_text(encoding="utf-8")
             except (UnicodeDecodeError, OSError) as e:

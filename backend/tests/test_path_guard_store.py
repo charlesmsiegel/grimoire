@@ -533,3 +533,86 @@ def test_no_listing_hands_back_an_id_its_own_lookups_refuse(monkeypatch, tmp_pat
         if any(x and MARK in str(x) for x in got):
             leaked[label] = got
     assert not leaked, f"listings disagree with their lookups: {leaked}"
+
+
+# ---- round 7 of the review
+
+def test_a_world_cannot_be_deleted_through_a_case_variant(monkeypatch, tmp_path):
+    """Case is another alias, and it destroyed a world in use just like the dot.
+
+    On a case-insensitive filesystem `DELETE /api/worlds/REALM` found the world
+    but compared the raw `REALM` against campaigns' stored `realm`, saw no
+    user, and removed it. Asking the directory listing rather than lower-casing
+    keeps a genuinely distinct `REALM` valid where the filesystem allows one.
+    """
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    entities.create_entity(worlds.world_root(wid), "lore", "Salt Pact", "the pact")
+    campaigns.create_campaign("Saltmarch", wid)
+    if worlds.world_exists("REALM"):          # only where the filesystem aliases
+        with pytest.raises(worlds.WorldNotFound):
+            worlds.delete_world("REALM")
+    assert worlds.world_root(wid).exists()
+    assert entities.list_entities(worlds.world_root(wid), "lore")
+
+
+def test_a_hidden_campaign_still_pins_its_world(monkeypatch, tmp_path):
+    """Hiding a record from enumeration must not hide it from integrity checks.
+
+    Filtering unusable campaigns out of `list_campaigns` (round 5) silently
+    made this world deletable: `delete_world` used that listing as its whole
+    in-use check, so the hidden campaign stopped counting as a user.
+    """
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    d = tmp_path / "campaigns" / MARK
+    d.mkdir(parents=True)
+    (d / "campaign.md").write_text(f"---\nname: Hidden\nworld: {wid}\n---\n", encoding="utf-8")
+    _reject_mark(monkeypatch)
+
+    assert [c["id"] for c in campaigns.list_campaigns()] == []      # hidden from the UI
+    assert ("Hidden", wid) in campaigns.world_refs()                # not from the check
+    with pytest.raises(worlds.WorldInUse):
+        worlds.delete_world(wid)
+    assert worlds.world_root(wid).exists()
+
+
+def test_startup_migrations_survive_unusable_ids(monkeypatch, tmp_path):
+    """`bake_char_macros` and `migrate_scene_ids` both run in the app lifespan
+    and both scan directories directly rather than through a listing."""
+    from grimoire.store import greetings, migrations, scenes
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    cid = campaigns.create_campaign("Saltmarch", wid)
+    ch, vid = characters.create_character(worlds.world_root(wid), "Seraphine")
+    scenes.create_scene(cid, "Opening")
+    croot = campaigns.campaign_root(cid)
+    (croot / "greetings").mkdir(parents=True, exist_ok=True)
+    (croot / "greetings" / f"{MARK}.md").write_text(
+        f"---\nname: N\ncharacter: {ch}\nversion: {vid}\n---\nbody\n", encoding="utf-8")
+    (croot / "scenes" / f"{MARK}.md").write_text("---\ntitle: N\n---\n", encoding="utf-8")
+    _reject_mark(monkeypatch)
+
+    migrations.migrate_scene_ids()      # neither may raise: they abort startup
+    migrations.bake_char_macros()
+    assert MARK not in [g["id"] for g in greetings.list_greetings(croot)]
+
+
+def test_module_content_with_an_unusable_id_is_reported_not_advertised(monkeypatch, tmp_path):
+    """A pack is authored, not user data, so an unusable content id is an error
+    in the pack -- but it must never be listed as content the detail route
+    cannot open."""
+    from grimoire.store import modules
+    home(monkeypatch, tmp_path)
+    root = tmp_path / "modules" / "pack"
+    (root / "content" / "locations").mkdir(parents=True)
+    (root / "module.md").write_text("---\nname: Pack\n---\n", encoding="utf-8")
+    (root / "content" / "locations" / f"{MARK}.md").write_text(
+        "---\nname: N\n---\nbody\n", encoding="utf-8")
+    (root / "content" / "locations" / "keep.md").write_text(
+        "---\nname: Keep\n---\nbody\n", encoding="utf-8")
+    _reject_mark(monkeypatch)
+
+    pack = modules.load_pack("pack")
+    assert [c["id"] for c in pack["content"]] == ["keep"]
+    assert any(MARK in e for e in pack["errors"])
