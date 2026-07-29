@@ -14,7 +14,8 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 from . import prompts, store
-from .llm import LLMClient, LLMError
+from .llm import LLMClient
+from .llm_errors import LLMError
 from .openai_compatible import OpenAICompatibleClient
 
 router = APIRouter()

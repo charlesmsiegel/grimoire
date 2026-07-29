@@ -1,4 +1,4 @@
-from grimoire.llm import LLMError
+from grimoire.llm_errors import LLMError
 from grimoire.openrouter import OpenRouterError
 
 
@@ -81,3 +81,62 @@ async def test_missing_kind_defaults_to_openrouter():
     client = LLMClient(openrouter=op, claude=cl, openai_compatible=oc)
     conn = {"model": "or-model", "api_key": "sk-or-x"}  # defensive: no kind key at all
     assert [c async for c in client.stream([], conn)] == ["or"]
+
+
+import ast
+from pathlib import Path
+
+import grimoire
+
+# The LLM gateway: the facade plus the three providers it dispatches to, and the
+# error module they all share.
+GATEWAY_MODULES = ("llm", "llm_errors", "openrouter", "claude_agent", "openai_compatible")
+
+
+def _sibling_imports(name: str) -> set[str]:
+    """Names in the grimoire package that `name` imports.
+
+    Deliberately counts function-scope imports too: deferring an import into a
+    function is how an import cycle gets worked around, so a check that ignored
+    them would call the workaround "acyclic" and let the cycle back in.
+    """
+    src = Path(grimoire.__file__).with_name(f"{name}.py").read_text(encoding="utf-8")
+    found: set[str] = set()
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.ImportFrom) and node.level == 1:
+            if node.module:
+                found.add(node.module)
+            else:  # `from . import x`
+                found.update(a.name for a in node.names)
+        elif isinstance(node, ast.Import):
+            found.update(a.name.split(".", 1)[1] for a in node.names
+                         if a.name.startswith("grimoire."))
+    return found
+
+
+def _find_cycle(graph: dict[str, set[str]]) -> list[str] | None:
+    done: set[str] = set()
+
+    def walk(node: str, path: list[str]) -> list[str] | None:
+        if node in path:
+            return path[path.index(node):] + [node]
+        if node in done:
+            return None
+        for nxt in sorted(graph.get(node, ())):
+            if cycle := walk(nxt, path + [node]):
+                return cycle
+        done.add(node)
+        return None
+
+    for start in graph:
+        if cycle := walk(start, []):
+            return cycle
+    return None
+
+
+def test_llm_gateway_imports_are_acyclic():
+    """Regression for #239: LLMError lives in its own leaf module so that
+    llm.py can import the providers at module scope."""
+    graph = {m: _sibling_imports(m) & set(GATEWAY_MODULES) for m in GATEWAY_MODULES}
+    cycle = _find_cycle(graph)
+    assert cycle is None, "import cycle: " + " -> ".join(cycle or [])

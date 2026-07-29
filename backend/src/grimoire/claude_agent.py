@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import AsyncIterator
 
-from .llm import LLMError
+from .llm_errors import LLMError
 
 
 class ClaudeAgentError(LLMError):
