@@ -1,0 +1,867 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>grimoire fix-253-promote-image-swap — Review</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#faf7f2; --bg-grid:rgba(120,90,60,0.05); --surface:#ffffff; --surface-2:#f2ede4;
+  --border:rgba(90,70,50,0.16); --border-strong:rgba(90,70,50,0.34);
+  --text:#2b2620; --text-dim:#6d6357; --text-faint:#9a8f81;
+  --accent:#8a5a2b; --accent-dim:rgba(138,90,43,0.10);
+  --good:#3e7d4f; --good-dim:rgba(62,125,79,0.11);
+  --warn:#a06b14; --warn-dim:rgba(160,107,20,0.12);
+  --bad:#b04030; --bad-dim:rgba(176,64,48,0.10);
+  --violet:#6a5590;
+  --heat-lo:#e4dccd; --heat-hi:#b04030;
+  --add:#3e7d4f; --add-dim:rgba(62,125,79,0.13);
+  --del:#b04030; --del-dim:rgba(176,64,48,0.12);
+  --mono:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  --sans:'IBM Plex Sans',system-ui,-apple-system,sans-serif;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#1c1915; --bg-grid:rgba(220,190,150,0.045); --surface:#26221c; --surface-2:#2f2a22;
+    --border:rgba(220,195,160,0.14); --border-strong:rgba(220,195,160,0.30);
+    --text:#e8e1d5; --text-dim:#a89c8b; --text-faint:#776d5f;
+    --accent:#d3a161; --accent-dim:rgba(211,161,97,0.13);
+    --good:#7bbd8b; --good-dim:rgba(123,189,139,0.13);
+    --warn:#d9a84e; --warn-dim:rgba(217,168,78,0.14);
+    --bad:#dd7a66; --bad-dim:rgba(221,122,102,0.14);
+    --violet:#a893cf;
+    --heat-lo:#3d372c; --heat-hi:#dd7a66;
+    --add:#7bbd8b; --add-dim:rgba(123,189,139,0.14);
+    --del:#dd7a66; --del-dim:rgba(221,122,102,0.14);
+  }
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{
+  font-family:var(--sans); background:var(--bg); color:var(--text);
+  background-image:linear-gradient(var(--bg-grid) 1px,transparent 1px),linear-gradient(90deg,var(--bg-grid) 1px,transparent 1px);
+  background-size:32px 32px; line-height:1.55; font-size:15px;
+}
+header.doc{padding:34px 28px 0; max-width:1280px; margin:0 auto}
+.doc-label{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);display:flex;align-items:center;gap:8px}
+.doc-label::before{content:"";width:8px;height:8px;background:var(--accent);border-radius:2px;display:inline-block}
+h1.doc-title{font-size:30px;font-weight:700;letter-spacing:-.02em;margin-top:8px}
+.doc-sub{color:var(--text-dim);margin-top:6px;max-width:900px}
+.doc-meta{font-family:var(--mono);font-size:12px;color:var(--text-faint);margin-top:10px}
+nav.tabs{
+  position:sticky;top:0;z-index:50;background:color-mix(in srgb,var(--bg) 88%,transparent);
+  backdrop-filter:blur(8px);border-bottom:1px solid var(--border);
+  margin-top:22px;padding:0 28px;display:flex;gap:2px;overflow-x:auto;
+  max-width:1280px;margin-left:auto;margin-right:auto;scrollbar-width:thin;
+}
+nav.tabs button{
+  appearance:none;background:none;border:none;border-bottom:2px solid transparent;
+  color:var(--text-dim);font-family:var(--mono);font-size:12.5px;letter-spacing:.02em;
+  padding:12px 14px;cursor:pointer;white-space:nowrap;transition:color .15s;
+}
+nav.tabs button:hover{color:var(--text)}
+nav.tabs button[aria-selected="true"]{color:var(--accent);border-bottom-color:var(--accent)}
+nav.tabs button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+main{max-width:1280px;margin:0 auto;padding:26px 28px 80px}
+.panel{display:none;animation:fadeUp .25s ease both}
+.panel.active{display:block}
+@keyframes fadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}
+
+/* ---------- content primitives ---------- */
+.panel h2{font-size:21px;font-weight:600;letter-spacing:-.01em;margin:26px 0 10px}
+.panel h2:first-child{margin-top:0}
+.panel h3{font-size:16px;font-weight:600;margin:22px 0 8px}
+.panel p{margin:8px 0;max-width:940px;color:var(--text)}
+.panel ul,.panel ol{margin:8px 0 8px 22px;max-width:940px}
+.panel li{margin:4px 0}
+.dim{color:var(--text-dim)} .faint{color:var(--text-faint)}
+code,.mono{font-family:var(--mono);font-size:.92em}
+p code,li code,td code{background:var(--surface-2);border:1px solid var(--border);border-radius:4px;padding:1px 5px}
+pre{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px 16px;overflow-x:auto;font-family:var(--mono);font-size:13px;line-height:1.5;margin:10px 0}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 20px;margin:12px 0}
+.card.hero{border-color:var(--border-strong);background:linear-gradient(180deg,var(--accent-dim),var(--surface) 60%)}
+.grid{display:grid;gap:14px;margin:12px 0}
+.grid.cols-2{grid-template-columns:repeat(auto-fit,minmax(340px,1fr))}
+.grid.cols-3{grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+.grid>*{min-width:0}
+.kpis{display:flex;flex-wrap:wrap;gap:12px;margin:12px 0}
+.kpi{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 18px;min-width:130px}
+.kpi .n{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.kpi .l{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-dim);margin-top:2px}
+.kpi.warn .n{color:var(--warn)} .kpi.bad .n{color:var(--bad)} .kpi.good .n{color:var(--good)} .kpi.accent .n{color:var(--accent)}
+.badge{display:inline-block;font-family:var(--mono);font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--border);vertical-align:1px;white-space:nowrap}
+.badge.good{color:var(--good);background:var(--good-dim);border-color:transparent}
+.badge.warn{color:var(--warn);background:var(--warn-dim);border-color:transparent}
+.badge.bad{color:var(--bad);background:var(--bad-dim);border-color:transparent}
+.badge.accent{color:var(--accent);background:var(--accent-dim);border-color:transparent}
+.badge.neutral{color:var(--text-dim);background:var(--surface-2);border-color:transparent}
+.callout{border-left:3px solid var(--accent);background:var(--accent-dim);border-radius:0 8px 8px 0;padding:12px 16px;margin:12px 0;max-width:940px}
+.callout.warn{border-color:var(--warn);background:var(--warn-dim)}
+.callout.bad{border-color:var(--bad);background:var(--bad-dim)}
+.callout.good{border-color:var(--good);background:var(--good-dim)}
+details{border:1px solid var(--border);border-radius:8px;margin:10px 0;background:var(--surface)}
+details summary{cursor:pointer;padding:10px 16px;font-weight:500;color:var(--text-dim)}
+details[open] summary{border-bottom:1px solid var(--border);color:var(--text)}
+details .body{padding:12px 16px}
+
+/* tables */
+.tbl-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:10px;margin:12px 0;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+thead th{
+  position:sticky;top:0;background:var(--surface-2);text-align:left;font-family:var(--mono);
+  font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-dim);
+  padding:9px 14px;border-bottom:1px solid var(--border-strong);white-space:nowrap;
+}
+tbody td{padding:8px 14px;border-bottom:1px solid var(--border);vertical-align:top;overflow-wrap:break-word}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:nth-child(even){background:color-mix(in srgb,var(--surface-2) 45%,transparent)}
+tbody tr:hover{background:var(--accent-dim)}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;font-family:var(--mono);font-size:12.5px}
+table.sortable thead th{cursor:pointer;user-select:none}
+table.sortable thead th::after{content:"↕";opacity:.35;margin-left:6px;font-size:10px}
+table.sortable thead th.asc::after{content:"↑";opacity:1;color:var(--accent)}
+table.sortable thead th.desc::after{content:"↓";opacity:1;color:var(--accent)}
+
+/* CSS bars inside tables */
+.bar{position:relative;background:var(--surface-2);border-radius:4px;height:14px;min-width:120px;overflow:hidden}
+.bar>i{position:absolute;inset:0 auto 0 0;background:var(--accent);border-radius:4px}
+.bar.warn>i{background:var(--warn)} .bar.bad>i{background:var(--bad)} .bar.good>i{background:var(--good)}
+/* diff add/del split bar: use two <i> with classes a and d */
+.dbar{position:relative;display:flex;background:var(--surface-2);border-radius:4px;height:14px;min-width:120px;overflow:hidden}
+.dbar>i.a{background:var(--add)} .dbar>i.d{background:var(--del)}
+.plusminus{font-family:var(--mono);font-size:12px;white-space:nowrap}
+.plusminus .p{color:var(--add)} .plusminus .m{color:var(--del)}
+.diff-snippet{background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow-x:auto;font-family:var(--mono);font-size:12.5px;line-height:1.5;margin:10px 0}
+.diff-snippet .fh{background:var(--surface-2);padding:6px 12px;border-bottom:1px solid var(--border);font-size:11.5px;color:var(--text-dim)}
+.diff-snippet .ln{display:block;padding:1px 12px;white-space:pre}
+.diff-snippet .ln.add{background:var(--add-dim);color:var(--text)}
+.diff-snippet .ln.del{background:var(--del-dim);color:var(--text)}
+.diff-snippet .ln.ctx{color:var(--text-dim)}
+
+/* ---------- viz containers ---------- */
+.viz{position:relative;border:1px solid var(--border);border-radius:10px;background:var(--surface);margin:12px 0;overflow:hidden}
+.viz svg{display:block;width:100%;height:100%}
+.viz .zoombar{position:absolute;top:10px;right:10px;display:flex;gap:6px;z-index:5}
+.viz .zoombar button{width:28px;height:28px;border-radius:6px;border:1px solid var(--border-strong);background:var(--surface-2);color:var(--text);font-family:var(--mono);cursor:pointer;font-size:14px;line-height:1}
+.viz .zoombar button:hover{background:var(--accent-dim);color:var(--accent)}
+.viz .legend{position:absolute;left:12px;bottom:10px;display:flex;flex-wrap:wrap;gap:10px;font-family:var(--mono);font-size:11px;color:var(--text-dim);background:color-mix(in srgb,var(--surface) 80%,transparent);padding:4px 8px;border-radius:6px;max-width:70%}
+.legend .sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+.viz-tip{position:fixed;pointer-events:none;z-index:200;background:var(--surface-2);border:1px solid var(--border-strong);border-radius:8px;padding:8px 12px;font-family:var(--mono);font-size:12px;color:var(--text);box-shadow:0 6px 24px rgba(0,0,0,.35);display:none;max-width:380px}
+.mermaid-wrap{position:relative;border:1px solid var(--border);border-radius:10px;background:var(--surface);margin:12px 0;overflow:hidden;min-height:120px}
+.mermaid-wrap .mviewport{overflow:hidden;cursor:grab;padding:14px}
+.mermaid-wrap .mviewport.dragging{cursor:grabbing}
+.mermaid{font-family:var(--sans)}
+.mermaid[data-processed="true"]{display:flex;justify-content:center}
+footer.doc{max-width:1280px;margin:0 auto;padding:0 28px 34px;color:var(--text-faint);font-family:var(--mono);font-size:11.5px}
+@media(max-width:720px){header.doc,main,nav.tabs,footer.doc{padding-left:16px;padding-right:16px} h1.doc-title{font-size:24px}}
+</style>
+</head>
+<body>
+<header class="doc">
+  <div class="doc-label">PULL REQUEST REVIEW</div>
+  <h1 class="doc-title">grimoire fix-253-promote-image-swap — Review</h1>
+  <p class="doc-sub">promote_image stops swapping through a temp: republish both slots, and repair the temps the old swap stranded</p>
+  <div class="doc-meta">base origin/main @ 75076ea3 → fix-253-promote-image-swap @ 144911f6 · +647/−12 · 8 commits · rebased 2026-07-28</div>
+</header>
+<nav class="tabs" role="tablist"><button role="tab" data-tab="summary" aria-selected="true" aria-controls="summary">Summary</button>
+<button role="tab" data-tab="footprint" aria-selected="false" aria-controls="footprint">Footprint</button>
+<button role="tab" data-tab="contracts-tests" aria-selected="false" aria-controls="contracts-tests">Contracts &amp; Tests</button>
+<button role="tab" data-tab="blast-radius" aria-selected="false" aria-controls="blast-radius">Blast Radius</button>
+<button role="tab" data-tab="flow-impact" aria-selected="false" aria-controls="flow-impact">Flow Impact</button>
+<button role="tab" data-tab="review-walkthrough" aria-selected="false" aria-controls="review-walkthrough">Review Walkthrough</button></nav>
+<main><section class="panel active" id="summary" role="tabpanel">
+
+<div class="card hero">
+  <h2>Making an image the avatar stops being a three-step file dance</h2>
+  <p><code>backend/src/grimoire/store/assets.py:387</code> — <strong>promotion no longer moves files</strong>. It reads both images into memory and republishes each through <code>put_image</code>: the promoted bytes to <code>avatar.&lt;ext&gt;</code>, the demoted avatar's bytes to the promoted image's slot. The old code renamed <em>src → promote-tmp → </em> and <em>avatar → src's slot</em>, and a crash between renames left the store with a file under <code>promote-tmp.png</code> and <strong>no avatar at all</strong>.</p>
+  <p>Two behavioral consequences a reviewer should hold onto. <strong>The avatar slot now always resolves</strong> — every instant it holds either the old or the new image, because <code>put_image</code> writes before it unlinks the extension it replaces. And <strong>reads now repair damage</strong>: <code>image_path</code> (<code>backend/src/grimoire/store/assets.py:244</code>) and <code>list_images</code> (<code>backend/src/grimoire/store/assets.py:268</code>) call <code>_heal_stranded_promotion</code>, which renames a leftover <code>promote-tmp.*</code> into the avatar slot, or into a free gallery slot when a working avatar exists.</p>
+  <p>Two smaller contract changes ride along: <code>promote-tmp</code> (case-folded) is now a <strong>rejected image name</strong> (<code>backend/src/grimoire/store/assets.py:29</code>), and promoting a file whose extension isn't allowlisted now <strong>raises</strong> instead of silently renaming it — surfaced as HTTP 400 by all four promote routes.</p>
+</div>
+
+<div class="kpis">
+  <div class="kpi"><div class="k">Behavior change</div><div class="v">rename → republish</div></div>
+  <div class="kpi"><div class="k">Reads now write</div><div class="v">2 call sites</div></div>
+  <div class="kpi"><div class="k">New rejected name</div><div class="v">promote-tmp</div></div>
+  <div class="kpi"><div class="k">Tests added</div><div class="v"><span class="p">+404</span></div></div>
+</div>
+
+<div class="card">
+  <h3>Claimed vs. actual</h3>
+  <p>Claims taken from the branch's PR description and the seven commit messages.</p>
+  <div class="tbl-wrap"><table>
+    <thead><tr><th>Claim</th><th>Verdict</th><th>Evidence</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>"The avatar slot always resolves"</td>
+        <td><span class="badge good">matches</span></td>
+        <td>Both publishes go through <code>put_image</code>, which snapshots stale siblings, writes, then unlinks (<code>backend/src/grimoire/store/assets.py:325</code>). Parametrized crash test cuts the sequence at every step.</td>
+      </tr>
+      <tr>
+        <td>"Takes the per-logical-image lock so promotion can't interleave with an upload" (the issue's requirement)</td>
+        <td><span class="badge good">matches, exceeded</span></td>
+        <td>Holds <em>both</em> slots' locks for the whole swap via <code>_image_locks_held</code> (<code>backend/src/grimoire/store/assets.py:87</code>), not just one.</td>
+      </tr>
+      <tr>
+        <td>"Two concurrent promotions no longer collide on a fixed temp name"</td>
+        <td><span class="badge good">matches</span></td>
+        <td>No temp exists to collide on. Thread test asserts three images are merely permuted.</td>
+      </tr>
+      <tr>
+        <td>"The residue of a crash between the two publishes is a duplicate, not a hole"</td>
+        <td><span class="badge warn">true, and it is a real loss</span></td>
+        <td>Accurate but easy to skim past: for a <em>same-extension</em> swap the old avatar's only on-disk copy is overwritten by publish #1, so a crash there <strong>loses the demoted image</strong>. Disclosed in the docstring (<code>backend/src/grimoire/store/assets.py:402-407</code>); see the callout below.</td>
+      </tr>
+      <tr>
+        <td>"Recovery only renames onto a free name — never overwrites, never deletes"</td>
+        <td><span class="badge good">matches</span></td>
+        <td>Slot locked and re-verified free while held, plus a last-moment <code>target.exists()</code> guard (<code>backend/src/grimoire/store/assets.py:206-231</code>).</td>
+      </tr>
+      <tr>
+        <td>"A pre-existing case-aliasing gap in <code>_image_lock</code> is out of scope"</td>
+        <td><span class="badge good">verified</span></td>
+        <td>Exact-string keying predates the branch: <code>git show 55b1022c:…/assets.py</code> line 66 is already <code>key = str(d / name)</code>. Two <code>put_image</code> calls named <code>gallery_1</code>/<code>Gallery_1</code> race on <code>main</code> today.</td>
+      </tr>
+    </tbody>
+  </table></div>
+</div>
+
+<div class="callout warn">
+  <strong>The one loss the change introduces, and why it is still a net win.</strong> Publish #1 replaces <code>avatar.&lt;ext&gt;</code>. When the promoted image shares that extension — the common <code>png → png</code> case — the old avatar's bytes then exist only in memory, so a crash before publish #2 loses the demoted image and leaves its slot holding a duplicate of the new avatar. The old code lost nothing in that window but left <em>no resolvable avatar</em>, so this trades a rare loss of a demoted image for eliminating a rare loss of the avatar itself. Keeping both would need a third slot and therefore the temp-file recovery protocol the change deletes. Disclosed, not hidden — but it is a genuine regression in one narrow window and deserves an explicit reviewer nod.
+</div>
+
+<div class="card">
+  <h3>Change classification</h3>
+  <p><span class="badge accent">bugfix</span> with a deliberate <span class="badge accent">migration</span> component. Not mixed in the reviewable-defect sense — every file serves issue #253:</p>
+  <ul>
+    <li><code>backend/src/grimoire/store/assets.py</code> — the swap rewrite <em>and</em> the recovery of pre-existing wreckage. These are separable concerns living in one file; the commit history separates them (<code>9141ae34</code> the swap, <code>80881eea</code> the recovery).</li>
+    <li><code>backend/src/grimoire/routes.py</code> — 12 lines, one <code>except ValueError</code> arm per promote handler. Pure consequence of the new preflight.</li>
+    <li>Three test files, no production logic.</li>
+  </ul>
+</div>
+
+<div class="card">
+  <h3>What did <em>not</em> change</h3>
+  <ul>
+    <li><strong>Reads still take no locks.</strong> <code>image_path</code>/<code>list_images</code> remain unsynchronized, so a reader landing between the two publishes sees the promoted image in <em>both</em> slots. The change makes the swap crash-safe, not atomic to observers — stated in the docstring (<code>backend/src/grimoire/store/assets.py:409-414</code>) rather than fixed.</li>
+    <li><strong><code>_image_lock</code>'s keying.</strong> Still an exact string (<code>backend/src/grimoire/store/assets.py:60</code>), so case-variant names remain unserialized on case-insensitive filesystems. Scoped out with a documented reason; recovery works around it by case-folding its own slot choice.</li>
+    <li><strong>No cross-process safety.</strong> Every lock here is in-process, unchanged. A second process on a synced store still races, as everywhere else in this module.</li>
+    <li><strong>No frontend change.</strong> The gallery still renders only <code>avatar</code> and <code>gallery_N</code> (<code>frontend/src/components/CharacterEditor.tsx:119</code>) — which is precisely <em>why</em> the backend recovery is needed rather than optional, since a stranded temp is invisible in the UI.</li>
+    <li><strong>No observability.</strong> Recovery repairs damage and logs nothing; a store that quietly had files moved gives the user no record. Defensible for a rename-only repair, worth a conscious decision.</li>
+  </ul>
+</div>
+
+</section>
+<section class="panel" id="footprint" role="tabpanel">
+
+
+<div class="kpis">
+  <div class="kpi accent"><div class="n">5</div><div class="l">files changed</div></div>
+  <div class="kpi good"><div class="n">+647</div><div class="l">additions</div></div>
+  <div class="kpi bad"><div class="n">−12</div><div class="l">deletions</div></div>
+  <div class="kpi"><div class="n">8</div><div class="l">commits</div></div>
+  <div class="kpi warn"><div class="n">3</div><div class="l">directories touched</div></div>
+</div>
+<div class="callout"><b>Footprint shape: moderately spread.</b> A tightly clustered change usually means one concern; a diff smeared across many directories can indicate shotgun surgery — one logical change forced through poorly separated modules — or several unrelated changes bundled into one PR.</div>
+
+<h2>Change map</h2>
+<p class="dim">Area = lines changed · color = heuristic risk score · hover for details.</p>
+<div class="viz" data-render="treemap" style="height:480px"></div>
+<script type="application/json">{"items":[{"name":"backend/src/grimoire/store/assets.py","value":243,"metric":7,"meta":"+231/\u221212 \u00b7 source"},{"name":"backend/src/grimoire/routes.py","value":12,"metric":1,"meta":"+12/\u22120 \u00b7 source"},{"name":"backend/tests/test_assets_store.py","value":342,"metric":0,"meta":"+342/\u22120 \u00b7 test"},{"name":"backend/tests/test_routes.py","value":42,"metric":0,"meta":"+42/\u22120 \u00b7 test"},{"name":"backend/tests/test_overlay.py","value":20,"metric":0,"meta":"+20/\u22120 \u00b7 test"}],"valueLabel":"lines changed","metricLabel":"risk score"}</script>
+
+<h2>By category</h2>
+<div class="tbl-wrap"><table>
+<thead><tr><th>Category</th><th class="num">Files</th><th class="num">+/−</th><th>Volume</th></tr></thead>
+<tbody><tr><td><span class='badge good'>test</span></td><td class='num'>3</td><td class='num'><span class='plusminus'><span class='p'>+404</span> <span class='m'>−0</span></span></td><td><div class="bar "><i style="width:100.0%"></i></div></td></tr>
+<tr><td><span class='badge accent'>source</span></td><td class='num'>2</td><td class='num'><span class='plusminus'><span class='p'>+243</span> <span class='m'>−12</span></span></td><td><div class="bar "><i style="width:63.1%"></i></div></td></tr></tbody></table></div>
+
+<h2>Files, risk-ordered</h2>
+<p class="dim">Reviewer attention is a budget — spend it top-down. Score combines category weight, risky patterns in added lines, signature changes, and large removals. Heuristic, not verdict.</p>
+<div class="tbl-wrap"><table class="sortable">
+<thead><tr><th>File</th><th>Category</th><th class="num">+/−</th><th>Change</th><th class="num">Risk</th><th>Why</th></tr></thead>
+<tbody><tr><td><code>backend/src/grimoire/store/assets.py</code> </td><td><span class='badge accent'>source</span></td><td class='num'><span class='plusminus'><span class='p'>+231</span> <span class='m'>−12</span></span></td><td data-sort='243'><div class='dbar'><i class='a' style='width:67.5%'></i><i class='d' style='width:3.5%'></i></div></td><td class='num'>7</td><td class='dim' style='font-size:12px'>concurrency×17, retries/timeouts×6</td></tr><tr><td><code>backend/src/grimoire/routes.py</code> </td><td><span class='badge accent'>source</span></td><td class='num'><span class='plusminus'><span class='p'>+12</span> <span class='m'>−0</span></span></td><td data-sort='12'><div class='dbar'><i class='a' style='width:3.5%'></i><i class='d' style='width:0.0%'></i></div></td><td class='num'>1</td><td class='dim' style='font-size:12px'></td></tr><tr><td><code>backend/tests/test_assets_store.py</code> </td><td><span class='badge good'>test</span></td><td class='num'><span class='plusminus'><span class='p'>+342</span> <span class='m'>−0</span></span></td><td data-sort='342'><div class='dbar'><i class='a' style='width:100.0%'></i><i class='d' style='width:0.0%'></i></div></td><td class='num'>0</td><td class='dim' style='font-size:12px'></td></tr><tr><td><code>backend/tests/test_routes.py</code> </td><td><span class='badge good'>test</span></td><td class='num'><span class='plusminus'><span class='p'>+42</span> <span class='m'>−0</span></span></td><td data-sort='42'><div class='dbar'><i class='a' style='width:12.3%'></i><i class='d' style='width:0.0%'></i></div></td><td class='num'>0</td><td class='dim' style='font-size:12px'></td></tr><tr><td><code>backend/tests/test_overlay.py</code> </td><td><span class='badge good'>test</span></td><td class='num'><span class='plusminus'><span class='p'>+20</span> <span class='m'>−0</span></span></td><td data-sort='20'><div class='dbar'><i class='a' style='width:5.8%'></i><i class='d' style='width:0.0%'></i></div></td><td class='num'>0</td><td class='dim' style='font-size:12px'></td></tr></tbody></table></div>
+<details><summary>8 commits in range</summary><div class='body'><ul><li><code>04c81235</code> Add the #253 review report and bring the atlas current</li><li><code>144911f6</code> Budget recovery retries, not repairs; fold case in slot choice (#253)</li><li><code>98fc5c4d</code> Pin that a campaign read repairs world-side wreckage (#253)</li><li><code>56526377</code> Close the recovery&#x27;s slot race and pick the newest temp (#253)</li><li><code>d9b21958</code> Recover images the old swap stranded, and reserve its temp name (#253)</li><li><code>d522f41a</code> Say where the inner atomic-write crash windows are tested (#253)</li><li><code>39f75648</code> Address the Codex review: two P2s and three P3s (#253)</li><li><code>6ddefdbf</code> Republish both image slots instead of swapping through a temp (#253)</li></ul></div></details>
+
+
+</section>
+<section class="panel" id="contracts-tests" role="tabpanel">
+
+
+<div class='callout good'><b>No schema, API-contract, or dependency-manifest files touched.</b></div>
+
+<div class='callout good'><b>No function/class signature changes detected</b> in supported languages — the change appears additive or internal to function bodies.</div>
+<h2>Test delta</h2>
+<p class="dim">Match is heuristic: a changed test counts as covering a source file if it shares a name stem or mentions the file's changed symbols. 2 of 2 changed source files have matching test changes.</p>
+<div class='callout good'><b>2 of 2 changed source files have matching test changes.</b></div>
+
+
+
+
+</section>
+<section class="panel" id="blast-radius" role="tabpanel">
+
+
+<div class="kpis">
+  <div class="kpi accent"><div class="n">4</div><div class="l">changed symbols traced</div></div>
+  <div class="kpi good"><div class="n">0</div><div class="l">untouched caller files (non-test)</div></div>
+  <div class="kpi"><div class="n">0</div><div class="l">untouched test caller files</div></div>
+</div>
+<div class='callout good'><b>All detected call sites of changed symbols are inside this diff.</b> The change is self-contained at the symbol level (name-match analysis; dynamic dispatch and reflection are invisible to it).</div>
+
+<h2>Caller graph</h2>
+<p class="dim">Arrows point from caller to changed definition. Node color: changed in this diff vs untouched. Matching is textual (<code>name(</code> / <code>.name</code>) — precise enough to point a reviewer, not a proof.</p>
+<div class="viz" data-render="forcegraph" style="height:560px"></div>
+<script type="application/json">{"nodes":[{"id":"backend/src/grimoire/store/assets.py","label":"assets.py","group":"changed","size":8,"meta":"in this diff"},{"id":"backend/tests/test_assets_store.py","label":"test_assets_store.py","group":"changed","size":2,"meta":"in this diff"}],"links":[{"source":"backend/tests/test_assets_store.py","target":"backend/src/grimoire/store/assets.py","weight":1}]}</script>
+<h2>Symbols, ordered by untouched callers</h2>
+<div class="tbl-wrap"><table class="sortable">
+<thead><tr><th>Symbol</th><th>Defined in</th><th class="num">Caller files</th><th class="num">Untouched (non-test)</th><th class="num">In tests</th><th>Untouched callers</th></tr></thead>
+<tbody><tr><td><code>_free_gallery</code></td><td><code>backend/src/grimoire/store/assets.py</code></td><td class='num'>2</td><td class='num'>0</td><td class='num'>0</td><td></td></tr><tr><td><code>_image_locks_held</code></td><td><code>backend/src/grimoire/store/assets.py</code></td><td class='num'>1</td><td class='num'>0</td><td class='num'>0</td><td></td></tr><tr><td><code>_newest_stranded</code></td><td><code>backend/src/grimoire/store/assets.py</code></td><td class='num'>1</td><td class='num'>0</td><td class='num'>0</td><td></td></tr><tr><td><code>_heal_stranded_promotion</code></td><td><code>backend/src/grimoire/store/assets.py</code></td><td class='num'>1</td><td class='num'>0</td><td class='num'>0</td><td></td></tr></tbody></table></div>
+
+
+</section>
+<section class="panel" id="flow-impact" role="tabpanel">
+
+<div class="card">
+  <h3>Flow 1 — promoting a gallery image to avatar</h3>
+  <p>The crash-shaped difference: in <em>Before</em>, a crash after step 2 leaves the directory with no <code>avatar.*</code> at all. In <em>After</em>, every instant of the sequence has a resolvable avatar.</p>
+  <div class="grid cols-2">
+    <div>
+      <h4>Before <span class="badge bad">avatar can vanish</span></h4>
+      <div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant R as route
+    participant P as promote_image
+    participant FS as filesystem
+    R->>P: promote(gallery_1)
+    P->>FS: image_path(gallery_1), image_path(avatar)
+    Note over P,FS: no lock held at all
+    P->>FS: rename gallery_1.png to promote-tmp.png
+    Note over FS: gallery_1 slot now empty
+    P->>FS: rename avatar.png to gallery_1.png
+    Note over FS: CRASH HERE leaves no avatar,<br/>image under a name nothing globs
+    P->>FS: rename promote-tmp.png to avatar.png
+    P->>FS: clear_focus()
+      </pre></div></div>
+    </div>
+    <div>
+      <h4>After <span class="badge good">avatar always resolves</span></h4>
+      <div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant R as route
+    participant P as promote_image
+    participant L as image locks
+    participant PI as put_image
+    participant FS as filesystem
+    R->>P: promote(gallery_1)
+    P->>L: acquire {avatar, gallery_1} sorted
+    P->>FS: read both files into memory
+    Note over P: reject non-allowlisted ext here,<br/>before anything is written
+    P->>PI: put_image(avatar, promoted bytes)
+    PI->>FS: write new ext, then drop stale sibling
+    Note over FS: CRASH HERE leaves the new avatar<br/>plus a duplicate in gallery_1
+    P->>PI: put_image(gallery_1, demoted bytes)
+    PI->>FS: write, then drop stale sibling
+    P->>L: release both
+      </pre></div></div>
+    </div>
+  </div>
+  <h4>What moved</h4>
+  <ul>
+    <li><strong>Lock boundary is new and wraps the whole swap</strong> — <code>backend/src/grimoire/store/assets.py:421</code>. Previously promotion took no lock, so an upload could land between renames.</li>
+    <li><strong>Bytes are copied, not moved</strong> — <code>backend/src/grimoire/store/assets.py:432-433</code>. Both files are read before either is written, so publish #1 can't destroy the input to publish #2.</li>
+    <li><strong>Validation moved earlier</strong> — <code>backend/src/grimoire/store/assets.py:429-431</code>. An unsupported extension now fails before any write instead of surfacing from <code>put_image</code> mid-swap.</li>
+    <li><strong>New error propagation</strong>: a promotion with no avatar to swap back verifies its own delete and raises <code>OSError</code> if the source survived — <code>backend/src/grimoire/store/assets.py:435-448</code>. Previously that failure was swallowed by <code>delete_image</code>, and <code>overlay.promote_image</code> silently mis-decided its tombstone (<code>backend/src/grimoire/store/overlay.py:449</code>).</li>
+    <li><strong>mtimes now change on both files</strong>, since they're rewritten rather than renamed. Harmless and slightly better: the <code>?v=</code> cache token derives from mtime+size (<code>backend/src/grimoire/store/assets.py:286</code>), so browsers refetch.</li>
+  </ul>
+</div>
+
+<div class="card">
+  <h3>Flow 2 — a read repairs the store (new flow)</h3>
+  <p>This flow did not exist before. Two read entry points can now mutate the directory they are scanning.</p>
+  <div class="mermaid-wrap"><div class="mviewport"><pre class="mermaid">
+flowchart LR
+    A["GET image / list images"] --> B["image_path(avatar)<br/>assets.py:244"]
+    A --> C["list_images<br/>assets.py:268"]
+    B -->|"no avatar.* found"| D["_heal_stranded_promotion"]
+    C -->|"always"| D
+    D -->|"no promote-tmp.*"| E["return: one glob, no locks, no writes"]
+    D -->|"temp found"| F["pick newest temp by mtime"]
+    F --> G["choose slot: avatar if none,<br/>else next free gallery_N"]
+    G --> H["lock {promote-tmp, avatar, slot} sorted"]
+    H --> I["recompute choice under lock"]
+    I -->|"choice moved"| J["spend a retry, re-decide"]
+    I -->|"still valid, target free"| K["rename temp into slot"]
+    K -->|"more temps"| F
+    K -->|"OSError"| L["give up; next scan retries"]
+  </pre></div></div>
+  <h4>What moved</h4>
+  <ul>
+    <li><strong>Reads are no longer side-effect free.</strong> <code>backend/src/grimoire/store/assets.py:256</code> and <code>:277</code>. The happy path costs one extra glob and takes no locks (<code>backend/src/grimoire/store/assets.py:204</code>); only a directory that actually holds wreckage acquires anything.</li>
+    <li><strong>The heal reaches through the overlay.</strong> <code>overlay.list_images</code> scans both campaign and world roots (<code>backend/src/grimoire/store/overlay.py:396-402</code>), so a campaign read repairs <em>world-side</em> damage. Deliberate and tested (<code>backend/tests/test_overlay.py:313</code>): the damage is the world's, the repair is a rename, and the campaign layer still shadows it.</li>
+    <li><strong>Nested lock acquisition now exists.</strong> <code>promote_image</code> holds <code>{name, avatar}</code> and calls <code>image_path</code>, which can enter the heal and acquire <code>{promote-tmp, avatar, gallery_N}</code>. No cycle: every set contains <code>avatar</code> and each caller sorts its whole set — reasoned out at <code>backend/src/grimoire/store/assets.py:98-110</code>.</li>
+    <li><strong>Bounded retries, unbounded progress.</strong> <code>backend/src/grimoire/store/assets.py:163</code> — the budget is spent only on lost races, so a directory with many temps is fully repaired in one scan while a hostile writer can't spin the loop.</li>
+  </ul>
+</div>
+
+<div class="callout warn">
+  <strong>Flow-level risk worth a reviewer's attention.</strong> The heal fires on the <em>read</em> path, so it runs under whatever concurrency the read path has — including many simultaneous requests for the same missing avatar. That is safe here (all healers serialize on the <code>promote-tmp</code> and <code>avatar</code> locks, and a loser observes <code>stray.exists() == False</code> and re-decides), but it means a filesystem that permanently refuses the rename gets one failed attempt per read forever. The failure is swallowed by design (<code>backend/src/grimoire/store/assets.py:226-227</code>) and nothing reports it.
+</div>
+
+</section>
+<section class="panel" id="review-walkthrough" role="tabpanel">
+
+<div class="card">
+  <h3>Per-file verdicts</h3>
+  <div class="tbl-wrap"><table>
+    <thead><tr><th>File</th><th>Δ</th><th>Verdict</th><th>What to check</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>backend/src/grimoire/store/assets.py</code></td>
+        <td><span class="plusminus"><span class="p">+231</span> <span class="m">−12</span></span></td>
+        <td><span class="badge warn">the whole review</span></td>
+        <td>Two separable changes in one file: the swap rewrite (<code>:387</code>) and the recovery pass (<code>:166</code>). The recovery is the newer, more intricate half — read it first, not last.</td>
+      </tr>
+      <tr>
+        <td><code>backend/src/grimoire/routes.py</code></td>
+        <td><span class="plusminus"><span class="p">+12</span></span></td>
+        <td><span class="badge good">correct and complete</span></td>
+        <td>Four identical <code>except ValueError → 400</code> arms. All four are promote handlers (<code>backend/src/grimoire/routes.py:1636</code>, <code>:2202</code>, <code>:3312</code>, <code>:4356</code>); no other handler picked up the block.</td>
+      </tr>
+      <tr>
+        <td><code>backend/tests/test_assets_store.py</code></td>
+        <td><span class="plusminus"><span class="p">+342</span></span></td>
+        <td><span class="badge good">unusually strong</span></td>
+        <td>The crash simulator hooks both <code>Path.rename</code> and <code>atomic.write_bytes</code> (<code>:264</code>), so it survives the implementation swap it was written against — that is what makes it a test of the invariant.</td>
+      </tr>
+      <tr>
+        <td><code>backend/tests/test_routes.py</code></td>
+        <td><span class="plusminus"><span class="p">+42</span></span></td>
+        <td><span class="badge good">closes a real gap</span></td>
+        <td>The two campaign promote routes had no route-level coverage at all before this branch, despite being changed by it.</td>
+      </tr>
+      <tr>
+        <td><code>backend/tests/test_overlay.py</code></td>
+        <td><span class="plusminus"><span class="p">+20</span></span></td>
+        <td><span class="badge good">pins the layering question</span></td>
+        <td>Asserts a campaign read repairs world-side wreckage and that campaign shadowing still wins (<code>:313</code>).</td>
+      </tr>
+    </tbody>
+  </table></div>
+</div>
+
+<div class="card">
+  <h3>Asymmetry checklist</h3>
+  <div class="tbl-wrap"><table>
+    <thead><tr><th>Opened</th><th>Closed?</th><th>Evidence</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>Locks acquired (2, sometimes 3)</td>
+        <td><span class="badge good">yes, on every path</span></td>
+        <td><code>ExitStack</code> in a <code>@contextmanager</code> (<code>backend/src/grimoire/store/assets.py:112-115</code>) unwinds on exception and on the <code>continue</code>/<code>return</code> paths inside the heal loop.</td>
+      </tr>
+      <tr>
+        <td>Retry loop added</td>
+        <td><span class="badge good">bounded, and idempotent</span></td>
+        <td><code>backend/src/grimoire/store/assets.py:205</code>. Budget spent only on lost races; a successful rename strictly reduces the temp count, so progress alone terminates it. Re-running the heal on an already-clean directory is a no-op glob.</td>
+      </tr>
+      <tr>
+        <td>New errors caught</td>
+        <td><span class="badge warn">deliberately swallowed, twice</span></td>
+        <td><code>backend/src/grimoire/store/assets.py:226-227</code> (heal rename) — correct for a read path, but nothing reports a store that never heals. The <em>other</em> swallow, in <code>delete_image</code>, is now explicitly compensated for (<code>:446-448</code>).</td>
+      </tr>
+      <tr>
+        <td>State written from a read path</td>
+        <td><span class="badge warn">by design, unlogged</span></td>
+        <td><code>backend/src/grimoire/store/assets.py:256</code>, <code>:277</code>. The issue asked for recover-on-read, so this is the requested design — but files move under the user with no record.</td>
+      </tr>
+      <tr>
+        <td>New reserved name</td>
+        <td><span class="badge good">validated, case-folded, tested</span></td>
+        <td><code>backend/src/grimoire/store/assets.py:29-46</code>; both <code>promote-tmp</code> and <code>Promote-Tmp</code> rejected in <code>backend/tests/test_assets_store.py:35</code>.</td>
+      </tr>
+      <tr>
+        <td>New exception type from a store function</td>
+        <td><span class="badge good">mapped at every caller</span></td>
+        <td><code>ValueError</code> → 400 on all four promote routes; <code>OSError</code> from the no-avatar branch is uncaught → 500, which is right for "the store could not do what it said".</td>
+      </tr>
+      <tr>
+        <td>On-disk name semantics touched</td>
+        <td><span class="badge warn">old data readable, one caveat</span></td>
+        <td>A <code>promote-tmp.*</code> file written by an older version is now <em>adopted</em>. If a store somehow holds a genuine user image under that name — possible, since <code>_safe_name</code> accepted it before this branch — it silently becomes the avatar or a gallery image. Documented at <code>backend/src/grimoire/store/assets.py:196-201</code>.</td>
+      </tr>
+    </tbody>
+  </table></div>
+</div>
+
+<div class="callout bad">
+  <strong>Blast Radius tab under-reports — read this instead.</strong> The analyzer traced only the four <em>new</em> private helpers and found no untouched callers, which reads as "nothing else is affected". Two corrections, both verified by grep: (1) <code>promote_image</code> itself was rewritten but not traced, and it has <strong>five callers</strong> — <code>backend/src/grimoire/routes.py:1633</code>, <code>:2199</code>, <code>:3309</code>, <code>:4353</code> and <code>backend/src/grimoire/store/overlay.py:444</code>. Of these, <code>overlay.promote_image</code> is the one that <em>depends on the rewritten function's postcondition</em> (it reads the promoted slot's emptiness at <code>backend/src/grimoire/store/overlay.py:449</code> to decide whether to tombstone) — the single most important untouched caller in the change, invisible in that tab. (2) The tab credits <code>_heal_stranded_promotion</code> with one caller; there are two (<code>backend/src/grimoire/store/assets.py:256</code> and <code>:277</code>). Name-based tracing, as the tab's own caveat says: aim attention with it, never take it as proof of safety.
+</div>
+
+<div class="card">
+  <h3>Invariant impact</h3>
+  <ul>
+    <li><strong>Strengthened — "the avatar slot always resolves".</strong> Previously held only outside promotion's window; now holds always. This is the issue's core ask.</li>
+    <li><strong>Strengthened — "one file per logical image".</strong> Both publishes clean their stale sibling; <code>backend/tests/test_assets_store.py:298</code> pins that a cross-extension swap leaves no phantom.</li>
+    <li><strong>Weakened — "reads don't mutate the store".</strong> Two read entry points now rename files. No caller depended on read purity (verified: no read-only-root callers of <code>image_path</code>/<code>list_images</code> exist), and failure is swallowed rather than propagated, but the invariant is genuinely gone and future code must not assume it.</li>
+    <li><strong>Weakened, narrowly — "a swap loses nothing".</strong> A crash between the two publishes loses the demoted image in the same-extension case. Traded knowingly against the avatar hole.</li>
+    <li><strong>Now assumed in one more place — "<code>promote-tmp</code> is not a user image".</strong> Previously an implicit consequence of the old rename target; now load-bearing for <code>_heal_stranded_promotion</code> and enforced in <code>_safe_name</code>. Enforcement only applies going forward, which is exactly the residual risk the docstring records.</li>
+    <li><strong>Unchanged and still relied upon — <code>put_image</code>'s write-before-clean ordering</strong> (from #233). The new swap's crash-safety is entirely borrowed from it: if someone ever reorders <code>put_image</code>, promotion silently loses its guarantee. Worth a comment there pointing back, though the coupling is at least stated in the promotion docstring (<code>backend/src/grimoire/store/assets.py:399-402</code>).</li>
+  </ul>
+</div>
+
+<div class="card">
+  <h3>Test quality — where the coverage actually is, and isn't</h3>
+  <p>No coverage artifact in the repo, so this is read from the tests themselves, not measured.</p>
+  <ul>
+    <li><span class="badge good">strong</span> Crash windows: parametrized over every cut point × same/cross extension (<code>backend/tests/test_assets_store.py:275</code>). The fault injector hooks two different mechanisms, so it doesn't encode the implementation it was written for.</li>
+    <li><span class="badge good">strong</span> Concurrency: real threads for promotion-vs-promotion and promotion-vs-upload, asserting the permutation invariant and no deadlock (<code>backend/tests/test_assets_store.py:517</code>, <code>:551</code>).</li>
+    <li><span class="badge good">strong</span> Recovery: adopt-as-avatar, gallery fallback, mtime tie-break, slot-taken re-decision, retry budget, case-variant slot, failed rename, healthy-directory no-op.</li>
+    <li><span class="badge warn">gap</span> No test drives recovery <em>concurrently</em> with an upload using real threads — the slot race is covered by a deterministic monkeypatched simulation (<code>backend/tests/test_assets_store.py:424</code>), which pins the re-decision logic but not the real interleaving.</li>
+    <li><span class="badge warn">gap</span> The inner windows of <code>atomic.write_bytes</code> (failed replace, leftover temp) are not exercised through promotion; they're covered in <code>backend/tests/test_atomic.py</code>, which the test docstring now cites by name.</li>
+    <li><span class="badge warn">gap</span> Nothing tests the nested <code>promote_image → image_path → heal</code> path, where a promotion in a damaged directory adopts a stranded temp as the avatar and then immediately swaps it. Reasoned safe (reentrant locks, sorted sets); unverified by test.</li>
+  </ul>
+</div>
+
+<div class="card hero">
+  <h3>Verdict — mergeable; the must-fix list is empty</h3>
+  <p>The change closes the issue's actual failure (a promotion that leaves no avatar and an unreachable file), does it by removing the mechanism rather than adding recovery machinery around it, and repairs stores already damaged. Test quality is above this repo's norm — the fault injector and the "promotion only permutes the images" invariant are the right abstractions. What follows is discretionary.</p>
+  <h4>Should-fix</h4>
+  <ol>
+    <li><strong>Point <code>put_image</code> back at its dependant.</strong> <code>backend/src/grimoire/store/assets.py:325</code> — its write-before-clean ordering is now load-bearing for promotion's crash-safety, and nothing at that site says so. One comment prevents a future reorder from silently breaking <code>promote_image</code>.</li>
+    <li><strong>Decide, explicitly, that a permanently failing heal stays silent.</strong> <code>backend/src/grimoire/store/assets.py:226-227</code> — on a read-only store this retries and fails on every read forever with no record. Swallowing is right for the read path; a one-time log would still be cheap.</li>
+  </ol>
+  <h4>Nits</h4>
+  <ol>
+    <li><code>backend/src/grimoire/store/assets.py:448</code> — the trailing <code>clear_focus</code> is redundant: <code>put_image</code> already clears focus whenever the name is the avatar, and that call always precedes it on the success path. Harmless defence, or dead weight, depending on taste.</li>
+    <li><code>_HEAL_RETRIES = 8</code> (<code>backend/src/grimoire/store/assets.py:163</code>) is unexplained as a <em>number</em> — the comment justifies the semantics (races, not repairs) but not the magnitude.</li>
+  </ol>
+  <h4>Explicitly out of scope, with reasons in the code</h4>
+  <ul>
+    <li><code>_image_lock</code>'s exact-string keying leaves case-variant names unserialized on case-insensitive filesystems — verified pre-existing at the base commit, affects <code>put_image</code>/<code>delete_image</code> equally, and closing it means re-keying #233's design.</li>
+    <li>Reader-visible atomicity of the two-slot swap: would require locking the read path, a different change to a documented stance.</li>
+  </ul>
+</div>
+
+</section></main>
+<footer class="doc">Generated by pr-visualization. Automated tabs: Footprint, Contracts &amp; Tests, Blast Radius (heuristic, name-based — see the correction in Review Walkthrough). Judgment tabs authored from diff reading; all 51 citations re-verified after the rebase onto origin/main.</footer>
+<div class="viz-tip" id="viz-tip"></div>
+<script>
+/* ============ tabs ============ */
+(function(){
+  const btns=[...document.querySelectorAll('nav.tabs button')];
+  const panels=[...document.querySelectorAll('.panel')];
+  function activate(id,push){
+    btns.forEach(b=>b.setAttribute('aria-selected',b.dataset.tab===id?'true':'false'));
+    panels.forEach(p=>p.classList.toggle('active',p.id===id));
+    if(push){try{history.replaceState(null,'','#'+id)}catch(e){}}
+    window.dispatchEvent(new CustomEvent('tab:shown',{detail:{id}}));
+  }
+  btns.forEach(b=>b.addEventListener('click',()=>activate(b.dataset.tab,true)));
+  const initial=location.hash&&panels.some(p=>'#'+p.id===location.hash)?location.hash.slice(1):(panels[0]&&panels[0].id);
+  if(initial)activate(initial,false);
+  window.addEventListener('hashchange',()=>{const h=location.hash.slice(1);if(panels.some(p=>p.id===h))activate(h,false);});
+})();
+
+/* ============ helpers ============ */
+const cssVar=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const tip=document.getElementById('viz-tip');
+function showTip(html,x,y){tip.innerHTML=html;tip.style.display='block';
+  const r=tip.getBoundingClientRect();
+  tip.style.left=Math.min(x+14,innerWidth-r.width-10)+'px';
+  tip.style.top=Math.min(y+14,innerHeight-r.height-10)+'px';}
+function hideTip(){tip.style.display='none'}
+function lerpColor(a,b,t){
+  const pa=hex(a),pb=hex(b);
+  return `rgb(${pa.map((v,i)=>Math.round(v+(pb[i]-v)*t)).join(',')})`;
+  function hex(h){h=h.replace('#','');if(h.length===3)h=h.split('').map(c=>c+c).join('');
+    return [0,2,4].map(i=>parseInt(h.slice(i,i+2),16));}
+}
+function fmt(n){return n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e4?(n/1e3).toFixed(0)+'k':n>=1e3?(n/1e3).toFixed(1)+'k':String(n)}
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+
+/* sortable tables */
+document.querySelectorAll('table.sortable').forEach(tb=>{
+  tb.querySelectorAll('thead th').forEach((th,ci)=>{
+    th.addEventListener('click',()=>{
+      const dir=th.classList.contains('asc')?'desc':'asc';
+      tb.querySelectorAll('thead th').forEach(h=>h.classList.remove('asc','desc'));
+      th.classList.add(dir);
+      const rows=[...tb.querySelectorAll('tbody tr')];
+      const val=r=>{const td=r.children[ci];if(!td)return '';
+        const d=td.dataset.sort!==undefined?td.dataset.sort:td.textContent.trim();
+        const n=parseFloat(String(d).replace(/[,%]/g,''));return isNaN(n)?String(d).toLowerCase():n;};
+      rows.sort((a,b)=>{const va=val(a),vb=val(b);
+        const c=(typeof va==='number'&&typeof vb==='number')?va-vb:String(va).localeCompare(String(vb));
+        return dir==='asc'?c:-c;});
+      const tbody=tb.querySelector('tbody');rows.forEach(r=>tbody.appendChild(r));
+    });
+  });
+});
+
+/* pan/zoom for a container holding an inner element (svg group or div) */
+function panZoom(viewport,apply,getState){
+  let drag=null;
+  viewport.addEventListener('wheel',e=>{
+    if(!e.ctrlKey&&!e.metaKey)return;e.preventDefault();
+    const s=getState();const f=e.deltaY<0?1.15:1/1.15;
+    const r=viewport.getBoundingClientRect(),mx=e.clientX-r.left,my=e.clientY-r.top;
+    s.x=mx-(mx-s.x)*f; s.y=my-(my-s.y)*f; s.k=Math.max(.15,Math.min(8,s.k*f)); apply();
+  },{passive:false});
+  viewport.addEventListener('mousedown',e=>{
+    if(e.target.closest('.zoombar')||e.target.dataset.draggable)return;
+    drag={sx:e.clientX,sy:e.clientY,ox:getState().x,oy:getState().y};
+    viewport.classList.add('dragging');
+  });
+  window.addEventListener('mousemove',e=>{if(!drag)return;
+    const s=getState();s.x=drag.ox+e.clientX-drag.sx;s.y=drag.oy+e.clientY-drag.sy;apply();});
+  window.addEventListener('mouseup',()=>{drag=null;viewport.classList.remove('dragging')});
+}
+function addZoombar(container,zoomIn,zoomOut,reset){
+  const bar=document.createElement('div');bar.className='zoombar';
+  [['+',zoomIn],['−',zoomOut],['⟲',reset]].forEach(([t,fn])=>{
+    const b=document.createElement('button');b.textContent=t;b.title=t==='⟲'?'Reset view':(t==='+'?'Zoom in':'Zoom out');
+    b.addEventListener('click',fn);bar.appendChild(b);});
+  container.appendChild(bar);
+}
+
+/* ============ force-directed graph ============ */
+/* data: {nodes:[{id,label,group,size,fanIn,fanOut,meta}], links:[{source,target,cycle,weight}], groups:{name:colorKey}} */
+function renderForceGraph(container,data){
+  const W=container.clientWidth||900,H=container.clientHeight||560;
+  const groupNames=[...new Set(data.nodes.map(n=>n.group||''))];
+  const palette=[cssVar('--accent'),cssVar('--good'),cssVar('--warn'),cssVar('--violet'),cssVar('--bad'),'#5ec2c9','#c98fb8','#8fb0c9'];
+  const gcolor={};groupNames.forEach((g,i)=>gcolor[g]=palette[i%palette.length]);
+  const nodes=data.nodes.map(n=>({...n,x:W/2+(Math.random()-0.5)*W*0.7,y:H/2+(Math.random()-0.5)*H*0.7,vx:0,vy:0}));
+  const idx={};nodes.forEach((n,i)=>idx[n.id]=i);
+  const links=data.links.filter(l=>idx[l.source]!==undefined&&idx[l.target]!==undefined)
+    .map(l=>({...l,s:idx[l.source],t:idx[l.target]}));
+  const maxSize=Math.max(1,...nodes.map(n=>n.size||1));
+  const R=n=>6+14*Math.sqrt((n.size||1)/maxSize);
+  /* simulate */
+  const iter=nodes.length>60?220:320;
+  for(let k=0;k<iter;k++){
+    const t=1-k/iter, rep=9000*t+900;
+    for(let i=0;i<nodes.length;i++)for(let j=i+1;j<nodes.length;j++){
+      const a=nodes[i],b=nodes[j];let dx=a.x-b.x,dy=a.y-b.y;let d2=dx*dx+dy*dy||1;
+      if(d2<250000){const f=rep/d2;dx*=f;dy*=f;a.vx+=dx;a.vy+=dy;b.vx-=dx;b.vy-=dy;}
+    }
+    links.forEach(l=>{const a=nodes[l.s],b=nodes[l.t];
+      const dx=b.x-a.x,dy=b.y-a.y,d=Math.sqrt(dx*dx+dy*dy)||1;
+      const want=90+R(a)+R(b);const f=0.02*(d-want)/d;
+      a.vx+=dx*f;a.vy+=dy*f;b.vx-=dx*f;b.vy-=dy*f;});
+    nodes.forEach(n=>{
+      n.vx+=(W/2-n.x)*0.0035;n.vy+=(H/2-n.y)*0.0035;
+      n.x+=Math.max(-14,Math.min(14,n.vx));n.y+=Math.max(-14,Math.min(14,n.vy));
+      n.vx*=0.6;n.vy*=0.6;});
+  }
+  /* fit */
+  const xs=nodes.map(n=>n.x),ys=nodes.map(n=>n.y);
+  const pad=60,minx=Math.min(...xs)-pad,maxx=Math.max(...xs)+pad,miny=Math.min(...ys)-pad,maxy=Math.max(...ys)+pad;
+  const fitK=Math.min(W/(maxx-minx),H/(maxy-miny),1.6);
+  const st={k:fitK,x:(W-(maxx+minx)*fitK)/2,y:(H-(maxy+miny)*fitK)/2};
+  const init={...st};
+  const svgNS='http://www.w3.org/2000/svg';
+  const svg=document.createElementNS(svgNS,'svg');svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
+  const defs=document.createElementNS(svgNS,'defs');
+  defs.innerHTML=`<marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" fill="${cssVar('--text-faint')}"/></marker>
+  <marker id="arr-cyc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" fill="${cssVar('--bad')}"/></marker>`;
+  svg.appendChild(defs);
+  const g=document.createElementNS(svgNS,'g');svg.appendChild(g);
+  const apply=()=>g.setAttribute('transform',`translate(${st.x},${st.y}) scale(${st.k})`);
+  const edgeEls=[],nodeEls=[];
+  links.forEach(l=>{
+    const p=document.createElementNS(svgNS,'path');
+    p.setAttribute('stroke',l.cycle?cssVar('--bad'):cssVar('--text-faint'));
+    p.setAttribute('stroke-opacity',l.cycle?'0.9':'0.4');
+    p.setAttribute('stroke-width',l.cycle?2:Math.min(3,0.7+Math.log2(1+(l.weight||1))*0.5));
+    p.setAttribute('fill','none');
+    p.setAttribute('marker-end',l.cycle?'url(#arr-cyc)':'url(#arr)');
+    g.appendChild(p);edgeEls.push(p);
+  });
+  nodes.forEach(n=>{
+    const grp=document.createElementNS(svgNS,'g');grp.style.cursor='grab';grp.dataset.draggable='1';
+    const c=document.createElementNS(svgNS,'circle');
+    c.setAttribute('r',R(n));c.setAttribute('fill',gcolor[n.group||'']);
+    c.setAttribute('fill-opacity','0.85');c.setAttribute('stroke',cssVar('--bg'));c.setAttribute('stroke-width','1.5');
+    c.dataset.draggable='1';
+    const t=document.createElementNS(svgNS,'text');
+    t.textContent=n.label||n.id;t.setAttribute('font-size','11');t.setAttribute('font-family',cssVar('--mono'));
+    t.setAttribute('fill',cssVar('--text'));t.setAttribute('text-anchor','middle');t.setAttribute('dy',R(n)+13);
+    t.style.pointerEvents='none';
+    grp.appendChild(c);grp.appendChild(t);g.appendChild(grp);nodeEls.push(grp);
+    grp.addEventListener('mouseenter',e=>{
+      showTip(`<b>${esc(n.label||n.id)}</b><br>${n.meta?esc(n.meta)+'<br>':''}fan-in ${n.fanIn??'–'} · fan-out ${n.fanOut??'–'}${n.size?` · ${fmt(n.size)} loc`:''}`,e.clientX,e.clientY);
+      hl(n.id);});
+    grp.addEventListener('mousemove',e=>showTip(tip.innerHTML,e.clientX,e.clientY));
+    grp.addEventListener('mouseleave',()=>{hideTip();hl(null)});
+    let dragN=null;
+    grp.addEventListener('mousedown',e=>{e.stopPropagation();dragN={mx:e.clientX,my:e.clientY,ox:n.x,oy:n.y};});
+    window.addEventListener('mousemove',e=>{if(!dragN)return;
+      n.x=dragN.ox+(e.clientX-dragN.mx)/st.k;n.y=dragN.oy+(e.clientY-dragN.my)/st.k;draw();});
+    window.addEventListener('mouseup',()=>dragN=null);
+  });
+  function hl(id){
+    if(id===null){edgeEls.forEach((p,i)=>p.setAttribute('stroke-opacity',links[i].cycle?'0.9':'0.4'));
+      nodeEls.forEach(el=>el.style.opacity='1');return;}
+    const near=new Set([id]);
+    links.forEach(l=>{if(l.source===id)near.add(l.target);if(l.target===id)near.add(l.source)});
+    edgeEls.forEach((p,i)=>{const l=links[i];
+      p.setAttribute('stroke-opacity',(l.source===id||l.target===id)?'1':'0.08');});
+    nodeEls.forEach((el,i)=>el.style.opacity=near.has(nodes[i].id)?'1':'0.25');
+  }
+  function draw(){
+    links.forEach((l,i)=>{const a=nodes[l.s],b=nodes[l.t];
+      const dx=b.x-a.x,dy=b.y-a.y,d=Math.sqrt(dx*dx+dy*dy)||1;
+      const tx=b.x-dx/d*(R(b)+3),ty=b.y-dy/d*(R(b)+3);
+      const sx=a.x+dx/d*R(a),sy=a.y+dy/d*R(a);
+      const mx=(sx+tx)/2-dy/d*10,my=(sy+ty)/2+dx/d*10;
+      edgeEls[i].setAttribute('d',`M${sx},${sy} Q${mx},${my} ${tx},${ty}`);});
+    nodes.forEach((n,i)=>nodeEls[i].setAttribute('transform',`translate(${n.x},${n.y})`));
+  }
+  draw();apply();
+  container.appendChild(svg);
+  panZoom(container,apply,()=>st);
+  addZoombar(container,
+    ()=>{st.k=Math.min(8,st.k*1.25);apply()},
+    ()=>{st.k=Math.max(.15,st.k/1.25);apply()},
+    ()=>{Object.assign(st,init);apply()});
+  if(groupNames.length>1||data.legendExtra){
+    const leg=document.createElement('div');leg.className='legend';
+    groupNames.forEach(gn=>{leg.innerHTML+=`<span><i class="sw" style="background:${gcolor[gn]}"></i>${esc(gn||'(root)')}</span>`});
+    if(data.legendExtra)leg.innerHTML+=data.legendExtra;
+    container.appendChild(leg);
+  }
+}
+
+/* ============ squarified treemap ============ */
+/* data: {items:[{name,value,metric,meta}], metricLabel, metricMax} — value drives area, metric drives heat color */
+function renderTreemap(container,data){
+  const W=container.clientWidth||900,H=container.clientHeight||520;
+  const items=data.items.filter(d=>d.value>0).sort((a,b)=>b.value-a.value);
+  const total=items.reduce((s,d)=>s+d.value,0)||1;
+  const mmax=data.metricMax??Math.max(1,...items.map(d=>d.metric||0));
+  const rects=[];
+  (function squarify(list,x,y,w,h){
+    if(!list.length)return;
+    if(list.length===1){rects.push({d:list[0],x,y,w,h});return;}
+    let row=[],rest=list.slice(),best=Infinity;
+    while(rest.length){
+      const cand=row.concat(rest[0]);
+      const sum=cand.reduce((s,d)=>s+d.value,0);
+      const side=Math.min(w,h);
+      const scale=(w*h)*(sum/list.reduce((s,d)=>s+d.value,0));
+      const len=scale/side;
+      const worst=Math.max(...cand.map(d=>{
+        const a=(d.value/sum)*side*len;const r=Math.max(len*len/ (a/side*side/ (a/len)||1),1);
+        const iw=(d.value/sum)*side, ratio=Math.max(len/iw,iw/len);return ratio;}));
+      if(worst<=best){best=worst;row=cand;rest.shift();}
+      else break;
+    }
+    const sum=row.reduce((s,d)=>s+d.value,0);
+    const frac=sum/list.reduce((s,d)=>s+d.value,0);
+    if(w>=h){const cw=w*frac;let cy=y;
+      row.forEach(d=>{const ch=h*(d.value/sum);rects.push({d,x,y:cy,w:cw,h:ch});cy+=ch;});
+      squarify(rest,x+cw,y,w-cw,h);
+    }else{const ch=h*frac;let cx=x;
+      row.forEach(d=>{const cw=w*(d.value/sum);rects.push({d,x:cx,y,w:cw,h:ch});cx+=cw;});
+      squarify(rest,x,y+ch,w,h-ch);
+    }
+  })(items,0,0,W,H);
+  const svgNS='http://www.w3.org/2000/svg';
+  const svg=document.createElementNS(svgNS,'svg');svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
+  const lo=cssVar('--heat-lo'),hi=cssVar('--heat-hi');
+  rects.forEach(r=>{
+    const t=Math.pow(Math.min(1,(r.d.metric||0)/mmax),0.6);
+    const g=document.createElementNS(svgNS,'g');
+    const rc=document.createElementNS(svgNS,'rect');
+    rc.setAttribute('x',r.x+1);rc.setAttribute('y',r.y+1);
+    rc.setAttribute('width',Math.max(0,r.w-2));rc.setAttribute('height',Math.max(0,r.h-2));
+    rc.setAttribute('rx',3);rc.setAttribute('fill',lerpColor(lo,hi,t));
+    rc.setAttribute('stroke',cssVar('--bg'));rc.setAttribute('stroke-width','1');
+    g.appendChild(rc);
+    if(r.w>66&&r.h>22){
+      const tx=document.createElementNS(svgNS,'text');
+      const nm=r.d.name.split('/').pop();
+      tx.textContent=nm.length>Math.floor(r.w/6.6)?nm.slice(0,Math.floor(r.w/6.6)-1)+'…':nm;
+      tx.setAttribute('x',r.x+7);tx.setAttribute('y',r.y+16);
+      tx.setAttribute('font-size','11');tx.setAttribute('font-family',cssVar('--mono'));
+      tx.setAttribute('fill',t>0.55?'#fff':cssVar('--text'));tx.style.pointerEvents='none';
+      g.appendChild(tx);
+    }
+    g.addEventListener('mouseenter',e=>{rc.setAttribute('stroke',cssVar('--text'));
+      showTip(`<b>${esc(r.d.name)}</b><br>${esc(data.valueLabel||'size')}: ${fmt(r.d.value)}<br>${esc(data.metricLabel||'metric')}: ${fmt(r.d.metric||0)}${r.d.meta?'<br>'+esc(r.d.meta):''}`,e.clientX,e.clientY);});
+    g.addEventListener('mousemove',e=>showTip(tip.innerHTML,e.clientX,e.clientY));
+    g.addEventListener('mouseleave',()=>{rc.setAttribute('stroke',cssVar('--bg'));hideTip();});
+    svg.appendChild(g);
+  });
+  container.appendChild(svg);
+  const leg=document.createElement('div');leg.className='legend';
+  leg.innerHTML=`<span>area = ${esc(data.valueLabel||'size')}</span><span><i class="sw" style="background:${lo}"></i>low ${esc(data.metricLabel||'')}</span><span><i class="sw" style="background:${hi}"></i>high ${esc(data.metricLabel||'')}</span>`;
+  container.appendChild(leg);
+}
+
+/* ============ auto-init viz blocks ============ */
+document.querySelectorAll('.viz[data-render]').forEach(el=>{
+  const dataEl=el.nextElementSibling;
+  if(!dataEl||dataEl.type!=='application/json')return;
+  let data;try{data=JSON.parse(dataEl.textContent)}catch(e){el.textContent='data parse error';return}
+  const render=()=>{
+    if(el.dataset.done)return;el.dataset.done='1';
+    try{
+      if(el.dataset.render==='forcegraph')renderForceGraph(el,data);
+      else if(el.dataset.render==='treemap')renderTreemap(el,data);
+    }catch(e){el.innerHTML='<p style="padding:16px" class="dim">render error: '+esc(e.message)+'</p>';}
+  };
+  const panel=el.closest('.panel');
+  if(panel&&panel.classList.contains('active'))render();
+  else window.addEventListener('tab:shown',ev=>{if(panel&&ev.detail.id===panel.id)render();});
+});
+
+/* ============ mermaid (lazy per tab, with pan/zoom) ============ */
+(function(){
+  if(!document.querySelector('.mermaid'))return;
+  const s=document.createElement('script');
+  s.src='https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js';
+  s.onload=()=>{
+    if(typeof mermaid==='undefined'){document.querySelectorAll('.mermaid').forEach(n=>{n.style.cssText='white-space:pre;font-family:var(--mono);font-size:12px;padding:14px;overflow-x:auto';});return;}
+    mermaid.initialize({startOnLoad:false,securityLevel:'loose',theme:'base',
+      themeVariables:{
+        primaryColor:cssVar('--surface-2'),primaryTextColor:cssVar('--text'),
+        primaryBorderColor:cssVar('--border-strong'),lineColor:cssVar('--text-dim'),
+        secondaryColor:cssVar('--accent-dim'),tertiaryColor:cssVar('--surface'),
+        background:cssVar('--surface'),mainBkg:cssVar('--surface-2'),
+        nodeTextColor:cssVar('--text'),fontFamily:cssVar('--sans'),fontSize:'14px',
+        actorBkg:cssVar('--surface-2'),actorBorder:cssVar('--accent'),actorTextColor:cssVar('--text'),
+        signalColor:cssVar('--text-dim'),signalTextColor:cssVar('--text'),
+        labelBoxBkgColor:cssVar('--surface-2'),labelTextColor:cssVar('--text'),
+        loopTextColor:cssVar('--text-dim'),noteBkgColor:cssVar('--warn-dim'),noteTextColor:cssVar('--text'),noteBorderColor:cssVar('--warn'),
+        clusterBkg:cssVar('--accent-dim'),clusterBorder:cssVar('--border-strong'),titleColor:cssVar('--text'),
+        edgeLabelBackground:cssVar('--surface')
+      }});
+    async function renderIn(panel){
+      const nodes=[...panel.querySelectorAll('.mermaid:not([data-processed])')];
+      if(!nodes.length)return;
+      try{await mermaid.run({nodes});}catch(e){/* leaves source visible */}
+      nodes.forEach(n=>{
+        const wrap=n.closest('.mermaid-wrap');if(!wrap||wrap.dataset.pz)return;wrap.dataset.pz='1';
+        const vp=wrap.querySelector('.mviewport')||wrap;
+        const svg=n.querySelector('svg');if(!svg)return;
+        svg.style.maxWidth='none';
+        const st={k:1,x:0,y:0},init={k:1,x:0,y:0};
+        const apply=()=>{svg.style.transformOrigin='0 0';svg.style.transform=`translate(${st.x}px,${st.y}px) scale(${st.k})`};
+        panZoom(vp,apply,()=>st);
+        addZoombar(wrap,()=>{st.k=Math.min(8,st.k*1.25);apply()},()=>{st.k=Math.max(.2,st.k/1.25);apply()},()=>{Object.assign(st,init);apply()});
+      });
+    }
+    const active=document.querySelector('.panel.active');if(active)renderIn(active);
+    window.addEventListener('tab:shown',e=>{const p=document.getElementById(e.detail.id);if(p)renderIn(p);});
+  };
+  s.onerror=()=>{document.querySelectorAll('.mermaid').forEach(n=>{n.style.cssText='white-space:pre;font-family:var(--mono);font-size:12px;padding:14px;overflow-x:auto';});};
+  document.head.appendChild(s);
+})();
+</script>
+</body>
+</html>
