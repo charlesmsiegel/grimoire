@@ -145,8 +145,10 @@ def delete_world(wid: str) -> None:
         raise WorldNotFound(wid)
     from . import campaigns  # function-level: campaigns imports worlds at module level
     # world_refs, not list_campaigns: the in-use check has to see campaigns the
-    # public listing hides, or hiding one makes its world deletable
-    used_by = [name for name, w in campaigns.world_refs() if w == wid]
+    # public listing hides, or hiding one makes its world deletable. A campaign
+    # whose reference could not be read (w is None) counts as a user too --
+    # deletion is irreversible, so "we could not tell" has to block it.
+    used_by = [name for name, w in campaigns.world_refs() if w == wid or w is None]
     if used_by:
         raise WorldInUse(wid, used_by)
     shutil.rmtree(root)

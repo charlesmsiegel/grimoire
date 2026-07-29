@@ -121,7 +121,7 @@ def list_campaigns() -> list[dict]:
     return out
 
 
-def world_refs() -> list[tuple[str, str]]:
+def world_refs() -> list[tuple[str, str | None]]:
     """(campaign name, referenced world id) for *every* campaign on disk.
 
     Deliberately unfiltered, unlike `list_campaigns`. This backs
@@ -130,8 +130,15 @@ def world_refs() -> list[tuple[str, str]]:
     what would make that world deletable out from under it (#259 review).
     Enumeration may hide a record from the UI; it must never hide it from a
     referential-integrity check.
+
+    A world id of ``None`` means "this campaign's reference could not be read".
+    Undecodable bytes in the *body* must not cost us a reference sitting in
+    perfectly good frontmatter, so the read is retried lossily first; only a
+    file that cannot be read at all yields ``None``. Callers must treat that as
+    "may reference anything" -- skipping it is how "we could not tell" turns
+    into "nothing uses this world", which deletes it (#259 review).
     """
-    out: list[tuple[str, str]] = []
+    out: list[tuple[str, str | None]] = []
     base = _campaigns_dir()
     if not base.exists():
         return out
@@ -140,9 +147,17 @@ def world_refs() -> list[tuple[str, str]]:
         if not d.is_dir() or not mp.exists():
             continue
         try:
-            meta, _ = parse_frontmatter(mp.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError):
-            continue   # unreadable: nothing to learn, and a scan must not raise
+            text = mp.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            try:   # frontmatter survives a bad byte in the body
+                text = mp.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                out.append((d.name, None))
+                continue
+        except OSError:
+            out.append((d.name, None))
+            continue
+        meta, _ = parse_frontmatter(text)
         out.append((meta.get("name", d.name), meta.get("world", "")))
     return out
 
