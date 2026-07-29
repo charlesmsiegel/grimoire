@@ -24,12 +24,17 @@ and building an inheritable path by hand is worth a second look either way.
 
 Honest about its reach, like `test_atomic_guard.py`:
 
-- It follows names only inside the function that binds them, through
-  assignment, annotation, walrus, matched tuple unpacking and aliasing (to a
-  fixed point, so chains of any length hold). Passing a campaign root into a
-  helper that takes a bare ``root``/``path`` parameter escapes it
+- It follows names through assignment, annotation, walrus, matched tuple
+  unpacking and aliasing (to a fixed point, so chains of any length hold), and
+  into nested functions that close over them (a parameter of the same name
+  shadows, as Python does). Passing a campaign root into a *separate* helper
+  that takes a bare ``root``/``path`` parameter escapes it
   (`context._char_name` is such a helper), as does returning one. Widening that
   means real type analysis, which is not worth it here.
+- Resolver calls are matched through import aliases, including a directly
+  imported function (which keeps its canonical name, so a renamed import of a
+  sanctioned writer is still sanctioned), and the root may be positional or
+  passed under any of `ROOT_KEYWORDS`.
 - Name tracking is **flow-insensitive**: a name that ever holds a campaign root
   holds one for the whole function, so ``x = croot`` followed by
   ``x = world_root(...)`` keeps flagging reads through ``x``. That direction is
@@ -72,8 +77,12 @@ ROOT_FUNCS = ("campaign_root", "croot_of", "_campaign_root_or_404")
 #: own module a raw campaign root is the point (it owns the lock), but its
 #: root-taking actor readers -- `actor_hash`, `_actor_name` -- are reachable
 #: from elsewhere, and `checks.py` was calling one with a bare `campaign_root`.
+#:
+#: `image_subjects` reads greeting assets and character refs under `<root>/
+#: greetings` (`backend/src/grimoire/store/image_subjects.py:21`), so on a thin
+#: campaign it omits inherited world data exactly like the others.
 RESOLVER_MODULES = ("entities", "characters", "pcs", "greetings", "assets", "taglines",
-                    "appearances")
+                    "appearances", "image_subjects")
 
 #: Resolver functions that *only* write, named exactly. A pure write belongs on
 #: the campaign root: that is how a record materializes.
@@ -123,14 +132,29 @@ def _last_name(node: ast.AST) -> str | None:
     return None
 
 
-def _is_root_call(node: ast.AST) -> bool:
-    return isinstance(node, ast.Call) and _last_name(node.func) in ROOT_FUNCS
+def _root_aliases(tree: ast.AST) -> set[str]:
+    """Local names bound to a campaign-root factory by an import.
+
+    `from .campaigns import campaign_root as campaign_dir` makes `campaign_dir`
+    a root factory that `_last_name` cannot see, so the alias has to be
+    recorded the same way resolver imports are."""
+    out = set(ROOT_FUNCS)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for a in node.names:
+                if a.name in ROOT_FUNCS:
+                    out.add(a.asname or a.name)
+    return out
+
+
+def _is_root_call(node: ast.AST, aliases: frozenset[str] = frozenset(ROOT_FUNCS)) -> bool:
+    return isinstance(node, ast.Call) and _last_name(node.func) in aliases
 
 
 def _own_nodes(body: list):
-    """Statements belonging to this scope, not descending into nested defs -- a
-    closure has its own bindings, and inheriting the enclosing function's would
-    misattribute them. Every def is reached separately, so nothing is missed."""
+    """Statements belonging to this scope, not descending into nested defs --
+    each def is walked separately so it can be given its own name set (which
+    starts from its enclosing scope's; see `_scopes`)."""
     stack = list(body)
     while stack:
         node = stack.pop()
@@ -140,7 +164,7 @@ def _own_nodes(body: list):
         stack.extend(ast.iter_child_nodes(node))
 
 
-def _bound_here(node: ast.AST, known: set[str]) -> set[str]:
+def _bound_here(node: ast.AST, known: set[str], aliases: frozenset[str]) -> set[str]:
     """Names this statement binds to a campaign root.
 
     Covers the forms a real call site uses: plain assignment, annotated
@@ -149,7 +173,7 @@ def _bound_here(node: ast.AST, known: set[str]) -> set[str]:
     known to hold one. Anything cleverer than that escapes -- see the module
     docstring; this is a tripwire, not a type system."""
     def is_rootish(value: ast.AST) -> bool:
-        return _is_root_call(value) or (isinstance(value, ast.Name) and value.id in known)
+        return _is_root_call(value, aliases) or (isinstance(value, ast.Name) and value.id in known)
 
     def targets_of(target: ast.AST, value: ast.AST) -> set[str]:
         if isinstance(target, ast.Name) and is_rootish(value):
@@ -175,7 +199,7 @@ def _bound_here(node: ast.AST, known: set[str]) -> set[str]:
     return set()
 
 
-def _scopes(tree: ast.AST):
+def _scopes(tree: ast.AST, aliases: frozenset[str] = frozenset(ROOT_FUNCS)):
     """(nodes, campaign-root-valued names) for the module and for each function.
 
     Every scope is yielded, including ones that bind no name: a campaign root
@@ -183,15 +207,19 @@ def _scopes(tree: ast.AST):
     exact shape of the read that motivated this guard.
 
     A name is campaign-root-valued if the scope binds it from a ROOT_FUNCS
-    call, or if it is a parameter named `croot` -- the convention this codebase
-    already uses for "a campaign root passed in from somewhere else"."""
-    for scope in [tree] + [n for n in ast.walk(tree)
-                           if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
-        names = set()
+    call, if it is a parameter named `croot` -- the convention this codebase
+    already uses for "a campaign root passed in from somewhere else" -- or if
+    an *enclosing* scope bound it and this one does not shadow it. A closure
+    over `croot` is an ordinary refactor, and treating a nested `def` as a
+    clean slate let it walk straight past the guard.
+    """
+    def walk(scope, inherited: set[str]):
+        names = set(inherited)
         if not isinstance(scope, ast.Module):
             args = scope.args
-            names = {a.arg for a in args.posonlyargs + args.args + args.kwonlyargs
-                     if a.arg == "croot"}
+            params = {a.arg for a in args.posonlyargs + args.args + args.kwonlyargs}
+            names -= params                       # a parameter shadows the closure
+            names |= {a for a in params if a == "croot"}
         nodes = list(_own_nodes(scope.body))
         # To a fixed point, not a fixed number of passes: `_own_nodes` yields in
         # no useful order, so an alias chain (`a = croot; b = a; c = b`) needs as
@@ -199,23 +227,33 @@ def _scopes(tree: ast.AST):
         while True:
             grown = set()
             for node in nodes:
-                grown |= _bound_here(node, names)
+                grown |= _bound_here(node, names, aliases)
             if grown <= names:
                 break
             names |= grown
         yield nodes, names
+        for child in nodes:
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                yield from walk(child, names)
+
+    yield from walk(tree, set())
 
 
-def _resolver_imports(tree: ast.AST) -> tuple[dict[str, str], set[str]]:
-    """(module alias -> resolver module, resolver functions imported directly).
+def _resolver_imports(tree: ast.AST) -> tuple[dict[str, str], dict[str, tuple[str, str]]]:
+    """(module alias -> resolver module, local name -> canonical (module, func)).
 
     `from . import characters as chars` and `from .characters import read_card`
     both reach the same resolver, and matching on the attribute's trailing name
     alone saw neither. The codebase does not currently use either form, which is
     exactly why the guard has to: the first one written should fail, not pass.
+
+    Direct imports keep their *canonical* pair, not the local name, so
+    `from .assets import put_image as save` still matches `assets.put_image` in
+    PURE_WRITERS -- otherwise renaming an import turns a sanctioned write into a
+    permanent false positive.
     """
     aliases: dict[str, str] = {}
-    direct: set[str] = set()
+    direct: dict[str, tuple[str, str]] = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
             tail = (node.module or "").rsplit(".", 1)[-1]
@@ -223,7 +261,7 @@ def _resolver_imports(tree: ast.AST) -> tuple[dict[str, str], set[str]]:
                 if a.name in RESOLVER_MODULES:          # from . import characters [as chars]
                     aliases[a.asname or a.name] = a.name
                 elif tail in RESOLVER_MODULES:          # from .characters import read_card
-                    direct.add(a.asname or a.name)
+                    direct[a.asname or a.name] = (tail, a.name)
         elif isinstance(node, ast.Import):
             for a in node.names:
                 mod = a.name.rsplit(".", 1)[-1]
@@ -232,23 +270,31 @@ def _resolver_imports(tree: ast.AST) -> tuple[dict[str, str], set[str]]:
     return aliases, direct
 
 
+#: Parameter names the resolvers give their root argument. `appearances
+#: ._actor_name` calls it `aroot`, so looking only for `root` let the keyword
+#: form of the very call that motivated RESOLVER_MODULES's `appearances` entry
+#: slip past.
+ROOT_KEYWORDS = ("root", "aroot", "croot")
+
+
 def _unresolved_reads(tree: ast.AST):
     """(node, description) for every campaign-root read of an inheritable record."""
     aliases, direct = _resolver_imports(tree)
+    root_aliases = frozenset(_root_aliases(tree))
 
     def resolver_of(func: ast.AST) -> tuple[str, str] | None:
-        """(module, function) if this call reaches a resolver, else None."""
+        """Canonical (module, function) if this call reaches a resolver."""
         if isinstance(func, ast.Attribute):
             recv = _last_name(func.value)
             mod = aliases.get(recv, recv if recv in RESOLVER_MODULES else None)
             return (mod, func.attr) if mod else None
         if isinstance(func, ast.Name) and func.id in direct:
-            return ("<imported>", func.id)
+            return direct[func.id]
         return None
 
-    for nodes, names in _scopes(tree):
+    for nodes, names in _scopes(tree, root_aliases):
         def is_croot(n: ast.AST) -> bool:
-            return _is_root_call(n) or (isinstance(n, ast.Name) and n.id in names)
+            return _is_root_call(n, root_aliases) or (isinstance(n, ast.Name) and n.id in names)
 
         for node in nodes:
             if (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div)
@@ -265,10 +311,9 @@ def _unresolved_reads(tree: ast.AST):
                 yield node, f'<campaign root>.joinpath("{seg}", ...)'
             elif isinstance(node, ast.Call) and (hit := resolver_of(node.func)):
                 mod, fn = hit
-                # `root=` as a keyword is the same call; these resolvers all name
-                # their first parameter `root`.
+                # the root as a keyword is the same call
                 root_arg = node.args[0] if node.args else next(
-                    (k.value for k in node.keywords if k.arg == "root"), None)
+                    (k.value for k in node.keywords if k.arg in ROOT_KEYWORDS), None)
                 if (root_arg is not None and is_croot(root_arg)
                         and f"{mod}.{fn}" not in PURE_WRITERS):
                     yield node, f"{mod}.{fn}(<campaign root>, ...)"
@@ -281,8 +326,10 @@ def _scan():
         if rel in OWNERS:
             continue
         src = path.read_text(encoding="utf-8")
-        for node, what in _unresolved_reads(ast.parse(src)):
-            yield rel, node, what, guard_markers.marker_reason(MARKER, src, node)
+        found = list(_unresolved_reads(ast.parse(src)))
+        for node, what in found:
+            others = [n for n, _w in found if n is not node]
+            yield rel, node, what, guard_markers.marker_reason(MARKER, src, node, others)
 
 
 def test_every_campaign_read_of_an_inheritable_record_goes_through_the_overlay():
@@ -433,6 +480,81 @@ def test_a_resolver_reached_through_an_import_alias_is_still_caught():
          "    return read_card(croot, aid, vid)\n", "directly imported function"),
     ]:
         assert list(_unresolved_reads(ast.parse(src))), f"missed: {why}"
+
+
+def test_a_closure_over_a_campaign_root_is_still_caught():
+    """A nested `def` was scanned with a fresh name set, so closing over `croot`
+    — an ordinary refactor — walked straight past the guard."""
+    src = ("def outer(cid):\n"
+           "    croot = campaigns.campaign_root(cid)\n"
+           "    def read():\n"
+           "        return characters.read_card(croot, aid, vid)\n"
+           "    return read\n")
+    assert list(_unresolved_reads(ast.parse(src))), "a closure over croot escaped"
+
+
+def test_a_nested_parameter_shadows_the_enclosing_root():
+    """Inheriting enclosing bindings must not classify a *different* value that
+    merely reuses the name — the `taken` closures inside `overlay.create_*` take
+    an id, not a root."""
+    src = ("def outer(cid):\n"
+           "    croot = campaigns.campaign_root(cid)\n"
+           "    def taken(croot):\n"
+           "        return characters.read_card(other, aid, vid)\n"
+           "    return taken\n")
+    assert not list(_unresolved_reads(ast.parse(src)))
+
+
+def test_an_aliased_root_factory_import_is_still_a_root():
+    """`_last_name` sees only the local alias, so an imported-and-renamed
+    factory stopped being recognized as a campaign root at all."""
+    src = ("from .campaigns import campaign_root as campaign_dir\n"
+           "def f(cid):\n    croot = campaign_dir(cid)\n"
+           "    return characters.read_card(croot, aid, vid)\n")
+    assert list(_unresolved_reads(ast.parse(src))), "an aliased root factory escaped"
+
+
+def test_a_directly_imported_pure_writer_keeps_its_canonical_name():
+    """A direct import used to lose the function's identity, so a sanctioned
+    write became a permanent false positive — including under a rename."""
+    for src, why in [
+        ("from .assets import put_image\n"
+         "def f(cid):\n    croot = campaigns.campaign_root(cid)\n"
+         "    put_image(croot, aid, vid, name, data, ext)\n", "direct import"),
+        ("from .assets import put_image as save\n"
+         "def f(cid):\n    croot = campaigns.campaign_root(cid)\n"
+         "    save(croot, aid, vid, name, data, ext)\n", "renamed import"),
+    ]:
+        assert not list(_unresolved_reads(ast.parse(src))), f"false positive: {why}"
+
+
+def test_the_resolvers_own_root_keyword_is_recognized():
+    """`appearances._actor_name` names its root `aroot`, so looking only for
+    `root=` let the keyword form of the call that motivated the `appearances`
+    entry slip past."""
+    src = ("def f(cid):\n"
+           "    return appearances._actor_name(aroot=campaigns.campaign_root(cid), kind=k, actor_id=a, vid=v)\n")
+    assert list(_unresolved_reads(ast.parse(src))), "the aroot= keyword form escaped"
+
+
+def test_a_marker_on_a_nested_call_does_not_exempt_its_parent():
+    """An inline marker sits inside every enclosing call's line span, so a
+    marker written for an inner read also silenced the outer one."""
+    src = ("def f(cid):\n"
+           "    croot = campaigns.campaign_root(cid)\n"
+           "    return characters.read_card(\n"
+           "        croot,\n"
+           "        assets.image_path(croot, a, v),  # overlay-ok: inner one is fine, honestly\n"
+           "        vid)\n")
+    found = list(_unresolved_reads(ast.parse(src)))
+    assert len(found) == 2, f"expected both calls flagged, got {[w for _n, w in found]}"
+    reasons = {}
+    for node, what in found:
+        others = [n for n, _w in found if n is not node]
+        reasons[what.split("(")[0]] = guard_markers.marker_reason(MARKER, src, node, others)
+    assert reasons["assets.image_path"] is not None, "the inner call lost its own marker"
+    assert reasons["characters.read_card"] is None, \
+        "the outer call inherited the inner call's marker"
 
 
 def test_an_alias_chain_is_followed_to_its_end():

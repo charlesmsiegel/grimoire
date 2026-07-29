@@ -21,10 +21,11 @@ only in prose: `tests/test_overlay_guard.py` reads those names to check that
 nothing outside this module resolves an inheritable record off a raw campaign
 root. Everything else under <campaign> is campaign-local by definition and is
 read directly: campaign.md, sync.md, deleted.json, appearances.json,
-climate.json, calendar.json, changes.json, chronicle.json, timeline.md,
-sheet_baselines.json, scenes/, sheets/, proposals/, and the per-actor sidecars
-filed inside an actor dir (dossier.md, state.md). tagline.md is the exception
-among sidecars -- it overlays per file, via `tagline()` below.
+calendar.json, changes.json, chronicle.json, timeline.md, sheet_baselines.json,
+the climate default (store/campaign_climate.py owns that filename), scenes/,
+sheets/, proposals/, and the per-actor sidecars filed inside an actor dir
+(dossier.md, state.md). tagline.md is the exception among sidecars -- it
+overlays per file, via `tagline()` below.
 """
 
 from __future__ import annotations
