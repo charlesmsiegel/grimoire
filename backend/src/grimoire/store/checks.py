@@ -225,11 +225,17 @@ def available_checks(cid: str, sid: str) -> list[dict]:
 _DICE_HEAD_RE = re.compile(r"^\U0001F3B2 `.*?` → ")
 
 
+def roll_label(resolution: dict) -> str:
+    """The roll log's label for a resolved check — the same "actor — check"
+    head the 🎲 transcript line uses, shared so the two can never drift."""
+    return f"{resolution['actor_label']} — {resolution['check_label']}"
+
+
 def format_check_roll(resolution: dict) -> str:
     """The 🎲 transcript line for a resolved check; delegates the dice
     segment to `dice.format_roll` rather than reimplementing it."""
     segment = _DICE_HEAD_RE.sub("", dice.format_roll(resolution["result"]), count=1)
-    head = f"\U0001F3B2 **{resolution['actor_label']} — {resolution['check_label']}"
+    head = f"\U0001F3B2 **{roll_label(resolution)}"
     if resolution.get("difficulty") is not None:
         head += f" (diff {resolution['difficulty']})"
     head += f":** {segment}"

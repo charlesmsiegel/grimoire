@@ -11,7 +11,7 @@ from ..llm import LLMClient
 from .common import (_campaign_root_or_404, _require_connection, _require_scene, get_llm)
 from .models import (CheckBody, ModuleSetting, ProposalAction, RollBody, SheetAdvanceBody,
                      SheetBody, SheetCreationBody)
-from .streaming import (_continuation_stream, _project_resolution, _roll_label, _sse,
+from .streaming import (_continuation_stream, _sse,
                         _sse_response)
 
 router = APIRouter()
@@ -107,7 +107,7 @@ def post_roll_proposal(cid: str, sid: str, body: ProposalAction,
         # superseded while still pending/resolving has no resolution to
         # project; it stays a plain 409.
         if isinstance(rec.get("resolution"), dict):
-            _project_resolution(cid, sid, pid)
+            store.proposals.project(cid, sid, pid)
         raise HTTPException(status_code=409, detail="proposal is stale")
     status = rec["status"]
 
@@ -140,7 +140,7 @@ def post_roll_proposal(cid: str, sid: str, body: ProposalAction,
         status = store.proposals.get(cid, sid)["status"]
 
     if status == "resolved":
-        resolution = _project_resolution(cid, sid, pid)
+        resolution = store.proposals.project(cid, sid, pid)
         if resolution is None:
             # Another actor won the scene's record in the window between our
             # pre-stream status read and the projection lock (a supersede +
@@ -171,7 +171,8 @@ def post_scene_check(cid: str, sid: str, body: CheckBody):
             cid, body.check, body.actor, body.difficulty, body.modifier or 0)
     except store.checks.CheckError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    entry = store.rolls.append(cid, sid, _roll_label(resolution), resolution["result"],
+    entry = store.rolls.append(cid, sid, store.checks.roll_label(resolution),
+                               resolution["result"],
                                tier=resolution.get("tier"))
     resolution = {**resolution, "roll_id": entry["id"]}
     line = store.checks.format_check_roll(resolution)

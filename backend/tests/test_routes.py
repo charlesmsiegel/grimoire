@@ -4792,24 +4792,44 @@ def test_valid_json_fence_missing_check_flags_problem(client):
     assert "roll request had no check id" in payload["problems"]
 
 
+def _unhealed(fn, *args):
+    """Run a retirement path with the store's own heal disabled — the on-disk
+    shape a caller that predates the #242 guarantee would leave behind.
+    Production can no longer produce it (`supersede`/`new` heal themselves),
+    so tests that need an unprojected retired record must construct it."""
+    real = store.proposals.heal
+    store.proposals.heal = lambda *a, **k: None
+    try:
+        return fn(*args)
+    finally:
+        store.proposals.heal = real
+
+
+def _resolved(client, cid, sid):
+    """A record driven to resolved-with-resolution but never projected."""
+    rec = _pending(client, cid, sid)
+    store.proposals.claim(cid, sid, rec["id"])
+    resolution = store.checks.resolve_check(cid, "brawl", "characters:mara", 6, 0)
+    assert store.proposals.transition(
+        cid, sid, rec["id"], ("resolving",), "resolved", resolution)
+    return rec, rec["id"]
+
+
 def test_project_resolution_none_when_record_replaced(client):
     # Reproduces the narrow window in finding #2: the route reads status
-    # "resolved" for pid, then — before _project_resolution acquires its
+    # "resolved" for pid, then — before `proposals.project` acquires its
     # lock — a supersede + brand-new fence/send replaces the scene's record
-    # with a different id. _project_resolution must stop dead: no roll
-    # append, no transcript line, no TypeError on a None resolution.
+    # with a different id. `project` must stop dead: no roll append, no
+    # transcript line, no TypeError on a None resolution. The replacement is
+    # driven unhealed so the guard is tested in isolation from the heal.
     cid, sid, _ = _mech_scene(client)
-    rec = _pending(client, cid, sid)
-    old_pid = rec["id"]
-    store.proposals.claim(cid, sid, old_pid)
-    resolution = store.checks.resolve_check(cid, "brawl", "characters:mara", 6, 0)
-    assert store.proposals.transition(cid, sid, old_pid, ("resolving",), "resolved", resolution)
+    rec, old_pid = _resolved(client, cid, sid)
 
-    store.proposals.supersede(cid, sid)
-    store.proposals.new(cid, sid, {"check": "brawl", "actor": "characters:mara",
-                                   "problems": []})
+    _unhealed(store.proposals.supersede, cid, sid)
+    _unhealed(store.proposals.new, cid, sid,
+              {"check": "brawl", "actor": "characters:mara", "problems": []})
 
-    result = routes.streaming._project_resolution(cid, sid, old_pid)
+    result = store.proposals.project(cid, sid, old_pid)
     assert result is None
     assert [e for e in client.get(f"/api/campaigns/{cid}/rolls").json()
             if e.get("proposal") == old_pid] == []
@@ -4823,16 +4843,12 @@ def test_superseded_same_id_still_projects(client):
     # stands in the transcript as history per spec; only the automatic
     # continuation is cancelled elsewhere (commit_narration), not this.
     cid, sid, _ = _mech_scene(client)
-    rec = _pending(client, cid, sid)
-    pid = rec["id"]
-    store.proposals.claim(cid, sid, pid)
-    resolution = store.checks.resolve_check(cid, "brawl", "characters:mara", 6, 0)
-    assert store.proposals.transition(cid, sid, pid, ("resolving",), "resolved", resolution)
+    rec, pid = _resolved(client, cid, sid)
 
-    store.proposals.supersede(cid, sid)  # same id — no new() call follows
+    _unhealed(store.proposals.supersede, cid, sid)  # same id — no new() follows
     assert store.proposals.get(cid, sid)["status"] == "superseded"
 
-    result = routes.streaming._project_resolution(cid, sid, pid)
+    result = store.proposals.project(cid, sid, pid)
     assert result is not None and "roll_id" in result and "line_intent" in result
     tagged = [e for e in client.get(f"/api/campaigns/{cid}/rolls").json()
               if e.get("proposal") == pid]
@@ -4842,13 +4858,10 @@ def test_superseded_same_id_still_projects(client):
 
 def _resolve_then_supersede(client, cid, sid):
     """Drive a proposal to resolved, then supersede it keeping the same id
-    (no new() follows) — the same-id superseded state the fix must heal."""
-    rec = _pending(client, cid, sid)
-    pid = rec["id"]
-    store.proposals.claim(cid, sid, pid)
-    resolution = store.checks.resolve_check(cid, "brawl", "characters:mara", 6, 0)
-    assert store.proposals.transition(cid, sid, pid, ("resolving",), "resolved", resolution)
-    store.proposals.supersede(cid, sid)
+    (no new() follows) — the same-id superseded state the fix must heal.
+    Retired unhealed so the record arrives here unprojected."""
+    rec, pid = _resolved(client, cid, sid)
+    _unhealed(store.proposals.supersede, cid, sid)
     assert store.proposals.get(cid, sid)["status"] == "superseded"
     return rec, pid
 
@@ -4860,7 +4873,7 @@ def test_superseded_same_id_projection_persists_metadata(client):
     cid, sid, _ = _mech_scene(client)
     rec, pid = _resolve_then_supersede(client, cid, sid)
 
-    result = routes.streaming._project_resolution(cid, sid, pid)
+    result = store.proposals.project(cid, sid, pid)
     assert result is not None
 
     stored = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
@@ -4891,7 +4904,7 @@ def test_superseded_same_id_crash_before_line_heals_on_stale_post(client, monkey
         return real_append(*a, **k)
     monkeypatch.setattr(store.scenes, "append_message", flaky_append)
     with pytest.raises(RuntimeError):
-        routes.streaming._project_resolution(cid, sid, pid)
+        store.proposals.project(cid, sid, pid)
     # restore only this attr — never monkeypatch.undo() (shared GRIMOIRE_HOME)
     monkeypatch.setattr(store.scenes, "append_message", real_append)
 
@@ -4956,7 +4969,7 @@ def test_new_fence_replacement_heals_crashed_projection(client, monkeypatch):
         return real_append(*a, **k)
     monkeypatch.setattr(store.scenes, "append_message", flaky_append)
     with pytest.raises(RuntimeError):
-        routes.streaming._project_resolution(cid, sid, pid)
+        store.proposals.project(cid, sid, pid)
     # restore only this attr — never monkeypatch.undo() (shared GRIMOIRE_HOME)
     monkeypatch.setattr(store.scenes, "append_message", real_append)
     assert _roll_lines(client, cid, sid) == []          # roll tagged, no line
@@ -5009,6 +5022,111 @@ def test_new_fence_replacement_projects_resolved_record(client):
     assert fresh["id"] != pid and fresh["status"] == "pending"
 
 
+# ---- #242: the heal is the state machine's guarantee, not a convention -----
+# Before #242 the "heal before you retire" rule lived in a routes.py docstring
+# and five call sites that remembered to obey it; a sixth retirement path would
+# have orphaned a completed roll silently. These call the store primitives
+# *directly* — the shape a forgetful future call site takes — and assert the
+# projection still lands.
+
+def test_supersede_projects_before_retiring(client):
+    cid, sid, _ = _mech_scene(client)
+    _, pid = _resolved(client, cid, sid)
+    assert client.get(f"/api/campaigns/{cid}/rolls").json() == []   # never projected
+
+    store.proposals.supersede(cid, sid)   # a bare retire, no route helper
+
+    tagged = [e for e in client.get(f"/api/campaigns/{cid}/rolls").json()
+              if e.get("proposal") == pid]
+    assert len(tagged) == 1
+    assert len(_roll_lines(client, cid, sid)) == 1
+    stored = store.proposals.get(cid, sid)
+    assert stored["id"] == pid and stored["status"] == "superseded"
+    assert stored["resolution"]["roll_id"] == tagged[0]["id"]
+    assert "line_intent" in stored["resolution"]
+
+
+def test_new_projects_before_replacing(client):
+    cid, sid, _ = _mech_scene(client)
+    _, pid = _resolved(client, cid, sid)
+
+    fresh = store.proposals.new(cid, sid, {"check": "brawl"})   # erases the handle
+
+    assert len([e for e in client.get(f"/api/campaigns/{cid}/rolls").json()
+                if e.get("proposal") == pid]) == 1
+    assert len(_roll_lines(client, cid, sid)) == 1
+    assert store.proposals.get(cid, sid)["id"] == fresh["id"]   # replacement landed
+
+
+def test_supersede_heals_a_half_projected_record(client, monkeypatch):
+    # The partial state that motivated the invariant: roll appended, process
+    # died before the 🎲 line. A bare supersede must finish the line rather
+    # than retiring the only handle that could.
+    cid, sid, _ = _mech_scene(client)
+    _, pid = _resolved(client, cid, sid)
+    real_append = store.scenes.append_message
+    state = {"raised": False}
+    def flaky_append(*a, **k):
+        if not state["raised"]:
+            state["raised"] = True
+            raise RuntimeError("crash before 🎲 line")
+        return real_append(*a, **k)
+    monkeypatch.setattr(store.scenes, "append_message", flaky_append)
+    with pytest.raises(RuntimeError):
+        store.proposals.project(cid, sid, pid)
+    # restore only this attr — never monkeypatch.undo() (shared GRIMOIRE_HOME)
+    monkeypatch.setattr(store.scenes, "append_message", real_append)
+    assert _roll_lines(client, cid, sid) == []
+
+    store.proposals.supersede(cid, sid)
+
+    assert len(_roll_lines(client, cid, sid)) == 1
+    assert len([e for e in client.get(f"/api/campaigns/{cid}/rolls").json()
+                if e.get("proposal") == pid]) == 1   # not duplicated
+
+
+def test_retiring_a_pending_or_declined_record_projects_nothing(client):
+    # The heal must stay narrow: only a resolution carrying a roll `result`
+    # projects. A pending record retired by a bare supersede leaves no roll,
+    # no line, and no stray resolution.
+    cid, sid, _ = _mech_scene(client)
+    _pending(client, cid, sid)
+    store.proposals.supersede(cid, sid)
+    assert client.get(f"/api/campaigns/{cid}/rolls").json() == []
+    assert _roll_lines(client, cid, sid) == []
+    assert store.proposals.get(cid, sid)["resolution"] is None
+
+    rec = _pending(client, cid, sid)
+    assert store.proposals.transition(cid, sid, rec["id"], ("pending",), "declined")
+    store.proposals.new(cid, sid, {"check": "brawl"})
+    assert client.get(f"/api/campaigns/{cid}/rolls").json() == []
+    assert _roll_lines(client, cid, sid) == []
+
+
+@pytest.mark.parametrize("path,body,status", [
+    ("chat", {"content": "go on"}, 200),
+    ("retry", None, 200),
+    # Regenerate refuses once the heal's 🎲 line is the scene's trailing
+    # message — rerolling must never delete a logged roll's transcript entry.
+    # It judges that on a transcript re-read AFTER the retire, so the guard
+    # returns a clean 400 rather than letting the removal blow up (500).
+    ("regenerate", None, 400),
+])
+def test_every_route_retirement_path_projects(client, path, body, status):
+    # Issue #242 suggestion 3: drive each retirement endpoint with an
+    # unprojected resolved record present and assert the projection landed.
+    cid, sid, _ = _mech_scene(client)
+    _, pid = _resolved(client, cid, sid)
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["reply."])
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/{path}", json=body)
+    assert resp.status_code == status
+
+    assert len([e for e in client.get(f"/api/campaigns/{cid}/rolls").json()
+                if e.get("proposal") == pid]) == 1
+    assert len(_roll_lines(client, cid, sid)) == 1
+    assert store.proposals.get(cid, sid)["status"] == "superseded"
+
+
 def _resolve_with_crashed_line(client, cid, sid, monkeypatch):
     """A resolved record whose projection crashed between the roll append and
     the 🎲 line append: roll tagged with roll_id persisted, no transcript
@@ -5027,7 +5145,7 @@ def _resolve_with_crashed_line(client, cid, sid, monkeypatch):
         return real_append(*a, **k)
     monkeypatch.setattr(store.scenes, "append_message", flaky_append)
     with pytest.raises(RuntimeError):
-        routes.streaming._project_resolution(cid, sid, pid)
+        store.proposals.project(cid, sid, pid)
     # restore only this attr — never monkeypatch.undo() (shared GRIMOIRE_HOME)
     monkeypatch.setattr(store.scenes, "append_message", real_append)
     mid = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
