@@ -20,13 +20,20 @@ wider contract in #271.
 
 from __future__ import annotations
 
+import hashlib
 import json
+from datetime import datetime, timedelta, timezone
 
 from . import atomic, campaigns
+from .paths import now_iso
 
-# Only a save the user could still be retrying is worth remembering; the ledger
-# is a guard, not a history. Oldest tokens are evicted first.
-KEEP = 20
+#: How long a completed entry stays retryable. Deliberately time, not count: a
+#: review sits open on someone's screen for as long as they leave it there, and
+#: evicting by count would drop their token the moment the campaign saw enough
+#: other saves -- their retry would then replay every append. An UNFINISHED
+#: reservation never expires at all; it is the entry whose loss lets a partly
+#: landed commit run again.
+RETAIN_DAYS = 30
 
 
 def _path(cid: str):
@@ -44,12 +51,25 @@ def _read(cid: str) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def fingerprint(body: dict) -> str:
+    """A stable digest of the save body.
+
+    A token identifies the *attempt*; this identifies what the attempt was for.
+    A review stays editable after a failed save, so a retry can carry the same
+    token and different content -- returning the first result then reports
+    success while silently discarding the edits made in between.
+    """
+    return hashlib.sha256(
+        json.dumps(body, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+
+
 def lookup(cid: str, token: str) -> dict | None:
     """This token's ledger entry, or None when it is unseen.
 
-    An entry is ``{"done": bool, "result": dict | None}``. ``done`` is False
-    between ``reserve`` and ``record`` -- the commit began and its outcome is
-    unknown, which is exactly the state a replay must not run again.
+    An entry is ``{"done": bool, "result": dict | None, "fingerprint": str,
+    "at": iso}``. ``done`` is False between ``reserve`` and ``record`` -- the
+    commit began and its outcome is unknown, which is exactly the state a replay
+    must not run again.
 
     An empty token is always unseen: a client that sends none opts out of the
     guard, and must not collide with every other tokenless save.
@@ -62,16 +82,21 @@ def lookup(cid: str, token: str) -> dict | None:
     return entry
 
 
+def _prune(data: dict) -> dict:
+    """Drop completed entries past RETAIN_DAYS. Reservations are kept."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=RETAIN_DAYS))         .strftime("%Y-%m-%dT%H:%M:%SZ")
+    return {t: e for t, e in data.items()
+            if not (isinstance(e, dict) and e.get("done")
+                    and str(e.get("at", "")) < cutoff)}
+
+
 def _put(cid: str, token: str, entry: dict) -> None:
-    data = _read(cid)
-    data.pop(token, None)                       # re-insert so it counts as newest
-    data[token] = entry
-    for stale in list(data)[:-KEEP]:            # dicts keep insertion order
-        del data[stale]
+    data = _prune(_read(cid))
+    data[token] = {**entry, "at": now_iso()}
     atomic.write_text(_path(cid), json.dumps(data, indent=2) + "\n")
 
 
-def reserve(cid: str, token: str) -> None:
+def reserve(cid: str, token: str, fp: str = "") -> None:
     """Claim the token before the first non-idempotent write.
 
     Recording only *after* the effects leaves a window: a crash in between (or a
@@ -81,11 +106,11 @@ def reserve(cid: str, token: str) -> None:
     """
     if not token:
         return
-    _put(cid, token, {"done": False, "result": None})
+    _put(cid, token, {"done": False, "result": None, "fingerprint": fp})
 
 
-def record(cid: str, token: str, result: dict) -> None:
+def record(cid: str, token: str, result: dict, fp: str = "") -> None:
     """Complete the reservation with what this token's save returned."""
     if not token:
         return
-    _put(cid, token, {"done": True, "result": result})
+    _put(cid, token, {"done": True, "result": result, "fingerprint": fp})
