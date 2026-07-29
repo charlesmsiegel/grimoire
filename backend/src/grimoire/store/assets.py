@@ -98,6 +98,22 @@ def _image_locks_held(d: Path, *names: str):
     (PR review corrected the original claim here). It is the *second*
     multi-lock caller that would introduce a cycle, and a fixed global order
     means that caller is safe by construction rather than by review.
+
+    That second caller already exists, nested: ``promote_image`` holds
+    ``{name, avatar}`` and calls ``image_path``, which can enter
+    ``_heal_stranded_promotion`` and take ``{promote-tmp, avatar, gallery_N}``.
+    No cycle, because both sort their *whole* set and every set contains
+    ``avatar`` -- so no thread can hold a later name while waiting for an
+    earlier one. Sorting the whole set, not appending to a held set, is the
+    property that has to survive future edits.
+
+    What sorting cannot do is serialize names that differ only by case:
+    ``_image_lock`` keys on the exact string, so on a case-insensitive
+    filesystem ``gallery_1`` and ``Gallery_1`` are one file behind two locks.
+    That is this module's own pre-existing gap -- two ``put_image`` calls
+    spelled that way have raced since the lock was added in #233 -- not
+    something promotion introduces, and closing it means re-keying every caller
+    (PR review).
     """
     with ExitStack() as stack:
         for n in sorted(set(names)):
@@ -106,7 +122,17 @@ def _image_locks_held(d: Path, *names: str):
 
 
 def _free_gallery(d: Path) -> str:
-    used = {p.stem for p in d.iterdir() if p.is_file()}
+    """The lowest ``gallery_N`` no file in ``d`` already occupies.
+
+    Occupancy is case-folded: on a case-insensitive filesystem an existing
+    ``Gallery_1.png`` *is* ``gallery_1.png``, so a case-sensitive comparison
+    would keep handing out a slot that cannot actually be claimed -- recovery
+    would then find its target already there on every pass and give up without
+    repairing anything (PR review). Skipping a case-variant name on a
+    case-sensitive filesystem too is merely conservative: the next slot is
+    equally good, and nothing else allocates these names.
+    """
+    used = {p.stem.casefold() for p in d.iterdir() if p.is_file()}
     n = 1
     while f"gallery_{n}" in used:
         n += 1
@@ -126,7 +152,15 @@ def _newest_stranded(d: Path) -> Path | None:
     return max(strays, key=lambda p: (_mtime_ns(p), p.name)) if strays else None
 
 
-_HEAL_PASSES = 16  # one rename per pass, plus room to re-decide on a lost race
+# Bounds LOST RACES only -- a successful rename does not spend it. Budgeting
+# total passes instead would let a directory holding more temps than the budget
+# keep one stranded after an uncontended scan (`_norm_ext` lowercases, so
+# `promote-tmp.PNG` and `promote-tmp.png` are two eligible files on a
+# case-sensitive filesystem: the count is not bounded by the five extensions --
+# PR review). Successful renames strictly reduce the number of temps, so the
+# loop terminates on progress alone; this only stops it spinning against a
+# writer that keeps taking the slot, and the next scan resumes the repair.
+_HEAL_RETRIES = 8
 
 
 def _heal_stranded_promotion(d: Path) -> None:
@@ -167,7 +201,8 @@ def _heal_stranded_promotion(d: Path) -> None:
     """
     if not any(d.glob(f"{_PROMOTE_TMP}.*")):
         return  # the overwhelmingly common case: one glob, no locks, no writes
-    for _ in range(_HEAL_PASSES):
+    retries = _HEAL_RETRIES
+    while retries:
         stray = _newest_stranded(d)
         if stray is None:
             return
@@ -175,18 +210,23 @@ def _heal_stranded_promotion(d: Path) -> None:
         # Both choices above were read unlocked, so lock every name they name --
         # in the module's one global order -- and only then act on them.
         with _image_locks_held(d, _PROMOTE_TMP, AVATAR, slot):
-            if not stray.exists():
-                continue  # another thread rescued this one
-            recheck = AVATAR if not any(d.glob(f"{AVATAR}.*")) else _free_gallery(d)
-            if recheck != slot:
-                continue  # an avatar appeared, or the slot was taken: re-decide
             target = d / f"{slot}{stray.suffix}"
-            if target.exists():
-                continue  # same stem, other extension: pick another slot
-            try:
-                stray.rename(target)
-            except OSError:
-                return  # read-only store or a held file; the next scan retries
+            # Recompute the decision while holding the names it depends on: the
+            # temp may have been rescued by another thread, an avatar may have
+            # appeared, or the slot may have been taken. `target.exists()` is
+            # the last-moment guard -- with the locks held nothing in this
+            # process can have created it, but `rename` replaces silently on
+            # POSIX, so a file another process put there must stop us.
+            if (stray.exists()
+                    and slot == (AVATAR if not any(d.glob(f"{AVATAR}.*"))
+                                 else _free_gallery(d))
+                    and not target.exists()):
+                try:
+                    stray.rename(target)
+                except OSError:
+                    return  # read-only store or a held file; the next scan retries
+                continue  # progress: only lost races spend the retry budget
+        retries -= 1
 
 
 def _mtime_ns(p: Path) -> int:
