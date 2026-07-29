@@ -33,6 +33,15 @@ from .paths import now_iso
 
 NON_TERMINAL = ("pending", "resolving", "resolved", "declined")
 
+# Statuses the generic CAS may move a record TO. The two exits from the
+# projectable states are deliberately absent: ``superseded`` and ``narrated``
+# belong to ``supersede`` and ``commit_narration``, which heal before they move
+# the record (#242). Routing either through ``transition`` would reopen the hole
+# this module closed. Healing inside ``transition`` instead is NOT the
+# alternative: ``update_resolution``'s status-preserving resolved -> resolved
+# CAS would then recurse back through ``project`` without bound.
+TRANSITION_TARGETS = ("pending", "resolving", "resolved", "declined")
+
 
 @contextmanager
 def locked(cid: str):
@@ -88,9 +97,20 @@ def get(cid: str, sid: str) -> dict | None:
 def transition(cid: str, sid: str, pid: str, from_states, to: str,
                resolution: dict | None = None) -> bool:
     """Atomic CAS: move the scene's proposal to ``to`` only if it carries
-    exactly this id and its status is in ``from_states``. Every state
-    change goes through here; a lost transition means another actor moved
-    the record (e.g. a supersede mid-resolve) and the caller must stop."""
+    exactly this id and its status is in ``from_states``. A lost transition
+    means another actor moved the record (e.g. a supersede mid-resolve) and
+    the caller must stop.
+
+    ``to`` must be a non-exit status (``TRANSITION_TARGETS``). The two exits
+    from the projectable states are reached only through ``supersede`` and
+    ``commit_narration``, which heal first; letting the generic CAS perform
+    them would be an unhealed exit, which is exactly the class of bug #242
+    closed. Misuse raises rather than returning False — a bad ``to`` is a
+    programming error, not the lost race False is reserved for."""
+    if to not in TRANSITION_TARGETS:
+        raise ValueError(
+            f"proposals.transition cannot move a record to {to!r}: "
+            "use supersede() or commit_narration(), which heal first (#242)")
     with locks.campaign_lock(cid):
         data = _read(cid)
         rec = data.get(sid)

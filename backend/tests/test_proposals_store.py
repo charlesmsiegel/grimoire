@@ -62,8 +62,24 @@ def test_transition_cas_and_resolution(monkeypatch, tmp_path):
     assert got["status"] == "resolved" and got["resolution"]["tier"] == "success"
     # wrong expected state, wrong id: both lose without writing
     assert proposals.transition(cid, sid, rec["id"], ("pending",), "declined") is False
-    assert proposals.transition(cid, sid, "pr-999999", ("resolved",), "narrated") is False
+    assert proposals.transition(cid, sid, "pr-999999", ("resolved",), "declined") is False
     assert proposals.get(cid, sid)["status"] == "resolved"
+
+
+def test_transition_refuses_the_exits_from_the_projectable_states(monkeypatch, tmp_path):
+    """#242: the generic CAS must not be a back door out of `resolved`.
+    `superseded` and `narrated` are owned by `supersede`/`commit_narration`,
+    which heal first — reaching them through `transition` would retire a
+    record with its roll unprojected, silently."""
+    cid, sid = _scene(monkeypatch, tmp_path)
+    rec = proposals.new(cid, sid, {})
+    proposals.claim(cid, sid, rec["id"])
+    proposals.transition(cid, sid, rec["id"], ("resolving",), "resolved",
+                         {"result": {"total": 5}})
+    for exit_status in ("narrated", "superseded"):
+        with pytest.raises(ValueError, match="heal"):
+            proposals.transition(cid, sid, rec["id"], ("resolved",), exit_status)
+    assert proposals.get(cid, sid)["status"] == "resolved"   # refused before any write
 
 
 def test_supersede_during_resolve_wins(monkeypatch, tmp_path):
@@ -93,11 +109,12 @@ def test_supersede_covers_every_non_terminal_state(monkeypatch, tmp_path):
                 proposals.transition(cid, sid, rec["id"], ("pending",), "declined")
         proposals.supersede(cid, sid)
         assert proposals.get(cid, sid)["status"] == "superseded"
-    # narrated is terminal: untouched
+    # narrated is terminal: untouched. Reached through commit_narration —
+    # `transition` refuses the exits, so this is the only legal route (#242).
     rec = proposals.new(cid, sid, {})
     proposals.claim(cid, sid, rec["id"])
     proposals.transition(cid, sid, rec["id"], ("resolving",), "resolved")
-    proposals.transition(cid, sid, rec["id"], ("resolved",), "narrated")
+    assert proposals.commit_narration(cid, sid, rec["id"], lambda: None) is True
     proposals.supersede(cid, sid)
     assert proposals.get(cid, sid)["status"] == "narrated"
 
