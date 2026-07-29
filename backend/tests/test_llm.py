@@ -83,6 +83,227 @@ async def test_missing_kind_defaults_to_openrouter():
     assert [c async for c in client.stream([], conn)] == ["or"]
 
 
+
+# ---- idle timeout (#243) ----
+
+import asyncio
+
+import pytest
+
+
+STALL = 2.0  # >> the 0.05s timeouts below, but bounded so an unguarded
+             # regression fails the suite in seconds instead of hanging it
+
+
+class StallingProvider:
+    """Yields `before` chunks, then stalls — a wedged upstream."""
+
+    def __init__(self, before=()):
+        self.before = list(before)
+        self.closed = False
+
+    async def stream(self, messages, *args, **kwargs):
+        try:
+            for chunk in self.before:
+                yield chunk
+            await asyncio.sleep(STALL)
+        finally:
+            self.closed = True
+
+
+def _timeout_client(provider, timeout):
+    return LLMClient(openrouter=provider, claude=provider, openai_compatible=provider,
+                     timeout=timeout)
+
+
+async def test_stalled_stream_raises_timeout_llm_error():
+    client = _timeout_client(StallingProvider(), 0.05)
+    with pytest.raises(LLMError) as exc:
+        [c async for c in client.stream([], _conn("openrouter"))]
+    assert exc.value.kind == "timeout"
+
+
+async def test_deltas_before_the_stall_are_still_yielded():
+    """A stall mid-stream must not discard what already arrived — the fence
+    watcher and the partial-reply persist path both depend on those deltas."""
+    client = _timeout_client(StallingProvider(["a", "b"]), 0.05)
+    seen = []
+    with pytest.raises(LLMError):
+        async for delta in client.stream([], _conn("openrouter")):
+            seen.append(delta)
+    assert seen == ["a", "b"]
+
+
+async def test_timeout_closes_the_underlying_generator():
+    """Otherwise the provider's httpx stream leaks for the life of the process."""
+    provider = StallingProvider()
+    client = _timeout_client(provider, 0.05)
+    with pytest.raises(LLMError):
+        [c async for c in client.stream([], _conn("openrouter"))]
+    assert provider.closed
+
+
+class UnyieldingProvider:
+    """A provider whose cleanup ignores the first cancellation — the case that
+    makes `await`ing cleanup unsafe at any timeout."""
+
+    def __init__(self):
+        self.closing = False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        await asyncio.sleep(STALL)
+        return "never"
+
+    async def aclose(self):
+        self.closing = True
+        try:
+            await asyncio.sleep(0.4)
+        except asyncio.CancelledError:
+            await asyncio.sleep(0.4)  # resists being cancelled
+
+    def stream(self, messages, *args, **kwargs):
+        # Not `async def`: a provider's stream() is an async *generator*
+        # function, so calling it hands back the iterator, not a coroutine.
+        return self
+
+
+async def test_cleanup_that_ignores_cancellation_cannot_wedge_the_caller(monkeypatch):
+    """The timeout has to reach the caller even when closing the sick provider
+    doesn't — otherwise the bound is only as good as the provider's manners."""
+    from grimoire import llm as llm_mod
+    monkeypatch.setattr(llm_mod, "_CLOSE_TIMEOUT", 0.05)
+    provider = UnyieldingProvider()
+    client = _timeout_client(provider, 0.05)
+
+    async def consume():
+        async for _ in client.stream([], _conn("openrouter")):
+            pass
+
+    # Watchdog well under the 0.4s the cleanup insists on taking: awaiting that
+    # cleanup — however it is bounded — blows this, abandoning it does not.
+    with pytest.raises(LLMError) as exc:
+        await asyncio.wait_for(consume(), 0.25)
+    assert exc.value.kind == "timeout" and provider.closing
+    await asyncio.sleep(0.5)  # let the abandoned cleanup finish before teardown
+
+
+class UncancellableProvider:
+    """A provider whose *pull* ignores the first cancellation. Cancelling and
+    then waiting for that cancellation to land is what turns a wedged upstream
+    back into a wedged request — the failure #243 is about."""
+
+    def __init__(self):
+        self.closed = False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        try:
+            await asyncio.sleep(STALL)
+        except asyncio.CancelledError:
+            await asyncio.sleep(0.4)  # resists, then finally lets go
+        return "never"
+
+    async def aclose(self):
+        self.closed = True
+
+    def stream(self, messages, *args, **kwargs):
+        return self
+
+
+async def test_an_abandoned_pull_is_closed_once_it_finally_settles(monkeypatch):
+    """Skipping the close of a still-running iterator is required (closing one
+    mid-__anext__ raises) — but skipping it forever leaks the connection, so
+    the close has to happen when the pull eventually lets go."""
+    from grimoire import llm as llm_mod
+    monkeypatch.setattr(llm_mod, "_CLOSE_TIMEOUT", 0.05)
+    provider = UncancellableProvider()
+    client = _timeout_client(provider, 0.05)
+    with pytest.raises(LLMError):
+        async for _ in client.stream([], _conn("openrouter")):
+            pass
+    assert not provider.closed  # still running: closing it now would raise
+    await asyncio.sleep(0.5)    # the pull lets go
+    assert provider.closed
+
+
+async def test_a_pull_that_ignores_cancellation_cannot_wedge_the_caller(monkeypatch):
+    from grimoire import llm as llm_mod
+    monkeypatch.setattr(llm_mod, "_CLOSE_TIMEOUT", 0.05)
+    provider = UncancellableProvider()
+    client = _timeout_client(provider, 0.05)
+
+    async def consume():
+        async for _ in client.stream([], _conn("openrouter")):
+            pass
+
+    with pytest.raises(LLMError) as exc:
+        await asyncio.wait_for(consume(), 0.25)  # << the 0.4s the pull insists on
+    assert exc.value.kind == "timeout"
+    await asyncio.sleep(0.5)  # let the abandoned pull finish before teardown
+
+
+async def test_caller_side_close_reaches_the_provider():
+    """An SSE client that disconnects mid-stream closes the guard; the provider
+    (and its open httpx response) has to be closed with it."""
+    provider = StallingProvider(["a"])
+    client = _timeout_client(provider, 0)  # unbounded: only the close can end this
+    agen = client.stream([], _conn("openrouter"))
+    assert await agen.__anext__() == "a"
+    await agen.aclose()
+    assert provider.closed
+
+
+async def test_healthy_stream_is_untouched_by_the_guard():
+    op = FakeProvider("or")
+    client = _timeout_client(op, 0.05)
+    assert [c async for c in client.stream([], _conn("openrouter"))] == ["or"]
+
+
+async def test_zero_timeout_disables_the_bound():
+    provider = StallingProvider(["a"])
+    client = _timeout_client(provider, 0)
+    agen = client.stream([], _conn("openrouter"))
+    assert await agen.__anext__() == "a"
+    with pytest.raises(asyncio.TimeoutError):  # hangs, unguarded, as configured
+        await asyncio.wait_for(agen.__anext__(), 0.05)
+    await agen.aclose()
+
+
+async def test_complete_inherits_the_timeout():
+    client = _timeout_client(StallingProvider(["partial"]), 0.05)
+    with pytest.raises(LLMError) as exc:
+        await client.complete([], _conn("openrouter"))
+    assert exc.value.kind == "timeout"
+
+
+async def test_a_resolver_is_consulted_per_call():
+    """routes passes the config.md setting as a callable rather than a number,
+    so a Configuration-page change lands without a restart — and so this module
+    never has to import the store (see llm_errors' leaf rule)."""
+    setting = [0.0]  # unbounded to start
+    provider = StallingProvider(["a"])
+    client = _timeout_client(provider, lambda: setting[0])
+    agen = client.stream([], _conn("openrouter"))
+    assert await agen.__anext__() == "a"
+    await agen.aclose()
+
+    setting[0] = 0.05  # the user tightens it mid-session
+    with pytest.raises(LLMError) as exc:
+        [c async for c in client.stream([], _conn("openrouter"))]
+    assert exc.value.kind == "timeout"
+
+
+async def test_a_client_given_no_timeout_uses_the_module_default():
+    from grimoire import llm as llm_mod
+    client = LLMClient(openrouter=FakeProvider("or"))
+    assert client._timeout_seconds() == llm_mod.DEFAULT_TIMEOUT
+
+
 import ast
 from pathlib import Path
 

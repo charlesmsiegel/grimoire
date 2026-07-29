@@ -17,7 +17,10 @@ from ..llm import LLMClient
 from ..openai_compatible import OpenAICompatibleClient
 
 
-_llm = LLMClient()
+# The idle bound is passed as a resolver, not a number: llm.py must not import
+# the store (#239), and reading config.md per call is what lets a
+# Configuration-page change land without a restart (#243).
+_llm = LLMClient(timeout=store.config.llm_timeout)
 _openai_compatible_client = OpenAICompatibleClient()
 
 

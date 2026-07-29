@@ -2185,7 +2185,7 @@ def test_absorb_writes_dossier_for_present_character(client):
     croot = store.campaigns.campaign_root(cid)
     assert "Aese is a shy snowleopardgirl" in store.dossiers.read(croot, "aese")
     assert r.json()["dossiers"] == {"status": "ok", "reason": None,
-                                    "refreshed": ["aese"], "failed": []}
+                                    "refreshed": ["aese"], "failed": [], "skipped": []}
 
 
 def _cast_npc(client, wid, cid, sid, name, ident):
@@ -2227,7 +2227,8 @@ def test_absorb_survives_dossier_failure(client):
     assert store.dossiers.read(store.campaigns.campaign_root(cid), "aese") == ""  # failed write skipped
     assert r.json()["dossiers"] == {
         "status": "failed", "reason": "no dossier could be refreshed",
-        "refreshed": [], "failed": [{"id": "aese", "reason": "RuntimeError: dossier boom"}]}
+        "refreshed": [], "failed": [{"id": "aese", "reason": "RuntimeError: dossier boom"}],
+        "skipped": []}
 
 
 def test_absorb_reports_partial_dossier_failure_as_degraded(client):
@@ -2241,7 +2242,8 @@ def test_absorb_reports_partial_dossier_failure_as_degraded(client):
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
     assert body["dossiers"] == {
         "status": "degraded", "reason": "some dossiers could not be refreshed",
-        "refreshed": ["aese"], "failed": [{"id": "winifred", "reason": "RuntimeError: dossier boom"}]}
+        "refreshed": ["aese"], "failed": [{"id": "winifred", "reason": "RuntimeError: dossier boom"}],
+        "skipped": []}
     croot = store.campaigns.campaign_root(cid)
     assert store.dossiers.read(croot, "aese") == "A standing paragraph."
     assert store.dossiers.read(croot, "winifred") == ""
@@ -2273,10 +2275,11 @@ def test_refresh_dossiers_reports_an_unreadable_scene_cast(client, monkeypatch):
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
     monkeypatch.setattr(store.appearances, "scene_cast",
                         lambda *a: (_ for _ in ()).throw(OSError("appearances.json is garbled")))
-    out = asyncio.run(routes.scenes._refresh_dossiers(cid, sid, "transcript", _DossierFake(), {}))
+    out = asyncio.run(routes.scenes._refresh_dossiers(cid, sid, "transcript", _DossierFake(), {},
+                                                      routes.scenes._Budget(0)))
     assert out == {
         "status": "failed", "reason": "could not read the scene cast: appearances.json is garbled",
-        "refreshed": [], "failed": []}
+        "refreshed": [], "failed": [], "skipped": []}
 
 
 def test_absorb_dossiers_are_skipped_with_no_npcs_present(client):
@@ -2287,7 +2290,7 @@ def test_absorb_dossiers_are_skipped_with_no_npcs_present(client):
     client.app.dependency_overrides[routes.get_llm] = lambda: _DossierFake()
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
     assert body["dossiers"] == {"status": "skipped", "reason": "no npcs present",
-                                "refreshed": [], "failed": []}
+                                "refreshed": [], "failed": [], "skipped": []}
 
 
 def test_absorb_empty_scene_is_400(client):
@@ -2473,6 +2476,162 @@ def test_audit_retry_endpoint_400_without_module(client, plain_scene):
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete([AUDIT_OK])
     r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/audit")
     assert r.status_code == 400
+
+
+# ---- absorb: overall time budget (#243) ----
+
+@pytest.fixture
+def npc_module_scene(client):
+    """A pool-basic campaign whose one present cast member is a *sheeted NPC* —
+    so a single absorb exercises all three LLM steps (extraction, one dossier,
+    audit), unlike module_scene, whose player-role cast makes zero dossier
+    calls."""
+    wid, cid = _campaign(client)
+    client.put(f"/api/campaigns/{cid}/module", json={"module": "pool-basic"})
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Aese", "version_name": "main"})
+    store.sheets.write(cid, "characters", "aese", "medium", {"health": 3}, expected=None)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                json={"kind": "characters", "id": "aese", "version": "main", "role": "npc"})
+    store.scenes.append_message(cid, sid, "user", "Aese took a hit.")
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    return cid, sid
+
+
+class ClockEatingFake:
+    """Answers every call instantly but advances the (faked) clock by `cost`
+    seconds, so budget arithmetic is exercised without real waiting."""
+
+    def __init__(self, clock, cost, replies):
+        self.clock, self.cost, self.replies, self.calls = clock, cost, replies, 0
+
+    async def stream(self, m, cfg):
+        yield "{}"
+
+    async def complete(self, m, cfg):
+        reply = self.replies[min(self.calls, len(self.replies) - 1)]
+        self.calls += 1
+        self.clock[0] += self.cost
+        return reply
+
+
+def test_absorb_budget_exhaustion_skips_dossiers_and_fails_the_audit(
+        client, npc_module_scene, monkeypatch):
+    """The extraction is the expensive part and is kept; the trailing steps
+    degrade rather than running unbounded (or discarding the absorb)."""
+    cid, sid = npc_module_scene
+    client.put("/api/config", json={"absorb_budget": "60"})
+    clock = [0.0]
+    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    fake = ClockEatingFake(clock, 90.0, [ABSORB_JSON])  # one call eats the budget
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+
+    assert body["one_line"] == "o"                    # prose absorb intact
+    assert fake.calls == 1                            # dossier + audit never called
+    assert store.dossiers.read(store.campaigns.campaign_root(cid), "aese") == ""
+    assert body["mechanics"]["status"] == "failed"
+    assert "budget" in body["mechanics"]["reason"]
+
+
+def test_absorb_names_the_dossiers_the_budget_skipped(client, npc_module_scene, monkeypatch):
+    """Skipping the tail is deliberate; skipping it silently is the bug #236
+    closed for failures — a budget skip reports through the same status."""
+    cid, sid = npc_module_scene
+    client.put("/api/config", json={"absorb_budget": "60"})
+    clock = [0.0]
+    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: ClockEatingFake(clock, 90.0, [ABSORB_JSON])
+
+    dossiers = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["dossiers"]
+
+    assert dossiers["status"] == "failed"
+    assert dossiers["skipped"] == ["aese"] and dossiers["refreshed"] == []
+    assert "budget" in dossiers["reason"]
+
+
+def test_absorb_reports_a_partially_skipped_dossier_phase_as_degraded(
+        client, npc_module_scene, monkeypatch):
+    cid, sid = npc_module_scene
+    wid = store.campaigns.read_campaign(cid)["meta"]["world"]
+    _cast_npc(client, wid, cid, sid, "Winifred", "winifred")
+    client.put("/api/config", json={"absorb_budget": "60"})
+    clock = [0.0]
+    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    # extraction (10s), aese's dossier (55s -> over), so winifred is dropped
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: ClockEatingFake(clock, 33.0, [ABSORB_JSON, "A standing paragraph."])
+
+    dossiers = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["dossiers"]
+
+    assert dossiers["status"] == "degraded"
+    assert dossiers["refreshed"] == ["aese"] and dossiers["skipped"] == ["winifred"]
+    assert "budget" in dossiers["reason"]
+
+
+def test_absorb_within_budget_runs_every_step(client, npc_module_scene, monkeypatch):
+    cid, sid = npc_module_scene
+    client.put("/api/config", json={"absorb_budget": "60"})
+    clock = [0.0]
+    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    fake = ClockEatingFake(clock, 1.0, [ABSORB_JSON, "Aese is steady.", AUDIT_OK])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+
+    assert fake.calls == 3
+    assert "Aese is steady" in store.dossiers.read(store.campaigns.campaign_root(cid), "aese")
+    assert body["mechanics"]["status"] == "ok" and body["dossiers"]["status"] == "ok"
+
+
+def test_absorb_budget_of_zero_is_unbounded(client, npc_module_scene, monkeypatch):
+    """The escape hatch: 0 means no ceiling, however long the calls take."""
+    cid, sid = npc_module_scene
+    client.put("/api/config", json={"absorb_budget": "0"})
+    clock = [0.0]
+    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    fake = ClockEatingFake(clock, 10_000.0, [ABSORB_JSON, "Aese is steady.", AUDIT_OK])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+
+    assert fake.calls == 3 and body["mechanics"]["status"] == "ok"
+
+
+def test_absorb_extraction_overrunning_the_budget_is_502(client, npc_module_scene):
+    """Nothing has been produced yet, so there is nothing to degrade to."""
+    import asyncio
+
+    cid, sid = npc_module_scene
+    client.put("/api/config", json={"absorb_budget": "0.05"})
+
+    class Wedged:
+        async def stream(self, m, cfg):
+            yield "{}"
+
+        async def complete(self, m, cfg):
+            # Cancelled by the budget after ~0.05s; kept short so a regression
+            # that drops the budget fails the suite in seconds, not minutes.
+            await asyncio.sleep(5)
+            return ABSORB_JSON
+
+    client.app.dependency_overrides[routes.get_llm] = lambda: Wedged()
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+    assert r.status_code == 502 and r.json()["kind"] == "timeout"
+
+
+def test_audit_retry_gets_a_fresh_budget(client, npc_module_scene, monkeypatch):
+    """A standalone retry must not inherit the exhausted absorb's deadline."""
+    cid, sid = npc_module_scene
+    client.put("/api/config", json={"absorb_budget": "60"})
+    clock = [1_000.0]  # well past any earlier absorb's deadline
+    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: ClockEatingFake(clock, 1.0, [AUDIT_OK])
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/audit").json()
+    assert body["mechanics"]["status"] == "ok"
 
 
 def test_chronicle_put_applies_sheet_edit_and_reports_conflicts(client, module_scene):
