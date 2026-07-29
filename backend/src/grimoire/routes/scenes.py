@@ -172,7 +172,12 @@ def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
     if core and core[-1]["role"] == "assistant":
         if all(m["role"] == "assistant" for m in core):
             raise HTTPException(status_code=400, detail="cannot regenerate the opening post")
-        if core[-1].get("speaker") == store.scenes.ROLL_SPEAKER:
+        if core[-1].get("speaker") in store.scenes.SYNTHETIC_SPEAKERS:
+            # Enumerated from the same tuple `remove_trailing_assistant_run`
+            # refuses on, not from one speaker name: only ROLL_SPEAKER is
+            # reachable here (trailing transitions are already stripped
+            # above), but a future synthetic speaker gets this 400 rather than
+            # the bare IndexError (500) that refusal would otherwise surface.
             raise HTTPException(status_code=400, detail="cannot regenerate past a manual dice roll")
         try:
             store.scenes.remove_trailing_assistant_run(cid, sid)
