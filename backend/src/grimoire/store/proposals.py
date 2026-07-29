@@ -53,7 +53,6 @@ TRANSITION_EDGES = frozenset({
     ("pending", "declined"),      # the player declines the roll
     ("resolving", "pending"),     # resolve_check failed; hand the chip back
     ("resolving", "resolved"),    # the roll landed
-    ("resolved", "resolved"),     # update_resolution: metadata, status untouched
 })
 
 # ...and the subset of those that may CARRY a resolution. This enforces the
@@ -62,10 +61,13 @@ TRANSITION_EDGES = frozenset({
 # ``narrated``, which by construction projected on the way there). Without it a
 # legal edge like ``pending -> declined`` could store a result, which ``heal``
 # reads as projectable while ``project`` refuses the status — and the roll is
-# then discarded by the next retirement, unlogged. ``update_resolution``
-# already restricts its own writes to resolved/superseded, so these two edges
-# are the only other way a resolution reaches disk.
-RESOLUTION_EDGES = frozenset({("resolving", "resolved"), ("resolved", "resolved")})
+# then discarded by the next retirement, unlogged.
+#
+# One edge, because storing a resolution and amending one are different
+# operations: this is the roll landing, and ``update_resolution`` owns the
+# metadata amendments (and refuses to change a `result`). A generic
+# ``resolved -> resolved`` edge could not tell the two apart.
+RESOLUTION_EDGES = frozenset({("resolving", "resolved")})
 
 
 @contextmanager
@@ -173,24 +175,31 @@ def update_resolution(cid: str, sid: str, pid: str, resolution: dict) -> bool:
 
     This exists so projection metadata (roll_id, line_intent) persists on a
     same-id *superseded* record — whose roll stands in the transcript as
-    history per spec — which a plain status CAS (``transition(...,
-    ("resolved",), "resolved", res)``) would silently drop once superseded.
-    It is NOT a state transition: status is left exactly as found either way.
+    history per spec — which a plain status CAS would silently drop once
+    superseded. It is NOT a state transition: status is left exactly as found.
 
-    A still-``resolved`` record is written through that status-preserving CAS
-    (``resolved -> resolved``), so the write lands only while the id and state
-    still hold and refuses cleanly against any concurrent legal transition. A
-    ``superseded`` record is terminal — no CAS can target it — so its metadata
-    is written directly.
+    It owns this write outright rather than borrowing ``transition``'s
+    ``resolved -> resolved`` edge, because that edge was indistinguishable from
+    "replace the whole resolution": a direct caller could swap in a different
+    ``result`` after projection, and the next ``project`` would find the
+    ORIGINAL roll by proposal id (``find_or_append_by_proposal`` is idempotent
+    by tag) while formatting its transcript line from the REPLACEMENT — a roll
+    log and a transcript that contradict each other. The generic edge is gone;
+    the ``result`` guard below is what makes this write metadata-only.
     """
     with locks.campaign_lock(cid):
-        if transition(cid, sid, pid, ("resolved",), "resolved", resolution):
-            return True
         data = _read(cid)
         rec = data.get(sid)
         if (not isinstance(rec, dict) or rec.get("id") != pid
-                or rec.get("status") != "superseded"):
+                or rec.get("status") not in ("resolved", "superseded")):
             return False
+        current = rec.get("resolution")
+        if (isinstance(current, dict) and "result" in current
+                and resolution.get("result") != current["result"]):
+            raise ValueError(
+                "proposals.update_resolution persists projection metadata; it "
+                "cannot change a resolved roll's `result` — the logged roll and "
+                "its transcript line would disagree (#242)")
         rec["resolution"] = resolution
         _write(cid, data)
         return True

@@ -4564,25 +4564,28 @@ def test_accept_crash_before_roll_id_heals_on_retry(client, monkeypatch):
     cid, sid, _ = _mech_scene(client)
     rec = _pending(client, cid, sid)
     real_append = store.rolls.find_or_append_by_proposal
-    real_transition = store.proposals.transition
+    # The backfill is `update_resolution`, which owns its own CAS rather than
+    # borrowing `transition`'s (#242 review round 4) — so that is where the
+    # crash goes in.
+    real_update = store.proposals.update_resolution
     state = {"appended": False, "raised": False}
     def tracking_append(*a, **k):
         state["appended"] = True
         return real_append(*a, **k)
-    def flaky_transition(*a, **k):
+    def flaky_update(*a, **k):
         if state["appended"] and not state["raised"]:
             state["raised"] = True
             raise RuntimeError("crash before roll_id backfill")
-        return real_transition(*a, **k)
+        return real_update(*a, **k)
     monkeypatch.setattr(store.rolls, "find_or_append_by_proposal", tracking_append)
-    monkeypatch.setattr(store.proposals, "transition", flaky_transition)
+    monkeypatch.setattr(store.proposals, "update_resolution", flaky_update)
     with pytest.raises(RuntimeError):
         client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal", json=_accept_body(rec))
     assert len(client.get(f"/api/campaigns/{cid}/rolls").json()) == 1
     # restore only these attrs — never monkeypatch.undo(), which would also
     # revert the client fixture's GRIMOIRE_HOME (the monkeypatch is shared).
     monkeypatch.setattr(store.rolls, "find_or_append_by_proposal", real_append)
-    monkeypatch.setattr(store.proposals, "transition", real_transition)
+    monkeypatch.setattr(store.proposals, "update_resolution", real_update)
 
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["healed"])
     resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal", json=_accept_body(rec))
