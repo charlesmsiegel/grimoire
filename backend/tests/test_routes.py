@@ -508,6 +508,32 @@ def test_character_image_promote_unsupported_type_400(client):
     assert (d / "gallery_1.bmp").exists()  # nothing moved
 
 
+def test_campaign_image_promote_routes_swap_campaign_side_only(client):
+    """All four promote handlers changed with #253, but only the two world ones
+    had route coverage. Campaign-side promotion copies both images up before
+    swapping, so the world's copies must come through untouched."""
+    wid, cid = _campaign(client)
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mira"}).json()["character"]
+    wbase = f"/api/worlds/{wid}/characters/{chid}/versions/default/images"
+    client.put(f"{wbase}/avatar", files={"file": ("a.png", io.BytesIO(b"old"), "image/png")})
+    client.put(f"{wbase}/gallery_1", files={"file": ("g.png", io.BytesIO(b"new"), "image/png")})
+
+    cbase = f"/api/campaigns/{cid}/characters/{chid}/versions/default/images"
+    assert client.post(f"{cbase}/gallery_1/promote").status_code == 200
+    assert client.get(f"{cbase}/avatar").content == b"new"
+    assert client.get(f"{cbase}/gallery_1").content == b"old"
+    assert client.get(f"{wbase}/avatar").content == b"old"
+    assert client.get(f"{wbase}/gallery_1").content == b"new"
+
+    eid = client.post(f"/api/campaigns/{cid}/locations", json={"name": "Crypt"}).json()["id"]
+    ebase = f"/api/campaigns/{cid}/locations/{eid}/images"
+    client.put(f"{ebase}/avatar", files={"file": ("a.png", io.BytesIO(b"day"), "image/png")})
+    client.put(f"{ebase}/gallery_1", files={"file": ("n.png", io.BytesIO(b"night"), "image/png")})
+    assert client.post(f"{ebase}/gallery_1/promote").status_code == 200
+    assert client.get(f"{ebase}/avatar").content == b"night"
+    assert client.get(f"{ebase}/gallery_1").content == b"day"
+
+
 def test_avatar_focus_endpoint_round_trip(client):
     wid = _world(client)
     cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
