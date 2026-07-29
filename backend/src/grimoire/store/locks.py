@@ -52,8 +52,9 @@ import threading
 import time
 from contextlib import ExitStack, contextmanager
 
+from . import paths, proclock
+
 _registry_guard = threading.Lock()
-_campaign_locks: dict[str, threading.RLock] = {}
 
 # Longer than any legitimate hold, but bounded so a cross-process lock-order
 # inversion surfaces as a 409 naming the campaign rather than a wedged server.
@@ -88,12 +89,132 @@ def _remaining(deadline) -> float:
     return max(0.0, deadline - time.monotonic())
 
 
-def campaign_lock(cid: str) -> threading.RLock:
+class _ProcessScopedLock:
+    """A ``threading.RLock`` plus an OS advisory file lock (#234).
+
+    The file lock is taken on the OUTERMOST acquisition only and released on
+    the outermost release, so reentrancy touches the filesystem once -- which
+    ``audit.apply_delta`` -> ``sheets.set_field``, ``scenes._serialized``
+    nesting under a holder, and ``module_edit._apply`` -> ``recover()`` all
+    depend on.
+
+    ``acquire`` keeps ``RLock``'s contract exactly (returns a bool, never
+    raises ``StoreBusy``); ``__enter__`` is the layer that raises. The timeout
+    is a deadline for the WHOLE acquisition -- time spent on the thread lock is
+    subtracted from the file lock's budget -- and it bounds lock *contention*
+    only: ``realpath``/``mkdir``/``open`` on an unavailable path are blocking
+    syscalls no userspace deadline can interrupt.
+    """
+
+    def __init__(self, name: str, busy: type[StoreBusy]):
+        self._name = name
+        self._busy = busy
+        self._rlock = threading.RLock()
+        self._depth = 0
+        self._fd: int | None = None
+
+    def _path(self):
+        # Resolved per outermost acquisition, never cached: home() resolves
+        # live on every call and the Storage location can change at runtime.
+        return proclock.lock_path(paths.home(), self._name)
+
+    def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+        if timeout != -1 and timeout < 0:   # RLock parity: -1 is the only
+            raise ValueError(               # legal negative, not "any negative"
+                "timeout value must be a positive number")
+        if not blocking:
+            if timeout != -1:
+                raise ValueError("can't specify a timeout for a non-blocking call")
+            ok = self._rlock.acquire(False)
+            deadline = proclock.NO_WAIT     # ONE attempt; None would retry forever
+        else:
+            deadline = time.monotonic() + timeout if timeout >= 0 else None
+            ok = self._rlock.acquire(True, _remaining(deadline))
+        if not ok:
+            return False
+        fd = None
+        try:
+            if self._depth > 0:             # we already hold the file lock
+                self._depth += 1
+                return True
+            fd = proclock.acquire(self._path(), deadline)
+            if fd is None:
+                self._rlock.release()
+                return False
+            self._fd = fd                   # installed BEFORE depth becomes 1
+            fd = None                       # ownership transferred to self
+            self._depth = 1
+            return True
+        except BaseException:
+            # Two cases, and the handler must cover both: the lock was taken
+            # but never installed (local `fd`), or it WAS installed and an
+            # asynchronous exception landed before depth reached 1 (`self._fd`
+            # set with depth 0, which release() would never clean up).
+            if fd is None and self._depth == 0 and self._fd is not None:
+                fd, self._fd = self._fd, None
+            if fd is not None:
+                proclock.release(fd)        # else it leaks for the process's life
+            self._rlock.release()           # never strand the thread lock
+            raise
+
+    def release(self) -> None:
+        if not self._rlock._is_owned():     # ownership BEFORE state, so a
+            raise RuntimeError(             # non-owner corrupts nothing
+                "cannot release un-acquired lock")
+        if self._depth > 1:
+            self._depth -= 1
+            self._rlock.release()
+            return
+        fd, self._fd = self._fd, None
+        try:
+            if fd is not None:
+                proclock.release(fd)
+        finally:                            # even if the unlock raises
+            self._depth = 0
+            self._rlock.release()
+
+    def __enter__(self):
+        if not self.acquire(timeout=LOCK_TIMEOUT):
+            raise self._busy(self._name)
+        return self
+
+    def __exit__(self, *exc) -> bool:
+        self.release()
+        return False
+
+    def _is_owned(self) -> bool:
+        """RLock parity: two sheets tests assert `modules.resolve` runs inside
+        the lock by calling this."""
+        return self._rlock._is_owned()
+
+
+_campaign_locks: dict[str, _ProcessScopedLock] = {}
+
+
+def campaign_lock(cid: str) -> _ProcessScopedLock:
     """Get-or-create the per-campaign lock atomically -- a plain
     ``if cid not in _campaign_locks: ...`` is a check-then-act race that can
-    hand two concurrent first-ever callers different lock objects."""
+    hand two concurrent first-ever callers different lock objects.
+
+    Keyed by cid alone: two *different* stores' campaigns sharing a cid share
+    one lock object, which is over-serialization inside one process and never a
+    correctness hole, while the lock *file* is per store.
+    """
     with _registry_guard:
-        return _campaign_locks.setdefault(cid, threading.RLock())
+        lock = _campaign_locks.get(cid)
+        if lock is None:
+            lock = _campaign_locks[cid] = _ProcessScopedLock(cid, CampaignBusy)
+        return lock
+
+
+_module_edit = _ProcessScopedLock("module-edit", ModuleEditBusy)
+
+
+def module_edit_lock() -> _ProcessScopedLock:
+    """The global module-edit lock. Cross-process for the same reason the
+    campaign locks are: whole-directory pack publication mutates the shared
+    user library, not just one campaign."""
+    return _module_edit
 
 
 @contextmanager
