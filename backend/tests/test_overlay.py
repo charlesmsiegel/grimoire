@@ -310,6 +310,26 @@ def test_promote_inherited_without_avatar_tombstones_source(monkeypatch, tmp_pat
     assert overlay.image_root(cid, aid, "default", "gallery_0") == croot  # 404, no fallthrough
 
 
+def test_a_campaign_read_heals_a_stranded_world_image(monkeypatch, tmp_path):
+    """The recovery in #253 lives on the directory scan, so a campaign read of an
+    inherited image can fire it against the WORLD directory. That is the right
+    outcome -- it is the world's own damage, the repair is a rename onto a name
+    the UI renders, and every campaign sees the image again -- and the campaign
+    layer still wins wherever it has its own file."""
+    wroot, cid, aid = _actor_pair(monkeypatch, tmp_path)
+    d = wroot / "characters" / aid / "assets" / "default"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "promote-tmp.png").write_bytes(b"stranded-in-the-world")  # pre-#253 wreckage
+
+    assert {i["name"] for i in overlay.list_images(cid, aid, "default")} == {"avatar"}
+    assert not list(d.glob("promote-tmp.*"))  # repaired in place, world-side
+    assert (d / "avatar.png").read_bytes() == b"stranded-in-the-world"
+
+    # and a campaign-side avatar still shadows the recovered world one
+    assets.put_image(campaigns.campaign_root(cid), aid, "default", "avatar", b"mine", "png")
+    assert overlay.image_root(cid, aid, "default", "avatar") == campaigns.campaign_root(cid)
+
+
 def test_read_character_patches_images_from_union(monkeypatch, tmp_path):
     wroot, cid, aid = _actor_pair(monkeypatch, tmp_path)
     assets.put_image(wroot, aid, "default", "avatar", PNG, "png")
