@@ -131,6 +131,63 @@ def test_a_file_whose_id_does_not_match_its_name_is_skipped(client, tmp_path):
     assert client.get("/api/climates/saltmarch-fens").status_code == 404
 
 
+# ---- referrers (#237): the scan the delete warning is built on ----
+
+def campaign(client, climate=None):
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    body = {"name": "Saltmarch Chronicle", "world": wid}
+    if climate is not None:
+        body["climate"] = climate
+    return client.post("/api/campaigns", json=body).json()["id"]
+
+
+def test_referrers_report_a_campaign_that_defaults_to_the_climate(client):
+    client.put("/api/climates/saltmarch-fens", json=doc())
+    cid = campaign(client, climate="saltmarch-fens")
+    got = client.get("/api/climates/saltmarch-fens/referrers").json()
+    assert [c["id"] for c in got["campaigns"]] == [cid]
+
+
+def test_referrers_report_a_location_naming_the_climate(client):
+    client.put("/api/climates/saltmarch-fens", json=doc())
+    cid = campaign(client)
+    lid = client.post(f"/api/campaigns/{cid}/locations",
+                      json={"name": "Saltmarch Docks", "body": "A place",
+                            "fields": {"climate": "saltmarch-fens"}}).json()["id"]
+    got = client.get("/api/climates/saltmarch-fens/referrers").json()
+    assert [(l["campaign"], l["id"]) for l in got["locations"]] == [(cid, lid)]
+
+
+def test_a_campaign_with_no_stored_default_counts_as_using_the_fallback(client):
+    # It resolves to the preset at every turn, so a warning that omits it is
+    # wrong about who is affected. The file-reading scan reported nothing.
+    from grimoire.store import campaign_climate
+    cid = campaign(client)
+    campaign_climate.path(cid).unlink()
+    got = client.get(f"/api/climates/{store.climates.FALLBACK_ID}/referrers").json()
+    assert [c["id"] for c in got["campaigns"]] == [cid]
+
+
+def test_a_campaign_whose_default_went_dangling_is_not_a_referrer(client):
+    # The named climate no longer exists, so the campaign resolves to the
+    # preset; reporting it under a dead id would warn about nothing.
+    client.put("/api/climates/saltmarch-fens", json=doc())
+    cid = campaign(client, climate="saltmarch-fens")
+    assert client.delete("/api/climates/saltmarch-fens").status_code == 200
+    got = client.get("/api/climates/saltmarch-fens/referrers").json()
+    assert got["campaigns"] == []
+    assert [c["id"] for c in client.get(
+        f"/api/climates/{store.climates.FALLBACK_ID}/referrers").json()["campaigns"]] == [cid]
+
+
+def test_deleting_a_climate_returns_the_referrers_it_affects(client):
+    # The delete is not blocked; the warning is the whole safety net.
+    client.put("/api/climates/saltmarch-fens", json=doc())
+    cid = campaign(client, climate="saltmarch-fens")
+    got = client.delete("/api/climates/saltmarch-fens").json()
+    assert [c["id"] for c in got["referrers"]["campaigns"]] == [cid]
+
+
 def test_a_failed_delete_is_a_500_not_a_404(client, monkeypatch):
     # "no custom climate to delete" for a climate that still exists tells the
     # user the opposite of what happened.
