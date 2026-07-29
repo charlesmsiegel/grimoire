@@ -449,6 +449,32 @@ def test_apply_edits_skips_a_stale_dossier(monkeypatch, tmp_path):
     assert dossiers.read(croot, ch) == "Seraphine rides with the party."
 
 
+def test_a_dossier_read_failure_is_reported(monkeypatch, tmp_path):
+    """The conflict check reads before it writes, and that read sits inside the
+    generic per-edit `except`. A permissions or I/O error there would drop an
+    approved edit with the save still reading as a success."""
+    from grimoire.store import dossiers
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    ch = _char(croot, "Seraphine")
+    real_read = dossiers.read
+
+    def boom(*a, **k):
+        raise OSError("permission denied")
+
+    dossiers.read = boom
+    try:
+        applied, failures = absorb.apply_edits(cid, [
+            {"id": f"dossier:{ch}", "kind": "dossier",
+             "target": {"kind": "characters", "id": ch}, "field": "dossier",
+             "before": "", "after": "Seraphine is loyal."}])
+    finally:
+        dossiers.read = real_read
+    assert applied == []
+    assert [(f["id"], f["kind"]) for f in failures] == [(f"dossier:{ch}", "error")]
+    assert "permission denied" in failures[0]["reason"]
+
+
 def test_a_stale_dossier_is_reported_as_a_conflict(monkeypatch, tmp_path):
     """Skipping the stale write is right; skipping it silently is not -- the
     reviewer approved that dossier and would otherwise be told the save
