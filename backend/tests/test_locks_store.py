@@ -12,7 +12,8 @@ import threading
 
 import pytest
 
-from grimoire.store import audit, campaigns, locks, proposals, scenes, sheets, worlds
+from grimoire.store import (audit, campaigns, dice, locks, proposals, rolls, scenes, sheets,
+                            worlds)
 
 
 def _campaign(monkeypatch, tmp_path, name="Run", module="pool-basic"):
@@ -22,12 +23,26 @@ def _campaign(monkeypatch, tmp_path, name="Run", module="pool-basic"):
     return wid, cid
 
 
-def _blocks_while_held(cid, call) -> bool:
-    """True if `call` cannot start while campaign_lock(cid) is held here."""
-    done = []
-    with locks.campaign_lock(cid):
-        t = threading.Thread(target=lambda: (call(), done.append(1)))
+def _blocks_while_held(cid, call, hold=None) -> bool:
+    """True if `call` cannot start while `hold` (default campaign_lock(cid)) is
+    held here.
+
+    The worker signals `started` immediately before invoking `call`, and we
+    wait for that signal *before* starting the clock. Without it, "the worker
+    didn't finish in 300ms" is also what a worker that never got scheduled
+    looks like, and the test would pass against a lock-free implementation
+    (Codex review, #255)."""
+    done, started = [], threading.Event()
+
+    def worker():
+        started.set()
+        call()
+        done.append(1)
+
+    with (hold or locks.campaign_lock(cid)):
+        t = threading.Thread(target=worker)
         t.start()
+        assert started.wait(timeout=5), "the worker thread never ran"
         t.join(timeout=0.3)
         blocked = not done
     t.join(timeout=5)
@@ -189,10 +204,68 @@ def test_a_campaign_lock_holder_can_still_write_a_scene(monkeypatch, tmp_path):
     assert len(scenes.read_scene(cid, sid)["messages"]) == 1
 
 
+def test_roll_writes_serialize_on_the_campaign_lock(monkeypatch, tmp_path):
+    """The roll log joined the domain in #255. Before that it ran a private
+    registry, so a module-pack swap holding every campaign lock did NOT
+    exclude a roll append even though it excluded the proposal that roll is
+    tagged with -- two lock domains over the same cid."""
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+    assert _blocks_while_held(
+        cid, lambda: rolls.append(cid, "s1", "Perception", dice.roll("2d6", seed=1)))
+
+
+def test_roll_append_and_proposal_transition_exclude_each_other(monkeypatch, tmp_path):
+    """The coupling the unification is for: a logged roll can carry the id of
+    the proposal it resolved, so a thread mid-proposal-transition must exclude
+    a roll append. Held from the *proposals* side, which is the same lock only
+    while rolls stays in the domain."""
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+    assert _blocks_while_held(
+        cid, lambda: rolls.append(cid, "s1", None, dice.roll("1d6", seed=1)),
+        hold=proposals.locked(cid))
+
+
+def test_rolls_mutators_are_reentrant_under_a_held_campaign_lock(monkeypatch, tmp_path):
+    """``routes.streaming._project_resolution`` appends inside
+    ``proposals.locked``. That nesting is only safe because the shared lock is
+    an RLock -- swap it for a plain Lock and the whole projection sequence
+    self-deadlocks.
+
+    Run in a worker thread so that regression fails this test in one second
+    instead of hanging the suite forever (Codex review, #255)."""
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+    done = []
+
+    def nested():
+        with locks.campaign_lock(cid):          # the outer span (projection)
+            entry = rolls.find_or_append_by_proposal(
+                cid, "s1", "check", dice.roll("1d6", seed=1), "pr-x")
+            rolls.repoint_scenes(cid, {"s1": "s2"})
+            done.append(entry)
+
+    t = threading.Thread(target=nested, daemon=True)
+    t.start()
+    t.join(timeout=10)
+    assert done, "a rolls mutator deadlocked under an already-held campaign lock"
+    assert done[0]["id"] == "r1"
+    assert rolls.read(cid)[0]["scene"] == "s2"
+
+
 # ---- placement: the registry lives here and nowhere else (#245) ----
 
 
-@pytest.mark.parametrize("mod", [sheets, proposals, audit, scenes])
+def test_rolls_has_no_private_lock_registry():
+    """#255: `rolls` was the last campaign-scoped mutator running its own
+    `_LOCKS`/`_LOCKS_GUARD`. Reintroducing one would leave every rolls test
+    passing while quietly leaving the shared domain again -- and locks.py's
+    roster, which is how a reader discovers the domain, would go stale with
+    no way to detect it from locks.py alone."""
+    assert not hasattr(rolls, "_LOCKS")
+    assert not hasattr(rolls, "_LOCKS_GUARD")
+    assert not hasattr(rolls, "_lock")
+
+
+@pytest.mark.parametrize("mod", [sheets, proposals, audit, scenes, rolls])
 def test_borrowers_neither_re_export_nor_re_implement_the_registry(mod):
     """The lock domain is discoverable from store/locks.py only if no module
     re-exports or re-implements it: `sheets.lock_for()` was the old name and
