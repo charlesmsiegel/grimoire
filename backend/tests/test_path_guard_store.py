@@ -7,6 +7,8 @@ instead. Anything that isn't an HTTP path parameter -- a request body field, a
 CLI script, a batch importer -- got no protection at all.
 """
 
+import re
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -260,3 +262,69 @@ def test_scene_rename_route_answers_404_for_an_unsafe_campaign_id(monkeypatch, t
     client = TestClient(create_app())
     r = client.put("/api/campaigns/C:evil/scenes/s1", json={"title": "New"})
     assert r.status_code == 404
+
+
+# ---- round 4 of the review
+
+def test_a_campaign_whose_stored_world_id_is_unusable_reads_no_world_records(
+        monkeypatch, tmp_path):
+    """A corrupt `world` value is as good as no world, not a crash.
+
+    A restored or hand-edited campaign can carry a `world` the guard refuses
+    to resolve. A missing world directory and an empty `world` both already
+    mean "inherits nothing"; an unusable id has to land in the same place,
+    or every overlay and sync route 500s on that campaign.
+    """
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    entities.create_entity(worlds.world_root(wid), "lore", "Salt Pact", "the pact")
+    cid = campaigns.create_campaign("Saltmarch", wid)
+    for broken in ("C:evil", "../realm", "..", "a/b"):
+        mp = campaigns.campaign_meta_path(cid)
+        meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
+        meta["world"] = broken
+        mp.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+        assert not campaigns.world_root_of(cid).exists()
+        assert overlay.list_entities(cid, "lore") == []
+        assert sync.incoming(cid) == []
+
+
+# Every guarded resolver is reached through some path builder, and each new
+# one has been found the same way: a reviewer noticing a handler that catches
+# only its own domain error. This sweeps the whole router instead -- an
+# unsafe id must never reach a handler as an unhandled exception, whatever
+# route carries it.
+_FILL = {"sid": "s1", "rid": "r1", "gid": "g1", "eid": "e1", "kind": "locations",
+         "vid": "default", "mid": "pool-basic", "name": "avatar", "pid": "p1",
+         "tid": "t1", "char": "c1", "aid": "a1", "version": "default",
+         "actor_id": "a1", "id": "x1", "content_id": "c1", "nonce": "n1",
+         "preset_id": "p1", "style_id": "s1", "key": "k1", "kid": "k1",
+         "slot": "avatar", "tag": "t1", "provider": "gregorian", "who": "a1",
+         "storage_key": "k1", "span_id": "sp1", "index": "0"}
+
+
+def _id_routes():
+    from grimoire.routes import router
+    out = []
+    for route in router.routes:
+        path = "/api" + getattr(route, "path", "")
+        params = set(re.findall(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}", path))
+        if not ({"cid", "wid"} & params):
+            continue
+        unfilled = params - set(_FILL) - {"cid", "wid"}
+        for method in sorted((getattr(route, "methods", set()) or set())
+                             & {"GET", "DELETE", "POST", "PUT", "PATCH"}):
+            out.append(pytest.param(method, path, sorted(unfilled),
+                                    id=f"{method}-{path}"))
+    return out
+
+
+@pytest.mark.parametrize("method,path,unfilled", _id_routes())
+def test_no_route_500s_on_an_unsafe_id(monkeypatch, tmp_path, method, path, unfilled):
+    assert not unfilled, f"add {unfilled} to _FILL so this route is actually exercised"
+    home(monkeypatch, tmp_path)
+    url = path.replace("{cid}", "C:evil").replace("{wid}", "C:evil")
+    for name, value in _FILL.items():
+        url = url.replace("{" + name + "}", value)
+    client = TestClient(create_app(), raise_server_exceptions=False)
+    assert client.request(method, url, json={}).status_code != 500
