@@ -558,7 +558,10 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       const res = await api.saveChronicle(cid, activeId, {
         one_line: absorb.one_line, summary: absorb.summary, keywords: absorb.keywords,
         timeline_events: absorb.timeline_events,
-        edits: editRows.filter((e) => e.approved).map(({ approved, ...e }) => e) });
+        edits: editRows.filter((e) => e.approved).map(({ approved, ...e }) => e),
+        // Same token on every attempt, so the retry below cannot commit twice
+        // when the first PUT landed and only its response was lost (#235).
+        commit_token: absorb.commit_token });
       setEditFailures(res.failures.map((f) => ({ ...f, label: labels.get(f.id) ?? f.id })));
       setAbsorb(null);
       setEditRows([]);

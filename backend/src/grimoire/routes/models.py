@@ -371,6 +371,9 @@ class ChronicleSave(BaseModel):
     keywords: list[str] = []
     timeline_events: list[dict] = []
     edits: list[dict] = []
+    # Idempotency key minted by POST /absorb (#235). Optional: a body without
+    # one simply opts out of the replay guard.
+    commit_token: str = ""
 
 
 class ChatTurn(BaseModel):
