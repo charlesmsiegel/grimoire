@@ -379,11 +379,16 @@ async def _stage_dossiers(cid: str, sid: str, transcript: str, client: LLMClient
     return edits, {**out, "status": "ok"}
 
 
-def _already_absorbed(cid: str, sid: str) -> bool:
-    try:
-        return sid in store.chronicle.read_chronicle(cid)
-    except Exception:  # noqa: BLE001 — a garbled chronicle can't prove a prior absorb
-        return False
+def _already_absorbed(scene: dict) -> bool:
+    """Whether THIS scene was absorbed, read from its own frontmatter.
+
+    Deliberately not `sid in chronicle`: scene numbers are derived from the files
+    on disk and `delete_scene` leaves the chronicle entry behind, so deleting the
+    highest-numbered absorbed scene and remaking it under the same title hands the
+    new scene the same id. A chronicle lookup would then refuse to absorb a
+    brand-new scene. `done` is written only by mark_absorbed, into the scene file
+    itself, so a recycled id starts clean."""
+    return str(scene.get("meta", {}).get("done", "")).lower() == "true"
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/absorb")
@@ -396,7 +401,7 @@ async def post_absorb(cid: str, sid: str, force: bool = False,
     # Absorb is not idempotent: lore edits append and plot movements add a beat,
     # so a second pass over the same scene duplicates both. Refuse by default
     # (before spending a token) and make the re-run an explicit choice (#235).
-    if _already_absorbed(cid, sid) and not force:
+    if _already_absorbed(scene) and not force:
         raise HTTPException(
             status_code=409,
             detail={"detail": "this scene has already been absorbed", "kind": "already_absorbed"})

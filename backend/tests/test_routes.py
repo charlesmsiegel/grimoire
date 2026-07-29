@@ -2421,6 +2421,24 @@ def test_re_absorbing_an_absorbed_scene_is_409(client):
     assert fake.calls == 0                       # refused before spending a token
 
 
+def test_a_recycled_scene_id_does_not_read_as_absorbed(client):
+    """Scene numbers come from the files on disk and `delete_scene` leaves the
+    chronicle entry behind, so deleting the highest-numbered absorbed scene and
+    remaking it under the same title hands the new scene the SAME id. Keying the
+    guard off the chronicle would refuse to absorb a brand-new scene; the scene's
+    own `done` flag can't be inherited that way."""
+    cid, sid = _absorbed_scene(client)
+    assert client.delete(f"/api/campaigns/{cid}/scenes/{sid}").status_code in (200, 204)
+    new_sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    assert new_sid == sid                        # the id really was recycled
+    assert sid in store.chronicle.read_chronicle(cid)   # ...and the stale record survived
+    store.scenes.append_message(cid, new_sid, "user", "A different night entirely.")
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
+        '{"one_line": "Fresh.", "summary": "s", "keywords": [], "timeline_events": []}')
+    r = client.post(f"/api/campaigns/{cid}/scenes/{new_sid}/absorb")
+    assert r.status_code == 200 and r.json()["one_line"] == "Fresh."
+
+
 def test_re_absorbing_with_force_runs(client):
     cid, sid = _absorbed_scene(client)
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(

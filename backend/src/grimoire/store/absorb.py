@@ -612,6 +612,15 @@ def apply_edits(cid: str, edits: list[dict],
                 if target.get("kind") != "characters":
                     continue
                 characters.read_character(overlay.char_root(cid, target["id"]), target["id"])
+                # Staging the dossier (#235) moved the write from absorb time to
+                # save time, so the write order is now the SAVE order and can
+                # invert the absorb order: two reviews open on the same NPC, the
+                # newer saved first, and this one would overwrite it with
+                # earlier-scene state. The staged `before` dates the proposal --
+                # if it no longer matches, a newer dossier already landed and
+                # this one is stale. (Replaying one save twice lands here too.)
+                if dossiers.read(croot, target["id"]) != e.get("before", ""):
+                    continue
                 dossiers.write(croot, target["id"], after)
             elif kind == "lore":
                 overlay.update_entity(cid, target["kind"], target["id"], body=after)
