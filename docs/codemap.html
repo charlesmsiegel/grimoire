@@ -148,7 +148,7 @@ footer.doc{max-width:1280px;margin:0 auto;padding:0 28px 34px;color:var(--text-f
   <div class="doc-label">CODEBASE ATLAS</div>
   <h1 class="doc-title">grimoire — Codebase Atlas</h1>
   <p class="doc-sub">Local-first solo-RPG toolkit: FastAPI + React over a markdown/JSON store, with an LLM as game master</p>
-  <div class="doc-meta">generated 2026-07-29 · 874406c · 411 files, 78,651 LOC (docs/ excluded)</div>
+  <div class="doc-meta">generated 2026-07-29 · 4e471a0 · 411 files, 78,651 LOC (docs/ excluded) · hotspots from 50 commits, see Overview</div>
 </header>
 <nav class="tabs" role="tablist"><button role="tab" data-tab="overview" aria-selected="true" aria-controls="overview">Overview</button>
 <button role="tab" data-tab="inventory" aria-selected="false" aria-controls="inventory">Inventory</button>
@@ -247,7 +247,7 @@ flowchart TD
 <p><code>docs/</code> was excluded from all automated analysis. It holds 17 previously generated HTML reports which cite source paths in prose; parsed as code they contributed 328 phantom "runtime load" edges and ranked a report as the codebase's top fan-out file. Excluding them drops the measured tree from 178.6k to 78.6k LOC — the difference is documentation and generated artifacts, not code.</p>
 <p><b>No Coverage tab.</b> No coverage artifact (<i>coverage.xml</i>, <i>lcov.info</i>, <i>coverage.out</i>) exists in the tree, and this skill does not run test suites to manufacture one. The 51% test-LOC share below is a size ratio, not a coverage measurement — it says the suite is large, not that it reaches any particular line.</p>
 <p><b>No LLM Ops tab.</b> The automated detector found zero call sites and zero prompt files, which is wrong: it recognizes vendor SDK method names, and grimoire calls providers through its own <code>httpx</code> clients behind <code>backend/src/grimoire/llm.py</code> while keeping prompts in 57 <code>.j2</code> templates. Rather than ship a tab reading "0 prompt files" for a prompt-driven application, that material is covered in Critical Flows and Invariants. The detector did find seven model ids in one frontend picker list (<code>frontend/src/components/ConnectionEditor.tsx:19-25</code>), but that is not the full inventory: the backend carries its own <code>DEFAULT_MODEL</code> (<code>backend/src/grimoire/store/config.py:11</code>), used as the fallback when a legacy connection is migrated (<code>backend/src/grimoire/store/llm_connections.py:206</code>). Auditing model selection means reading both.</p>
-<p><b>Hotspots are computed over 50 commits</b> — the clone is shallow, so churn counts compress into a 3–11 range and separate signal poorly. Treat the branch-count and size columns there as the reliable ones.</p>
+<p><b>The Hotspots tab is weaker in this edition than in the last one, and this is the caveat to carry away from it.</b> It was generated from a shallow clone holding 50 commits; the previous atlas had 2,371. Churn values collapse from a 42–77 range into 3–11, which is too narrow to rank on. The visible consequence is that the reported top hotspot changed from <code>frontend/src/routes/CampaignView.tsx</code> to <code>backend/src/grimoire/store/module_edit.py</code> — <b>that change is an artifact of the truncated window, not evidence that the hotspot moved.</b> Size and branch-count columns are unaffected and remain trustworthy; the churn column and anything derived from it should be regenerated from a full clone before being acted on.</p>
 </div></details>
 
 </section>
