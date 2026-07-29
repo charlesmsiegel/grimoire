@@ -223,6 +223,20 @@ def test_repeated_timeouts_leak_no_descriptors(tmp_path):
         p.wait(timeout=10)
 
 
+def test_inode_mismatch_retries_respect_the_deadline_and_leak_nothing(
+        tmp_path, monkeypatch):
+    """A file replaced under us must not make a NO_WAIT acquire spin forever,
+    and each discarded attempt must close its descriptor."""
+    lock = proclock.lock_path(tmp_path, "mismatch")
+    monkeypatch.setattr(proclock, "_same_file", lambda fd, path: False)
+    before = _open_fds()
+    started = time.monotonic()
+    assert proclock.acquire(lock, proclock.NO_WAIT) is None
+    assert time.monotonic() - started < 1.0, "NO_WAIT spun on the mismatch path"
+    assert proclock.acquire(lock, time.monotonic() + 0.3) is None
+    assert _open_fds() - before < 5, "mismatch retries leaked descriptors"
+
+
 def _open_fds() -> int:
     """Live handle/descriptor count for this process."""
     if sys.platform == "win32":
@@ -386,11 +400,24 @@ def _unlock(fd: int) -> None:
 
 
 def _same_file(fd: int, path: Path) -> bool:
+    """Is the fd we locked still the file at `path`?
+
+    Only ENOENT counts as a mismatch (the name is gone, so it certainly is not
+    our inode). Every other stat failure propagates, per the same rule that
+    keeps permanent errors out of the contention path.
+    """
     try:
-        held, named = os.fstat(fd), os.stat(str(path))
-    except OSError:
+        named = os.stat(str(path))
+    except FileNotFoundError:
         return False
+    held = os.fstat(fd)
     return (held.st_dev, held.st_ino) == (named.st_dev, named.st_ino)
+
+
+def _expired(deadline) -> bool:
+    if deadline is NO_WAIT:
+        return True
+    return deadline is not None and deadline - time.monotonic() <= 0
 
 
 def acquire(path: Path, deadline) -> int | None:
@@ -413,17 +440,19 @@ def acquire(path: Path, deadline) -> int | None:
             # chosen directory is not one anything cleans -- and not a proof:
             # an unlink between this check and the return is still possible.
             release(fd)
+            # Retrying must still respect the caller's deadline: a file being
+            # replaced repeatedly would otherwise make a NO_WAIT or expired
+            # acquisition spin forever.
+            if _expired(deadline):
+                return None
             continue
         os.close(fd)
-        if deadline is NO_WAIT:
+        if _expired(deadline):
             return None
-        if deadline is not None:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return None
-            time.sleep(min(_RETRY_DELAY, remaining))
-        else:
+        if deadline is None:
             time.sleep(_RETRY_DELAY)
+        else:
+            time.sleep(min(_RETRY_DELAY, deadline - time.monotonic()))
 
 
 def release(fd: int) -> None:
@@ -452,17 +481,246 @@ git commit -m "Add proclock: the OS advisory file lock primitive (#234)"
 
 ---
 
-### Task 2: `locks.py` — the hybrid `_ProcessScopedLock`
+### Task 2: `hold_all()` and the sorted-order rule — *before* anything goes cross-process
 
 **Files:**
-- Modify: `backend/src/grimoire/store/locks.py` (whole file)
+- Modify: `backend/src/grimoire/store/locks.py` (add `StoreBusy`, `LOCK_TIMEOUT`, `hold_all`)
+- Modify: `backend/src/grimoire/store/module_edit.py:504-512` (`_campaign_locks`)
+- Modify: `backend/src/grimoire/routes.py:1034-1037` (`put_world_module`)
 - Test: `backend/tests/test_locks_store.py` (append)
 
+**Ordering is load-bearing, and this task exists because of it.** `module_edit._campaign_locks()` acquires every campaign lock in `list_campaigns()` order while `put_world_module` uses **sorted** order. In-process the global `_M` masks that inversion. The moment the locks become cross-process it is a real deadlock — so the ordering must be fixed **before** Task 3 flips the switch, not after. Doing it the other way round leaves a commit whose tree contains exactly the bug the spec is about.
+
+This task changes no locking behaviour: `campaign_lock` is still a plain `threading.RLock` when it lands.
+
 **Interfaces:**
-- Consumes: `proclock.acquire/release/lock_path/NO_WAIT` (Task 1); `paths.home()`.
+- Consumes: nothing from Task 1 yet.
 - Produces:
   - `LOCK_TIMEOUT: float = 30.0`
   - `StoreBusy(Exception)` with `.name`; subclasses `CampaignBusy`, `ModuleEditBusy`
+  - `hold_all(cids)` — context manager, sorted order, one deadline
+
+- [ ] **Step 1: Write the failing tests**
+
+Append to `backend/tests/test_locks_store.py`:
+
+```python
+def test_hold_all_acquires_in_sorted_order(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    order = []
+    real = locks.campaign_lock
+
+    def spy(cid):
+        order.append(cid)
+        return real(cid)
+
+    monkeypatch.setattr(locks, "campaign_lock", spy)
+    with locks.hold_all(["zeta", "alpha", "mid"]):
+        pass
+    assert order == ["alpha", "mid", "zeta"]
+
+
+def test_hold_all_holds_every_named_lock(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    with locks.hold_all(["a", "b", "c"]):
+        assert all(locks.campaign_lock(c)._is_owned() for c in ("a", "b", "c"))
+    assert not any(locks.campaign_lock(c)._is_owned() for c in ("a", "b", "c"))
+
+
+def test_hold_all_keeps_unwinding_when_one_release_raises(monkeypatch, tmp_path):
+    """A plain `for lock in reversed(held): lock.release()` strands every
+    remaining lock when one raises. ExitStack does not."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    first = locks.campaign_lock("aaa")
+    real_release = first.release
+    calls = []
+
+    def angry():
+        calls.append("aaa")
+        real_release()
+        raise OSError("release exploded")
+
+    monkeypatch.setattr(first, "release", angry)
+    with pytest.raises(OSError):
+        with locks.hold_all(["aaa", "bbb"]):
+            pass
+    assert calls == ["aaa"]
+    assert locks.campaign_lock("bbb").acquire(timeout=5), "bbb was stranded"
+    locks.campaign_lock("bbb").release()
+
+
+def test_module_edit_acquires_campaign_locks_in_sorted_order(monkeypatch, tmp_path):
+    """Behavioural, not a source grep: spy on the registry and assert the ORDER
+    module_edit actually asks for. A source assertion would pass on a docstring
+    mention and would not catch an alias."""
+    from grimoire.store import module_edit
+
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Realm")
+    for name in ("Zulu", "Alpha", "Mike"):
+        campaigns.create_campaign(name, wid, module="pool-basic")
+
+    order = []
+    real = locks.campaign_lock
+    monkeypatch.setattr(locks, "campaign_lock",
+                        lambda c: (order.append(c), real(c))[1])
+    with module_edit._campaign_locks():
+        pass
+    assert order == sorted(order), f"unsorted acquisition: {order}"
+    assert len(order) == 3
+
+
+def test_world_module_rebind_acquires_in_sorted_order(monkeypatch, tmp_path):
+    """Same guarantee for the other multi-lock holder, through the real route."""
+    from fastapi.testclient import TestClient
+
+    from grimoire import main
+
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Realm")
+    for name in ("Zulu", "Alpha", "Mike"):
+        campaigns.create_campaign(name, wid, module="pool-basic")
+
+    order = []
+    real = locks.campaign_lock
+    monkeypatch.setattr(locks, "campaign_lock",
+                        lambda c: (order.append(c), real(c))[1])
+    client = TestClient(main.create_app())
+    r = client.put(f"/api/worlds/{wid}/module", json={"module": "pool-basic"})
+    assert r.status_code == 200, r.text
+    assert order == sorted(order), f"unsorted acquisition: {order}"
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `PYTHONPATH="$PWD/backend/src" ../../backend/.venv/Scripts/python.exe -m pytest backend/tests/test_locks_store.py -q`
+Expected: FAIL — `AttributeError: module 'grimoire.store.locks' has no attribute 'hold_all'`
+
+- [ ] **Step 3: Add `StoreBusy`, `LOCK_TIMEOUT` and `hold_all` to `locks.py`**
+
+Add to the imports: `import time` and `from contextlib import ExitStack, contextmanager`. Then append to the module:
+
+```python
+# Longer than any legitimate hold, but bounded so a cross-process lock-order
+# inversion surfaces as a 409 naming the campaign rather than a wedged server.
+# Not a proof: a module migration over a large library on a synced or removable
+# filesystem can still exceed it, and its waiter then gets a retryable 409.
+LOCK_TIMEOUT = 30.0
+
+
+class StoreBusy(Exception):
+    """Another *process* holds a store lock. One handler maps this to HTTP 409."""
+
+    def __init__(self, name: str, what: str = "resource"):
+        super().__init__(f"another grimoire process is editing this {what}")
+        self.name = name
+
+
+class CampaignBusy(StoreBusy):
+    def __init__(self, cid: str):
+        super().__init__(cid, "campaign")
+
+
+class ModuleEditBusy(StoreBusy):
+    def __init__(self, name: str = "module-edit"):
+        super().__init__(name, "module library")
+
+
+def _remaining(deadline) -> float:
+    """RLock treats -1 as "no timeout" and rejects every other negative, so a
+    computed remainder must be clamped rather than passed through."""
+    if deadline is None:
+        return -1
+    return max(0.0, deadline - time.monotonic())
+
+
+@contextmanager
+def hold_all(cids):
+    """Hold every named campaign lock, in sorted order, under ONE deadline.
+
+    Sorted because that is what keeps two multi-campaign holders in different
+    processes from deadlocking once these locks are cross-process (#234). One
+    deadline because applying LOCK_TIMEOUT per lock would give an N x
+    LOCK_TIMEOUT convoy.
+
+    ``ExitStack`` rather than a hand-rolled reversed loop: it registers each
+    lock the instant it is acquired, and it runs EVERY registered exit even
+    when one of them raises. ``for lock in reversed(held): lock.release()``
+    strands every remaining lock the moment one release fails.
+    """
+    deadline = time.monotonic() + LOCK_TIMEOUT
+    with ExitStack() as stack:
+        for cid in sorted(set(cids)):
+            lock = campaign_lock(cid)
+            if not lock.acquire(timeout=_remaining(deadline)):
+                raise CampaignBusy(cid)
+            stack.push(lock)
+        yield
+```
+
+- [ ] **Step 4: Migrate `module_edit._campaign_locks`**
+
+```python
+@contextmanager
+def _campaign_locks():
+    """Every campaign's lock: the User-edit vs LLM-play exclusion.
+
+    Sorted order is mandatory, not cosmetic: this and the world-module rebind
+    route are the only multi-lock holders, and two of them in different
+    processes acquiring the same campaigns in opposite orders deadlock. The
+    global _M used to mask that; once these locks are cross-process it cannot.
+
+    Known limit, pre-existing: the enumeration is a snapshot, so a campaign
+    another process creates afterwards is not covered, and campaign deletion
+    takes no lock at all.
+    """
+    with locks.hold_all(c["id"] for c in campaigns.list_campaigns()):
+        yield
+```
+
+`_campaign_locks` was `ExitStack`'s only use in `module_edit.py` (verified: two hits, the import at line 22 and this function). Change line 22 to `from contextlib import contextmanager`.
+
+- [ ] **Step 5: Migrate `put_world_module`**
+
+In `routes.py`, replace:
+
+```python
+        with contextlib.ExitStack() as stack:
+            for c in all_cids:                   # sole multi-lock holder; sorted order
+                stack.enter_context(store.locks.campaign_lock(c))
+```
+
+with:
+
+```python
+        with store.locks.hold_all(all_cids):     # sorted order; see locks.hold_all
+```
+
+and dedent the block's body one level. Keep `all_cids` and the comment above it — the re-read-under-the-lock reasoning is unchanged.
+
+- [ ] **Step 6: Run the suite**
+
+Run: `PYTHONPATH="$PWD/backend/src" ../../backend/.venv/Scripts/python.exe -m pytest backend -q`
+Expected: PASS. `test_module_edit_holds_every_campaign_lock_from_this_registry` asserts `"locks.campaign_lock("` appears in `_campaign_locks`; it will now fail. **Update it** to assert `"locks.hold_all("` — its intent (the multi-holder uses this registry, not a private one) is preserved, and the two new order tests above cover the behaviour a source grep cannot.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add backend/src/grimoire/store/locks.py backend/src/grimoire/store/module_edit.py backend/src/grimoire/routes.py backend/tests/test_locks_store.py
+git commit -m "Add hold_all and fix the multi-campaign lock ordering (#234)"
+```
+
+---
+
+### Task 3: `locks.py` — the hybrid `_ProcessScopedLock`
+
+**Files:**
+- Modify: `backend/src/grimoire/store/locks.py`
+- Test: `backend/tests/test_locks_store.py` (append)
+
+**Interfaces:**
+- Consumes: `proclock.acquire/release/lock_path/NO_WAIT` (Task 1); `paths.home()`; `StoreBusy`/`hold_all` (Task 2).
+- Produces:
   - `campaign_lock(cid) -> _ProcessScopedLock` (unchanged signature)
   - `module_edit_lock() -> _ProcessScopedLock`
 
@@ -571,15 +829,24 @@ def test_reentrancy_takes_the_file_lock_exactly_once(monkeypatch, tmp_path):
 
 
 def test_a_second_process_cannot_hold_the_module_edit_lock(monkeypatch, tmp_path):
-    """The second stated goal of #234. Round-1 review: without this test the
-    module-edit lock could be entirely process-local and every other test
-    would still pass."""
+    """DEFER THIS TEST TO TASK 4 -- it must stay red until `_M` is rewired.
+    It is written here so the two module-edit changes read together.
+
+    The second stated goal of #234.
+
+    Note what this asserts on: ``module_edit._M``, the lock the code actually
+    takes -- NOT ``locks.module_edit_lock()``. Testing the new lock against
+    itself would pass before Task 4 rewires ``_M``, so ``_M`` could stay a
+    private process-local RLock and every test would still be green.
+    """
+    from grimoire.store import module_edit
+
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     p = _hold_in_child(tmp_path, "module_edit_lock()")
     try:
         monkeypatch.setattr(locks, "LOCK_TIMEOUT", 0.5)
         with pytest.raises(locks.ModuleEditBusy):
-            with locks.module_edit_lock():
+            with module_edit._M:            # the lock module_edit really uses
                 pass
     finally:
         p.kill()
@@ -665,41 +932,34 @@ def test_an_exception_inside_the_block_releases_both_layers(monkeypatch, tmp_pat
     lock.release()
 
 
-def test_a_failing_unlock_still_closes_and_releases(monkeypatch, tmp_path):
+def test_a_failing_unlock_still_closes_the_fd_and_releases(monkeypatch, tmp_path):
+    """Inject the failure at the UNLOCK, not at proclock.release: the spec's
+    requirement is that release() closes the descriptor even when the unlock
+    call itself raises. Stubbing release() to succeed-then-raise would test
+    something else entirely."""
     _wid, cid = _campaign(monkeypatch, tmp_path)
     lock = locks.campaign_lock(cid)
-    closed = []
-    real = locks.proclock.release
+    fds = []
+    real_open = locks.proclock.acquire
 
-    def bad(fd):
-        closed.append(fd)
-        real(fd)
-        raise OSError("unlock failed")
+    def spy(path, deadline):
+        fd = real_open(path, deadline)
+        fds.append(fd)
+        return fd
 
-    monkeypatch.setattr(locks.proclock, "release", bad)
+    monkeypatch.setattr(locks.proclock, "acquire", spy)
+    monkeypatch.setattr(locks.proclock, "_unlock",
+                        lambda fd: (_ for _ in ()).throw(OSError("unlock failed")))
     with pytest.raises(OSError):
         with lock:
             pass
-    assert closed, "release was attempted"
+    assert fds, "the lock was taken"
+    with pytest.raises(OSError):        # EBADF: the fd really was closed
+        os.fstat(fds[0])
     assert not lock._is_owned(), "the thread lock was freed anyway"
 
 
-# ---- hold_all ----
-
-
-def test_hold_all_acquires_in_sorted_order(monkeypatch, tmp_path):
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    order = []
-    real = locks.campaign_lock
-
-    def spy(cid):
-        order.append(cid)
-        return real(cid)
-
-    monkeypatch.setattr(locks, "campaign_lock", spy)
-    with locks.hold_all(["zeta", "alpha", "mid"]):
-        pass
-    assert order == ["alpha", "mid", "zeta"]
+# ---- hold_all, cross-process ----
 
 
 def test_hold_all_unwinds_everything_when_a_later_lock_is_busy(monkeypatch, tmp_path):
@@ -716,28 +976,6 @@ def test_hold_all_unwinds_everything_when_a_later_lock_is_busy(monkeypatch, tmp_
     finally:
         p.kill()
         p.wait(timeout=10)
-
-
-def test_hold_all_keeps_unwinding_when_one_release_raises(monkeypatch, tmp_path):
-    """A plain `for lock in reversed(held): lock.release()` strands every
-    remaining lock when one raises. ExitStack does not."""
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    first = locks.campaign_lock("aaa")
-    real_release = first.release
-    calls = []
-
-    def angry():
-        calls.append("aaa")
-        real_release()
-        raise OSError("release exploded")
-
-    monkeypatch.setattr(first, "release", angry)
-    with pytest.raises(OSError):
-        with locks.hold_all(["aaa", "bbb"]):
-            pass
-    assert calls == ["aaa"]
-    assert locks.campaign_lock("bbb").acquire(timeout=5), "bbb was stranded"
-    locks.campaign_lock("bbb").release()
 
 
 def test_hold_all_is_bounded_by_one_timeout_not_n(monkeypatch, tmp_path):
@@ -836,6 +1074,9 @@ class _ProcessScopedLock:
         return proclock.lock_path(paths.home(), self._name)
 
     def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+        if timeout != -1 and timeout < 0:   # RLock parity: -1 is the only
+            raise ValueError(               # legal negative, not "any negative"
+                "timeout value must be a positive number")
         if not blocking:
             if timeout != -1:
                 raise ValueError("can't specify a timeout for a non-blocking call")
@@ -860,8 +1101,14 @@ class _ProcessScopedLock:
             self._depth = 1
             return True
         except BaseException:
-            if fd is not None:              # locked but never installed: it
-                proclock.release(fd)        # would leak for the process's life
+            # Two cases, and the handler must cover both: the lock was taken
+            # but never installed (local `fd`), or it WAS installed and an
+            # asynchronous exception landed before depth reached 1 (`self._fd`
+            # set with depth 0, which release() would never clean up).
+            if fd is None and self._depth == 0 and self._fd is not None:
+                fd, self._fd = self._fd, None
+            if fd is not None:
+                proclock.release(fd)        # else it leaks for the process's life
             self._rlock.release()           # never strand the thread lock
             raise
 
@@ -959,94 +1206,6 @@ Expected: PASS, including every pre-existing test. If `test_campaign_lock_is_sta
 ```bash
 git add backend/src/grimoire/store/locks.py backend/tests/test_locks_store.py
 git commit -m "Make campaign_lock cross-process; add hold_all and StoreBusy (#234)"
-```
-
----
-
-### Task 3: Route both multi-lock holders through `hold_all()`
-
-**Files:**
-- Modify: `backend/src/grimoire/store/module_edit.py:504-512` (`_campaign_locks`)
-- Modify: `backend/src/grimoire/routes.py:1034-1037` (world-module rebind)
-- Test: `backend/tests/test_locks_store.py` (append)
-
-**Interfaces:**
-- Consumes: `locks.hold_all(cids)` (Task 2).
-- Produces: nothing new.
-
-- [ ] **Step 1: Write the failing test**
-
-Append to `backend/tests/test_locks_store.py`:
-
-```python
-def test_both_multi_lock_holders_delegate_to_hold_all():
-    """The deadlock this fix would otherwise CREATE: module_edit acquired in
-    list_campaigns() order while the rebind route used sorted order. In-process
-    the global _M masked the inversion; across processes it does not."""
-    from grimoire import routes
-    from grimoire.store import module_edit
-    assert "hold_all(" in inspect.getsource(module_edit._campaign_locks)
-    assert "hold_all(" in inspect.getsource(routes.put_world_module)
-    assert "campaign_lock(" not in inspect.getsource(routes.put_world_module)
-```
-
-(`put_world_module` is the rebind route at `routes.py:1021`; verified.)
-
-- [ ] **Step 2: Run it to verify it fails**
-
-Run: `... -m pytest backend/tests/test_locks_store.py::test_both_multi_lock_holders_delegate_to_hold_all -q`
-Expected: FAIL — `assert 'hold_all(' in ...`
-
-- [ ] **Step 3: Rewrite `module_edit._campaign_locks`**
-
-```python
-@contextmanager
-def _campaign_locks():
-    """Every campaign's lock: the User-edit vs LLM-play exclusion.
-
-    Sorted order is mandatory, not cosmetic: this and the world-module rebind
-    route are the only multi-lock holders, and two of them in different
-    processes acquiring the same campaigns in opposite orders deadlock. The
-    global _M used to mask that; across processes it masks nothing.
-
-    Known limit, pre-existing: the enumeration is a snapshot, so a campaign
-    another process creates afterwards is not covered, and campaign deletion
-    takes no lock at all.
-    """
-    with locks.hold_all(c["id"] for c in campaigns.list_campaigns()):
-        yield
-```
-
-`_campaign_locks` was `ExitStack`'s only use in `module_edit.py` (verified: two hits, the import at line 22 and this function). Change line 22 to `from contextlib import contextmanager`.
-
-- [ ] **Step 4: Rewrite the rebind route's lock block**
-
-In `routes.py`, replace:
-
-```python
-        with contextlib.ExitStack() as stack:
-            for c in all_cids:                   # sole multi-lock holder; sorted order
-                stack.enter_context(store.locks.campaign_lock(c))
-```
-
-with:
-
-```python
-        with store.locks.hold_all(all_cids):     # sorted order; see locks.hold_all
-```
-
-and dedent the block's body one level. Keep `all_cids` and the comment above it intact — the re-read-under-the-lock reasoning is still correct.
-
-- [ ] **Step 5: Run the tests**
-
-Run: `PYTHONPATH="$PWD/backend/src" ../../backend/.venv/Scripts/python.exe -m pytest backend -q`
-Expected: PASS. `test_module_edit_holds_every_campaign_lock_from_this_registry` asserts `"locks.campaign_lock("` appears in `_campaign_locks` — it will now fail. **Update that test** to assert `"locks.hold_all("` instead; its intent (the multi-holder uses this registry, not a private one) is preserved.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add backend/src/grimoire/store/module_edit.py backend/src/grimoire/routes.py backend/tests/test_locks_store.py
-git commit -m "Route both multi-campaign holders through locks.hold_all (#234)"
 ```
 
 ---
@@ -1262,7 +1421,12 @@ def test_concurrent_scene_creation_yields_distinct_ids(monkeypatch, tmp_path):
     got, guard = [], threading.Lock()
 
     def make(i):
-        sid = scenes.create_scene(cid, f"Scene {i}")
+        # The SAME title for every thread. Distinct titles produce distinct
+        # slugs, so the ids differ even when every thread picks the same scene
+        # NUMBER -- the test would pass with no lock at all. With one title,
+        # uniquify's check-then-create against the directory is the only thing
+        # separating them, which is exactly what the lock has to protect.
+        sid = scenes.create_scene(cid, "Saltmarch")
         with guard:
             got.append(sid)
 
@@ -1384,24 +1548,66 @@ git commit -m "Lock create_scene's whole body; stop swallowing contention in cap
 
 **Files:**
 - Modify: `backend/src/grimoire/routes.py:3896-3906`
-- Test: `backend/tests/test_locks_http.py` (append)
+- Test: `backend/tests/test_routes.py` (append, beside the existing adjudication tests)
 
 - [ ] **Step 1: Write the failing test**
 
 Append to `backend/tests/test_locks_http.py`:
 
-```python
-def test_adjudication_contention_is_not_reported_as_a_check_error(monkeypatch):
-    """resolve_check takes the campaign lock internally. A busy lock is not a
-    check failure and must not be dressed up as one."""
-    from grimoire import routes
+This is behavioural, not a source grep, and it belongs in `backend/tests/test_routes.py` beside the existing adjudication tests — that file already has the `client` fixture, `_mech_scene()` and `_emit_fence()` needed to drive the route to its `accept` branch (see `test_proposal_accept_walk_and_idempotency` at `test_routes.py:4069`). Append there:
 
-    src = inspect.getsource(routes)
-    marker = "except store.locks.StoreBusy"
-    assert marker in src, "contention must be caught ahead of the broad handler"
+```python
+def test_adjudication_contention_is_a_409_not_a_check_error(client, monkeypatch):
+    """resolve_check takes the campaign lock internally. Contention is not a
+    check failure and must not be dressed up as one -- the broad `except
+    Exception` around resolve_check would otherwise report it as check_error."""
+    cid, sid, _ = _mech_scene(client)
+    _emit_fence(client, cid, sid,
+                '{"check": "brawl", "actor": "characters:mara", "difficulty": 6}')
+    rec = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+
+    def busy(*a, **k):
+        raise store.locks.CampaignBusy(cid)
+
+    monkeypatch.setattr(store.checks, "resolve_check", busy)
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal", json={
+        "proposal": rec["id"], "action": "accept", "check": "brawl",
+        "actor": "characters:mara", "difficulty": 6, "modifier": 0})
+
+    assert resp.status_code == 409, resp.text
+    assert "check_error" not in resp.text
+    # reverted, so the record is adjudicable again rather than stuck
+    after = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert after["status"] == "pending"
+
+
+def test_adjudication_leaves_resolving_when_the_revert_is_also_busy(client, monkeypatch):
+    """If the revert itself contends, the record stays `resolving`. That needs
+    no new machinery: `resolving` is in proposals.NON_TERMINAL, so the next
+    send's supersede() retires it, and until then the route answers 409
+    'adjudication in progress', which is accurate."""
+    cid, sid, _ = _mech_scene(client)
+    _emit_fence(client, cid, sid,
+                '{"check": "brawl", "actor": "characters:mara", "difficulty": 6}')
+    rec = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+
+    def busy(*a, **k):
+        raise store.locks.CampaignBusy(cid)
+
+    monkeypatch.setattr(store.checks, "resolve_check", busy)
+    monkeypatch.setattr(store.proposals, "transition", busy)
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal", json={
+        "proposal": rec["id"], "action": "accept", "check": "brawl",
+        "actor": "characters:mara", "difficulty": 6, "modifier": 0})
+
+    assert resp.status_code == 409, resp.text
+    monkeypatch.undo()
+    after = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert after["status"] == "resolving"
+    assert after["status"] in store.proposals.NON_TERMINAL  # the next send retires it
 ```
 
-This is a source assertion, which is weaker than a behavioural test: it proves the handler exists, not that it works. **Prefer a behavioural test** — check `backend/tests/` for an existing fixture that drives `POST /campaigns/{cid}/scenes/{sid}/roll-proposal` to the `accept` branch (grep for `roll-proposal`), and if one exists, monkeypatch `store.checks.resolve_check` to raise `locks.CampaignBusy` and assert the response is 409 rather than a `check_error` frame. Keep the source assertion only if no such fixture exists.
+`store` is already imported in `test_routes.py`; confirm with `grep -n "^from grimoire import\|^import" backend/tests/test_routes.py | head`.
 
 - [ ] **Step 2: Run to verify failure**
 
@@ -1452,18 +1658,52 @@ git commit -m "Report adjudication contention as 409, not check_error (#234)"
 Append to `backend/tests/test_locks_http.py`:
 
 ```python
-def test_a_busy_finalize_emits_an_error_frame_and_persists_nothing(monkeypatch, tmp_path):
+@pytest.mark.parametrize("lazy", [False, True])
+def test_a_busy_finalize_emits_an_error_frame_and_persists_nothing(
+        monkeypatch, tmp_path, lazy):
     """finalize() runs OUTSIDE _fence_stream's try, so contention there would
     abort the stream with no frame at all. It must NOT route through on_error:
     that persists the narration, which would leave a roll fence with no
     proposal record -- the invariant the proposal-before-narration ordering
-    exists to maintain."""
+    exists to maintain.
+
+    Parameterized over a list-returning and a GENERATOR finalize, because
+    guarding only the call leaves a generator's StoreBusy escaping the `for`.
+    """
+    import anyio
+
     from grimoire import routes
 
-    src = inspect.getsource(routes._fence_stream)
-    assert "StoreBusy" in src, "finalize must be guarded"
-    assert "on_error" not in src.split("for frame in")[-1], \
-        "the busy path must not persist narration via on_error"
+    cid = _campaign(monkeypatch, tmp_path)
+    persisted = []
+    monkeypatch.setattr(routes, "_persist_reply",
+                        lambda *a, **k: persisted.append(a))
+
+    class _Client:
+        async def stream(self, messages, conn):
+            yield "narrated text"
+
+    def finalize(watcher):
+        raise locks.CampaignBusy(cid)
+
+    def lazy_finalize(watcher):
+        def gen():
+            raise locks.CampaignBusy(cid)
+            yield  # pragma: no cover
+        return gen()
+
+    def on_error(watcher):
+        persisted.append(("on_error",))
+
+    resp = routes._fence_stream(cid, "0001-x", [], {}, _Client(),
+                                lazy_finalize if lazy else finalize, on_error)
+
+    async def drain():
+        return [chunk async for chunk in resp.body_iterator]
+
+    frames = "".join(anyio.run(drain))
+    assert '"kind": "busy"' in frames or '"kind":"busy"' in frames, frames
+    assert not persisted, f"a busy finalize persisted something: {persisted}"
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -1484,7 +1724,10 @@ with:
 
 ```python
         try:
-            frames = finalize(watcher)
+            # list(), not a bare call: if finalize ever returns a generator,
+            # guarding only the call would let StoreBusy escape from the `for`
+            # below -- outside the handler, aborting the stream with no frame.
+            frames = list(finalize(watcher))
         except store.locks.StoreBusy as exc:
             # Deliberately NOT on_error: that persists watcher.narration, and
             # narration whose roll fence has no proposal record destroys the
@@ -1530,9 +1773,12 @@ One caveat: **do not actively use grimoire on two devices at once.** Sync
 clients (Dropbox, OneDrive, iCloud, Syncthing) resolve simultaneous edits by
 making conflict copies on their own schedule, and grimoire cannot merge those —
 one side's edit wins and the other becomes a stray file. Let the sync settle
-before switching devices. Concurrent access by more than one grimoire process
-*on the same machine* is safe: those serialize against each other.
+before switching devices. Two grimoire processes *on the same machine* do
+serialize their campaign edits against each other, so running the desktop app
+and a dev server together is fine.
 ```
+
+Say "campaign edits", not "is safe": the spec is explicit that several writers still take no lock (`scenes.append_message`, rolls, campaign rename/delete, asset writes). A blanket "safe" would be the same species of overclaim this task exists to remove.
 
 - [ ] **Step 2: `docs/android-architecture.md`**
 
