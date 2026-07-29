@@ -206,7 +206,7 @@ def post_scene_check(cid: str, sid: str, body: CheckBody):
 
 @router.get("/campaigns/{cid}/rolls")
 def get_rolls(cid: str):
-    if not store.campaigns.campaign_meta_path(cid).exists():
+    if not store.campaigns.campaign_exists(cid):
         raise HTTPException(status_code=404, detail="campaign not found")
     return list(reversed(store.rolls.read(cid)))
 
@@ -215,7 +215,9 @@ def get_rolls(cid: str):
 def post_roll_replay(cid: str, rid: str):
     try:
         return {"ok": True, **store.rolls.replay(cid, rid)}
-    except store.rolls.RollNotFound:
+    except (store.rolls.RollNotFound, store.campaigns.CampaignNotFound):
+        # rolls.json is under campaign_root, so an unusable campaign id
+        # surfaces here as CampaignNotFound -- still a 404, not a 500
         raise HTTPException(status_code=404, detail="roll not found")
 
 

@@ -303,19 +303,31 @@ _FILL = {"sid": "s1", "rid": "r1", "gid": "g1", "eid": "e1", "kind": "locations"
          "storage_key": "k1", "span_id": "sp1", "index": "0"}
 
 
+# Enumerated from the OpenAPI schema, not from `router.routes`: the router is
+# composed of per-domain sub-routers, so walking `.routes` yields the
+# inclusions rather than the paths. MIN_ID_ROUTES is a floor -- if enumeration
+# ever breaks again, the sweep must fail loudly rather than quietly testing
+# nothing.
+MIN_ID_ROUTES = 150
+
+
 def _id_routes():
-    from grimoire.routes import router
+    import os
+    import tempfile
+    os.environ.setdefault("GRIMOIRE_HOME", tempfile.mkdtemp())
+    schema = create_app().openapi()
     out = []
-    for route in router.routes:
-        path = "/api" + getattr(route, "path", "")
+    for path, ops in schema["paths"].items():
         params = set(re.findall(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}", path))
         if not ({"cid", "wid"} & params):
             continue
-        unfilled = params - set(_FILL) - {"cid", "wid"}
-        for method in sorted((getattr(route, "methods", set()) or set())
-                             & {"GET", "DELETE", "POST", "PUT", "PATCH"}):
-            out.append(pytest.param(method, path, sorted(unfilled),
-                                    id=f"{method}-{path}"))
+        unfilled = sorted(params - set(_FILL) - {"cid", "wid"})
+        for method in sorted(m.upper() for m in ops
+                             if m.upper() in {"GET", "DELETE", "POST", "PUT", "PATCH"}):
+            out.append(pytest.param(method, path, unfilled, id=f"{method}-{path}"))
+    assert len(out) >= MIN_ID_ROUTES, (
+        f"only {len(out)} id-carrying routes found; enumeration is broken "
+        f"(the sweep would silently cover nothing)")
     return out
 
 

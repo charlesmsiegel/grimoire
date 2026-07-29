@@ -199,7 +199,7 @@ def dir_content_hash(files: list[tuple[str, str]]) -> str:
 def snapshot(root: Path, pid: str) -> tuple[str, list[tuple[str, str]]] | None:
     """One read of the whole PC: its `dir_hash` and the (name, text) pairs that
     hash covers, meta first. See `characters.snapshot` (#247)."""
-    if not _safe(pid) or not _meta_path(root, pid).exists():
+    if not safe_id(pid) or not _meta_path(root, pid).exists():
         return None
     files = [_meta_path(root, pid)] + [_version_path(root, pid, v) for v in _version_ids(root, pid)]
     pairs = [(p.name, p.read_text(encoding="utf-8")) for p in files]

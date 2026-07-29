@@ -331,7 +331,7 @@ def post_lorebook_import(wid: str, body: LorebookCommit):
 
 @router.get("/worlds/{wid}/calendar/months")
 def get_world_calendar_months(wid: str, year: int):
-    if not store.worlds.world_meta_path(wid).exists():
+    if not store.worlds.world_exists(wid):
         raise HTTPException(status_code=404, detail="world not found")
     cfg = store.calendars.read_calendar(store.worlds.world_root(wid))
     try:
