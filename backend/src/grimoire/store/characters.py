@@ -145,7 +145,9 @@ def clear_chub_source(root: Path, cid: str, vid: str) -> None:
 
 
 def _version_ids(root: Path, cid: str) -> list[str]:
-    return sorted(p.stem for p in _char_dir(root, cid).glob("*.json"))
+    # enumeration agrees with the lookups: a version id read_card would
+    # refuse must not reach it through a listing (#259 review)
+    return sorted(p.stem for p in _char_dir(root, cid).glob("*.json") if safe_id(p.stem))
 
 
 def read_card(root: Path, cid: str, vid: str) -> dict:

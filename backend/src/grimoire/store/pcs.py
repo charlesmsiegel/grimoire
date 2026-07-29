@@ -122,7 +122,9 @@ def set_tags(root: Path, pid: str, tags: list[str]) -> None:
 
 
 def _version_ids(root: Path, pid: str) -> list[str]:
-    return sorted(p.stem for p in _pc_dir(root, pid).glob("*.md") if p.name != "pc.md")
+    # see characters._version_ids
+    return sorted(p.stem for p in _pc_dir(root, pid).glob("*.md")
+                  if p.name != "pc.md" and safe_id(p.stem))
 
 
 def read_persona(root: Path, pid: str, vid: str) -> dict:
