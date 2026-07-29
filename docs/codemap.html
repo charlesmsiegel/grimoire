@@ -148,7 +148,7 @@ footer.doc{max-width:1280px;margin:0 auto;padding:0 28px 34px;color:var(--text-f
   <div class="doc-label">CODEBASE ATLAS</div>
   <h1 class="doc-title">grimoire — Codebase Atlas</h1>
   <p class="doc-sub">Local-first solo-RPG toolkit: FastAPI + React over a markdown/JSON store, with an LLM as game master</p>
-  <div class="doc-meta">generated 2026-07-29 · c48c56e · 411 files, 78,651 LOC (docs/ excluded)</div>
+  <div class="doc-meta">generated 2026-07-29 · 1fdf1b8 · 411 files, 78,651 LOC (docs/ excluded)</div>
 </header>
 <nav class="tabs" role="tablist"><button role="tab" data-tab="overview" aria-selected="true" aria-controls="overview">Overview</button>
 <button role="tab" data-tab="inventory" aria-selected="false" aria-controls="inventory">Inventory</button>
@@ -507,7 +507,13 @@ sequenceDiagram
   participant W as store/fence.py
   participant D as ~/.grimoire
   UI->>R: POST .../chat (SSE)
-  R->>CTX: build_messages(cid, sid, turn)
+  R->>D: proposals.supersede - retire any pending decision
+  alt pcless scene, or empty send
+    R->>CTX: build_director_messages(note) - ephemeral, never stored
+  else ordinary turn
+    R->>D: stamp_user_speaker + append_message (USER TURN PERSISTED HERE)
+    R->>CTX: build_messages(cid, sid, turn)
+  end
   CTX->>CTX: activate() world-info, render templates/scene/*.j2
   CTX-->>R: messages[]
   R->>G: client.stream(messages, conn)
@@ -534,6 +540,8 @@ sequenceDiagram
 </pre></div></div>
 
 <h3>Seams</h3>
+<div class="callout warn"><b>The user's turn is durable before the model is ever called.</b> <code>backend/src/grimoire/routes/scenes.py:143</code> appends the user message, and only then does line 144 build the context. So if context assembly or the provider fails, the transcript already contains the player's turn with no reply — the assistant finalizer is <i>not</i> the only mutator on this path. Macros are deliberately expanded once at persist time (<code>backend/src/grimoire/routes/scenes.py:139-142</code>) so a player's <code>{{roll:1d20}}</code> cannot re-roll on every later context build.</div>
+<div class="callout"><b>Two sends never touch the transcript at all.</b> A pcless scene or an empty send takes the director-note branch (<code>backend/src/grimoire/routes/scenes.py:128-135</code>), which builds ephemeral messages and streams without persisting the prompt. Fence watching is also skipped there by design.</div>
 <div class="callout"><b>Ordering is the guarantee, not atomicity.</b> <code>backend/src/grimoire/routes/streaming.py:125-141</code> is explicit that <code>finalize</code> is <i>not</i> transactional: the proposal is written under one lock, the lock is released, then <code>_persist_reply</code> re-takes it. Contention on that second acquisition leaves a proposal on disk with no narration — the sanctioned direction. The invariant actually held is <b>narration is never persisted without its proposal</b>, never the reverse.</div>
 <div class="callout"><b>The idle bound is deliberately not a total bound.</b> <code>backend/src/grimoire/llm.py:84-104</code> bounds the gap <i>between</i> deltas, so a slow-but-progressing generation is never cut mid-prose. Empty chunks are provider heartbeats: they reset the wait and are dropped rather than forwarded (<code>backend/src/grimoire/llm.py:118</code>). A total-duration ceiling exists only where a caller imposes one.</div>
 <div class="callout warn"><b>Two disclosed crash windows.</b> <code>backend/src/grimoire/routes/streaming.py:5-24</code> documents both — a crash at the initial fence loses the last narration beat but leaves an adjudicable proposal; a crash at a follow-up fence loses the follow-up check. Both are bounded and non-corrupting. Full cross-file journaling was rejected as disproportionate for a local single-user store, which is a defensible call, but it is an accepted risk rather than an absent one.</div>
@@ -547,19 +555,22 @@ sequenceDiagram
 flowchart TD
   A["module edit request"] --> B["take module_edit lock (_M)"]
   B --> C["recover() - replay or roll back any stale journal"]
-  C --> D["hold_all(cids): every campaign lock, sorted"]
-  D --> E["stage validated pack to temp dir"]
-  E --> F["journal intent"]
+  C --> E["copytree to staging, mutate, load + validate"]
+  E --> V{"errors, or dry_run?"}
+  V -->|"yes"| X["return ok=false - no locks ever taken"]
+  V -->|"no"| D["hold_all(cids): every campaign lock, sorted"]
+  D --> P["pre_swap check"]
+  P --> F["journal intent"]
   F --> G["whole-directory swap"]
-  G --> H["clear journal"]
-  H --> I["release all locks"]
+  G --> H["clear journal, release campaign locks"]
   G -.->|"crash here"| J["next startup: recover() replays"]
 </pre></div></div>
 
 <h3>Seams</h3>
 <div class="callout"><b>The lock ordering is documented in exactly one place.</b> <code>backend/src/grimoire/store/locks.py:1-60</code> states the hierarchy: module-edit lock → campaign locks in sorted cid order → audit baseline lock / rolls lock. <code>hold_all</code> (<code>backend/src/grimoire/store/locks.py:265</code>) enforces the sort, so the two multi-campaign holders cannot deadlock against each other. The docstring notes they previously agreed only by accident.</div>
 <div class="callout warn"><b>The lock domain is a hand-maintained list, and it has been wrong before.</b> <code>backend/src/grimoire/store/locks.py:1-14</code> says it outright: a campaign-scoped mutator that keeps a private registry is invisible to the domain and silently outside the exclusion — which is what happened to <code>rolls</code> until it joined. Nothing mechanically enforces membership; the guarantee rests on this docstring being read.</div>
-<div class="callout warn"><b>Locks protect one machine, not one store.</b> Both locks are OS file locks as well as in-process ones, so three actors on one machine under one OS user are excluded (<code>backend/src/grimoire/store/module_edit.py:4-18</code>). Two <i>devices</i> sharing a synced folder are not — and, as the docstring concedes, cannot be by any filesystem lock. Since the Configuration page actively encourages pointing the store at a synced folder, this is the gap most likely to be met in real use.</div>
+<div class="callout good"><b>The expensive work happens outside the campaign locks.</b> <code>backend/src/grimoire/store/module_edit.py:564-585</code> copies, mutates, loads and validates the staged pack — and returns early on validation errors or a dry run — before <code>_campaign_locks()</code> is entered at <code>backend/src/grimoire/store/module_edit.py:586</code> for the pre-swap check, journal, swap and migration only. A rejected edit never takes a campaign lock at all, so the every-campaign hold is as short as the design allows.</div>
+<div class="callout warn"><b>Locks protect one machine, not one store — and not every mutation on that machine.</b> Both locks are OS file locks as well as in-process ones, so actors on one machine under one OS user are excluded (<code>backend/src/grimoire/store/module_edit.py:4-18</code>). Two <i>devices</i> sharing a synced folder are not, and cannot be by any filesystem lock. The docstring also lists what the lock does <i>not</i> cover on a single machine (<code>backend/src/grimoire/store/locks.py:64-68</code>) — see the Invariants tab. Since the Configuration page actively encourages pointing the store at a synced folder, this is the gap most likely to be met in real use.</div>
 <div class="callout"><b>Startup degrades to serving, not failing.</b> <code>backend/src/grimoire/main.py:33-55</code> guards each startup step separately and logs at WARNING on contention, because all three steps are idempotent and re-run later. Startup is also the one place the global 409 handler cannot reach.</div>
 
 <h2>3 · Scene absorption: propose, then commit</h2>
@@ -603,7 +614,7 @@ sequenceDiagram
 
 <div class="card hero">
   <h2>The headline</h2>
-  <p>Concern ownership here is unusually clean for a codebase this size: writes, locking, path resolution and prompt rendering each have exactly one owner, and one of those boundaries is enforced by a <b>test that reads the source tree</b> rather than by convention alone. The reported dependency cycle is a grouping artifact, not a design failure. Two things do not have a single owner: domain-error-to-HTTP mapping is spread across all 14 route modules, and module-pack authoring concentrates five concerns in one 1,134-line file.</p>
+  <p>Concern ownership here is unusually clean for a codebase this size: writes, locking, path resolution and prompt rendering each have exactly one owner, and one of those boundaries is enforced by a <b>test that reads the source tree</b> rather than by convention alone. The reported module cycle is a grouping artifact, though a real file-level cycle does exist inside the store. Two things do not have a single owner: domain-error-to-HTTP mapping is spread across all 14 route modules, and module-pack authoring concentrates five concerns in one 1,134-line file.</p>
 </div>
 
 <h2>Concern ownership</h2>
@@ -626,7 +637,7 @@ sequenceDiagram
 </tbody></table></div>
 
 <h2>The cycle, explained</h2>
-<p>The Dependencies tab reports one module cycle: <code>grimoire</code> → <code>routes</code> → <code>store</code> → <code>grimoire</code>. At <b>file</b> granularity there is no loop at all. The three edges are:</p>
+<p>The Dependencies tab reports one module cycle: <code>grimoire</code> → <code>routes</code> → <code>store</code> → <code>grimoire</code>. Among those three files there is no loop at all. The three edges are:</p>
 <div class="tbl-wrap"><table>
 <thead><tr><th>Edge</th><th>Actual import</th></tr></thead>
 <tbody>
@@ -634,7 +645,8 @@ sequenceDiagram
 <tr><td><code>routes</code> → <code>store</code></td><td><code>backend/src/grimoire/routes/common.py:15</code> — <code>from .. import store</code></td></tr>
 <tr><td><code>store</code> → <code>grimoire</code></td><td>eight modules importing one leaf: <code>backend/src/grimoire/store/context.py:16</code>, <code>backend/src/grimoire/store/absorb.py:11</code>, <code>backend/src/grimoire/store/audit.py:19</code>, <code>backend/src/grimoire/store/dossiers.py:13</code> and four more, all <code>from .. import prompts</code></td></tr>
 </tbody></table></div>
-<div class="callout good"><b>Not a real cycle.</b> <code>backend/src/grimoire/prompts.py</code> imports nothing from grimoire — only stdlib, plus Jinja2 lazily inside <code>_env()</code> (<code>backend/src/grimoire/prompts.py:29-32</code>). The closing edge lands on a leaf, so the file-level graph is a DAG. The cycle appears only because the module grouping collapses <code>backend/src/grimoire/main.py</code>, <code>backend/src/grimoire/llm.py</code> and <code>backend/src/grimoire/prompts.py</code> into one <code>grimoire</code> node. <b>Treat it as a naming artifact, not a defect.</b></div>
+<div class="callout good"><b>This particular triangle is not a real cycle.</b> <code>backend/src/grimoire/prompts.py</code> imports nothing from grimoire — only stdlib, plus Jinja2 lazily inside <code>_env()</code> (<code>backend/src/grimoire/prompts.py:29-32</code>). The closing edge lands on a leaf, so no import loop exists among these three files; the cycle appears only because the module grouping collapses <code>backend/src/grimoire/main.py</code>, <code>backend/src/grimoire/llm.py</code> and <code>backend/src/grimoire/prompts.py</code> into one <code>grimoire</code> node. <b>Treat this triangle as a naming artifact.</b></div>
+<div class="callout warn"><b>But the file graph is <i>not</i> acyclic — the store SCC is real coupling.</b> The Dependencies tab reports a 63-file strongly connected group inside <code>backend/src/grimoire/store/</code>, and it is not all package-<code>__init__</code> aggregation. A concrete back-edge: <code>backend/src/grimoire/store/modules.py:18</code> imports <code>module_display</code> at module load, while <code>backend/src/grimoire/store/module_display.py:65</code> and <code>:98</code> import back from <code>modules</code> <i>inside functions</i>, each annotated "deferred: modules imports us". That deferral is the workaround that makes the pair importable, and it is a marker of genuine mutual dependency rather than of a clean layering.</div>
 <div class="callout"><b>The store's internal "cycle" is the package-<code>__init__</code> aggregation pattern.</b> <code>backend/src/grimoire/store/__init__.py:6-13</code> imports all 60-odd submodules, and each submodule imports siblings via <code>from . import ...</code> — which re-enters the partially-initialized package. Python resolves this because submodule binding does not require <code>__init__</code> to have finished. It works, and it gives callers one flat <code>store.x</code> namespace (fan-in 153, the highest in the codebase). The cost is real but narrow: <b>import order inside <code>backend/src/grimoire/store/__init__.py</code> is load-bearing</b>, and a new module-level statement that reads a name defined later in <code>__init__</code> would fail at import time rather than at its call site.</div>
 
 <h2>Data ownership</h2>
@@ -648,7 +660,7 @@ sequenceDiagram
 <thead><tr><th>Structure</th><th>Written by</th><th>Note</th></tr></thead>
 <tbody>
 <tr><td>Scene transcripts</td><td><code>backend/src/grimoire/store/scenes.py</code>, via <code>backend/src/grimoire/routes/streaming.py:45</code></td><td><span class="badge bad">irreplaceable</span> the one artifact with no regeneration path — the stated reason for both the lock domain and atomic writes</td></tr>
-<tr><td>Module packs</td><td><code>backend/src/grimoire/store/module_edit.py</code> only</td><td>whole-directory swap under journal + every campaign lock</td></tr>
+<tr><td>Module packs</td><td><code>backend/src/grimoire/store/module_edit.py</code> for every routed edit</td><td><span class="badge warn">bypassable</span> the safe path is a journalled whole-directory swap, but <code>backend/src/grimoire/store/modules.py:753</code> (<code>create_module</code>) scaffolds a pack in place with a bare <code>mkdir</code>, and <code>backend/src/grimoire/store/modules.py:767</code> (<code>delete_module</code>) <code>rmtree</code>s one directly. <code>module_edit</code>'s own docstring contrasts itself with the former (<code>backend/src/grimoire/store/module_edit.py:105-106</code>): a crash mid-scaffold there <i>can</i> leave a partial live pack. HTTP routes use the safe wrappers; a CLI, migration or new store caller need not.</td></tr>
 <tr><td>Campaign overlay files (<i>sync.md</i>, <i>deleted.json</i>)</td><td><code>backend/src/grimoire/store/overlay.py</code></td><td>tombstones make an id permanently taken, so nothing resurrects under a reused id</td></tr>
 <tr><td>Roll log &amp; proposals</td><td><code>backend/src/grimoire/store/rolls.py</code>, <code>backend/src/grimoire/store/proposals.py</code></td><td>joined to the campaign lock domain late (<code>backend/src/grimoire/store/locks.py:1-14</code>)</td></tr>
 <tr><td>Bootstrap pointer <code>~/.grimoire.json</code></td><td><code>backend/src/grimoire/store/paths.py:16-38</code></td><td>necessarily outside the data dir it points at</td></tr>
@@ -659,7 +671,8 @@ sequenceDiagram
 <div class="callout good"><b>The overlay boundary is enforced by a test that reads the source.</b> <code>backend/tests/test_overlay_guard.py:437</code> asserts that every campaign read of an inheritable record goes through <code>overlay</code>, driven by the <code>INHERITED_KINDS</code>/<code>INHERITED_FILES</code> declarations at <code>backend/src/grimoire/store/overlay.py:43-46</code>. Exemptions must be scoped to functions rather than whole files and must state a reason (<code>backend/tests/test_overlay_guard.py:484</code>, <code>:498</code>), and a marker inside a string literal does not count (<code>backend/tests/test_overlay_guard.py:462</code>). This is the strongest boundary in the codebase — a rule that cannot rot silently.</div>
 <div class="callout warn"><b>Test-mock coupling leaks the import mechanism into the contract.</b> <code>backend/src/grimoire/routes/streaming.py:26-31</code> has to warn that importers bind helpers by value, so patching <code>routes.streaming._persist_reply</code> covers the turn strategies but not <code>greetings.post_first_post</code>, which holds its own reference. A documented footgun is better than an undocumented one, but the need for the note signals that <code>from x import y</code> at module scope has made the seam fragile.</div>
 <div class="callout warn"><b><code>backend/src/grimoire/store/context.py</code> reaches across nearly the whole store.</b> Fan-out 57 (<code>backend/src/grimoire/store/context.py:16-22</code>) — appearances, calendars, campaigns, characters, checks, chronicle, dice, dossiers, plot, relationships, sheets, weather and more. It is a legitimate assembler and the code is clearly organized, but it means <i>any</i> store change can affect prompt assembly, and the blast radius of a refactor there is the entire play path.</div>
-<div class="callout"><b>No layering inversion found.</b> The frontend touches the backend only through <code>frontend/src/api/client.ts</code> (fan-in 94, fan-out 2). No store module imports FastAPI; no route module writes files directly. The layer discipline the Overview diagram claims is the discipline the code actually keeps.</div>
+<div class="callout"><b>No layering inversion found.</b> Every <code>fetch</code>-based call goes through <code>frontend/src/api/client.ts</code> (fan-in 94, fan-out 2). No store module imports FastAPI; no route module writes files directly. The layer discipline the Overview diagram claims is the discipline the code actually keeps.</div>
+<div class="callout warn"><b>Five backend routes are reached without the API client.</b> The campaign export links are plain <code>&lt;a href download&gt;</code> elements pointing straight at <code>/api/campaigns/{cid}/export.{epub,md.zip,html,txt,json}</code> (<code>frontend/src/routes/CampaignView.tsx:691-695</code>). Correct for browser-driven downloads — a <code>fetch</code> would have to buffer the file — but it means <code>frontend/src/api/client.ts</code> is the single surface for <i>programmatic</i> calls only. Anyone renaming or auditing backend endpoints by grepping the client will miss these five.</div>
 
 </section>
 <section class="panel" id="invariants" role="tabpanel">
@@ -702,7 +715,12 @@ sequenceDiagram
 <tr>
   <td>Every campaign-scoped mutator serializes on the same <code>campaign_lock(cid)</code></td>
   <td><code>backend/src/grimoire/store/locks.py:1-44</code> — a prose list</td>
-  <td><span class="badge warn">partial</span> hand-maintained, nothing mechanical; <code>rolls</code> was silently outside it until #255</td>
+  <td><span class="badge bad">false as stated</span> four campaign mutators take no lock at all — see below</td>
+</tr>
+<tr>
+  <td>Two processes on one machine never lose a campaign write</td>
+  <td><code>backend/src/grimoire/store/locks.py:64-68</code></td>
+  <td><span class="badge warn">partial</span> holds for the mutators inside the domain; the four unlocked ones can still overwrite each other</td>
 </tr>
 <tr>
   <td>Multi-campaign lock holders acquire in sorted cid order</td>
@@ -732,7 +750,7 @@ sequenceDiagram
 <tr>
   <td>Two grimoire processes never corrupt one store</td>
   <td><code>backend/src/grimoire/store/locks.py</code>, <code>backend/src/grimoire/store/module_edit.py:4-18</code></td>
-  <td><span class="badge warn">one machine only</span> OS file locks cover one machine and one OS user — explicitly not two devices on a synced folder</td>
+  <td><span class="badge warn">one machine, and only the locked mutators</span> OS file locks cover one machine under one OS user — not two devices on a synced folder, not two OS users, and not the four unlocked campaign mutators</td>
 </tr>
 <tr>
   <td>Record writes survive power loss</td>
@@ -766,13 +784,13 @@ The second pattern is a design decision, not sloppiness: a single unreadable JSO
 <h2 id="risks">Risk ranking</h2>
 <div class="callout bad"><b>1 · No CI configuration exists in the repository.</b> There is no <code>.github/workflows/</code>. pytest, vitest, <code>tsc -b</code>, <code>scripts/verify_templates.py</code> and the eval suite all run only when a human remembers. This is the single highest-leverage gap: the project has built better-than-average guard harnesses and then left their execution to discipline. <code>templates/</code> edits are the sharpest case — Jinja auto-reload means a bad edit takes effect live, with no restart and no code change.</div>
 <div class="callout bad"><b>2 · Synced-folder concurrency is unprotectable and actively recommended.</b> <code>CLAUDE.md</code> suggests pointing the store at a synced folder to share a library across devices; <code>backend/src/grimoire/store/module_edit.py:4-18</code> states that two devices cannot be excluded by any filesystem lock. Conflict-copy resolution is left to OneDrive/Dropbox on their own schedule (<code>backend/src/grimoire/store/atomic.py:20-21</code>). Blast radius is an irreplaceable transcript.</div>
-<div class="callout warn"><b>3 · The lock domain is a prose list that has already been wrong once.</b> <code>backend/src/grimoire/store/locks.py:1-14</code> concedes that a campaign-scoped mutator with a private registry is invisible to the domain — which is exactly what happened to <code>rolls</code>. A guard test in the style of <code>backend/tests/test_overlay_guard.py</code> would convert the codebase's most dangerous convention into an enforced one.</div>
+<div class="callout bad"><b>3 · Four campaign mutators sit outside the lock domain right now, by the module's own admission.</b> <code>backend/src/grimoire/store/locks.py:64-68</code> names them: <code>rename_campaign</code>, <code>set_campaign_response</code>, <code>touch</code> and <code>delete_campaign</code> take no lock at all. Each is an unlocked read-modify-write on campaign metadata (<code>backend/src/grimoire/store/campaigns.py:344-374</code>), so two processes updating one campaign can silently overwrite each other, and a delete can race a concurrent mutation. Atomic replacement guarantees each <i>write</i> lands whole; it does not prevent a lost update. This is the same class of gap as the <code>rolls</code> omission recorded at <code>backend/src/grimoire/store/locks.py:1-14</code>, except these are current rather than historical — and because the list is prose, nothing stops the set from growing. A guard test in the style of <code>backend/tests/test_overlay_guard.py</code> would turn the codebase's most dangerous convention into an enforced one.</div>
 <div class="callout warn"><b>4 · <code>backend/src/grimoire/store/module_edit.py</code> concentrates the most branching in the app.</b> 1,134 lines and 332 branches — the top hotspot on both size and complexity — carrying staging, validation, journaling, crash recovery and publication together. It is also the only code holding every campaign lock at once, so a defect there is a whole-store defect.</div>
 <div class="callout warn"><b>5 · Android portability rules are convention-only.</b> The pydantic v1/v2-agnostic rule and the "no <code>Path.home()</code>" rule are documented in <code>CLAUDE.md</code> and honoured in current code, but no test or lint rule asserts either. A violation passes every check in the repository and surfaces as a broken APK build.</div>
 
 <h2>Closed since the previous atlas</h2>
 <p class="dim">Findings the last atlas raised that this one deliberately does not carry forward — recorded here because "the risk we flagged is fixed" is information a fresh atlas cannot otherwise express.</p>
-<div class="callout good"><b>Locks were in-process only; they are now cross-process.</b> The previous atlas's top risk was that <code>threading.RLock</code> protects nothing across processes while the product recommends a shared data directory. Both the campaign lock and the module-edit lock are now OS file locks as well (<code>backend/src/grimoire/store/module_edit.py:4-18</code>), and a <code>StoreBusy</code> handler converts contention into a 409 centrally (<code>backend/src/grimoire/main.py:77-81</code>). <b>Partially closed:</b> one machine and one OS user are now covered; two devices over a synced folder still are not, which is why that survives as risk #2 above.</div>
+<div class="callout good"><b>Locks were in-process only; they are now cross-process.</b> The previous atlas's top risk was that <code>threading.RLock</code> protects nothing across processes while the product recommends a shared data directory. Both the campaign lock and the module-edit lock are now OS file locks as well (<code>backend/src/grimoire/store/module_edit.py:4-18</code>), and a <code>StoreBusy</code> handler converts contention into a 409 centrally (<code>backend/src/grimoire/main.py:77-81</code>). <b>Partially closed:</b> one machine under one OS user is now covered <i>for the mutators inside the lock domain</i>. Two devices over a synced folder still are not (risk #2), and four campaign mutators still take no lock at all (risk #3).</div>
 <div class="callout good"><b>Absorb no longer commits early phases before later ones run.</b> The previous atlas flagged absorb as a long, non-atomic, non-idempotent multi-phase write whose prose edits landed before the dossier and audit phases. Extraction now stages everything and writes nothing (<code>backend/src/grimoire/routes/scenes.py:435-441</code>); the commit is a separate reviewed call that holds one campaign lock across all four writes and is protected by a commit ledger (<code>backend/src/grimoire/routes/scenes.py:471-528</code>). Re-absorption is refused by default before a token is spent (<code>backend/src/grimoire/routes/scenes.py:413-416</code>).</div>
 <div class="callout good"><b>Absorb failures now reach the user.</b> <code>apply_edits</code> returns a <code>failures</code> list alongside <code>applied</code> (<code>backend/src/grimoire/routes/scenes.py:532-533</code>), and each ledger 409 carries a message naming the recovery step. The previous atlas's "no remediation path" finding is substantially addressed, though remediation is still "reload and edit the records directly" rather than a retry of the failed edit.</div>
 <div class="callout"><b>The old monolithic routes module stayed gone.</b> Split into 14 route modules; nothing in <code>backend/src/grimoire/routes/</code> now exceeds 661 lines, and the top hotspot has moved to the store.</div>
@@ -793,7 +811,7 @@ The second pattern is a design decision, not sloppiness: a single unreadable JSO
 <tr><td>Mechanics pack</td><td><code>modules</code></td><td><code>backend/src/grimoire/store/modules.py:1</code></td><td><span class="badge warn">drift</span> see below</td></tr>
 <tr><td>World-info / lorebook</td><td><code>lore</code>, <code>_world_info</code>, <code>lorebook</code></td><td><code>backend/src/grimoire/store/context.py:182</code>, <code>backend/src/grimoire/store/lorebook.py</code></td><td><span class="badge warn">drift</span> see below</td></tr>
 <tr><td>Entity</td><td><code>ENTITY_KINDS</code></td><td><code>backend/src/grimoire/store/entities.py:17</code></td><td><span class="badge warn">narrower than it sounds</span> locations, lore, items, groups, creatures — <b>not</b> characters</td></tr>
-<tr><td>Actor</td><td>— no single symbol —</td><td><code>backend/src/grimoire/store/overlay.py:7-13</code></td><td><span class="badge warn">prose-only</span> means characters + pcs; appears in docstrings but is not a constant</td></tr>
+<tr><td>Actor</td><td><code>ACTOR_KINDS</code></td><td><code>backend/src/grimoire/store/appearances.py:19</code></td><td>characters + pcs, defined once and reused by <code>backend/src/grimoire/store/campaigns.py:255</code>, <code>backend/src/grimoire/store/checks.py:91</code> and <code>backend/src/grimoire/store/sync.py:118</code></td></tr>
 <tr><td>Opening post</td><td><code>greetings</code></td><td><code>backend/src/grimoire/store/greetings.py</code></td><td>SillyTavern inheritance; a "greeting" is a seed scene, not a salutation.</td></tr>
 <tr><td>Scene absorption</td><td><code>absorb</code></td><td><code>backend/src/grimoire/store/absorb.py</code></td><td>Extracting durable world/character state out of a played scene.</td></tr>
 <tr><td>Campaign summary</td><td><code>chronicle</code></td><td><code>backend/src/grimoire/store/chronicle.py</code></td><td>Campaign-level running summary.</td></tr>
@@ -815,7 +833,9 @@ The second pattern is a design decision, not sloppiness: a single unreadable JSO
 
 <div class="callout warn"><b><i>sync.md</i> is unrelated to folder syncing.</b> It holds base hashes for materialized overlay records (<code>backend/src/grimoire/store/overlay.py:14</code>). The codebase separately discusses OneDrive/Dropbox "sync" as a concurrency hazard (<code>backend/src/grimoire/store/atomic.py:20-21</code>) and recommends a synced folder for sharing a library. Same word, two unrelated meanings, both load-bearing — worth a rename or at least a cross-reference.</div>
 
-<div class="callout good"><b>Everything else is consistent.</b> Identifier conventions hold across the tree (<code>cid</code>/<code>sid</code> for campaign and scene ids, <code>*NotFound</code> for lookup failures, <code>_</code>-prefixed helpers as module-private). Exception names match their domains — <code>CampaignNotFound</code>, <code>StoreBusy</code>, <code>LLMError</code>, <code>DiceError</code> — and are re-exported from one place (<code>backend/src/grimoire/store/__init__.py:14-33</code>), so a caller never has to know which submodule defines the error it catches.</div>
+<div class="callout good"><b>Naming conventions otherwise hold across the tree.</b> <code>cid</code>/<code>sid</code> for campaign and scene ids, <code>*NotFound</code> for lookup failures, <code>_</code>-prefixed helpers as module-private, and exception names that match their domains — <code>CampaignNotFound</code>, <code>DiceError</code>, <code>WorldNotFound</code>.</div>
+
+<div class="callout warn"><b>The store's exception re-export is not complete, so the import path still matters.</b> <code>backend/src/grimoire/store/__init__.py:14-33</code> re-exports the store's own record errors, so a caller catching <code>CampaignNotFound</code> or <code>DiceError</code> need not know the defining submodule. Two of the errors a caller is most likely to want are <i>not</i> in that block: <code>StoreBusy</code> stays under <code>backend/src/grimoire/store/locks.py:92</code>, and <code>LLMError</code> lives outside the store entirely in <code>backend/src/grimoire/llm_errors.py</code>. Both are deliberate — <code>LLMError</code> is kept out of the store to keep the LLM gateway's imports acyclic — but it means the convenience is partial, and "import it from <code>store</code>" is not a rule you can follow blindly.</div>
 
 </section></main>
 <footer class="doc">Generated by code-visualization. Automated tabs: Inventory, Dependencies, Hotspots. Judgment tabs authored from code reading — all citations machine-verified. No Coverage or LLM Ops tab: see Overview → Scope and method.</footer>
