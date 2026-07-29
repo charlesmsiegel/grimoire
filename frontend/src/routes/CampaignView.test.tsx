@@ -673,7 +673,10 @@ test("re-absorbing a scene asks for confirmation, then retries with force", asyn
   renderCampaign();
   await screen.findByText("hi");
   fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
-  await waitFor(() => expect(api.absorbScene).toHaveBeenCalledWith("run", "s1", true));
+  await waitFor(() => expect(api.absorbScene).toHaveBeenCalledTimes(2));
+  // the FIRST attempt must be unforced -- otherwise the guard is bypassed outright
+  expect((api.absorbScene as any).mock.calls[0][2]).toBeFalsy();
+  expect((api.absorbScene as any).mock.calls[1]).toEqual(["run", "s1", true]);
   expect(confirm).toHaveBeenCalled();
   expect(await screen.findByLabelText("Scene one-line")).toHaveValue("Again.");
   confirm.mockRestore();
@@ -693,6 +696,38 @@ test("declining the re-absorb confirmation leaves the scene alone", async () => 
   expect(api.absorbScene).toHaveBeenCalledTimes(1);
   expect(screen.queryByLabelText("Scene one-line")).toBeNull();
   confirm.mockRestore();
+});
+
+test("double-clicking Save summary commits once", async () => {
+  // PUT /chronicle is replayable and plot movements append a beat per apply, so a
+  // second commit of the same review duplicates them (#235).
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  let release: (v: any) => void = () => {};
+  (api.saveChronicle as any).mockReturnValue(new Promise((res) => { release = res; }));
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  const save = await screen.findByRole("button", { name: /Save summary/ });
+  fireEvent.click(save);
+  fireEvent.click(save);
+  expect(api.saveChronicle).toHaveBeenCalledTimes(1);
+  release({ id: "s1", one_line: "o", summary: "s", keywords: [], cast: [], location: "",
+            date: "", absorbed: "t", applied: [], sheet_failures: [] });
+  await waitFor(() => expect(screen.queryByLabelText("Scene summary")).toBeNull());
+});
+
+test("a failed save keeps the review open and shows the error", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  (api.saveChronicle as any).mockRejectedValue(
+    Object.assign(new Error("boom"), { detail: "disk full" }));
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /Save summary/ }));
+  expect(await screen.findByText(/disk full/)).toBeTruthy();
+  expect(screen.getByLabelText("Scene summary")).toBeTruthy();  // review survives to retry
 });
 
 test("a staged dossier is editable and sent with the save", async () => {
