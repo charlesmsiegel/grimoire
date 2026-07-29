@@ -43,7 +43,7 @@ def _is_write_mode(mode) -> bool:
 MARKER = "atomic-ok:"
 
 
-def _marker_reason(src: str, node: ast.AST) -> str | None:
+def _marker_reason(src: str, node: ast.AST, others=()) -> str | None:
     """The `# atomic-ok: <reason>` attached to THIS call, if any.
 
     Accepted in exactly two places: on one of the call's own lines, or in the
@@ -51,8 +51,20 @@ def _marker_reason(src: str, node: ast.AST) -> str | None:
     this used to use) let one marker cover a raw write added just below the
     call it was written for — the exemption would silently spread, which is the
     same invisible drift the guard exists to stop.
+
+    `others` is the file's other raw writes, so a marker on one write cannot
+    exempt a second one nested inside it — this guard was not passing them, and
+    so still shared markers between nested writes after the shared helper had
+    learned not to.
     """
-    return guard_markers.marker_reason(MARKER, src, node)
+    return guard_markers.marker_reason(MARKER, src, node, others)
+
+
+def _write_calls_with_siblings(tree: ast.AST):
+    """(node, kind, the file's other write nodes) — marker ownership needs them."""
+    found = list(_write_calls(tree))
+    for node, kind in found:
+        yield node, kind, [n for n, _k in found if n is not node]
 
 
 def _write_calls(tree: ast.AST):
@@ -125,8 +137,8 @@ def _offenders():
             continue  # the helper is where the raw writes are supposed to live
         src = path.read_text(encoding="utf-8")
         tree = ast.parse(src)
-        for node, kind in _write_calls(tree):
-            reason = _marker_reason(src, node)
+        for node, kind, others in _write_calls_with_siblings(tree):
+            reason = _marker_reason(src, node, others)
             if reason is None:
                 yield f"{path.relative_to(PACKAGE)}:{node.lineno}: {kind}"
 
@@ -150,8 +162,8 @@ def test_the_marker_is_not_a_rubber_stamp():
             continue
         src = path.read_text(encoding="utf-8")
         tree = ast.parse(src)
-        for node, kind in _write_calls(tree):
-            reason = _marker_reason(src, node)
+        for node, kind, others in _write_calls_with_siblings(tree):
+            reason = _marker_reason(src, node, others)
             if reason is not None:
                 marked.append((f"{path.relative_to(PACKAGE)}:{node.lineno}", reason))
 
@@ -237,6 +249,22 @@ def test_a_marker_survives_a_multi_line_comment_block():
     tree = ast.parse(src)
     node, _kind = next(iter(_write_calls(tree)))
     assert _marker_reason(src, node) == "unpublished staging tree, published as a"
+
+
+def test_a_marker_does_not_reach_a_write_nested_inside_the_marked_one():
+    """This guard never passed its sibling nodes to the shared helper, so when
+    one raw write was nested inside another the single `atomic-ok` covered both
+    — the outer write simply left `_offenders`. Found reviewing #248."""
+    src = ("# atomic-ok: this reason was written for the outer write only\n"
+           "dest.write_bytes((cache.write_bytes(data), payload)[1])\n")
+    calls = list(_write_calls_with_siblings(ast.parse(src)))
+    assert len(calls) == 2, f"expected both writes flagged, got {calls}"
+    by_line = {}
+    for node, _kind, others in calls:
+        by_line[node.col_offset] = _marker_reason(src, node, others)
+    outer, inner = min(by_line), max(by_line)
+    assert by_line[outer] is not None, "the outer write lost its own marker"
+    assert by_line[inner] is None, "the nested write inherited its parent's marker"
 
 
 def test_a_blank_line_detaches_the_marker():

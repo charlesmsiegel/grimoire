@@ -97,6 +97,13 @@ def marker_reason(marker: str, src: str, node: ast.AST, others=()) -> str | None
             continue
         return reason.strip()
 
+    # A comment block above a statement attaches to the statement, so it belongs
+    # to the OUTERMOST flagged node starting there. Without this, a marker
+    # written for `dst.write_bytes(...)` also exempted a call nested inside it on
+    # the same first line -- the enclosing-direction twin of the inline case.
+    if any(_strictly_inside(node, o) for o in others):
+        return None
+
     # Walk up through contiguous comment lines only; a blank line or any code
     # ends the block and detaches the marker from this call. A comment line is
     # one the tokenizer calls a comment AND that holds nothing else.
