@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -13,7 +14,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .routes import router
-from .store import migrations, module_edit
+from .store import locks, migrations, module_edit
 
 DEFAULT_DIST = Path(__file__).resolve().parents[2].parent / "frontend" / "dist"
 
@@ -33,7 +34,15 @@ def dist_dir() -> Path:
 async def _lifespan(app: FastAPI):
     migrations.migrate_scene_ids()
     migrations.bake_char_macros()
-    module_edit.recover()
+    try:
+        module_edit.recover()
+    except locks.StoreBusy:
+        # Another backend holds the module-edit lock: it is running recovery
+        # itself, and replay is idempotent. Refusing to start would be strictly
+        # worse than starting and serializing per request (#234). Only here --
+        # the in-request _apply -> recover() path still surfaces as a 409.
+        logging.getLogger(__name__).info(
+            "module-edit recovery skipped: another grimoire process holds the lock")
     yield
 
 
@@ -55,6 +64,12 @@ def create_app() -> FastAPI:
         if isinstance(exc.detail, dict):
             return JSONResponse(status_code=exc.status_code, content=exc.detail)
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+    @app.exception_handler(locks.StoreBusy)
+    async def store_busy_handler(request: Request, exc: locks.StoreBusy):
+        # One handler rather than a try/except at every one of the ~35 call
+        # sites that can take a campaign or module-edit lock (#234).
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
 
     app.include_router(router, prefix="/api")
 

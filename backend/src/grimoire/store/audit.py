@@ -63,7 +63,8 @@ def schema_stamp(mid: str) -> dict:
 
 def capture_baseline(cid: str, sid: str) -> None:
     """Snapshot every campaign sheet at scene creation. Never raises -- a
-    capture failure must not fail scene creation."""
+    capture failure must not fail scene creation -- with one exception,
+    ``locks.StoreBusy`` (#234); see the handler at the bottom."""
     try:
         with locks.campaign_lock(cid):     # consistent multi-file snapshot
             # resolve INSIDE the lock: rebinds publish under this same lock
@@ -89,6 +90,14 @@ def capture_baseline(cid: str, sid: str) -> None:
                 data = read_baselines(cid)
                 data[sid] = entry
                 _write(cid, data)
+    except locks.StoreBusy:
+        # The one exception to "never raises". Contention means the snapshot
+        # was not merely attempted-and-failed but never attempted, and a scene
+        # without a baseline silently loses its audit delta -- unrecoverable,
+        # where a 409 on scene creation is trivially retried. Safe because the
+        # only caller, scenes._create_scene, already holds this lock
+        # (reentrantly), so this guards a future caller that does not (#234).
+        raise
     except Exception:  # noqa: BLE001 — never fail the caller
         return
 
