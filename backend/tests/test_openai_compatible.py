@@ -179,3 +179,49 @@ async def test_no_tools_field_in_payload():
                                      "https://custom.example.com/v1")]
     import json
     assert "tools" not in json.loads(captured["body"])
+
+
+# ---- liveness and who owns the read bound (#243) ----
+
+REASONING_BODY = (
+    ": keep-alive\n\n"
+    'data: {"choices":[{"delta":{"reasoning_content":"thinking hard"}}]}\n\n'
+    'data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n'
+    "data: [DONE]\n\n"
+)
+
+
+async def test_non_content_frames_are_reported_as_liveness():
+    """A local reasoning endpoint can send nothing displayable for minutes; the
+    facade's idle bound has to see that as activity, not silence."""
+    def handler(request):
+        return httpx.Response(200, text=REASONING_BODY)
+
+    chunks = [c async for c in make_client(handler).stream([], "m", "", "https://x/v1")]
+    assert "".join(chunks) == "Hello"
+    assert chunks.count("") >= 2
+
+
+async def test_streaming_leaves_the_read_bound_to_the_facade():
+    seen = {}
+
+    def handler(request):
+        seen.update(request.extensions.get("timeout") or {})
+        return httpx.Response(200, text=SSE_BODY)
+
+    [c async for c in make_client(handler).stream([], "m", "", "https://x/v1")]
+    assert seen["read"] is None
+    assert seen["connect"] == 30.0
+
+
+async def test_list_models_keeps_its_own_read_bound():
+    """Only the streaming call hands its read bound to the facade — a hung
+    model-list fetch has no guard behind it and must still time out."""
+    seen = {}
+
+    def handler(request):
+        seen.update(request.extensions.get("timeout") or {})
+        return httpx.Response(200, json={"data": []})
+
+    await make_client(handler).list_models("https://x/v1", "")
+    assert seen["read"] is not None

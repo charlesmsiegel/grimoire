@@ -109,3 +109,16 @@ async def test_unexpected_error_is_network(monkeypatch):
     with pytest.raises(ClaudeAgentError) as exc:
         [c async for c in client.stream([{"role": "user", "content": "hi"}], "opus")]
     assert exc.value.kind == "network"
+
+
+async def test_non_text_messages_are_reported_as_liveness(monkeypatch):
+    """The SDK sends tool/thinking/result messages that carry no text; the
+    facade's idle bound has to count them as activity, not silence (#243)."""
+    replies = [
+        types.SimpleNamespace(),                 # e.g. a thinking/result message
+        _AssistantMessage([_TextBlock("Hello")]),
+    ]
+    install_fake_sdk(monkeypatch, replies=replies)
+    chunks = [c async for c in ClaudeAgentClient().stream([], "opus")]
+    assert "".join(chunks) == "Hello"
+    assert chunks.count("") >= 1

@@ -45,6 +45,10 @@ class ClaudeAgentClient:
         )
         try:
             async for message in query(prompt=_flatten(turns), options=options):
+                # Proof of life for the facade's idle bound: the SDK sends
+                # messages that carry no text (thinking, tool, result), and a
+                # model can spend minutes on those before its first word (#243).
+                yield ""
                 if isinstance(message, AssistantMessage):
                     for block in message.content:
                         if isinstance(block, TextBlock):

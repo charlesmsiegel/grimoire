@@ -78,3 +78,39 @@ async def test_stream_surfaces_unexpected_errors(monkeypatch):
     with pytest.raises(OpenRouterError) as exc:
         [c async for c in client.stream([], "m", "sk-or-x")]
     assert exc.value.kind == "network"
+
+
+# ---- liveness and who owns the read bound (#243) ----
+
+REASONING_BODY = (
+    ": OPENROUTER PROCESSING\n\n"
+    'data: {"choices":[{"delta":{"reasoning":"thinking hard"}}]}\n\n'
+    'data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n'
+    "data: [DONE]\n\n"
+)
+
+
+async def test_non_content_frames_are_reported_as_liveness():
+    """The facade's idle bound counts what the provider yields, so a model that
+    streams only reasoning for minutes would look wedged. Every received frame
+    yields an empty heartbeat: activity, no content."""
+    def handler(request):
+        return httpx.Response(200, text=REASONING_BODY)
+
+    chunks = [c async for c in make_client(handler).stream([], "m", "sk-or-x")]
+    assert "".join(chunks) == "Hello"       # nothing extra reaches the caller
+    assert chunks.count("") >= 2            # the comment and the reasoning frame
+
+
+async def test_streaming_leaves_the_read_bound_to_the_facade():
+    """Otherwise llm_timeout is a lie above 120s, and "0 disables it" fails at
+    120s with a network error."""
+    seen = {}
+
+    def handler(request):
+        seen.update(request.extensions.get("timeout") or {})
+        return httpx.Response(200, text=SSE_BODY)
+
+    [c async for c in make_client(handler).stream([], "m", "sk-or-x")]
+    assert seen["read"] is None
+    assert seen["connect"] == 30.0
