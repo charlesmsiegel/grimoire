@@ -314,7 +314,7 @@ footer.doc{max-width:1280px;margin:0 auto;padding:0 28px 34px;color:var(--text-f
 <tr>
   <td>Cross-process safety</td>
   <td><span class="badge warn">still open</span></td>
-  <td><code>locks.campaign_lock</code> remains in-process (#234) and <code>backend/src/grimoire/store/rolls.py</code> keeps its own private lock (#255). Inherited, not worsened.</td>
+  <td><code>locks.campaign_lock</code> remains in-process (#234) and <code>backend/src/grimoire/store/rolls.py</code> put the roll log on the same lock (#255, now merged and rebased onto), which removes the second domain this change used to span. <code>campaign_lock</code> remains in-process (#234). Inherited, not worsened.</td>
 </tr>
 <tr>
   <td><code>docs/codemap.html</code></td>
@@ -622,7 +622,7 @@ flowchart LR
   <ul>
     <li><strong>No recursion.</strong> <code>project</code> reaches <code>update_resolution</code> → <code>transition</code>, never <code>new</code>/<code>supersede</code>/<code>commit_narration</code>. The heal cannot re-enter itself — and the <code>transition</code> guard was deliberately written as a refusal rather than a heal for exactly this reason.</li>
     <li><strong>No import cycle.</strong> <code>checks</code>, <code>rolls</code> and <code>scenes</code> are imported function-level (<code>backend/src/grimoire/store/proposals.py:194</code>), matching the pre-existing <code>from . import scenes</code> in <code>commit_narration</code>. None of the three imports <code>proposals</code>.</li>
-    <li><strong>No lock inversion.</strong> The order is <code>campaign_lock</code> → <code>rolls</code>' private lock. <code>backend/src/grimoire/store/rolls.py</code> never acquires <code>campaign_lock</code>, and <code>backend/src/grimoire/store/campaigns.py</code> does not import <code>locks</code> at all. Unchanged from before: the old <code>_project_resolution</code> held the same lock in the same order.</li>
+    <li><strong>No lock inversion — and, since #255, no second domain at all.</strong> <code>backend/src/grimoire/store/rolls.py</code> used to run a private lock registry, so <code>project</code> spanned two domains in the order <code>campaign_lock</code> → <code>rolls</code>'. #255 moved the roll log onto <code>campaign_lock</code> itself, so the whole projection now runs under one reentrant lock and the ordering question disappears. This branch was rebased onto that change; the earlier two-domain reasoning is kept here only because it is what the code did when the work started.</li>
     <li><strong>Composes with #254's scene locking.</strong> <code>scenes.append_message</code> is now wrapped by a <code>campaign_lock</code> decorator; it is reentrant and its docstring already anticipates nesting under <code>proposals</code>. <code>project</code> calls it while holding the lock, which is the anticipated case.</li>
   </ul>
   <details>
