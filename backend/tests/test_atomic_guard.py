@@ -42,18 +42,30 @@ MARKER = "atomic-ok:"
 
 
 def _marker_reason(src: str, node: ast.AST) -> str | None:
-    """The `# atomic-ok: <reason>` text attached to a call, if any.
+    """The `# atomic-ok: <reason>` attached to THIS call, if any.
 
-    Looked for on the call's own line and on the lines just above it, so a
-    reason long enough to be useful can sit on its own line.
+    Accepted in exactly two places: on one of the call's own lines, or in the
+    unbroken comment block immediately above it. A fixed backward window (which
+    this used to use) let one marker cover a raw write added just below the
+    call it was written for — the exemption would silently spread, which is the
+    same invisible drift the guard exists to stop.
     """
     lines = src.splitlines()
     end = getattr(node, "end_lineno", node.lineno)
-    window = lines[max(0, node.lineno - 4):end]
-    for line in window:
+
+    for line in lines[node.lineno - 1:end]:
         _, sep, reason = line.partition(MARKER)
         if sep:
             return reason.strip()
+
+    # Walk up through contiguous comment lines only; a blank line or any code
+    # ends the block and detaches the marker from this call.
+    i = node.lineno - 2
+    while i >= 0 and lines[i].lstrip().startswith("#"):
+        _, sep, reason = lines[i].partition(MARKER)
+        if sep:
+            return reason.strip()
+        i -= 1
     return None
 
 
@@ -209,3 +221,40 @@ def test_multi_line_calls_are_not_missed():
     tree = ast.parse("_meta_path(root, cid).write_text(\n    dump(meta),\n"
                      "    encoding='utf-8')\n")
     assert [kind for _n, kind in _write_calls(tree)] == ["Path.write_text"]
+
+
+def test_a_marker_exempts_only_its_own_call():
+    """A fixed backward window let one `atomic-ok` cover a raw write added just
+    below the call it was written for, so the exemption spread silently -- the
+    same invisible drift the guard exists to stop."""
+    src = (
+        "# atomic-ok: staging dir, published by rename\n"
+        "dest.write_bytes(payload)\n"
+        "other.write_text(sneaky, encoding='utf-8')\n"
+    )
+    tree = ast.parse(src)
+    calls = list(_write_calls(tree))
+    assert len(calls) == 2
+    exempt, unexempt = calls[0], calls[1]
+    assert _marker_reason(src, exempt[0]) is not None, "the marked call lost its marker"
+    assert _marker_reason(src, unexempt[0]) is None, \
+        "the next write inherited the marker above its neighbour"
+
+
+def test_a_marker_survives_a_multi_line_comment_block():
+    """Real reasons need more than one line; the block above the call counts."""
+    src = (
+        "# atomic-ok: unpublished staging tree, published as a\n"
+        "# unit by _publish's single rename\n"
+        "dest.write_bytes(payload)\n"
+    )
+    tree = ast.parse(src)
+    node, _kind = next(iter(_write_calls(tree)))
+    assert _marker_reason(src, node) == "unpublished staging tree, published as a"
+
+
+def test_a_blank_line_detaches_the_marker():
+    src = "# atomic-ok: this reason belongs to something else\n\ndest.write_bytes(x)\n"
+    tree = ast.parse(src)
+    node, _kind = next(iter(_write_calls(tree)))
+    assert _marker_reason(src, node) is None
