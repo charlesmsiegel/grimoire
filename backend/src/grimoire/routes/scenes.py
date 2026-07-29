@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -430,7 +431,11 @@ async def post_absorb(cid: str, sid: str, force: bool = False,
     return {"one_line": parsed["one_line"], "summary": parsed["summary"],
             "keywords": parsed["keywords"], "timeline_events": parsed["timeline_events"],
             **facts, "edits": edits + audit_edits, "mechanics": mechanics,
-            "dossiers": dossiers}
+            "dossiers": dossiers,
+            # Idempotency key for the save this review will become (#235): the
+            # commit appends in six places, so a replay whose first response was
+            # lost must return that result rather than apply it again.
+            "commit_token": uuid.uuid4().hex}
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/audit")
@@ -466,13 +471,19 @@ def put_chronicle(cid: str, sid: str, body: ChronicleSave):
     # concurrent saves could otherwise both read a matching `before` before
     # either wrote -- a guard that stops neither.
     with store.locks.campaign_lock(cid):
+        # Inside the lock: two saves racing on one token must not both miss.
+        spent = store.commits.result_for(cid, body.commit_token)
+        if spent is not None:
+            return spent
         record = store.chronicle.absorb(cid, {
             "id": sid, "one_line": body.one_line, "summary": body.summary,
             "keywords": body.keywords, **facts})
         store.chronicle.append_timeline(cid, body.timeline_events)
         store.scenes.mark_absorbed(cid, sid, body.one_line, body.summary)
         applied, failures = store.absorb.apply_edits(cid, body.edits, sid)
-    return {**record, "applied": applied, "failures": failures}
+        result = {**record, "applied": applied, "failures": failures}
+        store.commits.record(cid, body.commit_token, result)
+    return result
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}/cast")

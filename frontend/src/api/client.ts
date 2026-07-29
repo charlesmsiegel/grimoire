@@ -365,6 +365,9 @@ export type SceneAbsorb = {
   timeline_events: TimelineEvent[]; cast: string[]; location: string; date: string;
   edits: StagedEdit[];
   mechanics: Mechanics;
+  /** Idempotency key for this review's save (#235) — replaying a spent one
+   *  returns the first result instead of committing twice. */
+  commit_token: string;
   dossiers: Dossiers;
 };
 export type SceneSuggestion = {
@@ -931,7 +934,8 @@ export const api = {
       `/api/campaigns/${cid}/scenes/${sid}/absorb${force ? "?force=true" : ""}`),
   saveChronicle: (cid: string, sid: string,
                   body: { one_line: string; summary: string; keywords: string[];
-                          timeline_events: TimelineEvent[]; edits: StagedEdit[] }) =>
+                          timeline_events: TimelineEvent[]; edits: StagedEdit[];
+                          commit_token?: string }) =>
     request<ChronicleEntry & { applied: string[];
       failures: { id: string; reason: string; kind: "conflict" | "error" }[] }>(
       "PUT", `/api/campaigns/${cid}/scenes/${sid}/chronicle`, body),

@@ -132,6 +132,7 @@ beforeEach(() => {
     one_line: "They met.", summary: "A met B.", keywords: ["salt"],
     timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
+    commit_token: "tok",
     dossiers: { status: "skipped", reason: null, proposed: [], failed: [], skipped: [] },
     edits: [{ id: "character_state:seraphine", kind: "character_state",
       target: { kind: "characters", id: "seraphine" }, label: "Seraphine — current state",
@@ -669,6 +670,7 @@ test("re-absorbing a scene asks for confirmation, then retries with force", asyn
       one_line: "Again.", summary: "s", keywords: [], timeline_events: [],
       cast: [], location: "", date: "", edits: [],
       mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
+    commit_token: "tok",
       dossiers: { status: "skipped", reason: null, proposed: [], failed: [] } });
   const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
   renderCampaign();
@@ -737,6 +739,9 @@ test("a failed save offers a retry that saves, not one that generates a reply", 
   fireEvent.click(again);
   await waitFor(() => expect(api.saveChronicle).toHaveBeenCalledTimes(2));
   expect(api.retry).not.toHaveBeenCalled();
+  // the same token both times, so a first PUT that landed cannot commit twice
+  const tokens = (api.saveChronicle as any).mock.calls.map((c: any) => c[2].commit_token);
+  expect(tokens).toEqual(["tok", "tok"]);
 });
 
 test("a failed save keeps the review open and shows the error", async () => {
@@ -758,6 +763,7 @@ test("a staged dossier is editable and sent with the save", async () => {
   (api.absorbScene as any).mockResolvedValue({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
+    commit_token: "tok",
     dossiers: { status: "ok", reason: null, proposed: ["seraphine"], failed: [] },
     edits: [{ id: "dossier:seraphine", kind: "dossier",
       target: { kind: "characters", id: "seraphine" }, label: "Seraphine — campaign dossier",
@@ -792,6 +798,7 @@ test("character_state row renders a multi-section knowledge body in its textarea
   (api.absorbScene as any).mockResolvedValue({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
+    commit_token: "tok",
     dossiers: { status: "skipped", reason: null, proposed: [], failed: [], skipped: [] },
     edits: [{ id: "character_state:seraphine", kind: "character_state",
       target: { kind: "characters", id: "seraphine" }, label: "Seraphine — current state",
@@ -815,6 +822,7 @@ test("plot rows are editable and sent with payload on save", async () => {
   (api.absorbScene as any).mockResolvedValue({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
+    commit_token: "tok",
     dossiers: { status: "skipped", reason: null, proposed: [], failed: [], skipped: [] },
     edits: [{ id: "plot:the-map", kind: "plot",
       target: { kind: "plot", id: "the-map" }, label: "The map — advanced",
@@ -839,6 +847,7 @@ test("new_character proposal renders editable card and provenance fields and sav
   (api.absorbScene as any).mockResolvedValue({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
+    commit_token: "tok",
     dossiers: { status: "skipped", reason: null, proposed: [], failed: [], skipped: [] },
     edits: [{ id: "new_character:old-bram", kind: "new_character",
       target: { kind: "characters", id: "" }, label: "New character — Old Bram",
@@ -890,6 +899,7 @@ test("new_location shows the setting checkbox only when the scene has no locatio
   (api.absorbScene as any).mockResolvedValue({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
+    commit_token: "tok",
     dossiers: { status: "skipped", reason: null, proposed: [], failed: [], skipped: [] },
     edits: [{ id: "new_location:the-crypt", kind: "new_location",
       target: { kind: "locations", id: "" }, label: "New location — The Crypt",
@@ -912,6 +922,7 @@ test("new_location hides the setting checkbox when the scene already has a locat
   (api.absorbScene as any).mockResolvedValue({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "Old Dock", date: "",
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
+    commit_token: "tok",
     dossiers: { status: "skipped", reason: null, proposed: [], failed: [], skipped: [] },
     edits: [{ id: "new_location:the-crypt", kind: "new_location",
       target: { kind: "locations", id: "" }, label: "New location — The Crypt",
@@ -930,6 +941,7 @@ test("relationship rows are read-only and sent with payload on save", async () =
   (api.absorbScene as any).mockResolvedValue({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
+    commit_token: "tok",
     dossiers: { status: "skipped", reason: null, proposed: [], failed: [], skipped: [] },
     edits: [{ id: "feeling:characters:a->characters:b", kind: "relationship",
       target: { kind: "relationships", id: "characters:a->characters:b" }, label: "Ann → Bo",
@@ -958,6 +970,7 @@ test("mechanics: warnings render with a ⚠ prefix; a clean run shows the hint i
   (api.absorbScene as any).mockResolvedValue({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "ok", reason: null, warnings: ["Mara claimed a hit with no roll"], dropped: [] },
+    commit_token: "tok",
     dossiers: { status: "skipped", reason: null, proposed: [], failed: [], skipped: [] },
     edits: [] });
   const { unmount } = renderCampaign();
@@ -970,6 +983,7 @@ test("mechanics: warnings render with a ⚠ prefix; a clean run shows the hint i
   (api.absorbScene as any).mockResolvedValue({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
+    commit_token: "tok",
     dossiers: { status: "skipped", reason: null, proposed: [], failed: [], skipped: [] },
     edits: [] });
   renderCampaign();
@@ -984,6 +998,7 @@ test("skipped mechanics renders no mechanics section", async () => {
   (api.absorbScene as any).mockResolvedValue({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "skipped", reason: null, warnings: [], dropped: [] },
+    commit_token: "tok",
     dossiers: { status: "skipped", reason: null, proposed: [], failed: [], skipped: [] },
     edits: [] });
   renderCampaign();
@@ -1002,10 +1017,12 @@ test("failed mechanics shows a notice with Retry validation; retry replaces shee
   (api.absorbScene as any).mockResolvedValue({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "failed", reason: "boom", warnings: [], dropped: [] },
+    commit_token: "tok",
     dossiers: { status: "skipped", reason: null, proposed: [], failed: [], skipped: [] },
     edits: [] });
   (api.retryAudit as any).mockResolvedValue({
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
+    commit_token: "tok",
     edits: [SHEET_EDIT] });
   renderCampaign();
   await screen.findByText("hi");
@@ -1023,6 +1040,7 @@ test("a rejected retryAudit surfaces an error and leaves the mechanics notice/ro
   (api.absorbScene as any).mockResolvedValue({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "failed", reason: "boom", warnings: [], dropped: [] },
+    commit_token: "tok",
     dossiers: { status: "skipped", reason: null, proposed: [], failed: [], skipped: [] },
     edits: [] });
   (api.retryAudit as any).mockRejectedValue({ detail: "audit retry blew up" });
@@ -1046,10 +1064,12 @@ test("unapproved non-sheet rows survive Retry validation without duplicating", a
   (api.absorbScene as any).mockResolvedValue({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "failed", reason: "boom", warnings: [], dropped: [] },
+    commit_token: "tok",
     dossiers: { status: "skipped", reason: null, proposed: [], failed: [], skipped: [] },
     edits: [LORE_EDIT] });
   (api.retryAudit as any).mockResolvedValue({
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
+    commit_token: "tok",
     edits: [SHEET_EDIT] });
   renderCampaign();
   await screen.findByText("hi");
@@ -1087,6 +1107,7 @@ const absorbWithDossiers = (dossiers: unknown) =>
   (api.absorbScene as any).mockResolvedValue({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "skipped", reason: null, warnings: [], dropped: [] },
+    commit_token: "tok",
     dossiers, edits: [] });
 
 test("failed dossier refreshes are listed per NPC instead of passing silently", async () => {
@@ -1163,6 +1184,7 @@ test("sheet edits render read-only with the note and survive save", async () => 
   (api.absorbScene as any).mockResolvedValue({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
+    commit_token: "tok",
     dossiers: { status: "skipped", reason: null, proposed: [], failed: [], skipped: [] },
     edits: [SHEET_EDIT] });
   (api.saveChronicle as any).mockResolvedValue({ id: "s1", one_line: "o", summary: "s", keywords: [],
@@ -1187,6 +1209,7 @@ test("failures from save render a notice", async () => {
   (api.absorbScene as any).mockResolvedValue({
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
+    commit_token: "tok",
     dossiers: { status: "skipped", reason: null, proposed: [], failed: [], skipped: [] },
     edits: [SHEET_EDIT] });
   (api.saveChronicle as any).mockResolvedValue({ id: "s1", one_line: "o", summary: "s", keywords: [],

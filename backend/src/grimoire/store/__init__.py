@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from . import (
-    absorb, appearances, assets, atomic, audit, campaign_climate, campaigns, cards, changes, characters, checks, chronicle,
+    absorb, appearances, assets, atomic, audit, campaign_climate, campaigns, cards, changes, characters, checks, chronicle, commits,
     chub, climates, config, context, dice, dossiers, entities, entity_schema, epub, export, fence, fetch, greetings, groupstate,
     image_subjects, length_drift, lengths, llm_connections, localize, locks, lorebook, migrations, module_edit, modules, overlay, pcs, playing,
     playstate, plot, proposals, relationships, response_presets, rolls, scene_ids, scene_refs, scenes, sheets,
@@ -62,6 +62,7 @@ __all__ = [
     "CampaignNotFound",
     "changes",
     "chronicle",
+    "commits",
     "assets",
     "fetch",
     "localize",
