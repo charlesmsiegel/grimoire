@@ -2260,6 +2260,71 @@ def test_put_chronicle_serializes_the_whole_commit(client):
     assert observed.get("locked_out") is True
 
 
+def test_replaying_a_save_with_the_same_token_applies_once(client):
+    """PUT /chronicle is not idempotent -- timeline events append, plot beats
+    append, weather spans append, and new_* records get created -- so the
+    "Try saving again" button must not duplicate campaign history when the first
+    PUT landed but its response was lost. The absorb mints a commit token; a
+    replay carrying a spent one returns the stored result without re-applying."""
+    _, cid = _campaign(client)
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "We poured the tea.")
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
+        '{"one_line": "o", "summary": "s", "keywords": [],'
+        ' "timeline_events": [{"date": "d1", "text": "The tea was poured."}],'
+        ' "plot_movements": [{"title": "The Tea", "beat": "poured", "status": "open"}]}')
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    save = {"one_line": "o", "summary": "s", "keywords": [],
+            "timeline_events": body["timeline_events"], "edits": body["edits"],
+            "commit_token": body["commit_token"]}
+
+    first = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle", json=save)
+    second = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle", json=save)
+
+    assert first.status_code == 200 and second.status_code == 200
+    assert second.json() == first.json()          # the replay is the first result
+    assert len(store.plot.read(cid)["the-tea"]["beats"]) == 1
+    timeline = (store.campaigns.campaign_root(cid) / "timeline.md").read_text(encoding="utf-8")
+    assert timeline.count("The tea was poured.") == 1
+
+
+def test_a_save_without_a_token_still_commits(client):
+    """The token is the UI's guard, not a new requirement: a body without one
+    behaves exactly as before."""
+    _, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                   json={"one_line": "They entered.", "summary": "s", "keywords": [],
+                         "timeline_events": [{"date": "d", "text": "Entered."}]})
+    assert r.status_code == 200
+    assert store.scenes.read_scene(cid, sid)["meta"]["done"] == "true"
+
+
+def test_a_failed_dossier_write_is_reported(client):
+    """A filesystem failure on the deferred write must not be swallowed: the
+    chronicle is already marked absorbed and the review closes, so an approved
+    dossier would be lost with the save still reading as a success."""
+    cid, sid = _dossier_scene(client)
+    client.app.dependency_overrides[routes.get_llm] =         lambda: FakeOpenRouterComplete("Aese now trusts the owner.")
+    edits = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["edits"]
+    real_write = store.dossiers.write
+
+    def boom(*a, **k):
+        raise OSError("no space left on device")
+
+    store.dossiers.write = boom
+    try:
+        r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                       json={"one_line": "o", "summary": "s", "keywords": [],
+                             "timeline_events": [], "edits": edits})
+    finally:
+        store.dossiers.write = real_write
+    assert r.status_code == 200 and r.json()["applied"] == []
+    assert [(f["id"], f["kind"]) for f in r.json()["failures"]] == [("dossier:aese", "error")]
+    assert "no space left" in r.json()["failures"][0]["reason"]
+
+
 def test_a_stale_dossier_conflict_reaches_the_reviewer(client):
     cid, sid = _dossier_scene(client, prior="Aese is a stranger.")
     client.app.dependency_overrides[routes.get_llm] =         lambda: FakeOpenRouterComplete("Aese now trusts the owner.")

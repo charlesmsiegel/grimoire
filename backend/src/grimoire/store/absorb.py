@@ -627,7 +627,15 @@ def apply_edits(cid: str, edits: list[dict],
                         "id": e.get("id", ""), "kind": "conflict",
                         "reason": "this dossier changed since the scene was absorbed"})
                     continue
-                dossiers.write(croot, target["id"], after)
+                try:
+                    dossiers.write(croot, target["id"], after)
+                except Exception as exc:  # noqa: BLE001 -- full disk, permissions, ...
+                    # Not the generic per-edit skip below: the chronicle is
+                    # already recorded and the reviewer's panel closes on a 200,
+                    # so a swallowed write loses an approved dossier silently.
+                    failures.append({"id": e.get("id", ""), "kind": "error",
+                                     "reason": f"could not write the dossier: {exc}"})
+                    continue
             elif kind == "lore":
                 overlay.update_entity(cid, target["kind"], target["id"], body=after)
             elif kind == "authored":
