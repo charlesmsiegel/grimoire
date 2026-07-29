@@ -11,8 +11,7 @@ from ..llm import LLMClient
 from .common import (_campaign_root_or_404, _require_connection, _require_scene, get_llm)
 from .models import (CheckBody, ModuleSetting, ProposalAction, RollBody, SheetAdvanceBody,
                      SheetBody, SheetCreationBody)
-from .streaming import (_continuation_stream, _sse,
-                        _sse_response)
+from .streaming import _continuation_stream, _sse, _sse_response
 
 router = APIRouter()
 
