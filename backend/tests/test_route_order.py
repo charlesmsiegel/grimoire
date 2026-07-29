@@ -97,15 +97,25 @@ CROSSING_PAIRS = [
 
 
 def test_crossing_routes_keep_their_winner():
-    order = {}
-    for i, (_, path) in enumerate(_table()):
-        order.setdefault(path, i)
+    """Per method, not per path: two routes can share a path pattern with
+    different method sets, so collapsing them would hide a one-method flip."""
+    table = _table()
     for winner, loser in CROSSING_PAIRS:
-        assert winner in order, f"{winner} no longer exists"
-        assert loser in order, f"{loser} no longer exists"
-        assert order[winner] < order[loser], (
-            f"{winner} used to win over {loser} but is now registered after it; "
-            f"a URL matching both now reaches the wrong handler")
+        shared = set()
+        for methods, path in table:
+            if path == winner:
+                shared |= methods
+        loser_methods = set()
+        for methods, path in table:
+            if path == loser:
+                loser_methods |= methods
+        shared &= loser_methods
+        assert shared, f"{winner} and {loser} no longer share a method"
+        for method in sorted(shared):
+            first = next(p for m, p in table if method in m and p in (winner, loser))
+            assert first == winner, (
+                f"{method} {winner} used to win over {loser} but is now registered "
+                f"after it; a URL matching both now reaches the wrong handler")
 
 
 def test_the_crossing_pair_list_is_complete():
@@ -125,6 +135,18 @@ def test_the_crossing_pair_list_is_complete():
     assert not unlisted, (
         "these route patterns overlap ambiguously and are not pinned in "
         "CROSSING_PAIRS:\n" + "\n".join(sorted(set(unlisted))))
+
+
+def test_no_duplicate_route_registrations():
+    """The same (method, path) registered twice would silently make the second
+    unreachable, and the overlap checks above skip identical paths."""
+    seen, dupes = set(), []
+    for methods, path in _table():
+        for method in methods:
+            if (method, path) in seen:
+                dupes.append(f"{method} {path}")
+            seen.add((method, path))
+    assert not dupes, "duplicate registrations: " + ", ".join(sorted(set(dupes)))
 
 
 def test_the_generic_entity_routes_are_included_last():
