@@ -24,15 +24,25 @@ include order below is load-bearing in two ways.
 1. ``entities`` registers ``/worlds/{wid}/{kind}`` and ``/campaigns/{cid}/{kind}``,
    which capture any third path segment, so it goes **last** — a literal-segment
    route registered after it would never be reached.
-2. Nine pairs of patterns *cross*: neither is more general, but a concrete URL
-   exists that both match (e.g. ``POST /campaigns/c/scenes/instantiate/cast/batch``
-   matches both ``/campaigns/{cid}/scenes/{sid}/cast/batch`` and
-   ``/campaigns/{cid}/{kind}/instantiate/{mid}/{content_id}``). Which one wins is
+2. Seven pairs of patterns *cross* (nine counting per-method): neither is more
+   general, but a concrete URL exists that both match — e.g.
+   ``POST /campaigns/c/scenes/instantiate/cast/batch`` matches both
+   ``/campaigns/{cid}/scenes/{sid}/cast/batch`` and
+   ``/campaigns/{cid}/{kind}/instantiate/{mid}/{content_id}``. Which one wins is
    decided purely by this order — hence ``campaigns`` after ``scenes`` and
    ``mechanics``.
 
 ``tests/test_route_order.py`` checks both: it fails if any route is shadowed by
 an earlier one, and it pins the winner of every crossing pair.
+
+Known, accepted difference from the pre-split single module: for a request whose
+method *no* matching route supports, Starlette builds the 405's ``Allow`` header
+from the first partially-matching route, so the reordering changes that header's
+content for eight method/URL combinations across three crossing shapes (all of
+which need a path segment that cannot occur in practice, e.g. a scene literally
+named ``instantiate``). The status stays 405 and no dispatch changes; matching
+the old header exactly would mean reproducing the old interleaved registration
+order, which is the thing this package exists to undo.
 """
 
 from __future__ import annotations
