@@ -20,6 +20,8 @@ import pathlib
 import grimoire
 import grimoire.store as store_pkg
 
+from . import guard_markers
+
 STORE = pathlib.Path(store_pkg.__file__).parent
 # The whole package, not just store/: a route module wrote a campaign's
 # climate.json with a plain write_text, which a store-only scan missed
@@ -50,23 +52,7 @@ def _marker_reason(src: str, node: ast.AST) -> str | None:
     call it was written for — the exemption would silently spread, which is the
     same invisible drift the guard exists to stop.
     """
-    lines = src.splitlines()
-    end = getattr(node, "end_lineno", node.lineno)
-
-    for line in lines[node.lineno - 1:end]:
-        _, sep, reason = line.partition(MARKER)
-        if sep:
-            return reason.strip()
-
-    # Walk up through contiguous comment lines only; a blank line or any code
-    # ends the block and detaches the marker from this call.
-    i = node.lineno - 2
-    while i >= 0 and lines[i].lstrip().startswith("#"):
-        _, sep, reason = lines[i].partition(MARKER)
-        if sep:
-            return reason.strip()
-        i -= 1
-    return None
+    return guard_markers.marker_reason(MARKER, src, node)
 
 
 def _write_calls(tree: ast.AST):

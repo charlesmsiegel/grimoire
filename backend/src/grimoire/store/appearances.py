@@ -36,6 +36,24 @@ def _path(cid: str) -> Path:
     return campaigns.campaign_root(cid) / "appearances.json"
 
 
+def locked_actor_root(cid: str) -> Path:
+    """The campaign root, for reading actors that are in the appearance record.
+
+    Actors normally inherit from the world, so reading one off a raw campaign
+    root is the mistake `store/overlay.py` exists to prevent (#248). Appeared
+    actors are the documented exception: entering the record goes through
+    `_lock`, which copies the picked version and the container meta into the
+    campaign tree, and `campaigns.ensure_campaign_slim` keeps a locked actor's
+    files there. So a campaign-side read at the locked version is authoritative
+    -- for those actors only.
+
+    Same path as `campaigns.campaign_root`; the name is the point. Call this
+    when a `roster`/`scene_cast`/`locked_version` result is what you are
+    reading, and `overlay.char_root` / `overlay.pc_root` for anything else.
+    """
+    return campaigns.campaign_root(cid)
+
+
 def record(cid: str) -> dict:
     p = _path(cid)
     if not p.exists():
@@ -203,7 +221,7 @@ def appear(cid: str, scene_id: str, kind: str, actor_id: str, version_id: str, r
     except scenes.SceneNotFound:
         return  # synthetic/test scene id with no backing file: nothing to narrate into
     if has_messages:
-        name = _actor_name(campaigns.campaign_root(cid), kind, actor_id, version_id) or actor_id
+        name = _actor_name(locked_actor_root(cid), kind, actor_id, version_id) or actor_id
         scenes.append_message(cid, scene_id, "assistant", f"*{name} joins the scene.*",
                               speaker=scenes.TRANSITION_SPEAKER)
 
@@ -233,7 +251,7 @@ def leave(cid: str, scene_id: str, kind: str, actor_id: str) -> None:
     except scenes.SceneNotFound:
         return
     if has_messages:
-        name = _actor_name(campaigns.campaign_root(cid), kind, actor_id, version) or actor_id
+        name = _actor_name(locked_actor_root(cid), kind, actor_id, version) or actor_id
         scenes.append_message(cid, scene_id, "assistant", f"*{name} leaves the scene.*",
                               speaker=scenes.TRANSITION_SPEAKER)
 
@@ -258,16 +276,16 @@ def cast_detail(cid: str, sid: str, kind: str, actor_id: str) -> dict:
     """Read-only display info for an actor in a scene, from the campaign copy."""
     if not any(a["kind"] == kind and a["id"] == actor_id for a in scene_cast(cid, sid)):
         raise AppearError(f"{kind}/{actor_id} is not in scene {sid}")
-    croot = campaigns.campaign_root(cid)
+    aroot = locked_actor_root(cid)
     vid = locked_version(cid, kind, actor_id)
     if kind == "characters":
-        data = characters.read_card(croot, actor_id, vid)["data"]
+        data = characters.read_card(aroot, actor_id, vid)["data"]
         labelled = [("Description", "description"), ("Personality", "personality"), ("Scenario", "scenario")]
         body = "\n\n".join(f"**{lbl}**\n{data.get(f, '').strip()}"
                            for lbl, f in labelled if data.get(f, "").strip())
         name = data.get("name", actor_id)
     else:
-        p = pcs.read_persona(croot, actor_id, vid)
+        p = pcs.read_persona(aroot, actor_id, vid)
         body = "\n\n".join(x for x in (p.get("summary", "").strip(), p.get("description", "").strip()) if x)
         name = p.get("name", actor_id)
     return {"kind": kind, "id": actor_id, "name": name, "version": vid, "body": body}
@@ -288,21 +306,24 @@ def roster_names(cid: str) -> list[str]:
     drift measurement needs: its window reaches back three turns, so a departed
     character still has blocks in it. Unreadable actors are skipped.
     """
-    croot = campaigns.campaign_root(cid)
+    aroot = locked_actor_root(cid)
     out = []
     for a in roster(cid):
-        name = _actor_name(croot, a["kind"], a["id"], a["version"])
+        name = _actor_name(aroot, a["kind"], a["id"], a["version"])
         if name:
             out.append(name)
     return out
 
 
-def _actor_name(croot: Path, kind: str, actor_id: str, vid: str | None) -> str | None:
-    """Display name from the campaign copy at the locked version; None if unreadable."""
+def _actor_name(aroot: Path, kind: str, actor_id: str, vid: str | None) -> str | None:
+    """Display name from the campaign copy at the locked version; None if unreadable.
+
+    `aroot` is a `locked_actor_root`: every actor reaching here comes from the
+    appearance record, so the campaign-side copy exists."""
     try:
         if kind == "pcs":
-            return pcs.read_persona(croot, actor_id, vid).get("name") or actor_id
-        return characters.read_card(croot, actor_id, vid)["data"].get("name") or actor_id
+            return pcs.read_persona(aroot, actor_id, vid).get("name") or actor_id
+        return characters.read_card(aroot, actor_id, vid)["data"].get("name") or actor_id
     except (pcs.PCNotFound, pcs.PCVersionNotFound,
             characters.CharacterNotFound, characters.VersionNotFound):
         return None
@@ -310,23 +331,23 @@ def _actor_name(croot: Path, kind: str, actor_id: str, vid: str | None) -> str |
 
 def player_names(cid: str, scene_id: str) -> list[str]:
     """Display names of the scene's role=player cast (PCs or characters cast as players)."""
-    croot = campaigns.campaign_root(cid)
+    aroot = locked_actor_root(cid)
     out = []
     for a in players_in_scene(cid, scene_id):
-        name = _actor_name(croot, a["kind"], a["id"], a["version"])
+        name = _actor_name(aroot, a["kind"], a["id"], a["version"])
         if name:
             out.append(name)
     return out
 
 
 def scene_cast(cid: str, scene_id: str) -> list[dict]:
-    croot = campaigns.campaign_root(cid)
+    aroot = locked_actor_root(cid)
     out = []
     for ref, r in record(cid).items():
         if scene_id in r["scenes"]:
             kind, actor_id = _split(ref)
             out.append({"kind": kind, "id": actor_id, "role": r["role"],
-                        "name": _actor_name(croot, kind, actor_id, r["version"]) or actor_id})
+                        "name": _actor_name(aroot, kind, actor_id, r["version"]) or actor_id})
     return sorted(out, key=lambda a: (a["kind"], a["id"]))
 
 

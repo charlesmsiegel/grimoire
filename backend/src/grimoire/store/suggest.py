@@ -14,16 +14,19 @@ from . import (appearances, calendars, campaigns, characters, chronicle,
                greetings, overlay, pcs, plot)
 
 
-def _char_name(croot, aid: str) -> str:
+def _char_name(aroot, aid: str) -> str:
+    """`aroot` is an `appearances.locked_actor_root`; callers pass roster ids."""
     try:
-        return characters.read_character(croot, aid)["meta"].get("name", aid)
+        return characters.read_character(aroot, aid)["meta"].get("name", aid)
     except characters.CharacterNotFound:
         return aid
 
 
-def _birthdays(croot, now: str, roster: list[dict]) -> list[dict]:
+def _birthdays(cid: str, now: str, roster: list[dict]) -> list[dict]:
     if not now:
         return []
+    croot = campaigns.campaign_root(cid)          # calendar.json is campaign-local
+    aroot = appearances.locked_actor_root(cid)    # roster actors are locked, so campaign-side
     try:
         cfg = calendars.read_calendar(croot)
         provider = calendars.get_provider(cfg["primary"])
@@ -34,11 +37,11 @@ def _birthdays(croot, now: str, roster: list[dict]) -> list[dict]:
     for a in roster:
         try:
             if a["kind"] == "pcs":
-                birth = pcs.read_persona(croot, a["id"], a["version"]).get("birthdate", "")
-                name = pcs.read_pc(croot, a["id"])["meta"].get("name", a["id"])
+                birth = pcs.read_persona(aroot, a["id"], a["version"]).get("birthdate", "")
+                name = pcs.read_pc(aroot, a["id"])["meta"].get("name", a["id"])
             else:
-                birth = characters.read_character(croot, a["id"])["meta"].get("birthdate", "")
-                name = _char_name(croot, a["id"])
+                birth = characters.read_character(aroot, a["id"])["meta"].get("birthdate", "")
+                name = _char_name(aroot, a["id"])
         except (characters.CharacterNotFound, pcs.PCNotFound, pcs.PCVersionNotFound):
             continue
         if not birth:
@@ -63,7 +66,8 @@ def _tok(ref: str) -> str:
 
 
 def build_snapshot(cid: str, offscreen: bool = False) -> dict:
-    croot = campaigns.campaign_root(cid)
+    croot = campaigns.campaign_root(cid)          # calendar.json is campaign-local
+    aroot = appearances.locked_actor_root(cid)    # roster actors are locked, so campaign-side
     roster = appearances.roster(cid)
 
     try:
@@ -128,8 +132,8 @@ def build_snapshot(cid: str, offscreen: bool = False) -> dict:
                 continue
             seen.add(tok)
             try:
-                name = (pcs.read_pc(croot, a["id"])["meta"].get("name", a["id"])
-                        if a["kind"] == "pcs" else _char_name(croot, a["id"]))
+                name = (pcs.read_pc(aroot, a["id"])["meta"].get("name", a["id"])
+                        if a["kind"] == "pcs" else _char_name(aroot, a["id"]))
             except pcs.PCNotFound:
                 name = a["id"]
             cast.append({"token": tok, "name": name, "tagline": "",
@@ -139,7 +143,7 @@ def build_snapshot(cid: str, offscreen: bool = False) -> dict:
                            for e in overlay.list_entities(cid, "locations")]
 
     return {"now": now, "friendly": friendly, "holidays_today": holidays_today,
-            "upcoming": upcoming, "birthdays": _birthdays(croot, now, roster),
+            "upcoming": upcoming, "birthdays": _birthdays(cid, now, roster),
             "story_so_far": story_so_far, "open_threads": open_threads,
             "cast": cast, "available_locations": available_locations}
 
