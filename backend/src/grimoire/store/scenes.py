@@ -184,6 +184,9 @@ def repad(cid: str, width: int) -> None:
 
 def create_scene(cid: str, title: str, suggested_date: str | None = None,
                  pcless: bool = False) -> str:
+    _require_campaign(cid)   # before _date_hint: no calendar plugin runs for a
+                             # campaign that doesn't exist. Re-checked under the
+                             # lock, which is where it actually has to hold.
     # The date hint is normalized before the lock, not inside it — see _date_hint.
     return _create_scene(cid, title, pcless, _date_hint(cid, suggested_date))
 
