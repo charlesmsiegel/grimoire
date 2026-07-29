@@ -17,6 +17,7 @@ from pathlib import Path
 
 from . import (atomic, campaigns, characters, entities, expressions, locks, modules, overlay,
                pcs, worlds)
+from .paths import safe_id
 
 
 class SheetError(Exception):
@@ -55,13 +56,6 @@ def _atomic_write_json(path: Path, data: dict) -> None:
 def sheet_kind(kind: str) -> str:
     """Module sheet-type kind for a file kind (pcs share characters types)."""
     return "characters" if kind == "pcs" else kind
-
-
-def _safe_part(part: str) -> bool:
-    if not isinstance(part, str):
-        return False
-    return (bool(part) and part not in (".", "..") and "/" not in part
-            and "\\" not in part and ":" not in part)
 
 
 def _campaign_dir(cid: str) -> Path:
@@ -211,7 +205,7 @@ def _read_path(path: Path, file_kind: str, mid: str | None) -> dict | None:
 
 
 def read(cid: str, kind: str, eid: str) -> dict | None:
-    if kind not in FILE_KINDS or not _safe_part(eid):
+    if kind not in FILE_KINDS or not safe_id(eid):
         return None
     mid = modules.resolve(cid)
     return _read_path(_campaign_path(cid, kind, eid), kind, mid)
@@ -222,7 +216,7 @@ def _validate_write_target(mid: str, file_kind: str, eid: str, sheet_type: str) 
     sheet_type and returns the resolved sheets definition. Raises SheetError."""
     if file_kind not in FILE_KINDS:
         raise SheetError(f"unknown sheet kind {file_kind!r}")
-    if not _safe_part(eid):
+    if not safe_id(eid):
         raise SheetError(f"bad entity id {eid!r}")
     if not isinstance(sheet_type, str) or not sheet_type:
         raise SheetError("sheet_type must be a non-empty string")
@@ -311,7 +305,7 @@ def delete(cid: str, kind: str, eid: str, *, expected_gen: str | None) -> bool:
     """Delete a campaign sheet. ``expected_gen`` is mandatory CAS: the
     caller's last-read gen (None matches a legacy file with no gen minted
     yet). A missing file is False, never a conflict."""
-    if kind not in FILE_KINDS or not _safe_part(eid):
+    if kind not in FILE_KINDS or not safe_id(eid):
         return False
     with locks.campaign_lock(cid):
         p = _campaign_path(cid, kind, eid)
@@ -331,7 +325,7 @@ def list_refs(cid: str) -> list[tuple[str, str]]:
         return out
     for p in sorted(d.glob("*.json")):
         kind, sep, eid = p.stem.partition("--")
-        if sep and kind in FILE_KINDS and _safe_part(eid):
+        if sep and kind in FILE_KINDS and safe_id(eid):
             out.append((kind, eid))
     return out
 
@@ -345,7 +339,7 @@ def _world_path(wid: str, mid: str, kind: str, eid: str) -> Path:
 
 
 def read_world(wid: str, mid: str, kind: str, eid: str) -> dict | None:
-    if kind not in FILE_KINDS or not _safe_part(eid) or not _safe_part(mid):
+    if kind not in FILE_KINDS or not safe_id(eid) or not safe_id(mid):
         return None
     try:
         modules.pack_root(mid)
@@ -357,7 +351,7 @@ def read_world(wid: str, mid: str, kind: str, eid: str) -> dict | None:
 def write_world(wid: str, mid: str, kind: str, eid: str, sheet_type: str,
                 fields: dict | None = None, *, expected: dict | None) -> None:
     """``expected`` is mandatory whole-sheet CAS -- see write()."""
-    if not _safe_part(mid):
+    if not safe_id(mid):
         raise SheetError(f"bad module id {mid!r}")
     modules.pack_root(mid)  # raises ModuleNotFound
     path = _world_path(wid, mid, kind, eid)
@@ -485,7 +479,7 @@ def write_world_creation(wid: str, mid: str, kind: str, eid: str, sheet_type: st
 def delete_world(wid: str, mid: str, kind: str, eid: str, *,
                  expected_gen: str | None) -> bool:
     """``expected_gen`` is mandatory CAS -- see delete()."""
-    if kind not in FILE_KINDS or not _safe_part(eid) or not _safe_part(mid):
+    if kind not in FILE_KINDS or not safe_id(eid) or not safe_id(mid):
         return False
     p = _world_path(wid, mid, kind, eid)
     stored = _stored_snapshot(p)
@@ -504,7 +498,7 @@ def world_list_refs(wid: str, mid: str) -> list[tuple[str, str]]:
         return out
     for p in sorted(d.glob("*.json")):
         kind, sep, eid = p.stem.partition("--")
-        if sep and kind in FILE_KINDS and _safe_part(eid):
+        if sep and kind in FILE_KINDS and safe_id(eid):
             out.append((kind, eid))
     return out
 
@@ -513,7 +507,7 @@ def world_sheet_modules(wid: str) -> list[str]:
     d = worlds.world_root(wid) / "sheets"
     if not d.is_dir():
         return []
-    return sorted(p.name for p in d.iterdir() if p.is_dir() and _safe_part(p.name))
+    return sorted(p.name for p in d.iterdir() if p.is_dir() and safe_id(p.name))
 
 
 def seed(cid: str) -> int:
@@ -524,7 +518,7 @@ def seed(cid: str) -> int:
     if mid is None:
         return 0
     meta = campaigns.read_campaign(cid)["meta"]
-    src = worlds.world_root(meta.get("world", "")) / "sheets" / mid
+    src = worlds.world_root_or_missing(meta.get("world", "")) / "sheets" / mid
     if not src.is_dir():
         return 0
     dst = _campaign_dir(cid)
@@ -706,7 +700,7 @@ def _set_field_locked(mid: str, cid: str, kind: str, eid: str,
     """Body of set_field; caller holds locks.campaign_lock(cid) and resolved mid once."""
     if kind not in FILE_KINDS:
         raise SheetError(f"unknown sheet kind {kind!r}")
-    if not _safe_part(eid):
+    if not safe_id(eid):
         raise SheetError(f"bad entity id {eid!r}")
     path = _campaign_path(cid, kind, eid)
     stored = _stored_snapshot(path)

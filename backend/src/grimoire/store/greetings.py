@@ -15,15 +15,11 @@ from pathlib import Path
 
 from . import atomic, cards, characters, statcache
 from .frontmatter import dump_frontmatter, parse_frontmatter
-from .paths import natural_key, slugify, uniquify
+from .paths import natural_key, safe_id, slugify, uniquify
 
 
 class GreetingNotFound(Exception):
     pass
-
-
-def _safe(part: str) -> bool:
-    return part not in ("", ".", "..") and "/" not in part and "\\" not in part
 
 
 def _greetings_dir(root: Path) -> Path:
@@ -121,7 +117,7 @@ def create_greeting(root: Path, name: str, character: str, version: str, body: s
 
 def read_greeting(root: Path, gid: str) -> dict:
     p = _greeting_path(root, gid)
-    if not _safe(gid) or not p.exists():
+    if not safe_id(gid) or not p.exists():
         raise GreetingNotFound(gid)
     meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
     return {"meta": _meta_dict(gid, meta), "body": body}
@@ -145,7 +141,7 @@ def update_greeting(root: Path, gid: str, *, name: str | None = None, body: str 
                     requires_tags: list[str] | None = None, predecessor_join: str | None = None,
                     present: list[str] | None = None, pcless: bool | None = None) -> None:
     p = _greeting_path(root, gid)
-    if not _safe(gid) or not p.exists():
+    if not safe_id(gid) or not p.exists():
         raise GreetingNotFound(gid)
     meta, cur_body = parse_frontmatter(p.read_text(encoding="utf-8"))
     if name is not None:
@@ -227,7 +223,7 @@ def remove_from_plotmap(root: Path, gid: str) -> None:
 
 def delete_greeting(root: Path, gid: str) -> None:
     p = _greeting_path(root, gid)
-    if not _safe(gid) or not p.exists():
+    if not safe_id(gid) or not p.exists():
         raise GreetingNotFound(gid)
     p.unlink()
     remove_from_plotmap(root, gid)

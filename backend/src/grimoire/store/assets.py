@@ -15,15 +15,12 @@ import threading
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from . import atomic
+from .paths import safe_id
 
 AVATAR = "avatar"
 FOCUS_FILE = "focus.json"
 _EXTS = {"png", "jpg", "jpeg", "gif", "webp"}
 _PROMOTE_TMP = "promote-tmp"  # the temp name the pre-#253 three-rename swap used
-
-
-def _safe(part: str) -> bool:
-    return part not in ("", ".", "..") and "/" not in part and "\\" not in part
 
 
 def _safe_name(name: str) -> bool:
@@ -40,7 +37,7 @@ def _safe_name(name: str) -> bool:
     # rather than Python's: on Windows and macOS `Promote-Tmp.png` *is*
     # `promote-tmp.png`, so a case variant would otherwise slip an image into the
     # name the recovery scan claims (PR review).
-    return (_safe(name) and "." not in name and name.casefold() != _PROMOTE_TMP
+    return (safe_id(name) and "." not in name and name.casefold() != _PROMOTE_TMP
             and not any(c in name for c in "*?[]"))
 
 
@@ -242,7 +239,7 @@ def _mtime_ns(p: Path) -> int:
 
 
 def image_path(root: Path, cid: str, vid: str, name: str, base: str = "characters") -> Path | None:
-    if not (_safe(cid) and _safe(vid) and _safe_name(name)):
+    if not (safe_id(cid) and safe_id(vid) and _safe_name(name)):
         return None
     d = _dir(root, cid, vid, base)
     if not d.exists():
@@ -266,7 +263,7 @@ def image_path(root: Path, cid: str, vid: str, name: str, base: str = "character
 
 
 def list_images(root: Path, cid: str, vid: str, base: str = "characters") -> list[dict]:
-    if not (_safe(cid) and _safe(vid)):
+    if not (safe_id(cid) and safe_id(vid)):
         return []
     d = _dir(root, cid, vid, base)
     if not d.exists():
@@ -292,7 +289,7 @@ def image_version(p: Path) -> str:
 
 def read_focus(root: Path, cid: str, vid: str, base: str = "characters") -> int | None:
     """Avatar crop focus: 0-100 along the image's long axis; None = center."""
-    if not (_safe(cid) and _safe(vid)):
+    if not (safe_id(cid) and safe_id(vid)):
         return None
     p = _dir(root, cid, vid, base) / FOCUS_FILE
     if not p.exists():
@@ -307,7 +304,7 @@ def read_focus(root: Path, cid: str, vid: str, base: str = "characters") -> int 
 
 
 def write_focus(root: Path, cid: str, vid: str, focus: int, base: str = "characters") -> None:
-    if not (_safe(cid) and _safe(vid)):
+    if not (safe_id(cid) and safe_id(vid)):
         raise ValueError("unsafe image id")
     d = _dir(root, cid, vid, base)
     d.mkdir(parents=True, exist_ok=True)
@@ -315,7 +312,7 @@ def write_focus(root: Path, cid: str, vid: str, focus: int, base: str = "charact
 
 
 def clear_focus(root: Path, cid: str, vid: str, base: str = "characters") -> None:
-    if not (_safe(cid) and _safe(vid)):
+    if not (safe_id(cid) and safe_id(vid)):
         return
     p = _dir(root, cid, vid, base) / FOCUS_FILE
     if p.exists():
@@ -324,7 +321,7 @@ def clear_focus(root: Path, cid: str, vid: str, base: str = "characters") -> Non
 
 def put_image(root: Path, cid: str, vid: str, name: str, data: bytes, ext: str,
               base: str = "characters") -> str:
-    if not (_safe(cid) and _safe(vid) and _safe_name(name)):
+    if not (safe_id(cid) and safe_id(vid) and _safe_name(name)):
         raise ValueError("unsafe image id")
     ext = _norm_ext(ext)
     if not ext:
@@ -367,7 +364,7 @@ def put_image(root: Path, cid: str, vid: str, name: str, data: bytes, ext: str,
 
 
 def delete_image(root: Path, cid: str, vid: str, name: str, base: str = "characters") -> None:
-    if not (_safe(cid) and _safe(vid) and _safe_name(name)):
+    if not (safe_id(cid) and safe_id(vid) and _safe_name(name)):
         return
     d = _dir(root, cid, vid, base)
     if d.exists():
@@ -415,7 +412,7 @@ def promote_image(root: Path, cid: str, vid: str, name: str, base: str = "charac
     """
     if name == AVATAR:
         return
-    if not (_safe(cid) and _safe(vid) and _safe_name(name)):
+    if not (safe_id(cid) and safe_id(vid) and _safe_name(name)):
         raise FileNotFoundError(name)  # no logical image can live under such a name
     d = _dir(root, cid, vid, base)
     with _image_locks_held(d, name, AVATAR):

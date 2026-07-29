@@ -1091,7 +1091,7 @@ def test_set_field_bad_kind_and_eid_rejected(monkeypatch, tmp_path):
 
 
 def test_set_field_rejects_kind_that_traverses_into_another_campaign(monkeypatch, tmp_path):
-    """A crafted `kind` combined with FILE_KINDS/_safe_part(eid) being
+    """A crafted `kind` combined with FILE_KINDS/safe_id(eid) being
     unchecked would let a caller in one campaign's set_field reach a sheet
     file belonging to a different campaign (kind + eid form the raw
     "<kind>--<eid>.json" filename component). Regression for a real exploit

@@ -15,7 +15,7 @@ from pathlib import Path
 from . import atomic, calendars, campaigns, locks, overlay, scene_ids, scene_refs
 from .frontmatter import dump_frontmatter, parse_frontmatter, parse_frontmatter_head
 from .llm_connections import get_active as _get_active_connection
-from .paths import now_iso, slugify, uniquify
+from .paths import now_iso, safe_id, slugify, uniquify
 
 # The body is a script: every message is `**<Speaker>:** content`. Role is not
 # stored — a message is user-side iff its speaker is "You" or a role=player
@@ -100,11 +100,6 @@ def _scenes_dir(cid: str) -> Path:
 
 def _scene_path(cid: str, sid: str) -> Path:
     return _scenes_dir(cid) / f"{sid}.md"
-
-
-def _safe_id(sid: str) -> bool:
-    """Reject ids that could escape the scenes directory (defense in depth)."""
-    return sid not in ("", ".", "..") and "/" not in sid and "\\" not in sid
 
 
 def _require_campaign(cid: str) -> None:
@@ -265,7 +260,7 @@ def list_scenes(cid: str) -> list[dict]:
 def is_pcless(cid: str, sid: str) -> bool:
     """A scene deliberately without a player character (director-driven)."""
     p = _scene_path(cid, sid)
-    if not _safe_id(sid) or not p.exists():
+    if not safe_id(sid) or not p.exists():
         return False
     return parse_frontmatter_head(p).get("pcless") == "true"
 
@@ -286,7 +281,7 @@ def _parse_messages(body: str, players: frozenset[str]) -> list[dict]:
 
 def read_scene(cid: str, sid: str) -> dict:
     p = _scene_path(cid, sid)
-    if not _safe_id(sid) or not p.exists():
+    if not safe_id(sid) or not p.exists():
         raise SceneNotFound(sid)
     from . import appearances  # lazy: appearances lazily imports scenes too
     players = frozenset(appearances.player_names(cid, sid))
@@ -299,7 +294,7 @@ def read_scene_meta(cid: str, sid: str) -> dict:
     (response-preset usage) where the messages are irrelevant and reading them
     for every scene in the library is pure waste."""
     p = _scene_path(cid, sid)
-    if not _safe_id(sid) or not p.exists():
+    if not safe_id(sid) or not p.exists():
         raise SceneNotFound(sid)
     return {"id": sid, **parse_frontmatter_head(p)}
 
@@ -307,7 +302,7 @@ def read_scene_meta(cid: str, sid: str) -> dict:
 @_serialized
 def rename_scene(cid: str, sid: str, title: str) -> str:
     p = _scene_path(cid, sid)
-    if not _safe_id(sid) or not p.exists():
+    if not safe_id(sid) or not p.exists():
         raise SceneNotFound(sid)
     meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
     meta["title"] = title
@@ -329,7 +324,7 @@ def rename_scene(cid: str, sid: str, title: str) -> str:
 @_serialized
 def delete_scene(cid: str, sid: str) -> None:
     p = _scene_path(cid, sid)
-    if not _safe_id(sid) or not p.exists():
+    if not safe_id(sid) or not p.exists():
         raise SceneNotFound(sid)
     p.unlink()
 
@@ -337,7 +332,7 @@ def delete_scene(cid: str, sid: str) -> None:
 def get_dismissed(cid: str, sid: str) -> list[str]:
     """Suggestion ids the user dismissed for this scene. Missing scene ⇒ none."""
     p = _scene_path(cid, sid)
-    if not _safe_id(sid) or not p.exists():
+    if not safe_id(sid) or not p.exists():
         return []
     meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
     return [x for x in meta.get("dismissed", "").split(",") if x]
@@ -346,7 +341,7 @@ def get_dismissed(cid: str, sid: str) -> list[str]:
 @_serialized
 def add_dismissed(cid: str, sid: str, char_id: str) -> None:
     p = _scene_path(cid, sid)
-    if not _safe_id(sid) or not p.exists():
+    if not safe_id(sid) or not p.exists():
         raise SceneNotFound(sid)
     meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
     current = [x for x in meta.get("dismissed", "").split(",") if x]
@@ -360,7 +355,7 @@ def add_dismissed(cid: str, sid: str, char_id: str) -> None:
 def stamp_greeting(cid: str, sid: str, gid: str) -> None:
     """Record the greeting this scene was started from (plot-map unlock linkage)."""
     p = _scene_path(cid, sid)
-    if not _safe_id(sid) or not p.exists():
+    if not safe_id(sid) or not p.exists():
         raise SceneNotFound(sid)
     meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
     meta["greeting"] = gid
@@ -371,7 +366,7 @@ def stamp_greeting(cid: str, sid: str, gid: str) -> None:
 def set_pcless(cid: str, sid: str) -> None:
     """Flag a scene as deliberately player-less (an offscreen greeting stamps it)."""
     p = _scene_path(cid, sid)
-    if not _safe_id(sid) or not p.exists():
+    if not safe_id(sid) or not p.exists():
         raise SceneNotFound(sid)
     meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
     meta["pcless"] = "true"
@@ -387,7 +382,7 @@ def set_response(cid: str, sid: str, fields: dict) -> None:
     """Write scene-scope response settings. An empty value clears the field
     (inherit); a key that is absent from `fields` is left untouched."""
     p = _scene_path(cid, sid)
-    if not _safe_id(sid) or not p.exists():
+    if not safe_id(sid) or not p.exists():
         raise SceneNotFound(sid)
     meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
     for key in RESPONSE_FIELDS:
@@ -399,7 +394,7 @@ def set_response(cid: str, sid: str, fields: dict) -> None:
 @_serialized
 def append_message(cid: str, sid: str, role: str, content: str, speaker: str | None = None) -> None:
     p = _scene_path(cid, sid)
-    if not _safe_id(sid) or not p.exists():
+    if not safe_id(sid) or not p.exists():
         raise SceneNotFound(sid)
     meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
     body = _append_block(body, _block(role, speaker, content))
@@ -450,7 +445,7 @@ def get_turn_sizes(cid: str, sid: str) -> list[int]:
     no tracking yet; such a scene is simply not measured.
     """
     p = _scene_path(cid, sid)
-    if not _safe_id(sid) or not p.exists():
+    if not safe_id(sid) or not p.exists():
         return []
     return _parse_turn_sizes(parse_frontmatter_head(p).get("turn_sizes", ""))
 
@@ -489,7 +484,7 @@ def append_reply(cid: str, sid: str, segments: list[dict]) -> None:
     destroying transcript that was never meant to be rerolled.
     """
     p = _scene_path(cid, sid)
-    if not _safe_id(sid) or not p.exists():
+    if not safe_id(sid) or not p.exists():
         raise SceneNotFound(sid)
     kept = [s for s in segments if s["content"].strip()]
     if not kept:
@@ -514,7 +509,7 @@ def _serialize_messages(messages: list[dict]) -> str:
 def stamp_user_speaker(cid: str, sid: str, name: str) -> None:
     """Backfill: give every speakerless user message the (sole) player's name."""
     p = _scene_path(cid, sid)
-    if not _safe_id(sid) or not p.exists():
+    if not safe_id(sid) or not p.exists():
         raise SceneNotFound(sid)
     messages = read_scene(cid, sid)["messages"]
     stamped = False
@@ -616,7 +611,7 @@ def remove_trailing_assistant_run(cid: str, sid: str) -> None:
     Transcript and boundaries land in ONE write; see _set_turn_sizes.
     """
     p = _scene_path(cid, sid)
-    if not _safe_id(sid) or not p.exists():
+    if not safe_id(sid) or not p.exists():
         raise SceneNotFound(sid)
     messages = read_scene(cid, sid)["messages"]
     keep = len(messages) - trailing_transitions(messages)
@@ -656,7 +651,7 @@ def trim_continuation(cid: str, sid: str, from_index: int) -> None:
     lines are the only non-superseding writer active during the crash
     window; our own continuation segments never carry ROLL_SPEAKER."""
     p = _scene_path(cid, sid)
-    if not _safe_id(sid) or not p.exists():
+    if not safe_id(sid) or not p.exists():
         raise SceneNotFound(sid)
     messages = read_scene(cid, sid)["messages"]
     kept = messages[:from_index] + [
@@ -693,7 +688,7 @@ class RollMessageImmutable(Exception):
 @_serialized
 def edit_message(cid: str, sid: str, index: int, content: str) -> None:
     p = _scene_path(cid, sid)
-    if not _safe_id(sid) or not p.exists():
+    if not safe_id(sid) or not p.exists():
         raise SceneNotFound(sid)
     from . import appearances  # lazy: appearances lazily imports scenes too
     players = frozenset(appearances.player_names(cid, sid))
@@ -773,7 +768,7 @@ def _reconciled_turn_sizes(sizes: list[int], before: list[int], after: list[int]
 def mark_absorbed(cid: str, sid: str, one_line: str, summary: str) -> None:
     """Record a scene's absorbed summary into its frontmatter and flag it done."""
     p = _scene_path(cid, sid)
-    if not _safe_id(sid) or not p.exists():
+    if not safe_id(sid) or not p.exists():
         raise SceneNotFound(sid)
     meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
     meta["one_line"] = one_line
@@ -786,7 +781,7 @@ def mark_absorbed(cid: str, sid: str, one_line: str, summary: str) -> None:
 def get_location_history(cid: str, sid: str) -> list[str]:
     """Ordered campaign-location ids this scene has been at; last is current. Missing ⇒ []."""
     p = _scene_path(cid, sid)
-    if not _safe_id(sid) or not p.exists():
+    if not safe_id(sid) or not p.exists():
         return []
     meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
     return [x for x in meta.get("location_history", "").split(",") if x]
@@ -801,7 +796,7 @@ def set_location(cid: str, sid: str, eid: str) -> dict:
     Returns {"moved": bool, "name": str}.
     """
     p = _scene_path(cid, sid)
-    if not _safe_id(sid) or not p.exists():
+    if not safe_id(sid) or not p.exists():
         raise SceneNotFound(sid)
     name = overlay.read_entity(cid, "locations", eid)["meta"].get("name", eid)  # raises EntityNotFound
     history = get_location_history(cid, sid)
@@ -822,7 +817,7 @@ def set_location(cid: str, sid: str, eid: str) -> dict:
 def get_time_history(cid: str, sid: str) -> list[str]:
     """Ordered scene moments (native datetime strings); last is current. Missing ⇒ []."""
     p = _scene_path(cid, sid)
-    if not _safe_id(sid) or not p.exists():
+    if not safe_id(sid) or not p.exists():
         return []
     meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
     return [x for x in meta.get("time_history", "").split(",") if x]
@@ -831,7 +826,7 @@ def get_time_history(cid: str, sid: str) -> list[str]:
 def get_suggested_date(cid: str, sid: str) -> str:
     """The creation-time date hint, if the scene still carries one. Missing ⇒ ""."""
     p = _scene_path(cid, sid)
-    if not _safe_id(sid) or not p.exists():
+    if not safe_id(sid) or not p.exists():
         return ""
     meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
     return meta.get("suggested_date", "")
@@ -842,7 +837,7 @@ def set_datetime(cid: str, sid: str, native: str) -> dict:
     silent and stamps the start date into the filename (the id changes); later
     changes append an assistant transition line. Returns {"advanced", "friendly",
     "id"} where id is the possibly-renamed scene id."""
-    if not _safe_id(sid) or not _scene_path(cid, sid).exists():
+    if not safe_id(sid) or not _scene_path(cid, sid).exists():
         raise SceneNotFound(sid)     # cheap pre-check; re-checked under the lock
     # Resolve the calendar BEFORE taking the lock — user-authored provider code
     # must not run under it (see _date_hint). Nothing here touches the scene.
@@ -855,7 +850,7 @@ def set_datetime(cid: str, sid: str, native: str) -> dict:
 @_serialized
 def _apply_datetime(cid: str, sid: str, canonical: str, friendly: str) -> dict:
     p = _scene_path(cid, sid)
-    if not _safe_id(sid) or not p.exists():
+    if not safe_id(sid) or not p.exists():
         raise SceneNotFound(sid)
     history = get_time_history(cid, sid)
     if history and history[-1] == canonical:

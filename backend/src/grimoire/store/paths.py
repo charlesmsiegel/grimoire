@@ -111,6 +111,25 @@ def slugify(text: str) -> str:
     return slug or "untitled"
 
 
+def safe_id(value: object) -> bool:
+    """Reject ids that could escape their parent directory (defense in depth).
+
+    For every value this accepts, ``parent / value`` names a direct child of
+    ``parent``: no path separator, no ``.`` or ``..``, no empty string (which
+    would resolve to ``parent`` itself), and no colon -- on Windows a
+    drive-relative id replaces the base outright (``Path("store") / "C:evil"``
+    is ``C:evil``), and any colon names an NTFS alternate data stream.
+    Non-strings are rejected too, so ids read back out of on-disk JSON need no
+    separate type check.
+
+    Every id-to-path resolver in the store goes through this one function --
+    it used to be copy-pasted per module, and the copies that were never made
+    were exactly the resolvers that lacked the guard (#240).
+    """
+    return (isinstance(value, str) and value not in ("", ".", "..")
+            and not any(c in value for c in "/\\:"))
+
+
 def natural_key(text: str) -> tuple:
     """Sort key that orders digit runs numerically: A2 before A10, SoL 2 before
     SoL 19. Case-insensitive. Splitting on digit runs keeps types aligned
