@@ -757,7 +757,7 @@ flowchart LR
     <tr>
       <td>Per-version images</td>
       <td><code>store/assets.py</code></td>
-      <td><span class="badge warn">multi-step publish</span> Owns the format cleanly, but publication is write-then-clean and needed a per-logical-image lock (<code>backend/src/grimoire/store/assets.py:45</code>) to be safe. <code>promote_image</code>'s three-rename swap is still unguarded — issue #253.</td>
+      <td><span class="badge warn">multi-step publish</span> Owns the format cleanly, but publication is write-then-clean and needed a per-logical-image lock (<code>backend/src/grimoire/store/assets.py:45</code>) to be safe. <code>promote_image</code> no longer shuffles files through a temp name at all: it republishes each side through <code>put_image</code> under both locks, so the avatar slot always resolves (issue #253).</td>
     </tr>
   </tbody>
 </table>
