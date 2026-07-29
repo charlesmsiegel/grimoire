@@ -2238,6 +2238,19 @@ def test_absorb_skips_dossier_edit_when_unchanged(client):
     assert body["dossiers"]["status"] == "ok" and body["dossiers"]["proposed"] == ["aese"]
 
 
+def test_absorb_reports_a_blank_dossier_reply_as_a_failure(client):
+    """An empty reply also stages no edit, but unlike an unchanged paragraph it
+    is a failed refresh -- reporting it as `ok` is how #236's symptom (dossiers
+    quietly stop updating) would come back."""
+    cid, sid = _dossier_scene(client, prior="Aese is a stranger.")
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete("   ")
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    assert [e for e in body["edits"] if e["kind"] == "dossier"] == []
+    assert body["dossiers"]["status"] == "failed"
+    assert body["dossiers"]["proposed"] == []
+    assert body["dossiers"]["failed"] == [{"id": "aese", "reason": "empty dossier reply"}]
+
+
 def _cast_npc(client, wid, cid, sid, name, ident):
     client.post(f"/api/worlds/{wid}/characters", json={"name": name, "version_name": "main"})
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",

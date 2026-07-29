@@ -340,8 +340,15 @@ async def _stage_dossiers(cid: str, sid: str, transcript: str, client: LLMClient
             name = store.characters.read_character(croot, a["id"])["meta"].get("name", a["id"])
             msgs = store.dossiers.build_prompt(name, store.dossiers.read(croot, a["id"]), transcript)
             d_text = await budget.run(client.complete(msgs, conn))
-            edit = store.dossiers.stage_edit(croot, a["id"], name,
-                                             store.dossiers.parse_output(d_text))
+            parsed_dossier = store.dossiers.parse_output(d_text)
+            # stage_edit returns None for an unchanged paragraph AND for a blank
+            # reply; only the first is a success. Left conflated, a model that
+            # answers "" for every NPC reports `ok` with nothing staged -- exactly
+            # #236's symptom (dossiers quietly stop updating) wearing a status.
+            if not parsed_dossier:
+                out["failed"].append({"id": a["id"], "reason": "empty dossier reply"})
+                continue
+            edit = store.dossiers.stage_edit(croot, a["id"], name, parsed_dossier)
         except Exception as exc:  # noqa: BLE001 -- LLMError, store errors, anything
             # Type-prefixed: a bare str() is useless for the store's own errors
             # (CharacterNotFound("aese") stringifies to just "aese").
