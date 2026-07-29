@@ -30,7 +30,7 @@ from pathlib import Path
 
 from . import atomic, campaigns, locks, modules, proposals, sheets, worlds
 from .frontmatter import dump_frontmatter, parse_frontmatter
-from .paths import home, slugify, uniquify
+from .paths import home, safe_id, slugify, uniquify
 
 # Cross-process (#234): pack publication rewrites a whole directory in the
 # shared user library, so a second backend must be excluded, not just a second
@@ -298,7 +298,7 @@ def _replay_journal(jp: Path, quarantined: set[str]) -> None:
         j = None
     mid = str(j.get("mid") or "") if isinstance(j, dict) else ""
     nonce = str(j.get("nonce") or "") if isinstance(j, dict) else ""
-    if not modules._safe_mid(mid) or not modules._safe_id_like(nonce):
+    if not modules._safe_mid(mid) or not safe_id(nonce):
         quarantined.add(jp.name)
         jp.rename(jp.with_suffix(".bad"))
         return
@@ -1252,7 +1252,7 @@ def upsert_content(mid: str, kind: str, content_id: str, *, name: str,
                    dry_run: bool = False) -> dict:
     if kind not in modules.CONTENT_KINDS:
         return {"ok": False, "errors": [f"unknown content kind {kind!r}"], "display_errors": []}
-    if not modules._safe_id_like(content_id):
+    if not safe_id(content_id):
         return {"ok": False, "errors": [f"bad content id {content_id!r}"], "display_errors": []}
     def mutate(root: Path) -> None:
         d = root / "content" / kind
@@ -1275,7 +1275,7 @@ def upsert_content(mid: str, kind: str, content_id: str, *, name: str,
 
 
 def delete_content(mid: str, kind: str, content_id: str, *, dry_run: bool = False) -> dict:
-    if kind not in modules.CONTENT_KINDS or not modules._safe_id_like(content_id):
+    if kind not in modules.CONTENT_KINDS or not safe_id(content_id):
         return {"ok": False, "errors": [f"unknown content {kind}/{content_id}"], "display_errors": []}
     def mutate(root: Path) -> None:
         d = root / "content" / kind

@@ -13,7 +13,7 @@ from pathlib import Path
 
 from . import atomic, statcache
 from .frontmatter import dump_frontmatter, parse_frontmatter
-from .paths import slugify, uniquify
+from .paths import safe_id, slugify, uniquify
 
 PERSONA_FIELDS = ("name", "pronouns", "summary", "birthdate")  # frontmatter scalars; description is the body
 
@@ -26,15 +26,15 @@ class PCVersionNotFound(Exception):
     pass
 
 
-def _safe(part: str) -> bool:
-    return part not in ("", ".", "..") and "/" not in part and "\\" not in part
-
-
 def _pcs_dir(root: Path) -> Path:
     return root / "pcs"
 
 
 def _pc_dir(root: Path, pid: str) -> Path:
+    """The PC's directory. Raises PCNotFound for an id that doesn't name a
+    child of the pcs dir -- same guard as characters._char_dir (#240)."""
+    if not safe_id(pid):
+        raise PCNotFound(pid)
     return _pcs_dir(root) / pid
 
 
@@ -61,9 +61,10 @@ def _load_persona(text: str) -> dict:
 
 
 def _require_pc(root: Path, pid: str) -> Path:
-    if not _safe(pid) or not _meta_path(root, pid).exists():
+    d = _pc_dir(root, pid)   # raises PCNotFound for an unsafe id
+    if not _meta_path(root, pid).exists():
         raise PCNotFound(pid)
-    return _pc_dir(root, pid)
+    return d
 
 
 def _read_meta(root: Path, pid: str) -> dict:
@@ -101,14 +102,14 @@ def create_version(root: Path, pid: str, version_name: str, persona: dict) -> st
 def update_version(root: Path, pid: str, vid: str, persona: dict) -> None:
     _require_pc(root, pid)
     p = _version_path(root, pid, vid)
-    if not _safe(vid) or not p.exists():
+    if not safe_id(vid) or not p.exists():
         raise PCVersionNotFound(vid)
     atomic.write_text(p, _dump_persona(persona))
 
 
 def set_default_version(root: Path, pid: str, vid: str) -> None:
     _require_pc(root, pid)
-    if not _safe(vid) or not _version_path(root, pid, vid).exists():
+    if not safe_id(vid) or not _version_path(root, pid, vid).exists():
         raise PCVersionNotFound(vid)
     meta = _read_meta(root, pid)
     _write_meta(root, pid, meta.get("name", pid), _tags_of(meta), vid)
@@ -127,7 +128,7 @@ def _version_ids(root: Path, pid: str) -> list[str]:
 def read_persona(root: Path, pid: str, vid: str) -> dict:
     _require_pc(root, pid)
     p = _version_path(root, pid, vid)
-    if not _safe(vid) or not p.exists():
+    if not safe_id(vid) or not p.exists():
         raise PCVersionNotFound(vid)
     return _load_persona(p.read_text(encoding="utf-8"))
 
@@ -158,7 +159,7 @@ def list_pcs(root: Path) -> list[dict]:
 def delete_version(root: Path, pid: str, vid: str) -> None:
     _require_pc(root, pid)
     p = _version_path(root, pid, vid)
-    if not _safe(vid) or not p.exists():
+    if not safe_id(vid) or not p.exists():
         raise PCVersionNotFound(vid)
     if len(_version_ids(root, pid)) == 1:
         raise ValueError("cannot delete the last version of a PC")
@@ -174,7 +175,7 @@ def delete_pc(root: Path, pid: str) -> None:
 
 
 def version_hash(root: Path, pid: str, vid: str) -> str | None:
-    if not _safe(pid) or not _safe(vid):
+    if not safe_id(pid) or not safe_id(vid):
         return None
     p = _version_path(root, pid, vid)
     sig = statcache.signature(p)
@@ -212,7 +213,7 @@ def _dir_hash_compute(files: list[Path]) -> str:
 def dir_hash(root: Path, pid: str) -> str | None:
     """Whole-actor content hash: pc.md plus every version persona, name-tagged.
     Only these files feed the hash, so nothing else in the dir can surface in sync."""
-    if not _safe(pid) or not _meta_path(root, pid).exists():
+    if not safe_id(pid) or not _meta_path(root, pid).exists():
         return None
     files = [_meta_path(root, pid)] + [_version_path(root, pid, v) for v in _version_ids(root, pid)]
     return statcache.memo("pc_dir_hash", statcache.signature(*files),
