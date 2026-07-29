@@ -279,7 +279,10 @@ def test_a_crash_mid_promotion_always_leaves_a_resolvable_avatar(
     renames (#253). Each rename was atomic; the sequence was not, so a crash
     after the second left the promoted image parked under a name nothing ever
     looks for and NO avatar at all. The avatar slot must always resolve, and
-    nothing may be left behind under an unreachable name."""
+    nothing may be left behind under an unreachable name.
+
+    The swap makes only two hooked mutations, so the last cut points let it run
+    to completion -- those assert the same invariant on the success path."""
     assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"OLD", "png")
     assets.put_image(tmp_path, "sera", "default", "gallery_1", b"NEW", new_ext)
 
@@ -307,6 +310,39 @@ def test_promotion_leaves_one_file_per_slot(tmp_path):
     assets.promote_image(tmp_path, "sera", "default", "gallery_1")
     assert _named(assets.list_images(tmp_path, "sera", "default")) == [
         ("avatar", "webp"), ("gallery_1", "png")]
+
+
+def test_a_promotion_that_cannot_clear_its_source_does_not_claim_success(tmp_path, monkeypatch):
+    """With no avatar to swap back, the promoted image has to leave its slot --
+    overlay.promote_image reads that emptiness to decide whether to tombstone an
+    inherited image, so a silently-kept source becomes a visible duplicate.
+    delete_image swallows unlink failures by design (PR review), so promotion
+    has to confirm the slot rather than report a move that didn't happen."""
+    assets.put_image(tmp_path, "sera", "default", "gallery_1", b"NEW", "png")
+    monkeypatch.setattr("pathlib.Path.unlink", lambda self, **kw: None)  # unlink no-ops
+
+    with pytest.raises(OSError):
+        assets.promote_image(tmp_path, "sera", "default", "gallery_1")
+
+    monkeypatch.undo()
+    # The avatar was still published -- the leftover is the failure, not the promotion.
+    av = assets.image_path(tmp_path, "sera", "default", assets.AVATAR)
+    assert av is not None and av.read_bytes() == b"NEW"
+
+
+def test_promoting_a_file_of_an_unsupported_type_changes_nothing(tmp_path):
+    """image_path will hand back any extension; put_image accepts only the
+    allowlist. Checking both sides up front keeps that from surfacing halfway
+    through the swap, with the avatar already replaced."""
+    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"OLD", "png")
+    d = tmp_path / "characters" / "sera" / "assets" / "default"
+    (d / "gallery_1.bmp").write_bytes(b"NEW")  # only an external tool can put this here
+
+    with pytest.raises(ValueError):
+        assets.promote_image(tmp_path, "sera", "default", "gallery_1")
+
+    assert assets.image_path(tmp_path, "sera", "default", assets.AVATAR).read_bytes() == b"OLD"
+    assert (d / "gallery_1.bmp").read_bytes() == b"NEW"
 
 
 def test_concurrent_promotions_neither_collide_nor_lose_an_image(tmp_path):
