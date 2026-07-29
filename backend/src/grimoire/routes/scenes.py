@@ -17,7 +17,7 @@ from .common import (_campaign_root_or_404, _dump, _require_connection, _require
 from .models import (Appear, AppearBatch, ChatTurn, ChronicleSave, Dismiss, EditMessage,
                      NewScene, RegenerateBody, RenameScene, ResponseSettings, RetryBody,
                      SceneDatetime, SceneLocation)
-from .streaming import _chat_stream, _heal_current_proposal
+from .streaming import _chat_stream
 
 router = APIRouter()
 
@@ -117,7 +117,6 @@ def delete_scene(cid: str, sid: str):
 def post_chat(cid: str, sid: str, turn: ChatTurn, client: LLMClient = Depends(get_llm)):
     _require_scene(cid, sid)
     conn = _require_connection()
-    _heal_current_proposal(cid, sid)     # retirement paths heal first (invariant)
     store.proposals.supersede(cid, sid)  # a new send retires any pending decision
     if store.scenes.is_pcless(cid, sid) or not turn.content.strip():
         # ephemeral turn, never stored: a director note steering one generation
@@ -144,7 +143,6 @@ def post_retry(cid: str, sid: str, body: RetryBody | None = None,
                client: LLMClient = Depends(get_llm)):
     scene = _require_scene(cid, sid)
     conn = _require_connection()
-    _heal_current_proposal(cid, sid)     # retirement paths heal first (invariant)
     store.proposals.supersede(cid, sid)  # a fresh generation retires the old decision
     if not scene["messages"]:
         raise HTTPException(status_code=400, detail="nothing to retry")
@@ -156,11 +154,15 @@ def post_retry(cid: str, sid: str, body: RetryBody | None = None,
 def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
                     client: LLMClient = Depends(get_llm)):
     """Redo the most recent post: drop a trailing assistant reply, stream a fresh one."""
-    scene = _require_scene(cid, sid)
+    _require_scene(cid, sid)
     conn = _require_connection()
-    _heal_current_proposal(cid, sid)     # retirement paths heal first (invariant)
     store.proposals.supersede(cid, sid)  # regenerating retires the old decision
-    msgs = scene["messages"]
+    # Re-read AFTER the retire: superseding heals the record it retires, which
+    # can append a 🎲 line the pre-retire snapshot doesn't have. Judging the
+    # checks below on the stale snapshot let the ROLL_SPEAKER guard pass and
+    # `remove_trailing_assistant_run` then refuse (IndexError -> 500) — it
+    # never deletes a roll line, but the caller deserves the 400 instead.
+    msgs = _require_scene(cid, sid)["messages"]
     if not msgs:
         raise HTTPException(status_code=400, detail="nothing to regenerate")
     # Trailing scene transitions are stepped over, not consumed: reroll targets

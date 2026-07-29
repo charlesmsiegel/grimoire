@@ -8,6 +8,14 @@ persists a continuation and marks narrated atomically so a supersede that
 lands mid-stream drops the stale text. Ids are uuid-based (a rebuilt file
 can never re-mint an old id); writes are atomic via temp-file + replace.
 Reads never raise on malformed content.
+
+This module also owns projection (``project``) — writing a resolved record's
+roll and 🎲 line into the campaign's roll log and transcript — because the
+two are inseparable: a record with a projectable resolution must never be
+retired (``supersede``) or replaced (``new``) before its projection
+completes, or the roll stands in rolls.json without its transcript line
+forever. Both retirement paths call ``heal`` themselves (#242), so that is a
+guarantee of the state machine rather than a rule each caller must remember.
 Spec: docs/superpowers/specs/2026-07-12-mechanics-phase4-play-integration-design.md.
 """
 
@@ -57,8 +65,10 @@ def _write(cid: str, data: dict) -> None:
 def new(cid: str, sid: str, payload: dict) -> dict:
     """Create a fresh pending proposal for the scene, superseding whatever
     non-terminal record (if any) was already there — a new send always
-    retires the old one."""
+    retires the old one. Heals first: the record about to be overwritten is
+    the only recovery handle for its own projection (see ``heal``)."""
     with locks.campaign_lock(cid):
+        heal(cid, sid)
         data = _read(cid)
         rec = {"id": f"pr-{uuid.uuid4().hex}", "status": "pending",
                "payload": payload, "created": now_iso(), "resolution": None}
@@ -128,13 +138,88 @@ def update_resolution(cid: str, sid: str, pid: str, resolution: dict) -> bool:
 
 
 def supersede(cid: str, sid: str) -> None:
-    """A new send or a newer fence retires any non-narrated proposal."""
+    """A new send or a newer fence retires any non-narrated proposal. Heals
+    first: retirement must never outrun the record's own projection (see
+    ``heal``)."""
     with locks.campaign_lock(cid):
+        heal(cid, sid)
         data = _read(cid)
         rec = data.get(sid)
         if isinstance(rec, dict) and rec.get("status") in NON_TERMINAL:
             rec["status"] = "superseded"
             _write(cid, data)
+
+
+def project(cid: str, sid: str, pid: str) -> dict | None:
+    """Idempotent, crash-recoverable projection of a resolved proposal into the
+    roll log and transcript (roll entry + 🎲 line + the ``roll_id`` /
+    ``line_intent`` metadata that makes both re-findable). Runs entirely under
+    the per-campaign lock (pure file I/O, no LLM), so concurrent retries
+    serialize. The updated resolution is carried forward across each CAS —
+    never rebuilt from a stale local — so the roll_id survives the line_intent
+    write.
+
+    Defensive re-validation: a caller may check status *before* acquiring this
+    lock, so a supersede + brand-new record for the scene can land in that
+    narrow window. If the scene's current record no longer carries this
+    proposal id, or has no stored resolution yet, another actor won — return
+    None and do nothing (no roll append, no line). Deliberately NOT a status
+    check: a record that still carries this id but was superseded after
+    resolving (status "superseded") must still project — its roll stands in
+    the transcript as history per spec; only the automatic continuation is
+    cancelled (by ``commit_narration``), not the roll projection itself. The
+    roll_id/line_intent backfills persist via ``update_resolution``, which
+    writes metadata without touching terminal status, so a same-id superseded
+    record keeps them (a status CAS would silently lose and drop them)."""
+    from . import checks, rolls, scenes  # function-level: avoid import cycles
+    with locks.campaign_lock(cid):
+        rec = get(cid, sid)
+        if (rec is None or rec.get("id") != pid
+                or rec.get("status") not in ("resolved", "superseded")
+                or not isinstance(rec.get("resolution"), dict)):
+            return None
+        res = dict(rec["resolution"])
+        entry = rolls.find_or_append_by_proposal(
+            cid, sid, checks.roll_label(res), res["result"], proposal=pid,
+            tier=res.get("tier"))
+        res = {**res, "roll_id": entry["id"]}
+        update_resolution(cid, sid, pid, res)
+        if "line_intent" not in res:
+            res = {**res, "line_intent": len(scenes.read_scene(cid, sid)["messages"])}
+            update_resolution(cid, sid, pid, res)
+        line = checks.format_check_roll(res)
+        if not any(m.get("speaker") == scenes.ROLL_SPEAKER and m["content"] == line
+                   for m in scenes.read_scene(cid, sid)["messages"][res["line_intent"]:]):
+            scenes.append_message(cid, sid, "assistant", line,
+                                  speaker=scenes.ROLL_SPEAKER)
+        return res
+
+
+def heal(cid: str, sid: str) -> None:
+    """Complete the scene's current record's projection before that record is
+    retired or replaced. Called by ``supersede`` and ``new`` themselves, so the
+    guarantee holds for every caller — present and future — rather than
+    depending on each one remembering (#242).
+
+    The record is the only recovery handle for a projection crash (roll
+    tagged, line missing): the stale-retry heal in the POST roll-proposal
+    route matches on the record's id and only projects superseded records that
+    still carry a resolution, so once ``new`` overwrites ``data[sid]`` (or the
+    frontend stops offering the superseded record) the roll would stand in
+    rolls.json without its transcript line forever. Projection is idempotent
+    pure file I/O, so healing an already-complete record is a cheap no-op.
+    Only records whose resolution carries a roll ``result`` can project —
+    declined records never store a resolution (and would have no roll to
+    project if they somehow did), and pending/resolving records have nothing
+    resolved yet; those are retired/replaced as before.
+
+    The heal is idempotent, and a crash during it leaves the record current
+    (retirement never ran), so the next attempt re-heals. The only remaining
+    loss windows are the phase-4 spec's two accepted fence-handoff ones."""
+    rec = get(cid, sid)
+    if (isinstance(rec, dict) and isinstance(rec.get("resolution"), dict)
+            and "result" in rec["resolution"]):
+        project(cid, sid, rec["id"])
 
 
 def commit_narration(cid: str, sid: str, pid: str, persist) -> bool:
