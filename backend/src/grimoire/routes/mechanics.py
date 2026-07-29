@@ -128,6 +128,19 @@ def post_roll_proposal(cid: str, sid: str, body: ProposalAction,
                     cid, body.check or p.get("check"), body.actor or p.get("actor"),
                     body.difficulty if body.difficulty is not None else p.get("difficulty"),
                     body.modifier if body.modifier is not None else (p.get("modifier") or 0))
+            except store.locks.StoreBusy:
+                # Contention is not a check failure and must not be dressed up
+                # as one (#234). Revert exactly as the broad path does, then
+                # let the 409 handler answer. The revert can itself contend; if
+                # it does the record stays "resolving", which needs no new
+                # machinery -- that is in proposals.NON_TERMINAL, so the next
+                # send's supersede() retires it, and until then this route
+                # answers 409 "adjudication in progress", which is accurate.
+                try:
+                    store.proposals.transition(cid, sid, pid, ("resolving",), "pending")
+                except store.locks.StoreBusy:
+                    pass
+                raise
             except Exception as exc:  # noqa: BLE001 — any failure reverts cleanly
                 store.proposals.transition(cid, sid, pid, ("resolving",), "pending")
                 detail = (str(exc) if isinstance(exc, store.checks.CheckError)
