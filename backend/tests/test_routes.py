@@ -2170,7 +2170,9 @@ def test_absorb_returns_preview_without_persisting(client):
     assert client.get(f"/api/campaigns/{cid}/chronicle").json() == []  # not persisted yet
 
 
-def test_absorb_writes_dossier_for_present_character(client):
+def _dossier_scene(client, prior: str = ""):
+    """A campaign whose scene has one present NPC (aese) with a transcript --
+    the shape every dossier-staging test needs."""
     wid, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
     client.post(f"/api/worlds/{wid}/characters", json={"name": "Aese", "version_name": "main"})
@@ -2178,14 +2180,62 @@ def test_absorb_writes_dossier_for_present_character(client):
                 json={"kind": "characters", "id": "aese", "version": "main", "role": "npc"})
     store.scenes.append_message(cid, sid, "user", "Aese served tea.")
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    if prior:
+        store.dossiers.write(store.campaigns.campaign_root(cid), "aese", prior)
+    return cid, sid
+
+
+def test_absorb_stages_dossier_without_writing_it(client):
+    """The dossier LLM call still runs, but absorb writes NOTHING: the refreshed
+    dossier comes back as an approvable edit (#235 -- absorb is a proposal)."""
+    cid, sid = _dossier_scene(client)
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: FakeOpenRouterComplete("Aese is a shy snowleopardgirl who now trusts the owner.")
     r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
     assert r.status_code == 200
-    croot = store.campaigns.campaign_root(cid)
-    assert "Aese is a shy snowleopardgirl" in store.dossiers.read(croot, "aese")
+    edit = next(e for e in r.json()["edits"] if e["kind"] == "dossier")
+    assert edit["target"] == {"kind": "characters", "id": "aese"}
+    assert "Aese is a shy snowleopardgirl" in edit["after"] and edit["before"] == ""
     assert r.json()["dossiers"] == {"status": "ok", "reason": None,
-                                    "refreshed": ["aese"], "failed": [], "skipped": []}
+                                    "proposed": ["aese"], "failed": [], "skipped": []}
+    # the whole point: absorb left the store untouched
+    assert store.dossiers.read(store.campaigns.campaign_root(cid), "aese") == ""
+
+
+def test_dossier_edit_is_written_on_save(client):
+    cid, sid = _dossier_scene(client)
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: FakeOpenRouterComplete("Aese now trusts the owner.")
+    edits = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["edits"]
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                   json={"one_line": "o", "summary": "s", "keywords": [],
+                         "timeline_events": [], "edits": edits})
+    assert r.status_code == 200 and "dossier:aese" in r.json()["applied"]
+    assert store.dossiers.read(store.campaigns.campaign_root(cid), "aese") == "Aese now trusts the owner."
+
+
+def test_rejected_dossier_edit_leaves_the_prior_dossier(client):
+    """Cancelling (or unchecking) the dossier must leave the old one standing --
+    impossible before #235, when absorb wrote it eagerly."""
+    cid, sid = _dossier_scene(client, prior="Aese is a stranger.")
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: FakeOpenRouterComplete("Aese now trusts the owner.")
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+    client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+               json={"one_line": "o", "summary": "s", "keywords": [],
+                     "timeline_events": [], "edits": []})
+    assert store.dossiers.read(store.campaigns.campaign_root(cid), "aese") == "Aese is a stranger."
+
+
+def test_absorb_skips_dossier_edit_when_unchanged(client):
+    """An unchanged paragraph stages nothing, but the NPC still counts as
+    proposed -- the call succeeded, it just had nothing to say."""
+    cid, sid = _dossier_scene(client, prior="Aese is a shy snowleopardgirl.")
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: FakeOpenRouterComplete("Aese is a shy snowleopardgirl.")
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    assert [e for e in body["edits"] if e["kind"] == "dossier"] == []
+    assert body["dossiers"]["status"] == "ok" and body["dossiers"]["proposed"] == ["aese"]
 
 
 def _cast_npc(client, wid, cid, sid, name, ident):
@@ -2224,10 +2274,11 @@ def test_absorb_survives_dossier_failure(client):
     client.app.dependency_overrides[routes.get_llm] = lambda: _DossierFake("Aese")
     r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
     assert r.status_code == 200 and r.json()["one_line"] == "ok"
-    assert store.dossiers.read(store.campaigns.campaign_root(cid), "aese") == ""  # failed write skipped
+    assert [e for e in r.json()["edits"] if e["kind"] == "dossier"] == []  # nothing to stage
+    assert store.dossiers.read(store.campaigns.campaign_root(cid), "aese") == ""
     assert r.json()["dossiers"] == {
-        "status": "failed", "reason": "no dossier could be refreshed",
-        "refreshed": [], "failed": [{"id": "aese", "reason": "RuntimeError: dossier boom"}],
+        "status": "failed", "reason": "no dossier could be prepared",
+        "proposed": [], "failed": [{"id": "aese", "reason": "RuntimeError: dossier boom"}],
         "skipped": []}
 
 
@@ -2241,11 +2292,14 @@ def test_absorb_reports_partial_dossier_failure_as_degraded(client):
     client.app.dependency_overrides[routes.get_llm] = lambda: _DossierFake("Winifred")
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
     assert body["dossiers"] == {
-        "status": "degraded", "reason": "some dossiers could not be refreshed",
-        "refreshed": ["aese"], "failed": [{"id": "winifred", "reason": "RuntimeError: dossier boom"}],
+        "status": "degraded", "reason": "some dossiers could not be prepared",
+        "proposed": ["aese"], "failed": [{"id": "winifred", "reason": "RuntimeError: dossier boom"}],
         "skipped": []}
+    # the survivor is staged for approval, not written -- one NPC's failure no
+    # longer leaves the other's dossier committed against an unabsorbed scene
+    assert [e["target"]["id"] for e in body["edits"] if e["kind"] == "dossier"] == ["aese"]
     croot = store.campaigns.campaign_root(cid)
-    assert store.dossiers.read(croot, "aese") == "A standing paragraph."
+    assert store.dossiers.read(croot, "aese") == ""
     assert store.dossiers.read(croot, "winifred") == ""
 
 
@@ -2265,7 +2319,7 @@ def test_absorb_reports_an_unreadable_npc_card_as_a_dossier_failure(client):
     assert body["dossiers"]["failed"][0]["reason"].startswith("CharacterNotFound")
 
 
-def test_refresh_dossiers_reports_an_unreadable_scene_cast(client, monkeypatch):
+def test_stage_dossiers_reports_an_unreadable_scene_cast(client, monkeypatch):
     # The outer boundary: the phase can't even enumerate who was present. Driven
     # against the helper rather than the route, because absorb reads the cast
     # earlier too -- patching it globally would blow up before this phase runs.
@@ -2275,11 +2329,12 @@ def test_refresh_dossiers_reports_an_unreadable_scene_cast(client, monkeypatch):
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
     monkeypatch.setattr(store.appearances, "scene_cast",
                         lambda *a: (_ for _ in ()).throw(OSError("appearances.json is garbled")))
-    out = asyncio.run(routes.scenes._refresh_dossiers(cid, sid, "transcript", _DossierFake(), {},
-                                                      routes.scenes._Budget(0)))
+    edits, out = asyncio.run(routes.scenes._stage_dossiers(
+        cid, sid, "transcript", _DossierFake(), {}, routes.scenes._Budget(0)))
+    assert edits == []
     assert out == {
         "status": "failed", "reason": "could not read the scene cast: appearances.json is garbled",
-        "refreshed": [], "failed": [], "skipped": []}
+        "proposed": [], "failed": [], "skipped": []}
 
 
 def test_absorb_dossiers_are_skipped_with_no_npcs_present(client):
@@ -2290,7 +2345,75 @@ def test_absorb_dossiers_are_skipped_with_no_npcs_present(client):
     client.app.dependency_overrides[routes.get_llm] = lambda: _DossierFake()
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
     assert body["dossiers"] == {"status": "skipped", "reason": "no npcs present",
-                                "refreshed": [], "failed": [], "skipped": []}
+                                "proposed": [], "failed": [], "skipped": []}
+
+
+def test_absorb_leaves_the_campaign_byte_identical(client):
+    """The #235 invariant, guarded whole rather than per-store: a full absorb --
+    extraction, the per-NPC dossier loop, the audit -- must not change one byte
+    under the campaign root. Everything it proposes rides back in `edits` and
+    lands only when PUT /chronicle applies them, so an absorb that dies partway
+    (or a reviewer who hits Cancel) leaves nothing behind.
+
+    The parsed output deliberately exercises every staging branch that touches a
+    store which CAN write, weather included -- `weather.overrides.read()` repairs
+    legacy records in place, so a dirty weather.json is the one thing an absorb
+    can still rewrite. That repair is the weather store's own migration (any read
+    of it does the same, e.g. the scene inspector) and carries no absorb state,
+    so this fixture's weather store is clean and the assertion stays absolute."""
+    cid, sid = _dossier_scene(client)
+    store.overlay.create_entity(cid, "locations", "The Tearoom", "A quiet room.")
+    store.scenes.set_location(cid, sid, "the-tearoom")
+    sid = client.put(f"/api/campaigns/{cid}/scenes/{sid}/datetime",
+                     json={"datetime": "2026-01-01"}).json()["id"]  # first date renames the scene
+    croot = store.campaigns.campaign_root(cid)
+    snapshot = {p: p.read_bytes() for p in croot.rglob("*") if p.is_file()}
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
+        '{"one_line": "o", "summary": "s", "keywords": [], "timeline_events": [],'
+        ' "character_state_edits": [{"id": "aese", "current_state": "warmer"}],'
+        ' "lore_edits": [], "plot_movements": [{"title": "The Tea", "beat": "poured",'
+        '   "status": "open"}],'
+        ' "relationship_deltas": [], "bond_changes": [],'
+        ' "new_lore": [{"name": "The Blend", "body": "A smoked oolong."}],'
+        ' "weather_edits": [{"condition": "hail", "duration_blocks": 2}]}')
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    # the branches really ran: staging happened, it just didn't land
+    assert {e["kind"] for e in body["edits"]} >= {"character_state", "plot", "new_lore", "weather"}
+    after = {p: p.read_bytes() for p in croot.rglob("*") if p.is_file()}
+    assert after == snapshot
+
+
+# ---- absorb: re-absorb guard (#235) ----
+
+def _absorbed_scene(client):
+    """A scene already committed to the chronicle -- the state the guard fires on."""
+    _, cid = _campaign(client)
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "We entered the crypt.")
+    client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+               json={"one_line": "They entered.", "summary": "s", "keywords": [],
+                     "timeline_events": []})
+    return cid, sid
+
+
+def test_re_absorbing_an_absorbed_scene_is_409(client):
+    """Deltas (lore appends, plot beats) double-apply on a second absorb, so the
+    second one has to be an explicit choice, not a silent re-run (#235)."""
+    cid, sid = _absorbed_scene(client)
+    fake = FakeOpenRouterComplete(ABSORB_JSON)
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+    assert r.status_code == 409 and r.json()["kind"] == "already_absorbed"
+    assert fake.calls == 0                       # refused before spending a token
+
+
+def test_re_absorbing_with_force_runs(client):
+    cid, sid = _absorbed_scene(client)
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
+        '{"one_line": "Again.", "summary": "s", "keywords": [], "timeline_events": []}')
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb?force=true")
+    assert r.status_code == 200 and r.json()["one_line"] == "Again."
 
 
 def test_absorb_empty_scene_is_400(client):
@@ -2548,7 +2671,7 @@ def test_absorb_names_the_dossiers_the_budget_skipped(client, npc_module_scene, 
     dossiers = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["dossiers"]
 
     assert dossiers["status"] == "failed"
-    assert dossiers["skipped"] == ["aese"] and dossiers["refreshed"] == []
+    assert dossiers["skipped"] == ["aese"] and dossiers["proposed"] == []
     assert "budget" in dossiers["reason"]
 
 
@@ -2567,7 +2690,7 @@ def test_absorb_reports_a_partially_skipped_dossier_phase_as_degraded(
     dossiers = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["dossiers"]
 
     assert dossiers["status"] == "degraded"
-    assert dossiers["refreshed"] == ["aese"] and dossiers["skipped"] == ["winifred"]
+    assert dossiers["proposed"] == ["aese"] and dossiers["skipped"] == ["winifred"]
     assert "budget" in dossiers["reason"]
 
 
@@ -2582,7 +2705,10 @@ def test_absorb_within_budget_runs_every_step(client, npc_module_scene, monkeypa
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
 
     assert fake.calls == 3
-    assert "Aese is steady" in store.dossiers.read(store.campaigns.campaign_root(cid), "aese")
+    # staged, not written (#235): the dossier rides back in `edits` and lands
+    # only when the review is saved
+    assert [e["after"] for e in body["edits"] if e["kind"] == "dossier"] == ["Aese is steady."]
+    assert store.dossiers.read(store.campaigns.campaign_root(cid), "aese") == ""
     assert body["mechanics"]["status"] == "ok" and body["dossiers"]["status"] == "ok"
 
 

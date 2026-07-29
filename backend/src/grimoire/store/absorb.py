@@ -601,6 +601,10 @@ def apply_edits(cid: str, edits: list[dict],
                 playstate.write_state(croot, target["id"], after)
             elif kind == "group_state":
                 groupstate.write_state(croot, target["id"], after)
+            elif kind == "dossier":
+                if not after.strip():
+                    continue  # a blank reply must not erase a good dossier
+                dossiers.write(croot, target["id"], after)
             elif kind == "lore":
                 overlay.update_entity(cid, target["kind"], target["id"], body=after)
             elif kind == "authored":

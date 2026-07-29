@@ -1,8 +1,9 @@
 """Per-character campaign "dossier" — a short standing paragraph (who they are + their
 current status in this campaign) feeding the off-scene cast's "Active in this campaign,
-elsewhere" tier. Campaign-level; written at absorb. Plain text at
-<croot>/characters/<cid>/dossier.md. Pure file IO + prompt/parse only; the LLM call
-lives in the route layer and the prompt text in templates/dossier/.
+elsewhere" tier. Campaign-level; proposed at absorb and written when the reviewer saves
+the chronicle. Plain text at <croot>/characters/<cid>/dossier.md. Pure file IO +
+prompt/parse/stage only; the LLM call lives in the route layer and the prompt text in
+templates/dossier/.
 """
 
 from __future__ import annotations
@@ -29,6 +30,25 @@ def write(croot: Path, cid: str, text: str) -> None:
     p = dossier_path(croot, cid)
     p.parent.mkdir(parents=True, exist_ok=True)
     atomic.write_text(p, text.strip() + "\n")
+
+
+def stage_edit(croot: Path, cid: str, name: str, text: str) -> dict | None:
+    """The refreshed dossier as a StagedEdit against the stored one, or None when
+    there is nothing to propose (blank reply, or the same paragraph again).
+
+    Absorb never writes dossiers itself (#235): a refresh that lands before the
+    reviewer saves would survive a Cancel, and a run interrupted mid-loop would
+    leave half the cast holding post-scene dossiers for a scene the chronicle
+    never recorded. Staging puts them on the same commit boundary as every other
+    edit -- absorb proposes, PUT /chronicle applies."""
+    after = text.strip()
+    before = read(croot, cid)
+    if not after or after == before:
+        return None
+    return {"id": f"dossier:{cid}", "kind": "dossier",
+            "target": {"kind": "characters", "id": cid},
+            "label": f"{name} — campaign dossier", "field": "dossier",
+            "before": before, "after": after, "authored": False}
 
 
 def build_prompt(name: str, prior: str, transcript: str) -> list[dict]:
