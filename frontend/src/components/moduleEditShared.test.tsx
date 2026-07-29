@@ -6,7 +6,7 @@ import ts from "typescript";
 // moduleEditShared, so the arrows run one way.
 //
 // This guards that by building the real import graph — every source file under
-// src/, scanned with TypeScript's own preprocessor — and asking, for each
+// src/, scanned with the TypeScript AST — and asking, for each
 // module-editor file, whether a path leads from it back to itself. A new
 // section file, a transitive cycle through a third module, a re-export or a
 // dynamic `import()` back into ModuleEditor all fail this test.
@@ -57,35 +57,86 @@ function dirOf(path: string): string {
   return cut < 0 ? "" : path.slice(0, cut);
 }
 
+/** Parse each file as what it actually is: `<Foo>x` is a cast in .ts, JSX in .tsx. */
+function scriptKind(path: string): ts.ScriptKind {
+  if (path.endsWith(".tsx")) return ts.ScriptKind.TSX;
+  if (path.endsWith(".jsx")) return ts.ScriptKind.JSX;
+  if (/\.[mc]?js$/.test(path)) return ts.ScriptKind.JS;
+  return ts.ScriptKind.TS;
+}
+
+/**
+ * Names used somewhere other than a type position. TypeScript also elides an
+ * *unmarked* import whose bindings are only ever used as types, so
+ * `import { Props } from "./x"` with `Props` used solely in type position
+ * emits nothing — checking `isTypeOnly` markers alone would keep that edge.
+ *
+ * This is a syntactic approximation of the checker's elision, and it is
+ * deliberately biased: anything ambiguous counts as a value use, which keeps
+ * the edge. A spurious edge fails loudly and is diagnosable; a dropped one is
+ * a silent hole, which is the failure this whole file exists to prevent.
+ */
+function valueNames(src: ts.SourceFile): Set<string> {
+  const used = new Set<string>();
+  const walk = (node: ts.Node, inType: boolean): void => {
+    // Import clauses bind names, they don't use them.
+    if (ts.isImportDeclaration(node)) return;
+    const typeCtx = inType || ts.isTypeNode(node);
+    // `class A extends B` is a value use even though the node is a TypeNode.
+    const heritageValue = ts.isExpressionWithTypeArguments(node) &&
+      ts.isHeritageClause(node.parent) &&
+      node.parent.token === ts.SyntaxKind.ExtendsKeyword &&
+      ts.isClassLike(node.parent.parent);
+    if (!typeCtx || heritageValue) {
+      if (ts.isIdentifier(node)) used.add(node.text);
+    }
+    ts.forEachChild(node, (c) => walk(c, typeCtx && !heritageValue));
+  };
+  ts.forEachChild(src, (n) => walk(n, false));
+  return used;
+}
+
 /**
  * Every specifier that survives to the emitted JavaScript, via the TypeScript
  * AST. Static imports, `export … from`, side-effect imports and dynamic
  * `import()` all count; unlike a regex this never mistakes a
  * specifier-shaped comment or string for an import.
  *
- * Type-only edges are excluded deliberately. `import type { X }`, `export
- * type { X } from`, and a clause whose every named binding is `type X` are
- * erased at emit, so they cannot participate in an initialization cycle —
- * counting them would reject a valid change (a section needing only a *type*
- * from ModuleEditor) as a runtime cycle that does not exist.
+ * Type-only edges are excluded deliberately — `import type { X }`, `export
+ * type { X } from`, a clause whose every binding is `type X`, and a clause
+ * whose bindings are only ever used in type position are all erased at emit,
+ * so they cannot participate in an initialization cycle. Counting them would
+ * reject a valid change (a section needing only a *type* from ModuleEditor)
+ * as a runtime cycle that does not exist.
  */
-function specifiers(code: string): string[] {
-  const src = ts.createSourceFile("f.tsx", code, ts.ScriptTarget.Latest,
-                                  true, ts.ScriptKind.TSX);
+function specifiers(code: string, path = "f.tsx"): string[] {
+  const src = ts.createSourceFile(path, code, ts.ScriptTarget.Latest, true,
+                                  scriptKind(path));
   const found: string[] = [];
+  // `import("./x")` and ``import(`./x`)`` are both valid and both emit.
   const literal = (n: ts.Node | undefined) =>
-    n && ts.isStringLiteral(n) ? n.text : undefined;
+    n && ts.isStringLiteralLike(n) ? n.text : undefined;
+  let values: Set<string> | null = null;   // computed lazily; only some files need it
 
   for (const st of src.statements) {
     if (ts.isImportDeclaration(st)) {
       const clause = st.importClause;
       if (clause?.isTypeOnly) continue;                    // import type { … }
-      const named = clause?.namedBindings;
-      // A clause with only `{ type A, type B }` and no default/namespace
-      // binding emits nothing either.
-      if (named && ts.isNamedImports(named) && !clause?.name &&
-          named.elements.length > 0 &&
-          named.elements.every((e) => e.isTypeOnly)) continue;
+      // A side-effect import (`import "./x"`) has no clause and always emits.
+      if (clause) {
+        const named = clause.namedBindings;
+        const bindings = named && ts.isNamedImports(named) ? named.elements : [];
+        // Explicitly-marked: `{ type A, type B }` with no default/namespace.
+        if (!clause.name && bindings.length > 0 &&
+            bindings.every((e) => e.isTypeOnly)) continue;
+        // Usage-elided: every binding is only ever referenced as a type.
+        if (!named || ts.isNamedImports(named)) {
+          values ??= valueNames(src);
+          const names = [clause.name, ...bindings.map((e) => e.name)]
+            .filter((n): n is ts.Identifier => !!n);
+          if (names.length > 0 && !names.some((n) => values!.has(n.text))) continue;
+        }
+      }
       const spec = literal(st.moduleSpecifier);
       if (spec) found.push(spec);
     } else if (ts.isExportDeclaration(st)) {
@@ -161,7 +212,7 @@ const isRelative = (spec: string) => spec.startsWith(".");
 const GRAPH = new Map(
   [...SOURCES].map(([path, code]) => [
     path,
-    specifiers(code).filter(isRelative)
+    specifiers(code, path).filter(isRelative)
       .map((spec) => resolve(path, spec))
       .filter((dep): dep is string => dep !== null),
   ]),
@@ -186,7 +237,7 @@ function isCodeSpecifier(spec: string): boolean {
 
 /** Relative specifiers that resolved to nothing — assets, or a dropped edge. */
 const UNRESOLVED = [...SOURCES].flatMap(([path, code]) =>
-  specifiers(code).filter(isRelative)
+  specifiers(code, path).filter(isRelative)
     .filter((spec) => resolve(path, spec) === null)
     .map((spec) => `${path} -> ${spec}`));
 
@@ -235,18 +286,45 @@ describe("module-editor import graph", () => {
     // Type-only edges are erased at emit and cannot cause an initialization
     // cycle. Counting them would fail a valid change — a section importing
     // only a *type* from ModuleEditor — as a runtime cycle that isn't there.
-    expect(specifiers(`import { A } from "./v";`)).toEqual(["./v"]);
-    expect(specifiers(`import type { A } from "./t";`)).toEqual([]);
-    expect(specifiers(`import { type A, type B } from "./t";`)).toEqual([]);
-    expect(specifiers(`import { type A, B } from "./v";`)).toEqual(["./v"]);
-    expect(specifiers(`import D, { type A } from "./v";`)).toEqual(["./v"]);
+    // Each snippet must actually *use* what it imports: an unused import is
+    // itself elided, so a snippet that only declares one would pass for the
+    // wrong reason.
+    expect(specifiers(`import { A } from "./v"; A();`)).toEqual(["./v"]);
+    expect(specifiers(`import type { A } from "./t"; let x: A;`)).toEqual([]);
+    expect(specifiers(`import { type A, type B } from "./t"; let x: A; let y: B;`))
+      .toEqual([]);
+    expect(specifiers(`import { type A, B } from "./v"; let x: A; B();`))
+      .toEqual(["./v"]);
+    expect(specifiers(`import D, { type A } from "./v"; D(); let x: A;`))
+      .toEqual(["./v"]);
     expect(specifiers(`export type { A } from "./t";`)).toEqual([]);
     expect(specifiers(`export { A } from "./v";`)).toEqual(["./v"]);
     expect(specifiers(`import "./side-effect";`)).toEqual(["./side-effect"]);
     expect(specifiers(`const f = () => import("./dyn");`)).toEqual(["./dyn"]);
+    // A template-literal specifier emits exactly like a quoted one.
+    expect(specifiers("const f = () => import(`./tmpl`);")).toEqual(["./tmpl"]);
+    // Unmarked, but used only as a type — TypeScript erases the whole import.
+    expect(specifiers(`import { P } from "./t"; let x: P;`)).toEqual([]);
+    expect(specifiers(`import { P } from "./v"; let x: P; P();`)).toEqual(["./v"]);
     // …and no false positives from comments or ordinary strings.
     expect(specifiers(`// import { A } from "./c";\nconst s = 'from "./s"';`))
       .toEqual([]);
+  });
+
+  it("parses each file as its own script kind", () => {
+    // `<Foo>raw` is a type assertion in .ts but an unterminated JSX tag in
+    // .tsx, and TSX error recovery swallows what follows — including a
+    // dynamic import back to an editor, which would vanish from the graph
+    // without ever showing up as an unresolved edge.
+    const code = 'const v = <Foo>raw;\nconst f = () => import("./ModuleEditor");';
+    expect(specifiers(code, "api/thing.ts")).toEqual(["./ModuleEditor"]);
+    expect(specifiers(code, "api/thing.mts")).toEqual(["./ModuleEditor"]);
+    // Same text in a .tsx file really is malformed JSX; the point is that the
+    // extension decides, not a hardcoded default.
+    expect(scriptKind("a/b.tsx")).toBe(ts.ScriptKind.TSX);
+    expect(scriptKind("a/b.ts")).toBe(ts.ScriptKind.TS);
+    expect(scriptKind("a/b.mts")).toBe(ts.ScriptKind.TS);
+    expect(scriptKind("a/b.mjs")).toBe(ts.ScriptKind.JS);
   });
 
   it("treats non-executing Vite queries as asset edges", () => {
