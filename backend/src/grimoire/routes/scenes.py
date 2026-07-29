@@ -410,12 +410,21 @@ async def post_audit(cid: str, sid: str, client: LLMClient = Depends(get_llm)):
 def put_chronicle(cid: str, sid: str, body: ChronicleSave):
     _require_scene(cid, sid)
     facts = store.chronicle.scene_facts(cid, sid)
-    record = store.chronicle.absorb(cid, {
-        "id": sid, "one_line": body.one_line, "summary": body.summary,
-        "keywords": body.keywords, **facts})
-    store.chronicle.append_timeline(cid, body.timeline_events)
-    store.scenes.mark_absorbed(cid, sid, body.one_line, body.summary)
-    applied, sheet_failures = store.absorb.apply_edits(cid, body.edits, sid)
+    # One hold across the whole persistence sequence (#234). These are four
+    # independent writes; with a lock taken per write, contention arriving
+    # partway returns 409 after the chronicle record and timeline events are
+    # already durable -- and the retry that 409 invites appends the timeline
+    # events a second time while the first attempt's approved edits were never
+    # applied. Holding it here means a busy response is reported before the
+    # first write, so a retry is safe. Reentrant, so the inner acquisitions
+    # cost nothing.
+    with store.locks.campaign_lock(cid):
+        record = store.chronicle.absorb(cid, {
+            "id": sid, "one_line": body.one_line, "summary": body.summary,
+            "keywords": body.keywords, **facts})
+        store.chronicle.append_timeline(cid, body.timeline_events)
+        store.scenes.mark_absorbed(cid, sid, body.one_line, body.summary)
+        applied, sheet_failures = store.absorb.apply_edits(cid, body.edits, sid)
     return {**record, "applied": applied, "sheet_failures": sheet_failures}
 
 

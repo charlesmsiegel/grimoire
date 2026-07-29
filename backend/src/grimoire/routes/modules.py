@@ -9,6 +9,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
+from starlette.concurrency import run_in_threadpool
 
 from .. import store
 from .models import (ModuleCheckBody, ModuleContentBody, ModuleCreate, ModuleDefaultsBody,
@@ -192,7 +193,15 @@ async def post_module_import(request: Request):
                 if total > IMPORT_CAP:
                     raise HTTPException(status_code=413, detail="zip too large")
                 f.write(chunk)
-        return {"id": _module_edit_call(store.module_edit.import_module, Path(tmp_name))}
+        # In a worker thread (#234). import_module takes the module-edit lock,
+        # which is now cross-process: when another backend holds it, acquire
+        # sleeps in its retry loop for up to LOCK_TIMEOUT. This route is
+        # `async def`, so an inline call would block the event loop for 30s and
+        # freeze every unrelated request and live stream, not just this import.
+        # (Sync `def` routes get FastAPI's threadpool for free; the `async`
+        # ones have to ask.)
+        return {"id": await run_in_threadpool(
+            _module_edit_call, store.module_edit.import_module, Path(tmp_name))}
     finally:
         try:
             os.unlink(tmp_name)
