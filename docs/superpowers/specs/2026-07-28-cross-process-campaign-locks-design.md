@@ -527,8 +527,10 @@ module-edit lock (_M)
 No inverse edge exists today; the rule is written down so the next one is
 caught in review.
 
-`_M` itself becomes cross-process, using the same primitive with a lock file at
-`<lockdir>/<store-hash>/module-edit.lock`. Leaving it process-local would leave
+`_M` itself becomes cross-process, using the same primitive with a lock file in
+the same per-store directory, named through the same `lock_path` sanitizer as
+the campaign locks (so `module-edit-<hash>.lock`, not a hand-written
+`module-edit.lock` — one naming rule, no second code path). Leaving it process-local would leave
 whole-directory pack publication — which mutates the shared user library, not
 just one campaign — unguarded against the exact scenario this spec exists for.
 It is the same `_ProcessLock` primitive, so there is one implementation of the
