@@ -11,11 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import appearances, atomic, campaigns, characters, entities, greetings, overlay, pcs, worlds
-
-
-def _world_id(cid: str) -> str:
-    return campaigns.read_campaign(cid)["meta"].get("world", "")
+from . import appearances, atomic, campaigns, characters, entities, greetings, overlay, pcs
 
 
 def _ref_str(kind: str, eid: str) -> str:
@@ -31,8 +27,7 @@ def _entity_blob(root: Path, kind: str, eid: str) -> dict:
 
 
 def incoming(cid: str) -> list[dict]:
-    wid = _world_id(cid)  # raises CampaignNotFound if the campaign is missing
-    wroot = worlds.world_root_or_missing(wid)
+    wroot = campaigns.world_root_of(cid)  # raises CampaignNotFound if the campaign is missing
     croot = campaigns.campaign_root(cid)
     # read campaign.md / sync.md / appearances.json once and thread them through
     # the passes -- each used to re-read all three per pass
@@ -140,7 +135,7 @@ def _unpicked_incoming(wroot: Path, croot: Path, manifest: dict, locked: dict) -
 
 
 def _advance_actor(cid: str, kind: str, actor_id: str, *, copy: bool) -> bool:
-    wroot = worlds.world_root_or_missing(_world_id(cid))
+    wroot = campaigns.world_root_of(cid)
     croot = campaigns.campaign_root(cid)
     rec = appearances.record(cid).get(f"{kind}/{actor_id}")
     if rec is None:
@@ -160,8 +155,7 @@ def _advance_actor(cid: str, kind: str, actor_id: str, *, copy: bool) -> bool:
 
 
 def _advance(cid: str, refs: list[dict], *, copy: bool) -> None:
-    wid = _world_id(cid)
-    wroot = worlds.world_root_or_missing(wid)
+    wroot = campaigns.world_root_of(cid)
     croot = campaigns.campaign_root(cid)
     manifest = campaigns.read_manifest(cid)
     manifest_changed = False  # loc/lore manifest write

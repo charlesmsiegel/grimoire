@@ -44,6 +44,26 @@ def campaign_meta_path(cid: str) -> Path:
     return campaign_root(cid) / "campaign.md"
 
 
+# A campaign may record no world at all, and every world-side read still wants
+# a path it can treat as empty. That path has to be one nothing can occupy: any
+# sentinel *directory* is one a restored or hand-managed store may already
+# contain, and then a world-less campaign inherits whatever is inside it. So
+# absence resolves below the campaign's own campaign.md -- a regular file, so
+# the filesystem itself guarantees no child of it can ever exist.
+_NO_WORLD = "(no world)"
+
+
+def world_root_of(cid: str) -> Path:
+    """The root of the campaign's world, or an unoccupiable path if it has none.
+
+    Raises CampaignNotFound for a campaign that isn't there. Callers holding a
+    world id they know is set should use `worlds.world_root` directly; this is
+    for the ones reading a campaign's `world` meta, which may be empty.
+    """
+    wid = read_campaign(cid)["meta"].get("world", "")
+    return worlds.world_root(wid) if wid else campaign_meta_path(cid) / _NO_WORLD
+
+
 def campaign_exists(cid: str) -> bool:
     """Existence check that survives an id `campaign_root` refuses to resolve.
 
@@ -159,7 +179,7 @@ def ensure_campaign_slim(cid: str) -> None:
     if meta.get("world_copy") == "overlay":
         return
     root = campaign_root(cid)
-    wroot = worlds.world_root_or_missing(meta.get("world", ""))
+    wroot = world_root_of(cid)
     if not wroot.exists():
         return
     from . import appearances, overlay  # campaigns is imported by these

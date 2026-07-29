@@ -24,15 +24,6 @@ def _worlds_dir() -> Path:
     return home() / "worlds"
 
 
-# The no-world root sits *outside* `worlds/` on purpose: anything under
-# `worlds/` is by definition an addressable world -- `list_worlds` offers any
-# directory there holding a world.md, and a world id resolves to it -- so a
-# sentinel in that namespace would be a world a restored or synced store could
-# supply, and every world-less campaign would inherit its records. Nothing
-# creates this path.
-_NO_WORLD_DIR = ".no-world"
-
-
 def world_root(wid: str) -> Path:
     """The world's directory.
 
@@ -44,17 +35,6 @@ def world_root(wid: str) -> Path:
     if not safe_id(wid):
         raise WorldNotFound(wid)
     return _worlds_dir() / wid
-
-
-def world_root_or_missing(wid: str) -> Path:
-    """The world root for a campaign's recorded world, which may be unset.
-
-    An empty id means the campaign has no world at all, so this hands back a
-    path that does not exist and every world-side read finds nothing -- which
-    is what these callers already wanted from `world_root("")`. What they got
-    was the worlds parent dir, which exists and holds every world.
-    """
-    return world_root(wid) if wid else home() / _NO_WORLD_DIR
 
 
 def world_meta_path(wid: str) -> Path:

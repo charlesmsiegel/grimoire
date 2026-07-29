@@ -118,27 +118,6 @@ def test_campaign_with_no_world_reads_no_world_records(monkeypatch, tmp_path):
     assert overlay.list_characters(cid) == []
 
 
-def test_missing_world_root_is_outside_the_worlds_namespace(monkeypatch, tmp_path):
-    """The no-world root must not be reachable as a world id.
-
-    A sentinel inside `worlds/` would be an ordinary world directory: a
-    restored or synced store containing it would silently feed its entities
-    to every world-less campaign, and `list_worlds` would offer it in the UI.
-    """
-    home(monkeypatch, tmp_path)
-    missing = worlds.world_root_or_missing("")
-    assert not missing.exists()
-    assert missing.parent != tmp_path / "worlds"   # world_root only builds in there
-
-    # so even a store that happens to contain it can neither list it nor open
-    # it as a world -- its name does not address it
-    (missing / "characters").mkdir(parents=True)
-    (missing / "world.md").write_text("---\nname: Nope\n---\n", encoding="utf-8")
-    assert worlds.list_worlds() == []
-    with pytest.raises(worlds.WorldNotFound):
-        worlds.read_world(missing.name)
-
-
 def test_campaign_with_no_world_still_slims(monkeypatch, tmp_path):
     home(monkeypatch, tmp_path)
     wid = worlds.create_world("Realm")
@@ -166,14 +145,14 @@ def _world_less_campaign(monkeypatch, tmp_path) -> str:
 
 
 def test_sync_incoming_on_a_world_less_campaign(monkeypatch, tmp_path):
-    # sync reaches world_root through _world_id(cid), which yields "" here
+    # sync resolves the world through the campaign, whose `world` meta is empty here
     cid = _world_less_campaign(monkeypatch, tmp_path)
     assert sync.incoming(cid) == []
 
 
 def test_appearances_pick_on_a_world_less_campaign(monkeypatch, tmp_path):
-    # the actor-lock path also resolves the world through _world_id(cid); with
-    # no world there is no version to pick, which is a domain error, not a crash
+    # the actor-lock path resolves the world the same way; with no world there
+    # is no version to pick, which is a domain error, not a crash
     cid = _world_less_campaign(monkeypatch, tmp_path)
     with pytest.raises(appearances.AppearError):
         appearances.pick_version(cid, "characters", "seraphine", "default")
@@ -224,3 +203,60 @@ def test_unsafe_campaign_id_put_routes_answer_404(monkeypatch, tmp_path):
     assert client.put("/api/campaigns/C:evil/calendar",
                       json={"primary": {"provider": "gregorian"}, "secondary": None,
                             "confirmed": True}).status_code == 404
+
+
+# ---- round 3 of the review
+
+def test_no_world_root_cannot_be_collided_with(monkeypatch, tmp_path):
+    """The missing-world root must be absent by construction, not by convention.
+
+    A sentinel directory anywhere in the store is one a restored or
+    hand-managed data dir can already contain, and then every world-less
+    campaign inherits whatever is inside it. Resolving *under the campaign's
+    own campaign.md* -- a regular file -- makes the filesystem itself the
+    guarantee: nothing can be created below a regular file.
+    """
+    cid = _world_less_campaign(monkeypatch, tmp_path)
+    wroot = overlay.wroot_of(cid)
+    assert not wroot.exists()
+    with pytest.raises(OSError):
+        (wroot / "lore").mkdir(parents=True)
+    assert overlay.list_entities(cid, "lore") == []
+
+
+def test_a_stray_store_directory_is_not_adopted_as_a_world(monkeypatch, tmp_path):
+    cid = _world_less_campaign(monkeypatch, tmp_path)
+    # every plausible sentinel name a previous revision might have used
+    for stray in (".no-world", ".none", "no-world"):
+        d = tmp_path / stray / "lore"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "leak.md").write_text("---\nname: Leak\n---\nleaked\n", encoding="utf-8")
+        (tmp_path / "worlds" / stray / "lore").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "worlds" / stray / "lore" / "leak.md").write_text(
+            "---\nname: Leak\n---\nleaked\n", encoding="utf-8")
+    assert overlay.list_entities(cid, "lore") == []
+
+
+SCENE_ROUTES = [
+    ("get", "/api/campaigns/C:evil/scenes"),
+    ("get", "/api/campaigns/C:evil/scenes/s1"),
+    ("get", "/api/campaigns/C:evil/scenes/s1/weather"),
+    ("get", "/api/campaigns/C:evil/scenes/s1/messages"),
+    ("delete", "/api/campaigns/C:evil/scenes/s1"),
+]
+
+
+@pytest.mark.parametrize("method,path", SCENE_ROUTES)
+def test_scene_routes_answer_404_for_an_unsafe_campaign_id(monkeypatch, tmp_path, method, path):
+    # scene paths are built from campaign_root, so the guard fires inside the
+    # scene store; those handlers catch SceneNotFound only
+    home(monkeypatch, tmp_path)
+    client = TestClient(create_app())
+    assert getattr(client, method)(path).status_code == 404
+
+
+def test_scene_rename_route_answers_404_for_an_unsafe_campaign_id(monkeypatch, tmp_path):
+    home(monkeypatch, tmp_path)
+    client = TestClient(create_app())
+    r = client.put("/api/campaigns/C:evil/scenes/s1", json={"title": "New"})
+    assert r.status_code == 404

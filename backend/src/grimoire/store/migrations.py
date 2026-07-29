@@ -98,7 +98,7 @@ def bake_char_macros() -> None:
 
 def _bake_campaign(cid: str) -> None:
     croot = campaigns.campaign_root(cid)
-    wroot = worlds.world_root_or_missing(campaigns.read_campaign(cid)["meta"].get("world", ""))
+    wroot = campaigns.world_root_of(cid)
     _bake_characters(croot)  # materialized characters are self-contained
     _repair_character_baselines(cid, croot, wroot)
     gdir = croot / "greetings"

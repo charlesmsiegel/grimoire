@@ -13,7 +13,7 @@ import json
 import re
 from pathlib import Path
 
-from . import atomic, campaigns, characters, overlay, pcs, worlds
+from . import atomic, campaigns, characters, overlay, pcs
 from .frontmatter import dump_frontmatter, parse_frontmatter
 
 ACTOR_KINDS = ("characters", "pcs")
@@ -74,10 +74,6 @@ def set_base(cid: str, kind: str, actor_id: str, base: str) -> None:
         _write(cid, data)
 
 
-def _world_id(cid: str) -> str:
-    return campaigns.read_campaign(cid)["meta"].get("world", "")
-
-
 def actor_hash(root: Path, kind: str, actor_id: str, vid: str) -> str | None:
     if kind == "characters":
         return characters.card_hash(root, actor_id, vid)
@@ -133,7 +129,7 @@ def _lock(cid: str, kind: str, actor_id: str, version_id: str) -> str:
     present, purge every sibling version, point default_version at the pick, and
     drop the whole-actor sync ref (the locked per-version flow takes over).
     Returns the sync base hash for the appearance record."""
-    wroot = worlds.world_root_or_missing(_world_id(cid))
+    wroot = campaigns.world_root_of(cid)
     croot = campaigns.campaign_root(cid)
     base = actor_hash(wroot, kind, actor_id, version_id)
     if actor_hash(croot, kind, actor_id, version_id) is None:
@@ -172,7 +168,7 @@ def import_version(cid: str, kind: str, actor_id: str, version_id: str) -> None:
     rec = data.get(ref)
     if rec is None:
         raise AppearError(f"{ref} is not locked; world changes arrive via sync until a version is picked")
-    wroot = worlds.world_root_or_missing(_world_id(cid))
+    wroot = campaigns.world_root_of(cid)
     base = actor_hash(wroot, kind, actor_id, version_id)
     if base is None:
         raise AppearError(f"no {ref}/{version_id} in world")
