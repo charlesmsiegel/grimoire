@@ -38,7 +38,11 @@ def _comments_by_line(src: str) -> dict[int, str]:
     return out
 
 
-def marker_reason(marker: str, src: str, node: ast.AST) -> str | None:
+def _spans(node: ast.AST) -> tuple[int, int]:
+    return node.lineno, getattr(node, "end_lineno", node.lineno)
+
+
+def marker_reason(marker: str, src: str, node: ast.AST, others=()) -> str | None:
     """The `# <marker>: <reason>` attached to THIS call, if any.
 
     Accepted in exactly two places: on one of the call's own lines, or in the
@@ -50,14 +54,26 @@ def marker_reason(marker: str, src: str, node: ast.AST) -> str | None:
     The marker must appear in an actual comment. Matching raw line text let a
     string literal containing the marker exempt a call, which is both a way to
     silence a guard by accident and a way to do it on purpose.
+
+    `others` is the rest of the flagged nodes in the same file. An inline marker
+    belongs to the *narrowest* flagged node containing it, so a marker written
+    for an inner call — `read_card(image_path(croot, ...)  # marker`, spanning
+    both — cannot also exempt the outer one that happens to span the same line.
     """
     comments = _comments_by_line(src)
-    end = getattr(node, "end_lineno", node.lineno)
+    start, end = _spans(node)
 
-    for lineno in range(node.lineno, end + 1):
+    for lineno in range(start, end + 1):
         _, sep, reason = comments.get(lineno, "").partition(marker)
-        if sep:
-            return reason.strip()
+        if not sep:
+            continue
+        # someone else, strictly inside this node, owns this comment
+        if any(_spans(o)[0] <= lineno <= _spans(o)[1]
+               and (_spans(o)[1] - _spans(o)[0]) < (end - start)
+               and start <= _spans(o)[0] and _spans(o)[1] <= end
+               for o in others):
+            continue
+        return reason.strip()
 
     # Walk up through contiguous comment lines only; a blank line or any code
     # ends the block and detaches the marker from this call. A comment line is

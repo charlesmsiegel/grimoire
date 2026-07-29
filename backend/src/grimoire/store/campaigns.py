@@ -23,7 +23,7 @@ def campaign_root(cid: str) -> Path:
     """The campaign's own directory — nothing it inherits from its world.
 
     Correct for campaign-local state (scenes, sheets, proposals, chronicle,
-    playstate, calendar.json, climate.json, ...) and for writes, which is how a
+    playstate, calendar.json, the climate default, ...) and for writes, which is how a
     record materializes. It is *not* a place to read a record the campaign
     inherits: `overlay.INHERITED_KINDS` / `INHERITED_FILES` say which those are,
     and `store/overlay.py` is the only thing that resolves them. Reading one
