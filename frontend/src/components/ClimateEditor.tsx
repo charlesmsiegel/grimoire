@@ -96,34 +96,37 @@ export function ClimateEditor() {
     let message = reverting
       ? `Discard your changes to '${form.name}' and go back to the shipped preset?`
       : `Delete climate '${form.name}'?`;
-    if (!reverting) {
-      // Deleting a custom-only climate used as a *campaign default* silently
-      // moves every untagged location in that campaign to the fallback — the
-      // widest effect, and the one a locations-only warning never mentions.
-      let refs;
-      try {
-        refs = await api.climateReferrers(id);
-      } catch {
-        // Fail closed. Treating a failed lookup as an empty one would tell the
-        // user "Nothing is using it" and still delete — presenting an unknown
-        // impact as no impact, which is the one thing this warning exists to
-        // prevent.
-        setError("Could not check what is using this climate. Not deleting — try again.");
-        return;
-      }
-      const campaigns = refs.campaigns ?? [];
-      const locations = refs.locations ?? [];
-      if (campaigns.length) {
-        message += `\n\nIt is the default climate for: ${campaigns.map((c) => c.name).join(", ")}.`
-          + " Every location there that doesn't name its own climate falls back.";
-      }
-      if (locations.length) {
-        message += `\n\n${locations.length} location(s) name it directly: `
-          + `${locations.slice(0, 5).map((l) => l.name).join(", ")}`
-          + `${locations.length > 5 ? ", …" : ""}.`;
-      }
-      if (!campaigns.length && !locations.length) message += " Nothing is using it.";
+    // Both paths change the sky, so both disclose. Deleting a custom-only
+    // climate used as a *campaign default* silently moves every untagged
+    // location in that campaign to the fallback; reverting swaps the tables
+    // under everything using the id — and the widest case of all is a
+    // customized *fallback* preset, which every campaign with no default of
+    // its own resolves to (#237).
+    let refs;
+    try {
+      refs = await api.climateReferrers(id);
+    } catch {
+      // Fail closed. Treating a failed lookup as an empty one would tell the
+      // user "Nothing is using it" and still go ahead — presenting an unknown
+      // impact as no impact, which is the one thing this warning exists to
+      // prevent.
+      setError("Could not check what is using this climate. "
+        + `Not ${reverting ? "reverting" : "deleting"} — try again.`);
+      return;
     }
+    const campaigns = refs.campaigns ?? [];
+    const locations = refs.locations ?? [];
+    if (campaigns.length) {
+      message += `\n\nIt is the default climate for: ${campaigns.map((c) => c.name).join(", ")}.`
+        + " Every location there that doesn't name its own climate"
+        + (reverting ? " changes with it." : " falls back.");
+    }
+    if (locations.length) {
+      message += `\n\n${locations.length} location(s) name it directly: `
+        + `${locations.slice(0, 5).map((l) => l.name).join(", ")}`
+        + `${locations.length > 5 ? ", …" : ""}.`;
+    }
+    if (!campaigns.length && !locations.length) message += " Nothing is using it.";
     const ok = window.confirm(message);
     if (!ok) return;
     const got = await api.deleteClimate(id);
