@@ -18,6 +18,7 @@ the world live. Rules:
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from pathlib import Path
 
 from . import assets, atomic, campaigns, cards, characters, entities, greetings, groupstate, pcs, taglines, worlds
@@ -69,6 +70,48 @@ def _flat_path(root: Path, kind: str, eid: str) -> Path:
     return root / kind / f"{eid}.md"
 
 
+@contextmanager
+def _recorded_base(cid: str, ref: str, base: str):
+    """Record `ref`'s sync base in sync.md, then make the copy it describes.
+
+    Base first, copy second, because the two writes cannot be made one and a
+    crash between them has to land on the harmless side (#247):
+
+    - *base, no copy* — the record is still un-materialized, so it reads
+      through to the world live and sync skips it (`mine_h is None`). The next
+      materialization overwrites the base. Self-healing.
+    - *copy, no base* — permanent silent divergence. Every ref the sync engine
+      considers comes from the manifest, so that record never sees a world
+      edit again, and nothing ever notices.
+
+    The copy's own last write is therefore the commit point: for an actor that
+    is character.md / pc.md, which is what `actor_root` keys on — version files
+    landing without it leave the actor inherited, exactly as if the copy had
+    not begun.
+
+    An exception, unlike a crash, can unwind, so undo the base then. It restores
+    what it displaced rather than dropping the ref: an earlier interrupted
+    attempt may have left a base there.
+    """
+    manifest = campaigns.read_manifest(cid)
+    previous = manifest.get(ref)
+    manifest[ref] = base
+    campaigns.write_manifest(cid, manifest)
+    try:
+        yield
+    except BaseException:
+        manifest = campaigns.read_manifest(cid)
+        if previous is None:
+            manifest.pop(ref, None)
+        else:
+            manifest[ref] = previous
+        try:
+            campaigns.write_manifest(cid, manifest)
+        except OSError:
+            pass   # the copy's failure is the one worth raising
+        raise
+
+
 def _materialize_flat(cid: str, kind: str, eid: str) -> bool:
     """Copy an inherited flat record into the campaign and record its sync
     base. True if the campaign file exists afterwards. Assets are never
@@ -82,10 +125,9 @@ def _materialize_flat(cid: str, kind: str, eid: str) -> bool:
         return False
     dst = _flat_path(croot, kind, eid)
     dst.parent.mkdir(parents=True, exist_ok=True)
-    atomic.write_text(dst, src.read_text(encoding="utf-8"))
-    manifest = campaigns.read_manifest(cid)
-    manifest[_flat_ref(kind, eid)] = entities.entity_hash(wroot, kind, eid) or ""
-    campaigns.write_manifest(cid, manifest)
+    text = src.read_text(encoding="utf-8")
+    with _recorded_base(cid, _flat_ref(kind, eid), entities.entity_hash(wroot, kind, eid) or ""):
+        atomic.write_text(dst, text)
     return True
 
 
@@ -244,10 +286,9 @@ def materialize_plotmap(cid: str) -> None:
     src = wroot / "plotmap.json"
     if not src.exists():
         return   # nothing to copy; set_edges will create a fresh campaign map
-    atomic.write_text(croot / "plotmap.json", src.read_text(encoding="utf-8"))
-    manifest = campaigns.read_manifest(cid)
-    manifest["plotmap"] = greetings.plotmap_hash(wroot) or ""
-    campaigns.write_manifest(cid, manifest)
+    text = src.read_text(encoding="utf-8")
+    with _recorded_base(cid, "plotmap", greetings.plotmap_hash(wroot) or ""):
+        atomic.write_text(croot / "plotmap.json", text)
 
 
 def set_edges(cid: str, gid: str, leads_to=None, excludes=None) -> None:
@@ -296,15 +337,16 @@ def materialize_actor(cid: str, kind: str, aid: str) -> None:
         raise _actor_not_found(kind, aid)
     dst = croot / kind / aid
     dst.mkdir(parents=True, exist_ok=True)
-    ext = "json" if kind == "characters" else "md"
-    for p in sorted(src.glob(f"*.{ext}")):
-        atomic.write_text(dst / p.name, p.read_text(encoding="utf-8"))
-    meta_src = src / _actor_meta(kind)
-    atomic.write_text(dst / meta_src.name, meta_src.read_text(encoding="utf-8"))
     base = (characters.dir_hash if kind == "characters" else pcs.dir_hash)(wroot, aid)
-    manifest = campaigns.read_manifest(cid)
-    manifest[_flat_ref(kind, aid)] = base or ""
-    campaigns.write_manifest(cid, manifest)
+    ext = "json" if kind == "characters" else "md"
+    meta_src = src / _actor_meta(kind)
+    with _recorded_base(cid, _flat_ref(kind, aid), base or ""):
+        # pc.md is itself an *.md sibling of the version files; skip it here so
+        # the meta write below stays the single commit point (see _recorded_base)
+        for p in sorted(src.glob(f"*.{ext}")):
+            if p.name != meta_src.name:
+                atomic.write_text(dst / p.name, p.read_text(encoding="utf-8"))
+        atomic.write_text(dst / meta_src.name, meta_src.read_text(encoding="utf-8"))
 
 
 def ensure_actor_writable(cid: str, kind: str, aid: str) -> Path:
