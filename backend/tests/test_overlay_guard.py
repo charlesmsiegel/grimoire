@@ -16,19 +16,29 @@ chronicle, playstate, dossiers). A reviewer cannot tell a correct use from an
 incorrect one without knowing whether the record in question is inheritable.
 
 So the guard flags one specific combination: **a campaign root meeting an
-inheritable kind, in a read.** Writes are not flagged — a write is *supposed*
-to land campaign-side; that is what materialization is.
+inheritable kind.** In the resolver-call form it additionally requires a read,
+because a pure write is *supposed* to land campaign-side — that is what
+materialization is. In the raw-path form (``croot / "characters"``) it does not
+try to tell reads from writes: a bare path expression has no verb to inspect,
+and building an inheritable path by hand is worth a second look either way.
 
 Honest about its reach, like `test_atomic_guard.py`:
 
-- It follows names only inside the function that binds them. Passing a campaign
-  root into a helper that takes a bare ``root``/``path`` parameter escapes it
-  (`context._char_name` is such a helper). Widening that means real type
-  analysis, which is not worth it here.
-- `MUTATORS` classifies by name. A reader called something unexpected is
-  flagged, not missed — the bias is deliberate, matching the atomic guard: a
-  false positive is a loud test failure a human clears with a marker or a
-  rename; a false negative is the bug.
+- It follows names only inside the function that binds them, through
+  assignment, annotation, walrus, matched tuple unpacking and plain aliasing.
+  Passing a campaign root into a helper that takes a bare ``root``/``path``
+  parameter escapes it (`context._char_name` is such a helper), as does
+  returning one. Widening that means real type analysis, which is not worth it
+  here.
+- `MUTATORS` classifies by name, and lists only names that *purely* write.
+  Read-modify-write families (`promote_`, `copy_`, `import_`) are not exempt,
+  because they resolve a source before writing it. A reader called something
+  unexpected is flagged, not missed — the bias is deliberate, matching the
+  atomic guard: a false positive is a loud test failure a human clears with a
+  marker or a rename; a false negative is the bug.
+- Raw path building is recognized as ``/`` and ``joinpath`` with a literal
+  segment. ``os.path.join``, ``Path(croot, ...)``, and a non-literal segment
+  (``croot / kind``) are invisible.
 - `appearances.locked_actor_root` is a sanctioned way to read an actor
   campaign-side, and the guard cannot check that the actor really is in the
   appearance record. What it buys is that the call site now *states* the claim
@@ -61,10 +71,16 @@ ROOT_FUNCS = ("campaign_root", "croot_of", "_campaign_root_or_404")
 RESOLVER_MODULES = ("entities", "characters", "pcs", "greetings", "assets", "taglines",
                     "appearances")
 
-#: Name prefixes of resolver functions that *write*. A write belongs on the
-#: campaign root: that is how a record materializes.
-MUTATORS = ("write", "put_", "create_", "update_", "delete_", "set_", "import_",
-            "promote_", "clear_", "remove_", "seed", "copy_", "download_")
+#: Name prefixes of resolver functions that *only* write. A pure write belongs
+#: on the campaign root: that is how a record materializes.
+#:
+#: Read-modify-write names are deliberately absent. `assets.promote_image`
+#: resolves its source through `image_path` before renaming
+#: (`backend/src/grimoire/store/assets.py:219`), so exempting `promote_` would
+#: hide a swap that silently misses an inherited image -- the same for the
+#: `copy_` / `import_` / `download_` families, which all read a source first.
+MUTATORS = ("write", "put_", "create_", "update_", "delete_", "set_",
+            "clear_", "remove_", "seed")
 
 #: Modules allowed to combine the two, because each owns the invariant that
 #: makes a campaign-side read correct. The reason is the point: a new entry
@@ -112,6 +128,41 @@ def _own_nodes(body: list):
         stack.extend(ast.iter_child_nodes(node))
 
 
+def _bound_here(node: ast.AST, known: set[str]) -> set[str]:
+    """Names this statement binds to a campaign root.
+
+    Covers the forms a real call site uses: plain assignment, annotated
+    assignment (`croot: Path = campaign_root(cid)`), the walrus, tuple
+    unpacking where every value is a root, and a plain alias of a name already
+    known to hold one. Anything cleverer than that escapes -- see the module
+    docstring; this is a tripwire, not a type system."""
+    def is_rootish(value: ast.AST) -> bool:
+        return _is_root_call(value) or (isinstance(value, ast.Name) and value.id in known)
+
+    def targets_of(target: ast.AST, value: ast.AST) -> set[str]:
+        if isinstance(target, ast.Name) and is_rootish(value):
+            return {target.id}
+        # `a, b = campaign_root(x), campaign_root(y)` -- element-wise
+        if isinstance(target, (ast.Tuple, ast.List)) and isinstance(value, (ast.Tuple, ast.List)) \
+                and len(target.elts) == len(value.elts):
+            out: set[str] = set()
+            for t, v in zip(target.elts, value.elts):
+                out |= targets_of(t, v)
+            return out
+        return set()
+
+    if isinstance(node, ast.Assign):
+        out = set()
+        for t in node.targets:
+            out |= targets_of(t, node.value)
+        return out
+    if isinstance(node, ast.AnnAssign) and node.value is not None:
+        return targets_of(node.target, node.value)
+    if isinstance(node, ast.NamedExpr):
+        return targets_of(node.target, node.value)
+    return set()
+
+
 def _scopes(tree: ast.AST):
     """(nodes, campaign-root-valued names) for the module and for each function.
 
@@ -130,9 +181,11 @@ def _scopes(tree: ast.AST):
             names = {a.arg for a in args.posonlyargs + args.args + args.kwonlyargs
                      if a.arg == "croot"}
         nodes = list(_own_nodes(scope.body))
-        for node in nodes:
-            if isinstance(node, ast.Assign) and _is_root_call(node.value):
-                names.update(t.id for t in node.targets if isinstance(t, ast.Name))
+        # Two passes: a plain alias (`c = croot`) can only be resolved once the
+        # names it copies from are known, and source order is not dependable.
+        for _ in range(2):
+            for node in nodes:
+                names |= _bound_here(node, names)
         yield nodes, names
 
 
@@ -147,9 +200,21 @@ def _unresolved_reads(tree: ast.AST):
                     and is_croot(node.left) and isinstance(node.right, ast.Constant)
                     and node.right.value in INHERITED_SEGMENTS):
                 yield node, f'<campaign root> / "{node.right.value}"'
+            elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "joinpath" and is_croot(node.func.value)
+                    and any(isinstance(a, ast.Constant) and a.value in INHERITED_SEGMENTS
+                            for a in node.args)):
+                # the same join, spelled the other way
+                seg = next(a.value for a in node.args
+                           if isinstance(a, ast.Constant) and a.value in INHERITED_SEGMENTS)
+                yield node, f'<campaign root>.joinpath("{seg}", ...)'
             elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
                 mod, fn = _last_name(node.func.value), node.func.attr
-                if (mod in RESOLVER_MODULES and node.args and is_croot(node.args[0])
+                # `root=` as a keyword is the same call; these resolvers all name
+                # their first parameter `root`.
+                root_arg = node.args[0] if node.args else next(
+                    (k.value for k in node.keywords if k.arg == "root"), None)
+                if (mod in RESOLVER_MODULES and root_arg is not None and is_croot(root_arg)
                         and not fn.startswith(MUTATORS)):
                     yield node, f"{mod}.{fn}(<campaign root>, ...)"
 
@@ -188,6 +253,20 @@ def test_the_marker_is_not_a_rubber_stamp():
         f"{len(marked)} overlay-ok exemptions; each one is a record that can "
         f"silently miss world inheritance, so they need review rather than a "
         f"raised limit: {marked}")
+
+
+def test_a_marker_inside_a_string_literal_does_not_exempt():
+    """The marker scan used to match raw line text, so a string that merely
+    quoted the marker silenced the guard for that line — a way to disable an
+    architecture test by accident, or quietly on purpose."""
+    src = ('raise ValueError("pass overlay-ok: to skip")\n')
+    node = ast.parse(src).body[0]
+    assert guard_markers.marker_reason(MARKER, src, node) is None
+
+    src = 'x = read(croot)  # overlay-ok: a real reason living in a real comment\n'
+    node = ast.parse(src).body[0]
+    assert guard_markers.marker_reason(MARKER, src, node) == \
+        "a real reason living in a real comment"
 
 
 def test_every_owner_module_exists_and_says_why():
@@ -249,8 +328,8 @@ def test_the_overlay_and_the_sanctioned_accessor_are_not_flagged():
 
 
 def test_writes_and_campaign_local_records_are_not_flagged():
-    """A write is how a record materializes, and campaign-local records have
-    nothing to inherit — flagging either would make the guard noise."""
+    """A pure write is how a record materializes, and campaign-local records
+    have nothing to inherit — flagging either would make the guard noise."""
     for src, why in [
         ("def f(cid):\n    croot = campaigns.campaign_root(cid)\n"
          "    entities.update_entity(croot, kind, eid, body=b)\n", "a write"),
@@ -262,6 +341,37 @@ def test_writes_and_campaign_local_records_are_not_flagged():
          "    return playstate.read_state(croot, aid)\n", "campaign-local record"),
     ]:
         assert not list(_unresolved_reads(ast.parse(src))), f"false positive: {why}"
+
+
+def test_read_modify_write_resolvers_are_not_exempt():
+    """`promote_image` resolves its source through `image_path` before renaming,
+    so a `promote_`-shaped name is not a pure write. Exempting the whole family
+    by prefix hid a swap that can silently miss an inherited image."""
+    for fn in ("promote_image", "copy_to_character", "import_from_character"):
+        src = (f"def f(cid):\n    croot = campaigns.campaign_root(cid)\n"
+               f"    assets.{fn}(croot, aid, vid, name)\n")
+        assert list(_unresolved_reads(ast.parse(src))), f"{fn} was exempted as a write"
+
+
+def test_the_other_ways_to_spell_a_campaign_root():
+    """Only a plain `x = campaign_root(cid)` was tracked; these all reach the
+    same place and were invisible."""
+    for src, why in [
+        ("def f(cid):\n    croot: Path = campaigns.campaign_root(cid)\n"
+         "    return characters.read_card(croot, aid, vid)\n", "annotated assignment"),
+        ("def f(cid):\n    if (croot := campaigns.campaign_root(cid)):\n"
+         "        return characters.read_card(croot, aid, vid)\n", "walrus"),
+        ("def f(cid):\n    croot = campaigns.campaign_root(cid)\n    alias = croot\n"
+         "    return characters.read_card(alias, aid, vid)\n", "plain alias"),
+        ("def f(cid):\n    a, b = campaigns.campaign_root(cid), campaigns.campaign_root(o)\n"
+         "    return characters.read_card(b, aid, vid)\n", "tuple unpacking"),
+        ("def f(cid):\n    croot = campaigns.campaign_root(cid)\n"
+         "    return characters.read_card(root=croot, cid=aid, vid=vid)\n", "root= keyword"),
+        ("def f(cid):\n    croot = campaigns.campaign_root(cid)\n"
+         "    return croot.joinpath('characters', aid, 'character.md').read_text()\n",
+         "joinpath instead of /"),
+    ]:
+        assert list(_unresolved_reads(ast.parse(src))), f"missed: {why}"
 
 
 def test_a_world_root_in_the_same_module_is_not_mistaken_for_a_campaign_one():
