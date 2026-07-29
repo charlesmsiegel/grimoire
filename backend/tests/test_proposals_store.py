@@ -61,26 +61,44 @@ def test_transition_cas_and_resolution(monkeypatch, tmp_path):
                                 {"tier": "success"}) is True
     got = proposals.get(cid, sid)
     assert got["status"] == "resolved" and got["resolution"]["tier"] == "success"
-    # wrong expected state, wrong id: both lose without writing
+    # wrong expected state, wrong id: both lose without writing (legal edges,
+    # so the CAS is what refuses them — not the edge guard below)
     assert proposals.transition(cid, sid, rec["id"], ("pending",), "declined") is False
-    assert proposals.transition(cid, sid, "pr-999999", ("resolved",), "declined") is False
+    assert proposals.transition(cid, sid, "pr-999999", ("pending",), "resolving") is False
     assert proposals.get(cid, sid)["status"] == "resolved"
 
 
-def test_transition_refuses_the_exits_from_the_projectable_states(monkeypatch, tmp_path):
+def test_transition_refuses_every_exit_from_the_projectable_states(monkeypatch, tmp_path):
     """#242: the generic CAS must not be a back door out of `resolved`.
+
     `superseded` and `narrated` are owned by `supersede`/`commit_narration`,
-    which heal first — reaching them through `transition` would retire a
-    record with its roll unprojected, silently."""
+    which heal first. `declined` is the subtler one and is why this guard
+    enumerates EDGES rather than target statuses: `resolved -> declined` keeps
+    the resolution but puts the record outside what `project()` accepts, so a
+    later `supersede()` heals nothing and retires the roll's only recovery
+    handle unprojected — the exact bug the issue is about, reached sideways.
+    """
     cid, sid = _scene(monkeypatch, tmp_path)
     rec = proposals.new(cid, sid, {})
     proposals.claim(cid, sid, rec["id"])
     proposals.transition(cid, sid, rec["id"], ("resolving",), "resolved",
                          {"result": {"total": 5}})
-    for exit_status in ("narrated", "superseded"):
-        with pytest.raises(ValueError, match="heal"):
+    for exit_status in ("narrated", "superseded", "declined", "pending", "resolving"):
+        with pytest.raises(ValueError, match="illegal edge"):
             proposals.transition(cid, sid, rec["id"], ("resolved",), exit_status)
     assert proposals.get(cid, sid)["status"] == "resolved"   # refused before any write
+
+
+def test_transition_checks_the_whole_declaration_not_just_the_winning_edge(monkeypatch, tmp_path):
+    """Passing a from-state asserts it may legally reach `to`, so a mixed
+    declaration is refused even when the record's actual status names a legal
+    edge — otherwise the illegal half would sit there until a record happened
+    to be in that state."""
+    cid, sid = _scene(monkeypatch, tmp_path)
+    rec = proposals.new(cid, sid, {})
+    with pytest.raises(ValueError, match="illegal edge"):
+        proposals.transition(cid, sid, rec["id"], ("pending", "resolved"), "declined")
+    assert proposals.get(cid, sid)["status"] == "pending"
 
 
 def test_supersede_during_resolve_wins(monkeypatch, tmp_path):

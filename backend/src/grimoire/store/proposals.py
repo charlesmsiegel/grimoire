@@ -33,14 +33,28 @@ from .paths import now_iso
 
 NON_TERMINAL = ("pending", "resolving", "resolved", "declined")
 
-# Statuses the generic CAS may move a record TO. The two exits from the
-# projectable states are deliberately absent: ``superseded`` and ``narrated``
-# belong to ``supersede`` and ``commit_narration``, which heal before they move
-# the record (#242). Routing either through ``transition`` would reopen the hole
-# this module closed. Healing inside ``transition`` instead is NOT the
-# alternative: ``update_resolution``'s status-preserving resolved -> resolved
-# CAS would then recurse back through ``project`` without bound.
-TRANSITION_TARGETS = ("pending", "resolving", "resolved", "declined")
+# The complete set of edges the generic CAS may walk (#242). Enumerating EDGES
+# rather than target statuses is the point: an allowlist of targets still let
+# ``resolved -> declined`` through, which keeps the resolution but puts the
+# record outside what ``project`` accepts — so the next ``supersede`` would
+# heal nothing and retire the roll's only recovery handle unprojected.
+#
+# Every edge that leaves a projectable state is therefore absent here and owned
+# by a function that heals first: ``supersede`` (-> superseded) and
+# ``commit_narration`` (-> narrated). ``resolved -> resolved`` is the
+# status-preserving CAS ``update_resolution`` uses to persist projection
+# metadata.
+#
+# Healing inside ``transition`` instead is NOT the alternative: that same
+# ``resolved -> resolved`` CAS would recurse back through ``project`` without
+# bound.
+TRANSITION_EDGES = frozenset({
+    ("pending", "resolving"),     # claim
+    ("pending", "declined"),      # the player declines the roll
+    ("resolving", "pending"),     # resolve_check failed; hand the chip back
+    ("resolving", "resolved"),    # the roll landed
+    ("resolved", "resolved"),     # update_resolution: metadata, status untouched
+})
 
 
 @contextmanager
@@ -101,16 +115,20 @@ def transition(cid: str, sid: str, pid: str, from_states, to: str,
     means another actor moved the record (e.g. a supersede mid-resolve) and
     the caller must stop.
 
-    ``to`` must be a non-exit status (``TRANSITION_TARGETS``). The two exits
-    from the projectable states are reached only through ``supersede`` and
-    ``commit_narration``, which heal first; letting the generic CAS perform
-    them would be an unhealed exit, which is exactly the class of bug #242
-    closed. Misuse raises rather than returning False — a bad ``to`` is a
-    programming error, not the lost race False is reserved for."""
-    if to not in TRANSITION_TARGETS:
+    Every ``(from_state, to)`` pair the caller declares must be in
+    ``TRANSITION_EDGES``, and the whole declaration is checked — not just the
+    edge that happens to win the CAS — because passing a from-state is an
+    assertion that it may legally reach ``to``. Edges that leave a projectable
+    state are absent by design; they belong to ``supersede`` and
+    ``commit_narration``, which heal first (#242). Misuse raises rather than
+    returning False: an illegal edge is a programming error, not the lost race
+    False is reserved for, and callers treat False as "someone else won, stop"."""
+    illegal = sorted((f, to) for f in from_states if (f, to) not in TRANSITION_EDGES)
+    if illegal:
         raise ValueError(
-            f"proposals.transition cannot move a record to {to!r}: "
-            "use supersede() or commit_narration(), which heal first (#242)")
+            f"proposals.transition: illegal edge(s) {illegal} — a record may only "
+            "leave a projectable state through supersede() or commit_narration(), "
+            "which heal first (#242)")
     with locks.campaign_lock(cid):
         data = _read(cid)
         rec = data.get(sid)
