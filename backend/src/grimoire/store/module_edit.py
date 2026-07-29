@@ -1,13 +1,19 @@
 """Module authoring (#829, mechanics Phase 8): staged, validated, journaled
 whole-directory publication of user-library pack edits.
 
-Concurrency threat model (spec): exactly two actors — the User (UI) and the
-LLM (play flows). One global re-entrant module-edit lock serializes all
-module mutation + recovery; every publishing writer also holds every
-campaign's locks.campaign_lock(cid) across its swap, so LLM flows (which hold
-their single campaign lock across resolve/load/compute) never observe a
-half-published pack. No machinery for two User actions racing.
-Spec: docs/superpowers/specs/2026-07-13-mechanics-phase8-authoring-ui-design.md.
+Concurrency threat model: the original spec assumed exactly two actors — the
+User (UI) and the LLM (play flows) — both inside one process. A synced store
+adds a third, a second grimoire process, which that design did not account for
+(#234). One global re-entrant module-edit lock serializes all module mutation
++ recovery; every publishing writer also holds every campaign's
+locks.campaign_lock(cid) across its swap, so LLM flows (which hold their
+single campaign lock across resolve/load/compute) never observe a
+half-published pack. Both locks are now OS file locks as well as in-process
+ones, so all three actors are excluded **on one machine**; two *devices*
+sharing a synced folder are still not, and cannot be by any filesystem lock.
+No machinery for two User actions racing.
+Specs: docs/superpowers/specs/2026-07-13-mechanics-phase8-authoring-ui-design.md,
+docs/superpowers/specs/2026-07-28-cross-process-campaign-locks-design.md.
 """
 
 from __future__ import annotations
