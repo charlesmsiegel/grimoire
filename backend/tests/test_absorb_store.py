@@ -449,6 +449,24 @@ def test_apply_edits_skips_a_stale_dossier(monkeypatch, tmp_path):
     assert dossiers.read(croot, ch) == "Seraphine rides with the party."
 
 
+def test_a_stale_dossier_is_reported_as_a_conflict(monkeypatch, tmp_path):
+    """Skipping the stale write is right; skipping it silently is not -- the
+    reviewer approved that dossier and would otherwise be told the save
+    succeeded while the text they wrote was dropped."""
+    from grimoire.store import dossiers
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    ch = _char(croot, "Seraphine")
+    dossiers.write(croot, ch, "Seraphine rides with the party.")
+    applied, failures = absorb.apply_edits(cid, [
+        {"id": f"dossier:{ch}", "kind": "dossier",
+         "target": {"kind": "characters", "id": ch}, "field": "dossier",
+         "before": "Seraphine is wary.", "after": "Seraphine is slightly less wary."}])
+    assert applied == []
+    assert failures == [{"id": f"dossier:{ch}", "kind": "conflict",
+                         "reason": "this dossier changed since the scene was absorbed"}]
+
+
 def test_apply_edits_writes_a_dossier_whose_before_still_matches(monkeypatch, tmp_path):
     from grimoire.store import dossiers
     cid = _campaign(monkeypatch, tmp_path)

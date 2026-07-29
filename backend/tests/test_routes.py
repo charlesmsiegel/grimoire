@@ -2214,6 +2214,67 @@ def test_dossier_edit_is_written_on_save(client):
     assert store.dossiers.read(store.campaigns.campaign_root(cid), "aese") == "Aese now trusts the owner."
 
 
+def test_put_chronicle_serializes_the_whole_commit(client):
+    """The stale-dossier check is a read-then-write: two concurrent saves could
+    both read a matching `before` before either writes, and the guard would stop
+    neither. The commit runs under the campaign lock so it cannot interleave --
+    the same lock domain every other campaign mutator uses."""
+    import threading
+
+    cid, sid = _dossier_scene(client)
+    client.app.dependency_overrides[routes.get_llm] =         lambda: FakeOpenRouterComplete("Aese now trusts the owner.")
+    edits = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["edits"]
+    assert [e["id"] for e in edits] == ["dossier:aese"]
+
+    observed = {}
+    real_write = store.dossiers.write
+
+    def probing_write(croot, ch, text):
+        # Mid-commit, ask from ANOTHER thread whether this campaign's lock is
+        # free -- the lock is an RLock, so asking on this one would always
+        # succeed. Acquire and release both happen on the probe thread: an
+        # RLock may only be released by its owner.
+        got: list[bool] = []
+
+        def probe():
+            lock = store.locks.campaign_lock(cid)
+            acquired = lock.acquire(timeout=0.25)
+            got.append(acquired)
+            if acquired:
+                lock.release()
+
+        t = threading.Thread(target=probe)
+        t.start()
+        t.join()
+        observed["locked_out"] = got == [False]
+        return real_write(croot, ch, text)
+
+    store.dossiers.write = probing_write
+    try:
+        r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                       json={"one_line": "o", "summary": "s", "keywords": [],
+                             "timeline_events": [], "edits": edits})
+    finally:
+        store.dossiers.write = real_write
+    assert r.status_code == 200 and "dossier:aese" in r.json()["applied"]
+    assert observed.get("locked_out") is True
+
+
+def test_a_stale_dossier_conflict_reaches_the_reviewer(client):
+    cid, sid = _dossier_scene(client, prior="Aese is a stranger.")
+    client.app.dependency_overrides[routes.get_llm] =         lambda: FakeOpenRouterComplete("Aese now trusts the owner.")
+    edits = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["edits"]
+    # another review lands first
+    store.dossiers.write(store.campaigns.campaign_root(cid), "aese", "Aese left the city.")
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                   json={"one_line": "o", "summary": "s", "keywords": [],
+                         "timeline_events": [], "edits": edits})
+    assert r.status_code == 200
+    assert [f["id"] for f in r.json()["failures"]] == ["dossier:aese"]
+    assert r.json()["failures"][0]["kind"] == "conflict"
+    assert store.dossiers.read(store.campaigns.campaign_root(cid), "aese") == "Aese left the city."
+
+
 def test_rejected_dossier_edit_leaves_the_prior_dossier(client):
     """Cancelling (or unchecking) the dossier must leave the old one standing --
     impossible before #235, when absorb wrote it eagerly."""
@@ -2800,9 +2861,9 @@ def test_chronicle_put_applies_sheet_edit_and_reports_conflicts(client, module_s
     save = {"one_line": "x", "summary": "y", "keywords": [], "timeline_events": [],
             "edits": [sheet_edit]}
     r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle", json=save).json()
-    assert r["applied"] == [sheet_edit["id"]] and r["sheet_failures"] == []
+    assert r["applied"] == [sheet_edit["id"]] and r["failures"] == []
     r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle", json=save).json()
-    assert r["applied"] == [] and r["sheet_failures"][0]["kind"] == "conflict"
+    assert r["applied"] == [] and r["failures"][0]["kind"] == "conflict"
 
 
 def test_scene_suggestions_returns_resolved(client):
@@ -2839,11 +2900,11 @@ def test_put_chronicle_applies_approved_edits(client):
         "edits": [{"id": f"character_state:{ch}", "kind": "character_state",
                    "target": {"kind": "characters", "id": ch}, "field": "current_state", "after": "Loyal."}]})
     assert r.json()["applied"] == [f"character_state:{ch}"]
-    assert r.json()["sheet_failures"] == []
+    assert r.json()["failures"] == []
     assert store.playstate.read_state(croot, ch)["current_state"] == "Loyal."
 
 
-def test_put_chronicle_reports_sheet_failures(client):
+def test_put_chronicle_reports_edit_failures(client):
     wid, cid = _campaign(client)
     client.put(f"/api/campaigns/{cid}/module", json={"module": "pool-basic"})
     chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"}).json()["character"]
@@ -2858,15 +2919,15 @@ def test_put_chronicle_reports_sheet_failures(client):
     r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle", json={
         "one_line": "o", "summary": "s", "keywords": [], "timeline_events": [], "edits": edits})
     body = r.json()
-    assert body["applied"] == [edits[0]["id"]] and body["sheet_failures"] == []
+    assert body["applied"] == [edits[0]["id"]] and body["failures"] == []
     assert store.sheets.read(cid, "characters", chid)["fields"]["health"] == 2
 
     r2 = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle", json={   # replay: reported, not skipped
         "one_line": "o", "summary": "s", "keywords": [], "timeline_events": [], "edits": edits})
     body2 = r2.json()
     assert body2["applied"] == []
-    assert body2["sheet_failures"] == [
-        {"id": edits[0]["id"], "kind": "conflict", "reason": body2["sheet_failures"][0]["reason"]}]
+    assert body2["failures"] == [
+        {"id": edits[0]["id"], "kind": "conflict", "reason": body2["failures"][0]["reason"]}]
 
 
 def _apply_lore_change(client, cid):
