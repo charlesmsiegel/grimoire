@@ -339,7 +339,12 @@ async def _stage_dossiers(cid: str, sid: str, transcript: str, client: LLMClient
             break
         try:
             name = store.characters.read_character(croot, a["id"])["meta"].get("name", a["id"])
-            msgs = store.dossiers.build_prompt(name, store.dossiers.read(croot, a["id"]), transcript)
+            # Read ONCE, before the await. Re-reading after it to build the
+            # staged `before` would record a paragraph another review wrote
+            # while this call was in flight -- the conflict guard would then
+            # pass and this stale output would overwrite that newer one (#235).
+            prior = store.dossiers.read(croot, a["id"])
+            msgs = store.dossiers.build_prompt(name, prior, transcript)
             d_text = await budget.run(client.complete(msgs, conn))
             parsed_dossier = store.dossiers.parse_output(d_text)
             # stage_edit returns None for an unchanged paragraph AND for a blank
@@ -349,7 +354,7 @@ async def _stage_dossiers(cid: str, sid: str, transcript: str, client: LLMClient
             if not parsed_dossier:
                 out["failed"].append({"id": a["id"], "reason": "empty dossier reply"})
                 continue
-            edit = store.dossiers.stage_edit(croot, a["id"], name, parsed_dossier)
+            edit = store.dossiers.stage_edit(a["id"], name, prior, parsed_dossier)
         except Exception as exc:  # noqa: BLE001 -- LLMError, store errors, anything
             # Type-prefixed: a bare str() is useless for the store's own errors
             # (CharacterNotFound("aese") stringifies to just "aese").
@@ -470,10 +475,24 @@ def put_chronicle(cid: str, sid: str, body: ChronicleSave):
     # compares the staged `before` with what is stored and then writes, and two
     # concurrent saves could otherwise both read a matching `before` before
     # either wrote -- a guard that stops neither.
+    # The token names the attempt; the fingerprint names what it was for.
+    fp = store.commits.fingerprint({
+        "one_line": body.one_line, "summary": body.summary, "keywords": body.keywords,
+        "timeline_events": body.timeline_events, "edits": body.edits})
     with store.locks.campaign_lock(cid):
         # Inside the lock: two saves racing on one token must not both miss.
         prior = store.commits.lookup(cid, body.commit_token)
         if prior is not None:
+            if prior.get("fingerprint") and prior["fingerprint"] != fp:
+                # The review stayed editable after the failed save, and this
+                # retry carries different content. Returning the first result
+                # would report success while discarding the edits made since.
+                raise HTTPException(
+                    status_code=409,
+                    detail={"detail": "this review changed after a save that already "
+                                      "committed — reload the campaign and edit the "
+                                      "records directly",
+                            "kind": "commit_body_changed"})
             if prior["done"]:
                 return prior["result"]
             # Reserved but never completed: the first attempt got past the point
@@ -490,12 +509,12 @@ def put_chronicle(cid: str, sid: str, body: ChronicleSave):
         # Claimed BEFORE the first non-idempotent write (the chronicle entry
         # above is keyed by scene id and merely overwrites); every append below
         # is covered by the reservation.
-        store.commits.reserve(cid, body.commit_token)
+        store.commits.reserve(cid, body.commit_token, fp)
         store.chronicle.append_timeline(cid, body.timeline_events)
         store.scenes.mark_absorbed(cid, sid, body.one_line, body.summary)
         applied, failures = store.absorb.apply_edits(cid, body.edits, sid)
         result = {**record, "applied": applied, "failures": failures}
-        store.commits.record(cid, body.commit_token, result)
+        store.commits.record(cid, body.commit_token, result, fp)
     return result
 
 
