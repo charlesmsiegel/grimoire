@@ -527,28 +527,6 @@ def test_hold_all_holds_every_named_lock(monkeypatch, tmp_path):
     assert not any(locks.campaign_lock(c)._is_owned() for c in ("a", "b", "c"))
 
 
-def test_hold_all_keeps_unwinding_when_one_release_raises(monkeypatch, tmp_path):
-    """A plain `for lock in reversed(held): lock.release()` strands every
-    remaining lock when one raises. ExitStack does not."""
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    first = locks.campaign_lock("aaa")
-    real_release = first.release
-    calls = []
-
-    def angry():
-        calls.append("aaa")
-        real_release()
-        raise OSError("release exploded")
-
-    monkeypatch.setattr(first, "release", angry)
-    with pytest.raises(OSError):
-        with locks.hold_all(["aaa", "bbb"]):
-            pass
-    assert calls == ["aaa"]
-    assert locks.campaign_lock("bbb").acquire(timeout=5), "bbb was stranded"
-    locks.campaign_lock("bbb").release()
-
-
 def test_module_edit_acquires_campaign_locks_in_sorted_order(monkeypatch, tmp_path):
     """Behavioural, not a source grep: spy on the registry and assert the ORDER
     module_edit actually asks for. A source assertion would pass on a docstring
@@ -586,8 +564,11 @@ def test_world_module_rebind_acquires_in_sorted_order(monkeypatch, tmp_path):
     monkeypatch.setattr(locks, "campaign_lock",
                         lambda c: (order.append(c), real(c))[1])
     client = TestClient(main.create_app())
-    r = client.put(f"/api/worlds/{wid}/module", json={"module": "pool-basic"})
+    # A DIFFERENT module from the campaigns' current one, so the route cannot
+    # take a no-op path and acquire nothing.
+    r = client.put(f"/api/worlds/{wid}/module", json={"module": "none"})
     assert r.status_code == 200, r.text
+    assert len(order) == 3, f"the route acquired nothing: {order}"  # not vacuous
     assert order == sorted(order), f"unsorted acquisition: {order}"
 ```
 
@@ -828,30 +809,6 @@ def test_reentrancy_takes_the_file_lock_exactly_once(monkeypatch, tmp_path):
     assert _probe(tmp_path, factory) == "GOT", "outer exit failed to release"
 
 
-def test_a_second_process_cannot_hold_the_module_edit_lock(monkeypatch, tmp_path):
-    """DEFER THIS TEST TO TASK 4 -- it must stay red until `_M` is rewired.
-    It is written here so the two module-edit changes read together.
-
-    The second stated goal of #234.
-
-    Note what this asserts on: ``module_edit._M``, the lock the code actually
-    takes -- NOT ``locks.module_edit_lock()``. Testing the new lock against
-    itself would pass before Task 4 rewires ``_M``, so ``_M`` could stay a
-    private process-local RLock and every test would still be green.
-    """
-    from grimoire.store import module_edit
-
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    p = _hold_in_child(tmp_path, "module_edit_lock()")
-    try:
-        monkeypatch.setattr(locks, "LOCK_TIMEOUT", 0.5)
-        with pytest.raises(locks.ModuleEditBusy):
-            with module_edit._M:            # the lock module_edit really uses
-                pass
-    finally:
-        p.kill()
-        p.wait(timeout=10)
-
 
 # ---- the RLock contract the wrapper must preserve ----
 
@@ -962,6 +919,33 @@ def test_a_failing_unlock_still_closes_the_fd_and_releases(monkeypatch, tmp_path
 # ---- hold_all, cross-process ----
 
 
+def test_hold_all_keeps_unwinding_when_one_release_raises(monkeypatch, tmp_path):
+    """A plain `for lock in reversed(held): lock.release()` strands every
+    remaining lock when one raises. ExitStack does not.
+
+    This test lives in Task 3, not Task 2: patching `.release` needs a
+    `_ProcessScopedLock` instance. A built-in `threading.RLock` has a
+    read-only `release`, so `monkeypatch.setattr` on one raises AttributeError.
+    """
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    first = locks.campaign_lock("aaa")
+    real_release = first.release
+    calls = []
+
+    def angry():
+        calls.append("aaa")
+        real_release()
+        raise OSError("release exploded")
+
+    monkeypatch.setattr(first, "release", angry)
+    with pytest.raises(OSError):
+        with locks.hold_all(["aaa", "bbb"]):
+            pass
+    assert calls == ["aaa"]
+    assert locks.campaign_lock("bbb").acquire(timeout=5), "bbb was stranded"
+    locks.campaign_lock("bbb").release()
+
+
 def test_hold_all_unwinds_everything_when_a_later_lock_is_busy(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     p = _hold_in_child(tmp_path, "campaign_lock('zulu')")
@@ -979,19 +963,29 @@ def test_hold_all_unwinds_everything_when_a_later_lock_is_busy(monkeypatch, tmp_
 
 
 def test_hold_all_is_bounded_by_one_timeout_not_n(monkeypatch, tmp_path):
-    """Per-lock deadlines would give an N x LOCK_TIMEOUT convoy."""
+    """Per-lock deadlines would give an N x LOCK_TIMEOUT convoy.
+
+    THREE contended locks, not one: with a single contended lock a per-lock
+    implementation waits exactly the same total time as a single-deadline one,
+    so the test would pass either way. Sorted order means 'aaa' is contended
+    first, and a per-lock implementation would then go on to wait the full
+    timeout on 'bbb' and 'ccc' too.
+    """
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    p = _hold_in_child(tmp_path, "campaign_lock('zzz')")
+    holders = [_hold_in_child(tmp_path, f"campaign_lock({c!r})")
+               for c in ("aaa", "bbb", "ccc")]
     try:
         monkeypatch.setattr(locks, "LOCK_TIMEOUT", 1.0)
         started = time.monotonic()
         with pytest.raises(locks.CampaignBusy):
-            with locks.hold_all(["a", "b", "c", "d", "zzz"]):
+            with locks.hold_all(["aaa", "bbb", "ccc"]):
                 pass
-        assert time.monotonic() - started < 3.0
+        elapsed = time.monotonic() - started
+        assert elapsed < 2.0, f"took {elapsed:.1f}s: a per-lock deadline convoy"
     finally:
-        p.kill()
-        p.wait(timeout=10)
+        for p in holders:
+            p.kill()
+            p.wait(timeout=10)
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -1214,17 +1208,46 @@ git commit -m "Make campaign_lock cross-process; add hold_all and StoreBusy (#23
 
 **Files:**
 - Modify: `backend/src/grimoire/store/module_edit.py:29` (`_M`)
-- Test: covered by `test_a_second_process_cannot_hold_the_module_edit_lock` (Task 2)
+- Test: `backend/tests/test_locks_store.py` (append)
 
 **Interfaces:**
-- Consumes: `locks.module_edit_lock()` (Task 2).
+- Consumes: `locks.module_edit_lock()` (Task 3).
 
-- [ ] **Step 1: Confirm the test currently fails for the right reason**
+**The test belongs here, not in Task 3.** It must be red until `_M` is rewired, and Task 3 requires a fully green suite at its commit point.
+
+- [ ] **Step 1: Write the failing test**
+
+Append to `backend/tests/test_locks_store.py`:
+
+```python
+def test_a_second_process_cannot_hold_the_module_edit_lock(monkeypatch, tmp_path):
+    """The second stated goal of #234.
+
+    Note what this asserts on: ``module_edit._M``, the lock the code actually
+    takes -- NOT ``locks.module_edit_lock()``. Testing the new lock against
+    itself would pass before `_M` is rewired, so `_M` could stay a private
+    process-local RLock and every test would still be green.
+    """
+    from grimoire.store import module_edit
+
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    p = _hold_in_child(tmp_path, "module_edit_lock()")
+    try:
+        monkeypatch.setattr(locks, "LOCK_TIMEOUT", 0.5)
+        with pytest.raises(locks.ModuleEditBusy):
+            with module_edit._M:            # the lock module_edit really uses
+                pass
+    finally:
+        p.kill()
+        p.wait(timeout=10)
+```
+
+- [ ] **Step 2: Run it to verify it fails for the right reason**
 
 Run: `... -m pytest backend/tests/test_locks_store.py::test_a_second_process_cannot_hold_the_module_edit_lock -q`
-Expected: FAIL — the child holds `locks.module_edit_lock()` but `module_edit._M` is a private `threading.RLock`, so the parent's publication is not excluded. (It passes only once `_M` *is* that lock.)
+Expected: FAIL — `module_edit._M` is still a private `threading.RLock`, so `with module_edit._M:` succeeds while the child holds the real lock, and no `ModuleEditBusy` is raised.
 
-- [ ] **Step 2: Replace `_M`**
+- [ ] **Step 3: Replace `_M`**
 
 In `module_edit.py`, delete `_M = threading.RLock()` and add:
 
@@ -1237,15 +1260,15 @@ _M = locks.module_edit_lock()
 
 `locks` is already imported at `module_edit.py:25`. Line 29 was `threading`'s only use in the file (verified), so delete `import threading` from the import block too.
 
-- [ ] **Step 3: Run the tests**
+- [ ] **Step 4: Run the tests**
 
 Run: `PYTHONPATH="$PWD/backend/src" ../../backend/.venv/Scripts/python.exe -m pytest backend -q`
 Expected: PASS, including the whole `test_module_edit.py` suite (`_apply → recover()` exercises reentrancy heavily).
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add backend/src/grimoire/store/module_edit.py
+git add backend/src/grimoire/store/module_edit.py backend/tests/test_locks_store.py
 git commit -m "Make the module-edit lock cross-process (#234)"
 ```
 
@@ -1594,16 +1617,30 @@ def test_adjudication_leaves_resolving_when_the_revert_is_also_busy(client, monk
     def busy(*a, **k):
         raise store.locks.CampaignBusy(cid)
 
+    # The revert must fail, but the CLAIM (pending -> resolving) must succeed --
+    # claim() goes through transition() too, so patching every call would stop
+    # the record ever reaching `resolving` and the assertion below would be
+    # testing nothing. Let the first transition through, break the rest.
+    real_transition = store.proposals.transition
+    seen = []
+
+    def flaky(cid_, sid_, pid_, expect, target, *a, **k):
+        seen.append(target)
+        if len(seen) == 1:
+            return real_transition(cid_, sid_, pid_, expect, target, *a, **k)
+        raise store.locks.CampaignBusy(cid_)
+
     monkeypatch.setattr(store.checks, "resolve_check", busy)
-    monkeypatch.setattr(store.proposals, "transition", busy)
+    monkeypatch.setattr(store.proposals, "transition", flaky)
     resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal", json={
         "proposal": rec["id"], "action": "accept", "check": "brawl",
         "actor": "characters:mara", "difficulty": 6, "modifier": 0})
 
     assert resp.status_code == 409, resp.text
-    monkeypatch.undo()
+    assert seen[0] == "resolving", f"the claim never landed: {seen}"
+    monkeypatch.setattr(store.proposals, "transition", real_transition)
     after = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
-    assert after["status"] == "resolving"
+    assert after["status"] == "resolving", "the failed revert should leave it here"
     assert after["status"] in store.proposals.NON_TERMINAL  # the next send retires it
 ```
 
@@ -1611,7 +1648,7 @@ def test_adjudication_leaves_resolving_when_the_revert_is_also_busy(client, monk
 
 - [ ] **Step 2: Run to verify failure**
 
-Run: `... -m pytest backend/tests/test_locks_http.py -q`
+Run: `... -m pytest backend/tests/test_routes.py -k adjudication_contention -q`
 Expected: FAIL
 
 - [ ] **Step 3: Catch contention ahead of the broad handler**
@@ -1641,7 +1678,7 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add backend/src/grimoire/routes.py backend/tests/test_locks_http.py
+git add backend/src/grimoire/routes.py backend/tests/test_routes.py
 git commit -m "Report adjudication contention as 409, not check_error (#234)"
 ```
 
