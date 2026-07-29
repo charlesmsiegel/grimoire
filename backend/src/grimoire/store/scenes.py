@@ -103,7 +103,7 @@ def _scene_path(cid: str, sid: str) -> Path:
 
 
 def _require_campaign(cid: str) -> None:
-    if not campaigns.campaign_meta_path(cid).exists():
+    if not campaigns.campaign_exists(cid):
         raise campaigns.CampaignNotFound(cid)
 
 
