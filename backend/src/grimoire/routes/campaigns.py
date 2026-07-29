@@ -29,7 +29,7 @@ router = APIRouter()
 # /images sub-paths, so order relative to the generic routes doesn't matter)
 @router.get("/campaigns/{cid}/groups/{gid}/state")
 def get_group_state(cid: str, gid: str):
-    if not store.campaigns.campaign_meta_path(cid).exists():
+    if not store.campaigns.campaign_exists(cid):
         raise HTTPException(status_code=404, detail="campaign not found")
     try:
         store.overlay.read_entity(cid, "groups", gid)
@@ -43,7 +43,7 @@ def get_group_state(cid: str, gid: str):
 
 @router.put("/campaigns/{cid}/groups/{gid}/state")
 def put_group_state(cid: str, gid: str, body: GroupStateSave):
-    if not store.campaigns.campaign_meta_path(cid).exists():
+    if not store.campaigns.campaign_exists(cid):
         raise HTTPException(status_code=404, detail="campaign not found")
     try:
         store.overlay.read_entity(cid, "groups", gid)
@@ -95,14 +95,14 @@ def get_campaigns():
 
 @router.get("/campaigns/{cid}/calendar")
 def get_calendar_config(cid: str):
-    if not store.campaigns.campaign_meta_path(cid).exists():
+    if not store.campaigns.campaign_exists(cid):
         raise HTTPException(status_code=404, detail="campaign not found")
     return store.calendars.read_calendar(store.campaigns.campaign_root(cid))
 
 
 @router.put("/campaigns/{cid}/calendar")
 def put_calendar_config(cid: str, body: CalendarConfig):
-    if not store.campaigns.campaign_meta_path(cid).exists():
+    if not store.campaigns.campaign_exists(cid):
         raise HTTPException(status_code=404, detail="campaign not found")
     cfg = {"primary": body.primary, "secondary": body.secondary, "confirmed": body.confirmed}
     try:
@@ -115,7 +115,7 @@ def put_calendar_config(cid: str, body: CalendarConfig):
 
 @router.get("/campaigns/{cid}/calendar/months")
 def get_calendar_months(cid: str, year: int):
-    if not store.campaigns.campaign_meta_path(cid).exists():
+    if not store.campaigns.campaign_exists(cid):
         raise HTTPException(status_code=404, detail="campaign not found")
     cfg = store.calendars.read_calendar(store.campaigns.campaign_root(cid))
     try:
@@ -418,7 +418,7 @@ def post_copy_campaign_image_from_greeting(cid: str, char: str, vid: str, body: 
 
 
 def _campaign_wroot(cid: str):
-    return store.worlds.world_root(store.campaigns.read_campaign(cid)["meta"].get("world", ""))
+    return store.campaigns.world_root_of(cid)
 
 
 @router.get("/campaigns/{cid}/characters")
