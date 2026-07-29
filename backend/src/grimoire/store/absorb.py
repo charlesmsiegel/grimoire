@@ -294,7 +294,10 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
         if not vid:
             continue
         try:
-            before = characters.read_card(croot, char_id, vid)["data"].get(field, "").strip()
+            # locked_version returned a version, so the actor is in the appearance
+            # record and its card is materialized campaign-side
+            before = characters.read_card(appearances.locked_actor_root(cid),
+                                          char_id, vid)["data"].get(field, "").strip()
         except (characters.CharacterNotFound, characters.VersionNotFound):
             continue
         out.append({"id": f"authored:{char_id}:{field}", "kind": "authored",
@@ -604,9 +607,10 @@ def apply_edits(cid: str, edits: list[dict],
                 if e["field"] not in _CARD_FIELDS:
                     continue  # re-guard: PUT edits are client-supplied, not re-materialized
                 vid = appearances.locked_version(cid, "characters", target["id"])
-                card = characters.read_card(croot, target["id"], vid)
+                aroot = appearances.locked_actor_root(cid)   # locked -> materialized
+                card = characters.read_card(aroot, target["id"], vid)
                 card["data"][e["field"]] = after
-                characters.update_version(croot, target["id"], vid, card)
+                characters.update_version(aroot, target["id"], vid, card)
             elif kind == "relationship":
                 p = e["payload"]
                 relationships.set_feeling(cid, p["from"], p["to"], p["trust"], p["affection"],
@@ -709,15 +713,15 @@ def group_snapshot(cid: str) -> str:
 def state_snapshot(cid: str, sid: str) -> dict:
     """Present NPCs' existing standing snapshot — current_state with any Knows/Suspects
     folded in (via _snapshot_line) — keyed by display name (feeds the prompt)."""
-    croot = campaigns.campaign_root(cid)
+    aroot = appearances.locked_actor_root(cid)   # cast actors are locked, so campaign-side
     out: dict[str, str] = {}
     for a in appearances.scene_cast(cid, sid):
         if a["role"] != "npc" or a["kind"] != "characters":
             continue
-        st = playstate.read_state(croot, a["id"])
+        st = playstate.read_state(aroot, a["id"])
         if st and (st["current_state"] or st["knows"] or st["suspects"]):
             try:
-                name = characters.read_character(croot, a["id"])["meta"].get("name", a["id"])
+                name = characters.read_character(aroot, a["id"])["meta"].get("name", a["id"])
             except characters.CharacterNotFound:
                 name = a["id"]
             out[name] = _snapshot_line(st)
