@@ -55,6 +55,19 @@ function dirOf(path: string): string {
 const specifiers = (code: string) =>
   ts.preProcessFile(code, true, true).importedFiles.map((f) => f.fileName);
 
+/**
+ * TypeScript lets a specifier name the file that will be *emitted*, so
+ * `./foo.js` on disk is `foo.ts`. Probing only the literal name would leave
+ * such an import unresolved — dropping a real edge, and tripping the
+ * completeness assertion below on a perfectly valid import.
+ */
+const JS_TO_TS: Record<string, string[]> = {
+  ".js": [".ts", ".tsx"],
+  ".jsx": [".tsx"],
+  ".mjs": [".mts"],
+  ".cjs": [".cts"],
+};
+
 /** Resolve a relative specifier to a src-relative source path, or null. */
 function resolve(from: string, spec: string): string | null {
   const base = normalize(dirOf(from) + "/" + spec.split("?")[0]);
@@ -64,6 +77,11 @@ function resolve(from: string, spec: string): string | null {
   const candidates = base
     ? [base, `${base}.ts`, `${base}.tsx`, `${base}/index.ts`, `${base}/index.tsx`]
     : ["index.ts", "index.tsx"];
+  const js = Object.keys(JS_TO_TS).find((ext) => base.endsWith(ext));
+  if (js) {
+    const stem = base.slice(0, -js.length);
+    candidates.push(...JS_TO_TS[js].map((ext) => stem + ext));
+  }
   for (const candidate of candidates) {
     if (SOURCES.has(candidate)) return candidate;
   }
@@ -141,6 +159,19 @@ describe("module-editor import graph", () => {
       "components/ModuleDisplayEditor.tsx",
       "components/moduleEditShared.tsx",
     ]));
+  });
+
+  it("resolves the specifier forms the bundler accepts", () => {
+    // Extensionless, explicit, and the TypeScript `.js`-means-`.ts` form.
+    // The last one is why JS_TO_TS exists: without it a valid `./client.js`
+    // import would drop its edge and fail the completeness case below.
+    const from = "components/ModuleEditor.tsx";
+    expect(resolve(from, "../api/client")).toBe("api/client.ts");
+    expect(resolve(from, "../api/client.ts")).toBe("api/client.ts");
+    expect(resolve(from, "../api/client.js")).toBe("api/client.ts");
+    expect(resolve(from, "./moduleEditShared")).toBe("components/moduleEditShared.tsx");
+    expect(resolve(from, "./moduleEditShared.js")).toBe("components/moduleEditShared.tsx");
+    expect(resolve(from, "../index.css")).toBeNull(); // asset, not a module edge
   });
 
   it("drops no edge it could not resolve", () => {

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>grimoire#fix-238-module-editor-cycle — Review</title>
+<title>grimoire#260 — Review</title>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 :root{
@@ -161,9 +161,9 @@ footer.doc{max-width:1280px;margin:0 auto;padding:0 28px 34px;color:var(--text-f
 <body>
 <header class="doc">
   <div class="doc-label">PULL REQUEST REVIEW</div>
-  <h1 class="doc-title">grimoire#fix-238-module-editor-cycle — Review</h1>
+  <h1 class="doc-title">grimoire#260 — Review</h1>
   <p class="doc-sub">Break the five-file module-editor import cycle by extracting shared helpers</p>
-  <div class="doc-meta">base main @ 55b1022c → 6d5042e8 · +284/−124 · generated 2026-07-28</div>
+  <div class="doc-meta">base main @ 55b1022c → 17400bed · +284/−124 · generated 2026-07-28</div>
 </header>
 <nav class="tabs" role="tablist"><button role="tab" data-tab="summary" aria-selected="true" aria-controls="summary">Summary</button>
 <button role="tab" data-tab="footprint" aria-selected="false" aria-controls="footprint">Footprint</button>
@@ -283,9 +283,11 @@ No feature, no bugfix, no behavioural change bundled in.</p>
 <ul>
   <li><strong>The other two file-level cycles.</strong> The atlas records three
   strongly-connected groups; issue #238 called this "the one worth fixing
-  outright". The <code>theme ↔ theme/themes</code> cycle and the LLM-provider
-  cycle (issue #239) are untouched, and the new guard is scoped so it will not
-  fail on them.</li>
+  outright". The other two are untouched, and the new guard is scoped so it will
+  not fail on them: the backend <code>store</code> package (a 60-file
+  strongly-connected group) and the LLM providers cycling through
+  <code>LLMError</code> (issue #239, a 4-file group rooted at
+  <code>backend/src/grimoire/claude_agent.py</code>).</li>
   <li><strong>No lint rule.</strong> The invariant is enforced by a test, not by
   <code>import/no-cycle</code>, so it holds only where the test's entry-point
   regex reaches — <code>components/Module*Editor.tsx</code> and
@@ -654,9 +656,10 @@ the completeness assertion exposed it.</p>
   matching <code>components/(Module\w*Editor|moduleEditShared).tsx</code>
   (<code>frontend/src/components/moduleEditShared.test.tsx:108</code>). A cycle
   introduced between, say, two route files still passes CI. The narrowing is
-  deliberate — the repo has two other known file-level cycles (issue #239, and
-  <code>theme ↔ theme/themes</code>) that a repo-wide assertion would fail on — but
-  it means this guard protects one neighbourhood, not the codebase.</li>
+  deliberate — the repo has two other known file-level cycles (the backend
+  <code>store</code> package, and the LLM providers of issue #239) that a
+  repo-wide assertion would fail on — but it means this guard protects one
+  neighbourhood, not the codebase.</li>
   <li><strong>Atlas claim now stale:</strong> <code>docs/codemap.html</code> states
   "File-level import cycles: 3 strongly-connected groups" and names the
   module-editor five-file cycle in its Boundaries text. After this change it is 2.
