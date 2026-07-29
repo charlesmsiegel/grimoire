@@ -349,11 +349,17 @@ export type Mechanics = {
   status: "ok" | "degraded" | "failed" | "skipped"; reason: string | null;
   warnings: string[]; dropped: MechanicsDrop[];
 };
+export type DossierFailure = { id: string; reason: string };
+export type Dossiers = {
+  status: "ok" | "degraded" | "failed" | "skipped"; reason: string | null;
+  refreshed: string[]; failed: DossierFailure[];
+};
 export type SceneAbsorb = {
   one_line: string; summary: string; keywords: string[];
   timeline_events: TimelineEvent[]; cast: string[]; location: string; date: string;
   edits: StagedEdit[];
   mechanics: Mechanics;
+  dossiers: Dossiers;
 };
 export type SceneSuggestion = {
   title: string; premise: string; date?: string;

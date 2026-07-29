@@ -3113,6 +3113,45 @@ async def _run_audit(cid: str, sid: str, client: LLMClient, conn: dict) -> tuple
                    "warnings": parsed["warnings"], "dropped": dropped}
 
 
+async def _refresh_dossiers(cid: str, sid: str, transcript: str,
+                            client: LLMClient, conn: dict) -> dict:
+    """Refresh every present NPC's campaign dossier from this scene, reporting
+    the outcome. Never raises -- a dossier failure must not fail absorb -- but
+    it is no longer silent either: failures come back as a status the inspector
+    renders, mirroring _run_audit's shape, so a user whose dossiers quietly
+    stopped updating sees it on the very first absorb rather than never."""
+    out: dict = {"status": "skipped", "reason": None, "refreshed": [], "failed": []}
+    try:
+        cast = store.appearances.scene_cast(cid, sid)
+        croot = store.campaigns.campaign_root(cid)
+    except Exception as exc:  # noqa: BLE001 -- an unreadable cast is a failed phase, not a 500
+        return {**out, "status": "failed", "reason": f"dossier refresh failed: {exc}"}
+    for a in cast:
+        if a["kind"] != "characters" or a["role"] != "npc":
+            continue  # dossiers feed the npc-only "Active elsewhere" tier; skip player cards
+        try:
+            name = store.characters.read_character(croot, a["id"])["meta"].get("name", a["id"])
+            msgs = store.dossiers.build_prompt(name, store.dossiers.read(croot, a["id"]), transcript)
+            d_text = await client.complete(msgs, conn)
+            store.dossiers.write(croot, a["id"], store.dossiers.parse_output(d_text))
+        except Exception as exc:  # noqa: BLE001 -- LLMError, store errors, anything
+            # Type-prefixed: a bare str() is useless for the store's own errors
+            # (CharacterNotFound("aese") stringifies to just "aese").
+            detail = str(exc).strip()
+            out["failed"].append({
+                "id": a["id"],
+                "reason": f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__})
+        else:
+            out["refreshed"].append(a["id"])
+    if not out["refreshed"] and not out["failed"]:
+        return {**out, "reason": "no npcs present"}
+    if not out["refreshed"]:
+        return {**out, "status": "failed", "reason": "no dossier could be refreshed"}
+    if out["failed"]:
+        return {**out, "status": "degraded", "reason": "some dossiers could not be refreshed"}
+    return {**out, "status": "ok"}
+
+
 @router.post("/campaigns/{cid}/scenes/{sid}/absorb")
 async def post_absorb(cid: str, sid: str,
                       client: LLMClient = Depends(get_llm)):
@@ -3132,24 +3171,16 @@ async def post_absorb(cid: str, sid: str,
         raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
     parsed = store.absorb.parse_output(text)
     edits = store.absorb.materialize(cid, sid, parsed)
-    # Phase 2: refresh each present character's campaign dossier from this scene.
-    croot = store.campaigns.campaign_root(cid)
-    for a in store.appearances.scene_cast(cid, sid):
-        if a["kind"] != "characters" or a["role"] != "npc":
-            continue  # dossiers feed the npc-only "Active elsewhere" tier; skip player cards
-        try:
-            name = store.characters.read_character(croot, a["id"])["meta"].get("name", a["id"])
-            msgs = store.dossiers.build_prompt(name, store.dossiers.read(croot, a["id"]), transcript)
-            d_text = await client.complete(msgs, conn)
-            store.dossiers.write(croot, a["id"], store.dossiers.parse_output(d_text))
-        except Exception:  # noqa: BLE001 — a dossier failure must not fail absorb
-            continue
+    # Phase 2: refresh each present NPC's campaign dossier from this scene
+    # (never raises -- see _refresh_dossiers' own failure boundary).
+    dossiers = await _refresh_dossiers(cid, sid, transcript, client, conn)
     # Phase 5: audit the scene's mechanics against the sheeted cast (never
     # raises -- see _run_audit's own failure boundary).
     audit_edits, mechanics = await _run_audit(cid, sid, client, conn)
     return {"one_line": parsed["one_line"], "summary": parsed["summary"],
             "keywords": parsed["keywords"], "timeline_events": parsed["timeline_events"],
-            **facts, "edits": edits + audit_edits, "mechanics": mechanics}
+            **facts, "edits": edits + audit_edits, "mechanics": mechanics,
+            "dossiers": dossiers}
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/audit")
