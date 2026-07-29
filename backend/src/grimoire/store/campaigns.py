@@ -121,6 +121,32 @@ def list_campaigns() -> list[dict]:
     return out
 
 
+def world_refs() -> list[tuple[str, str]]:
+    """(campaign name, referenced world id) for *every* campaign on disk.
+
+    Deliberately unfiltered, unlike `list_campaigns`. This backs
+    `worlds.delete_world`'s in-use check, and a campaign that is unusable as an
+    id still pins the world it references: filtering it out of the check is
+    what would make that world deletable out from under it (#259 review).
+    Enumeration may hide a record from the UI; it must never hide it from a
+    referential-integrity check.
+    """
+    out: list[tuple[str, str]] = []
+    base = _campaigns_dir()
+    if not base.exists():
+        return out
+    for d in sorted(base.iterdir()):
+        mp = d / "campaign.md"
+        if not d.is_dir() or not mp.exists():
+            continue
+        try:
+            meta, _ = parse_frontmatter(mp.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError):
+            continue   # unreadable: nothing to learn, and a scan must not raise
+        out.append((meta.get("name", d.name), meta.get("world", "")))
+    return out
+
+
 def create_campaign(name: str, world_id: str, region: str | None = None,
                      calendar: str | None = None, module: str | None = None,
                      climate: str | None = None) -> str:
@@ -331,6 +357,8 @@ def touch(cid: str) -> None:
 
 def delete_campaign(cid: str) -> None:
     root = campaign_root(cid)
-    if not campaign_meta_path(cid).exists():
+    # same canonical-name requirement as delete_world: an rmtree must not
+    # run for a spelling the store does not actually use (#259 review)
+    if not campaign_meta_path(cid).exists() or not worlds.names_its_directory(root):
         raise CampaignNotFound(cid)
     shutil.rmtree(root)
