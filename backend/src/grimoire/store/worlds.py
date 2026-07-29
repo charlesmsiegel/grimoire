@@ -120,12 +120,33 @@ def rename_world(wid: str, name: str) -> None:
     atomic.write_text(mp, dump_frontmatter(meta, body))
 
 
+def names_its_directory(root: Path) -> bool:
+    """True when ``root.name`` is how the filesystem itself spells that entry.
+
+    Windows and macOS match paths case-insensitively, so a lookup can succeed
+    under a spelling the store does not use: ``worlds/REALM`` opens
+    ``worlds/realm``. Harmless for a read, dangerous for anything that deletes
+    by an id or compares it against stored references -- ``delete_world`` did
+    both, so ``DELETE /api/worlds/REALM`` found the world, compared the raw
+    ``REALM`` against campaigns' stored ``realm``, and destroyed a world in use
+    (#259 review). Asking the directory listing rather than lower-casing keeps
+    this correct per filesystem: a genuinely distinct ``REALM`` on a
+    case-sensitive one is still its own world.
+    """
+    try:
+        return any(p.name == root.name for p in root.parent.iterdir())
+    except OSError:
+        return False
+
+
 def delete_world(wid: str) -> None:
     root = world_root(wid)
-    if not world_meta_path(wid).exists():
+    if not world_meta_path(wid).exists() or not names_its_directory(root):
         raise WorldNotFound(wid)
     from . import campaigns  # function-level: campaigns imports worlds at module level
-    used_by = [c["name"] for c in campaigns.list_campaigns() if c.get("world") == wid]
+    # world_refs, not list_campaigns: the in-use check has to see campaigns the
+    # public listing hides, or hiding one makes its world deletable
+    used_by = [name for name, w in campaigns.world_refs() if w == wid]
     if used_by:
         raise WorldInUse(wid, used_by)
     shutil.rmtree(root)
