@@ -104,39 +104,6 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
-def _heal_current_proposal(cid: str, sid: str) -> None:
-    """Complete the scene's current record's projection (roll + 🎲 line +
-    metadata) before the record is retired or replaced. The record is the only
-    recovery handle for a projection crash (roll tagged, line missing): the
-    stale-retry heal in the POST roll-proposal route matches on the record's
-    id and only projects superseded records that still carry a resolution, so
-    once ``new`` overwrites ``data[sid]`` (or the frontend stops offering the
-    superseded record) the roll would stand in rolls.json without its
-    transcript line forever. Projection is idempotent pure file I/O, so
-    healing an already-complete record is a cheap no-op. Only records whose
-    resolution carries a roll ``result`` can project — declined records never
-    store a resolution (and would have no roll to project if they somehow
-    did), and pending/resolving records have nothing resolved yet; those are
-    retired/replaced as before.
-
-    INVARIANT (keep it when adding call sites): a record with a projectable
-    resolution is never retired (``proposals.supersede``) nor replaced
-    (``proposals.new``) before its projection completes — every retirement or
-    replacement path calls this first. The heal is idempotent, and a crash
-    during the heal leaves the record current, so the next attempt re-heals.
-    The only remaining loss windows are the spec's two accepted fence-handoff
-    ones.
-
-    The call sites are ``_chat_stream`` / ``_continuation_stream`` below and
-    the three generating routes in ``scenes`` (chat, retry, regenerate); every
-    ``proposals.new`` / ``proposals.supersede`` in the package is one of
-    those. ``tests/test_routes.py`` covers each crash window."""
-    rec = store.proposals.get(cid, sid)
-    if (isinstance(rec, dict) and isinstance(rec.get("resolution"), dict)
-            and "result" in rec["resolution"]):
-        _project_resolution(cid, sid, rec["id"])
-
-
 def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: LLMClient):
     """A normal persisted turn. A ```roll fence cuts the stream: the pending
     proposal record is written *before* the pre-fence narration persists, so a
@@ -147,8 +114,7 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
         if watcher.complete or watcher.truncated:
             with store.locks.campaign_lock(cid):
                 payload = _make_proposal(cid, sid, watcher)
-                _heal_current_proposal(cid, sid)  # new() erases the recovery handle
-                rec = store.proposals.new(cid, sid, payload)
+                rec = store.proposals.new(cid, sid, payload)  # heals before replacing
             _persist_reply(cid, sid, watcher.narration)
             frames.append(_sse({"proposal": {**payload, "id": rec["id"]}}))
         elif watcher.narration.strip():
@@ -177,9 +143,8 @@ def _continuation_stream(cid: str, sid: str, pid: str, messages: list[dict],
             with store.locks.campaign_lock(cid):
                 if store.proposals.commit_narration(cid, sid, pid, persist):
                     payload = _make_proposal(cid, sid, watcher)
-                    # the lock is reentrant, so healing (projection) is safe
-                    # here; new() below erases the recovery handle
-                    _heal_current_proposal(cid, sid)
+                    # new() heals the record it is about to erase; the lock is
+                    # reentrant, so that projection is safe under ours
                     rec = store.proposals.new(cid, sid, payload)
                     frames.append(_sse({"proposal": {**payload, "id": rec["id"]}}))
         else:
@@ -209,14 +174,6 @@ def _ephemeral_stream(messages: list[dict], conn: dict, client: LLMClient):
 # ---- roll-proposal derivation and projection ----
 # Used by the turn strategies above and by the roll-proposal routes in
 # `mechanics`, which is why they live here rather than beside those routes.
-def _scene_messages(cid: str, sid: str) -> list[dict]:
-    return store.scenes.read_scene(cid, sid)["messages"]
-
-
-def _roll_label(res: dict) -> str:
-    return f"{res['actor_label']} — {res['check_label']}"
-
-
 def _make_proposal(cid: str, sid: str, watcher) -> dict:
     """Build the proposal payload from a closed/truncated fence: parse the
     body, resolve the actor against the scene's available checks (exact
@@ -273,42 +230,3 @@ def _make_proposal(cid: str, sid: str, watcher) -> dict:
             "problems": problems}
 
 
-def _project_resolution(cid: str, sid: str, pid: str) -> dict | None:
-    """Idempotent, crash-recoverable projection of a resolved proposal into the
-    roll log and transcript. Runs entirely under the proposals per-campaign
-    lock (pure file I/O, no LLM), so concurrent retries serialize. The updated
-    resolution is carried forward across each CAS — never rebuilt from a stale
-    local — so the roll_id survives the line_intent write.
-
-    Defensive re-validation: the caller checks status *before* acquiring this
-    lock, so a supersede + brand-new record for the scene can land in that
-    narrow window. If the scene's current record no longer carries this
-    proposal id, or has no stored resolution yet, another actor won — return
-    None and do nothing (no roll append, no line). Deliberately NOT a status
-    check: a record that still carries this id but was superseded after
-    resolving (status "superseded") must still project — its roll stands in
-    the transcript as history per spec; only the automatic continuation is
-    cancelled (by commit_narration), not the roll projection itself. The
-    roll_id/line_intent backfills persist via ``update_resolution``, which
-    writes metadata without touching terminal status, so a same-id superseded
-    record keeps them (a status CAS would silently lose and drop them)."""
-    with store.proposals.locked(cid):
-        rec = store.proposals.get(cid, sid)
-        if (rec is None or rec.get("id") != pid
-                or rec.get("status") not in ("resolved", "superseded")
-                or not isinstance(rec.get("resolution"), dict)):
-            return None
-        res = dict(rec["resolution"])
-        entry = store.rolls.find_or_append_by_proposal(
-            cid, sid, _roll_label(res), res["result"], proposal=pid, tier=res.get("tier"))
-        res = {**res, "roll_id": entry["id"]}
-        store.proposals.update_resolution(cid, sid, pid, res)
-        if "line_intent" not in res:
-            res = {**res, "line_intent": len(_scene_messages(cid, sid))}
-            store.proposals.update_resolution(cid, sid, pid, res)
-        line = store.checks.format_check_roll(res)
-        if not any(m.get("speaker") == store.scenes.ROLL_SPEAKER and m["content"] == line
-                   for m in _scene_messages(cid, sid)[res["line_intent"]:]):
-            store.scenes.append_message(cid, sid, "assistant", line,
-                                        speaker=store.scenes.ROLL_SPEAKER)
-        return res
