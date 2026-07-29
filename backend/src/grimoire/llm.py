@@ -92,6 +92,13 @@ async def _guard(agen, timeout: float) -> AsyncIterator[str]:
     a ceiling on total duration impose it themselves (see routes' absorb
     budget). ``timeout <= 0`` disables the bound entirely.
 
+    The bound counts provider *activity*, not visible text: a provider yields
+    an empty string for a frame that carries no content (a keep-alive, or the
+    reasoning a model can stream for minutes before its first word), which
+    resets the wait and is dropped here rather than reaching the caller. Timing
+    only yielded text would cancel healthy long-reasoning generations that the
+    providers' old HTTP read timeout let run.
+
     Deltas already received are yielded before the timeout raises, so a partial
     reply stays recoverable by the fence watcher's on_error path.
     """
@@ -108,7 +115,8 @@ async def _guard(agen, timeout: float) -> AsyncIterator[str]:
                 chunk = pull.result()  # re-raises the provider's own LLMError
             except StopAsyncIteration:
                 return
-            yield chunk
+            if chunk:  # "" was a heartbeat: it reset the wait above, nothing more
+                yield chunk
     finally:
         # Every exit settles the outstanding pull and closes the provider: on a
         # timeout the pull is cancelled here, and on a caller-side close (an SSE

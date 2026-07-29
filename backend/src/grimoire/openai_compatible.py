@@ -113,11 +113,22 @@ class OpenAICompatibleClient:
         payload = {"model": model, "messages": payload_messages, "stream": True}
         try:
             http = self._client()
-            async with http.stream("POST", url, headers=self._headers(key), json=payload) as resp:
+            async with http.stream(
+                "POST", url, headers=self._headers(key), json=payload,
+                # The facade owns the read bound (#243) — a read timeout here
+                # would cap the configured one at 120s, including "0 = no
+                # bound", which is exactly the slow-local-endpoint case this
+                # setting exists for. list_models keeps the client default.
+                timeout=httpx.Timeout(None, connect=30.0, write=30.0, pool=30.0),
+            ) as resp:
                 if resp.status_code >= 400:
                     await resp.aread()
                     raise OpenAICompatibleError(_status_kind(resp.status_code), _extract_error(resp.text))
                 async for line in resp.aiter_lines():
+                    # Proof of life for the facade's idle bound, including the
+                    # frames dropped below (keep-alives, and deltas carrying
+                    # only reasoning_content) — see openrouter.stream (#243).
+                    yield ""
                     if not line.startswith("data:"):
                         continue
                     data = line[len("data:"):].strip()

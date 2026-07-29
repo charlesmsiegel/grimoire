@@ -73,11 +73,21 @@ class OpenRouterClient:
             async with http.stream(
                 "POST", API_URL, headers=self._headers(key),
                 json=self._payload(messages, model, True),
+                # The facade owns the read bound (#243) — it is the configurable,
+                # provider-independent one, and a read timeout here would cap it
+                # at 120s no matter what the user set, including "0 = no bound".
+                # Every other bound stays.
+                timeout=httpx.Timeout(None, connect=30.0, write=30.0, pool=30.0),
             ) as resp:
                 if resp.status_code >= 400:
                     await resp.aread()
                     raise OpenRouterError(_status_kind(resp.status_code), _extract_error(resp.text))
                 async for line in resp.aiter_lines():
+                    # Every frame is proof of life, including the ones this
+                    # parser drops: a comment keep-alive, or a delta carrying
+                    # only `reasoning`. The facade times the gap between yields,
+                    # so silence here would read as a wedged upstream (#243).
+                    yield ""
                     if not line.startswith("data:"):
                         continue
                     data = line[len("data:"):].strip()

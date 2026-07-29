@@ -258,6 +258,35 @@ async def test_caller_side_close_reaches_the_provider():
     assert provider.closed
 
 
+class ReasoningProvider:
+    """Streams liveness heartbeats for `beats` rounds — a model that is
+    thinking, not one that is wedged — then produces its answer."""
+
+    def __init__(self, beats):
+        self.beats = beats
+
+    async def stream(self, messages, *args, **kwargs):
+        for _ in range(self.beats):
+            await asyncio.sleep(0.02)
+            yield ""
+        yield "the answer"
+
+
+async def test_heartbeats_hold_the_bound_open_and_never_reach_the_caller():
+    """Total time here (~0.16s) is well past the 0.05s bound: only the *gap*
+    between frames matters, and an empty frame is provider activity, not text."""
+    client = _timeout_client(ReasoningProvider(8), 0.05)
+    assert [c async for c in client.stream([], _conn("openrouter"))] == ["the answer"]
+
+
+async def test_a_gap_between_heartbeats_still_times_out():
+    """The heartbeat must not become a way to never time out."""
+    client = _timeout_client(ReasoningProvider(1), 0.005)
+    with pytest.raises(LLMError) as exc:
+        [c async for c in client.stream([], _conn("openrouter"))]
+    assert exc.value.kind == "timeout"
+
+
 async def test_healthy_stream_is_untouched_by_the_guard():
     op = FakeProvider("or")
     client = _timeout_client(op, 0.05)
