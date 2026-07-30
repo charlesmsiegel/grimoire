@@ -51,6 +51,16 @@ It also reads annotated assignments now. `FILE_KINDS: tuple[str, ...] = ...` in 
 
 If a run reports `GAPS`, it names each unplaced name and the files that read it — place it with its reader (or in the leaf its readers share) and re-run.
 
+- [ ] **Step 1b: Confirm this plan's task interfaces agree with the spec**
+
+```bash
+python3 scripts/validate_partition.py --plan
+```
+
+Expected: `[OK    ] plan interfaces agree with the spec's placement tables`.
+
+Each task repeats its package's placement in an `**Interfaces:**` block, and a correction that landed in the spec but not in the task text was the single largest defect source in review — `world_root_of`, `_lock`, `repoint_scenes`, `RESPONSE_FIELDS`, each caught only by a human reading two documents side by side. This compares them directly. It reads only the backticked list before the em dash, since the prose after it legitimately names functions that live elsewhere.
+
 - [ ] **Step 2: Re-run it at the start of every split task**
 
 Tasks 3-12 each create one package. Before writing any file, run the validator and confirm that package reports `[OK ]`. If a task's placement changes for any reason, re-run before committing — this is cheaper than discovering it from the guard after the files exist, and far cheaper than discovering it in review.
@@ -1119,9 +1129,9 @@ The largest split, and the one that closes the last cycle.
 - Produces:
   - `scenes/paths.py`: `SceneNotFound`, `_scenes_dir`, `_scene_path`, `_require_campaign`
   - `scenes/locking.py`: `_serialized(fn)` — the campaign-lock decorator
-  - `scenes/serialize.py`: `match_name`, `_parse_messages`, `_serialize_messages`, `_numbering`, `repad`, `TRANSITION_SPEAKER`, `RESPONSE_FIELDS`
+  - `scenes/serialize.py`: `match_name`, `_parse_messages`, `_serialize_messages`, `_block`, `_append_block`, `_numbering`, `repad`, `TRANSITION_SPEAKER`, `ROLL_SPEAKER`, `SYNTHETIC_SPEAKERS`
   - `scenes/read.py`: `read_scene(cid, sid) -> dict`, `read_scene_meta`, `list_scenes`, `is_pcless`, `get_dismissed`, `get_location_history`, `get_time_history`, `get_suggested_date`, `trailing_transitions`
-  - `scenes/write.py`: `append_message`, `append_reply`, `split_reply`, `edit_message`, `remove_trailing_assistant_run`, `trim_continuation`, `mark_absorbed`, `RollMessageImmutable`
+  - `scenes/write.py`: `append_message`, `append_reply`, `split_reply`, `edit_message`, `remove_trailing_assistant_run`, `trim_continuation`, `mark_absorbed`, `set_response`, `RollMessageImmutable`, `RESPONSE_FIELDS` — `campaigns/lifecycle.py` retargets `scenes.RESPONSE_FIELDS` here, not to `serialize.py`
   - `scenes/lifecycle.py`: `create_scene`, `rename_scene`, `delete_scene`
 - Consumes: `audit/baselines.py::capture_baseline`, `appearances/cast.py::player_names`, `scene_refs`, `campaigns/paths.py`, `overlay`.
 
@@ -1541,28 +1551,36 @@ Hoist the `from`-import itself, with the sentinel applied to each name:
 try:
     from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions,
                                   CLINotFoundError, ProcessError, TextBlock, query)
-except Exception:        # noqa: BLE001 -- optional `claude` extra; absent on Android
+    _SDK_IMPORT_ERROR: Exception | None = None
+except ImportError as exc:                  # the `claude` extra is not installed
     AssistantMessage = ClaudeAgentOptions = TextBlock = query = None
     # Empty tuples, not None: these are used as `except` targets, and
     # `except None` raises TypeError while `except ()` simply never matches.
     CLINotFoundError = ProcessError = ()
+    _SDK_IMPORT_ERROR = exc
+except Exception as exc:                    # noqa: BLE001 -- installed but broken
+    AssistantMessage = ClaudeAgentOptions = TextBlock = query = None
+    CLINotFoundError = ProcessError = ()
+    _SDK_IMPORT_ERROR = exc
 ```
 
-`except Exception` here for the same reason as `tiktoken`, though the argument runs slightly differently. Today a non-`ImportError` from the SDK import escapes `stream()` and fails that one request. But `llm.py:11` does `from .claude_agent import ClaudeAgentClient` at module scope, so at module level the same exception would break `import grimoire.llm` and the app would not start. Catching broadly keeps the blast radius where it is: a broken install reports `missing_dependency` when the Claude provider is actually used.
-
-That is a deliberate, narrow behaviour change for the *installed-but-broken* case — the error message becomes `missing_dependency` rather than the SDK's own exception. The missing case, which is the one that actually happens on Android, is unchanged.
-
-`stream()` then opens by checking the sentinel, raising exactly the error the removed `except ImportError` raised:
+`stream()` then distinguishes the two, so neither case changes behaviour:
 
 ```python
         if query is None:
-            raise ClaudeAgentError(
-                "missing_dependency",
-                "claude-agent-sdk is not installed — pip install \'grimoire[claude]\'",
-            )
+            if isinstance(_SDK_IMPORT_ERROR, ImportError):
+                raise ClaudeAgentError(
+                    "missing_dependency",
+                    "claude-agent-sdk is not installed — pip install \'grimoire[claude]\'",
+                ) from _SDK_IMPORT_ERROR
+            raise _SDK_IMPORT_ERROR         # installed but broken: same exception, same place
 ```
 
-Preserve that message verbatim — `test_claude_agent.py` asserts on it.
+Preserve the `missing_dependency` message verbatim — `test_claude_agent.py` asserts on it.
+
+**Why both arms, rather than one broad catch.** Catching broadly is necessary: `llm.py:11` does `from .claude_agent import ClaudeAgentClient` at module scope, so letting a non-`ImportError` escape a module-level import would stop the app from starting, where today it only fails the one request that calls `stream()`. But collapsing both arms into `missing_dependency` would discard the real exception and misreport a broken install as a missing one. Capturing it and re-raising from `stream()` keeps the observable behaviour identical in *both* cases — the error surfaces at the same call, with the same type — while still keeping the module importable. An earlier draft accepted the misreport as a "small behaviour change"; it was avoidable.
+
+`tiktoken` needs no equivalent: `count_tokens` already swallows every exception from `_encoder()` and falls back to the heuristic, so a single broad catch there *is* the existing behaviour.
 
 - [ ] **Step 3b: Rework how `test_claude_agent.py` installs its fake**
 

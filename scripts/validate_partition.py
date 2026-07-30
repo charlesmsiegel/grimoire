@@ -95,9 +95,17 @@ def consumer_imports(spec: dict[str, dict[str, str]]) -> int:
     import collections
     absorbed = {m for extra in EXTRA_SOURCES.values() for m in extra}
     bad = 0
-    for p in sorted(STORE.glob("*.py")):
-        if p.stem in spec or p.stem == "__init__" or p.stem in absorbed:
+    for p in sorted(STORE.rglob("*.py")):
+        rel = p.relative_to(STORE)
+        owner_pkg = rel.parts[0] if len(rel.parts) > 1 else None
+        # Files inside a package being split are handled by the partition
+        # tables, not here. Everything else is a consumer -- including
+        # weather/__init__.py, which root-level globbing missed entirely
+        # despite Task 13 modifying it.
+        if owner_pkg in spec or p.stem in spec or p.stem in absorbed:
             continue
+        label = str(rel)
+        depth = len(rel.parts) - 1          # how many dots the import needs
         tree = ast.parse(p.read_text(encoding="utf-8"))
         # Only names this file actually imports. `_type_scope(sheets: dict)`
         # shadows the store module with a parameter, and counting `sheets.get`
@@ -115,16 +123,49 @@ def consumer_imports(spec: dict[str, dict[str, str]]) -> int:
                 need[n.value.id][n.attr] = spec[n.value.id].get(n.attr)
         if not need:
             continue
-        print(f"--- {p.stem}.py")
+        print(f"--- {label}")
         for pkg, names in sorted(need.items()):
             missing = sorted(k for k, v in names.items() if v is None)
             files = sorted({v for v in names.values() if v})
-            print(f"    from .{pkg} import {', '.join(files)}")
+            print(f"    from {'.' * (depth + 1)}{pkg} import {', '.join(files)}")
             for k, v in sorted(names.items()):
                 print(f"        {pkg}.{k} -> {v or 'UNPLACED'}")
             if missing:
                 bad += 1
                 print(f"    !! unplaced in spec: {', '.join(missing)}")
+    return bad
+
+
+PLAN = pathlib.Path("docs/superpowers/plans/2026-07-30-store-import-layering.md")
+
+
+def plan_agrees(spec: dict[str, dict[str, str]]) -> int:
+    """Every `<pkg>/<file>.py: \`name\`` claim in the plan matches the spec.
+
+    Corrections that landed in the spec but not in a task interface were the
+    single largest defect source across review rounds six to nine --
+    world_root_of, _lock, repoint_scenes, RESPONSE_FIELDS. Prose review kept
+    missing them; this does not.
+    """
+    if not PLAN.exists():
+        print(f"  !! no plan at {PLAN}")
+        return 1
+    bad = 0
+    for m in re.finditer(r"`([a-z_]+)/([a-z_]+)\.py`:([^\n]*)", PLAN.read_text(encoding="utf-8")):
+        pkg, fname, rest = m.group(1), m.group(2), m.group(3)
+        if pkg not in spec:
+            continue
+        # Only the backticked list before the em dash. Everything after it is
+        # explanatory prose that legitimately names functions living elsewhere
+        # -- reading it as placement produced five false positives.
+        rest = rest.split("—")[0]
+        for name in re.findall(r"`([A-Za-z_][A-Za-z0-9_]*)", rest):
+            want = spec[pkg].get(name)
+            if want is not None and want != fname:
+                bad += 1
+                print(f"  !! plan puts {pkg}.{name} in {fname}.py, spec says {want}.py")
+    if not bad:
+        print("[OK    ] plan interfaces agree with the spec's placement tables")
     return bad
 
 
@@ -139,15 +180,23 @@ def main() -> int:
         return 1
     if "--imports" in sys.argv:
         return consumer_imports(spec)
+    if "--plan" in sys.argv:
+        return plan_agrees(spec)
     bad = 0
     for mod, mapping in spec.items():
         sources = [mod] + EXTRA_SOURCES.get(mod, [])
         owner: dict[str, str] = {}
         trees = {}
+        unreadable = False
         for src in sources:
             p = STORE / f"{src}.py"
             if not p.exists():
-                print(f"  !! missing source {p}")
+                if (STORE / src / "__init__.py").exists():
+                    continue      # already split; the partition is done
+                print(f"  !! missing source {p} and no {src}/ package -- "
+                      f"cannot validate this partition")
+                bad += 1
+                unreadable = True
                 continue
             t = ast.parse(p.read_text(encoding="utf-8"))
             trees[src] = t
@@ -172,8 +221,12 @@ def main() -> int:
         # An unplaced name is not a clean partition. Where it lands can create
         # a cycle this graph cannot see -- SYNTHETIC_SPEAKERS is read by both
         # turns.py and write.py, so putting it in the wrong one closes a loop.
-        ok = not cycles and not unassigned
-        status = "OK   " if ok else ("CYCLE" if cycles else "GAPS ")
+        # Never print OK for a partition nothing was read for -- that is the
+        # same "status means less than it claims" failure this tool exists to
+        # stop.
+        ok = not cycles and not unassigned and not unreadable
+        status = ("UNREAD" if unreadable else
+                  "OK    " if ok else ("CYCLE " if cycles else "GAPS  "))
         print(f"[{status}] {mod}: {len(mapping)} names mapped, "
               f"{len(unassigned)} unassigned")
         if unassigned:
