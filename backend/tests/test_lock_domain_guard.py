@@ -49,11 +49,12 @@ Honest about its reach — the house standard set by ``test_atomic_guard.py``:
   So the polarity is inverted. Rather than accepting an acquisition unless a
   problem is spotted, only these are recognized:
 
-  1. ``with locks.campaign_lock(cid)`` — receiver ``locks``, argument exactly
-     the name ``cid``;
+  1. ``with locks.campaign_lock(cid)`` — receiver ``locks``, which nothing in
+     the module rebinds, and argument exactly the name ``cid``;
   2. ``with locks.hold_all([... cid ...])`` — a literal container that visibly
      contains ``cid`` (or any argument at all, in a function that takes no
-     ``cid`` and is therefore a multi-campaign holder);
+     ``cid`` — that covers the function's own body only, and never vouches for
+     a caller: see ``_binds_the_campaign``);
   3. ``with <alias>(cid, ...)`` — a module-local helper whose FIRST parameter is
      ``cid`` and which returns or yields one of the above, so positional binding
      makes the two the same campaign;
@@ -67,19 +68,27 @@ Honest about its reach — the house standard set by ``test_atomic_guard.py``:
   the intended trade: the marker is cheap and visible, and a false alarm costs a
   comment while a false negative costs a transcript.
 
-  Three things the whitelist deliberately does *not* trust. A name that only
+  Four things the whitelist deliberately does *not* trust. A name that only
   module scope may bind — a lock alias or decorator resolved from a nested
   ``def`` in some unrelated factory is not the name module scope actually binds.
   A name reached through an attribute — ``@hooks.safe`` is not this module's
-  ``safe``. And a decorator that is not the innermost one, because composition
-  order decides whether the write happens inside the lock: ``@safe`` over
-  ``@defer`` locks around a call that returns a callback and writes nothing.
+  ``safe``. A decorator that is not the innermost one, because composition order
+  decides whether the write happens inside the lock: ``@safe`` over ``@defer``
+  locks around a call that returns a callback and writes nothing. And the
+  spelling ``locks`` itself, in any module that rebinds the name — see
+  ``_rebinds_locks``.
 
   Running through all four forms is one rule that took five rounds to state in
   one place: **an acquisition only counts when this campaign's id reaches the
   parameter the lock is keyed on.** It has to be checked at every boundary the
   id crosses — into an alias, into a delegated helper, into a decorated target —
   and each boundary was a separate finding before it was a single rule.
+
+  The rule's limit is worth stating beside it, because assuming otherwise was
+  itself a finding: when a callee has NO parameter the id can reach, there is no
+  binding to verify and therefore no coverage to infer. Not even
+  ``locks.hold_all(...)``, whose argument may be ``[]`` or another campaign's
+  id. Such a callee never vouches for its caller.
 - **The mutation surface is inverted too, inside the filesystem namespace.**
   The other half of the same lesson, learned one round later. "What counts as
   publishing" was an enumeration, and six rounds each added exactly one more
@@ -359,10 +368,49 @@ class _Surface(typing.NamedTuple):
     bindings, so `import shutil as fs` defeated one and not the other."""
     imported: frozenset = frozenset()
     namespaces: dict = {}
+    trusted_locks: bool = True
 
     @classmethod
     def of(cls, tree: ast.AST) -> "_Surface":
-        return cls(frozenset(_imported_writers(tree)), _fs_namespaces(tree))
+        return cls(frozenset(_imported_writers(tree)), _fs_namespaces(tree),
+                   not _rebinds_locks(tree))
+
+
+def _rebinds_locks(tree: ast.AST) -> bool:
+    """Whether anything in this module binds the name `locks` other than an
+    import of the real module.
+
+    `_is_lock_context` requires the receiver to be spelled `locks`, and that was
+    described as "requiring the receiver costs nothing" — but a spelling is not
+    a binding:
+
+        def put(cid, locks=fake):            # the parameter shadows the module
+            with locks.campaign_lock(cid):   # `fake.campaign_lock` locks nothing
+                atomic.write_text(p, x)
+
+    This is the SAME defect the receiver check was introduced to fix
+    (`def put(cid, campaign_lock=nullcontext)`), moved one level up — patched at
+    the instance rather than at the class, which is the pattern this guard's
+    review keeps finding in it.
+
+    Answered for the whole module rather than per function, deliberately. A
+    binding in one function does not shadow another, so this is coarser than
+    Python's scoping; it is also the version that cannot be defeated by putting
+    the rebinding somewhere the per-function check does not look. No module in
+    this package binds `locks` to anything, so the strictness is free — and when
+    it is not free, the whole module fails loud, which is the trade made
+    everywhere else here.
+    """
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store) \
+                and node.id == "locks":
+            return True                  # assignment, `for`, `with ... as`, walrus
+        if isinstance(node, ast.arg) and node.arg == "locks":
+            return True                  # a parameter, of any function here
+        if isinstance(node, ast.alias) and (node.asname or node.name) == "locks" \
+                and node.name.rsplit(".", 1)[-1] != "locks":
+            return True                  # `import json as locks`
+    return False
 
 
 def _writes_directly(fn: ast.AST, surface: _Surface = _Surface()) -> bool:
@@ -828,20 +876,6 @@ def _module_level(tree: ast.AST) -> set[str]:
     return out - poisoned
 
 
-def _is_multi_campaign_holder(fn: ast.AST) -> bool:
-    """`fn` holds EVERY campaign lock, so a caller's campaign is covered whatever
-    it is — `module_edit._campaign_locks` and the world-module rebind route.
-
-    Recognized only as `locks.hold_all(...)` entered directly, on every context
-    it enters. A helper serialized some other way (a decorator, delegation) is
-    not resolvable here and reads as not-a-holder, which fails loud.
-    """
-    entered = list(_with_context_calls(fn))
-    return bool(entered) and all(
-        _receiver_name(c.func) == "locks" and _called_name(c.func) == "hold_all"
-        for c in entered)
-
-
 def _binds_the_campaign(call: ast.Call, defs) -> bool:
     """The callee's own `cid` parameter receives THIS function's `cid`.
 
@@ -871,9 +905,21 @@ def _binds_the_campaign(call: ast.Call, defs) -> bool:
 
     `helper` is serializing, so `_serializing` accepted `put` and `_mutators`
     also stopped propagating at it — `put` was reported by neither, the same
-    double silence the argument-swap case produced. Only the genuine `hold_all`
-    shape bypasses binding now; a campaign-locking helper with no parameter to
-    tie to the caller's `cid` fails loud.
+    double silence the argument-swap case produced.
+
+    The first fix for that kept a bypass for `locks.hold_all(...)`, on the
+    reasoning that an all-campaign holder covers whatever the caller's campaign
+    is. That was the receiver-spelling mistake again, one argument along:
+    `hold_all([])` and `hold_all([sid])` are also `hold_all`, and neither holds
+    the caller's campaign, so the bypass restored exactly the double silence it
+    had just closed. There is no syntactic form that proves an argument
+    enumerates every campaign, so the bypass is gone rather than narrowed — a
+    callee with no `cid` parameter can never establish coverage of the caller's,
+    and says so by failing loud.
+
+    (A function with no `cid` is still recognized as serializing its OWN body
+    via `_holds_this_campaign`; that is a different question, and `_analyze`
+    ignores such functions anyway because they are not campaign-scoped.)
 
     Anything this cannot index — a starred argument, a position the call does
     not reach — fails loud too.
@@ -882,8 +928,6 @@ def _binds_the_campaign(call: ast.Call, defs) -> bool:
     for fn in defs:
         params = [a.arg for a in [*fn.args.posonlyargs, *fn.args.args]]
         if "cid" not in params:
-            if _is_multi_campaign_holder(fn):
-                continue                 # holds every campaign; nothing to bind
             return False
         passed = [k.value for k in call.keywords if k.arg == "cid"]
         if passed:
@@ -1091,6 +1135,11 @@ def _serializing(funcs: dict[str, ast.AST], surface=_Surface(),
     `_module_level`. ``None`` means "every name", which is only for callers
     that have no tree to draw it from; every real caller passes it.
     """
+    if not surface.trusted_locks:
+        # Something here binds the name `locks`, so no `locks.campaign_lock(...)`
+        # in this module is known to reach the real one. Nothing in it may claim
+        # to serialize -- see `_rebinds_locks`.
+        return set()
     scope = set(funcs) if module_level is None else module_level
     # A decorator's acquisition is nested inside the wrapper it returns, so it is
     # the one case that must look through nested defs -- see `_locks_anywhere`.
@@ -1783,30 +1832,96 @@ def test_a_decorator_must_bind_this_campaign_to_its_target():
     assert "put" in serializing
 
 
-def test_only_a_hold_all_helper_may_skip_argument_binding():
-    """A callee with no `cid` parameter was waved through as a multi-campaign
-    holder. True of `hold_all`, false of a helper that locks a module global —
-    and that one was reported by neither check, since `_mutators` also stopped
-    propagating at it."""
-    src = ("cid = 'a-global'\n"
-           "def helper():\n"
-           "    with locks.campaign_lock(cid):\n"
-           "        atomic.write_text(p, x)\n"
-           "def put(cid):\n"
-           "    helper()\n")
-    _f, serializing, mutators = _probe(src)
-    assert "put" in mutators, "the caller was reported by neither check"
-    assert "put" not in serializing, "a helper locking a global vouched for the caller"
+def test_no_callee_without_a_bindable_cid_may_vouch_for_its_caller():
+    """A callee with no `cid` parameter cannot establish coverage of the
+    caller's campaign — there is nothing for the caller's `cid` to reach.
 
-    # The shape the bypass exists for: `hold_all` covers every campaign, so
-    # there is genuinely nothing to bind.
-    holder = ("def _every_campaign():\n"
-              "    with locks.hold_all(all_cids()):\n"
-              "        atomic.write_text(p, x)\n"
-              "def put(cid):\n"
-              "    _every_campaign()\n")
-    _f, serializing, _m = _probe(holder)
-    assert "put" in serializing, "a genuine multi-campaign holder was rejected"
+    This took two goes. The first version excluded a helper locking a module
+    global but kept a bypass for `locks.hold_all(...)`, reasoning that an
+    all-campaign holder covers whatever the caller's campaign is. That read the
+    callee's *name* and not its argument: `hold_all([])` and `hold_all([sid])`
+    are equally `hold_all` and hold neither everything nor this campaign. No
+    syntactic form proves an argument enumerates every campaign, so there is no
+    narrower bypass to write — it is gone.
+
+    Each of these was reported by NEITHER check before its fix: `_serializing`
+    accepted the caller and `_mutators` also stopped propagating at it, which is
+    quieter than the helper taking no lock at all."""
+    for src, why in [
+        ("cid = 'a-global'\n"
+         "def helper():\n"
+         "    with locks.campaign_lock(cid):\n"
+         "        atomic.write_text(p, x)\n"
+         "def put(cid):\n"
+         "    helper()\n", "a helper locking a module global"),
+        ("def helper():\n"
+         "    with locks.hold_all([]):\n"
+         "        atomic.write_text(p, x)\n"
+         "def put(cid):\n"
+         "    helper()\n", "hold_all of nothing"),
+        ("def helper():\n"
+         "    with locks.hold_all([sid]):\n"
+         "        atomic.write_text(p, x)\n"
+         "def put(cid):\n"
+         "    helper()\n", "hold_all of another campaign"),
+        ("def helper():\n"
+         "    with locks.hold_all(all_cids()):\n"
+         "        atomic.write_text(p, x)\n"
+         "def put(cid):\n"
+         "    helper()\n", "hold_all of an expression this cannot read"),
+    ]:
+        _f, serializing, mutators = _probe(src)
+        assert "put" in mutators, f"{why}: the caller was reported by neither check"
+        assert "put" not in serializing, f"{why} vouched for its caller"
+
+    # A helper that DOES take `cid` still covers a caller that binds it -- the
+    # rule is about the missing parameter, not about delegation.
+    ok = ("def helper(cid):\n"
+          "    with locks.campaign_lock(cid):\n"
+          "        atomic.write_text(p, x)\n"
+          "def put(cid):\n"
+          "    helper(cid)\n")
+    _f, serializing, _m = _probe(ok)
+    assert "put" in serializing
+
+
+def test_the_locks_receiver_must_be_the_locks_module():
+    """Requiring the receiver to be spelled `locks` was the fix for
+    `def put(cid, campaign_lock=nullcontext)`. It moved the shadowing up one
+    level rather than closing it: `def put(cid, locks=fake)` passes the same
+    check, and `fake.campaign_lock` need not lock anything.
+
+    Answered per module, not per function — coarser than Python's scoping, and
+    the version that cannot be defeated by rebinding somewhere the per-function
+    check does not look."""
+    for src, why in [
+        ("def put(cid, locks=fake):\n"
+         "    with locks.campaign_lock(cid):\n"
+         "        atomic.write_text(p, x)\n", "a parameter"),
+        ("locks = fake\n"
+         "def put(cid):\n"
+         "    with locks.campaign_lock(cid):\n"
+         "        atomic.write_text(p, x)\n", "a module-level assignment"),
+        ("import json as locks\n"
+         "def put(cid):\n"
+         "    with locks.campaign_lock(cid):\n"
+         "        atomic.write_text(p, x)\n", "an import alias"),
+        ("def put(cid):\n"
+         "    for locks in registries:\n"
+         "        with locks.campaign_lock(cid):\n"
+         "            atomic.write_text(p, x)\n", "a loop target"),
+    ]:
+        _f, serializing, mutators = _probe(src)
+        assert "put" in mutators
+        assert "put" not in serializing, f"`locks` shadowed by {why} still read as the module"
+
+    # Unshadowed, the same body is the real acquisition.
+    _f, serializing, _m = _probe(
+        "from . import locks\n"
+        "def put(cid):\n"
+        "    with locks.campaign_lock(cid):\n"
+        "        atomic.write_text(p, x)\n")
+    assert "put" in serializing, "the real `locks` import was rejected"
 
 
 def test_a_filesystem_namespace_is_resolved_through_its_import():
