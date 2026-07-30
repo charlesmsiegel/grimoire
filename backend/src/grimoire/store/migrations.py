@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import appearances, atomic, cards, characters, entities, greetings, locks, overlay, scene_ids, scene_refs, scenes, worlds
+from . import atomic, cards, characters, entities, greetings, locks, overlay, scene_ids, scene_refs, scenes, worlds
+from .appearances import paths as appearances_paths, versions as appearances_versions
 from .campaigns import paths as campaigns_paths, read as campaigns_read
 from .frontmatter import parse_frontmatter
 from .paths import home, safe_id, slugify, uniquify
@@ -155,7 +156,7 @@ def _repair_character_baselines(cid: str, croot: Path, wroot: Path) -> None:
     (appearances.json, one base per locked ref) or -- if never version-locked
     -- the whole actor directory (campaigns manifest, one base per actor).
     Only one applies per actor; check which."""
-    locked = appearances.record(cid)
+    locked = appearances_paths.record(cid)
     manifest = campaigns_paths.read_manifest(cid)
     manifest_changed = False
     for meta in characters.list_characters(croot):
@@ -166,7 +167,7 @@ def _repair_character_baselines(cid: str, croot: Path, wroot: Path) -> None:
             world_h = characters.card_hash(wroot, actor_id, vid)
             mine_h = characters.card_hash(croot, actor_id, vid)
             if world_h is not None and world_h == mine_h and locked[lock_ref]["base"] != mine_h:
-                appearances.set_base(cid, "characters", actor_id, mine_h)
+                appearances_versions.set_base(cid, "characters", actor_id, mine_h)
         elif lock_ref in manifest:
             world_h = characters.dir_hash(wroot, actor_id)
             mine_h = characters.dir_hash(croot, actor_id)
