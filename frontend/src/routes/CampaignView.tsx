@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
-  api, type Actor, type SceneMeta, type Message, type RosterEntry, type SceneAbsorb,
+  api, type Actor, type AbsorbPhase, type SceneMeta, type Message, type RosterEntry, type SceneAbsorb,
   type SceneDatetime, type StagedEdit, type ProposalRecord, type SceneCheckActor,
   type ResponsePresetSummary, type ResponseOverride, type ResponseBundle,
 } from "../api/client";
@@ -32,6 +32,14 @@ const ROLL_SPEAKER = "⁣Roll";
 // separator and reroll steps over it, but it is NEVER displayed — a transition
 // renders as the unlabelled narration it was before the tag existed.
 const TRANSITION_SPEAKER = "⁣Scene";
+
+// Reader-facing names for the absorb steps the API reports in `phases`. The
+// wire names say where the work happens; these say what the reviewer lost.
+const PHASE_LABELS: Record<AbsorbPhase["name"], string> = {
+  extraction: "the scene summary",
+  dossiers: "NPC dossiers",
+  audit: "mechanics audit",
+};
 
 // The scene rail lists scenes most-recently-edited first, but the displayed
 // number must reflect story order — the id's own leading number (its
@@ -799,6 +807,23 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
                 ))}
               </ul>
             )}
+            {(() => {
+              // The compounding silent failure this closes: one slow-but-healthy
+              // extraction can eat the whole shared budget, and the trailing
+              // steps then come back with nothing to show -- which looks exactly
+              // like a model that had nothing to suggest. Say it once, up front,
+              // before the reviewer reads the (short) list of proposed changes.
+              const cut = absorb.phases.filter((p) => p.budget_exhausted);
+              return cut.length > 0 && (
+                <div className="mechanics-notice">
+                  <p>This scene was only partly absorbed: the absorb time budget ran out.</p>
+                  <p className="field-hint">
+                    Cut short: {cut.map((p) => PHASE_LABELS[p.name]).join(", ")}. The summary and
+                    its edits above are complete. Raise the absorb budget on the Configuration
+                    page, or end the scene again to retry the rest.
+                  </p>
+                </div>);
+            })()}
             {absorb.mechanics.status === "ok" && absorb.mechanics.warnings.length === 0 && (
               <p className="field-hint">mechanics audited clean</p>)}
             {absorb.mechanics.warnings.length > 0 && (
@@ -807,9 +832,15 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
               </ul>)}
             {(absorb.mechanics.status === "failed" || absorb.mechanics.status === "degraded") && (
               <div className="mechanics-notice">
-                <p>{absorb.mechanics.status === "failed"
-                    ? `Mechanics validation failed: ${absorb.mechanics.reason}`
-                    : "Some mechanics findings could not be validated"}</p>
+                {/* "never ran" vs "failed": an audit the clock refused to start
+                    asked nothing of the model, so there is no finding to doubt —
+                    only work still owed. Retry (which gets a fresh budget) is the
+                    fix for both, which is why both keep the button. */}
+                <p>{absorb.mechanics.status !== "failed"
+                    ? "Some mechanics findings could not be validated"
+                    : absorb.mechanics.budget_exhausted && !absorb.mechanics.attempted
+                      ? `Mechanics validation never ran: ${absorb.mechanics.reason}`
+                      : `Mechanics validation failed: ${absorb.mechanics.reason}`}</p>
                 {absorb.mechanics.dropped.map((d, i) => (
                   <p className="field-hint" key={i}>{d.id} {d.field ?? ""}: {d.reason}</p>))}
                 <button onClick={retryAudit}>Retry validation</button>
@@ -818,11 +849,13 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
               <div className="mechanics-notice">
                 {/* "prepared", not "refreshed": the dossier is staged here and only
                     written when the review is saved (#235). */}
-                <p>{absorb.dossiers.failed.length === 0
-                    ? `NPC dossier refresh failed: ${absorb.dossiers.reason}`
-                    : absorb.dossiers.status === "failed"
-                      ? "No NPC dossier could be prepared"
-                      : "Some NPC dossiers could not be prepared"}</p>
+                <p>{absorb.dossiers.budget_exhausted && !absorb.dossiers.attempted
+                    ? `No NPC dossier was prepared: ${absorb.dossiers.reason}`
+                    : absorb.dossiers.failed.length === 0
+                      ? `NPC dossier refresh failed: ${absorb.dossiers.reason}`
+                      : absorb.dossiers.status === "failed"
+                        ? "No NPC dossier could be prepared"
+                        : "Some NPC dossiers could not be prepared"}</p>
                 {absorb.dossiers.failed.map((d, i) => (
                   <p className="field-hint" key={i}>{d.id}: {d.reason}</p>))}
                 {absorb.dossiers.skipped.length > 0 && (

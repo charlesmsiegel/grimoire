@@ -2197,7 +2197,8 @@ def test_absorb_stages_dossier_without_writing_it(client):
     assert edit["target"] == {"kind": "characters", "id": "aese"}
     assert "Aese is a shy snowleopardgirl" in edit["after"] and edit["before"] == ""
     assert r.json()["dossiers"] == {"status": "ok", "reason": None,
-                                    "proposed": ["aese"], "failed": [], "skipped": []}
+                                    "proposed": ["aese"], "failed": [], "skipped": [],
+                                    "attempted": True, "budget_exhausted": False}
     # the whole point: absorb left the store untouched
     assert store.dossiers.read(store.campaigns.campaign_root(cid), "aese") == ""
 
@@ -2536,7 +2537,7 @@ def test_absorb_survives_dossier_failure(client):
     assert r.json()["dossiers"] == {
         "status": "failed", "reason": "no dossier could be prepared",
         "proposed": [], "failed": [{"id": "aese", "reason": "RuntimeError: dossier boom"}],
-        "skipped": []}
+        "skipped": [], "attempted": True, "budget_exhausted": False}
 
 
 def test_absorb_reports_partial_dossier_failure_as_degraded(client):
@@ -2551,7 +2552,7 @@ def test_absorb_reports_partial_dossier_failure_as_degraded(client):
     assert body["dossiers"] == {
         "status": "degraded", "reason": "some dossiers could not be prepared",
         "proposed": ["aese"], "failed": [{"id": "winifred", "reason": "RuntimeError: dossier boom"}],
-        "skipped": []}
+        "skipped": [], "attempted": True, "budget_exhausted": False}
     # the survivor is staged for approval, not written -- one NPC's failure no
     # longer leaves the other's dossier committed against an unabsorbed scene
     assert [e["target"]["id"] for e in body["edits"] if e["kind"] == "dossier"] == ["aese"]
@@ -2591,7 +2592,8 @@ def test_stage_dossiers_reports_an_unreadable_scene_cast(client, monkeypatch):
     assert edits == []
     assert out == {
         "status": "failed", "reason": "could not read the scene cast: appearances.json is garbled",
-        "proposed": [], "failed": [], "skipped": []}
+        "proposed": [], "failed": [], "skipped": [],
+        "attempted": False, "budget_exhausted": False}
 
 
 def test_absorb_dossiers_are_skipped_with_no_npcs_present(client):
@@ -2602,7 +2604,8 @@ def test_absorb_dossiers_are_skipped_with_no_npcs_present(client):
     client.app.dependency_overrides[routes.get_llm] = lambda: _DossierFake()
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
     assert body["dossiers"] == {"status": "skipped", "reason": "no npcs present",
-                                "proposed": [], "failed": [], "skipped": []}
+                                "proposed": [], "failed": [], "skipped": [],
+                                "attempted": False, "budget_exhausted": False}
 
 
 def test_absorb_leaves_the_campaign_byte_identical(client):
@@ -3033,6 +3036,151 @@ def test_audit_retry_gets_a_fresh_budget(client, npc_module_scene, monkeypatch):
         lambda: ClockEatingFake(clock, 1.0, [AUDIT_OK])
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/audit").json()
     assert body["mechanics"]["status"] == "ok"
+
+
+# ---- absorb: per-phase reporting ----
+
+def _phase(body, name):
+    return next(p for p in body["phases"] if p["name"] == name)
+
+
+def test_absorb_reports_all_three_phases_attempted(client, npc_module_scene, monkeypatch):
+    """The whole point of `phases`: a reviewer can tell an absorb that ran every
+    step from one that only looks like it did."""
+    cid, sid = npc_module_scene
+    clock = [0.0]
+    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: ClockEatingFake(clock, 1.0, [ABSORB_JSON, "Aese is steady.", AUDIT_OK])
+
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+
+    assert [p["name"] for p in body["phases"]] == ["extraction", "dossiers", "audit"]
+    assert all(p["attempted"] for p in body["phases"])
+    assert all(p["status"] == "ok" for p in body["phases"])
+    assert not any(p["budget_exhausted"] for p in body["phases"])
+
+
+def test_absorb_phases_name_the_steps_the_budget_never_attempted(
+        client, npc_module_scene, monkeypatch):
+    """The reported bug: a slow-but-healthy extraction eats the budget and the
+    absorb comes back looking like one the model had nothing to add to. The
+    phase rows say which steps never ran, and that the clock is why."""
+    cid, sid = npc_module_scene
+    client.put("/api/config", json={"absorb_budget": "60"})
+    clock = [0.0]
+    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    fake = ClockEatingFake(clock, 90.0, [ABSORB_JSON])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+
+    assert fake.calls == 1
+    assert _phase(body, "extraction") == {"name": "extraction", "attempted": True,
+                                          "status": "ok", "reason": None,
+                                          "budget_exhausted": False}
+    for name in ("dossiers", "audit"):
+        assert _phase(body, name)["attempted"] is False, name
+        assert _phase(body, name)["budget_exhausted"] is True, name
+        assert "budget" in _phase(body, name)["reason"], name
+
+
+def test_absorb_phases_mirror_the_dossier_and_mechanics_blocks(
+        client, npc_module_scene, monkeypatch):
+    """`phases` is a projection, not a second source of truth -- so it can never
+    disagree with the blocks the panel already renders."""
+    cid, sid = npc_module_scene
+    client.put("/api/config", json={"absorb_budget": "60"})
+    clock = [0.0]
+    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: ClockEatingFake(clock, 90.0, [ABSORB_JSON])
+
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+
+    for name, block in (("dossiers", "dossiers"), ("audit", "mechanics")):
+        for key in ("status", "reason", "attempted", "budget_exhausted"):
+            assert _phase(body, name)[key] == body[block][key], (name, key)
+
+
+def test_a_genuine_audit_failure_is_not_blamed_on_the_budget(
+        client, npc_module_scene, monkeypatch):
+    """The distinction that makes the flag worth having: a model that answers
+    garbage failed on its own merits, and a bigger budget would not help."""
+    cid, sid = npc_module_scene
+    client.put("/api/config", json={"absorb_budget": "600"})
+    clock = [0.0]
+    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: ClockEatingFake(clock, 1.0, [ABSORB_JSON, "Aese is steady.", "not json"])
+
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+
+    assert body["mechanics"]["status"] == "failed"
+    assert _phase(body, "audit") == {"name": "audit", "attempted": True, "status": "failed",
+                                     "reason": body["mechanics"]["reason"],
+                                     "budget_exhausted": False}
+
+
+def test_a_dossier_call_cancelled_mid_flight_counts_as_attempted(
+        client, npc_module_scene, monkeypatch):
+    """A call the budget kills *while it is in flight* did reach the model --
+    unlike one the budget refused to start. Both blame the budget; only the
+    second is un-attempted."""
+    import asyncio
+
+    cid, sid = npc_module_scene
+    client.put("/api/config", json={"absorb_budget": "0.05"})
+
+    class SlowDossier:
+        def __init__(self):
+            self.calls = 0
+
+        async def stream(self, m, cfg):
+            yield "{}"
+
+        async def complete(self, m, cfg):
+            self.calls += 1
+            if self.calls == 1:
+                return ABSORB_JSON
+            await asyncio.sleep(5)   # cancelled by the budget after ~0.05s
+            return "never"
+
+    client.app.dependency_overrides[routes.get_llm] = lambda: SlowDossier()
+
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+
+    assert _phase(body, "dossiers")["attempted"] is True
+    assert _phase(body, "dossiers")["budget_exhausted"] is True
+
+
+def test_audit_retry_reports_its_own_fresh_budget(client, npc_module_scene, monkeypatch):
+    """The retry the failed-audit notice offers carries the same flags, so the
+    panel can say whether the second attempt was the clock's fault too."""
+    cid, sid = npc_module_scene
+    client.put("/api/config", json={"absorb_budget": "60"})
+    clock = [1_000.0]
+    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: ClockEatingFake(clock, 1.0, [AUDIT_OK])
+
+    mech = client.post(f"/api/campaigns/{cid}/scenes/{sid}/audit").json()["mechanics"]
+
+    assert mech["attempted"] is True and mech["budget_exhausted"] is False
+
+
+def test_an_audit_with_nothing_to_do_is_unattempted_but_not_the_budgets_fault(
+        client, plain_scene):
+    """`skipped` already covered "no module"/"no sheeted scope"; those are
+    un-attempted for reasons a longer budget would not change."""
+    cid, sid = plain_scene
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: FakeOpenRouterComplete([ABSORB_JSON])
+
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+
+    assert _phase(body, "audit") == {"name": "audit", "attempted": False, "status": "skipped",
+                                     "reason": "no module", "budget_exhausted": False}
 
 
 def test_chronicle_put_applies_sheet_edit_and_reports_conflicts(client, module_scene):

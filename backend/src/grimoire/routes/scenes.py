@@ -265,13 +265,55 @@ class _Budget:
             raise LLMError("timeout", detail) from exc
 
 
+def _budget_overrun(exc: BaseException) -> bool:
+    """Whether `exc` is this absorb's own clock running out rather than an
+    upstream stall.
+
+    `_Budget.run` deliberately reports both as the same LLMError kind so callers
+    need no extra branch to *handle* them -- but a phase needs to *say* which
+    happened, because only one of them is fixed by a larger budget. The detail
+    is the sentinel `_Budget.run` sets, not a substring guess."""
+    return isinstance(exc, LLMError) and exc.detail == BUDGET_EXHAUSTED
+
+
+# Every LLM-backed step of one absorb, in the order they run. A phase row is
+# projected from the block that already reports that step (below), so `phases`
+# is a single uniform view rather than a second source of truth that can drift.
+# ("Phase" here means a step of one absorb run; the `Phase 2:`/`Phase 5:`
+# comments elsewhere in this file are roadmap milestones, unrelated.)
+_PHASE_KEYS = ("status", "reason", "attempted", "budget_exhausted")
+
+
+def _phase_report(dossiers: dict, mechanics: dict) -> list[dict]:
+    """One row per absorb step: was it attempted, how did it end, and was the
+    time budget what stopped it (#243/#236 follow-up).
+
+    Without this, a slow-but-healthy extraction that eats the whole budget
+    returns an absorb with fewer proposed edits and no way to tell that apart
+    from a model that simply had nothing to suggest.
+
+    Extraction is unconditionally `ok`: `post_absorb` raises 502 when it fails,
+    so reaching the point where this is built already proves it succeeded."""
+    rows = [{"name": "extraction", "status": "ok", "reason": None,
+             "attempted": True, "budget_exhausted": False}]
+    for name, block in (("dossiers", dossiers), ("audit", mechanics)):
+        rows.append({"name": name, **{k: block[k] for k in _PHASE_KEYS}})
+    return rows
+
+
 async def _run_audit(cid: str, sid: str, client: LLMClient, conn: dict,
                      budget: _Budget) -> tuple[list[dict], dict]:
     """(edits, mechanics) for the scene audit. Never raises; every failure is
     an explicit mechanics status (spec: audit visibility) so absorb stays
-    intact even when the audit pipeline blows up."""
-    mech = {"status": "skipped", "reason": None, "warnings": [], "dropped": []}
+    intact even when the audit pipeline blows up.
+
+    `attempted` says whether a request actually reached the model and
+    `budget_exhausted` says whether this absorb's clock is why it did not --
+    the two facts a bare `status: failed` cannot carry."""
+    mech = {"status": "skipped", "reason": None, "warnings": [], "dropped": [],
+            "attempted": False, "budget_exhausted": False}
     excluded: list = []
+    attempted = False
     try:
         if store.modules.resolve(cid) is None:
             mech["reason"] = "no module"
@@ -291,23 +333,36 @@ async def _run_audit(cid: str, sid: str, client: LLMClient, conn: dict,
         transcript = store.chronicle.transcript_text(scene["messages"])
         messages = store.audit.build_prompt(transcript, blocks,
                                             store.audit.roll_lines(cid, sid))
-        # An exhausted budget fails this instantly (never calling the model),
-        # landing in the catch-all below as a failed audit — the status the UI
-        # already renders with a POST /audit retry beside it.
+        if budget.spent():
+            # Checked here rather than left to budget.run below: an exhausted
+            # budget means no request is ever issued, and "never attempted, the
+            # clock ran out" is a different story from "asked and it went
+            # wrong". Still `failed` (not `skipped`) and still paired with the
+            # POST /audit retry the UI renders -- a fresh budget is exactly what
+            # that retry gets.
+            return [], {**mech, "status": "failed", "budget_exhausted": True,
+                        "reason": "the absorb time budget ran out before the audit could run",
+                        "dropped": excluded}
+        attempted = True
         text = await budget.run(client.complete(messages, conn))
         parsed = store.audit.parse_output(text)
         edits, dropped = store.audit.materialize(cid, sid, parsed)
     except store.audit.AuditParseError as exc:
-        return [], {**mech, "status": "failed", "reason": str(exc), "dropped": excluded}
+        return [], {**mech, "status": "failed", "reason": str(exc),
+                    "dropped": excluded, "attempted": attempted}
     except Exception as exc:  # noqa: BLE001 -- LLMError, store errors, anything
+        # A budget overrun *here* was cancelled mid-flight, so the request did
+        # reach the model -- `attempted` stays true, unlike the pre-check above.
         return [], {**mech, "status": "failed", "reason": f"audit failed: {exc}",
-                    "dropped": excluded}
+                    "dropped": excluded, "attempted": attempted,
+                    "budget_exhausted": _budget_overrun(exc)}
     dropped = excluded + dropped
     status = "degraded" if dropped else "ok"
     reason = ("some sheets could not be audited" if excluded else
               "some findings could not be validated") if dropped else None
     return edits, {"status": status, "reason": reason,
-                   "warnings": parsed["warnings"], "dropped": dropped}
+                   "warnings": parsed["warnings"], "dropped": dropped,
+                   "attempted": True, "budget_exhausted": False}
 
 
 async def _stage_dossiers(cid: str, sid: str, transcript: str, client: LLMClient,
@@ -324,9 +379,11 @@ async def _stage_dossiers(cid: str, sid: str, transcript: str, client: LLMClient
 
     Never raises -- a dossier failure must not fail absorb -- but it is not silent
     either: failures (#236) and budget skips (#243) come back as a status the
-    inspector renders, mirroring _run_audit's shape."""
+    inspector renders, mirroring _run_audit's shape -- including `attempted` and
+    `budget_exhausted`, the two flags a phase row is built from."""
     out: dict = {"status": "skipped", "reason": None,
-                 "proposed": [], "failed": [], "skipped": []}
+                 "proposed": [], "failed": [], "skipped": [],
+                 "attempted": False, "budget_exhausted": False}
     edits: list[dict] = []
     try:
         cast = store.appearances.scene_cast(cid, sid)
@@ -342,6 +399,7 @@ async def _stage_dossiers(cid: str, sid: str, transcript: str, client: LLMClient
             # silently, for the same reason failures are (#236).
             out["skipped"] = [b["id"] for b in cast[i:]
                               if b["kind"] == "characters" and b["role"] == "npc"]
+            out["budget_exhausted"] = True
             break
         try:
             name = store.characters.read_character(croot, a["id"])["meta"].get("name", a["id"])
@@ -351,6 +409,10 @@ async def _stage_dossiers(cid: str, sid: str, transcript: str, client: LLMClient
             # pass and this stale output would overwrite that newer one (#235).
             prior = store.dossiers.read(croot, a["id"])
             msgs = store.dossiers.build_prompt(name, prior, transcript)
+            # Set before the await, never after: the loop is only here because
+            # the budget still had room, so the request goes out even if the
+            # answer never comes back.
+            out["attempted"] = True
             d_text = await budget.run(client.complete(msgs, conn))
             parsed_dossier = store.dossiers.parse_output(d_text)
             # stage_edit returns None for an unchanged paragraph AND for a blank
@@ -365,6 +427,7 @@ async def _stage_dossiers(cid: str, sid: str, transcript: str, client: LLMClient
             # Type-prefixed: a bare str() is useless for the store's own errors
             # (CharacterNotFound("aese") stringifies to just "aese").
             detail = str(exc).strip()
+            out["budget_exhausted"] = out["budget_exhausted"] or _budget_overrun(exc)
             out["failed"].append({
                 "id": a["id"],
                 "reason": f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__})
@@ -443,6 +506,9 @@ async def post_absorb(cid: str, sid: str, force: bool = False,
             "keywords": parsed["keywords"], "timeline_events": parsed["timeline_events"],
             **facts, "edits": edits + audit_edits, "mechanics": mechanics,
             "dossiers": dossiers,
+            # One uniform row per step so a short absorb is legible as one
+            # (see _phase_report) rather than as a model with nothing to say.
+            "phases": _phase_report(dossiers, mechanics),
             # Idempotency key for the save this review will become (#235): the
             # commit appends in six places, so a replay whose first response was
             # lost must return that result rather than apply it again.
