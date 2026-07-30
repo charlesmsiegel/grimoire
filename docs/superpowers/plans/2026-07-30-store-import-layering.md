@@ -26,6 +26,42 @@
 
 ---
 
+### Task 0: Run the partition validator before every split
+
+Three review rounds each found the same class of defect: a partition table that reads sensibly but places mutually-calling helpers in different files, which the import guard then rejects. Hand-deriving the call graph is what kept failing, so `scripts/validate_partition.py` does it mechanically — it parses the partition tables straight out of the spec, resolves every top-level name in the source module to its proposed file, and reports strongly connected components with the exact function pairs that form them.
+
+**Files:**
+- Already present: `scripts/validate_partition.py`
+
+**Interfaces:**
+- Consumes: the spec's `### <module>/` tables and `backend/src/grimoire/store/*.py`.
+- Produces: exit 0 when every proposed package is acyclic; exit 1 listing each cycle and its edges.
+
+- [ ] **Step 1: Confirm the current tables are clean**
+
+```bash
+python3 scripts/validate_partition.py
+```
+
+Expected: `[OK ]` for all ten packages, exit 0. The `unassigned` counts are module-level constants (`RESPONSE_FIELDS`, `DEFAULT_BUILTIN_DIR`, …) that the tables do not enumerate; place each with the file that reads it, and re-run.
+
+- [ ] **Step 2: Re-run it at the start of every split task**
+
+Tasks 3-12 each create one package. Before writing any file, run the validator and confirm that package reports `[OK ]`. If a task's placement changes for any reason, re-run before committing — this is cheaper than discovering it from the guard after the files exist, and far cheaper than discovering it in review.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add scripts/validate_partition.py
+git commit -m "Add a partition validator for the store split
+
+Reads the spec's tables, resolves each name to its proposed file, and reports
+intra-package cycles with the function pairs that cause them. Hand-deriving
+this is what three rounds of review kept catching."
+```
+
+---
+
 ### Task 1: Repair the four broken `stat` stubs
 
 Two independent test bugs stand between the suite and a trustworthy baseline.
@@ -146,13 +182,13 @@ Three rules, one scan:
    held a 15-module cycle together; each one moves an ImportError from load
    time to call time and hides the coupling from every static reader.
 2. No cycle in the module-level import graph.
-3. Inside ``store/``, never bind a non-module name off a package's
-   ``__init__``. ``from ..campaigns import read`` binds a submodule and is
-   fine; ``from ..campaigns import world_refs`` reads a name that exists only
-   once ``campaigns/__init__.py`` has run. Rule 2 cannot catch this -- the
-   name binding raises at import time while the *file* graph stays perfectly
-   acyclic, so the load-bearing order just moves from ``store/__init__.py``
-   into each package's ``__init__.py``.
+3. Inside ``store/``, a cross-package import binds a *module*, never a name.
+   ``from ..campaigns import read`` is fine; ``from ..campaigns import
+   world_refs`` reads a name that exists only once ``campaigns/__init__.py``
+   has run, and ``from ..campaigns.read import world_refs`` binds the function
+   by value so the caller caches it. The first fails at import time; the
+   second silently defeats every test that patches it. Rule 2 catches
+   neither -- the file graph stays perfectly acyclic either way.
 
 Ratchet, not a cliff: `import_guard_baseline.txt` lists the violations that
 existed when this guard landed. A violation missing from the baseline fails,
@@ -194,6 +230,19 @@ def _sources() -> dict[str, tuple[pathlib.Path, str, ast.Module]]:
 SOURCES = _sources()
 MODULES = set(SOURCES)
 PACKAGES = {m for m, (p, _, _) in SOURCES.items() if p.name == "__init__.py"}
+
+
+def _kind_of(mod: str, name: str) -> str:
+    """"function", "class" or "other" for a top-level name in `mod`."""
+    entry = SOURCES.get(mod)
+    if entry is None:
+        return "other"
+    for node in entry[2].body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+            return "function"
+        if isinstance(node, ast.ClassDef) and node.name == name:
+            return "class"
+    return "other"
 
 
 def _resolve(node, mod: str, is_pkg: bool) -> set[str]:
@@ -272,11 +321,26 @@ class _Walker(ast.NodeVisitor):
             target = n.module or ""
             if not target.startswith("grimoire.store"):
                 return
-        if target not in PACKAGES or target == pkg:
+        if target == pkg:
             return
-        for a in n.names:
-            if f"{target}.{a.name}" not in MODULES:
-                self.form.append((f"{target}.{a.name}", n))
+        if target in PACKAGES:
+            # `from ..campaigns import world_refs` -- a name off a package
+            # whose __init__ may still be running.
+            for a in n.names:
+                if f"{target}.{a.name}" not in MODULES:
+                    self.form.append((f"{target}.{a.name}", n))
+            return
+        # `from ..modules.binding import resolve` -- a name off a *leaf module*
+        # in another split package. No init-order hazard, but it binds by
+        # value, so the caller caches the function and a test patching
+        # `modules.binding.resolve` stops intercepting. Only functions carry
+        # that hazard: a class or exception bound by value is fine.
+        parent = target.rsplit(".", 1)[0]
+        if parent != pkg and parent.startswith("grimoire.store.") and parent in PACKAGES:
+            for a in n.names:
+                if (f"{target}.{a.name}" not in MODULES
+                        and _kind_of(target, a.name) == "function"):
+                    self.form.append((f"{target}.{a.name}", n))
 
 
 def _collect():
@@ -1072,7 +1136,7 @@ readers are needed by read/write, so nothing imports in both directions."
 Pure size. 1297 lines holding the five concerns the codebase atlas names, plus `rename` — a single 229-line function with its own helper cluster.
 
 **Files:**
-- Create: `backend/src/grimoire/store/module_edit/__init__.py`, `staging.py`, `packs.py`, `migrate.py`, `layout.py`, `renaming.py`, `edits.py`
+- Create: `backend/src/grimoire/store/module_edit/__init__.py`, `packfile.py`, `scope.py`, `staging.py`, `packs.py`, `migrate.py`, `layout.py`, `renaming.py`, `edits.py`
 - Delete: `backend/src/grimoire/store/module_edit.py`
 - Modify: `backend/tests/test_module_edit.py:627`, `:631`, `:914`
 - Modify: `backend/tests/import_guard_baseline.txt`
@@ -1080,6 +1144,8 @@ Pure size. 1297 lines holding the five concerns the codebase atlas names, plus `
 **Interfaces:**
 - Produces: function placement is in the spec's `module_edit/` table. Public entry points (`create_module`, `delete_module`, `duplicate_module`, `import_module`, `export_module`, `rename`, `recover`, the `upsert_*`/`delete_*` family, `set_layout`, `set_theme`, `set_manifest`, `check_proposal_guard`) all stay re-exported from `module_edit/__init__.py`.
 - Consumes: `modules/pack.py`, `modules/validate.py`, `locks`, `atomic`.
+
+Two shared leaves carry what the other five files reach for. `packfile.py` holds `_read_json`, `_write_json` and `_read_sheets` — eight call sites across the package — and `scope.py` holds `_RenameCollision`, `_field_keys`, `_group_scope` and `_fragment_users`. Without them the five remaining files form a single `edits ↔ layout ↔ migrate ↔ renaming` SCC: `edits` reaches `_field_keys`/`_group_scope`, `layout` reaches `_fragment_users`, `migrate._apply` catches `_RenameCollision`, and all three sit in `renaming` otherwise. `check_proposal_guard` moves to `renaming.py` for the same reason — `rename` is its only in-package caller (`:939`), and leaving it in `edits.py` closes `renaming → edits`.
 
 There is no `journal.py`. Crash recovery and migration are one concern, not two: `recover` takes `_campaign_locks` (`module_edit.py:268`), `_replay_journal` calls `_run_migration` (`:318`), and `_apply` calls back into `recover` and `_require_user_root` (`:565-566`). Splitting them would produce a `journal ↔ migrate` cycle that this task's own guard run would reject, so `migrate.py` holds both — the journal it replays *is* the migration journal.
 
