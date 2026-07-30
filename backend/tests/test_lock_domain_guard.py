@@ -40,6 +40,11 @@ Honest about its reach — the house standard set by ``test_atomic_guard.py``:
   decorators, context managers and delegation. A lock acquired through a
   dynamic or cross-module indirection this walker cannot follow reads as
   *absent*, which fails loud rather than silent — the marker is the remedy.
+- **Analysis is per-module.** Mutation propagates through a module's own
+  helpers, never across an import, so a function whose only mutation happens
+  inside a *different* module's unserialized mutator is not itself flagged. The
+  callee is flagged in its own file instead, which is where the fix goes; what
+  this misses is the caller that spans two such calls non-atomically.
 - **It checks that a lock is taken, never that it is taken widely enough.** A
   read-modify-write whose read sits outside the ``with`` is exactly the bug
   ``scenes._serialized`` was written to fix ("The lock has to span the READ as
@@ -54,6 +59,7 @@ Honest about its reach — the house standard set by ``test_atomic_guard.py``:
 from __future__ import annotations
 
 import ast
+import functools
 import pathlib
 
 import grimoire
@@ -62,6 +68,9 @@ from grimoire.store import locks
 from . import guard_markers
 
 PACKAGE = pathlib.Path(grimoire.__file__).parent
+# Compared by path, not by `name == "locks.py"`: a second module with that name
+# anywhere under the package would otherwise be skipped along with it.
+LOCKS_PY = pathlib.Path(locks.__file__)
 
 # The trailing colon is load-bearing -- see test_pydantic_guard.MARKER.
 MARKER = "lock-domain-ok:"
@@ -72,7 +81,16 @@ MARKER = "lock-domain-ok:"
 _ATOMIC_WRITERS = ("write_text", "write_bytes")
 # Removal and rename publish a change without writing bytes, so a guard that
 # watched only `atomic.*` would miss `delete_campaign`'s `rmtree` entirely.
-_DESTRUCTIVE = ("rmtree", "unlink", "rmdir", "remove", "rename", "replace")
+#
+# Split by whether the NAME alone is evidence, because two of these are also
+# ordinary methods on builtins and being receiver-blind about them was wrong:
+# `doc.replace(...)` in `store/export.py` is `str.replace`, and
+# `rec["scenes"].remove(sid)` in `store/appearances.py` is `list.remove`.
+# Neither touches a filesystem, and counting them classified `store.export` as a
+# campaign mutator on the strength of a string operation.
+_FS_ONLY = ("rmtree", "unlink", "rmdir", "rename")   # no builtin type has these
+_FS_AMBIGUOUS = ("remove", "replace")                # also str/list/set methods
+_FS_MODULES = ("os", "shutil")                       # ...so require the receiver
 # The two entry points into the domain. `hold_all` counts because the
 # multi-campaign holders reach every campaign lock through it.
 _LOCK_CALLS = ("campaign_lock", "hold_all")
@@ -133,11 +151,24 @@ def _takes_cid(fn: ast.AST) -> bool:
 
 
 def _writes_directly(fn: ast.AST) -> bool:
+    """Whether `fn` publishes a change to disk itself.
+
+    `Path.replace` — a real atomic rename — is deliberately NOT matched: it is
+    indistinguishable from `str.replace` without type inference, and
+    `test_atomic_guard` already forces publication through `store.atomic`, whose
+    own `os.replace` this does match. The trade is a known blind spot in exchange
+    for not classifying every string substitution as a campaign mutation.
+    """
     for node in _calls(fn):
+        if not isinstance(node.func, ast.Attribute):
+            continue
         name = _called_name(node.func)
-        if name in _ATOMIC_WRITERS and _receiver_name(node.func) == "atomic":
+        receiver = _receiver_name(node.func)
+        if name in _ATOMIC_WRITERS and receiver == "atomic":
             return True
-        if name in _DESTRUCTIVE and isinstance(node.func, ast.Attribute):
+        if name in _FS_ONLY:
+            return True
+        if name in _FS_AMBIGUOUS and receiver in _FS_MODULES:
             return True
     return False
 
@@ -229,6 +260,31 @@ def _module_name(path: pathlib.Path) -> str:
     return ".".join(rel.parts)
 
 
+def _exemption(src: str, fn: ast.AST, others=()) -> str | None:
+    """The `# lock-domain-ok: <reason>` attached to THIS function, if any.
+
+    Two things `guard_markers.marker_reason(MARKER, src, fn)` alone gets wrong
+    for a *function* node, as opposed to the call nodes the other guards pass it:
+
+    - ``ast.FunctionDef.lineno`` is the ``def`` line, not the first decorator's,
+      so the comment block above a decorated function does not attach and the
+      marker is silently ignored. Every ``scenes`` mutator is decorated, which is
+      the one domain module where that matters most. Retry from the decorator.
+    - a function's span covers its whole body, so a marker written inside a
+      NESTED function exempts the enclosing one too. Passing the module's other
+      functions as `others` hands the marker to the innermost that contains it,
+      which is what that parameter is for.
+    """
+    reason = guard_markers.marker_reason(MARKER, src, fn, others)
+    if reason is not None:
+        return reason
+    for decorator in getattr(fn, "decorator_list", []):
+        reason = guard_markers.marker_reason(MARKER, src, decorator, others)
+        if reason is not None:
+            return reason
+    return None
+
+
 def _analyze(path: pathlib.Path):
     """(unserialized mutator names, every campaign mutator name) for one file."""
     src = path.read_text(encoding="utf-8")
@@ -255,16 +311,22 @@ def _analyze(path: pathlib.Path):
         campaign_mutators.add(name)
         if name in serializing:
             continue
-        if guard_markers.marker_reason(MARKER, src, fn) is not None:
+        others = [f for f in funcs.values() if f is not fn]
+        if _exemption(src, fn, others) is not None:
             continue
         unserialized.add(name)
     return unserialized, campaign_mutators
 
 
+@functools.cache
 def _survey() -> dict[str, tuple[set[str], set[str]]]:
+    """Every campaign-mutating module -> (unserialized public mutators, all of
+    them). Cached: six tests below ask for it, the package is ~150 files, and
+    the per-module fixed points are quadratic in the module's function count.
+    Nothing rewrites the tree mid-run."""
     out = {}
     for path in sorted(PACKAGE.rglob("*.py")):
-        if path.name == "locks.py":
+        if path == LOCKS_PY:
             continue                    # the lock itself is not a lock taker
         unserialized, mutators = _analyze(path)
         if mutators:
@@ -296,7 +358,7 @@ def test_the_unreviewed_backlog_only_shrinks():
     """A third bucket is a temptation: it takes an entry with no reason. It is
     allowed to exist only because it cannot grow — every module in it predates
     this guard, and a new mutator has to be classified for real."""
-    assert len(locks.UNREVIEWED) <= 19, (
+    assert len(locks.UNREVIEWED) <= 17, (
         f"`locks.UNREVIEWED` has grown to {len(locks.UNREVIEWED)}; it is a "
         "frozen backlog of modules that predate this guard. Classify the new "
         "module into DOMAIN_MODULES or OUTSIDE_DOMAIN instead.")
@@ -367,7 +429,8 @@ def test_the_marker_is_not_a_rubber_stamp():
         src = path.read_text(encoding="utf-8")
         funcs = _functions(ast.parse(src))
         for name, fn in funcs.items():
-            reason = guard_markers.marker_reason(MARKER, src, fn)
+            others = [f for f in funcs.values() if f is not fn]
+            reason = _exemption(src, fn, others)
             if reason is not None:
                 marked.append((f"{_module_name(path)}.{name}", reason))
     unexplained = [loc for loc, reason in marked if len(reason) < 15]
@@ -504,9 +567,25 @@ def test_removal_counts_as_a_mutation():
     A guard watching only writers would not see it."""
     for src in ("def delete_campaign(cid):\n    shutil.rmtree(root)\n",
                 "def drop(cid):\n    p.unlink()\n",
-                "def rehome(cid):\n    p.rename(q)\n"):
+                "def rehome(cid):\n    p.rename(q)\n",
+                "def swap(cid):\n    os.replace(tmp, p)\n",
+                "def drop2(cid):\n    os.remove(p)\n"):
         _funcs, _s, mutators = _probe(src)
         assert mutators, f"missed a removal/rename mutation: {src!r}"
+
+
+def test_a_string_or_list_method_is_not_a_filesystem_mutation():
+    """`remove` and `replace` are also ordinary builtin methods, and matching
+    them receiver-blind classified `store.export` as a campaign mutator because
+    `build_html` calls `doc.replace(...)` on a string. Two modules sat in the
+    declaration on the strength of that."""
+    for src, why in [
+        ("def build_html(cid):\n    return doc.replace('a', 'b')\n", "str.replace"),
+        ("def leave(cid, sid):\n    rec['scenes'].remove(sid)\n", "list.remove"),
+        ("def prune(cid):\n    seen.remove(cid)\n", "set.remove"),
+    ]:
+        _funcs, _s, mutators = _probe(src)
+        assert not mutators, f"{why} was read as a filesystem mutation ({src!r})"
 
 
 def test_a_function_without_a_cid_is_not_campaign_scoped():
@@ -534,5 +613,32 @@ def test_a_marker_exempts_only_its_own_function():
            "def other(cid):\n"
            "    atomic.write_text(q, y)\n")
     funcs = _functions(ast.parse(src))
-    assert guard_markers.marker_reason(MARKER, src, funcs["seed"]) is not None
-    assert guard_markers.marker_reason(MARKER, src, funcs["other"]) is None
+    assert _exemption(src, funcs["seed"]) is not None
+    assert _exemption(src, funcs["other"]) is None
+
+
+def test_a_marker_above_a_decorator_attaches():
+    """`FunctionDef.lineno` is the `def` line, so the comment block above a
+    DECORATED function does not attach to it and the marker reads as absent.
+    Every `scenes` mutator is decorated — the one domain module where writing a
+    marker in the obvious place has to work."""
+    src = (f"# {MARKER} a reason long enough to be a real one\n"
+           "@_serialized\n"
+           "def append_message(cid, text):\n"
+           "    atomic.write_text(p, text)\n")
+    funcs = _functions(ast.parse(src))
+    assert _exemption(src, funcs["append_message"]) is not None
+
+
+def test_a_marker_inside_a_nested_function_does_not_exempt_the_outer_one():
+    """A function's span covers its whole body, so without `others` a marker
+    written for an inner closure silently exempted the enclosing mutator."""
+    src = ("def outer(cid):\n"
+           "    def inner():\n"
+           f"        pass  # {MARKER} this reason belongs to the closure\n"
+           "    atomic.write_text(p, x)\n")
+    funcs = _functions(ast.parse(src))
+    others = [f for f in funcs.values() if f is not funcs["outer"]]
+    assert _exemption(src, funcs["outer"], others) is None, \
+        "the enclosing mutator inherited a nested function's marker"
+    assert _exemption(src, funcs["inner"], [funcs["outer"]]) is not None

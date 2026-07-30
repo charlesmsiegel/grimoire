@@ -131,7 +131,6 @@ OUTSIDE_DOMAIN: dict[str, str] = {
 #: are examined and moved into one of the two above. Anything new mutating
 #: campaign state fails the guard until it is classified.
 UNREVIEWED: frozenset[str] = frozenset({
-    "routes.weather",
     "store.appearances",
     "store.assets",
     "store.campaign_climate",
@@ -140,7 +139,6 @@ UNREVIEWED: frozenset[str] = frozenset({
     "store.chronicle",
     "store.commits",
     "store.dossiers",
-    "store.export",
     "store.modules",
     "store.overlay",
     "store.playing",
