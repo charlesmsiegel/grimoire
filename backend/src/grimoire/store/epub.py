@@ -19,6 +19,7 @@ from pathlib import Path
 import markdown as _md_lib
 from markupsafe import Markup, escape
 
+from ..prompts import templates_dir
 from . import export as _export
 from .export import EXT_MEDIA as _EXT_MEDIA
 from .paths import now_iso
@@ -30,7 +31,6 @@ FONTS_DIR = Path(__file__).resolve().parents[1] / "assets" / "fonts"  # paths-ok
 def _env():
     # A separate environment from prompts._env: book pages need autoescape.
     from jinja2 import Environment, FileSystemLoader, StrictUndefined
-    from ..prompts import templates_dir
     return Environment(loader=FileSystemLoader(str(templates_dir())),
                        undefined=StrictUndefined, autoescape=True)
 

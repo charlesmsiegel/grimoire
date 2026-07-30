@@ -18,7 +18,7 @@ from pathlib import Path
 import markdown as _md_lib
 from markupsafe import escape
 
-from . import calendars, chronicle, characters, entities, overlay, pcs, worlds
+from . import assets, calendars, chronicle, characters, entities, overlay, pcs, worlds
 from .appearances import cast as appearances_cast, paths as appearances_paths
 from .scenes import read as scenes_read, serialize as scenes_serialize
 from .campaigns import paths as campaigns_paths, read as campaigns_read
@@ -61,7 +61,6 @@ def _resolve_image(cid: str, m: re.Match) -> Path | None:
     else:
         rid, vid, base = m["eid"], "default", m["kind"]
     root = overlay.image_root(cid, rid, vid, m["name"], base=base)
-    from . import assets
     return assets.image_path(root, rid, vid, m["name"], base=base)
 
 
@@ -91,7 +90,6 @@ def _friendly_or_none(provider, native: str) -> str | None:
 
 
 def _avatar(cid: str, rid: str, vid: str, base: str, images: Images, prefix: str) -> str | None:
-    from . import assets
     root = overlay.image_root(cid, rid, vid, assets.AVATAR, base=base)
     p = assets.image_path(root, rid, vid, assets.AVATAR, base=base)
     return f"{prefix}{images.add(p)}" if p is not None else None

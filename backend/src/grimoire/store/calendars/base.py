@@ -15,6 +15,8 @@ from __future__ import annotations
 import re
 from abc import ABC, abstractmethod
 
+from .plugins import load_custom_providers
+
 
 class CalendarError(Exception):
     pass
@@ -111,7 +113,6 @@ def register(provider_id: str, cls: type[CalendarProvider], name: str | None = N
 
 
 def get_provider(config: dict) -> CalendarProvider:
-    from .plugins import load_custom_providers
     load_custom_providers()
     cls = REGISTRY.get(config.get("provider", "gregorian"))
     if cls is None:
@@ -121,7 +122,6 @@ def get_provider(config: dict) -> CalendarProvider:
 
 def list_providers() -> list[dict]:
     """Every registered calendar (built-in + user-authored), for a UI picker."""
-    from .plugins import load_custom_providers
     load_custom_providers()
     return [{"id": pid, "name": NAMES.get(pid, pid)} for pid in REGISTRY]
 

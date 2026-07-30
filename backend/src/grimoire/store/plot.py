@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from .. import prompts
 from . import atomic
 from .campaigns import paths as campaigns_paths
 
@@ -82,7 +83,6 @@ def render_open(cid: str, with_id: bool) -> list[str]:
     the # Plot threads context block. `with_id=True` → absorb form (leads with the id so
     the model can reference the thread); `False` → context form. The line formats live in
     templates/snippets/plot_thread_line/. Tolerant of a garbled plot.json (returns [])."""
-    from .. import prompts
     try:
         threads = open_threads(cid)
     except Exception:  # noqa: BLE001 — garbled plot.json: omit, don't crash callers

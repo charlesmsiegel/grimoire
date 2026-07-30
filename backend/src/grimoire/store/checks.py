@@ -15,6 +15,7 @@ import re
 from . import (characters, dice, entities, expressions,
                locks, modules, overlay, pcs)
 from .appearances import cast as appearances_cast, paths as appearances_paths, versions as appearances_versions
+from .scenes import read as scenes_read
 from .sheets import paths as sheets_paths, reader as sheets_reader, schema as sheets_schema
 
 
@@ -209,8 +210,7 @@ def available_checks(cid: str, sid: str) -> list[dict]:
         if e is not None:
             out.append(e)
 
-    from . import scenes  # function-level: avoid import-order surprises
-    history_ids = scenes.get_location_history(cid, sid)
+    history_ids = scenes_read.get_location_history(cid, sid)
     current_loc = history_ids[-1] if history_ids else None
     if current_loc:
         try:
