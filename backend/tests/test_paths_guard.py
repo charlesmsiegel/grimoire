@@ -17,7 +17,9 @@ trust it. The guard flags a fixed list of idioms:
   encourage) is not flagged.
 - ``.expanduser()``, and ``expanduser`` imported bare from ``os.path``.
 - ``os.environ["HOME"]``, ``os.environ.get("HOME")``, ``os.getenv("HOME")``,
-  and the same three for ``USERPROFILE``.
+  and the same three for ``USERPROFILE`` — in either the ``os.``-qualified form
+  or the ``from os import getenv`` form, resolved through the module's imports
+  so an unrelated ``settings.getenv("HOME")`` is not flagged.
 - ``Path(__file__).resolve().parents[N]`` and ``.parent.parent`` chains — but
   *only* when the chain bottoms out at ``__file__``. Walking up from a path
   inside the data store (``p.parents[2].name`` on a glob result, to recover a
@@ -98,20 +100,49 @@ def _rooted_at_file(node: ast.AST) -> bool:
             return False
 
 
-def _is_home_env(node: ast.AST) -> bool:
-    """``os.environ["HOME"]``, ``os.environ.get("HOME")`` or ``os.getenv("HOME")``."""
+def _os_bindings(tree: ast.AST) -> tuple[set[str], dict[str, str]]:
+    """(local names bound to the os module, {local name: os attribute name}).
+
+    Resolved the same way as the pathlib bindings, and for the same two reasons:
+    ``from os import getenv`` then ``getenv("HOME")`` is a bare Name that an
+    attribute-only check never sees, and ``settings.getenv("HOME")`` is an
+    attribute whose receiver is not os at all.
+    """
+    modules: set[str] = set()
+    names: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                if a.name == "os":
+                    modules.add(a.asname or "os")
+        elif isinstance(node, ast.ImportFrom) and node.module == "os":
+            for a in node.names:
+                names[a.asname or a.name] = a.name
+    return modules, names
+
+
+def _is_os_attr(expr: ast.AST, attr: str, mods: set[str], names: dict[str, str]) -> bool:
+    """``<os>.attr`` via the module, or a bare name imported from os."""
+    if isinstance(expr, ast.Attribute):
+        return expr.attr == attr and isinstance(expr.value, ast.Name) and expr.value.id in mods
+    return isinstance(expr, ast.Name) and names.get(expr.id) == attr
+
+
+def _is_home_env(node: ast.AST, mods: set[str], names: dict[str, str]) -> bool:
+    """``environ["HOME"]``, ``environ.get("HOME")`` or ``getenv("HOME")``, in
+    either the ``os.``-qualified or the ``from os import ...`` form."""
     if isinstance(node, ast.Subscript):
-        return (isinstance(node.value, ast.Attribute) and node.value.attr == "environ"
+        return (_is_os_attr(node.value, "environ", mods, names)
                 and isinstance(node.slice, ast.Constant) and node.slice.value in HOME_KEYS)
-    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.args:
+    if isinstance(node, ast.Call) and node.args:
         arg = node.args[0]
         if not (isinstance(arg, ast.Constant) and arg.value in HOME_KEYS):
             return False
-        if node.func.attr == "getenv":
+        if _is_os_attr(node.func, "getenv", mods, names):
             return True
-        # `.get("HOME")` only counts on os.environ, not on any dict
-        return (node.func.attr == "get" and isinstance(node.func.value, ast.Attribute)
-                and node.func.value.attr == "environ")
+        # `.get("HOME")` counts only on os.environ, never on an arbitrary dict
+        return (isinstance(node.func, ast.Attribute) and node.func.attr == "get"
+                and _is_os_attr(node.func.value, "environ", mods, names))
     return False
 
 
@@ -119,6 +150,7 @@ def scan(src: str) -> list[tuple[ast.AST, str]]:
     """Flagged ``(node, idiom)`` pairs for one module's source."""
     tree = ast.parse(src)
     path_names, modules = _path_bindings(tree)
+    os_mods, os_names = _os_bindings(tree)
     found: list[tuple[ast.AST, str]] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Attribute):
@@ -134,7 +166,7 @@ def scan(src: str) -> list[tuple[ast.AST, str]]:
         elif (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Attribute)
               and node.value.attr == "parents" and _rooted_at_file(node)):
             found.append((node, "parents[N] from __file__"))
-        elif _is_home_env(node):
+        elif _is_home_env(node, os_mods, os_names):
             found.append((node, "HOME from the environment"))
     return found
 
@@ -152,6 +184,11 @@ PROHIBITED = [
     ("environ subscript", "import os\np = os.environ['HOME']\n"),
     ("environ get", "import os\np = os.environ.get('HOME')\n"),
     ("getenv", "import os\np = os.getenv('USERPROFILE')\n"),
+    ("aliased os module", "import os as o\np = o.environ['HOME']\n"),
+    # The bare-import forms an attribute-only check never sees.
+    ("getenv imported bare", "from os import getenv\np = getenv('HOME')\n"),
+    ("environ imported bare", "from os import environ\np = environ['HOME']\n"),
+    ("environ.get imported bare", "from os import environ\np = environ.get('HOME')\n"),
     ("parents index", "from pathlib import Path\np = Path(__file__).resolve().parents[2]\n"),
     ("parent chain", "from pathlib import Path\np = Path(__file__).parent.parent\n"),
 ]
@@ -169,6 +206,9 @@ ALLOWED = [
     ("single parent", "from pathlib import Path\np = Path(__file__).parent\n"),
     ("unrelated env", "import os\np = os.environ.get('GRIMOIRE_HOME')\n"),
     ("unrelated dict get", "p = cfg.get('HOME')\n"),
+    # The receiver check: these are not os, so they are not this rule's business.
+    ("unrelated getenv", "p = settings.getenv('HOME')\n"),
+    ("unrelated environ", "p = container.environ['HOME']\n"),
     ("locally-defined Path", "class Path:\n    pass\np = Path.home\n"),
 ]
 
