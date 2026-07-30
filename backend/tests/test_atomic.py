@@ -147,10 +147,16 @@ def test_the_mode_carried_over_is_the_targets(tmp_path, monkeypatch):
     chmod argument directly so the logic is covered on either platform."""
     p = tmp_path / "rec.md"
     _write_prior(p)
-    monkeypatch.setattr(atomic.os, "stat", lambda _p: os.stat_result(
+    # `atomic.os` *is* the os module, so these patches are global for the
+    # duration of the test -- pathlib reaches os.stat internally too. Accept any
+    # keyword: Path.exists() calls os.stat(self, follow_symlinks=...) on 3.11
+    # and not on 3.14, so a fixed one-positional signature passes on the
+    # development interpreter and raises TypeError on the version pyproject
+    # declares as its floor.
+    monkeypatch.setattr(atomic.os, "stat", lambda _p, **_kw: os.stat_result(
         (0o100644, 0, 0, 1, 0, 0, 0, 0, 0, 0)))
     chmodded = []
-    monkeypatch.setattr(atomic.os, "chmod", lambda t, m: chmodded.append(m))
+    monkeypatch.setattr(atomic.os, "chmod", lambda t, m, **_kw: chmodded.append(m))
 
     atomic.write_text(p, "body")
 
@@ -161,7 +167,7 @@ def test_a_new_record_does_not_inherit_the_0600_temp_mode(tmp_path, monkeypatch)
     """No existing target to copy from: fall back to the umask default, not to
     mkstemp's owner-only 0600."""
     chmodded = []
-    monkeypatch.setattr(atomic.os, "chmod", lambda t, m: chmodded.append(m))
+    monkeypatch.setattr(atomic.os, "chmod", lambda t, m, **_kw: chmodded.append(m))
 
     atomic.write_text(tmp_path / "fresh.md", "new")
 
@@ -376,12 +382,12 @@ def test_group_ownership_and_xattrs_are_carried_over(tmp_path, monkeypatch):
     _write_prior(p)
 
     fake = os.stat_result((0o100640, 0, 0, 1, 4242, 8484, 0, 0, 0, 0))
-    monkeypatch.setattr(atomic.os, "stat", lambda _p: fake)
+    monkeypatch.setattr(atomic.os, "stat", lambda _p, **_kw: fake)
     calls = {"chmod": [], "chown": [], "xattr": []}
-    monkeypatch.setattr(atomic.os, "chmod", lambda t, m: calls["chmod"].append(m))
-    monkeypatch.setattr(atomic.os, "chown", lambda t, u, g: calls["chown"].append((u, g)),
+    monkeypatch.setattr(atomic.os, "chmod", lambda t, m, **_kw: calls["chmod"].append(m))
+    monkeypatch.setattr(atomic.os, "chown", lambda t, u, g, **_kw: calls["chown"].append((u, g)),
                         raising=False)
-    monkeypatch.setattr(atomic.os, "listxattr", lambda _p: ["user.tag"], raising=False)
+    monkeypatch.setattr(atomic.os, "listxattr", lambda _p, **_kw: ["user.tag"], raising=False)
     monkeypatch.setattr(atomic.os, "getxattr", lambda _p, a: b"v", raising=False)
     monkeypatch.setattr(atomic.os, "setxattr",
                         lambda t, a, v: calls["xattr"].append((a, v)), raising=False)
@@ -399,8 +405,8 @@ def test_an_unprivileged_chown_falls_back_to_the_group(tmp_path, monkeypatch):
     p = tmp_path / "rec.md"
     _write_prior(p)
     monkeypatch.setattr(atomic.os, "stat",
-                        lambda _p: os.stat_result((0o100644, 0, 0, 1, 4242, 8484, 0, 0, 0, 0)))
-    monkeypatch.setattr(atomic.os, "chmod", lambda t, m: None)
+                        lambda _p, **_kw: os.stat_result((0o100644, 0, 0, 1, 4242, 8484, 0, 0, 0, 0)))
+    monkeypatch.setattr(atomic.os, "chmod", lambda t, m, **_kw: None)
     attempts = []
 
     def chown(t, uid, gid):
