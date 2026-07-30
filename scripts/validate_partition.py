@@ -136,6 +136,102 @@ def consumer_imports(spec: dict[str, dict[str, str]]) -> int:
     return bad
 
 
+def _local_attrs(node: ast.AST, imported: set[str]) -> set[str]:
+    """Attributes taken on *local* names inside `node`.
+
+    `for mod in (appearances, audit, ...): mod.repoint_scenes(...)` reaches the
+    target through a loop variable, so the module names carry no attribute of
+    their own. What the loop calls is the only clue to which submodule the
+    edge lands on.
+    """
+    out: set[str] = set()
+    for sub in ast.walk(node):
+        if (isinstance(sub, ast.Attribute) and isinstance(sub.value, ast.Name)
+                and sub.value.id not in imported):
+            out.add(sub.attr)
+    return out
+
+
+def store_graph(spec: dict[str, dict[str, str]]) -> int:
+    """Cycles in the WHOLE post-refactor store graph, not just inside packages.
+
+    The per-package check cannot see a loop that leaves a package and comes
+    back: `repad` placed in scenes/serialize.py calls scene_refs.repoint, and
+    scene_refs imports chronicle, which must import scenes.serialize for
+    TRANSITION_SPEAKER -- a three-package cycle every intra-package run
+    reported clean.
+    """
+    import collections
+    absorbed = {m for extra in EXTRA_SOURCES.values() for m in extra}
+    place: dict[str, str] = {}          # "pkg.name" -> "pkg.file"
+    for pkg, mapping in spec.items():
+        for name, fname in mapping.items():
+            place[f"{pkg}.{name}"] = f"{pkg}.{fname}"
+
+    def node_for(mod: str, attr: str | None) -> str | None:
+        if mod in spec:
+            return place.get(f"{mod}.{attr}") if attr else None
+        return mod
+
+    graph: dict[str, set[str]] = collections.defaultdict(set)
+    for p in sorted(STORE.rglob("*.py")):
+        rel = p.relative_to(STORE)
+        top = rel.parts[0] if len(rel.parts) > 1 else p.stem
+        src_pkg = top if top in spec else None
+        if p.stem in absorbed:
+            src_pkg = next(k for k, v in EXTRA_SOURCES.items() if p.stem in v)
+        tree = ast.parse(p.read_text(encoding="utf-8"))
+        imported = set()
+        for n in ast.walk(tree):
+            if isinstance(n, ast.ImportFrom):
+                imported |= {a.asname or a.name for a in n.names}
+            elif isinstance(n, ast.Import):
+                imported |= {(a.asname or a.name).split(".")[0] for a in n.names}
+        names = toplevel_names(tree)
+        for fname, node in names.items():
+            home = (place.get(f"{src_pkg}.{fname}") if src_pkg else
+                    (p.stem if len(rel.parts) == 1 else f"{top}.{p.stem}"))
+            if home is None:
+                continue
+            for sub in ast.walk(node):
+                if (isinstance(sub, ast.Attribute) and isinstance(sub.value, ast.Name)
+                        and sub.value.id in imported):
+                    dest = node_for(sub.value.id, sub.attr)
+                    if dest and dest != home:
+                        graph[home].add(dest)
+                elif isinstance(sub, ast.Name) and src_pkg and sub.id in names:
+                    dest = place.get(f"{src_pkg}.{sub.id}")
+                    if dest and dest != home:
+                        graph[home].add(dest)
+                elif isinstance(sub, ast.Name) and sub.id in imported:
+                    # A bare module reference -- `for mod in (appearances,
+                    # audit, changes, chronicle, ...)` in scene_refs.py:21 --
+                    # is a real edge that attribute-only walking missed. The
+                    # attribute is reached through the loop variable, so
+                    # resolve using the attributes taken on locals in this
+                    # same function; edging to every file in the package
+                    # instead over-approximates into one useless SCC.
+                    if sub.id in spec:
+                        for attr in _local_attrs(node, imported):
+                            dest = place.get(f"{sub.id}.{attr}")
+                            if dest and dest != home:
+                                graph[home].add(dest)
+                    elif sub.id != home and (STORE / f"{sub.id}.py").exists():
+                        graph[home].add(sub.id)
+    cycles = sccs(graph)
+    for c in cycles:
+        # Members of the SCC, not a path -- joining them with arrows implied an
+        # edge order Tarjan never computed.
+        print(f"  CYCLE among: {', '.join(c)}")
+        for a in c:
+            for b in sorted(graph.get(a, ())):
+                if b in c:
+                    print(f"      {a} -> {b}")
+    if not cycles:
+        print("[OK    ] post-refactor store graph is acyclic across packages")
+    return len(cycles)
+
+
 PLAN = pathlib.Path("docs/superpowers/plans/2026-07-30-store-import-layering.md")
 
 
@@ -182,6 +278,8 @@ def main() -> int:
         return consumer_imports(spec)
     if "--plan" in sys.argv:
         return plan_agrees(spec)
+    if "--graph" in sys.argv:
+        return store_graph(spec)
     bad = 0
     for mod, mapping in spec.items():
         sources = [mod] + EXTRA_SOURCES.get(mod, [])

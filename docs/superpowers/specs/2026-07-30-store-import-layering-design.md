@@ -109,12 +109,12 @@ names.
 |---|---|---|
 | `paths.py` | L1 | `SceneNotFound`, `_scenes_dir`, `_scene_path`, `_require_campaign` |
 | `locking.py` | L1 | `_serialized` |
-| `serialize.py` | L1 | `_label`, `_markers`, `match_name`, `_speaker_and_role`, `_parse_messages`, `_serialize_messages`, `_block`, `_append_block`, `_numbering`, `repad`, `RESERVED_LABELS`, `ROLE_TO_LABEL`, `_MARKER`, `_SAFE_LABEL`, `ROLL_SPEAKER`, `TRANSITION_SPEAKER`, `SYNTHETIC_SPEAKERS` |
+| `serialize.py` | L1 | `_label`, `_markers`, `match_name`, `_speaker_and_role`, `_parse_messages`, `_serialize_messages`, `_block`, `_append_block`, `_numbering`, `RESERVED_LABELS`, `ROLE_TO_LABEL`, `_MARKER`, `_SAFE_LABEL`, `ROLL_SPEAKER`, `TRANSITION_SPEAKER`, `SYNTHETIC_SPEAKERS` |
 | `read.py` | L2 | `read_scene`, `read_scene_meta`, `list_scenes`, `is_pcless`, `get_dismissed`, `get_location_history`, `get_time_history`, `get_suggested_date`, `trailing_transitions` |
 | `turns.py` | L2 | `_parse_turn_sizes`, `get_turn_sizes`, `_set_turn_sizes`, `_reconciled_turn_sizes`, `_trailing_model_run`, `_tracked_suffix_fits`, `_model_blocks`, `TurnSizesDesynced` |
 | `write.py` | L2 | `append_message`, `append_reply`, `split_reply`, `edit_message`, `remove_trailing_assistant_run`, `trim_continuation`, `mark_absorbed`, `stamp_greeting`, `stamp_user_speaker`, `add_dismissed`, `set_pcless`, `set_response`, `RollMessageImmutable`, `RESPONSE_FIELDS` |
 | `moment.py` | L2 | `set_location`, `set_datetime`, `_apply_datetime`, `_stamp_start_date` |
-| `lifecycle.py` | L3 | `create_scene`, `_create_scene`, `_date_hint`, `rename_scene`, `delete_scene` |
+| `lifecycle.py` | L3 | `create_scene`, `_create_scene`, `_date_hint`, `rename_scene`, `delete_scene`, `repad` |
 
 `lifecycle.py` is the only file that touches `audit.capture_baseline` and
 `scene_refs.repoint`.
