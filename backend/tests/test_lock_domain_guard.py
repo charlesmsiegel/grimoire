@@ -243,6 +243,30 @@ def _receiver_name(func: ast.expr) -> str | None:
     return None
 
 
+def _bindings(tree: ast.AST):
+    """(target name, value node) for every assignment in `tree`.
+
+    `x = v`, `x = y = v` and `x: T = v` all bind a name, and only the first two
+    were looked at. An annotated re-export -- `put: Callable[..., None] = _put`
+    -- is a different AST node, so the public name was never collected at all
+    and `_analyze` skipped the private writer as private: a domain module could
+    expose an unlocked public mutator and pass.
+
+    Walrus is deliberately absent: it binds inside an expression, never at the
+    module scope these callers care about.
+    """
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets, value = [node.target], node.value
+        else:
+            continue
+        for target in targets:
+            if isinstance(target, ast.Name):
+                yield target.id, value
+
+
 def _functions(tree: ast.AST) -> dict[str, list[ast.AST]]:
     """Every function in the module, grouped by name, nested ones included.
 
@@ -268,20 +292,17 @@ def _functions(tree: ast.AST) -> dict[str, list[ast.AST]]:
     # expose an unlocked public mutator and pass. Iterated for `a = b; c = a`.
     for _ in range(len(out) + 1):
         grew = False
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Name):
+        for name, value in _bindings(tree):
+            if not isinstance(value, ast.Name):
                 continue
-            source = out.get(node.value.id)
+            source = out.get(value.id)
             if not source:
                 continue
-            for target in node.targets:
-                if not isinstance(target, ast.Name):
-                    continue
-                have = out.setdefault(target.id, [])
-                for d in source:
-                    if d not in have:
-                        have.append(d)
-                        grew = True
+            have = out.setdefault(name, [])
+            for d in source:
+                if d not in have:
+                    have.append(d)
+                    grew = True
         if not grew:
             break
     return out
@@ -405,23 +426,19 @@ def _assigned_writers(tree: ast.AST, namespaces: dict) -> set[str]:
     already resolves re-export chains.
     """
     out: set[str] = set()
-    assigns = [n for n in ast.walk(tree) if isinstance(n, ast.Assign)]
-    for _ in range(len(assigns) + 1):
+    bound = list(_bindings(tree))
+    for _ in range(len(bound) + 1):
         grew = False
-        for node in assigns:
-            value = node.value
+        for name, value in bound:
             if isinstance(value, ast.Attribute):
                 writer = _names_a_writer(value.attr, _receiver_name(value), namespaces)
             elif isinstance(value, ast.Name):
                 writer = value.id in out
             else:
                 continue
-            if not writer:
-                continue
-            for target in node.targets:
-                if isinstance(target, ast.Name) and target.id not in out:
-                    out.add(target.id)
-                    grew = True
+            if writer and name not in out:
+                out.add(name)
+                grew = True
         if not grew:
             break
     return out
@@ -454,14 +471,23 @@ def _rebinds_locks(tree: ast.AST) -> bool:
     it is not free, the whole module fails loud, which is the trade made
     everywhere else here.
     """
+    # `store.locks.campaign_lock` is the other spelling the docstring supports,
+    # and `_receiver_name` reads its receiver as `locks` -- discarding the outer
+    # `store`, which can itself be a parameter. So every root a `.locks.` chain
+    # hangs off is watched alongside the name itself.
+    watched = {"locks"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr == "locks" \
+                and isinstance(node.value, ast.Name):
+            watched.add(node.value.id)
     for node in ast.walk(tree):
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store) \
-                and node.id == "locks":
+                and node.id in watched:
             return True                  # assignment, `for`, `with ... as`, walrus
-        if isinstance(node, ast.arg) and node.arg == "locks":
+        if isinstance(node, ast.arg) and node.arg in watched:
             return True                  # a parameter, of any function here
-        if isinstance(node, ast.alias) and (node.asname or node.name) == "locks" \
-                and node.name.rsplit(".", 1)[-1] != "locks":
+        if isinstance(node, ast.alias) and (node.asname or node.name) in watched \
+                and node.name.rsplit(".", 1)[-1] not in watched:
             return True                  # `import json as locks`
     return False
 
@@ -940,7 +966,8 @@ def _module_level(tree: ast.AST) -> set[str]:
     everywhere else.
     """
     defined: set[str] = set()
-    assigned: list[ast.Assign] = []
+    assigned: list[tuple[str, ast.AST]] = []
+    imported: set[str] = set()
 
     def scan(body):
         for node in body:
@@ -948,8 +975,15 @@ def _module_level(tree: ast.AST) -> set[str]:
                 defined.add(node.name)          # its body is a new scope; stop
             elif isinstance(node, ast.ClassDef):
                 continue                        # also a new scope
-            elif isinstance(node, ast.Assign):
-                assigned.append(node)
+            elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+                assigned.extend(_bindings(node))
+            elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                # An import binds a name too, and this scan handled only `=`.
+                # `def safe(fn): ...` followed by `from hooks import safe` leaves
+                # the local definition in the tree for the whitelist to validate
+                # while `@safe` decorates with the imported object. Per-module
+                # analysis cannot follow the import, so the name is poisoned.
+                imported.update((a.asname or a.name).split(".")[0] for a in node.names)
             elif isinstance(node, (ast.If, ast.Try, ast.With, ast.AsyncWith,
                                    ast.For, ast.While)):
                 for attr in ("body", "orelse", "finalbody", "handlers"):
@@ -959,19 +993,16 @@ def _module_level(tree: ast.AST) -> set[str]:
 
     scan(tree.body)
     out = set(defined)
-    poisoned: set[str] = set()
+    poisoned = set(imported)
     for _ in range(len(assigned) + 1):
         grew = False
-        for node in assigned:
-            source = isinstance(node.value, ast.Name) and node.value.id in out
-            for target in node.targets:
-                if not isinstance(target, ast.Name):
-                    continue
-                if source and target.id not in out:
-                    out.add(target.id)
+        for name, value in assigned:
+            if isinstance(value, ast.Name) and value.id in out:
+                if name not in out:
+                    out.add(name)
                     grew = True
-                elif not source:
-                    poisoned.add(target.id)
+            else:
+                poisoned.add(name)
         if not grew:
             break
     # ...and a name any parameter in this module shadows is not a name module
@@ -1396,8 +1427,6 @@ def _survey() -> dict[str, tuple[set[str], set[str]]]:
     Nothing rewrites the tree mid-run."""
     out = {}
     for path in sorted(PACKAGE.rglob("*.py")):
-        if path == LOCKS_PY:
-            continue                    # the lock itself is not a lock taker
         unserialized, mutators = _analyze(path)
         if mutators:
             out[_module_name(path)] = (unserialized, mutators)
@@ -2071,6 +2100,79 @@ def test_a_parameter_shadows_the_name_the_whitelist_validated():
     _f, serializing, _m = _probe(
         decorator.replace("def factory(_serialized=identity):\n    return _serialized\n", ""))
     assert "put" in serializing
+
+
+def test_an_annotated_alias_binds_a_name_too():
+    """`put = _put` was collected; `put: Callable[..., None] = _put` was not,
+    because Python represents the annotated form with a different node. The
+    public name was never collected at all, so `_analyze` skipped the writer as
+    private and a domain module could expose an unlocked public mutator."""
+    funcs, _s, mutators = _probe("def _put(cid):\n"
+                                 "    atomic.write_text(p, x)\n"
+                                 "put: Callable[..., None] = _put\n")
+    assert "put" in funcs, "an annotated re-export was never collected"
+    assert "put" in mutators
+
+
+def test_an_import_rebinds_a_module_scope_name():
+    """The shadowing rule reached parameters and assignments but not imports.
+    A local `safe` that really locks, followed by `from hooks import safe`,
+    left the whitelist validating the definition while `@safe` decorates with
+    the imported object."""
+    src = ("def safe(fn):\n"
+           "    def locked(cid, *a):\n"
+           "        with locks.campaign_lock(cid):\n"
+           "            return fn(cid, *a)\n"
+           "    return locked\n"
+           "from hooks import safe\n"
+           "@safe\n"
+           "def put(cid):\n"
+           "    atomic.write_text(p, x)\n")
+    _f, serializing, mutators = _probe(src)
+    assert "put" in mutators
+    assert "put" not in serializing, "an import did not poison the local definition"
+
+    _f, serializing, _m = _probe(src.replace("from hooks import safe\n", ""))
+    assert "put" in serializing, "the local decorator was rejected without the import"
+
+
+def test_the_store_locks_spelling_resolves_its_root():
+    """`store.locks.campaign_lock` is the other spelling the docstring
+    supports, and `_receiver_name` reads its receiver as `locks` — discarding
+    the outer `store`, which can itself be a parameter. The `locks`-parameter
+    fix did not reach it."""
+    _f, serializing, mutators = _probe(
+        "def put(cid, store=fake):\n"
+        "    with store.locks.campaign_lock(cid):\n"
+        "        atomic.write_text(p, x)\n")
+    assert "put" in mutators
+    assert "put" not in serializing, "a shadowed `store` still reached the real module"
+
+    # Unshadowed, the two-segment spelling is a real acquisition.
+    _f, serializing, _m = _probe(
+        "from grimoire import store\n"
+        "def put(cid):\n"
+        "    with store.locks.campaign_lock(cid):\n"
+        "        atomic.write_text(p, x)\n")
+    assert "put" in serializing, "the `store.locks` spelling was rejected outright"
+
+
+def test_the_lock_module_is_surveyed_like_any_other():
+    """`_survey` skipped `store/locks.py` outright, on the reasoning that the
+    lock is not a lock taker. Whether a module takes the lock has nothing to do
+    with whether it publishes, and the skip removed it from discovery entirely:
+    a future public `cid` writer there would be unclassified, unlocked and
+    invisible.
+
+    This one is a ratchet rather than a mutation-verified guard, and says so:
+    `locks.py` publishes nothing today, so restoring the skip would not make it
+    fail. Its value is entirely in the day that stops being true."""
+    assert LOCKS_PY.exists()
+    assert _module_name(LOCKS_PY) not in _survey(), (
+        "store/locks.py is in the survey; it is analyzed like any other module "
+        "now, so classify it rather than restoring the skip")
+    unserialized, mutators = _analyze(LOCKS_PY)
+    assert not mutators and not unserialized
 
 
 def test_a_writer_bound_by_assignment_is_seen():

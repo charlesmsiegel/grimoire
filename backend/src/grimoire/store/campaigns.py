@@ -205,7 +205,6 @@ def create_campaign(name: str, world_id: str, region: str | None = None,
         calendars.validate_calendar(cfg)   # unknown provider -> CalendarError
     cid = uniquify(slugify(name), lambda c: campaign_root(c).exists())
     root = campaign_root(cid)
-    root.mkdir(parents=True)
     # The lock spans PUBLICATION, not just the writes after it. `campaign.md` is
     # what makes a directory a campaign to `list_campaigns`, so the moment it
     # lands another grimoire process can find this campaign and start writing to
@@ -215,9 +214,17 @@ def create_campaign(name: str, world_id: str, region: str | None = None,
     # write with the world defaults. Holding from before publication through the
     # last initializing write is what makes creation atomic to anyone watching.
     #
+    # It spans the `mkdir` too, which is not about serialization: acquisition
+    # can fail (`StoreBusy` on a timeout), and with the directory already
+    # created that leaves an empty orphan behind. `uniquify` reads any existing
+    # directory as occupied, so the next attempt at the same name would silently
+    # become `<name>-2`. The lock file lives outside the campaign tree
+    # (`proclock.lock_path`), so nothing here needs the directory to exist first.
+    #
     # Everything inside is bounded: file writes this package owns. No plugin
     # code, no provider import — see the calendar block above.
     with locks.campaign_lock(cid):
+        root.mkdir(parents=True)
         (root / "scenes").mkdir()
         now = now_iso()
         atomic.write_text(campaign_meta_path(cid), dump_frontmatter(
