@@ -321,9 +321,13 @@ def main() -> int:
         for src in sources:
             p = STORE / f"{src}.py"
             if not p.exists():
-                if (STORE / src / "__init__.py").exists():
+                # The completed replacement is always the *owner* package.
+                # module_display.py is absorbed into modules/display.py, so
+                # looking for a module_display/ package would never find one
+                # and would block every task after the modules split.
+                if (STORE / mod / "__init__.py").exists():
                     continue      # already split; the partition is done
-                print(f"  !! missing source {p} and no {src}/ package -- "
+                print(f"  !! missing source {p} and no {mod}/ package -- "
                       f"cannot validate this partition")
                 bad += 1
                 unreadable = True
