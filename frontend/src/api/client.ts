@@ -349,16 +349,29 @@ export type StagedEdit = {
   payload?: Record<string, unknown>;
 };
 export type MechanicsDrop = { id: string; field?: string; reason: string };
-export type Mechanics = {
+/** The two facts a bare status cannot carry, on every phase that makes an LLM
+ *  call: whether a request reached the model at all, and whether the absorb's
+ *  shared time budget is why it did not. A phase stopped by the clock is worth
+ *  retrying as-is; one that failed on its own merits is not. */
+export type PhaseAttempt = { attempted: boolean; budget_exhausted: boolean };
+export type Mechanics = PhaseAttempt & {
   status: "ok" | "degraded" | "failed" | "skipped"; reason: string | null;
   warnings: string[]; dropped: MechanicsDrop[];
 };
 export type DossierFailure = { id: string; reason: string };
-export type Dossiers = {
+export type Dossiers = PhaseAttempt & {
   status: "ok" | "degraded" | "failed" | "skipped"; reason: string | null;
   proposed: string[]; failed: DossierFailure[];
   /** NPCs the absorb budget ran out before reaching — never attempted (#243). */
   skipped: string[];
+};
+/** One row per LLM-backed step of a single absorb, in run order. A projection of
+ *  `mechanics`/`dossiers` (never a second source of truth) that also covers the
+ *  extraction, so a run cut short by the time budget is legible as one instead of
+ *  looking like a model with nothing to suggest. */
+export type AbsorbPhase = PhaseAttempt & {
+  name: "extraction" | "dossiers" | "audit";
+  status: "ok" | "degraded" | "failed" | "skipped"; reason: string | null;
 };
 export type SceneAbsorb = {
   one_line: string; summary: string; keywords: string[];
@@ -369,6 +382,7 @@ export type SceneAbsorb = {
    *  returns the first result instead of committing twice. */
   commit_token: string;
   dossiers: Dossiers;
+  phases: AbsorbPhase[];
 };
 export type SceneSuggestion = {
   title: string; premise: string; date?: string;
