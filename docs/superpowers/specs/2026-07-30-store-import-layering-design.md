@@ -108,7 +108,8 @@ names.
 | File | Layer | Contents |
 |---|---|---|
 | `paths.py` | L1 | `SceneNotFound`, `_scenes_dir`, `_scene_path`, `_require_campaign` |
-| `serialize.py` | L1 | `_label`, `_markers`, `match_name`, `_speaker_and_role`, `_serialized`, `_parse_messages`, `_serialize_messages`, `_block`, `_numbering`, `repad` |
+| `locking.py` | L1 | `_serialized` |
+| `serialize.py` | L1 | `_label`, `_markers`, `match_name`, `_speaker_and_role`, `_parse_messages`, `_serialize_messages`, `_block`, `_numbering`, `repad` |
 | `read.py` | L2 | `read_scene`, `read_scene_meta`, `list_scenes`, `is_pcless`, `get_dismissed`, `get_location_history`, `get_time_history`, `get_suggested_date`, `trailing_transitions` |
 | `turns.py` | L2 | `_parse_turn_sizes`, `get_turn_sizes`, `_set_turn_sizes`, `_reconciled_turn_sizes`, `_trailing_model_run`, `_tracked_suffix_fits`, `_model_blocks`, `TurnSizesDesynced` |
 | `write.py` | L2 | `append_message`, `_append_block`, `append_reply`, `split_reply`, `edit_message`, `remove_trailing_assistant_run`, `trim_continuation`, `mark_absorbed`, `stamp_greeting`, `stamp_user_speaker`, `add_dismissed`, `set_pcless`, `set_response`, `RollMessageImmutable` |
@@ -121,6 +122,13 @@ names.
 `moment.py` rather than `datetime.py`: `scenes/__init__.py` will do
 `from . import moment`, and binding the name `datetime` in a package namespace
 that also uses the stdlib module is a trap not worth setting.
+
+`_serialized` gets its own `locking.py` rather than sharing `serialize.py`.
+The names are a coincidence: `_serialized` runs a mutation under the campaign
+lock, while `serialize.py` is transcript marshalling. It decorates 19
+functions that end up in four different files, all of which import it. The
+decorator's lock is reentrant (`locks.campaign_lock`), so spreading its call
+sites across files does not change locking behavior.
 
 ### `appearances/`
 
@@ -143,8 +151,15 @@ that also uses the stdlib module is a trap not worth setting.
 | `binding.py` | L3 | `_write_key`, `set_world_module`, `set_campaign_module`, `resolve` |
 | `admin.py` | L3 | `create_module`, `delete_module` |
 
-`module_display.py` disappears as a top-level module; `store/__init__.py`
-keeps exporting the name for compatibility.
+`module_display.py` disappears as a top-level module. Note that
+`store/__init__.py` does **not** currently export it — neither its `from . import
+(...)` list nor `__all__` mentions it. `from grimoire.store import module_display`
+works today only as a side effect of `modules.py:18` binding it as an attribute
+of the package. `backend/tests/test_module_display.py:3` relies on exactly that.
+So this step must *add* an explicit `module_display` alias to `store/__init__.py`
+rather than preserve one, or update that test. Keeping the alias is preferred:
+`test_module_display.py:361` patches `module_display._load_theme`, and an alias
+to the same module object leaves that working.
 
 ### `sheets/`
 
@@ -257,9 +272,45 @@ resolve.
 other three are already subpackages this refactor does not restructure. No
 direct-import site is affected.
 
-`store/__init__.py`'s import order is load-bearing today. Once the graph is
-acyclic it stops being — and the guard test is what demonstrates that, rather
-than a claim in a docstring.
+## Import form inside the store (load-bearing)
+
+An acyclic *file* graph is not sufficient. Package `__init__.py` re-exports can
+reintroduce the same partial-initialization hazard at package granularity, which
+would merely relocate today's load-bearing order from `store/__init__.py` into
+each new package's `__init__.py`.
+
+Demonstrated on a prototype of the structure above: with `worlds/lifecycle.py`
+written as `from ..campaigns import world_refs`, reordering the three lines of
+`campaigns/__init__.py` — changing no other code, leaving the file graph fully
+acyclic — produces
+
+```
+ImportError: cannot import name 'world_refs' from partially initialized
+module 'st.campaigns' (most likely due to a circular import)
+```
+
+**Rule: a cross-package import inside the store names the submodule and keeps
+it as a module object.**
+
+```python
+from ..campaigns import read        # yes
+...
+read.world_refs()
+
+from ..campaigns import world_refs  # no — reads a name off a package __init__
+from .. import campaigns            # no — same hazard once anything is read at module scope
+```
+
+Verified on the prototype under the hostile `__init__` ordering: this form
+imports cleanly regardless of order, because binding a submodule does not
+require the parent `__init__` to have finished. It also keeps the call site
+patchable (see below).
+
+The guard test must check this form directly. A file-level cycle check alone
+passes the broken version, since the file graph is acyclic either way.
+
+Given that rule, `store/__init__.py`'s import order stops being load-bearing —
+and the guard test is what demonstrates it, rather than a claim in a docstring.
 
 ## Third-party lazy imports
 
@@ -275,6 +326,38 @@ All four move to module top:
 The sentinel keeps the `desktop` and `claude` extras genuinely optional, which
 Android depends on, while satisfying the imports-at-top rule.
 
+## Monkeypatch targets that move
+
+Moving a function to a new submodule changes where tests must patch it. This
+is the footgun already documented at `routes/streaming.py:26-31`, and it is
+the one way a "pure move" can change behavior — silently, by making a patch
+stop intercepting so a test passes for the wrong reason.
+
+Fourteen sites patch a name on a module this refactor splits:
+
+| Test site | Patched | New home |
+|---|---|---|
+| `test_locks_store.py:865` | `scenes.append_message` | `scenes/write.py` |
+| `test_locks_store.py:911`, `:912` | `chronicle.absorb`, `chronicle.append_timeline` | `chronicle` (unsplit; verify) |
+| `test_scene_store.py:996` | `scenes.parse_frontmatter` | imported into several `scenes/` files |
+| `test_sheets_store.py:799`, `:1134` | `modules.resolve` | `modules/binding.py` |
+| `test_audit_store.py:100` | `modules.load_pack` | `modules/pack.py` |
+| `test_response_presets.py:601` | `campaigns.read_campaign` | `campaigns/read.py` |
+| `test_context.py:1157` | `context._drift_roster` | `context/cast.py` |
+| `test_module_edit.py:627`, `:631`, `:914` | `module_edit._run_migration`, `_campaign_locks` | `module_edit/migrate.py` |
+| `test_routes.py:2853` | `audit.materialize` | `audit/apply.py` |
+| `test_module_display.py:361` | `module_display._load_theme` | `modules/display.py` |
+
+`scenes.parse_frontmatter` is the nastiest: it patches a name `scenes.py`
+imported from elsewhere, so after the split each `scenes/` submodule holds its
+own binding and patching one has no effect on the others.
+
+The module-object import form required above is what keeps these patchable at
+all — a by-value `from ..modules.binding import resolve` in `sheets` would make
+`modules.binding.resolve` unpatchable from the caller's perspective. Each site
+still needs its target retargeted to the new submodule as part of the commit
+that moves the function, and re-run to confirm the patch still bites.
+
 ## Enforcement
 
 A new `backend/tests/test_import_guard.py`, written in the AST-parsing style
@@ -284,12 +367,22 @@ of `test_atomic_guard.py` and `test_overlay_guard.py`:
 2. Fails on any third-party or stdlib import inside a function body.
 3. Builds the module-level import graph over `backend/src/grimoire/` and fails
    on any cycle, naming the offending path.
+4. Fails on any intra-store cross-package import that names something other
+   than a submodule — `from ..campaigns import world_refs` and
+   `from .. import campaigns` both fail; `from ..campaigns import read`
+   passes. Rule 3 alone does not catch this, since the file graph is acyclic
+   either way.
 
 The guard's scan scope is `backend/src/grimoire/` only. Tests, `scripts/` and
 `evals/` are not covered — a test that imports inside a function to exercise
 import behavior is legitimate.
-4. Exemptions are function-scoped and must state a reason; a marker inside a
+5. Exemptions are function-scoped and must state a reason; a marker inside a
    string literal does not count, matching `test_overlay_guard.py:462`.
+
+The two existing guard tests need no changes: both discover files with
+`PACKAGE.rglob("*.py")` (`test_atomic_guard.py:135`, `test_overlay_guard.py:422`),
+so new submodules are covered automatically, and their exemptions are
+function-scoped and therefore travel with the code that moves.
 
 Resolution must be per-submodule: `from . import scenes` inside the store is
 an edge to `grimoire.store.scenes`, not to the package. Attributing it to the
@@ -341,7 +434,8 @@ is independently testable.
 - Migrating the 331 `from grimoire.store import x` call sites to deep paths.
   `store/__init__.py` stays a compatibility facade.
 - `routes/` and the frontend. Neither has measured cycles.
-- Behavior changes of any kind. Every step is a pure move plus import
-  rewrite; a diff that changes logic is a mistake in this refactor.
+- Behavior changes of any kind. Every step is a move plus an import rewrite,
+  plus retargeting the monkeypatch sites listed above; a diff that changes
+  logic is a mistake in this refactor.
 - Replacing lifecycle cascades with events or a registry. The seed steps in
   `create_campaign` are legible as a sequence and should stay that way.
