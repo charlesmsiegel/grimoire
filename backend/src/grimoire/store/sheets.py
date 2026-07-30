@@ -510,6 +510,9 @@ def world_sheet_modules(wid: str) -> list[str]:
     return sorted(p.name for p in d.iterdir() if p.is_dir() and safe_id(p.name))
 
 
+# lock-domain-ok: runs inside create_campaign, before the new cid has been
+# returned to any caller, so no concurrent holder of that campaign lock can
+# exist yet. The single call site is what makes this true — see campaigns.py.
 def seed(cid: str) -> int:
     """Copy world starting sheets for the campaign's resolved module.
     Called once from create_campaign; changing the module later never
