@@ -112,12 +112,31 @@ first if you think one should be skipped.
 ## Working notes
 
 - Backend tests isolate the store via `monkeypatch.setenv("GRIMOIRE_HOME", tmp_path)`.
-- Run: `backend/.venv/Scripts/python.exe -m pytest backend -q`; from `frontend/`,
-  `npx vitest run` and `npx tsc -b`. (Run vitest **from** `frontend/` — `npx --prefix
-  frontend vitest run` executes from the repo root, which skips `frontend/vitest.config.ts`
-  and disables `globals`, failing every mock-based test.)
-- **After editing anything in `templates/`**, run the two harnesses that guard
-  prompts: `scripts/verify_templates.py` (builders and templates agree
+- **Run the gate with `make check`** — the same targets `.github/workflows/ci.yml`
+  runs, so a CI failure reproduces locally with one command. Individually:
+  `make check-py` (pytest), `check-web` (npm ci + typecheck + vitest),
+  `check-lint` (ruff), `check-templates` (`verify_templates.py`),
+  `check-pydantic1` (the whole suite against the Android dependency set —
+  pydantic 1.10, no `desktop` extra — in a throwaway venv). `make check-apk`
+  is excluded from `check` because it needs `make android-bootstrap` first.
+  - In a **worktree**, pass `PY` explicitly: the default points at
+    `backend/.venv`, which only the main checkout has, e.g.
+    `make check-py PY=C:/Users/<you>/github/grimoire/backend/.venv/Scripts/python.exe`.
+  - `check-py` sets `PYTHONPATH` to this tree's `backend/src` on purpose:
+    `backend/.venv` holds an editable install whose `.pth` points at whichever
+    checkout created it, so a bare `pytest` inside a worktree silently tests the
+    *other* tree's sources.
+  - Run vitest **from** `frontend/` — `npx --prefix frontend vitest run` executes
+    from the repo root, which skips `frontend/vitest.config.ts` and disables
+    `globals`, failing every mock-based test. `make check-web` does this right.
+- Two architecture rules are enforced by tests that parse the package's own
+  ASTs, alongside the existing `test_atomic_guard.py` / `test_overlay_guard.py`:
+  `test_pydantic_guard.py` (v1/v2-agnostic pydantic) and `test_paths_guard.py`
+  (filesystem access goes through the resolvers). Clear a genuinely-safe call
+  with `# pydantic-ok: <reason>` / `# paths-ok: <reason>` — a marker with no
+  reason fails, deliberately.
+- **After editing anything in `templates/`**, `make check` covers both harnesses
+  that guard prompts: `scripts/verify_templates.py` (builders and templates agree
   byte-for-byte) and `evals/run.py` (see `evals/README.md`). Offline, the eval
   suite proves the *instructions* are still in the assembled prompt — it
   renders the budget, reply-format and roll-protocol sections and requires each
