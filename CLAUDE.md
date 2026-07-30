@@ -114,7 +114,8 @@ first if you think one should be skipped.
 - Backend tests isolate the store via `monkeypatch.setenv("GRIMOIRE_HOME", tmp_path)`.
 - **Run the gate with `make check`** — the same targets `.github/workflows/ci.yml`
   runs, so a CI failure reproduces locally with one command. Individually:
-  `make check-py` (pytest), `check-web` (npm ci + typecheck + vitest),
+  `make check-py` (pytest), `check-web` (npm ci + typecheck + vitest under
+  coverage),
   `check-lint` (ruff), `check-templates` (`verify_templates.py`),
   `check-pydantic1` (the whole suite against the Android dependency set —
   pydantic 1.10, no `desktop` extra — in a throwaway venv). `make check-apk`
@@ -129,6 +130,14 @@ first if you think one should be skipped.
   - Run vitest **from** `frontend/` — `npx --prefix frontend vitest run` executes
     from the repo root, which skips `frontend/vitest.config.ts` and disables
     `globals`, failing every mock-based test. `make check-web` does this right.
+  - `check-web` runs `npm run test:coverage` (`vitest run --coverage`), which
+    writes `frontend/coverage/lcov.info` — gitignored, uploaded by CI as the
+    `frontend-coverage` artifact, and the file external readers discover by
+    name. `npm test` still runs the suite bare when you only want pass/fail.
+    Coverage config lives in `frontend/vite.config.ts` under `test.coverage`;
+    the **istanbul** provider and `all: true` are load-bearing there, and the
+    comments say why — do not switch to the v8 provider, which reports a file
+    no test imports as 100% covered rather than 0%.
 - Two architecture rules are enforced by tests that parse the package's own
   ASTs, alongside the existing `test_atomic_guard.py` / `test_overlay_guard.py`:
   `test_pydantic_guard.py` (v1/v2-agnostic pydantic) and `test_paths_guard.py`

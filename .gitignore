@@ -18,6 +18,11 @@ frontend/node_modules/
 frontend/dist/
 frontend/*.tsbuildinfo
 
+# Coverage report written by `make check-web` (lcov.info + the HTML render).
+# Regenerated on every run, so it is a build output rather than a checked-in
+# number; CI uploads it as a job artifact instead.
+frontend/coverage/
+
 # Build outputs staged by the Makefile (APKs)
 /build/
 
