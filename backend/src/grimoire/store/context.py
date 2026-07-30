@@ -729,5 +729,5 @@ def count_tokens(text: str) -> int:
         return 0
     try:
         return len(_encoder().encode(text))
-    except Exception:
+    except Exception:  # noqa: BLE001 - token counting must never fail a turn; heuristic instead
         return len(text) // 4

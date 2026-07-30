@@ -51,7 +51,6 @@ def test_activate_unowned_unchanged():
     assert [e["name"] for e in context.activate(entries, "x")] == ["World"]
 
 
-import pytest  # noqa: E402
 
 from grimoire.store import appearances as ap  # noqa: E402
 from grimoire.store import campaigns, characters, chronicle, entities, plot, pcs, scenes, worlds  # noqa: E402

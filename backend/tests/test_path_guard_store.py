@@ -527,7 +527,7 @@ def test_no_listing_hands_back_an_id_its_own_lookups_refuse(monkeypatch, tmp_pat
     for label, fn in listings.items():
         try:
             got = fn()
-        except Exception as exc:                     # a listing must never raise for this
+        except Exception as exc:  # noqa: BLE001 - the test's subject: report which listing raised, don't crash
             leaked[label] = f"{type(exc).__name__}: {exc}"
             continue
         if any(x and MARK in str(x) for x in got):

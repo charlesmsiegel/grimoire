@@ -13,7 +13,7 @@ def test_llm_error_detail_defaults_to_kind():
     assert LLMError("network").detail == "network"
 
 
-from grimoire.llm import LLMClient
+from grimoire.llm import LLMClient  # noqa: E402 - deliberate late import; see the lines above
 
 
 class FakeProvider:
@@ -86,9 +86,9 @@ async def test_missing_kind_defaults_to_openrouter():
 
 # ---- idle timeout (#243) ----
 
-import asyncio
+import asyncio  # noqa: E402 - deliberate late import; see the lines above
 
-import pytest
+import pytest  # noqa: E402 - deliberate late import; see the lines above
 
 
 STALL = 2.0  # >> the 0.05s timeouts below, but bounded so an unguarded
@@ -333,10 +333,10 @@ async def test_a_client_given_no_timeout_uses_the_module_default():
     assert client._timeout_seconds() == llm_mod.DEFAULT_TIMEOUT
 
 
-import ast
-from pathlib import Path
+import ast  # noqa: E402 - deliberate late import; see the lines above
+from pathlib import Path  # noqa: E402 - deliberate late import; see the lines above
 
-import grimoire
+import grimoire  # noqa: E402 - deliberate late import; see the lines above
 
 # The LLM gateway: the facade plus the three providers it dispatches to, and the
 # error module they all share.

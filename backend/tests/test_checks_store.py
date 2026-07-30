@@ -1,6 +1,6 @@
 import pytest
 
-from grimoire.store import appearances, campaigns, checks, rolls, scenes, sheets, worlds
+from grimoire.store import campaigns, checks, rolls, scenes, sheets, worlds
 
 
 def _play(monkeypatch, tmp_path, module="pool-basic"):

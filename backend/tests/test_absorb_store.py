@@ -87,7 +87,7 @@ def test_parse_output_treats_null_id_as_new_thread_not_the_string_none():
 def test_plot_snapshot_renders_open_threads(monkeypatch, tmp_path):
     from grimoire.store import plot, scenes
     cid = _campaign(monkeypatch, tmp_path)
-    sid = scenes.create_scene(cid, "S")
+    scenes.create_scene(cid, "S")
     plot.set_movement(cid, "the-map", "The map", "advanced", "It is a forgery.", "s12")
     plot.set_movement(cid, "done", "Done thread", "closed", "resolved", "s5")
     snap = absorb.plot_snapshot(cid)
@@ -102,7 +102,7 @@ def test_plot_snapshot_tolerates_garbled(monkeypatch, tmp_path):
 
 
 def test_materialize_builds_before_after(monkeypatch, tmp_path):
-    from grimoire.store import appearances, characters, entities, scenes
+    from grimoire.store import appearances, entities, scenes
     cid = _campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     ch = _char(croot, "Seraphine")
@@ -597,8 +597,7 @@ def test_apply_edits_records_dossier_in_changes(monkeypatch, tmp_path):
 
 def test_dossier_edit_stages_before_and_after(monkeypatch, tmp_path):
     from grimoire.store import dossiers
-    cid = _campaign(monkeypatch, tmp_path)
-    croot = campaigns.campaign_root(cid)
+    _campaign(monkeypatch, tmp_path)
     edit = dossiers.stage_edit("seraphine", "Seraphine", "Seraphine is wary.",
                                "Seraphine is loyal.")
     assert edit == {"id": "dossier:seraphine", "kind": "dossier",

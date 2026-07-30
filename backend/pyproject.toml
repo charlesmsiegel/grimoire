@@ -30,6 +30,9 @@ desktop = [
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
+    # Pinned exactly: an unpinned linter turns a green commit red on someone
+    # else's release schedule. The `lint` CI job installs this same pin.
+    "ruff==0.16.0",
 ]
 
 [build-system]

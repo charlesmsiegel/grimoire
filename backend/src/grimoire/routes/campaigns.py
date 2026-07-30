@@ -8,7 +8,6 @@ Scenes, weather, mechanics and greetings have their own modules; the generic
 
 from __future__ import annotations
 
-import json
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import Response

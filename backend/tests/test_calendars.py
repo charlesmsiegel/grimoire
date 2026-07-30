@@ -1,6 +1,5 @@
 import pytest
 
-from grimoire.store import calendars
 from grimoire.store.calendars import CalendarError, get_provider, normalize, fixed_of, minutes_of, split_native
 
 
@@ -71,7 +70,7 @@ def test_normalize_zero_pads_time_for_stable_key():
     assert normalize(p, "2026-06-29T14:30") == "2026-06-29T14:30"
 
 
-from grimoire.store.calendars import today_facts
+from grimoire.store.calendars import today_facts  # noqa: E402 - deliberate late import; see the lines above
 
 
 def test_gregorian_library_holiday():
@@ -119,7 +118,7 @@ def test_today_facts_upcoming_within_30_days():
     assert facts["upcoming"] == {"name": "Christmas Day", "in_days": 5}
 
 
-from grimoire.store.calendars import age, is_anniversary
+from grimoire.store.calendars import age, is_anniversary  # noqa: E402 - deliberate late import; see the lines above
 
 
 def test_age_and_anniversary():
@@ -133,7 +132,7 @@ def test_age_and_anniversary():
     assert age(p, "1990-06-29", "2026-06-29T08:00") == 36
 
 
-from grimoire.store.calendars import default_calendar, read_calendar, write_calendar, copy_calendar
+from grimoire.store.calendars import default_calendar, read_calendar, write_calendar, copy_calendar  # noqa: E402 - deliberate late import; see the lines above
 
 
 def test_default_calendar_when_absent(tmp_path):

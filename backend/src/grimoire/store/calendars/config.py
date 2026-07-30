@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .base import CalendarError, get_provider
+from .base import get_provider
 from .. import atomic
 
 

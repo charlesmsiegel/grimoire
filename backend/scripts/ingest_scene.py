@@ -13,11 +13,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from grimoire.llm import LLMClient  # noqa: E402
-from grimoire.store import (  # noqa: E402
+from grimoire.llm import LLMClient
+from grimoire.store import (
     absorb, appearances, atomic, campaigns, characters, chronicle, llm_connections, overlay, scenes,
 )
-from grimoire.store.paths import slugify  # noqa: E402
+from grimoire.store.paths import slugify
 
 
 def ensure_campaign(name: str, world_id: str) -> str:
