@@ -30,8 +30,7 @@ def parse_spec() -> dict[str, dict[str, str]]:
     for sec in SECTIONS:
         m = re.search(rf"^### `{re.escape(sec)}/`\n(.*?)(?=^### |^## )", text, re.S | re.M)
         if not m:
-            print(f"  !! no spec section for {sec}")
-            continue
+            continue   # main() turns a missing section into a hard failure
         mapping: dict[str, str] = {}
         for row in re.finditer(r"^\| `([a-z_]+)\.py` \|(.*)$", m.group(1), re.M):
             stem, rest = row.group(1), row.group(2)
@@ -85,8 +84,61 @@ def sccs(graph: dict[str, set[str]]) -> list[list[str]]:
     return out
 
 
+def consumer_imports(spec: dict[str, dict[str, str]]) -> int:
+    """For every module outside the split packages that reaches into one,
+    print the submodules it must import and every name it needs.
+
+    Hand-listing these is what produced NameError-shaped gaps in the plan:
+    `chronicle.transcript_text` reads `scenes.TRANSITION_SPEAKER`, which lives
+    in `scenes/serialize.py`, not the `scenes/read.py` the table mentioned.
+    """
+    import collections
+    absorbed = {m for extra in EXTRA_SOURCES.values() for m in extra}
+    bad = 0
+    for p in sorted(STORE.glob("*.py")):
+        if p.stem in spec or p.stem == "__init__" or p.stem in absorbed:
+            continue
+        tree = ast.parse(p.read_text(encoding="utf-8"))
+        # Only names this file actually imports. `_type_scope(sheets: dict)`
+        # shadows the store module with a parameter, and counting `sheets.get`
+        # there reported a store function that does not exist.
+        imported = set()
+        for n in ast.walk(tree):
+            if isinstance(n, ast.ImportFrom):
+                imported |= {a.asname or a.name for a in n.names}
+            elif isinstance(n, ast.Import):
+                imported |= {(a.asname or a.name).split(".")[0] for a in n.names}
+        need = collections.defaultdict(dict)
+        for n in ast.walk(tree):
+            if (isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)
+                    and n.value.id in spec and n.value.id in imported):
+                need[n.value.id][n.attr] = spec[n.value.id].get(n.attr)
+        if not need:
+            continue
+        print(f"--- {p.stem}.py")
+        for pkg, names in sorted(need.items()):
+            missing = sorted(k for k, v in names.items() if v is None)
+            files = sorted({v for v in names.values() if v})
+            print(f"    from .{pkg} import {', '.join(files)}")
+            for k, v in sorted(names.items()):
+                print(f"        {pkg}.{k} -> {v or 'UNPLACED'}")
+            if missing:
+                bad += 1
+                print(f"    !! unplaced in spec: {', '.join(missing)}")
+    return bad
+
+
 def main() -> int:
     spec = parse_spec()
+    if len(spec) != len(SECTIONS):
+        # A renamed or deleted heading silently removed a whole package from
+        # the check; printing a warning and exiting 0 let Task 0 report a clean
+        # partition for something that was never examined.
+        print(f"  !! parsed {len(spec)} of {len(SECTIONS)} spec sections -- "
+              f"missing: {', '.join(sorted(set(SECTIONS) - set(spec)))}")
+        return 1
+    if "--imports" in sys.argv:
+        return consumer_imports(spec)
     bad = 0
     for mod, mapping in spec.items():
         sources = [mod] + EXTRA_SOURCES.get(mod, [])
