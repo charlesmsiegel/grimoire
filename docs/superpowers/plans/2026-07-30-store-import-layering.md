@@ -61,6 +61,24 @@ Expected: `[OK    ] plan interfaces agree with the spec's placement tables`.
 
 Each task repeats its package's placement in an `**Interfaces:**` block, and a correction that landed in the spec but not in the task text was the single largest defect source in review — `world_root_of`, `_lock`, `repoint_scenes`, `RESPONSE_FIELDS`, each caught only by a human reading two documents side by side. This compares them directly. It reads only the backticked list before the em dash, since the prose after it legitimately names functions that live elsewhere.
 
+- [ ] **Step 1c: Confirm the whole-store graph is acyclic**
+
+```bash
+python3 scripts/validate_partition.py --graph
+```
+
+Expected: `[OK    ] post-refactor store graph is acyclic across packages`.
+
+This is a different question from Step 1, and the plain run cannot answer it. A placement can be perfectly acyclic *within* every package and still close a loop through an unsplit consumer — `repad` in `scenes/serialize.py` calling `scene_refs.repoint`, with `scene_refs` importing `chronicle` and `chronicle` needing `scenes.serialize`, was clean per-package and a three-package cycle overall.
+
+- [ ] **Step 1d: Confirm every cross-package reference resolves**
+
+```bash
+python3 scripts/validate_partition.py --imports
+```
+
+Expected: exit 0. Non-zero means a consumer references a name with no home in the spec. This is also the command Task 13 uses to generate its import list, so a clean run here is a precondition for that task.
+
 - [ ] **Step 2: Re-run it at the start of every split task**
 
 Tasks 3-12 each create one package. Before writing any file, run the validator and confirm that package reports `[OK ]`. If a task's placement changes for any reason, re-run before committing — this is cheaper than discovering it from the guard after the files exist, and far cheaper than discovering it in review.
@@ -1393,13 +1411,15 @@ Sample of its output, to show the shape:
 
 ```
 --- chronicle.py
-    from .campaigns import paths
-        campaigns.campaign_root -> paths
-    from .scenes import read, serialize
-        scenes.TRANSITION_SPEAKER -> serialize
-        scenes.get_location_history -> read
-        scenes.get_time_history -> read
+    from .campaigns import paths as campaigns_paths
+        campaigns.campaign_root -> campaigns_paths.campaign_root
+    from .scenes import read as scenes_read, serialize as scenes_serialize
+        scenes.TRANSITION_SPEAKER -> scenes_serialize.TRANSITION_SPEAKER
+        scenes.get_location_history -> scenes_read.get_location_history
+        scenes.get_time_history -> scenes_read.get_time_history
 ```
+
+Every binding is package-qualified, deliberately. `response_presets.py` needs `read` *and* `paths` from both `campaigns` and `scenes`; unaliased, the second pair would silently rebind the first and break campaign lookups with no import error to show for it. The right-hand side of each mapping line is the literal call-site rewrite.
 
 Delete each in-function import and the comment explaining its deferral (those comments become false), and rewrite the call sites to the new bindings.
 
