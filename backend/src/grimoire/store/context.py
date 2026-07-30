@@ -14,11 +14,12 @@ import random
 import re
 
 from .. import prompts
-from . import (appearances, calendars, campaigns, characters, checks, chronicle,
+from . import (appearances, calendars, characters, checks, chronicle,
                config, dice, dossiers, entities, groupstate, length_drift, lengths, locks,
                modules, overlay,
                pcs, playstate, plot, relationships, response_presets, scenes, sheets, styles,
                weather)
+from .campaigns import paths as campaigns_paths, read as campaigns_read
 
 
 def activate(entries: list[dict], recent_text: str, present: frozenset = frozenset()) -> list[dict]:
@@ -89,7 +90,7 @@ def _datetime_subs(cid: str, sid: str) -> dict[str, str]:
         return {}
     native = history[-1]
     try:
-        provider = calendars.get_provider(calendars.read_calendar(campaigns.campaign_root(cid))["primary"])
+        provider = calendars.get_provider(calendars.read_calendar(campaigns_paths.campaign_root(cid))["primary"])
         desc = provider.describe(calendars.fixed_of(provider, native))
     except calendars.CalendarError:
         return {}
@@ -282,7 +283,7 @@ def _drift_roster(cid: str, npc_names: list[str], player_names: list[str]) -> li
 
 def cast_datetime_facts(cid: str, sid: str, native: str) -> list[dict]:
     """Age / birthday-today for each in-scene actor that has a birthdate. Others skipped."""
-    croot = campaigns.campaign_root(cid)          # calendar.json is campaign-local
+    croot = campaigns_paths.campaign_root(cid)    # calendar.json is campaign-local
     aroot = appearances.locked_actor_root(cid)    # cast actors are locked, so campaign-side
     cfg = calendars.read_calendar(croot)
     provider = calendars.get_provider(cfg["primary"])
@@ -506,7 +507,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     outranks every stored scope in response_presets.resolve -- see build_messages."""
     scene = scenes.read_scene(cid, sid)
     history = [dict(m) for m in scene["messages"]]
-    croot = campaigns.campaign_root(cid)          # campaign-local: dossiers, calendar, group state
+    croot = campaigns_paths.campaign_root(cid)    # campaign-local: dossiers, calendar, group state
     aroot = appearances.locked_actor_root(cid)    # cast/roster actors are locked, so campaign-side
     cast = appearances.scene_cast(cid, sid)
 
@@ -572,7 +573,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         present |= {f"locations:{current_loc}"}
 
     cfg = config.read_config()
-    campaign_meta = campaigns.read_campaign(cid)["meta"]
+    campaign_meta = campaigns_read.read_campaign(cid)["meta"]
     # One per-field cascade resolves BOTH the prose style and the length budget
     # over turn -> scene -> campaign -> global. It subsumes the old style-only
     # resolver: with no response presets set anywhere (every pre-existing

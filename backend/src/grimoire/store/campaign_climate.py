@@ -22,7 +22,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import atomic, campaigns, climates
+from . import atomic, climates
+from .campaigns import paths as campaigns_paths
 
 FILENAME = "climate.json"
 KEY = "default_climate"
@@ -39,7 +40,7 @@ def path(cid: str) -> Path:
     `campaign_root / "climate.json"` themselves, which is how the overlay gets
     bypassed everywhere else in this codebase.
     """
-    return campaigns.campaign_root(cid) / FILENAME
+    return campaigns_paths.campaign_root(cid) / FILENAME
 
 
 def read_default(cid: str) -> str | None:

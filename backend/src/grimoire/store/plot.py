@@ -8,13 +8,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import atomic, campaigns
+from . import atomic
+from .campaigns import paths as campaigns_paths
 
 STATUSES = ("open", "advanced", "closed")
 
 
 def _path(cid: str) -> Path:
-    return campaigns.campaign_root(cid) / "plot.json"
+    return campaigns_paths.campaign_root(cid) / "plot.json"
 
 
 def read(cid: str) -> dict:

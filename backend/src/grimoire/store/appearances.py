@@ -13,7 +13,8 @@ import json
 import re
 from pathlib import Path
 
-from . import atomic, campaigns, characters, overlay, pcs
+from . import atomic, characters, overlay, pcs
+from .campaigns import paths as campaigns_paths, read as campaigns_read
 from .frontmatter import dump_frontmatter, parse_frontmatter
 
 ACTOR_KINDS = ("characters", "pcs")
@@ -33,7 +34,7 @@ def _split(ref: str) -> tuple[str, str]:
 
 
 def _path(cid: str) -> Path:
-    return campaigns.campaign_root(cid) / "appearances.json"
+    return campaigns_paths.campaign_root(cid) / "appearances.json"
 
 
 def locked_actor_root(cid: str) -> Path:
@@ -51,7 +52,7 @@ def locked_actor_root(cid: str) -> Path:
     when a `roster`/`scene_cast`/`locked_version` result is what you are
     reading, and `overlay.char_root` / `overlay.pc_root` for anything else.
     """
-    return campaigns.campaign_root(cid)
+    return campaigns_paths.campaign_root(cid)
 
 
 def record(cid: str) -> dict:
@@ -119,9 +120,9 @@ def _set_default(croot: Path, kind: str, actor_id: str, vid: str) -> None:
 
 
 def _drop_manifest_ref(cid: str, kind: str, actor_id: str) -> None:
-    manifest = campaigns.read_manifest(cid)
+    manifest = campaigns_paths.read_manifest(cid)
     if manifest.pop(_ref(kind, actor_id), None) is not None:
-        campaigns.write_manifest(cid, manifest)
+        campaigns_paths.write_manifest(cid, manifest)
 
 
 def _lock(cid: str, kind: str, actor_id: str, version_id: str) -> str:
@@ -129,8 +130,8 @@ def _lock(cid: str, kind: str, actor_id: str, version_id: str) -> str:
     present, purge every sibling version, point default_version at the pick, and
     drop the whole-actor sync ref (the locked per-version flow takes over).
     Returns the sync base hash for the appearance record."""
-    wroot = campaigns.world_root_of(cid)
-    croot = campaigns.campaign_root(cid)
+    wroot = campaigns_read.world_root_of(cid)
+    croot = campaigns_paths.campaign_root(cid)
     base = actor_hash(wroot, kind, actor_id, version_id)
     if actor_hash(croot, kind, actor_id, version_id) is None:
         # Not in the campaign yet: a world actor created after the fork (copy it),
@@ -156,7 +157,7 @@ def pick_version(cid: str, kind: str, actor_id: str, version_id: str) -> None:
     data[ref] = {"version": version_id, "base": base, "scenes": [],
                  "role": "player" if kind == "pcs" else "npc"}
     _write(cid, data)
-    campaigns.touch(cid)
+    campaigns_read.touch(cid)
 
 
 def import_version(cid: str, kind: str, actor_id: str, version_id: str) -> None:
@@ -168,11 +169,11 @@ def import_version(cid: str, kind: str, actor_id: str, version_id: str) -> None:
     rec = data.get(ref)
     if rec is None:
         raise AppearError(f"{ref} is not locked; world changes arrive via sync until a version is picked")
-    wroot = campaigns.world_root_of(cid)
+    wroot = campaigns_read.world_root_of(cid)
     base = actor_hash(wroot, kind, actor_id, version_id)
     if base is None:
         raise AppearError(f"no {ref}/{version_id} in world")
-    croot = campaigns.campaign_root(cid)
+    croot = campaigns_paths.campaign_root(cid)
     ext = _version_ext(kind)
     d = croot / kind / actor_id
     d.mkdir(parents=True, exist_ok=True)
@@ -185,7 +186,7 @@ def import_version(cid: str, kind: str, actor_id: str, version_id: str) -> None:
     rec["version"] = version_id
     rec["base"] = base
     _write(cid, data)
-    campaigns.touch(cid)
+    campaigns_read.touch(cid)
 
 
 def appear(cid: str, scene_id: str, kind: str, actor_id: str, version_id: str, role: str,
@@ -207,7 +208,7 @@ def appear(cid: str, scene_id: str, kind: str, actor_id: str, version_id: str, r
         base = _lock(cid, kind, actor_id, version_id)  # lazy pick: first appearance locks
         data[ref] = {"version": version_id, "base": base, "scenes": [scene_id], "role": role}
         _write(cid, data)
-        campaigns.touch(cid)
+        campaigns_read.touch(cid)
 
     if not narrate:
         return

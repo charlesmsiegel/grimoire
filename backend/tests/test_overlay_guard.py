@@ -122,7 +122,7 @@ OWNERS: dict[str, dict[str, str]] = {
     "store/overlay.py": {
         "*": "is the resolver -- raw campaign reads are its whole job",
     },
-    "store/campaigns.py": {
+    "store/campaigns/lifecycle.py": {
         "ensure_campaign_slim": "rewrites the raw pre-overlay tree, by definition",
     },
     "store/appearances.py": {
@@ -512,7 +512,7 @@ def test_owner_exemptions_are_scoped_to_functions_not_whole_files():
            "    croot = campaigns.campaign_root(cid)\n"
            "    return characters.read_card(croot, aid, vid)\n")
     tree = ast.parse(src)
-    owners = OWNERS["store/campaigns.py"]
+    owners = OWNERS["store/campaigns/lifecycle.py"]
     inside = [_owning_def(tree, n) for n, _w in _unresolved_reads(tree)]
     assert "ensure_campaign_slim" in inside and "some_new_helper" in inside
     assert "some_new_helper" not in owners, \

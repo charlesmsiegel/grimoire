@@ -31,7 +31,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import atomic, campaigns, dice, locks
+from . import atomic, dice, locks
+from .campaigns import paths as campaigns_paths
 from .paths import now_iso
 
 
@@ -40,7 +41,7 @@ class RollNotFound(Exception):
 
 
 def _path(cid: str) -> Path:
-    return campaigns.campaign_root(cid) / "rolls.json"
+    return campaigns_paths.campaign_root(cid) / "rolls.json"
 
 
 def read(cid: str) -> list[dict]:

@@ -11,14 +11,6 @@ deferred grimoire.store.appearances::leave::grimoire.store.scenes
 deferred grimoire.store.appearances::suggestions::grimoire.store.scenes
 deferred grimoire.store.calendars.base::get_provider::grimoire.store.calendars.plugins
 deferred grimoire.store.calendars.base::list_providers::grimoire.store.calendars.plugins
-deferred grimoire.store.campaigns::_tombstone_deleted_copied_assets::grimoire.store.overlay
-deferred grimoire.store.campaigns::create_campaign::grimoire.store.campaign_climate
-deferred grimoire.store.campaigns::create_campaign::grimoire.store.climates
-deferred grimoire.store.campaigns::create_campaign::grimoire.store.modules
-deferred grimoire.store.campaigns::create_campaign::grimoire.store.sheets
-deferred grimoire.store.campaigns::ensure_campaign_slim::grimoire.store.appearances
-deferred grimoire.store.campaigns::ensure_campaign_slim::grimoire.store.overlay
-deferred grimoire.store.campaigns::set_campaign_response::grimoire.store.scenes
 deferred grimoire.store.checks::available_checks::grimoire.store.scenes
 deferred grimoire.store.chronicle::scene_facts::grimoire.store.appearances
 deferred grimoire.store.chronicle::scene_facts::grimoire.store.entities

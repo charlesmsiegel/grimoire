@@ -17,16 +17,17 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import atomic, campaigns
+from . import atomic
+from .campaigns import paths as campaigns_paths
 from .paths import now_iso
 
 
 def _chronicle_path(cid: str) -> Path:
-    return campaigns.campaign_root(cid) / "chronicle.json"
+    return campaigns_paths.campaign_root(cid) / "chronicle.json"
 
 
 def _timeline_path(cid: str) -> Path:
-    return campaigns.campaign_root(cid) / "timeline.md"
+    return campaigns_paths.campaign_root(cid) / "timeline.md"
 
 
 def read_chronicle(cid: str) -> dict:

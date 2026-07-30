@@ -20,7 +20,8 @@ import json
 import re
 from pathlib import Path
 
-from .. import atomic, calendars, campaigns
+from .. import atomic, calendars
+from ..campaigns import paths as campaigns_paths
 from ..paths import now_iso
 from . import blocks
 
@@ -40,7 +41,7 @@ def _valid_id(value) -> bool:
 
 
 def path(cid: str) -> Path:
-    return campaigns.campaign_root(cid) / "weather.json"
+    return campaigns_paths.campaign_root(cid) / "weather.json"
 
 
 def _generated_id(key: str, n: int, taken: set[str]) -> str:
