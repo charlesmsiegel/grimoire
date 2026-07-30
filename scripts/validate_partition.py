@@ -127,9 +127,16 @@ def consumer_imports(spec: dict[str, dict[str, str]]) -> int:
         for pkg, names in sorted(need.items()):
             missing = sorted(k for k, v in names.items() if v is None)
             files = sorted({v for v in names.values() if v})
-            print(f"    from {'.' * (depth + 1)}{pkg} import {', '.join(files)}")
+            # Package-qualified aliases, always. `from .campaigns import read`
+            # followed by `from .scenes import read` silently rebinds the
+            # first, and response_presets.py needs `read` and `paths` from
+            # both -- copying unaliased output would break campaign lookups
+            # with no import error to show for it.
+            binds = ", ".join(f"{f} as {pkg}_{f}" for f in files)
+            print(f"    from {'.' * (depth + 1)}{pkg} import {binds}")
             for k, v in sorted(names.items()):
-                print(f"        {pkg}.{k} -> {v or 'UNPLACED'}")
+                print(f"        {pkg}.{k} -> {pkg}_{v}.{k}" if v
+                      else f"        {pkg}.{k} -> UNPLACED")
             if missing:
                 bad += 1
                 print(f"    !! unplaced in spec: {', '.join(missing)}")
