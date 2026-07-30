@@ -121,6 +121,21 @@ def consumer_imports(spec: dict[str, dict[str, str]]) -> int:
             if (isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)
                     and n.value.id in spec and n.value.id in imported):
                 need[n.value.id][n.attr] = spec[n.value.id].get(n.attr)
+        # Dispatch through a local variable -- `for mod in (appearances, audit,
+        # ...): mod.repoint_scenes(...)` in scene_refs.repoint -- names no
+        # attribute on the module itself, so the loop above saw nothing and the
+        # file was omitted from the output entirely.
+        for fn in ast.walk(tree):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            bare = {b.id for b in ast.walk(fn)
+                    if isinstance(b, ast.Name) and b.id in spec and b.id in imported}
+            if not bare:
+                continue
+            for attr in _local_attrs(fn, imported):
+                for pkg in bare:
+                    if attr in spec[pkg]:
+                        need[pkg][attr] = spec[pkg][attr]
         if not need:
             continue
         print(f"--- {label}")
@@ -181,6 +196,25 @@ def store_graph(spec: dict[str, dict[str, str]]) -> int:
             return place.get(f"{target}.{attr}") if attr else None
         return target                            # already a leaf or an unsplit module
 
+    def is_module(path: str) -> bool:
+        """A real file today, or a leaf this spec plans to create."""
+        if (STORE / pathlib.Path(*path.split("."))).with_suffix(".py").exists():
+            return True
+        if (STORE / pathlib.Path(*path.split(".")) / "__init__.py").exists():
+            return True
+        if path in spec:
+            return True
+        head, _, tail = path.rpartition(".")
+        return head in spec and tail in set(spec[head].values())
+
+    def leaves(pkg: str) -> set[str]:
+        """Importing a package facade runs every file its __init__ loads, so an
+        edge to the package continues through all of them. Without this a
+        consumer edge to `campaigns` stopped at a synthetic node and the
+        package-initialisation cycles staged implementation can create were
+        invisible."""
+        return {f"{pkg}.{f}" for f in set(spec[pkg].values())}
+
     graph: dict[str, set[str]] = collections.defaultdict(set)
     for p in sorted(STORE.rglob("*.py")):
         rel = p.relative_to(STORE)
@@ -207,10 +241,13 @@ def store_graph(spec: dict[str, dict[str, str]]) -> int:
                     continue
                 for a in n.names:
                     local = a.asname or a.name
-                    target = ".".join([*prefix, a.name]) if prefix else a.name
-                    # `from .campaigns import read` -> campaigns.read;
-                    # `from . import campaigns`     -> campaigns
-                    imported[local] = target
+                    cand = ".".join([*prefix, a.name]) if prefix else a.name
+                    # `from .campaigns import read` -> campaigns.read.
+                    # `from .paths import helper`   -> campaigns.paths: helper
+                    # is a name, not a module, and recording the phantom
+                    # `campaigns.paths.helper` made every bare use of it fail
+                    # the existence check and contribute no edge at all.
+                    imported[local] = cand if is_module(cand) else ".".join(prefix)
             elif isinstance(n, ast.Import):
                 for a in n.names:
                     if a.name.startswith("grimoire.store."):
@@ -225,9 +262,12 @@ def store_graph(spec: dict[str, dict[str, str]]) -> int:
             for sub in ast.walk(node):
                 if (isinstance(sub, ast.Attribute) and isinstance(sub.value, ast.Name)
                         and sub.value.id in imported):
-                    dest = node_for(imported[sub.value.id], sub.attr)
+                    tgt = imported[sub.value.id]
+                    dest = node_for(tgt, sub.attr)
                     if dest and dest != home:
                         graph[home].add(dest)
+                    elif dest is None and tgt in spec:
+                        graph[home] |= leaves(tgt) - {home}
                 elif isinstance(sub, ast.Name) and src_pkg and sub.id in names:
                     dest = place.get(f"{src_pkg}.{sub.id}")
                     if dest and dest != home:
@@ -246,9 +286,7 @@ def store_graph(spec: dict[str, dict[str, str]]) -> int:
                             dest = place.get(f"{tgt}.{attr}")
                             if dest and dest != home:
                                 graph[home].add(dest)
-                    elif tgt != home and (
-                            (STORE / f"{tgt}.py").exists()
-                            or (STORE / pathlib.Path(*tgt.split("."))).with_suffix(".py").exists()):
+                    elif tgt != home and is_module(tgt):
                         graph[home].add(tgt)
     cycles = sccs(graph)
     for c in cycles:
