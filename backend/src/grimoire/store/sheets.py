@@ -15,8 +15,9 @@ import json
 import uuid
 from pathlib import Path
 
-from . import (atomic, campaigns, characters, entities, expressions, locks, modules, overlay,
+from . import (atomic, characters, entities, expressions, locks, modules, overlay,
                pcs, worlds)
+from .campaigns import paths as campaigns_paths, read as campaigns_read
 from .paths import safe_id
 
 
@@ -59,7 +60,7 @@ def sheet_kind(kind: str) -> str:
 
 
 def _campaign_dir(cid: str) -> Path:
-    return campaigns.campaign_root(cid) / "sheets"
+    return campaigns_paths.campaign_root(cid) / "sheets"
 
 
 def _campaign_path(cid: str, kind: str, eid: str) -> Path:
@@ -526,7 +527,7 @@ def seed(cid: str) -> int:
         mid = modules.resolve(cid)
         if mid is None:
             return 0
-        src = campaigns.world_root_of(cid) / "sheets" / mid
+        src = campaigns_read.world_root_of(cid) / "sheets" / mid
         if not src.is_dir():
             return 0
         dst = _campaign_dir(cid)

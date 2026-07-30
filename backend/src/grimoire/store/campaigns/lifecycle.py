@@ -1,4 +1,5 @@
-"""Campaign meta CRUD, copy-on-create from a world, and sync.md manifest IO."""
+"""Campaign create/delete/rename, copy-on-create from a world, and the
+one-time migration of a full-copy campaign to the overlay layout."""
 
 from __future__ import annotations
 
@@ -6,161 +7,11 @@ import filecmp
 import shutil
 from pathlib import Path
 
-from . import (assets, atomic, calendars, characters, entities, greetings, locks, pcs,
-               worlds)
-from .frontmatter import dump_frontmatter, parse_frontmatter
-from .paths import ensure_home, home, now_iso, safe_id, slugify, uniquify
-
-
-class CampaignNotFound(Exception):
-    pass
-
-
-def _campaigns_dir() -> Path:
-    return home() / "campaigns"
-
-
-def campaign_root(cid: str) -> Path:
-    """The campaign's own directory — nothing it inherits from its world.
-
-    Correct for campaign-local state (scenes, sheets, proposals, chronicle,
-    playstate, calendar.json, the climate default, ...) and for writes, which is how a
-    record materializes. It is *not* a place to read a record the campaign
-    inherits: `overlay.INHERITED_KINDS` / `INHERITED_FILES` say which those are,
-    and `store/overlay.py` is the only thing that resolves them. Reading one
-    here misses everything still live-inherited from the world, and misses the
-    campaign's tombstones — silently, which is why `tests/test_overlay_guard.py`
-    checks for it (#248).
-
-    Raises CampaignNotFound for an id that doesn't name a child of the
-    campaigns dir. The guard lives here rather than in the router so a caller
-    that isn't an HTTP path parameter gets it too (#240).
-    """
-    if not safe_id(cid):
-        raise CampaignNotFound(cid)
-    return _campaigns_dir() / cid
-
-
-def campaign_meta_path(cid: str) -> Path:
-    return campaign_root(cid) / "campaign.md"
-
-
-# A campaign may record no world at all, and every world-side read still wants
-# a path it can treat as empty. That path has to be one nothing can occupy: any
-# sentinel *directory* is one a restored or hand-managed store may already
-# contain, and then a world-less campaign inherits whatever is inside it. So
-# absence resolves below the campaign's own campaign.md -- a regular file, so
-# the filesystem itself guarantees no child of it can ever exist.
-_NO_WORLD = "(no world)"
-
-
-def world_root_of(cid: str) -> Path:
-    """The root of the campaign's world, or an unoccupiable path if it has none.
-
-    A stored `world` the guard refuses to resolve — a restored or hand-edited
-    campaign can carry one — counts as "no world" rather than raising: a world
-    directory that has been deleted already reads as inheriting nothing, and a
-    reference that cannot name one is no different. Raises CampaignNotFound
-    for a campaign that isn't there. Callers holding a world id they know is
-    set should use `worlds.world_root` directly.
-    """
-    wid = read_campaign(cid)["meta"].get("world", "")
-    try:
-        return worlds.world_root(wid)
-    except worlds.WorldNotFound:
-        return campaign_meta_path(cid) / _NO_WORLD
-
-
-def campaign_exists(cid: str) -> bool:
-    """Existence check that survives an id `campaign_root` refuses to resolve.
-
-    Callers testing "is there such a campaign?" want False for an unusable id,
-    not an exception -- see worlds.world_exists.
-    """
-    try:
-        return campaign_meta_path(cid).exists()
-    except CampaignNotFound:
-        return False
-
-
-def _manifest_path(cid: str) -> Path:
-    return campaign_root(cid) / "sync.md"
-
-
-def read_manifest(cid: str) -> dict[str, str]:
-    p = _manifest_path(cid)
-    if not p.exists():
-        return {}
-    meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
-    return meta
-
-
-def write_manifest(cid: str, manifest: dict[str, str]) -> None:
-    atomic.write_text(_manifest_path(cid), dump_frontmatter(manifest, ""))
-
-
-def list_campaigns() -> list[dict]:
-    ensure_home()
-    out: list[dict] = []
-    base = _campaigns_dir()
-    if base.exists():
-        for d in sorted(base.iterdir()):
-            mp = d / "campaign.md"
-            # see worlds.list_worlds: enumeration agrees with the resolvers, so a
-            # stray directory can't abort a listing -- or the startup migration
-            if not d.is_dir() or not mp.exists() or not safe_id(d.name):
-                continue
-            meta, _ = parse_frontmatter(mp.read_text(encoding="utf-8"))
-            out.append({
-                "id": d.name,
-                "name": meta.get("name", d.name),
-                "world": meta.get("world", ""),
-                "created": meta.get("created", ""),
-                "updated": meta.get("updated", ""),
-            })
-    out.sort(key=lambda m: m["updated"], reverse=True)
-    return out
-
-
-def world_refs() -> list[tuple[str, str | None]]:
-    """(campaign name, referenced world id) for *every* campaign on disk.
-
-    Deliberately unfiltered, unlike `list_campaigns`. This backs
-    `worlds.delete_world`'s in-use check, and a campaign that is unusable as an
-    id still pins the world it references: filtering it out of the check is
-    what would make that world deletable out from under it (#259 review).
-    Enumeration may hide a record from the UI; it must never hide it from a
-    referential-integrity check.
-
-    A world id of ``None`` means "this campaign's reference could not be read".
-    Undecodable bytes in the *body* must not cost us a reference sitting in
-    perfectly good frontmatter, so the read is retried lossily first; only a
-    file that cannot be read at all yields ``None``. Callers must treat that as
-    "may reference anything" -- skipping it is how "we could not tell" turns
-    into "nothing uses this world", which deletes it (#259 review).
-    """
-    out: list[tuple[str, str | None]] = []
-    base = _campaigns_dir()
-    if not base.exists():
-        return out
-    for d in sorted(base.iterdir()):
-        mp = d / "campaign.md"
-        if not d.is_dir() or not mp.exists():
-            continue
-        try:
-            text = mp.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            try:   # frontmatter survives a bad byte in the body
-                text = mp.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                out.append((d.name, None))
-                continue
-        except OSError:
-            out.append((d.name, None))
-            continue
-        meta, _ = parse_frontmatter(text)
-        out.append((meta.get("name", d.name), meta.get("world", "")))
-    return out
+from .. import (appearances, assets, atomic, calendars, campaign_climate, characters, climates,
+                entities, greetings, locks, modules, overlay, pcs, scenes, sheets, worlds)
+from ..frontmatter import dump_frontmatter, parse_frontmatter
+from ..paths import ensure_home, now_iso, slugify, uniquify
+from . import paths, read
 
 
 def create_campaign(name: str, world_id: str, region: str | None = None,
@@ -175,11 +26,9 @@ def create_campaign(name: str, world_id: str, region: str | None = None,
     world_id = worlds.canonical_id(world_id)
     if calendar is not None:
         calendars.get_provider({"provider": calendar})  # unknown id -> CalendarError before anything is created
-    from . import campaign_climate, climates
     wanted_climate = climate or climates.FALLBACK_ID
     campaign_climate.check_default(wanted_climate)  # unknown id -> fail before anything is created
     if module and module != "none":  # "none" = explicitly mechanics-free, always legal
-        from . import modules
         modules.pack_root(module)  # raises ModuleNotFound before creating anything
     # The campaign's calendar is resolved, adjusted and VALIDATED here, before
     # the lock — not inside it. `validate_calendar` calls `get_provider`, which
@@ -203,8 +52,8 @@ def create_campaign(name: str, world_id: str, region: str | None = None,
         cfg["primary"]["region"] = region
     if region is not None or calendar is not None:
         calendars.validate_calendar(cfg)   # unknown provider -> CalendarError
-    cid = uniquify(slugify(name), lambda c: campaign_root(c).exists())
-    root = campaign_root(cid)
+    cid = uniquify(slugify(name), lambda c: paths.campaign_root(c).exists())
+    root = paths.campaign_root(cid)
     # The lock spans PUBLICATION, not just the writes after it. `campaign.md` is
     # what makes a directory a campaign to `list_campaigns`, so the moment it
     # lands another grimoire process can find this campaign and start writing to
@@ -227,26 +76,17 @@ def create_campaign(name: str, world_id: str, region: str | None = None,
         root.mkdir(parents=True)
         (root / "scenes").mkdir()
         now = now_iso()
-        atomic.write_text(campaign_meta_path(cid), dump_frontmatter(
+        atomic.write_text(paths.campaign_meta_path(cid), dump_frontmatter(
             {"name": name, "world": world_id, "created": now, "updated": now,
              "world_copy": "overlay",
              **({"module": module} if module else {})}, ""))
         # copy-on-write: nothing is copied up front; records materialize on divergence
         # (store/overlay.py) and sync.md tracks bases for materialized records only
-        write_manifest(cid, {})
+        paths.write_manifest(cid, {})
         calendars.write_calendar(root, cfg)
         campaign_climate.write_default(cid, wanted_climate)
-        from . import sheets
         sheets.seed(cid)                 # reentrant: takes this same lock again
     return cid
-
-
-def read_campaign(cid: str) -> dict:
-    mp = campaign_meta_path(cid)
-    if not mp.exists():
-        raise CampaignNotFound(cid)
-    meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
-    return {"meta": {"id": cid, **meta}, "body": body}
 
 
 def ensure_campaign_slim(cid: str) -> None:
@@ -258,20 +98,19 @@ def ensure_campaign_slim(cid: str) -> None:
     the world dir is missing so a late-syncing store slims on a later access.
     Locked actors keep their cards (the lock invariant needs them); diverged
     records and campaign-local files are never touched."""
-    mp = campaign_meta_path(cid)
+    mp = paths.campaign_meta_path(cid)
     if not mp.exists():
-        raise CampaignNotFound(cid)
+        raise paths.CampaignNotFound(cid)
     meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
     if meta.get("world_copy") == "overlay":
         return
-    root = campaign_root(cid)
-    wroot = world_root_of(cid)
+    root = paths.campaign_root(cid)
+    wroot = read.world_root_of(cid)
     if not wroot.exists():
         return
-    from . import appearances, overlay  # campaigns is imported by these
 
     locked = set(appearances.record(cid))
-    manifest = read_manifest(cid)
+    manifest = paths.read_manifest(cid)
     copied = set(manifest)   # every record the full copy tracked, before the loop prunes it
     for ref, base in sorted(list(manifest.items())):
         kind, _, eid = ref.partition("/")
@@ -307,7 +146,7 @@ def ensure_campaign_slim(cid: str) -> None:
         elif entities.entity_hash(root, kind, eid) == base == entities.entity_hash(wroot, kind, eid):
             p.unlink()
             manifest.pop(ref)
-    write_manifest(cid, manifest)
+    paths.write_manifest(cid, manifest)
     _tombstone_deleted_copied_assets(cid, root, wroot, copied)
     _prune_duplicate_files(root, wroot)
     meta["world_copy"] = "overlay"
@@ -323,7 +162,6 @@ def _tombstone_deleted_copied_assets(cid: str, root: Path, wroot: Path, copied: 
     full copy tracked (`copied`) are considered — world records/assets added
     after the fork stay live-inherited; whole-deleted records already carry a
     <base>/<aid> tombstone and are skipped."""
-    from . import overlay  # campaigns is imported by overlay
     gone = overlay.deleted(cid)
     for kind in ("characters", "pcs", "locations", "lore", "greetings"):
         wbase = wroot / kind
@@ -375,9 +213,9 @@ def _prune_duplicate_files(root: Path, wroot: Path) -> None:
 
 
 def rename_campaign(cid: str, name: str) -> None:
-    mp = campaign_meta_path(cid)
+    mp = paths.campaign_meta_path(cid)
     if not mp.exists():
-        raise CampaignNotFound(cid)
+        raise paths.CampaignNotFound(cid)
     meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
     meta["name"] = name
     meta["updated"] = now_iso()
@@ -386,11 +224,9 @@ def rename_campaign(cid: str, name: str) -> None:
 
 def set_campaign_response(cid: str, fields: dict) -> None:
     """Campaign-scope response settings; same semantics as scenes.set_response."""
-    from . import scenes  # lazy: scenes imports campaigns, so avoid a module cycle
-
-    mp = campaign_meta_path(cid)
+    mp = paths.campaign_meta_path(cid)
     if not mp.exists():
-        raise CampaignNotFound(cid)
+        raise paths.CampaignNotFound(cid)
     meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
     for key in scenes.RESPONSE_FIELDS:
         if key in fields:
@@ -398,19 +234,10 @@ def set_campaign_response(cid: str, fields: dict) -> None:
     atomic.write_text(mp, dump_frontmatter(meta, body))
 
 
-def touch(cid: str) -> None:
-    mp = campaign_meta_path(cid)
-    if not mp.exists():
-        raise CampaignNotFound(cid)
-    meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
-    meta["updated"] = now_iso()
-    atomic.write_text(mp, dump_frontmatter(meta, body))
-
-
 def delete_campaign(cid: str) -> None:
-    root = campaign_root(cid)
+    root = paths.campaign_root(cid)
     # same canonical-name requirement as delete_world: an rmtree must not
     # run for a spelling the store does not actually use (#259 review)
-    if not campaign_meta_path(cid).exists() or not worlds.names_its_directory(root):
-        raise CampaignNotFound(cid)
+    if not paths.campaign_meta_path(cid).exists() or not worlds.names_its_directory(root):
+        raise paths.CampaignNotFound(cid)
     shutil.rmtree(root)

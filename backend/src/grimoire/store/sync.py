@@ -11,7 +11,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import appearances, atomic, campaigns, characters, entities, greetings, overlay, pcs
+from . import appearances, atomic, characters, entities, greetings, overlay, pcs
+from .campaigns import paths as campaigns_paths, read as campaigns_read
 
 
 def _ref_str(kind: str, eid: str) -> str:
@@ -27,11 +28,11 @@ def _entity_blob(root: Path, kind: str, eid: str) -> dict:
 
 
 def incoming(cid: str) -> list[dict]:
-    wroot = campaigns.world_root_of(cid)  # raises CampaignNotFound if the campaign is missing
-    croot = campaigns.campaign_root(cid)
+    wroot = campaigns_read.world_root_of(cid)  # raises CampaignNotFound if the campaign is missing
+    croot = campaigns_paths.campaign_root(cid)
     # read campaign.md / sync.md / appearances.json once and thread them through
     # the passes -- each used to re-read all three per pass
-    manifest = campaigns.read_manifest(cid)
+    manifest = campaigns_paths.read_manifest(cid)
     locked = appearances.record(cid)
 
     refs: set[str] = set(manifest)
@@ -135,8 +136,8 @@ def _unpicked_incoming(wroot: Path, croot: Path, manifest: dict, locked: dict) -
 
 
 def _advance_actor(cid: str, kind: str, actor_id: str, *, copy: bool) -> bool:
-    wroot = campaigns.world_root_of(cid)
-    croot = campaigns.campaign_root(cid)
+    wroot = campaigns_read.world_root_of(cid)
+    croot = campaigns_paths.campaign_root(cid)
     rec = appearances.record(cid).get(f"{kind}/{actor_id}")
     if rec is None:
         return False
@@ -155,9 +156,9 @@ def _advance_actor(cid: str, kind: str, actor_id: str, *, copy: bool) -> bool:
 
 
 def _advance(cid: str, refs: list[dict], *, copy: bool) -> None:
-    wroot = campaigns.world_root_of(cid)
-    croot = campaigns.campaign_root(cid)
-    manifest = campaigns.read_manifest(cid)
+    wroot = campaigns_read.world_root_of(cid)
+    croot = campaigns_paths.campaign_root(cid)
+    manifest = campaigns_paths.read_manifest(cid)
     manifest_changed = False  # loc/lore manifest write
     touched = False           # any ref advanced → bump campaign.updated
     for ref in refs:
@@ -200,9 +201,9 @@ def _advance(cid: str, refs: list[dict], *, copy: bool) -> None:
             manifest[_ref_str(kind, eid)] = world_h
         manifest_changed = touched = True
     if manifest_changed:
-        campaigns.write_manifest(cid, manifest)
+        campaigns_paths.write_manifest(cid, manifest)
     if touched:
-        campaigns.touch(cid)
+        campaigns_read.touch(cid)
 
 
 def accept(cid: str, refs: list[dict]) -> None:
@@ -215,7 +216,7 @@ def reject(cid: str, refs: list[dict]) -> None:
 
 def campaigns_for_world(wid: str) -> list[dict]:
     out: list[dict] = []
-    for c in campaigns.list_campaigns():
+    for c in campaigns_read.list_campaigns():
         if c.get("world") != wid:
             continue
         counts = {"new": 0, "update": 0, "conflict": 0}

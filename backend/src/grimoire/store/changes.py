@@ -10,7 +10,8 @@ import difflib
 import json
 from pathlib import Path
 
-from . import atomic, campaigns
+from . import atomic
+from .campaigns import paths as campaigns_paths
 
 
 def line_diff(before: str, after: str) -> list[dict]:
@@ -32,7 +33,7 @@ def line_diff(before: str, after: str) -> list[dict]:
 
 
 def _path(cid: str) -> Path:
-    return campaigns.campaign_root(cid) / "changes.json"
+    return campaigns_paths.campaign_root(cid) / "changes.json"
 
 
 def read(cid: str) -> dict:

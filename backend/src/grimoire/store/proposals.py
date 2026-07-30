@@ -28,7 +28,8 @@ import json
 import uuid
 from contextlib import contextmanager
 
-from . import atomic, campaigns, locks
+from . import atomic, locks
+from .campaigns import paths as campaigns_paths
 from .paths import now_iso
 
 NON_TERMINAL = ("pending", "resolving", "resolved", "declined")
@@ -83,7 +84,7 @@ def locked(cid: str):
 
 
 def _path(cid: str):
-    return campaigns.campaign_root(cid) / "proposals.json"
+    return campaigns_paths.campaign_root(cid) / "proposals.json"
 
 
 def _read(cid: str) -> dict:

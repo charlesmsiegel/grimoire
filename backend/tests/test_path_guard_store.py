@@ -9,6 +9,7 @@ CLI script, a batch importer -- got no protection at all.
 
 import os
 import re
+import types
 
 import pytest
 from fastapi.testclient import TestClient
@@ -464,10 +465,26 @@ def _reject_mark(monkeypatch):
     def guarded(value):
         return real(value) and MARK not in str(value)
 
-    for name in dir(store_pkg):
-        mod = getattr(store_pkg, name, None)
+    # Submodules too, not only what `dir(store)` shows. A store subpackage
+    # (`campaigns/`, `calendars/`, ...) holds `safe_id` on its *parts*, and the
+    # package itself may not carry the name at all -- so a one-level sweep left
+    # the real `safe_id` in place inside every listing this test drives, and the
+    # test passed while guarding nothing.
+    seen: set[int] = set()
+
+    def patch(mod) -> None:
+        if id(mod) in seen:
+            return
+        seen.add(id(mod))
         if hasattr(mod, "safe_id"):
             monkeypatch.setattr(mod, "safe_id", guarded)
+        for name in dir(mod):
+            sub = getattr(mod, name, None)
+            if (isinstance(sub, types.ModuleType)
+                    and getattr(sub, "__name__", "").startswith("grimoire.store")):
+                patch(sub)
+
+    patch(store_pkg)
 
 
 def test_no_listing_hands_back_an_id_its_own_lookups_refuse(monkeypatch, tmp_path):

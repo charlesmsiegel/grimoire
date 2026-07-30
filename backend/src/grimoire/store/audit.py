@@ -17,8 +17,9 @@ import threading
 from pathlib import Path
 
 from .. import prompts
-from . import (appearances, atomic, campaigns, entities, locks, modules, overlay, rolls,
+from . import (appearances, atomic, entities, locks, modules, overlay, rolls,
                scenes, sheets)
+from .campaigns import paths as campaigns_paths
 
 _LOCKS: dict[str, threading.Lock] = {}
 _LOCKS_GUARD = threading.Lock()
@@ -30,7 +31,7 @@ def _lock(cid: str) -> threading.Lock:
 
 
 def _path(cid: str) -> Path:
-    return campaigns.campaign_root(cid) / "sheet_baselines.json"
+    return campaigns_paths.campaign_root(cid) / "sheet_baselines.json"
 
 
 def read_baselines(cid: str) -> dict:
@@ -74,7 +75,7 @@ def capture_baseline(cid: str, sid: str) -> None:
             if mid is None:
                 return
             snap: dict = {}
-            croot = campaigns.campaign_root(cid)
+            croot = campaigns_paths.campaign_root(cid)
             for kind, eid in sheets.list_refs(cid):
                 try:
                     raw = json.loads((croot / "sheets" / f"{kind}--{eid}.json")

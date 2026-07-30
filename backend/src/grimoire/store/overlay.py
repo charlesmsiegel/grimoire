@@ -34,8 +34,9 @@ import json
 from contextlib import contextmanager
 from pathlib import Path
 
-from . import (assets, atomic, campaigns, cards, characters, entities, failsoft, greetings,
+from . import (assets, atomic, cards, characters, entities, failsoft, greetings,
                groupstate, pcs, taglines)
+from .campaigns import paths as campaigns_paths, read as campaigns_read
 from .paths import natural_key
 
 #: Record kinds a campaign inherits from its world. A `<campaign>/<kind>/...`
@@ -48,7 +49,7 @@ INHERITED_FILES: tuple[str, ...] = ("plotmap.json",)
 
 
 def croot_of(cid: str) -> Path:
-    return campaigns.campaign_root(cid)
+    return campaigns_paths.campaign_root(cid)
 
 
 def wroot_of(cid: str) -> Path:
@@ -57,13 +58,13 @@ def wroot_of(cid: str) -> Path:
     world, `campaigns.world_root_of` yields a path nothing can occupy.
     Either way, nothing here raises for it — every resolver below just reads
     a path that doesn't hold the expected records as holding none."""
-    return campaigns.world_root_of(cid)
+    return campaigns_read.world_root_of(cid)
 
 
 # ---- tombstones ----
 
 def _deleted_path(cid: str) -> Path:
-    return campaigns.campaign_root(cid) / "deleted.json"
+    return campaigns_paths.campaign_root(cid) / "deleted.json"
 
 
 def deleted(cid: str) -> set[str]:
@@ -129,21 +130,21 @@ def _recorded_base(cid: str, ref: str, base: str, commit: Path):
     materialization of the same ref that finished while ours failed is the same
     case (Codex review).
     """
-    manifest = campaigns.read_manifest(cid)
+    manifest = campaigns_paths.read_manifest(cid)
     previous = manifest.get(ref)
     manifest[ref] = base
-    campaigns.write_manifest(cid, manifest)
+    campaigns_paths.write_manifest(cid, manifest)
     try:
         yield
     except BaseException:
         if not commit.exists():
-            manifest = campaigns.read_manifest(cid)
+            manifest = campaigns_paths.read_manifest(cid)
             if previous is None:
                 manifest.pop(ref, None)
             else:
                 manifest[ref] = previous
             try:
-                campaigns.write_manifest(cid, manifest)
+                campaigns_paths.write_manifest(cid, manifest)
             except Exception:  # noqa: BLE001 - the copy's failure is the one worth raising
                 pass   # the copy's failure is the one worth raising
         raise
@@ -172,9 +173,9 @@ def _materialize_flat(cid: str, kind: str, eid: str) -> bool:
 
 
 def _drop_manifest_ref(cid: str, ref: str) -> None:
-    manifest = campaigns.read_manifest(cid)
+    manifest = campaigns_paths.read_manifest(cid)
     if manifest.pop(ref, None) is not None:
-        campaigns.write_manifest(cid, manifest)
+        campaigns_paths.write_manifest(cid, manifest)
 
 
 def materialize_entity(cid: str, kind: str, eid: str) -> None:

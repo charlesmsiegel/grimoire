@@ -7,11 +7,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import atomic, campaigns, characters, overlay, pcs
+from . import atomic, characters, overlay, pcs
+from .campaigns import paths as campaigns_paths
 
 
 def _path(cid: str) -> Path:
-    return campaigns.campaign_root(cid) / "relationships.json"
+    return campaigns_paths.campaign_root(cid) / "relationships.json"
 
 
 def read(cid: str) -> dict:

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import appearances, atomic, campaigns, cards, characters, entities, greetings, locks, overlay, scene_ids, scene_refs, scenes, worlds
+from . import appearances, atomic, cards, characters, entities, greetings, locks, overlay, scene_ids, scene_refs, scenes, worlds
+from .campaigns import paths as campaigns_paths, read as campaigns_read
 from .frontmatter import parse_frontmatter
 from .paths import home, safe_id, slugify, uniquify
 
@@ -15,7 +16,7 @@ def migrate_scene_ids() -> None:
     any already-migrated scenes), date section from the scene's first
     time_history entry, then repoint every persisted reference. New-grammar
     files never match the legacy test, so re-running is a no-op."""
-    for c in campaigns.list_campaigns():
+    for c in campaigns_read.list_campaigns():
         _migrate_campaign(c["id"])
 
 
@@ -34,7 +35,7 @@ def _migrate_campaign(cid: str) -> None:
 
 
 def _migrate_campaign_locked(cid: str) -> None:
-    d = campaigns.campaign_root(cid) / "scenes"
+    d = campaigns_paths.campaign_root(cid) / "scenes"
     if not d.exists():
         return
     legacy, top, width = [], 0, scene_ids.MIN_WIDTH
@@ -93,14 +94,14 @@ def bake_char_macros() -> None:
         _bake_characters(wroot)
         for g in greetings.list_greetings(wroot):
             _bake_greeting(wroot, wroot, g)  # world greetings are self-contained
-    for c in campaigns.list_campaigns():
+    for c in campaigns_read.list_campaigns():
         _bake_campaign(c["id"])
     atomic.write_text(marker, "")
 
 
 def _bake_campaign(cid: str) -> None:
-    croot = campaigns.campaign_root(cid)
-    wroot = campaigns.world_root_of(cid)
+    croot = campaigns_paths.campaign_root(cid)
+    wroot = campaigns_read.world_root_of(cid)
     _bake_characters(croot)  # materialized characters are self-contained
     _repair_character_baselines(cid, croot, wroot)
     gdir = croot / "greetings"
@@ -139,14 +140,14 @@ def _bake_greeting(root: Path, name_root: Path, g: dict) -> None:
 
 def _repair_greeting_baseline(cid: str, croot: Path, wroot: Path, gid: str) -> None:
     ref = f"greetings/{gid}"
-    manifest = campaigns.read_manifest(cid)
+    manifest = campaigns_paths.read_manifest(cid)
     if ref not in manifest:
         return
     world_h = entities.entity_hash(wroot, "greetings", gid)
     mine_h = entities.entity_hash(croot, "greetings", gid)
     if world_h is not None and world_h == mine_h and manifest[ref] != mine_h:
         manifest[ref] = mine_h
-        campaigns.write_manifest(cid, manifest)
+        campaigns_paths.write_manifest(cid, manifest)
 
 
 def _repair_character_baselines(cid: str, croot: Path, wroot: Path) -> None:
@@ -155,7 +156,7 @@ def _repair_character_baselines(cid: str, croot: Path, wroot: Path) -> None:
     -- the whole actor directory (campaigns manifest, one base per actor).
     Only one applies per actor; check which."""
     locked = appearances.record(cid)
-    manifest = campaigns.read_manifest(cid)
+    manifest = campaigns_paths.read_manifest(cid)
     manifest_changed = False
     for meta in characters.list_characters(croot):
         actor_id = meta["id"]
@@ -173,4 +174,4 @@ def _repair_character_baselines(cid: str, croot: Path, wroot: Path) -> None:
                 manifest[lock_ref] = mine_h
                 manifest_changed = True
     if manifest_changed:
-        campaigns.write_manifest(cid, manifest)
+        campaigns_paths.write_manifest(cid, manifest)

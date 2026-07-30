@@ -18,7 +18,8 @@ from pathlib import Path
 import markdown as _md_lib
 from markupsafe import escape
 
-from . import appearances, calendars, campaigns, chronicle, characters, entities, overlay, pcs, scenes, worlds
+from . import appearances, calendars, chronicle, characters, entities, overlay, pcs, scenes, worlds
+from .campaigns import paths as campaigns_paths, read as campaigns_read
 from .paths import slugify
 
 # Localized app image URLs (see store.localize): every shape the app writes.
@@ -185,13 +186,13 @@ def _appendix_entries(cid: str, aroot: Path, sids: list[str], images: Images, pr
 def collect(cid: str, image_prefix: str = "images/") -> dict:
     """The whole campaign as render-neutral data: (campaign masthead, chapters,
     appendix, packed-image registry). Raises `campaigns.CampaignNotFound`."""
-    campaign = campaigns.read_campaign(cid)
-    croot = campaigns.campaign_root(cid)
+    campaign = campaigns_read.read_campaign(cid)
+    croot = campaigns_paths.campaign_root(cid)
     wid = campaign["meta"].get("world", "")
     # through world_root_of, not world_root: a campaign can carry a world
     # reference the guard refuses, and an export must degrade to "no world"
     # rather than 500 (#259 review)
-    wroot = campaigns.world_root_of(cid)
+    wroot = campaigns_read.world_root_of(cid)
     if not wroot.exists():
         wroot = None
     world_name = worlds.read_world(wid)["meta"].get("name", "") if wroot is not None else ""
@@ -392,7 +393,7 @@ def build_text(cid: str) -> tuple[bytes, str]:
 def build_json(cid: str) -> tuple[bytes, str]:
     """Machine-readable dump: scene metas + messages verbatim, chronicle, and
     roster — nearest to the on-disk data, no image resolution or rendering."""
-    campaign = campaigns.read_campaign(cid)  # raises CampaignNotFound
+    campaign = campaigns_read.read_campaign(cid)  # raises CampaignNotFound
     sids = [s["id"] for s in sorted(scenes.list_scenes(cid), key=lambda s: s["id"])]
     payload = {
         "campaign": {"id": cid, "name": campaign["meta"].get("name", cid),
