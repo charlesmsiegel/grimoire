@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
+import threading
 
 import pytest
 
@@ -174,6 +176,52 @@ def test_eviction_costs_only_a_repeated_warning(tmp_path, caplog):
         caplog.clear()
         failsoft.read_json(first, dict, "x")
     assert len(caplog.records) == 1
+
+
+def test_eviction_survives_concurrent_readers(tmp_path, monkeypatch):
+    """Eviction must pick and remove in one call. Read-then-delete lets two
+    threads at the cap choose the same oldest key: the loser's `del` raises
+    KeyError, and a tolerant delete does not save it either, because
+    `next(iter(...))` raises RuntimeError when the size moves under it. Both
+    escape read_json and turn a campaign read into a 500 -- the opposite of
+    fail-soft (Codex review on #284).
+
+    The switch interval only changes how often the window is hit, never whether
+    it exists, so this cannot fail on correct code; it is set low, and the cap
+    small, to make a regression show up in one run rather than one in a hundred.
+    """
+    monkeypatch.setattr(failsoft, "_MAX_WARNED", 8)
+    paths = []
+    for i in range(16 * 40):
+        p = tmp_path / f"r{i}.json"
+        p.write_text("{not json", encoding="utf-8")
+        paths.append(p)
+
+    escaped: list[str] = []
+    batches = [paths[i::16] for i in range(16)]
+    ready = threading.Barrier(len(batches))
+
+    def worker(batch):
+        ready.wait()
+        for p in batch:
+            try:
+                failsoft.read_json(p, dict, "x")
+            except BaseException as exc:          # noqa: BLE001 - the point is that nothing escapes
+                escaped.append(f"{type(exc).__name__}: {exc}")
+
+    previous = sys.getswitchinterval()
+    sys.setswitchinterval(1e-9)
+    try:
+        threads = [threading.Thread(target=worker, args=(b,)) for b in batches]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+    finally:
+        sys.setswitchinterval(previous)
+
+    assert escaped == []
+    assert len(failsoft._warned) <= failsoft._MAX_WARNED
 
 
 def test_two_corrupt_files_each_warn(tmp_path, caplog):
