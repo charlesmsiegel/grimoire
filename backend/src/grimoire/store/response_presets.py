@@ -16,9 +16,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from .. import prompts
-from . import atomic, lengths
+from . import atomic, config, lengths, styles
+from .campaigns import paths as campaigns_paths, read as campaigns_read
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import home, natural_key, safe_id, slugify, uniquify
+from .scenes import paths as scenes_paths, read as scenes_read
 
 # The explicit "clear whatever a broader scope supplies" marker, as opposed to
 # "" which means "this record has no opinion". Prefixed with U+2063 (invisible
@@ -238,8 +240,6 @@ def resolve(*, turn: dict | None = None, scene_meta: dict | None = None,
     Always returns a COMPLETE dict: style_id plus every knob. The Jinja env runs
     with StrictUndefined, so a missing key is a hard render failure mid-scene.
     """
-    from . import styles  # lazy: keeps the store package's import order simple
-
     scoped = {"turn": turn or {}, "scene": scene_meta or {},
               "campaign": campaign_meta or {}, "global": config or {}}
     presets = {name: _supplied_by_preset(meta) for name, meta in scoped.items()}
@@ -336,8 +336,6 @@ def validity(meta: dict) -> dict:
     a preset can look selected while supplying nothing, which is
     indistinguishable from ordinary inheritance.
     """
-    from . import styles  # lazy: matches resolve()'s import, avoids an import cycle
-
     issues: list[str] = []
     valid = True
     named = _text(meta.get("length_preset"))
@@ -382,8 +380,6 @@ def usage(pid: str) -> dict:
     That false preview is the stated reason this design keeps no tombstones —
     it is exactly the failure it exists to avoid.
     """
-    from . import campaigns, config, scenes
-
     def resolved(scene_meta: dict, campaign_meta: dict, cfg: dict, hide: bool) -> dict:
         def strip(meta: dict) -> dict:
             if hide and (meta.get("response_preset") or "") == pid:
@@ -411,27 +407,27 @@ def usage(pid: str) -> dict:
     # `unevaluated` rather than skipped, so the caller can say the list is
     # incomplete instead of implying it is exhaustive.
     add("global", "", "", "Global default", {}, {})
-    for c in campaigns.list_campaigns():
+    for c in campaigns_read.list_campaigns():
         cid = c["id"]
         try:
-            cmeta = campaigns.read_campaign(cid)["meta"]
-        except (campaigns.CampaignNotFound, OSError, UnicodeDecodeError):
+            cmeta = campaigns_read.read_campaign(cid)["meta"]
+        except (campaigns_paths.CampaignNotFound, OSError, UnicodeDecodeError):
             unevaluated.append({"scope": "campaign", "id": cid, "name": c.get("name", cid),
                                 "reason": "this campaign could not be read"})
             continue
         name = cmeta.get("name", cid)
         add("campaign", "", cid, name, {}, cmeta)
         try:
-            scene_rows = scenes.list_scenes(cid)
-        except (campaigns.CampaignNotFound, OSError, UnicodeDecodeError):
+            scene_rows = scenes_read.list_scenes(cid)
+        except (campaigns_paths.CampaignNotFound, OSError, UnicodeDecodeError):
             unevaluated.append({"scope": "campaign", "id": cid, "name": name,
                                 "reason": "this campaign's scenes could not be listed"})
             continue   # the campaign row still stands; its scenes are unknown
         for s in scene_rows:
             sid = s["id"]
             try:
-                smeta = scenes.read_scene_meta(cid, sid)
-            except (scenes.SceneNotFound, OSError, UnicodeDecodeError):
+                smeta = scenes_read.read_scene_meta(cid, sid)
+            except (scenes_paths.SceneNotFound, OSError, UnicodeDecodeError):
                 unevaluated.append({"scope": "scene", "id": sid, "name": s.get("title", sid),
                                     "reason": f"a scene in {name} could not be read"})
                 continue

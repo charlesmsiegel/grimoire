@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from .. import prompts
 from . import atomic, characters, overlay, pcs
 from .campaigns import paths as campaigns_paths
 
@@ -82,7 +83,6 @@ def _render_feeling(f: dict) -> str:
 
 
 def render_present(cid: str, tokens: list[str], name_of) -> list[str]:
-    from .. import prompts
     data = read(cid)
     lines: list[str] = []
     for a in tokens:

@@ -5572,18 +5572,18 @@ def test_superseded_same_id_crash_before_line_heals_on_stale_post(client, monkey
     cid, sid, _ = _mech_scene(client)
     rec, pid = _resolve_then_supersede(client, cid, sid)
 
-    real_append = store.scenes.append_message
+    real_append = store.scenes.write.append_message
     state = {"raised": False}
     def flaky_append(*a, **k):
         if not state["raised"]:
             state["raised"] = True
             raise RuntimeError("crash before 🎲 line")
         return real_append(*a, **k)
-    monkeypatch.setattr(store.scenes, "append_message", flaky_append)
+    monkeypatch.setattr(store.scenes.write, "append_message", flaky_append)
     with pytest.raises(RuntimeError):
         store.proposals.project(cid, sid, pid)
     # restore only this attr — never monkeypatch.undo() (shared GRIMOIRE_HOME)
-    monkeypatch.setattr(store.scenes, "append_message", real_append)
+    monkeypatch.setattr(store.scenes.write, "append_message", real_append)
 
     # roll logged, no line, but roll_id already persisted on the superseded rec
     tagged = [e for e in client.get(f"/api/campaigns/{cid}/rolls").json()
@@ -5637,18 +5637,18 @@ def test_new_fence_replacement_heals_crashed_projection(client, monkeypatch):
     cid, sid, _ = _mech_scene(client)
     rec, pid = _resolve_then_supersede(client, cid, sid)
 
-    real_append = store.scenes.append_message
+    real_append = store.scenes.write.append_message
     state = {"raised": False}
     def flaky_append(*a, **k):
         if not state["raised"]:
             state["raised"] = True
             raise RuntimeError("crash before 🎲 line")
         return real_append(*a, **k)
-    monkeypatch.setattr(store.scenes, "append_message", flaky_append)
+    monkeypatch.setattr(store.scenes.write, "append_message", flaky_append)
     with pytest.raises(RuntimeError):
         store.proposals.project(cid, sid, pid)
     # restore only this attr — never monkeypatch.undo() (shared GRIMOIRE_HOME)
-    monkeypatch.setattr(store.scenes, "append_message", real_append)
+    monkeypatch.setattr(store.scenes.write, "append_message", real_append)
     assert _roll_lines(client, cid, sid) == []          # roll tagged, no line
 
     # the next chat turn's model emits a fresh fence, replacing the record —
@@ -5778,18 +5778,18 @@ def test_supersede_heals_a_half_projected_record(client, monkeypatch):
     # than retiring the only handle that could.
     cid, sid, _ = _mech_scene(client)
     _, pid = _resolved(client, cid, sid)
-    real_append = store.scenes.append_message
+    real_append = store.scenes.write.append_message
     state = {"raised": False}
     def flaky_append(*a, **k):
         if not state["raised"]:
             state["raised"] = True
             raise RuntimeError("crash before 🎲 line")
         return real_append(*a, **k)
-    monkeypatch.setattr(store.scenes, "append_message", flaky_append)
+    monkeypatch.setattr(store.scenes.write, "append_message", flaky_append)
     with pytest.raises(RuntimeError):
         store.proposals.project(cid, sid, pid)
     # restore only this attr — never monkeypatch.undo() (shared GRIMOIRE_HOME)
-    monkeypatch.setattr(store.scenes, "append_message", real_append)
+    monkeypatch.setattr(store.scenes.write, "append_message", real_append)
     assert _roll_lines(client, cid, sid) == []
 
     store.proposals.supersede(cid, sid)
@@ -5850,18 +5850,18 @@ def _resolve_with_crashed_line(client, cid, sid, monkeypatch):
     store.proposals.claim(cid, sid, pid)
     resolution = store.checks.resolve_check(cid, "brawl", "characters:mara", 6, 0)
     assert store.proposals.transition(cid, sid, pid, ("resolving",), "resolved", resolution)
-    real_append = store.scenes.append_message
+    real_append = store.scenes.write.append_message
     state = {"raised": False}
     def flaky_append(*a, **k):
         if not state["raised"]:
             state["raised"] = True
             raise RuntimeError("crash before 🎲 line")
         return real_append(*a, **k)
-    monkeypatch.setattr(store.scenes, "append_message", flaky_append)
+    monkeypatch.setattr(store.scenes.write, "append_message", flaky_append)
     with pytest.raises(RuntimeError):
         store.proposals.project(cid, sid, pid)
     # restore only this attr — never monkeypatch.undo() (shared GRIMOIRE_HOME)
-    monkeypatch.setattr(store.scenes, "append_message", real_append)
+    monkeypatch.setattr(store.scenes.write, "append_message", real_append)
     mid = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
     assert mid["status"] == "resolved" and "roll_id" in mid["resolution"]
     assert _roll_lines(client, cid, sid) == []

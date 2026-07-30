@@ -591,14 +591,14 @@ def test_usage_reports_an_unreadable_scene_as_unevaluated(tmp_path, monkeypatch)
 def test_usage_reports_an_unreadable_campaign_as_unevaluated(tmp_path, monkeypatch):
     """A campaign whose record cannot be read (permissions, a concurrent
     delete) is reported, not quietly omitted from the impact list."""
-    from grimoire.store import campaigns
+    from grimoire.store.campaigns import read as campaigns_read
     cid, _sid = _campaign_fixture(tmp_path, monkeypatch)
     pid = rp.create_preset("Slow Burn", length_preset="cinematic")
 
     def boom(_cid):
         raise OSError("permission denied")
 
-    monkeypatch.setattr(campaigns, "read_campaign", boom)
+    monkeypatch.setattr(campaigns_read, "read_campaign", boom)
     got = rp.usage(pid)
     assert [(u["scope"], u["id"]) for u in got["unevaluated"]] == [("campaign", cid)]
 

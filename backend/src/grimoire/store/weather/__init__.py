@@ -12,6 +12,7 @@ from __future__ import annotations
 from . import blocks, draw as _draw, overrides, seasons, settings
 from .. import calendars
 from ..campaigns import paths as campaigns_paths
+from ..scenes import read as scenes_read
 
 AXES = overrides.AXES
 
@@ -141,9 +142,8 @@ def sweep(cid: str, sid: str, prev_native: str | None, now_native: str | None) -
     """
     if not prev_native or not now_native:
         return []
-    from .. import scenes
     seen, ordered = set(), []
-    for lid in scenes.get_location_history(cid, sid):
+    for lid in scenes_read.get_location_history(cid, sid):
         if lid not in seen:
             seen.add(lid)
             ordered.append(lid)
