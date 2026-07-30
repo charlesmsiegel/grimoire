@@ -65,6 +65,26 @@ Honest about its reach — the house standard set by ``test_atomic_guard.py``:
   produce false alarms on legitimate code the whitelist has not learned. That is
   the intended trade: the marker is cheap and visible, and a false alarm costs a
   comment while a false negative costs a transcript.
+
+  Two things the whitelist deliberately does *not* trust: a name that only
+  module scope may bind (a lock alias or decorator resolved from a nested
+  ``def`` in some unrelated factory is not the name module scope actually
+  binds), and a name reached through an attribute (``@hooks.safe`` is not this
+  module's ``safe``). Both read as unserialized.
+- **The mutation surface is inverted too, inside the filesystem namespace.**
+  The other half of the same lesson, learned one round later. "What counts as
+  publishing" was an enumeration, and six rounds each added exactly one more
+  entry to it — ``touch``, ``mkdir``, a raw ``open``, imported writers,
+  ``os.write``/``os.fdopen``, ``os.open``. A rule that grows by one every time
+  somebody looks is not a rule that can be finished by looking. So a call on
+  ``os`` or ``shutil`` is a publication unless its name is a known reader, and
+  ``shutil.copytree`` — used twice in this package and matched by no
+  enumeration — is caught by that inversion rather than by a seventh entry.
+
+  It stops at the namespace boundary, and that boundary is real: ``p.foo()``
+  cannot be told from ``some_dict.foo()`` without type inference, so a
+  path-valued receiver keeps the enumerated names and keeps their blind spots
+  (``Path.replace`` is the documented one).
 - **Analysis is per-module.** Mutation propagates through a module's own
   helpers, never across an import, so a function whose only mutation happens
   inside a *different* module's unserialized mutator is not itself flagged. The
@@ -100,9 +120,9 @@ LOCKS_PY = pathlib.Path(locks.__file__)
 # The trailing colon is load-bearing -- see test_pydantic_guard.MARKER.
 MARKER = "lock-domain-ok:"
 
-# Publication primitives. Kept in step with `test_atomic_guard._PATH_WRITERS`:
-# that guard proves every write goes through `store.atomic`, which is what lets
-# this one watch a two-function helper surface instead of every `open()` mode.
+# Publication primitives, for receivers this cannot identify as a namespace.
+# The fallback, not the primary rule -- see `_FS_NAMESPACES` below, which
+# inverts the question everywhere the receiver IS identifiable.
 _ATOMIC_WRITERS = ("write_text", "write_bytes")
 # Removal and rename publish a change without writing bytes, so a guard that
 # watched only `atomic.*` would miss `delete_campaign`'s `rmtree` entirely.
@@ -116,6 +136,46 @@ _ATOMIC_WRITERS = ("write_text", "write_bytes")
 _FS_ONLY = ("rmtree", "unlink", "rmdir", "rename")   # no builtin type has these
 _FS_AMBIGUOUS = ("remove", "replace")                # also str/list/set methods
 _FS_MODULES = ("os", "shutil")                       # ...so require the receiver
+
+# --- the filesystem namespace, inverted ---------------------------------------
+#
+# Everything above is an ENUMERATION of things that publish, and every review
+# round that touched it found another entry: `touch`, then `mkdir`, then raw
+# `open`, then imported writers, then `os.write`/`os.fdopen`, then `os.open`.
+# Enumeration cannot be finished by inspection -- `os` alone also offers
+# `truncate`, `symlink`, `link`, `makedirs`, `mknod`, `renames`, `removedirs`,
+# `chmod`, `utime`, and `shutil` offers `copy`, `copy2`, `copyfile`, `move`,
+# `copytree`. `shutil.copytree` is used twice in this package today and was
+# invisible to the list above.
+#
+# So inside a namespace that is unambiguously the filesystem, the polarity is
+# inverted to match how locks are recognized: a call on `os` or `shutil` is a
+# publication UNLESS its name is a known reader. A primitive nobody thought of
+# now fails loud, and the cost of a wrong guess is a whitelist entry.
+#
+# It is bounded to receivers that NAME A MODULE on purpose. The same inversion
+# on a bare variable is not available: `p.foo()` cannot be told from
+# `some_dict.foo()` without type inference, so a path-valued receiver keeps the
+# enumerated names above and keeps their blind spots with it (`Path.replace` is
+# the documented one).
+_FS_NAMESPACES = ("os", "shutil")
+_FS_READERS = frozenset({
+    # os: inspection and process state, not publication
+    "stat", "lstat", "fstat", "statvfs", "access", "listdir", "scandir", "walk",
+    "readlink", "getcwd", "getcwdb", "fspath", "fsdecode", "fsencode", "read",
+    "pread", "lseek", "close", "closerange", "dup", "dup2", "pipe", "isatty",
+    "get_terminal_size", "cpu_count", "getpid", "getppid", "getuid", "geteuid",
+    "getgid", "getegid", "getlogin", "urandom", "strerror", "get_blocking",
+    "getenv", "environb", "device_encoding", "listxattr", "getxattr",
+    "path", "sep", "linesep", "pathsep", "curdir", "pardir", "extsep", "altsep",
+    "devnull", "name", "environ",
+    # shutil: measurement only
+    "disk_usage", "which", "get_archive_formats", "get_unpack_formats",
+    "ignore_patterns",
+})
+# `store.atomic` exists to publish; its whole public surface is a write. Named
+# separately because its readers are its own, not the stdlib's.
+_ATOMIC_READERS = frozenset({"replace_is_atomic"})
 # `touch` is ambiguous the other way round: `Path.touch` has no fixed receiver
 # to match, so it is treated as a file creation UNLESS the receiver names a
 # module in this package that defines its own `touch`. Only one does.
@@ -232,13 +292,16 @@ def _imported_writers(tree: ast.AST) -> set[str]:
         if not isinstance(node, ast.ImportFrom) or node.module is None:
             continue
         source = node.module.rsplit(".", 1)[-1]
+        # Inverted the same way the attribute path is: importing a name OUT of
+        # a filesystem namespace does not make it safer, so `from os import
+        # truncate` binds a writer even though nothing enumerated `truncate`.
         if source == "atomic":
-            wanted = _ATOMIC_WRITERS
-        elif source in _FS_MODULES:
-            wanted = _FS_ONLY + _FS_AMBIGUOUS
+            readers = _ATOMIC_READERS
+        elif source in _FS_NAMESPACES:
+            readers = _FS_READERS
         else:
             continue
-        out |= {(a.asname or a.name) for a in node.names if a.name in wanted}
+        out |= {(a.asname or a.name) for a in node.names if a.name not in readers}
     return out
 
 
@@ -263,6 +326,16 @@ def _writes_directly(fn: ast.AST, imported: frozenset[str] = frozenset()) -> boo
         if not isinstance(node.func, ast.Attribute):
             continue
         receiver = _receiver_name(node.func)
+        # The inverted namespace, checked BEFORE the enumerated names so the
+        # enumeration is a fallback for receivers this cannot identify rather
+        # than the primary rule. `os.path.join` is unaffected: `_receiver_name`
+        # reads its receiver as `path`, which names no namespace here, so it
+        # falls through to the enumeration and matches nothing -- which is
+        # right, since `os.path` publishes nothing.
+        if receiver in _FS_NAMESPACES and name not in _FS_READERS:
+            return True
+        if receiver == "atomic" and name not in _ATOMIC_READERS:
+            return True
         if name in _ATOMIC_WRITERS:
             # ANY receiver, not just `atomic`. The claim that `test_atomic_guard`
             # reduces publication to the helper surface was wrong twice over: it
@@ -561,18 +634,171 @@ def _every_one_locked(node: ast.AST, fn: ast.AST, want) -> bool:
     return bool(seen) and all(seen)
 
 
-def _is_call_to(target: str):
-    """Calls to the decorated function itself.
+def _is_call_to(names: set[str]):
+    """Calls to the decorated function, under any local name it is bound to.
 
     Matched as a bare `ast.Name`, not by trailing attribute: `_called_name`
     would read `hooks.fn(cid)` as an invocation of a target named `fn`, so a
-    wrapper could satisfy the lock with an unrelated call of the same spelling
-    and make the real one — `target = fn` called outside the block — invisible.
-    An aliased target now matches nothing, which leaves the wrapper with no
-    covered invocation at all and fails it closed.
+    wrapper could satisfy the lock with an unrelated call of the same spelling.
+
+    Taking a SET rather than the one parameter name is the other half of that.
+    Matching only the parameter meant an aliased target matched nothing, and
+    "nothing" is the wrong answer in the one shape that matters:
+
+        def wrapper(cid, *a):
+            with locks.campaign_lock(cid):
+                fn(cid, *a)          # counted, and locked
+            target = fn
+            target(cid, *a)          # not counted, and not locked
+
+    `_every_one_locked` asks "at least one, and all of them locked", so the
+    covered call satisfied it while the uncovered one was invisible. Rebinding
+    is followed instead; a target smuggled through a data structure still is
+    not, and reads as no invocation at all, which fails closed.
     """
     return lambda n: (isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-                      and n.func.id == target)
+                      and n.func.id in names)
+
+
+def _target_aliases(wrapper: ast.AST, target: str) -> set[str]:
+    """`target` and every local name assigned from it inside `wrapper`."""
+    names = {target}
+    assigns = [n for n in ast.walk(wrapper) if isinstance(n, ast.Assign)]
+    for _ in range(len(assigns) + 1):
+        grew = False
+        for node in assigns:
+            if not (isinstance(node.value, ast.Name) and node.value.id in names):
+                continue
+            for t in node.targets:
+                if isinstance(t, ast.Name) and t.id not in names:
+                    names.add(t.id)
+                    grew = True
+        if not grew:
+            break
+    return names
+
+
+def _decorator_name(decorator: ast.expr) -> str | None:
+    """The MODULE-LOCAL name a decorator applies, or None for anything else.
+
+    `_called_name` was used here and reads a trailing attribute, so `@hooks.safe`
+    resolved to `safe` — and a module that happened to define its own locking
+    `safe` decorator vouched for every unrelated `@hooks.safe` in the file. The
+    decorated function then read as serialized while nothing locked it.
+
+    An attribute decorator reaches into another module, which this per-module
+    analysis cannot follow, so it is not recognized and fails loud instead. A
+    decorator *factory* (`@retry(3)`) is let through to `_locks_anywhere`, which
+    rejects it on its own terms: its first parameter is the option, not the
+    function, so no invocation of the target is ever found.
+    """
+    if isinstance(decorator, ast.Call):
+        decorator = decorator.func
+    return decorator.id if isinstance(decorator, ast.Name) else None
+
+
+def _module_level(tree: ast.AST) -> set[str]:
+    """Names bound at MODULE scope to a function defined at module scope.
+
+    `_functions` is deliberately flat — every definition of a name, nested ones
+    included — because for "does this mutate?" a flat view is the conservative
+    one. For "does this lock?" it is the opposite, and it was a false negative:
+
+        def _make_probe():
+            def helper(cid):                     # nested, unrelated
+                with locks.campaign_lock(cid):
+                    yield
+            return contextmanager(helper)
+
+        helper = contextlib.nullcontext          # what module scope actually binds
+
+        def put(cid):
+            with helper(cid):                    # nullcontext -- locks nothing
+                atomic.write_text(p, x)
+
+    The nested `helper` made the name read as a lock alias for the whole module.
+    So the names that may vouch for a lock — aliases and decorators — are drawn
+    from module scope only, and a module-level assignment to anything this
+    cannot resolve back to a module-level function POISONS the name rather than
+    being ignored. A lock alias that is genuinely local to one function is no
+    longer recognized; that fails loud, which is the trade this guard makes
+    everywhere else.
+    """
+    defined: set[str] = set()
+    assigned: list[ast.Assign] = []
+
+    def scan(body):
+        for node in body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                defined.add(node.name)          # its body is a new scope; stop
+            elif isinstance(node, ast.ClassDef):
+                continue                        # also a new scope
+            elif isinstance(node, ast.Assign):
+                assigned.append(node)
+            elif isinstance(node, (ast.If, ast.Try, ast.With, ast.AsyncWith,
+                                   ast.For, ast.While)):
+                for attr in ("body", "orelse", "finalbody", "handlers"):
+                    inner = getattr(node, attr, [])
+                    scan([h for h in inner] if attr != "handlers"
+                         else [s for h in inner for s in h.body])
+
+    scan(tree.body)
+    out = set(defined)
+    poisoned: set[str] = set()
+    for _ in range(len(assigned) + 1):
+        grew = False
+        for node in assigned:
+            source = isinstance(node.value, ast.Name) and node.value.id in out
+            for target in node.targets:
+                if not isinstance(target, ast.Name):
+                    continue
+                if source and target.id not in out:
+                    out.add(target.id)
+                    grew = True
+                elif not source:
+                    poisoned.add(target.id)
+        if not grew:
+            break
+    return out - poisoned
+
+
+def _binds_the_campaign(call: ast.Call, defs) -> bool:
+    """The callee's own `cid` parameter receives THIS function's `cid`.
+
+    Delegation was accepted on the callee's name alone, which checked that the
+    helper locks *a* campaign and never that it locks *this* one:
+
+        def _write(cid, sid):            # locks its own `cid`
+            with locks.campaign_lock(cid): ...
+
+        def put(cid, sid):
+            _write(sid, cid)             # binds `sid` onto the locked parameter
+
+    Two concurrent `put`s for one campaign then serialize under two different
+    locks, which loses updates exactly as if there were no lock — the same
+    argument-binding hole `_enters_lock` closed for aliases, on the other path.
+
+    A callee with no `cid` parameter is a multi-campaign holder (`hold_all`);
+    there is nothing to bind and nothing to check. Anything this cannot index —
+    a starred argument, a position the call does not reach — fails loud.
+    """
+    starred = any(isinstance(a, ast.Starred) for a in call.args)
+    for fn in defs:
+        params = [a.arg for a in [*fn.args.posonlyargs, *fn.args.args]]
+        if "cid" not in params:
+            continue
+        passed = [k.value for k in call.keywords if k.arg == "cid"]
+        if passed:
+            if not all(isinstance(v, ast.Name) and v.id == "cid" for v in passed):
+                return False
+            continue
+        index = params.index("cid")
+        if starred or index >= len(call.args):
+            return False
+        arg = call.args[index]
+        if not (isinstance(arg, ast.Name) and arg.id == "cid"):
+            return False
+    return True
 
 
 def _is_yield(node: ast.AST) -> bool:
@@ -622,7 +848,7 @@ def _wraps_target_under_lock(fn: ast.AST) -> bool:
 
     if set(wrappers) != returned:
         return False                     # a returned name this cannot resolve
-    return all(_every_one_locked(w, w, _is_call_to(target))
+    return all(_every_one_locked(w, w, _is_call_to(_target_aliases(w, target)))
                for defs in wrappers.values() for w in defs)
 
 
@@ -690,7 +916,8 @@ def _reaches_a_write(funcs: dict[str, ast.AST], imported=frozenset()) -> set[str
     return out
 
 
-def _serializing(funcs: dict[str, ast.AST], imported=frozenset()) -> set[str]:
+def _serializing(funcs: dict[str, ast.AST], imported=frozenset(),
+                 module_level: set[str] | None = None) -> set[str]:
     """Names whose bodies establish the campaign lock.
 
     Three forms, all present in the package today: a direct
@@ -700,19 +927,25 @@ def _serializing(funcs: dict[str, ast.AST], imported=frozenset()) -> set[str]:
 
     Delegation counts too -- ``scenes.create_scene`` does its work in the
     ``@_serialized`` ``_create_scene`` -- but only when EVERY write the wrapper
-    reaches is covered. Two ways that fails: the wrapper publishes something
-    itself, or it calls a second, unlocked helper alongside the locked one.
-    Accepting "some callee is locked" let the latter through, and because
-    `_analyze` skips private helpers, the unlocked write then had nowhere left
-    to be reported -- a domain module could hold an unserialized write and pass.
+    reaches is covered, and only when the caller's ``cid`` lands on the
+    parameter the callee locks. Three ways that fails: the wrapper publishes
+    something itself, it calls a second unlocked helper alongside the locked
+    one, or it passes a different id into the locked position.
+
+    ``module_level`` is the set of names allowed to vouch for a lock -- see
+    `_module_level`. ``None`` means "every name", which is only for callers
+    that have no tree to draw it from; every real caller passes it.
     """
+    scope = set(funcs) if module_level is None else module_level
     # A decorator's acquisition is nested inside the wrapper it returns, so it is
     # the one case that must look through nested defs -- see `_locks_anywhere`.
-    decorating = {n for n, ds in funcs.items() if _all(ds, _locks_anywhere)}
+    decorating = {n for n, ds in funcs.items()
+                  if n in scope and _all(ds, _locks_anywhere)}
     # Local helpers that hand back a campaign lock. Entering one of these IS an
     # acquisition, even though the helper itself never enters anything.
     aliases = {n for n, ds in funcs.items()
-               if _all(ds, _produces_lock) and _all(ds, _locks_its_first_param)}
+               if n in scope and _all(ds, _produces_lock)
+               and _all(ds, _locks_its_first_param)}
     writing = _reaches_a_write(funcs, imported)
     out = {n for n, ds in funcs.items() if _all(ds, _locks_in_own_body)}
     for _ in range(len(funcs) + 1):
@@ -722,16 +955,20 @@ def _serializing(funcs: dict[str, ast.AST], imported=frozenset()) -> set[str]:
                 continue
 
             def covered(fn, grown=grown, imported=imported):
-                if any(_called_name(d) in decorating for d in fn.decorator_list):
+                if any(_decorator_name(d) in decorating for d in fn.decorator_list):
                     return True                       # @_serialized and friends
                 if _enters_lock(fn, aliases):
                     return True                       # with _lock(cid): ...
                 if _writes_directly(fn, imported):
                     return False
                 # Pure delegation: every local callee that reaches a write must
-                # itself be covered, and at least one must exist.
-                delegated = {_called_name(c.func) for c in _own_calls(fn)} & writing
-                return bool(delegated) and delegated <= grown
+                # itself be covered, on this campaign, and at least one must exist.
+                delegated = [c for c in _own_calls(fn)
+                             if _called_name(c.func) in writing]
+                return bool(delegated) and all(
+                    _called_name(c.func) in grown
+                    and _binds_the_campaign(c, funcs[_called_name(c.func)])
+                    for c in delegated)
 
             if _all(defs, covered):
                 grown.add(name)
@@ -749,7 +986,18 @@ def _mutators(funcs: dict[str, ast.AST], serializing: set[str],
     it does not make the caller a mutation site in its own right. Without that,
     every thin wrapper over a locked helper reads as an unlocked mutator and the
     guard drowns in false positives.
+
+    It stops only for a callee that locks THIS campaign, though. Stopping on
+    membership alone was the more dangerous half of the argument-binding hole:
+    `_write(sid, cid)` against a helper that locks its own first parameter is
+    not covered by `_serializing` any more, but the caller also stopped being a
+    mutator, so it was reported by neither -- quieter than if the helper had
+    taken no lock at all.
     """
+    def atomic_unit(call: ast.Call) -> bool:
+        name = _called_name(call.func)
+        return name in serializing and _binds_the_campaign(call, funcs.get(name, []))
+
     out = {n for n, ds in funcs.items() if _any(ds, lambda d: _writes_directly(d, imported))}
     for _ in range(len(funcs) + 1):
         grown = set(out)
@@ -757,7 +1005,7 @@ def _mutators(funcs: dict[str, ast.AST], serializing: set[str],
             if name in grown:
                 continue
             if _any(defs, lambda d: any(
-                    _called_name(c.func) in grown and _called_name(c.func) not in serializing
+                    _called_name(c.func) in grown and not atomic_unit(c)
                     for c in _calls(d))):
                 grown.add(name)
         if grown == out:
@@ -802,7 +1050,7 @@ def _analyze(path: pathlib.Path):
     tree = ast.parse(src)
     funcs = _functions(tree)
     imported = frozenset(_imported_writers(tree))
-    serializing = _serializing(funcs, imported)
+    serializing = _serializing(funcs, imported, _module_level(tree))
     mutators = _mutators(funcs, serializing, imported)
 
     every = [d for ds in funcs.values() for d in ds]
@@ -986,7 +1234,7 @@ def _probe(src: str):
     tree = ast.parse(src)
     funcs = _functions(tree)
     imported = frozenset(_imported_writers(tree))
-    serializing = _serializing(funcs, imported)
+    serializing = _serializing(funcs, imported, _module_level(tree))
     return funcs, serializing, _mutators(funcs, serializing, imported)
 
 
@@ -1212,6 +1460,148 @@ def test_os_level_writes_are_mutations():
                 "def put(cid):\n    os.fdopen(fd, 'wb')\n"):
         _f, _s, mutators = _probe(src)
         assert mutators, f"an os-level write was invisible: {src!r}"
+
+
+def test_the_filesystem_namespace_is_a_closed_whitelist_not_an_enumeration():
+    """The mutation surface is inverted, like lock recognition already is.
+
+    Six rounds each added one more publication primitive to a list, which is
+    the shape of a rule that cannot be finished by inspection. Inside `os` and
+    `shutil` the question is now "is this a known reader?", so a primitive
+    nobody enumerated is a mutation by default. `os.open` — a create-and-
+    truncate that never calls `os.write` because it hands the fd to something
+    else — is the one that made the point; `shutil.copytree` is used in this
+    package today and no enumeration had it either.
+    """
+    for src, why in [
+        ("def put(cid):\n    fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC)\n",
+         "os.open creates and truncates"),
+        ("def put(cid):\n    os.truncate(p, 0)\n", "os.truncate"),
+        ("def put(cid):\n    os.symlink(a, b)\n", "os.symlink"),
+        ("def put(cid):\n    os.makedirs(p)\n", "os.makedirs"),
+        ("def put(cid):\n    shutil.copytree(a, b)\n", "shutil.copytree"),
+        ("def put(cid):\n    shutil.move(a, b)\n", "shutil.move"),
+        ("from os import truncate\ndef put(cid):\n    truncate(p, 0)\n",
+         "imported out of the namespace"),
+    ]:
+        _f, _s, mutators = _probe(src)
+        assert mutators, f"{why} was invisible ({src!r})"
+
+
+def test_reading_the_filesystem_is_not_publishing_it():
+    """The other half of the inversion: it has to keep a reader quiet, or every
+    module that calls `os.stat` lands in the declaration. `os.path` is left to
+    the enumeration on purpose — its receiver reads as `path`, which names no
+    namespace here, and it publishes nothing anyway."""
+    for src, why in [
+        ("def read(cid):\n    return os.stat(p).st_mtime\n", "os.stat"),
+        ("def read(cid):\n    return sorted(os.listdir(p))\n", "os.listdir"),
+        ("def read(cid):\n    return os.path.join(root, cid)\n", "os.path.join"),
+        ("def read(cid):\n    return os.path.exists(p)\n", "os.path.exists"),
+        ("def read(cid):\n    return shutil.disk_usage(p).free\n", "shutil.disk_usage"),
+    ]:
+        _f, _s, mutators = _probe(src)
+        assert not mutators, f"{why} was read as a publication ({src!r})"
+
+
+def test_a_rebound_target_is_still_the_target():
+    """A wrapper that invokes the decorated function twice — once under the
+    lock, once through a local rebinding — is not protective.
+
+    `_every_one_locked` asks "at least one, and every one locked". Matching only
+    the parameter name meant the rebound call was not an invocation at all, so
+    the locked one answered for both and the decorator read as serializing."""
+    src = ("def _serialized(fn):\n"
+           "    def locked(cid, *a):\n"
+           "        with locks.campaign_lock(cid):\n"
+           "            fn(cid, *a)\n"
+           "        target = fn\n"
+           "        return target(cid, *a)\n"
+           "    return locked\n"
+           "@_serialized\n"
+           "def put(cid):\n"
+           "    atomic.write_text(p, x)\n")
+    _f, serializing, _m = _probe(src)
+    assert "put" not in serializing, "an unlocked call through a rebound target was invisible"
+
+    # ...and the same decorator with only the covered call still qualifies, so
+    # the rule is about the uncovered invocation, not about mentioning `target`.
+    ok = src.replace("        target = fn\n        return target(cid, *a)\n", "")
+    _f, serializing, _m = _probe(ok)
+    assert "put" in serializing
+
+
+def test_a_decorator_from_another_module_is_not_this_modules_decorator():
+    """`@hooks.safe` is not the local `safe`. Resolving a decorator by its
+    trailing attribute let any module that defined its own locking decorator
+    vouch for every same-spelled attribute decorator in the file."""
+    src = ("def safe(fn):\n"
+           "    def locked(cid, *a):\n"
+           "        with locks.campaign_lock(cid):\n"
+           "            return fn(cid, *a)\n"
+           "    return locked\n"
+           "@hooks.safe\n"
+           "def put(cid):\n"
+           "    atomic.write_text(p, x)\n")
+    _f, serializing, mutators = _probe(src)
+    assert "put" in mutators
+    assert "put" not in serializing, "an imported decorator borrowed a local name's lock"
+
+    # The local one, applied locally, still counts -- this narrows the rule to
+    # attribute decorators rather than breaking decorator recognition.
+    _f, serializing, _m = _probe(src.replace("@hooks.safe", "@safe"))
+    assert "put" in serializing
+
+
+def test_only_module_scope_can_vouch_for_a_lock():
+    """A nested `def helper` in an unrelated factory is not the module-level
+    `helper`, and `_functions` is flat, so the nested one vouched for the name
+    everywhere. Module scope binds `helper` to something that locks nothing."""
+    src = ("def _make_probe():\n"
+           "    def helper(cid):\n"
+           "        with locks.campaign_lock(cid):\n"
+           "            yield\n"
+           "    return contextmanager(helper)\n"
+           "helper = contextlib.nullcontext\n"
+           "def put(cid):\n"
+           "    with helper(cid):\n"
+           "        atomic.write_text(p, x)\n")
+    _f, serializing, mutators = _probe(src)
+    assert "put" in mutators
+    assert "put" not in serializing, "a nested definition vouched for a module-level name"
+
+    # Drop the shadowing assignment and promote the helper to module scope and
+    # it is a real alias again, so the rule is about scope, not about the shape.
+    real = ("from contextlib import contextmanager\n"
+            "@contextmanager\n"
+            "def helper(cid):\n"
+            "    with locks.campaign_lock(cid):\n"
+            "        yield\n"
+            "def put(cid):\n"
+            "    with helper(cid):\n"
+            "        atomic.write_text(p, x)\n")
+    _f, serializing, _m = _probe(real)
+    assert "put" in serializing
+
+
+def test_delegation_must_bind_this_campaign_to_the_locked_parameter():
+    """Delegating to a locked helper was accepted on the helper's name alone.
+    `_write(sid, cid)` binds the caller's `sid` onto the parameter `_write`
+    locks, so two concurrent calls for one campaign serialize under two
+    different locks — the same hole `_enters_lock` closed for aliases."""
+    helper = ("def _write(cid, sid):\n"
+              "    with locks.campaign_lock(cid):\n"
+              "        atomic.write_text(p, x)\n")
+    swapped = helper + ("def put(cid, sid):\n"
+                        "    _write(sid, cid)\n")
+    _f, serializing, mutators = _probe(swapped)
+    assert "put" in mutators
+    assert "put" not in serializing, "delegation bound the wrong id to the locked parameter"
+
+    for ok, why in [(helper + "def put(cid, sid):\n    _write(cid, sid)\n", "positional"),
+                    (helper + "def put(cid, sid):\n    _write(cid=cid, sid=sid)\n", "keyword")]:
+        _f, serializing, _m = _probe(ok)
+        assert "put" in serializing, f"correct {why} binding was rejected"
 
 
 def test_the_decorated_target_is_matched_by_name_not_by_spelling():
