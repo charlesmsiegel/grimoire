@@ -2,7 +2,7 @@
 story-so-far anchor, open plot threads with dormancy, a status-annotated cast, calendar
 facts at the current moment, seedable ids), build the one-shot prompt, and parse the
 model's proposed openings. Assembly + prompt/parse only; the LLM call lives in the route
-(mirrors absorb.py) and the prompt text in templates/scene_suggestions/.
+(mirrors absorb/prompt.py) and the prompt text in templates/scene_suggestions/.
 """
 
 from __future__ import annotations
