@@ -3193,6 +3193,61 @@ def test_a_budget_spent_by_the_reads_before_the_call_is_not_an_attempt(
     assert "budget" in body["dossiers"]["reason"]
 
 
+def test_the_budget_refuses_a_call_it_cannot_start(monkeypatch):
+    """The window no caller can close for itself: `run` reads the clock again
+    after the caller's own check, so the budget can cross zero in between. Only
+    `run` can decide-and-start atomically, which is why the attempt is recorded
+    from inside it rather than by the caller."""
+    import asyncio
+
+    # one value per _clock() read: __init__, the caller's spent(), run's
+    # remaining(). The last value repeats rather than running out, so a
+    # regression fails on the assertion below instead of on a spent iterator.
+    ticks = [0.0, 0.5, 1.5]
+
+    def clock():
+        return ticks.pop(0) if len(ticks) > 1 else ticks[0]
+
+    monkeypatch.setattr(routes.scenes, "_clock", clock)
+    budget = routes.scenes._Budget(1.0)
+    assert budget.spent() is False          # the caller looks, and there is room
+    events: list = []
+
+    async def call():
+        events.append("sent")
+        return "reply"
+
+    with pytest.raises(routes.scenes.BudgetRefused):
+        asyncio.run(budget.run(call(), lambda: events.append("marked")))
+    assert events == []                     # neither issued nor recorded
+
+
+def test_a_refused_dossier_call_is_skipped_rather_than_failed(
+        client, npc_module_scene, monkeypatch):
+    """And the phase agrees with it: a call the budget refused is one more NPC
+    never reached, not an LLMError against that NPC."""
+    cid, sid = npc_module_scene
+    real_run = routes.scenes._Budget.run
+
+    async def refuse_after_the_first(self, coro, on_start=None):
+        if getattr(self, "_seen", 0):       # the extraction goes through; the dossier does not
+            coro.close()
+            raise routes.scenes.BudgetRefused("timeout", routes.scenes.BUDGET_EXHAUSTED)
+        self._seen = 1
+        return await real_run(self, coro, on_start)
+
+    monkeypatch.setattr(routes.scenes._Budget, "run", refuse_after_the_first)
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: FakeOpenRouterComplete([ABSORB_JSON])
+
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+
+    assert body["dossiers"]["failed"] == []
+    assert body["dossiers"]["skipped"] == ["aese"]
+    assert _phase(body, "dossiers")["attempted"] is False
+    assert _phase(body, "dossiers")["budget_exhausted"] is True
+
+
 def test_an_upstream_timeout_is_not_mistaken_for_the_budget(
         client, npc_module_scene, monkeypatch):
     """The two arrive as the same LLMError kind on purpose (`_Budget.run`), so

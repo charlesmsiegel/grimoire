@@ -219,6 +219,15 @@ _clock = time.monotonic
 BUDGET_EXHAUSTED = "absorb time budget exhausted"
 
 
+class BudgetRefused(LLMError):
+    """The budget was already gone, so the call was never issued.
+
+    An LLMError subclass, so every existing `except LLMError` still covers it —
+    but a phase that cares can tell "never sent" from "sent, then cancelled".
+    Only the first means the step was never attempted, and only the first is a
+    step to report as skipped rather than failed."""
+
+
 class _Budget:
     """A wall-clock ceiling on one absorb's whole LLM sequence (#243).
 
@@ -242,10 +251,15 @@ class _Budget:
         left = self.remaining()
         return left is not None and left <= 0
 
-    async def run(self, coro):
+    async def run(self, coro, on_start=None):
         """Await `coro` under the remaining budget, reporting an overrun as the
         same LLMError kind an upstream stall raises — so every caller's existing
         LLM failure handling covers it with no new branch.
+
+        `on_start` fires only if the call actually goes out, and `BudgetRefused`
+        says it did not. Both exist because this is the only place that can
+        decide it: a caller's own `spent()` check is already stale by the time
+        the deadline is read below, however few statements sit in between.
 
         wait_for waits for the cancellation it requests to complete, so the
         real ceiling is the budget plus however long the call takes to unwind;
@@ -254,7 +268,20 @@ class _Budget:
         """
         left = self.remaining()
         if left is None:
+            if on_start:
+                on_start()
             return await coro
+        if left <= 0:
+            # Handled here rather than left to wait_for, which cancels a task
+            # before its first step and so reports a timeout for a request that
+            # never left. `close()` retires the coroutine we are not going to
+            # await, which would otherwise warn at collection.
+            coro.close()
+            raise BudgetRefused("timeout", BUDGET_EXHAUSTED)
+        # Past this point wait_for runs the task's first step before its timer
+        # can fire, so the call is issued even if the answer never arrives.
+        if on_start:
+            on_start()
         try:
             return await asyncio.wait_for(coro, left)
         except asyncio.TimeoutError as exc:
@@ -333,22 +360,20 @@ async def _run_audit(cid: str, sid: str, client: LLMClient, conn: dict,
         transcript = store.chronicle.transcript_text(scene["messages"])
         messages = store.audit.build_prompt(transcript, blocks,
                                             store.audit.roll_lines(cid, sid))
-        if budget.spent():
-            # Checked here rather than left to budget.run below: an exhausted
-            # budget means no request is ever issued, and "never attempted, the
-            # clock ran out" is a different story from "asked and it went
-            # wrong". Still `failed` (not `skipped`) and still paired with the
-            # POST /audit retry the UI renders -- a fresh budget is exactly what
-            # that retry gets.
-            return [], {**mech, "status": "failed", "budget_exhausted": True,
-                        "reason": "the absorb time budget ran out before the audit could run",
-                        "dropped": excluded}
-        # `mech` is the accumulator the failure returns spread below, so
-        # recording the attempt here reaches every one of them.
-        mech["attempted"] = True
-        text = await budget.run(client.complete(messages, conn))
+        # `mech` is the accumulator every failure return below spreads, so the
+        # callback reaches all of them -- and it fires only if the request goes
+        # out, which is a fact only `run` holds.
+        text = await budget.run(client.complete(messages, conn),
+                                lambda: mech.__setitem__("attempted", True))
         parsed = store.audit.parse_output(text)
         edits, dropped = store.audit.materialize(cid, sid, parsed)
+    except BudgetRefused:
+        # Never asked, so there is no finding to doubt -- only work still owed.
+        # Still `failed` (not `skipped`) and still paired with the POST /audit
+        # retry the UI renders: a fresh budget is exactly what that retry gets.
+        return [], {**mech, "status": "failed", "budget_exhausted": True,
+                    "reason": "the absorb time budget ran out before the audit could run",
+                    "dropped": excluded}
     except store.audit.AuditParseError as exc:
         return [], {**mech, "status": "failed", "reason": str(exc),
                     "dropped": excluded}
@@ -415,19 +440,11 @@ async def _stage_dossiers(cid: str, sid: str, transcript: str, client: LLMClient
             # pass and this stale output would overwrite that newer one (#235).
             prior = store.dossiers.read(croot, a["id"])
             msgs = store.dossiers.build_prompt(name, prior, transcript)
-            # Re-checked, because the loop's own check is stale by now: the two
-            # reads and the prompt build above are not free, and a budget with
-            # milliseconds left can be gone. `wait_for` cancels a task before
-            # its first step, so a non-positive remainder means the request
-            # never leaves -- and an unsent call is this NPC joining the skipped
-            # tail, not an LLMError against it.
-            if budget.spent():
-                drop_tail(i)
-                break
-            # Set before the await and never after: once the request is out, an
-            # answer that never comes back was still attempted.
-            out["attempted"] = True
-            d_text = await budget.run(client.complete(msgs, conn))
+            # The loop's own check is stale by now -- the two reads and the
+            # prompt build above are not free -- so the attempt is recorded by
+            # `run`, which alone can decide it atomically with the deadline.
+            d_text = await budget.run(client.complete(msgs, conn),
+                                      lambda: out.__setitem__("attempted", True))
             parsed_dossier = store.dossiers.parse_output(d_text)
             # stage_edit returns None for an unchanged paragraph AND for a blank
             # reply; only the first is a success. Left conflated, a model that
@@ -437,6 +454,11 @@ async def _stage_dossiers(cid: str, sid: str, transcript: str, client: LLMClient
                 out["failed"].append({"id": a["id"], "reason": "empty dossier reply"})
                 continue
             edit = store.dossiers.stage_edit(a["id"], name, prior, parsed_dossier)
+        except BudgetRefused:
+            # Refused, not failed: nothing was sent, so this NPC is one more the
+            # clock never reached — and so is everyone after them.
+            drop_tail(i)
+            break
         except Exception as exc:  # noqa: BLE001 -- LLMError, store errors, anything
             # Type-prefixed: a bare str() is useless for the store's own errors
             # (CharacterNotFound("aese") stringifies to just "aese").
