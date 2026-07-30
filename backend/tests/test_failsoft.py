@@ -147,6 +147,35 @@ def test_a_deleted_file_is_forgotten(tmp_path, caplog):
     assert len(caplog.records) == 1
 
 
+def test_the_cache_is_capped(tmp_path, caplog):
+    """A path can leave the store without a final read -- delete_campaign
+    rmtree's the tree -- so eviction cannot rely on reads alone. The cap is what
+    keeps a server that has seen thousands of them from holding every one."""
+    for i in range(failsoft._MAX_WARNED + 20):
+        p = tmp_path / f"f{i}.json"
+        p.write_text("{not json", encoding="utf-8")
+        failsoft.read_json(p, dict, "x")
+        p.unlink()                        # the campaign is gone; nothing reads it again
+    assert len(failsoft._warned) == failsoft._MAX_WARNED
+
+
+def test_eviction_costs_only_a_repeated_warning(tmp_path, caplog):
+    """The evicted entry is the oldest, and losing it is not a correctness
+    problem: the file warns again next time it is read."""
+    first = tmp_path / "first.json"
+    first.write_text("{not json", encoding="utf-8")
+    with caplog.at_level(logging.WARNING):
+        failsoft.read_json(first, dict, "x")
+        for i in range(failsoft._MAX_WARNED):
+            p = tmp_path / f"f{i}.json"
+            p.write_text("{not json", encoding="utf-8")
+            failsoft.read_json(p, dict, "x")
+        assert first not in failsoft._warned      # pushed out by the newer ones
+        caplog.clear()
+        failsoft.read_json(first, dict, "x")
+    assert len(caplog.records) == 1
+
+
 def test_two_corrupt_files_each_warn(tmp_path, caplog):
     """The cache is keyed per path -- one corrupt file must not mask another."""
     a, b = tmp_path / "a.json", tmp_path / "b.json"
