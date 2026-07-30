@@ -68,6 +68,14 @@ import { api } from "../api/client";
 import { getModels } from "../api/models";
 
 const ONE_SCENE = [{ id: "s1", title: "Old", model: "", created: "", updated: "" }];
+// Stand-in `phases` for the absorb mocks that are about something else. What
+// every one of them relies on is the single property named here: no phase was
+// cut short by the time budget, so no budget notice renders.
+const PHASES_NONE_CUT = [
+  { name: "extraction", status: "ok", reason: null, attempted: true, budget_exhausted: false },
+  { name: "dossiers", status: "ok", reason: null, attempted: true, budget_exhausted: false },
+  { name: "audit", status: "ok", reason: null, attempted: true, budget_exhausted: false },
+];
 
 // The built-ins response_presets.py ships (templates/response_presets/*.md) —
 // the chip's dropdown lists whatever listResponsePresets returns.
@@ -134,6 +142,7 @@ beforeEach(() => {
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
     commit_token: "tok",
     dossiers: { status: "skipped", reason: null, proposed: [], failed: [], skipped: [] },
+    phases: PHASES_NONE_CUT,
     edits: [{ id: "character_state:seraphine", kind: "character_state",
       target: { kind: "characters", id: "seraphine" }, label: "Seraphine — current state",
       field: "current_state", before: "Wary.", after: "Loyal now.", authored: false }] });
@@ -671,7 +680,8 @@ test("re-absorbing a scene asks for confirmation, then retries with force", asyn
       cast: [], location: "", date: "", edits: [],
       mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
     commit_token: "tok",
-      dossiers: { status: "skipped", reason: null, proposed: [], failed: [] } });
+      dossiers: { status: "skipped", reason: null, proposed: [], failed: [] },
+      phases: PHASES_NONE_CUT });
   const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
   renderCampaign();
   await screen.findByText("hi");
@@ -783,6 +793,7 @@ test("a staged dossier is editable and sent with the save", async () => {
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
     commit_token: "tok",
     dossiers: { status: "ok", reason: null, proposed: ["seraphine"], failed: [] },
+    phases: PHASES_NONE_CUT,
     edits: [{ id: "dossier:seraphine", kind: "dossier",
       target: { kind: "characters", id: "seraphine" }, label: "Seraphine — campaign dossier",
       field: "dossier", authored: false,
@@ -818,6 +829,7 @@ test("character_state row renders a multi-section knowledge body in its textarea
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
     commit_token: "tok",
     dossiers: { status: "skipped", reason: null, proposed: [], failed: [], skipped: [] },
+    phases: PHASES_NONE_CUT,
     edits: [{ id: "character_state:seraphine", kind: "character_state",
       target: { kind: "characters", id: "seraphine" }, label: "Seraphine — current state",
       field: "current_state", authored: false,
@@ -842,6 +854,7 @@ test("plot rows are editable and sent with payload on save", async () => {
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
     commit_token: "tok",
     dossiers: { status: "skipped", reason: null, proposed: [], failed: [], skipped: [] },
+    phases: PHASES_NONE_CUT,
     edits: [{ id: "plot:the-map", kind: "plot",
       target: { kind: "plot", id: "the-map" }, label: "The map — advanced",
       field: "beat", before: "open — Elara got it.", after: "It is a forgery.",
@@ -867,6 +880,7 @@ test("new_character proposal renders editable card and provenance fields and sav
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
     commit_token: "tok",
     dossiers: { status: "skipped", reason: null, proposed: [], failed: [], skipped: [] },
+    phases: PHASES_NONE_CUT,
     edits: [{ id: "new_character:old-bram", kind: "new_character",
       target: { kind: "characters", id: "" }, label: "New character — Old Bram",
       field: "description", before: "", after: "[character(\"Old Bram\") {}]", authored: false,
@@ -919,6 +933,7 @@ test("new_location shows the setting checkbox only when the scene has no locatio
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
     commit_token: "tok",
     dossiers: { status: "skipped", reason: null, proposed: [], failed: [], skipped: [] },
+    phases: PHASES_NONE_CUT,
     edits: [{ id: "new_location:the-crypt", kind: "new_location",
       target: { kind: "locations", id: "" }, label: "New location — The Crypt",
       field: "body", before: "", after: "A cold crypt.", authored: false,
@@ -942,6 +957,7 @@ test("new_location hides the setting checkbox when the scene already has a locat
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
     commit_token: "tok",
     dossiers: { status: "skipped", reason: null, proposed: [], failed: [], skipped: [] },
+    phases: PHASES_NONE_CUT,
     edits: [{ id: "new_location:the-crypt", kind: "new_location",
       target: { kind: "locations", id: "" }, label: "New location — The Crypt",
       field: "body", before: "", after: "A cold crypt.", authored: false,
@@ -961,6 +977,7 @@ test("relationship rows are read-only and sent with payload on save", async () =
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
     commit_token: "tok",
     dossiers: { status: "skipped", reason: null, proposed: [], failed: [], skipped: [] },
+    phases: PHASES_NONE_CUT,
     edits: [{ id: "feeling:characters:a->characters:b", kind: "relationship",
       target: { kind: "relationships", id: "characters:a->characters:b" }, label: "Ann → Bo",
       field: "feeling", before: "trust 1, affection 1, tension 3", after: "trust 4, affection 3, tension 1",
@@ -990,6 +1007,7 @@ test("mechanics: warnings render with a ⚠ prefix; a clean run shows the hint i
     mechanics: { status: "ok", reason: null, warnings: ["Mara claimed a hit with no roll"], dropped: [] },
     commit_token: "tok",
     dossiers: { status: "skipped", reason: null, proposed: [], failed: [], skipped: [] },
+    phases: PHASES_NONE_CUT,
     edits: [] });
   const { unmount } = renderCampaign();
   await screen.findByText("hi");
@@ -1003,6 +1021,7 @@ test("mechanics: warnings render with a ⚠ prefix; a clean run shows the hint i
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
     commit_token: "tok",
     dossiers: { status: "skipped", reason: null, proposed: [], failed: [], skipped: [] },
+    phases: PHASES_NONE_CUT,
     edits: [] });
   renderCampaign();
   await screen.findByText("hi");
@@ -1018,6 +1037,7 @@ test("skipped mechanics renders no mechanics section", async () => {
     mechanics: { status: "skipped", reason: null, warnings: [], dropped: [] },
     commit_token: "tok",
     dossiers: { status: "skipped", reason: null, proposed: [], failed: [], skipped: [] },
+    phases: PHASES_NONE_CUT,
     edits: [] });
   renderCampaign();
   await screen.findByText("hi");
@@ -1037,6 +1057,7 @@ test("failed mechanics shows a notice with Retry validation; retry replaces shee
     mechanics: { status: "failed", reason: "boom", warnings: [], dropped: [] },
     commit_token: "tok",
     dossiers: { status: "skipped", reason: null, proposed: [], failed: [], skipped: [] },
+    phases: PHASES_NONE_CUT,
     edits: [] });
   (api.retryAudit as any).mockResolvedValue({
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
@@ -1060,6 +1081,7 @@ test("a rejected retryAudit surfaces an error and leaves the mechanics notice/ro
     mechanics: { status: "failed", reason: "boom", warnings: [], dropped: [] },
     commit_token: "tok",
     dossiers: { status: "skipped", reason: null, proposed: [], failed: [], skipped: [] },
+    phases: PHASES_NONE_CUT,
     edits: [] });
   (api.retryAudit as any).mockRejectedValue({ detail: "audit retry blew up" });
   renderCampaign();
@@ -1084,6 +1106,7 @@ test("unapproved non-sheet rows survive Retry validation without duplicating", a
     mechanics: { status: "failed", reason: "boom", warnings: [], dropped: [] },
     commit_token: "tok",
     dossiers: { status: "skipped", reason: null, proposed: [], failed: [], skipped: [] },
+    phases: PHASES_NONE_CUT,
     edits: [LORE_EDIT] });
   (api.retryAudit as any).mockResolvedValue({
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
@@ -1113,6 +1136,7 @@ test("degraded mechanics shows a notice listing dropped findings", async () => {
     mechanics: { status: "degraded", reason: null, warnings: [],
       dropped: [{ id: "characters:mara", field: "athletics", reason: "static tamper" }] },
     dossiers: { status: "skipped", reason: null, proposed: [], failed: [], skipped: [] },
+    phases: PHASES_NONE_CUT,
     edits: [] });
   renderCampaign();
   await screen.findByText("hi");
@@ -1126,7 +1150,7 @@ const absorbWithDossiers = (dossiers: unknown) =>
     one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
     mechanics: { status: "skipped", reason: null, warnings: [], dropped: [] },
     commit_token: "tok",
-    dossiers, edits: [] });
+    dossiers, phases: PHASES_NONE_CUT, edits: [] });
 
 test("failed dossier refreshes are listed per NPC instead of passing silently", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
@@ -1196,6 +1220,94 @@ test("clean and skipped dossier phases render no notice", async () => {
   expect(screen.queryByText(/dossier/i)).toBeNull();
 });
 
+// ---- absorb phases: a run the time budget cut short says so ----
+
+const absorbWithPhases = (phases: unknown, over: Record<string, unknown> = {}) =>
+  (api.absorbScene as any).mockResolvedValue({
+    one_line: "o", summary: "s", keywords: [], timeline_events: [], cast: [], location: "", date: "",
+    mechanics: { status: "skipped", reason: null, warnings: [], dropped: [],
+                 attempted: false, budget_exhausted: false },
+    dossiers: { status: "skipped", reason: null, proposed: [], failed: [], skipped: [],
+                attempted: false, budget_exhausted: false },
+    commit_token: "tok", phases, edits: [], ...over });
+
+const openAbsorb = async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await screen.findByText("Review scene summary");
+};
+
+test("an absorb the budget cut short names the steps that never ran", async () => {
+  // The reported failure mode: extraction eats the clock, so the review panel
+  // shows fewer proposed changes and nothing says why.
+  absorbWithPhases([
+    { name: "extraction", status: "ok", reason: null, attempted: true, budget_exhausted: false },
+    { name: "dossiers", status: "failed", reason: "the absorb time budget ran out",
+      attempted: false, budget_exhausted: true },
+    { name: "audit", status: "failed", reason: "the absorb time budget ran out",
+      attempted: false, budget_exhausted: true },
+  ]);
+  await openAbsorb();
+
+  await screen.findByText(/only partly absorbed/);
+  expect(screen.getByText(/NPC dossiers, mechanics audit/)).toBeInTheDocument();
+});
+
+test("a phase that ran and failed on its own merits is not blamed on the clock", async () => {
+  absorbWithPhases([
+    { name: "extraction", status: "ok", reason: null, attempted: true, budget_exhausted: false },
+    { name: "dossiers", status: "ok", reason: null, attempted: true, budget_exhausted: false },
+    { name: "audit", status: "failed", reason: "audit failed: boom",
+      attempted: true, budget_exhausted: false },
+  ], { mechanics: { status: "failed", reason: "audit failed: boom", warnings: [], dropped: [],
+                    attempted: true, budget_exhausted: false } });
+  await openAbsorb();
+
+  await screen.findByText("Mechanics validation failed: audit failed: boom");
+  expect(screen.queryByText(/only partly absorbed/)).toBeNull();
+});
+
+/** Phase rows that agree with the blocks, the way the backend's projection
+ *  guarantees — a row claiming the clock while its block claims otherwise is a
+ *  state the API cannot produce, so no test should assert against it. */
+const phasesFor = (over: Record<string, any>) =>
+  [{ name: "extraction", status: "ok", reason: null, attempted: true, budget_exhausted: false },
+   { name: "dossiers", ...(over.dossiers ?? { status: "ok", reason: null, attempted: true, budget_exhausted: false }) },
+   { name: "audit", ...(over.mechanics ?? { status: "ok", reason: null, attempted: true, budget_exhausted: false }) }]
+    .map(({ name, status, reason, attempted, budget_exhausted }) =>
+      ({ name, status, reason, attempted, budget_exhausted }));
+
+test("a budget-cut audit reads as never run, and still offers the retry", async () => {
+  const over = {
+    mechanics: { status: "failed", reason: "the absorb time budget ran out before the audit could run",
+                 warnings: [], dropped: [], attempted: false, budget_exhausted: true },
+  };
+  absorbWithPhases(phasesFor(over), over);
+  await openAbsorb();
+
+  await screen.findByText(/Mechanics validation never ran: the absorb time budget ran out/);
+  expect(screen.queryByText(/Mechanics validation failed/)).toBeNull();
+  expect(screen.getByRole("button", { name: /Retry validation/ })).toBeInTheDocument();
+});
+
+test("a budget-cut dossier phase reads as never prepared, not as a failure", async () => {
+  const over = {
+    dossiers: { status: "failed",
+                reason: "the absorb time budget ran out before any dossier could be prepared",
+                proposed: [], failed: [], skipped: ["winifred"],
+                attempted: false, budget_exhausted: true },
+  };
+  absorbWithPhases(phasesFor(over), over);
+  await openAbsorb();
+
+  await screen.findByText(/No NPC dossier was prepared: the absorb time budget ran out/);
+  expect(screen.queryByText("No NPC dossier could be prepared")).toBeNull();
+  expect(screen.getByText(/skipped: winifred/)).toBeInTheDocument();
+});
+
 test("sheet edits render read-only with the note and survive save", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
@@ -1204,6 +1316,7 @@ test("sheet edits render read-only with the note and survive save", async () => 
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
     commit_token: "tok",
     dossiers: { status: "skipped", reason: null, proposed: [], failed: [], skipped: [] },
+    phases: PHASES_NONE_CUT,
     edits: [SHEET_EDIT] });
   (api.saveChronicle as any).mockResolvedValue({ id: "s1", one_line: "o", summary: "s", keywords: [],
     cast: [], location: "", date: "", absorbed: "t",
@@ -1229,6 +1342,7 @@ test("failures from save render a notice", async () => {
     mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
     commit_token: "tok",
     dossiers: { status: "skipped", reason: null, proposed: [], failed: [], skipped: [] },
+    phases: PHASES_NONE_CUT,
     edits: [SHEET_EDIT] });
   (api.saveChronicle as any).mockResolvedValue({ id: "s1", one_line: "o", summary: "s", keywords: [],
     cast: [], location: "", date: "", absorbed: "t", applied: [],
