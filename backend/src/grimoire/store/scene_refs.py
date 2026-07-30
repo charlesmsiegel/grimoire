@@ -11,13 +11,14 @@ themselves.
 
 from __future__ import annotations
 
-from . import audit, changes, chronicle, plot, rolls
+from . import changes, chronicle, plot, rolls
 from .appearances import paths as appearances_paths
+from .audit import baselines as audit_baselines
 
 
 def repoint(cid: str, mapping: dict[str, str]) -> None:
     mapping = {old: new for old, new in mapping.items() if old != new}
     if not mapping:
         return
-    for mod in (appearances_paths, audit, changes, chronicle, plot, rolls):
+    for mod in (appearances_paths, audit_baselines, changes, chronicle, plot, rolls):
         mod.repoint_scenes(cid, mapping)
