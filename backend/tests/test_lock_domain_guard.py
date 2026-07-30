@@ -303,26 +303,16 @@ def _produces_lock(fn: ast.AST) -> bool:
     so the `@contextmanager` case is recognized by its `yield` sitting INSIDE
     the `with`, which is what keeps the lock open across the caller's block.
     """
-    if _yields_inside_lock(fn):
-        return True                      # a @contextmanager that yields inside
-    for node in _own_body(fn):
-        # `return`/`yield` ONLY. Accepting a bare expression statement was a
-        # hole with nothing to gain: `locks.campaign_lock(cid)` as a statement
-        # constructs a lock and discards it, so
-        # `def _h(cid): campaign_lock(cid); return nullcontext()` qualified as an
-        # alias while entering it locked nothing. The `@contextmanager` shape
-        # this was meant to cover is already handled by `_locks_in_own_body`.
-        if isinstance(node, ast.Return) and isinstance(node.value, ast.Call):
-            call = node.value
-        elif isinstance(node, ast.Yield) and isinstance(node.value, ast.Call):
-            call = node.value
-        else:
-            continue
-        name = _called_name(call.func)
-        if name == "hold_all" or (name == "campaign_lock"
-                                  and _guards_the_campaign(call)):
-            return True
-    return False
+    if any(_is_yield(n) for n in _own_body(fn)):
+        return _yields_inside_lock(fn)   # a @contextmanager, judged by its yields
+
+    # Otherwise it must HAND BACK the lock -- and on every path, through
+    # `_is_lock_context` so `hold_all([sid])` is validated the same way it is
+    # everywhere else. A bare `campaign_lock(cid)` statement is not a return; it
+    # constructs a lock and discards it, which locks nothing.
+    returns = [n.value for n in _own_body(fn)
+               if isinstance(n, ast.Return) and n.value is not None]
+    return bool(returns) and all(_is_lock_context(v, fn) for v in returns)
 
 
 def _locks_in_own_body(fn: ast.AST) -> bool:
@@ -402,31 +392,28 @@ def _enters_lock(fn: ast.AST, aliases) -> bool:
 
 
 def _yields_inside_lock(fn: ast.AST) -> bool:
-    """A `@contextmanager` whose `yield` sits inside `with campaign_lock(cid)`,
-    so the lock is still held while the caller's block runs."""
-    for node in _own_body(fn):
-        if not isinstance(node, (ast.With, ast.AsyncWith)):
-            continue
-        if not any(isinstance(i.context_expr, ast.Call)
-                   and _called_name(i.context_expr.func) == "campaign_lock"
-                   and _guards_the_campaign(i.context_expr)
-                   for i in node.items):
-            continue
-        if any(isinstance(n, ast.Yield) for n in _own_body(node)):
-            return True
-    return False
+    """A `@contextmanager` whose EVERY `yield` sits inside a campaign lock, so
+    the lock is held across the caller's block on every path it can take.
+
+    One yield under the lock is not enough: a helper that yields unlocked on one
+    branch hands its caller an unprotected block, and the caller cannot tell.
+    """
+    return _every_one_locked(fn, fn, _is_yield)
 
 
-def _executed_calls(node: ast.AST, target: str, fn: ast.AST, locked: bool):
-    """Yield, for every invocation of `target` that this node executes DIRECTLY,
+def _under_lock(node: ast.AST, fn: ast.AST, locked: bool, want):
+    """Yield, for every node matching `want` that this node executes DIRECTLY,
     whether it runs while a campaign lock is held.
 
-    Two things this deliberately does not do. It does not descend into nested
-    `def`s or lambdas -- code there runs when someone calls it, not here, so
-    `later = lambda: fn(cid)` written inside a locked block is not a locked
-    invocation. And it does not stop at the first hit: `locked` is threaded down
-    per branch, so an early `return fn(cid)` under a feature flag is reported
-    alongside the locked fallback rather than hidden by it.
+    The one traversal every "is this protected?" question goes through, so the
+    two rules that kept being got wrong live in exactly one place.
+
+    It does not descend into nested `def`s or lambdas: code there runs when
+    someone calls it, not here, so `later = lambda: fn(cid)` written inside a
+    locked block is not a locked invocation. And it reports EVERY match rather
+    than stopping at the first, because `locked` differs per branch -- an early
+    `return fn(cid)` under a feature flag has to be visible beside the locked
+    fallback rather than hidden by it.
     """
     for child in ast.iter_child_nodes(node):
         if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
@@ -435,13 +422,34 @@ def _executed_calls(node: ast.AST, target: str, fn: ast.AST, locked: bool):
             inner = locked or any(_is_lock_context(i.context_expr, fn)
                                   for i in child.items)
             for item in child.items:       # the context expressions themselves
-                yield from _executed_calls(item, target, fn, locked)
+                yield from _under_lock(item, fn, locked, want)
             for stmt in child.body:
-                yield from _executed_calls(stmt, target, fn, inner)
+                yield from _under_lock(stmt, fn, inner, want)
             continue
-        if isinstance(child, ast.Call) and _called_name(child.func) == target:
+        if want(child):
             yield locked
-        yield from _executed_calls(child, target, fn, locked)
+        yield from _under_lock(child, fn, locked, want)
+
+
+def _every_one_locked(node: ast.AST, fn: ast.AST, want) -> bool:
+    """`node` does the thing at least once, and EVERY time it does, under a lock.
+
+    "At least one occurrence is locked" was the wrong polarity in four separate
+    predicates -- a `@contextmanager` yielding unlocked on one branch, a
+    decorator returning either a locked or an unlocked wrapper, a wrapper
+    invoking its target on a flagged fast path, an alias returning a lock on one
+    branch and something else on another. All four are this function now.
+    """
+    seen = list(_under_lock(node, fn, False, want))
+    return bool(seen) and all(seen)
+
+
+def _is_call_to(target: str):
+    return lambda n: isinstance(n, ast.Call) and _called_name(n.func) == target
+
+
+def _is_yield(node: ast.AST) -> bool:
+    return isinstance(node, (ast.Yield, ast.YieldFrom))
 
 
 def _wraps_target_under_lock(fn: ast.AST) -> bool:
@@ -469,25 +477,37 @@ def _wraps_target_under_lock(fn: ast.AST) -> bool:
         return False
     target = params[0]
 
-    returned = {node.value.id for node in _own_body(fn)
-                if isinstance(node, ast.Return) and isinstance(node.value, ast.Name)}
-    if not returned:
-        return False
+    # EVERY name the decorator can return, and every definition of each. A
+    # decorator that returns a locked wrapper on one branch and an unlocked one
+    # on another was accepted as soon as the locked one was inspected; if the
+    # flag selects the other, the decorated writer runs unlocked.
+    returns = [node.value for node in _own_body(fn)
+               if isinstance(node, ast.Return) and node.value is not None]
+    if not returns or not all(isinstance(v, ast.Name) for v in returns):
+        return False                     # `return fn` unchanged, or a call/expr
+    returned = {v.id for v in returns}
 
+    wrappers: dict[str, list[ast.AST]] = {}
     for nested in ast.walk(fn):
-        if not isinstance(nested, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        if nested is fn or nested.name not in returned:
-            continue
-        covered = list(_executed_calls(nested, target, nested, False))
-        if covered and all(covered):
-            return True
-    return False
+        if isinstance(nested, (ast.FunctionDef, ast.AsyncFunctionDef)) \
+                and nested is not fn and nested.name in returned:
+            wrappers.setdefault(nested.name, []).append(nested)
+
+    if set(wrappers) != returned:
+        return False                     # a returned name this cannot resolve
+    return all(_every_one_locked(w, w, _is_call_to(target))
+               for defs in wrappers.values() for w in defs)
 
 
 def _locks_anywhere(fn: ast.AST) -> bool:
-    """Whether applying `fn` as a decorator serializes what it decorates."""
-    return _locks_in_own_body(fn) or _wraps_target_under_lock(fn)
+    """Whether applying `fn` as a decorator serializes what it decorates.
+
+    Only the returned wrapper counts. A lock in the decorator's OWN body is held
+    while the decoration runs -- once, at import -- and is long released by the
+    time the decorated function is ever called, so `_locks_in_own_body(fn)` was
+    never evidence of anything here.
+    """
+    return _wraps_target_under_lock(fn)
 
 
 def _with_context_names(fn: ast.AST) -> set[str]:
@@ -953,6 +973,87 @@ def test_this_repos_own_touch_function_is_not_a_filesystem_call():
     the bare name would have made every caller of it a direct writer."""
     _f, _s, mutators = _probe("def bump(cid):\n    campaigns.touch(cid)\n")
     assert not mutators, "campaigns.touch(cid) was read as a filesystem call"
+
+
+def test_a_contextmanager_must_yield_under_the_lock_on_every_branch():
+    """One yield inside the lock is not enough: the branch that yields unlocked
+    hands its caller an unprotected block, and the caller cannot tell."""
+    mixed = ("@contextlib.contextmanager\n"
+             "def helper(cid):\n"
+             "    if FAST:\n"
+             "        yield\n"
+             "        return\n"
+             "    with locks.campaign_lock(cid):\n"
+             "        yield\n"
+             "def put(cid):\n"
+             "    with helper(cid):\n"
+             "        atomic.write_text(p, x)\n")
+    _f, serializing, _m = _probe(mixed)
+    assert "put" not in serializing, "an unlocked yield branch was hidden by the locked one"
+
+
+def test_a_decorator_that_locks_only_while_decorating_does_not_count():
+    """A lock in the decorator's own body is held once, at import, and released
+    long before the decorated function is ever called."""
+    src = ("def audited(fn):\n"
+           "    with locks.campaign_lock(cid):\n"
+           "        register(fn)\n"
+           "    return fn\n"
+           "@audited\n"
+           "def append_message(cid, text):\n"
+           "    atomic.write_text(p, text)\n")
+    _f, serializing, _m = _probe(src)
+    assert "append_message" not in serializing, \
+        "a decoration-time lock vouched for every runtime call"
+
+
+def test_an_alias_returning_hold_all_for_another_campaign_does_not_count():
+    """`hold_all` inside an alias went unvalidated, so the caller's own
+    `_guards_the_campaign` check passed on its argument while the helper held a
+    different campaign's locks entirely."""
+    src = ("def helper(cid, sid):\n"
+           "    return locks.hold_all([sid])\n"
+           "def put(cid, sid):\n"
+           "    with helper(cid, sid):\n"
+           "        atomic.write_text(p, x)\n")
+    _f, serializing, _m = _probe(src)
+    assert "put" not in serializing, "an alias holding another campaign passed"
+
+
+def test_every_wrapper_a_decorator_can_return_must_lock():
+    """`returned` can hold more than one name. Accepting the decorator as soon
+    as the locked wrapper was inspected let the flag select the other one."""
+    src = ("def audited(fn):\n"
+           "    def safe(cid, *a):\n"
+           "        with locks.campaign_lock(cid):\n"
+           "            return fn(cid, *a)\n"
+           "    def fast(cid, *a):\n"
+           "        return fn(cid, *a)\n"
+           "    if FAST:\n"
+           "        return fast\n"
+           "    return safe\n"
+           "@audited\n"
+           "def append_message(cid, text):\n"
+           "    atomic.write_text(p, text)\n")
+    _f, serializing, _m = _probe(src)
+    assert "append_message" not in serializing, \
+        "one locked wrapper vouched for the unlocked one beside it"
+
+
+def test_the_real_serialized_decorator_still_qualifies():
+    """The counterweight to the four tests above: none of that strictness may
+    stop recognizing the shape `scenes` actually uses."""
+    src = ("def _serialized(fn):\n"
+           "    @functools.wraps(fn)\n"
+           "    def locked(cid, *args, **kwargs):\n"
+           "        with locks.campaign_lock(cid):\n"
+           "            return fn(cid, *args, **kwargs)\n"
+           "    return locked\n"
+           "@_serialized\n"
+           "def append_message(cid, text):\n"
+           "    atomic.write_text(p, text)\n")
+    _f, serializing, _m = _probe(src)
+    assert "append_message" in serializing, "the real @_serialized shape regressed"
 
 
 def test_path_touch_with_positional_arguments_is_a_mutation():
