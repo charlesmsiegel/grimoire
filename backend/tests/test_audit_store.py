@@ -97,22 +97,18 @@ def test_baseline_entry_valid_survives_deleted_module(cid_with_sheet, monkeypatc
     def _boom(mid):
         raise modules.ModuleNotFound(mid)
 
-    # Two bindings, because `modules` is a package now. The facade attribute is
-    # what `audit`'s own `modules.load_pack` call reads; `modules.pack` is what
-    # `modules.binding.resolve` reads. While `modules` was one flat file those
-    # were the same name, and this test's live effect ran entirely through
-    # resolve() -- it returns None, so baseline_field bails before reaching
-    # audit's call. Patch only the facade and resolve() succeeds, which is not
-    # the "the pack cannot be read" state this test means to create: the
-    # `sheets.read` below then reaches `modules.load_pack` (sheets.py:199, via
-    # the facade) with a real mid and raises ModuleNotFound out of the test.
+    # One binding, because every reader now goes through it. `modules.pack` is
+    # what `modules.binding.resolve` reads, and -- since Task 8 rewrote
+    # `audit`'s imports -- also what `audit.baselines`' own `load_pack` and
+    # `schema_stamp` read. The former is this test's live injection: resolve()
+    # falls through to None, so baseline_field bails.
     #
-    # So line 3 of this block is the injection; the facade patch currently
-    # reaches no call site this test executes. Task 8, when it rewrites
-    # audit.py's imports, must either retarget the facade patch to whatever
-    # binding the rewritten audit.py reads, or delete it as redundant -- but
-    # not silently keep both, which would make the inert injection permanent.
-    monkeypatch.setattr(modules, "load_pack", _boom)
+    # The old second patch on the `modules` *facade* attribute is gone. While
+    # `modules` was one flat file it was the same name as the line below; once
+    # `modules` became a package it reached no call site this test executes,
+    # and once `audit` became a package it would be a duplicate of this line
+    # rather than a second injection point. Keeping an inert patch beside a
+    # live one is what hides a fault injection that proves nothing.
     monkeypatch.setattr(modules.pack, "load_pack", _boom)
     assert audit.baseline_field(cid, sid, "characters", "mara", "hp") is None
     sheet = sheets.read(cid, "characters", "mara")

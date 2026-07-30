@@ -45,14 +45,15 @@ Ordering rules (deadlock avoidance):
 
     module-edit lock (``module_edit._M``)
       └─ campaign locks, always in sorted cid order  (``hold_all``)
-           ├─ audit baseline lock   (``store/audit.py``)
+           ├─ audit baseline lock   (``store/audit/baselines.py``)
            └─ rolls lock            (``store/rolls.py``)
 
 - Every multi-campaign holder goes through ``hold_all``, which sorts. The two
   that exist (module publication, the world-module rebind route) already
   agreed before that existed, but only by accident — see ``hold_all``. No LLM
   play flow ever holds more than its own campaign's lock.
-- campaign lock -> audit baseline lock, never reversed (``store/audit.py``).
+- campaign lock -> audit baseline lock, never reversed
+  (``store/audit/baselines.py``).
 
 The lock is an ``RLock`` so a caller can compose lower-level mutators —
 ``audit.apply_delta`` calls ``sheets.set_field`` under an already-held lock —

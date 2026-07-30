@@ -1,11 +1,9 @@
-cycle grimoire.store.audit,grimoire.store.scene_refs,grimoire.store.scenes
 deferred grimoire.claude_agent::ClaudeAgentClient.stream::claude_agent_sdk
 deferred grimoire.prompts::_env::jinja2
 deferred grimoire.store.absorb::_apply_weather::grimoire.store.calendars
 deferred grimoire.store.absorb::_apply_weather::grimoire.store.weather
 deferred grimoire.store.absorb::_weather_edits::grimoire.store.scenes
 deferred grimoire.store.absorb::_weather_edits::grimoire.store.weather
-deferred grimoire.store.absorb::apply_edits::grimoire.store.audit
 deferred grimoire.store.calendars.base::get_provider::grimoire.store.calendars.plugins
 deferred grimoire.store.calendars.base::list_providers::grimoire.store.calendars.plugins
 deferred grimoire.store.checks::available_checks::grimoire.store.scenes

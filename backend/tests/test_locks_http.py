@@ -75,7 +75,11 @@ def test_capture_baseline_propagates_contention(monkeypatch, tmp_path):
     def busy(c):
         raise locks.CampaignBusy(c)
 
-    monkeypatch.setattr(audit.locks, "campaign_lock", busy)
+    # The shared module, not `audit.locks`: `audit` is a package now, and its
+    # facade re-exports only names its own files define -- the `locks` import
+    # lives on `audit.baselines`. Pointing at `grimoire.store.locks` is what
+    # this always meant and survives any further reshuffling.
+    monkeypatch.setattr(locks, "campaign_lock", busy)
     with pytest.raises(locks.CampaignBusy):
         audit.capture_baseline(cid, "0001-x")
 
