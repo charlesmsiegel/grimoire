@@ -354,12 +354,17 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     const { id: newId } = await api.renameScene(cid, id, title);
     if (activeId === id) setActiveId(newId);
     setSeedPrompt((p) => (p && p.sid === id ? { ...p, sid: newId } : p));
+    // An open review holds the id it was absorbed from, and both its save and
+    // its audit retry POST that id — so a rename must carry it along or they
+    // 404 against a scene that no longer exists.
+    setAbsorbSid((s) => (s === id ? newId : s));
     setScenes(await api.listScenes(cid));
   }
 
   // the first date set renames the scene file — re-list and adopt the new id
   async function sceneRenamed(id: string) {
     setSeedPrompt((p) => (p && p.sid === activeId ? { ...p, sid: id } : p));
+    setAbsorbSid((s) => (s === activeId ? id : s));   // same reason as renameScene
     setScenes(await api.listScenes(cid));
     selectScene(id);
   }
