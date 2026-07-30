@@ -392,9 +392,24 @@ own binding and patching one has no effect on the others.
 
 The module-object import form required above is what keeps these patchable at
 all — a by-value `from ..modules.binding import resolve` in `sheets` would make
-`modules.binding.resolve` unpatchable from the caller's perspective. Each site
-still needs its target retargeted to the new submodule as part of the commit
-that moves the function, and re-run to confirm the patch still bites.
+`modules.binding.resolve` unpatchable from the caller's perspective.
+
+**Retargeting is decided by the caller, not by the function's new home.** Two
+of the sites above must stay exactly where they are:
+
+- `test_locks_store.py:865` patches `scenes.append_message`, and the test
+  drives an HTTP route — `routes/mechanics.py:40`,`:202` call
+  `store.scenes.append_message(...)`, a call-time lookup on the package.
+- `test_routes.py:2853` patches `audit.materialize`, and
+  `routes/scenes.py:299` calls `store.audit.materialize(...)` the same way.
+
+A package `__init__` re-export is a by-value binding, so patching
+`scenes.write.append_message` or `audit.apply.materialize` would not intercept
+either route call — the lock-depth and audit-crash tests would pass while
+injecting nothing. Retarget only where the *caller* holds a submodule
+reference, in the commit that rewrites that caller's import, and re-run to
+confirm the patch still bites. The implementation plan carries the per-site
+table.
 
 ## Enforcement
 
@@ -461,8 +476,15 @@ is independently testable.
 3. The three remaining pure-size splits: `module_edit`, `absorb`, `context`.
    (`sheets` is a size split too, but it carries cycle edges, so it lands in
    step 2 with the other record kinds.)
-4. Hoist the four third-party imports.
-5. Delete the now-empty baseline file and the code path that reads it.
+4. Hoist the deferred imports left in the modules that were never split —
+   `chronicle`, `proposals`, `response_presets`, `export`, `entity_schema`,
+   `suggest`, `weather`, `checks`, `calendars.base`, `plot`, `relationships`,
+   `epub`. That is **26 of the 58 baseline lines**, so skipping it leaves the
+   baseline non-empty and step 6 cannot pass. These are not verbatim moves:
+   after step 2 the names are packages, so each import targets a submodule and
+   its call sites change with it.
+5. Hoist the four third-party imports.
+6. Delete the now-empty baseline file and the code path that reads it.
 
 ## Verification
 
