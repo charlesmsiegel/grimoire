@@ -739,7 +739,6 @@ def test_load_pack_never_raises_mutation_sweep(monkeypatch, tmp_path):
     content-sidecars (which this sweep doesn't create) and is instead directly
     verified by test_validate_sheet_values_ref_* unit tests.
     """
-    import json as _json
     import shutil
 
     base = _home(monkeypatch, tmp_path)
@@ -755,7 +754,7 @@ def test_load_pack_never_raises_mutation_sweep(monkeypatch, tmp_path):
                 modules.load_pack("testmod")
             except modules.ModuleNotFound:
                 raise
-            except Exception as e:  # noqa: BLE001 - the assertion IS "no exception"
+            except Exception as e:
                 raise AssertionError(
                     f"{which}.json mutation at {path} -> {junk!r} raised {type(e).__name__}: {e}"
                 ) from e
@@ -865,7 +864,7 @@ def test_builtin_reference_modules_validate(monkeypatch, tmp_path):
 
 # ---- Task 6: binding — world/campaign module: keys + resolve() ----
 
-from grimoire.store import campaigns, worlds
+from grimoire.store import campaigns, worlds  # noqa: E402 - deliberate late import; see the lines above
 
 
 def _world_campaign(monkeypatch, tmp_path, **kw):

@@ -29,7 +29,7 @@ def test_line_diff_empty_sides():
     assert changes.line_diff("x", "") == [{"op": "delete", "text": "x"}]
 
 
-from grimoire.store import worlds, campaigns
+from grimoire.store import worlds, campaigns  # noqa: E402 - deliberate late import; see the lines above
 
 
 def _campaign(monkeypatch, tmp_path):
@@ -64,7 +64,7 @@ def test_read_tolerates_garbage(monkeypatch, tmp_path):
     assert changes.read(cid) == {}
 
 
-from grimoire.store import absorb, entities, scenes
+from grimoire.store import absorb, entities, scenes  # noqa: E402 - deliberate late import; see the lines above
 
 
 def _lore_edit(before, after):

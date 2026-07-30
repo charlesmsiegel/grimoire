@@ -142,7 +142,7 @@ def _loads_png(data: bytes) -> dict:
         if key in chunks:
             try:
                 raw = base64.b64decode(chunks[key])
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 raise CardParseError(f"bad base64 in {key}") from exc
             return to_v3(json.loads(raw.decode("utf-8")))
     raise CardParseError("no ccv3/chara tEXt chunk in PNG")

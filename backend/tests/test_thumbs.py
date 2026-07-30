@@ -2,7 +2,6 @@
 
 import io
 
-import pytest
 from PIL import Image
 
 from grimoire.store import assets, thumbs

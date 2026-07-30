@@ -167,7 +167,7 @@ def test_heal_raises_rather_than_retiring_a_roll_it_cannot_project(monkeypatch, 
     the file directly — if a future edge reopens it, retirement must fail loudly
     instead of silently discarding the roll."""
     cid, sid = _scene(monkeypatch, tmp_path)
-    rec = proposals.new(cid, sid, {})
+    proposals.new(cid, sid, {})
     path = campaigns.campaign_root(cid) / "proposals.json"
     data = json.loads(path.read_text(encoding="utf-8"))
     data[sid]["status"] = "declined"                       # not projectable...

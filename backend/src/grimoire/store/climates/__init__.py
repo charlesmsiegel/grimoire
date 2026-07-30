@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .schema import ClimateError, validate  # noqa: F401  (re-exported)
+from .schema import ClimateError, validate
 from ..paths import home
 from .. import atomic
 
@@ -32,7 +32,7 @@ def _read(path: Path) -> dict | None:
         return validate(json.loads(path.read_text(encoding="utf-8")))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, ClimateError):
         return None
-    except Exception:  # malformed beyond what validate anticipates
+    except Exception:  # noqa: BLE001 - malformed beyond what validate anticipates
         return None
 
 

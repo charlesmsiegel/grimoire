@@ -4,8 +4,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-import ingest_scene  # noqa: E402
-from grimoire.store import campaigns, worlds  # noqa: E402
+import ingest_scene
+from grimoire.store import campaigns, worlds
 
 
 def _world(monkeypatch, tmp_path) -> str:
@@ -64,10 +64,8 @@ def test_ensure_character_returns_world_character_without_shadow_copy(monkeypatc
 
 
 def test_ensure_location_creates_once(monkeypatch, tmp_path):
-    from grimoire.store import campaigns as campaigns_store
     wid = _world(monkeypatch, tmp_path)
     cid = ingest_scene.ensure_campaign("Silver Oath", wid)
-    croot = campaigns_store.campaign_root(cid)
     eid1 = ingest_scene.ensure_location(cid, {"name": "Thornfield Manor", "notes": "Seat of Corvin."})
     eid2 = ingest_scene.ensure_location(cid, {"name": "Thornfield Manor"})
     assert eid1 == eid2 == "thornfield-manor"
@@ -85,7 +83,7 @@ def test_resolve_version_for_pc(monkeypatch, tmp_path):
 
 
 def test_build_scene_writes_transcript_cast_location_date(monkeypatch, tmp_path):
-    from grimoire.store import appearances, campaigns as campaigns_store, scenes, worlds as worlds_store
+    from grimoire.store import appearances, scenes, worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds_store.create_world("Ashgrove")
     wroot = worlds_store.world_root(wid)
@@ -185,11 +183,10 @@ def test_run_absorb_and_apply_scene(monkeypatch, tmp_path):
 
 
 def test_ingest_one_scene_is_resumable(monkeypatch, tmp_path):
-    from grimoire.store import campaigns as campaigns_store, worlds as worlds_store
+    from grimoire.store import worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds_store.create_world("Ashgrove")
     cid = ingest_scene.ensure_campaign("Silver Oath", wid)
-    croot = campaigns_store.campaign_root(cid)
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
 
     scene = {
@@ -219,11 +216,10 @@ def test_ingest_one_scene_is_resumable(monkeypatch, tmp_path):
 def test_ingest_one_scene_resumes_after_build_then_crash(monkeypatch, tmp_path):
     """If build_scene succeeded but absorb/apply never ran (process died in between),
     a retry must reuse the recorded sid instead of minting a duplicate scene."""
-    from grimoire.store import campaigns as campaigns_store, scenes, worlds as worlds_store
+    from grimoire.store import scenes, worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds_store.create_world("Ashgrove")
     cid = ingest_scene.ensure_campaign("Silver Oath", wid)
-    croot = campaigns_store.campaign_root(cid)
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
 
     scene = {
@@ -256,11 +252,10 @@ def test_ingest_one_scene_resumes_after_build_then_crash(monkeypatch, tmp_path):
 
 def test_two_scenes_accumulate_state_in_order(monkeypatch, tmp_path):
     """Scene 2's snapshot must see scene 1's applied character-state edit."""
-    from grimoire.store import campaigns as campaigns_store, worlds as worlds_store
+    from grimoire.store import worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds_store.create_world("Ashgrove")
     cid = ingest_scene.ensure_campaign("Silver Oath", wid)
-    croot = campaigns_store.campaign_root(cid)
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
     conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
 

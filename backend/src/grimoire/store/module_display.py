@@ -361,7 +361,7 @@ def load_display(root: Path, sheets: dict) -> tuple[dict, dict, list[dict]]:
         if (root / "theme.css").exists():
             errors.append(_entry("theme", None,
                                  "theme.css is not supported — use theme.json"))
-    except Exception as e:  # containment boundary, deliberately broad
+    except Exception as e:  # noqa: BLE001 - containment boundary, deliberately broad
         errors.append(_entry("layout", "*",
                              f"display files: {e.__class__.__name__}: {e}"))
         return {"sheet_types": {}}, {}, errors

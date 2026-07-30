@@ -44,7 +44,7 @@ def load_custom_providers() -> None:
             module = importlib.util.module_from_spec(spec)
             sys.modules[module_name] = module
             spec.loader.exec_module(module)
-        except Exception:
+        except Exception:  # noqa: BLE001 - a homebrew calendar must not break the calendar list
             sys.modules.pop(module_name, None)
         else:
             _loaded.add(path)

@@ -180,7 +180,7 @@ def _continuation_stream(cid: str, sid: str, pid: str, messages: list[dict],
     pending record, then emit its proposal event."""
     def finalize(watcher) -> list[str]:
         frames: list[str] = []
-        persist = lambda: _persist_reply(cid, sid, watcher.narration)  # noqa: E731
+        persist = lambda: _persist_reply(cid, sid, watcher.narration)
         if watcher.complete or watcher.truncated:
             with store.locks.campaign_lock(cid):
                 if store.proposals.commit_narration(cid, sid, pid, persist):
