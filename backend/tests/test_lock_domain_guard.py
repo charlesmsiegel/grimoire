@@ -91,6 +91,10 @@ _ATOMIC_WRITERS = ("write_text", "write_bytes")
 _FS_ONLY = ("rmtree", "unlink", "rmdir", "rename")   # no builtin type has these
 _FS_AMBIGUOUS = ("remove", "replace")                # also str/list/set methods
 _FS_MODULES = ("os", "shutil")                       # ...so require the receiver
+# `touch` is ambiguous the other way round: `Path.touch` has no fixed receiver
+# to match, so it is treated as a file creation UNLESS the receiver names a
+# module in this package that defines its own `touch`. Only one does.
+_TOUCH_FUNCTIONS = ("campaigns",)
 # The two entry points into the domain. `hold_all` counts because the
 # multi-campaign holders reach every campaign lock through it.
 _LOCK_CALLS = ("campaign_lock", "hold_all")
@@ -215,14 +219,16 @@ def _writes_directly(fn: ast.AST, imported: frozenset[str] = frozenset()) -> boo
             return True
         if name in _FS_AMBIGUOUS and receiver in _FS_MODULES:
             return True
-        if name == "touch" and not node.args:
+        if name == "touch" and receiver not in _TOUCH_FUNCTIONS:
             # `Path.touch()` publishes a pathname others can observe (a marker
             # or completion file) while writing no bytes, so neither this
-            # guard's writers nor `test_atomic_guard` would see it. Matched on
-            # arity because this codebase has its own `campaigns.touch(cid)`:
-            # `Path.touch` takes only keywords (mode=, exist_ok=), the module
-            # function takes a positional cid, so zero positional args
-            # separates them without a receiver to key on.
+            # guard's writers nor `test_atomic_guard` would see it.
+            #
+            # Keyed on the receiver, NOT on arity. Arity looked like a clean
+            # discriminator against this package's own `campaigns.touch(cid)`
+            # and was simply wrong: `Path.touch(self, mode=0o666,
+            # exist_ok=True)` takes both positionally, so `marker.touch(0o600)`
+            # is a real file creation that a zero-positional-args test rejects.
             return True
     return False
 
@@ -353,6 +359,24 @@ def _holds_this_campaign(call: ast.Call, fn: ast.AST) -> bool:
                for a in call.args for n in ast.walk(a))
 
 
+def _is_lock_context(expr: ast.expr, fn: ast.AST) -> bool:
+    """`expr`, used as a `with` context, holds THIS function's campaign lock.
+
+    The single place that answers the question. It was previously answered in
+    two — once on the direct path and once in the decorator check — and the copy
+    drifted twice: the decorator path shipped without the `cid` argument check
+    the direct path had just gained, and then without the `hold_all` coverage
+    check it gained after that. Both were the same bug arriving twice because
+    the rule lived in two places.
+    """
+    if not isinstance(expr, ast.Call):
+        return False
+    name = _called_name(expr.func)
+    if name == "hold_all":
+        return _holds_this_campaign(expr, fn)
+    return name == "campaign_lock" and _guards_the_campaign(expr)
+
+
 def _enters_lock(fn: ast.AST, aliases) -> bool:
     """`fn` enters `campaign_lock`/`hold_all` directly, or a local alias of one,
     keyed on this campaign.
@@ -370,10 +394,9 @@ def _enters_lock(fn: ast.AST, aliases) -> bool:
     which is what `_produces_lock` establishes.
     """
     for call in _with_context_calls(fn):
-        name = _called_name(call.func)
-        if name == "hold_all" and _holds_this_campaign(call, fn):
+        if _is_lock_context(call, fn):
             return True
-        if name in ("campaign_lock", *aliases) and _guards_the_campaign(call):
+        if _called_name(call.func) in aliases and _guards_the_campaign(call):
             return True
     return False
 
@@ -394,20 +417,51 @@ def _yields_inside_lock(fn: ast.AST) -> bool:
     return False
 
 
+def _executed_calls(node: ast.AST, target: str, fn: ast.AST, locked: bool):
+    """Yield, for every invocation of `target` that this node executes DIRECTLY,
+    whether it runs while a campaign lock is held.
+
+    Two things this deliberately does not do. It does not descend into nested
+    `def`s or lambdas -- code there runs when someone calls it, not here, so
+    `later = lambda: fn(cid)` written inside a locked block is not a locked
+    invocation. And it does not stop at the first hit: `locked` is threaded down
+    per branch, so an early `return fn(cid)` under a feature flag is reported
+    alongside the locked fallback rather than hidden by it.
+    """
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            continue                       # deferred, not executed here
+        if isinstance(child, (ast.With, ast.AsyncWith)):
+            inner = locked or any(_is_lock_context(i.context_expr, fn)
+                                  for i in child.items)
+            for item in child.items:       # the context expressions themselves
+                yield from _executed_calls(item, target, fn, locked)
+            for stmt in child.body:
+                yield from _executed_calls(stmt, target, fn, inner)
+            continue
+        if isinstance(child, ast.Call) and _called_name(child.func) == target:
+            yield locked
+        yield from _executed_calls(child, target, fn, locked)
+
+
 def _wraps_target_under_lock(fn: ast.AST) -> bool:
-    """`fn` is a decorator whose wrapper CALLS the decorated function while
-    holding the campaign lock — the `scenes._serialized` shape.
+    """`fn` is a decorator whose returned wrapper calls the decorated function,
+    and does so under this campaign's lock on EVERY path it executes.
 
-    Descending into nested defs is unavoidable here (a decorator's acquisition
-    lives in the closure it returns), but "some nested function locks" is not
-    enough on its own: a decorator carrying an unrelated locking callback, that
-    returns its target unchanged, would then launder every writer it decorates
-    through the guard. That would reopen the callback hole `_own_body` closed,
-    just via a different door.
+    Descending into nested defs is unavoidable here -- a decorator's acquisition
+    lives in the closure it returns -- which is exactly why this needs to be
+    precise about three separate things, each of which was a hole in turn:
 
-    So require the two facts that make a decorator protective: the wrapper takes
-    the lock, and the decorated function is invoked INSIDE that lock. The
-    decorated function is identified by the decorator's own first parameter,
+    - it must be the wrapper the decorator RETURNS, not any closure it happens
+      to define (a `safe` closure that locks, never used, beside an `unsafe` one
+      that is);
+    - the invocation must be *executed* inside the `with`, not merely written
+      there (a lambda defined in the block and called after it);
+    - and EVERY executed invocation must be covered, not one of them, so a
+      wrapper that returns `fn(cid)` early under a flag and locks only on the
+      fallback does not read as protective.
+
+    The decorated function is identified by the decorator's own first parameter,
     which is what `@_serialized`'s `fn` is.
     """
     params = [a.arg for a in [*fn.args.posonlyargs, *fn.args.args]]
@@ -415,10 +469,6 @@ def _wraps_target_under_lock(fn: ast.AST) -> bool:
         return False
     target = params[0]
 
-    # It has to be the wrapper the decorator RETURNS. Scanning every nested
-    # function reopened the same hole one level down: a decorator can define a
-    # `safe` closure that calls the target under the lock, never use it, and
-    # return an `unsafe` one that calls the target bare.
     returned = {node.value.id for node in _own_body(fn)
                 if isinstance(node, ast.Return) and isinstance(node.value, ast.Name)}
     if not returned:
@@ -429,25 +479,9 @@ def _wraps_target_under_lock(fn: ast.AST) -> bool:
             continue
         if nested is fn or nested.name not in returned:
             continue
-        for node in _own_body(nested):
-            if not isinstance(node, (ast.With, ast.AsyncWith)):
-                continue
-            # ...and the lock has to be this campaign's, the same check the
-            # direct path makes. Without it a wrapper entering
-            # `campaign_lock(sid)` laundered a cid-scoped writer.
-            if not any(isinstance(i.context_expr, ast.Call)
-                       and (_called_name(i.context_expr.func) == "hold_all"
-                            or (_called_name(i.context_expr.func) == "campaign_lock"
-                                and _guards_the_campaign(i.context_expr)))
-                       for i in node.items):
-                continue
-            # Directly inside the block, not merely lexically within it.
-            # `ast.walk` descended into nested defs and lambdas, so
-            # `later = lambda: fn(cid)` written inside the `with` but called
-            # after it counted as a protected invocation.
-            for inner in _own_body(node):
-                if isinstance(inner, ast.Call) and _called_name(inner.func) == target:
-                    return True
+        covered = list(_executed_calls(nested, target, nested, False))
+        if covered and all(covered):
+            return True
     return False
 
 
@@ -919,6 +953,53 @@ def test_this_repos_own_touch_function_is_not_a_filesystem_call():
     the bare name would have made every caller of it a direct writer."""
     _f, _s, mutators = _probe("def bump(cid):\n    campaigns.touch(cid)\n")
     assert not mutators, "campaigns.touch(cid) was read as a filesystem call"
+
+
+def test_path_touch_with_positional_arguments_is_a_mutation():
+    """`Path.touch(self, mode=0o666, exist_ok=True)` takes both positionally, so
+    the arity discriminator this used to rely on was simply wrong — a real file
+    creation written `marker.touch(0o600)` was rejected."""
+    for src in ("def mark(cid):\n    (root / 'done').touch()\n",
+                "def mark(cid):\n    (root / 'done').touch(0o600)\n",
+                "def mark(cid):\n    (root / 'done').touch(0o600, True)\n",
+                "def mark(cid):\n    (root / 'done').touch(exist_ok=False)\n"):
+        _f, _s, mutators = _probe(src)
+        assert mutators, f"missed a Path.touch publication: {src!r}"
+
+
+def test_a_decorator_holding_another_campaigns_hold_all_does_not_count():
+    """The `hold_all` coverage check lived only on the direct path; the
+    decorator path accepted it by callee name. Same rule, two places, one of
+    them stale — which is why both now go through `_is_lock_context`."""
+    src = ("def audited(fn):\n"
+           "    def locked(cid, sid):\n"
+           "        with locks.hold_all([sid]):\n"
+           "            return fn(cid, sid)\n"
+           "    return locked\n"
+           "@audited\n"
+           "def put(cid, sid):\n"
+           "    atomic.write_text(p, x)\n")
+    _f, serializing, _m = _probe(src)
+    assert "put" not in serializing, \
+        "a decorator holding another campaign's locks passed"
+
+
+def test_a_decorator_with_one_unlocked_path_does_not_count():
+    """Accepting the first protected invocation hid the branch beside it: an
+    early `return fn(cid)` under a flag runs the decorated writer unlocked."""
+    src = ("def audited(fn):\n"
+           "    def locked(cid, *a):\n"
+           "        if FAST:\n"
+           "            return fn(cid, *a)\n"
+           "        with locks.campaign_lock(cid):\n"
+           "            return fn(cid, *a)\n"
+           "    return locked\n"
+           "@audited\n"
+           "def append_message(cid, text):\n"
+           "    atomic.write_text(p, text)\n")
+    _f, serializing, _m = _probe(src)
+    assert "append_message" not in serializing, \
+        "an unlocked branch was hidden by the locked one beside it"
 
 
 def test_an_alias_that_releases_before_returning_does_not_count():
