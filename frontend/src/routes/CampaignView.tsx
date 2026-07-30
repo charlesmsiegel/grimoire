@@ -219,6 +219,14 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     return players.length === 1 ? players[0].name : null;
   }, [cast]);
 
+  // The compounding silent failure this closes: one slow-but-healthy extraction
+  // can eat the whole shared budget, and the trailing steps then come back with
+  // nothing to show — which reads exactly like a model that had nothing to
+  // suggest. Named up front, before the reviewer reads the (short) edit list.
+  const budgetCutPhases = useMemo(
+    () => (absorb?.phases ?? []).filter((p) => p.budget_exhausted),
+    [absorb?.phases]);
+
   // offscreen scenes take director notes instead of PC dialogue
   const activePcless = useMemo(
     () => scenes.find((s) => s.id === activeId)?.pcless ?? false,
@@ -595,7 +603,15 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     if (!activeId) return;
     try {
       const res = await api.retryAudit(cid, activeId);
-      setAbsorb((a) => (a ? { ...a, mechanics: res.mechanics } : a));
+      // The audit phase row is a projection of `mechanics` (backend:
+      // _phase_report), so it has to move with it — otherwise the panel keeps
+      // reporting a budget that ran out for a step this retry has since run.
+      setAbsorb((a) => (a ? { ...a, mechanics: res.mechanics,
+        phases: a.phases.map((p) => (p.name === "audit"
+          ? { ...p, status: res.mechanics.status, reason: res.mechanics.reason,
+              attempted: res.mechanics.attempted,
+              budget_exhausted: res.mechanics.budget_exhausted }
+          : p)) } : a));
       setEditRows((rows) => [
         ...rows.filter((r) => r.kind !== "sheet"),
         ...res.edits.map((e) => ({ ...e, approved: true })),
@@ -807,23 +823,15 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
                 ))}
               </ul>
             )}
-            {(() => {
-              // The compounding silent failure this closes: one slow-but-healthy
-              // extraction can eat the whole shared budget, and the trailing
-              // steps then come back with nothing to show -- which looks exactly
-              // like a model that had nothing to suggest. Say it once, up front,
-              // before the reviewer reads the (short) list of proposed changes.
-              const cut = absorb.phases.filter((p) => p.budget_exhausted);
-              return cut.length > 0 && (
-                <div className="mechanics-notice">
-                  <p>This scene was only partly absorbed: the absorb time budget ran out.</p>
-                  <p className="field-hint">
-                    Cut short: {cut.map((p) => PHASE_LABELS[p.name]).join(", ")}. The summary and
-                    its edits above are complete. Raise the absorb budget on the Configuration
-                    page, or end the scene again to retry the rest.
-                  </p>
-                </div>);
-            })()}
+            {budgetCutPhases.length > 0 && (
+              <div className="mechanics-notice">
+                <p>This scene was only partly absorbed: the absorb time budget ran out.</p>
+                <p className="field-hint">
+                  Cut short: {budgetCutPhases.map((p) => PHASE_LABELS[p.name]).join(", ")}. The
+                  summary and its edits above are complete. Raise the absorb budget on the
+                  Configuration page, or end the scene again to retry the rest.
+                </p>
+              </div>)}
             {absorb.mechanics.status === "ok" && absorb.mechanics.warnings.length === 0 && (
               <p className="field-hint">mechanics audited clean</p>)}
             {absorb.mechanics.warnings.length > 0 && (

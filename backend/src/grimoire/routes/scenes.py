@@ -276,28 +276,31 @@ def _budget_overrun(exc: BaseException) -> bool:
     return isinstance(exc, LLMError) and exc.detail == BUDGET_EXHAUSTED
 
 
-# Every LLM-backed step of one absorb, in the order they run. A phase row is
-# projected from the block that already reports that step (below), so `phases`
-# is a single uniform view rather than a second source of truth that can drift.
-# ("Phase" here means a step of one absorb run; the `Phase 2:`/`Phase 5:`
-# comments elsewhere in this file are roadmap milestones, unrelated.)
-_PHASE_KEYS = ("status", "reason", "attempted", "budget_exhausted")
-
-
 def _phase_report(dossiers: dict, mechanics: dict) -> list[dict]:
-    """One row per absorb step: was it attempted, how did it end, and was the
-    time budget what stopped it (#243/#236 follow-up).
+    """One row per LLM-backed step of this absorb, in run order: was it
+    attempted, how did it end, and was the shared time budget what stopped it
+    (#243/#236 follow-up).
 
-    Without this, a slow-but-healthy extraction that eats the whole budget
-    returns an absorb with fewer proposed edits and no way to tell that apart
-    from a model that simply had nothing to suggest.
+    Without it, a slow-but-healthy extraction that eats the whole budget returns
+    an absorb with fewer proposed edits and no way to tell that apart from a
+    model that simply had nothing to suggest.
 
-    Extraction is unconditionally `ok`: `post_absorb` raises 502 when it fails,
-    so reaching the point where this is built already proves it succeeded."""
+    Each row is *projected* from the block that already reports that step -- the
+    `audit` row from `mechanics`, which is that step's block -- so `phases` is a
+    uniform view rather than a second source of truth that can drift from what
+    the review panel renders beside it.
+
+    Extraction gets no block because it has no partial outcome: `post_absorb`
+    raises 502 when it fails, so reaching this call already proves it succeeded.
+
+    ("Phase" here means a step of one absorb run; the `Phase 2:`/`Phase 5:`
+    comments elsewhere in this file are roadmap milestones, unrelated.)"""
     rows = [{"name": "extraction", "status": "ok", "reason": None,
              "attempted": True, "budget_exhausted": False}]
     for name, block in (("dossiers", dossiers), ("audit", mechanics)):
-        rows.append({"name": name, **{k: block[k] for k in _PHASE_KEYS}})
+        rows.append({"name": name,
+                     **{k: block[k] for k in
+                        ("status", "reason", "attempted", "budget_exhausted")}})
     return rows
 
 
@@ -313,7 +316,6 @@ async def _run_audit(cid: str, sid: str, client: LLMClient, conn: dict,
     mech = {"status": "skipped", "reason": None, "warnings": [], "dropped": [],
             "attempted": False, "budget_exhausted": False}
     excluded: list = []
-    attempted = False
     try:
         if store.modules.resolve(cid) is None:
             mech["reason"] = "no module"
@@ -343,19 +345,20 @@ async def _run_audit(cid: str, sid: str, client: LLMClient, conn: dict,
             return [], {**mech, "status": "failed", "budget_exhausted": True,
                         "reason": "the absorb time budget ran out before the audit could run",
                         "dropped": excluded}
-        attempted = True
+        # `mech` is the accumulator the failure returns spread below, so
+        # recording the attempt here reaches every one of them.
+        mech["attempted"] = True
         text = await budget.run(client.complete(messages, conn))
         parsed = store.audit.parse_output(text)
         edits, dropped = store.audit.materialize(cid, sid, parsed)
     except store.audit.AuditParseError as exc:
         return [], {**mech, "status": "failed", "reason": str(exc),
-                    "dropped": excluded, "attempted": attempted}
+                    "dropped": excluded}
     except Exception as exc:  # noqa: BLE001 -- LLMError, store errors, anything
         # A budget overrun *here* was cancelled mid-flight, so the request did
         # reach the model -- `attempted` stays true, unlike the pre-check above.
         return [], {**mech, "status": "failed", "reason": f"audit failed: {exc}",
-                    "dropped": excluded, "attempted": attempted,
-                    "budget_exhausted": _budget_overrun(exc)}
+                    "dropped": excluded, "budget_exhausted": _budget_overrun(exc)}
     dropped = excluded + dropped
     status = "degraded" if dropped else "ok"
     reason = ("some sheets could not be audited" if excluded else
