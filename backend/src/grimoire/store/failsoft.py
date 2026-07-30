@@ -37,10 +37,21 @@ carries a hard cap and evicts oldest-first. Reaching it means the store has
 ``_MAX_WARNED`` files corrupt at once, which no dedup policy improves on, and the
 cost of an eviction is one repeated warning.
 
-The cache is plain module state, deliberately unlocked. Every operation on it is
-a single dict get/set/pop, so concurrent readers cannot corrupt it, and the only
-race -- two threads warning about the same file at once -- costs a duplicate log
-line. A lock on a read this hot would buy nothing.
+The cache is plain module state, deliberately unlocked, which is safe only
+because every operation on it is a *single* mapping call -- get, set, pop,
+popitem. Those cannot interleave, so the worst race is two threads warning about
+the same file at once, which costs a duplicate log line.
+
+Eviction is where that stops being free, and it is worth spelling out because
+the obvious spelling is wrong. ``del _warned[next(iter(_warned))]`` reads a key
+and then deletes it, and two threads at the cap will pick the same oldest key:
+the loser's ``del`` raises ``KeyError``, and merely making the delete tolerant
+does not help, because ``next(iter(...))`` raises ``RuntimeError: dictionary
+changed size during iteration`` when the size moves between the ``iter`` and the
+``next``. Both escape ``read_json`` and turn a campaign read into a 500 -- the
+exact opposite of what fail-soft is for (Codex review; reproduced with 32
+concurrent reads at the cap under a forced switch interval). ``popitem`` picks
+and removes in one call, so there is no window between the two.
 
 Nothing else should be routed through here without the same argument. The other
 fail-soft sites (``audit``, ``changes``, ``commits``, ...) are deliberately
@@ -51,6 +62,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
@@ -59,7 +71,10 @@ log = logging.getLogger(__name__)
 #: Paths known corrupt -> the (mtime_ns, size) that was warned about. ``None``
 #: means the signature could not be taken, which never matches, so an unstattable
 #: file is reported on every read rather than silently once.
-_warned: dict[Path, tuple[int, int] | None] = {}
+#: An OrderedDict, not a dict, for `popitem(last=False)` -- oldest-first removal
+#: in one call. A plain dict's `popitem()` takes the newest, which would evict
+#: the entry just recorded and so dedup nothing.
+_warned: OrderedDict[Path, tuple[int, int] | None] = OrderedDict()
 
 #: Ceiling on `_warned`, so a path that vanishes by rmtree cannot pin a row for
 #: the life of the process. Far above any real number of simultaneously-corrupt
@@ -81,7 +96,10 @@ def _warn(path: Path, detail: str, consequence: str) -> None:
         return
     _warned[path] = signature
     while len(_warned) > _MAX_WARNED:
-        del _warned[next(iter(_warned))]   # dicts iterate in insertion order: oldest first
+        try:
+            _warned.popitem(last=False)
+        except KeyError:      # a concurrent evictor got there first; nothing left to trim
+            break
     log.warning("%s is unusable (%s) -- %s", path, detail, consequence)
 
 
