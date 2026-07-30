@@ -36,10 +36,35 @@ Honest about its reach — the house standard set by ``test_atomic_guard.py``:
 - **"Campaign-scoped" is approximated by a ``cid`` parameter.** That is the
   codebase's own convention, not a proof. A mutator that derives the campaign id
   some other way (from a path, a scene record, a request object) is not seen.
-- **Serialization is recognized syntactically**, through module-local
-  decorators, context managers and delegation. A lock acquired through a
-  dynamic or cross-module indirection this walker cannot follow reads as
-  *absent*, which fails loud rather than silent — the marker is the remedy.
+- **Serialization is recognized from a CLOSED WHITELIST of forms, and
+  everything else fails loud.** This is the one design decision worth
+  understanding before trusting the guard, and it was learned the hard way:
+  seven review rounds produced roughly eight findings of a single shape — a
+  syntactic test standing in for the semantic fact "this lock protects this
+  campaign". `hold_all(x)` where `x` merely mentions `cid`; an alias whose
+  parameters bind the caller's `cid` onto a different name; a local variable
+  shadowing `campaign_lock`. Each was true, and each was a new way to spell
+  "looks locked".
+
+  So the polarity is inverted. Rather than accepting an acquisition unless a
+  problem is spotted, only these are recognized:
+
+  1. ``with locks.campaign_lock(cid)`` — receiver ``locks``, argument exactly
+     the name ``cid``;
+  2. ``with locks.hold_all([... cid ...])`` — a literal container that visibly
+     contains ``cid`` (or any argument at all, in a function that takes no
+     ``cid`` and is therefore a multi-campaign holder);
+  3. ``with <alias>(cid, ...)`` — a module-local helper whose FIRST parameter is
+     ``cid`` and which returns or yields one of the above, so positional binding
+     makes the two the same campaign;
+  4. ``@<decorator>`` whose returned wrapper invokes the decorated function
+     under one of the above on every path it executes.
+
+  Anything else — a computed iterable, a keyword-bound alias, a lock reached
+  through an object this cannot resolve — reads as *unserialized*. That will
+  produce false alarms on legitimate code the whitelist has not learned. That is
+  the intended trade: the marker is cheap and visible, and a false alarm costs a
+  comment while a false negative costs a transcript.
 - **Analysis is per-module.** Mutation propagates through a module's own
   helpers, never across an import, so a function whose only mutation happens
   inside a *different* module's unserialized mutator is not itself flagged. The
@@ -209,14 +234,29 @@ def _writes_directly(fn: ast.AST, imported: frozenset[str] = frozenset()) -> boo
             # `from .atomic import write_text` — no receiver to key on.
             if name in imported:
                 return True
+            if name == "open" and _is_write_mode(node):
+                return True              # the builtin, not a method
             continue
         if not isinstance(node.func, ast.Attribute):
             continue
         receiver = _receiver_name(node.func)
-        if name in _ATOMIC_WRITERS and receiver == "atomic":
+        if name in _ATOMIC_WRITERS:
+            # ANY receiver, not just `atomic`. The claim that `test_atomic_guard`
+            # reduces publication to the helper surface was wrong twice over: it
+            # matches these names only as attributes, and it lets a raw write
+            # through entirely when a human clears it with `# atomic-ok:`. Two
+            # such exemptions exist today. A write that guard forgives is still
+            # a write this one has to see.
+            return True
+        if name == "mkdir":
+            # A directory is a namespace entry others can observe, and neither
+            # guard looked for one -- a mutator that publishes state purely by
+            # creating an initialization or completion directory was invisible.
             return True
         if name in _FS_ONLY:
             return True
+        if name == "open" and _is_write_mode(node):
+            return True                  # the raw form `atomic` itself wraps
         if name in _FS_AMBIGUOUS and receiver in _FS_MODULES:
             return True
         if name == "touch" and receiver not in _TOUCH_FUNCTIONS:
@@ -229,6 +269,18 @@ def _writes_directly(fn: ast.AST, imported: frozenset[str] = frozenset()) -> boo
             # and was simply wrong: `Path.touch(self, mode=0o666,
             # exist_ok=True)` takes both positionally, so `marker.touch(0o600)`
             # is a real file creation that a zero-positional-args test rejects.
+            return True
+    return False
+
+
+def _is_write_mode(node: ast.Call) -> bool:
+    """`open(p, "w")` / `p.open("w")` in any writable mode -- mirrors
+    `test_atomic_guard._is_write_mode`, tested for the characters that make a
+    mode writable rather than enumerating literals."""
+    for arg in [*node.args[:2], *(k.value for k in node.keywords if k.arg == "mode")]:
+        if isinstance(arg, ast.Constant) and isinstance(arg.value, str) \
+                and 0 < len(arg.value) <= 3 and set(arg.value) <= set("rwaxbt+") \
+                and any(c in arg.value for c in "wax+"):
             return True
     return False
 
@@ -275,6 +327,18 @@ def _guards_the_campaign(call: ast.Call) -> bool:
     """
     return bool(call.args) and isinstance(call.args[0], ast.Name) \
         and call.args[0].id == "cid"
+
+
+def _locks_its_first_param(fn: ast.AST) -> bool:
+    """The lock this helper hands back is keyed on its OWN first parameter.
+
+    What makes positional binding safe to reason about: if the helper locks its
+    first parameter and the caller passes `cid` first, the two are the same
+    campaign. Any other arrangement is a helper this cannot follow, and it fails
+    loud rather than being assumed benign.
+    """
+    params = [a.arg for a in [*fn.args.posonlyargs, *fn.args.args]]
+    return bool(params) and params[0] == "cid"
 
 
 def _produces_lock(fn: ast.AST) -> bool:
@@ -344,9 +408,18 @@ def _holds_this_campaign(call: ast.Call, fn: ast.AST) -> bool:
     mention it in the argument. An expression this cannot read fails loud.
     """
     if not _takes_cid(fn):
-        return True
-    return any(isinstance(n, ast.Name) and n.id == "cid"
-               for a in call.args for n in ast.walk(a))
+        return True                      # a multi-campaign holder; nothing to tie
+    if not call.args:
+        return False
+    held = call.args[0]
+    # Membership in an arbitrary iterable is not decidable here, and "mentions
+    # `cid` somewhere" is not membership: `hold_all([sid] if cid else [other])`
+    # names it in the condition and holds it on neither branch. So only a
+    # literal container is recognized; anything else fails loud and needs a
+    # marker rather than being guessed at.
+    if isinstance(held, (ast.List, ast.Tuple, ast.Set)):
+        return any(isinstance(e, ast.Name) and e.id == "cid" for e in held.elts)
+    return False
 
 
 def _is_lock_context(expr: ast.expr, fn: ast.AST) -> bool:
@@ -360,6 +433,13 @@ def _is_lock_context(expr: ast.expr, fn: ast.AST) -> bool:
     the rule lived in two places.
     """
     if not isinstance(expr, ast.Call):
+        return False
+    # The call must reach the real `store.locks`. Trusting the trailing name let
+    # `def put(cid, campaign_lock=nullcontext): with campaign_lock(cid): ...`
+    # pass, and any object with a same-named method would do the same. Every
+    # acquisition in this package is written `locks.campaign_lock` or
+    # `store.locks.campaign_lock`, so requiring the receiver costs nothing.
+    if _receiver_name(expr.func) != "locks":
         return False
     name = _called_name(expr.func)
     if name == "hold_all":
@@ -386,6 +466,14 @@ def _enters_lock(fn: ast.AST, aliases) -> bool:
     for call in _with_context_calls(fn):
         if _is_lock_context(call, fn):
             return True
+        # An alias is recognized only when the caller's `cid` lands on the
+        # parameter the alias actually locks. Checking the two ends separately
+        # -- the helper locks *a* parameter named `cid`, the caller passes `cid`
+        # first -- accepted `def helper(sid, cid)` called as `helper(cid, sid)`,
+        # where binding sends the caller's cid to `sid` and the helper locks the
+        # other campaign entirely. `aliases` therefore holds only helpers whose
+        # FIRST parameter is the one they lock, and the call must pass `cid`
+        # first positionally.
         if _called_name(call.func) in aliases and _guards_the_campaign(call):
             return True
     return False
@@ -584,7 +672,8 @@ def _serializing(funcs: dict[str, ast.AST], imported=frozenset()) -> set[str]:
     decorating = {n for n, ds in funcs.items() if _all(ds, _locks_anywhere)}
     # Local helpers that hand back a campaign lock. Entering one of these IS an
     # acquisition, even though the helper itself never enters anything.
-    aliases = {n for n, ds in funcs.items() if _all(ds, _produces_lock)}
+    aliases = {n for n, ds in funcs.items()
+               if _all(ds, _produces_lock) and _all(ds, _locks_its_first_param)}
     writing = _reaches_a_write(funcs, imported)
     out = {n for n, ds in funcs.items() if _all(ds, _locks_in_own_body)}
     for _ in range(len(funcs) + 1):
@@ -973,6 +1062,88 @@ def test_this_repos_own_touch_function_is_not_a_filesystem_call():
     the bare name would have made every caller of it a direct writer."""
     _f, _s, mutators = _probe("def bump(cid):\n    campaigns.touch(cid)\n")
     assert not mutators, "campaigns.touch(cid) was read as a filesystem call"
+
+
+def test_hold_all_membership_must_be_visible_not_merely_mentioned():
+    """"Mentions `cid` somewhere in the expression" is not membership:
+    `hold_all([sid] if cid else [other])` names it in the condition and holds it
+    on neither branch. Only a literal container is recognized."""
+    for src, why in [
+        ("def put(cid, sid):\n    with locks.hold_all([sid] if cid else [x]):\n"
+         "        atomic.write_text(p, y)\n", "conditional, holds neither"),
+        ("def put(cid):\n    with locks.hold_all(ids_for(cid)):\n"
+         "        atomic.write_text(p, y)\n", "computed iterable"),
+    ]:
+        _f, serializing, _m = _probe(src)
+        assert "put" not in serializing, f"accepted without proving membership: {why}"
+
+    ok = ("def put(cid, sid):\n    with locks.hold_all([cid, sid]):\n"
+          "        atomic.write_text(p, y)\n")
+    _f, serializing, _m = _probe(ok)
+    assert "put" in serializing, "a literal container holding cid regressed"
+
+
+def test_an_alias_must_lock_the_parameter_the_caller_passes_cid_into():
+    """Checking the two ends separately accepted `def helper(sid, cid)` called
+    as `helper(cid, sid)`: the helper locks a parameter spelled `cid`, the
+    caller passes one spelled `cid`, and binding sends them to opposite
+    campaigns."""
+    crossed = ("def helper(sid, cid):\n"
+               "    return locks.campaign_lock(cid)\n"
+               "def put(cid, sid):\n"
+               "    with helper(cid, sid):\n"
+               "        atomic.write_text(p, x)\n")
+    _f, serializing, _m = _probe(crossed)
+    assert "put" not in serializing, "argument binding crossed the campaigns"
+
+    straight = ("def helper(cid):\n"
+                "    return locks.campaign_lock(cid)\n"
+                "def put(cid):\n"
+                "    with helper(cid):\n"
+                "        atomic.write_text(p, x)\n")
+    _f, serializing, _m = _probe(straight)
+    assert "put" in serializing, "the ordinary alias shape regressed"
+
+
+def test_a_shadowed_campaign_lock_is_not_the_store_lock():
+    """The name is not the thing. A local binding, or any object with a
+    same-named method, spelled its way past a check that trusted the trailing
+    name."""
+    for src in ("def put(cid, campaign_lock=nullcontext):\n"
+                "    with campaign_lock(cid):\n        atomic.write_text(p, x)\n",
+                "def put(cid):\n    with self.campaign_lock(cid):\n"
+                "        atomic.write_text(p, x)\n"):
+        _f, serializing, _m = _probe(src)
+        assert "put" not in serializing, f"a shadowed name passed as the lock: {src!r}"
+
+    real = ("def put(cid):\n    with locks.campaign_lock(cid):\n"
+            "        atomic.write_text(p, x)\n")
+    _f, serializing, _m = _probe(real)
+    assert "put" in serializing
+
+
+def test_directory_creation_is_a_mutation():
+    """A directory is a namespace entry others can observe, and neither guard
+    looked for one."""
+    _f, _s, mutators = _probe("def init(cid):\n    (root / 'done').mkdir()\n")
+    assert mutators, "Path.mkdir() was invisible"
+
+
+def test_a_raw_write_the_atomic_guard_forgives_is_still_a_mutation():
+    """`# atomic-ok:` lets a raw write past that guard -- two exist today -- and
+    matching only an `atomic` receiver meant this one never saw them. A write
+    the other guard forgives is still a write."""
+    for src in ("def put(cid):\n    p.write_text('x', encoding='utf-8')\n",
+                "def put(cid):\n    p.write_bytes(b'x')\n",
+                "def put(cid):\n    open(p, 'w').write('x')\n",
+                "def put(cid):\n    p.open('wb').write(b'x')\n"):
+        _f, _s, mutators = _probe(src)
+        assert mutators, f"a raw write was invisible: {src!r}"
+
+    for src in ("def read_it(cid):\n    return p.open('r').read()\n",
+                "def read_it(cid):\n    return open(p).read()\n"):
+        _f, _s, mutators = _probe(src)
+        assert not mutators, f"a read was mistaken for a write: {src!r}"
 
 
 def test_a_contextmanager_must_yield_under_the_lock_on_every_branch():
