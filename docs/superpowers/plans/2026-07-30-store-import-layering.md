@@ -43,7 +43,13 @@ Three review rounds each found the same class of defect: a partition table that 
 python3 scripts/validate_partition.py
 ```
 
-Expected: `[OK ]` for all ten packages, exit 0. The `unassigned` counts are module-level constants (`RESPONSE_FIELDS`, `DEFAULT_BUILTIN_DIR`, …) that the tables do not enumerate; place each with the file that reads it, and re-run.
+Expected: `[OK   ]` for all ten packages, exit 0.
+
+`[OK   ]` means two things, and the second was missing from the first version of this tool: no cycles **and** no unplaced names. An omitted name is not a clean partition — where it eventually lands can close a loop the graph never saw. `scenes.SYNTHETIC_SPEAKERS` is the example: read by both `turns.py` and `write.py`, so putting it in `write.py` creates `turns → write` while write functions already depend on turn helpers. The earlier version lumped every omitted name into one synthetic node and still printed `[OK ]`, which made the check unsound in exactly the way it existed to prevent.
+
+It also reads annotated assignments now. `FILE_KINDS: tuple[str, ...] = ...` in `sheets.py` is an `AnnAssign`, invisible to an `Assign`-only walk, and it is shared by four proposed files.
+
+If a run reports `GAPS`, it names each unplaced name and the files that read it — place it with its reader (or in the leaf its readers share) and re-run.
 
 - [ ] **Step 2: Re-run it at the start of every split task**
 
@@ -682,6 +688,29 @@ It follows that a retarget belongs in **the task that rewrites the caller's impo
 | `test_context.py:1157` | `context._drift_roster` | retarget in **Task 12** (caller is inside the same package) |
 | `test_module_edit.py:627`,`:631`,`:914` | `_run_migration`, `_campaign_locks` | retarget in **Task 10** (caller is inside the same package) |
 | `test_scene_store.py:996` | `scenes.parse_frontmatter` | retarget in **Task 9** — see that task, it needs every submodule patched |
+| `test_sheets_store.py:305` | `sheets.atomic.os` | retarget in **Task 7** to the shared module |
+| `test_locks_http.py:78` | `audit.locks` | retarget in **Task 8** to the shared module |
+| `test_locks_store.py:187`,`:193` | `scenes.calendars` | retarget in **Task 9** to the shared module |
+
+**A third case: reaching a *dependency* through the split module's namespace.** These three do not patch a name the module defines — they patch a module it imports, via `sheets.atomic`, `audit.locks`, `scenes.calendars`. All three are `from . import <dep>` today, so the attribute is the shared `grimoire.store.<dep>` module itself. After the split it lives on a submodule (`sheets/paths.py`, `audit/baselines.py`, a `scenes/` file) and the facade `__init__.py` does not re-bind it, so the current spelling raises `AttributeError` before the assertion runs.
+
+Point them at the shared module directly, which is what they always meant and is immune to any further reshuffling:
+
+```python
+from grimoire.store import atomic
+    monkeypatch.setattr(atomic.os, "replace", boom)          # test_sheets_store.py:305
+
+from grimoire.store import locks
+    monkeypatch.setattr(locks, "campaign_lock", busy)        # test_locks_http.py:78
+
+from grimoire.store import calendars
+    real = getattr(calendars, name)                          # test_locks_store.py:187
+    monkeypatch.setattr(calendars, name, watched)            # test_locks_store.py:193
+```
+
+`test_locks_store.py:196` already carries its own injection proof — `assert free, "the calendar was never resolved -- the test proves nothing"` — so that one reports a broken patch by itself. The other two need the usual check: drop the patch and confirm the test fails.
+
+A scan of the whole suite for `<split module>.<dependency>` finds exactly these three; there is no fourth.
 
 **Whenever you retarget one, prove it still injects.** Temporarily break the patched function's replacement (make it a no-op instead of raising, or drop the patch) and confirm the test fails. A fault-injection test that no longer injects is indistinguishable from a passing one.
 
