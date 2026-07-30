@@ -103,8 +103,12 @@ check: check-lint check-py check-web check-templates check-pydantic1
 check-py:
 	$(WITH_SRC) "$(call fixpath,$(PY))" -m pytest backend -q
 
+# `test:coverage`, not `test`: same suite, same pass/fail, plus it drops
+# frontend/coverage/lcov.info. Measuring in the gate rather than in a separate
+# job is deliberate -- a coverage target nobody runs reports on a tree nobody
+# has, and the istanbul provider costs a few seconds on this suite.
 check-web:
-	cd frontend && npm ci && npm run typecheck && npm test
+	cd frontend && npm ci && npm run typecheck && npm run test:coverage
 
 check-lint:
 	"$(call fixpath,$(PY))" -m ruff check .

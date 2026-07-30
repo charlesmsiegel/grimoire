@@ -53,6 +53,17 @@ jobs:
       # npm ci, never npm install: install rewrites resolution and would defeat
       # the committed lockfile. The target does this.
       - run: make check-web
+      # check-web runs vitest under coverage, so lcov.info exists by here.
+      # `always()` keeps the report retrievable when the suite fails, which is
+      # when knowing what actually ran is worth most. `if-no-files-found: error`
+      # is the same guard the apk job uses: without it, a check-web that
+      # silently stopped emitting coverage would upload nothing and stay green.
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: frontend-coverage
+          path: frontend/coverage/lcov.info
+          if-no-files-found: error
 
   lint:
     runs-on: ubuntu-24.04
