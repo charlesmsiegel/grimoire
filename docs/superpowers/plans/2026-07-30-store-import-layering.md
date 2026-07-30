@@ -292,6 +292,13 @@ class _Walker(ast.NodeVisitor):
 
     visit_AsyncFunctionDef = visit_FunctionDef
 
+    def visit_ClassDef(self, n):
+        # A class body is not module scope either: `class C: import json` ran
+        # with an empty stack and counted as a valid module-level edge.
+        self.stack.append(n.name)
+        self.generic_visit(n)
+        self.stack.pop()
+
     def visit_Import(self, n):
         self._record(n, [a.name for a in n.names])
 
@@ -712,6 +719,10 @@ from grimoire.store import calendars
 
 A scan of the whole suite for `<split module>.<dependency>` finds exactly these three; there is no fourth.
 
+**The rule applies inside a package too.** The recipe permits `from .migrate import _campaign_locks` between siblings, and that caches the function exactly the way a cross-package by-value import does. `test_module_edit.py:914` patches `_campaign_locks` to prove `delete_module` rejects a built-in *before* taking campaign locks; if `packs.py` binds it by value, patching `module_edit.migrate._campaign_locks` leaves `packs.delete_module` calling the original and the ordering assertion is never reached.
+
+So: **any function a test patches must be reached through a module object by whoever calls it** — `from . import migrate` then `migrate._campaign_locks(...)`, whether the caller is in the same package or not. This is deliberately not a blanket guard rule; a sweep that flagged every sibling name-import produced six false positives on `calendars/` and `weather/`, two of them the exact line Task 13 instructs the implementer to write. The enumerated patch targets below are the operative list, and the injection proof is what catches a miss.
+
 **Whenever you retarget one, prove it still injects.** Temporarily break the patched function's replacement (make it a no-op instead of raising, or drop the patch) and confirm the test fails. A fault-injection test that no longer injects is indistinguishable from a passing one.
 
 ### Task ordering is a dependency order
@@ -732,8 +743,8 @@ Highest-value task: ten modules import `campaigns` for nothing but path helpers.
 
 **Interfaces:**
 - Produces:
-  - `campaigns/paths.py`: `CampaignNotFound`, `_campaigns_dir()`, `campaign_root(cid) -> Path`, `campaign_meta_path(cid) -> Path`, `world_root_of(cid) -> Path`, `campaign_exists(cid) -> bool`, `_manifest_path(cid)`, `read_manifest(cid) -> dict`, `write_manifest(cid, data) -> None`
-  - `campaigns/read.py`: `read_campaign(cid) -> dict`, `list_campaigns() -> list`, `world_refs() -> list[tuple[str, str | None]]`, `touch(cid) -> None`
+  - `campaigns/paths.py`: `CampaignNotFound`, `_campaigns_dir()`, `campaign_root(cid) -> Path`, `campaign_meta_path(cid) -> Path`, `campaign_exists(cid) -> bool`, `_manifest_path(cid)`, `read_manifest(cid) -> dict`, `write_manifest(cid, data) -> None`
+  - `campaigns/read.py`: `read_campaign(cid) -> dict`, `list_campaigns() -> list`, `world_refs() -> list[tuple[str, str | None]]`, `touch(cid) -> None`, `world_root_of(cid) -> Path` — **not** `paths.py`: it calls `read_campaign`, which calls `campaign_meta_path`, so splitting them closes `paths ↔ read`
   - `campaigns/lifecycle.py`: `create_campaign(name, world_id, region=None, calendar=None, module=None, climate=None) -> str`, `delete_campaign`, `rename_campaign`, `ensure_campaign_slim`, `_tombstone_deleted_copied_assets`, `_prune_duplicate_files`, `set_campaign_response`
 - Consumes: Task 2's guard.
 
@@ -1195,6 +1206,8 @@ from grimoire.store.module_edit import migrate as me_migrate
     monkeypatch.setattr(me_migrate, "_campaign_locks", _boom)  # :914
 ```
 
+For `:914` to bite, `packs.py` must call `migrate._campaign_locks(...)` through the module object — `delete_module` lives in `packs.py` while `_campaign_locks` lives in `migrate.py`, and a `from .migrate import _campaign_locks` there would cache the original. Same for `_run_migration` if any file outside `migrate.py` calls it. Prove each: drop the patch and confirm the test fails.
+
 - [ ] **Step 3: Delete this task's baseline line**
 
 ```
@@ -1330,6 +1343,7 @@ It must come **after** Task 9. Hoisting `chronicle → scenes` today would close
 
 **Files:**
 - Modify: `backend/src/grimoire/store/chronicle.py`, `proposals.py`, `response_presets.py`, `export.py`, `entity_schema.py`, `suggest.py`, `weather/__init__.py`, `checks.py`, `calendars/base.py`, `plot.py`, `relationships.py`, `epub.py`
+- Modify: `backend/tests/test_response_presets.py:601`
 - Modify: `backend/tests/import_guard_baseline.txt`
 
 **Interfaces:**
@@ -1362,6 +1376,18 @@ Work one module at a time and run the guard after each: a call site you missed i
 | `epub.py` | `_env` | `from .. import prompts` |
 
 `calendars/base.py` needs care: hoisting `from . import plugins` must **not** cause user plugins to load at import time. `plugins.load_custom_providers()` stays a call inside `get_provider`/`list_providers`. Only the module import moves. `plugins.py` imports nothing from `base`, so this closes no loop — user plugin files import `base` themselves, at call time, when `base` is fully initialized.
+
+- [ ] **Step 1b: Retarget the response-presets patch, which this task's rewrite breaks**
+
+Rewriting `usage()` to call `campaigns_read.read_campaign` is what finally moves this patch. `test_response_presets.py:601` currently patches the facade binding `campaigns.read_campaign`, which worked while `usage()` did a call-time lookup on the package; after the rewrite the caller holds `campaigns_read`, so the injected `OSError` is never raised and the expected `unevaluated` row goes missing.
+
+```python
+from grimoire.store.campaigns import read as campaigns_read
+...
+    monkeypatch.setattr(campaigns_read, "read_campaign", boom)
+```
+
+Then prove it still injects: drop the patch and confirm `test_usage_reports_an_unreadable_campaign_as_unevaluated` fails.
 
 - [ ] **Step 2: Verify the plugin loader is still lazy**
 
@@ -1562,7 +1588,7 @@ Expected: all pass.
 - [ ] **Step 5: Delete this task's baseline lines**
 
 ```
-deferred grimoire.claude_agent::stream::claude_agent_sdk
+deferred grimoire.claude_agent::ClaudeAgentClient.stream::claude_agent_sdk
 deferred grimoire.prompts::_env::jinja2
 deferred grimoire.store.context::_encoder::tiktoken
 deferred grimoire.store.epub::_env::jinja2
