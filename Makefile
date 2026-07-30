@@ -51,7 +51,11 @@ else
   MKDIR_BUILD = mkdir -p $(BUILD_DIR)
   COPY = cp
   fixpath = $(1)
-  PY ?= python3
+  # Mirrors the Windows default: scripts/unix/install.sh creates backend/.venv
+  # and installs -e ".[dev,desktop]" into it, so a bare `python3` would miss
+  # every project dependency on an otherwise correctly set-up machine. CI passes
+  # PY=python explicitly, where the deps really are global to the runner.
+  PY ?= $(CURDIR)/backend/.venv/bin/python
   VENV_PY = $(BUILD_DIR)/venv-pydantic1/bin/python
   WITH_SRC = PYTHONPATH="$(CURDIR)/backend/src"
   rm_rf = rm -rf "$(1)"
