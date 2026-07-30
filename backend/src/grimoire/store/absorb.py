@@ -11,6 +11,7 @@ import json
 from .. import prompts
 from . import (appearances, cards, changes, characters, dossiers, entities,
                groupstate, overlay, pcs, playstate, plot, relationships, scenes, sheets)
+from .audit import apply as audit_apply
 from .campaigns import paths as campaigns_paths
 from .paths import slugify
 
@@ -577,7 +578,6 @@ def apply_edits(cid: str, edits: list[dict],
     applied: list[str] = []
     failures: list[dict] = []
     recorded: dict[str, list[dict]] = {}
-    from . import audit  # lazy: audit imports absorb-adjacent stores
     for e in edits:
         if not isinstance(e, dict):
             continue  # malformed batch item: skip, best-effort
@@ -592,7 +592,7 @@ def apply_edits(cid: str, edits: list[dict],
                                        "reason": "sheet edits need a scene id"})
                 continue
             try:
-                audit.apply_delta(cid, sid, e)
+                audit_apply.apply_delta(cid, sid, e)
                 applied.append(eid)
             except sheets.SheetConflict as exc:
                 failures.append({"id": eid, "kind": "conflict",

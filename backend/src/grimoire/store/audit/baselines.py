@@ -1,0 +1,167 @@
+"""Part 1: scene-start sheet baselines and the predicates that read them.
+
+Deliberately free of any `scenes` import: `capture_baseline` runs from
+``scenes._create_scene``, so a dependency the other way would close the
+``audit``/``scene_refs``/``scenes`` cycle this package's split removed. Only
+``audit/prompt.py`` reads scene state.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import threading
+from pathlib import Path
+
+from .. import atomic, locks
+from ..campaigns import paths as campaigns_paths
+from ..modules import binding as modules_binding, pack as modules_pack
+from ..sheets import reader as sheets_reader, schema as sheets_schema
+
+_LOCKS: dict[str, threading.Lock] = {}
+_LOCKS_GUARD = threading.Lock()
+
+
+def _lock(cid: str) -> threading.Lock:
+    with _LOCKS_GUARD:
+        return _LOCKS.setdefault(cid, threading.Lock())
+
+
+def _path(cid: str) -> Path:
+    return campaigns_paths.campaign_root(cid) / "sheet_baselines.json"
+
+
+def read_baselines(cid: str) -> dict:
+    p = _path(cid)
+    if not p.exists():
+        return {}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write(cid: str, data: dict) -> None:
+    atomic.write_text(_path(cid), json.dumps(data, indent=2, sort_keys=True) + "\n")
+
+
+def schema_stamp(mid: str) -> dict:
+    """Content hash + sheets.json mtime: an in-place pack edit changes the
+    hash; an A->B->A reversion restores the hash but not the mtime."""
+    sheets_def = modules_pack.load_pack(mid)["sheets"]
+    digest = hashlib.sha256(
+        json.dumps(sheets_def, sort_keys=True).encode("utf-8")).hexdigest()
+    try:
+        mtime = (modules_pack.pack_root(mid)[0] / "sheets.json").stat().st_mtime_ns
+    except OSError:
+        mtime = 0
+    return {"hash": digest, "mtime": mtime}
+
+
+def capture_baseline(cid: str, sid: str) -> None:
+    """Snapshot every campaign sheet at scene creation. Never raises -- a
+    capture failure must not fail scene creation -- with one exception,
+    ``locks.StoreBusy`` (#234); see the handler at the bottom."""
+    try:
+        with locks.campaign_lock(cid):     # consistent multi-file snapshot
+            # resolve INSIDE the lock: rebinds publish under this same lock
+            # (see sheets.write), so a concurrent rebind can't interleave
+            # between resolving the module and snapshotting sheets under it.
+            mid = modules_binding.resolve(cid)
+            if mid is None:
+                return
+            snap: dict = {}
+            croot = campaigns_paths.campaign_root(cid)
+            for kind, eid in sheets_reader.list_refs(cid):
+                try:
+                    raw = json.loads((croot / "sheets" / f"{kind}--{eid}.json")
+                                     .read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    continue
+                if isinstance(raw, dict):
+                    snap[f"{kind}--{eid}"] = {
+                        "sheet_type": raw.get("sheet_type"), "gen": raw.get("gen"),
+                        "fields": raw.get("fields") if isinstance(raw.get("fields"), dict) else {}}
+            entry = {"module": mid, "schema": schema_stamp(mid), "sheets": snap}
+            with _lock(cid):                # sheet lock -> baseline lock
+                data = read_baselines(cid)
+                data[sid] = entry
+                _write(cid, data)
+    except locks.StoreBusy:
+        # The one exception to "never raises". Contention means the snapshot
+        # was not merely attempted-and-failed but never attempted, and a scene
+        # without a baseline silently loses its audit delta -- unrecoverable,
+        # where a 409 on scene creation is trivially retried. Safe because the
+        # only caller, scenes._create_scene, already holds this lock
+        # (reentrantly), so this guards a future caller that does not (#234).
+        raise
+    except Exception:  # noqa: BLE001 — never fail the caller
+        return
+
+
+def baseline_entry_valid(cid: str, sid: str, kind: str, eid: str,
+                         mid: str, sheet: dict) -> bool:
+    """Shared validity predicate: scene entry exists, module + schema stamp
+    match, entity entry exists, and its sheet_type AND gen equal the live
+    sheet's. `sheet` is a sheets.read() result (must be non-None). Never
+    raises -- a module deleted mid-flight (schema_stamp -> load_pack ->
+    pack_root -> ModuleNotFound) makes the baseline invalid, not a 500."""
+    try:
+        scene = read_baselines(cid).get(sid)
+        if not isinstance(scene, dict) or scene.get("module") != mid:
+            return False
+        if scene.get("schema") != schema_stamp(mid):
+            return False
+        entry = scene.get("sheets", {}).get(f"{kind}--{eid}")
+        if not isinstance(entry, dict):
+            return False
+        return (entry.get("sheet_type") == sheet["sheet_type"]
+                and entry.get("gen") == sheet["gen"])
+    except Exception:  # noqa: BLE001 — never raise; see docstring
+        return False
+
+
+def baseline_field(cid: str, sid: str, kind: str, eid: str, field_key: str):
+    """The scene-start value for a field, or None when no valid baseline
+    covers it (report-only). Never raises -- see baseline_entry_valid."""
+    try:
+        mid = modules_binding.resolve(cid)
+        if mid is None:
+            return None
+        sheet = sheets_reader.read(cid, kind, eid)
+        if sheet is None or sheet["errors"]:
+            return None
+        if not baseline_entry_valid(cid, sid, kind, eid, mid, sheet):
+            return None
+        entry = read_baselines(cid)[sid]["sheets"][f"{kind}--{eid}"]
+        fields = {**sheets_schema.default_fields(modules_pack.load_pack(mid)["sheets"],
+                                                 entry["sheet_type"]), **entry["fields"]}
+        return fields.get(field_key)
+    except Exception:  # noqa: BLE001 — never raise; see docstring
+        return None
+
+
+# lock-domain-ok: touches only sheet_baselines.json, so the narrower baseline
+# lock is enough mutual exclusion; capture_baseline/apply_delta take the
+# campaign lock because they read sheets as well. Limit worth stating: `_lock`
+# is a process-local threading.Lock, so unlike campaign_lock this does not
+# exclude a second grimoire process — the private-registry shape #255 removed
+# from rolls, kept here because the baseline is derived and regenerable.
+def clear_baselines(cid: str) -> None:
+    with _lock(cid):
+        _write(cid, {})
+
+
+# lock-domain-ok: baseline-file-only for the same reason as clear_baselines, so
+# the baseline lock is enough; process-local, so not cross-process exclusion.
+def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
+    with _lock(cid):
+        data = read_baselines(cid)
+        hit = False
+        for old, new in mapping.items():
+            if old in data:
+                data[new] = data.pop(old)
+                hit = True
+        if hit:
+            _write(cid, data)

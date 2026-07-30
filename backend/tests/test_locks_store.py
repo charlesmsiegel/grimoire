@@ -18,6 +18,7 @@ import pytest
 
 from grimoire.store import (audit, campaigns, dice, locks, proposals, rolls, scenes, sheets,
                             worlds)
+from grimoire.store.audit import apply as audit_apply, baselines as audit_baselines
 from grimoire.store.sheets import (advancement as sheets_advancement,
                                    creation as sheets_creation, writer as sheets_writer)
 
@@ -303,11 +304,12 @@ def test_rolls_has_no_private_lock_registry():
     assert not hasattr(rolls, "_lock")
 
 
-#: `sheets` is a package now, so its borrowers are the three files that
-#: actually take the lock; the facade imports no `locks` of its own and is
-#: checked separately below.
+#: `sheets` and `audit` are packages now, so their borrowers are the files that
+#: actually take the lock -- three under `sheets/`, two under `audit/`
+#: (`prompt.py` reads sheets but takes no lock). Neither facade imports a
+#: `locks` of its own; both are checked separately below.
 @pytest.mark.parametrize("mod", [sheets_writer, sheets_creation, sheets_advancement,
-                                 proposals, audit, scenes, rolls])
+                                 proposals, audit_baselines, audit_apply, scenes, rolls])
 def test_borrowers_neither_re_export_nor_re_implement_the_registry(mod):
     """The lock domain is discoverable from store/locks.py only if no module
     re-exports or re-implements it: `sheets.lock_for()` was the old name and
@@ -320,13 +322,15 @@ def test_borrowers_neither_re_export_nor_re_implement_the_registry(mod):
     assert mod.locks is locks
 
 
-def test_the_sheets_facade_re_exports_no_part_of_the_registry():
-    """The other half of the rule above, for the one borrower that is a
-    package: `sheets/__init__.py` re-exports every name its own files define,
-    so a registry name reintroduced anywhere under `sheets/` surfaces here."""
-    assert not hasattr(sheets, "lock_for")
-    assert not hasattr(sheets, "_campaign_locks")
-    assert not hasattr(sheets, "campaign_lock")
+@pytest.mark.parametrize("pkg", [sheets, audit])
+def test_a_borrower_facade_re_exports_no_part_of_the_registry(pkg):
+    """The other half of the rule above, for the borrowers that are packages:
+    each `__init__.py` re-exports every name its own files define, so a
+    registry name reintroduced anywhere under `sheets/` or `audit/` surfaces
+    here -- including in a file the parametrized list above does not name."""
+    assert not hasattr(pkg, "lock_for")
+    assert not hasattr(pkg, "_campaign_locks")
+    assert not hasattr(pkg, "campaign_lock")
 
 
 def test_module_edit_holds_every_campaign_lock_from_this_registry():
