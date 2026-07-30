@@ -295,13 +295,11 @@ def _phase_report(dossiers: dict, mechanics: dict) -> list[dict]:
 
     ("Phase" here means a step of one absorb run; the `Phase 2:`/`Phase 5:`
     comments elsewhere in this file are roadmap milestones, unrelated.)"""
-    rows = [{"name": "extraction", "status": "ok", "reason": None,
-             "attempted": True, "budget_exhausted": False}]
-    for name, block in (("dossiers", dossiers), ("audit", mechanics)):
-        rows.append({"name": name,
-                     **{k: block[k] for k in
-                        ("status", "reason", "attempted", "budget_exhausted")}})
-    return rows
+    keys = ("status", "reason", "attempted", "budget_exhausted")
+    return [{"name": "extraction", "status": "ok", "reason": None,
+             "attempted": True, "budget_exhausted": False}] + \
+           [{"name": name, **{k: block[k] for k in keys}}
+            for name, block in (("dossiers", dossiers), ("audit", mechanics))]
 
 
 async def _run_audit(cid: str, sid: str, client: LLMClient, conn: dict,

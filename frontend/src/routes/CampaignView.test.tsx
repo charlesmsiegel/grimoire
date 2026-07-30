@@ -1177,6 +1177,23 @@ test("dossiers the absorb budget skipped are named, not silently missing", async
   expect(screen.getByText(/skipped: winifred/)).toBeInTheDocument();
 });
 
+test("a partly-prepared dossier phase does not call itself failed", async () => {
+  // mara's dossier was prepared; only winifred's was dropped. Calling that
+  // "refresh failed" contradicts the edit sitting in the list beside it.
+  absorbWithPhases(
+    phasesFor({ dossiers: { status: "degraded",
+                            reason: "the absorb time budget ran out before the rest could be prepared",
+                            attempted: true, budget_exhausted: true } }),
+    { dossiers: { status: "degraded",
+                  reason: "the absorb time budget ran out before the rest could be prepared",
+                  proposed: ["mara"], failed: [], skipped: ["winifred"],
+                  attempted: true, budget_exhausted: true } });
+  await openAbsorb();
+
+  await screen.findByText(/Some NPC dossiers were not prepared: the absorb time budget ran out/);
+  expect(screen.queryByText(/dossier refresh failed/)).toBeNull();
+});
+
 test("every NPC failing reads as total failure, not partial", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
