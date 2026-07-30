@@ -181,6 +181,28 @@ def create_campaign(name: str, world_id: str, region: str | None = None,
     if module and module != "none":  # "none" = explicitly mechanics-free, always legal
         from . import modules
         modules.pack_root(module)  # raises ModuleNotFound before creating anything
+    # The campaign's calendar is resolved, adjusted and VALIDATED here, before
+    # the lock — not inside it. `validate_calendar` calls `get_provider`, which
+    # imports every user-authored provider in `<home>/calendars/`, and then runs
+    # that provider's own `validate_rule`. Nothing bounds how long hand-written
+    # plugin code takes, so holding the campaign lock across it lets one bad
+    # calendar stall every writer in the campaign — the rule
+    # `test_calendar_plugin_code_never_runs_under_the_campaign_lock` already
+    # pins for the two scene mutators that need a calendar. Reading from the
+    # world root rather than re-reading the campaign copy is what makes the
+    # hoist possible, and is equivalent: `copy_calendar` is exactly
+    # `write_calendar(croot, read_calendar(wroot))`, and `read_calendar`
+    # normalizes, so the round trip through the campaign copy returned this
+    # same dict. A malformed holiday now also fails before the directory is
+    # created rather than after, which is what the checks above already do.
+    cfg = calendars.read_calendar(worlds.world_root(world_id))
+    if calendar is not None:
+        cfg["primary"]["provider"] = calendar
+        cfg["confirmed"] = True          # an explicit wizard choice
+    if region is not None:
+        cfg["primary"]["region"] = region
+    if region is not None or calendar is not None:
+        calendars.validate_calendar(cfg)   # unknown provider -> CalendarError
     cid = uniquify(slugify(name), lambda c: campaign_root(c).exists())
     root = campaign_root(cid)
     root.mkdir(parents=True)
@@ -192,6 +214,9 @@ def create_campaign(name: str, world_id: str, region: str | None = None,
     # inside the window, and `sheets.seed` would then overwrite a completed
     # write with the world defaults. Holding from before publication through the
     # last initializing write is what makes creation atomic to anyone watching.
+    #
+    # Everything inside is bounded: file writes this package owns. No plugin
+    # code, no provider import — see the calendar block above.
     with locks.campaign_lock(cid):
         (root / "scenes").mkdir()
         now = now_iso()
@@ -202,19 +227,10 @@ def create_campaign(name: str, world_id: str, region: str | None = None,
         # copy-on-write: nothing is copied up front; records materialize on divergence
         # (store/overlay.py) and sync.md tracks bases for materialized records only
         write_manifest(cid, {})
-        calendars.copy_calendar(worlds.world_root(world_id), root)
+        calendars.write_calendar(root, cfg)
         campaign_climate.write_default(cid, wanted_climate)
         from . import sheets
         sheets.seed(cid)                 # reentrant: takes this same lock again
-        if region is not None or calendar is not None:
-            cfg = calendars.read_calendar(root)
-            if calendar is not None:
-                cfg["primary"]["provider"] = calendar
-                cfg["confirmed"] = True   # an explicit wizard choice
-            if region is not None:
-                cfg["primary"]["region"] = region
-            calendars.validate_calendar(cfg)   # unknown provider -> CalendarError
-            calendars.write_calendar(root, cfg)
     return cid
 
 
