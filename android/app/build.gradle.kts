@@ -69,7 +69,11 @@ chaquopy {
             // (docs/android-architecture.md §7 risk 1, fallback 2). FastAPI
             // supports both lines, and the routes package is v1/v2-agnostic (_dump).
             install("pydantic==1.10.*")
-            install("fastapi>=0.110")
+            // Upper bound shared with `make check-pydantic1`, which runs the whole
+            // backend suite against exactly this set. Without it the CI job would
+            // test a known-good FastAPI while the APK resolved a newer one, so the
+            // job would no longer prove what it claims. Raise both together.
+            install("fastapi>=0.110,<0.116")
             install("uvicorn>=0.29")
             install("httpx>=0.27")
             install("python-multipart>=0.0.9")
