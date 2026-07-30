@@ -197,6 +197,38 @@ def test_calendar_plugin_code_never_runs_under_the_campaign_lock(monkeypatch, tm
     assert all(free), "the campaign lock was held across user calendar code"
 
 
+def test_campaign_creation_never_runs_calendar_plugin_code_under_the_lock(monkeypatch, tmp_path):
+    """The same rule on the creation path, which now takes the lock at all.
+
+    `create_campaign` serializes from before it publishes `campaign.md` through
+    the last initializing write, so the wizard's `calendar=`/`region=` handling
+    became a candidate for running *inside* that span -- and
+    `validate_calendar` both imports every user-authored provider and calls the
+    provider's own `validate_rule`. Resolving and validating the config from the
+    world root before the lock is what keeps the critical section bounded to
+    this package's own file writes.
+    """
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Saltmarch")
+    free = []
+
+    for name in ("get_provider", "validate_calendar"):
+        real = getattr(campaigns.calendars, name)
+
+        def watched(*args, _real=real):
+            # The cid is not returned until creation finishes, so probe the id
+            # creation will pick; the assert below fails loudly if it does not.
+            free.append(_lock_is_free("saltmarch"))
+            return _real(*args)
+
+        monkeypatch.setattr(campaigns.calendars, name, watched)
+
+    cid = campaigns.create_campaign("Saltmarch", wid, calendar="hebrew", region="IL")
+    assert cid == "saltmarch", "the probe watched a different campaign's lock"
+    assert free, "no provider code ran -- the test proves nothing"
+    assert all(free), "the campaign lock was held across user calendar code"
+
+
 def test_a_campaign_lock_holder_can_still_write_a_scene(monkeypatch, tmp_path):
     """Reentrancy is load-bearing, not incidental: proposals.commit_narration
     persists the reply through a callback while holding this lock, and
