@@ -150,19 +150,51 @@ def _takes_cid(fn: ast.AST) -> bool:
                for a in [*args.posonlyargs, *args.args, *args.kwonlyargs])
 
 
-def _writes_directly(fn: ast.AST) -> bool:
+def _imported_writers(tree: ast.AST) -> set[str]:
+    """Local names bound by `from <atomic|os|shutil> import <primitive>`.
+
+    Without this, `from .atomic import write_text` followed by a bare
+    `write_text(p, x)` is invisible: the call's target is an `ast.Name`, not an
+    attribute, so there is no receiver to key on. The comment here used to claim
+    `test_atomic_guard` caught that form as a fallback. It does not — it matches
+    `write_text`/`write_bytes` only as attributes — so nothing did.
+
+    Resolved from the import rather than matching the bare names everywhere,
+    which would flag any local helper that happened to be called `remove`.
+    """
+    out: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom) or node.module is None:
+            continue
+        source = node.module.rsplit(".", 1)[-1]
+        if source == "atomic":
+            wanted = _ATOMIC_WRITERS
+        elif source in _FS_MODULES:
+            wanted = _FS_ONLY + _FS_AMBIGUOUS
+        else:
+            continue
+        out |= {(a.asname or a.name) for a in node.names if a.name in wanted}
+    return out
+
+
+def _writes_directly(fn: ast.AST, imported: frozenset[str] = frozenset()) -> bool:
     """Whether `fn` publishes a change to disk itself.
 
     `Path.replace` — a real atomic rename — is deliberately NOT matched: it is
-    indistinguishable from `str.replace` without type inference, and
-    `test_atomic_guard` already forces publication through `store.atomic`, whose
-    own `os.replace` this does match. The trade is a known blind spot in exchange
-    for not classifying every string substitution as a campaign mutation.
+    indistinguishable from `str.replace` without type inference. That is a known
+    blind spot, accepted so that every string substitution is not read as a
+    campaign mutation; `os.replace`, which is how `store.atomic` actually
+    publishes, is matched.
     """
     for node in _calls(fn):
+        name = _called_name(node.func)
+        if isinstance(node.func, ast.Name):
+            # `from .atomic import write_text` — no receiver to key on.
+            if name in imported:
+                return True
+            continue
         if not isinstance(node.func, ast.Attribute):
             continue
-        name = _called_name(node.func)
         receiver = _receiver_name(node.func)
         if name in _ATOMIC_WRITERS and receiver == "atomic":
             return True
@@ -243,12 +275,22 @@ def _produces_lock(fn: ast.AST) -> bool:
     if _locks_in_own_body(fn):
         return True                      # a @contextmanager that yields inside
     for node in _own_body(fn):
-        if isinstance(node, (ast.Return, ast.Expr)) and isinstance(node.value, ast.Call):
+        # `return`/`yield` ONLY. Accepting a bare expression statement was a
+        # hole with nothing to gain: `locks.campaign_lock(cid)` as a statement
+        # constructs a lock and discards it, so
+        # `def _h(cid): campaign_lock(cid); return nullcontext()` qualified as an
+        # alias while entering it locked nothing. The `@contextmanager` shape
+        # this was meant to cover is already handled by `_locks_in_own_body`.
+        if isinstance(node, ast.Return) and isinstance(node.value, ast.Call):
             call = node.value
-            name = _called_name(call.func)
-            if name == "hold_all" or (name == "campaign_lock"
-                                      and _guards_the_campaign(call)):
-                return True
+        elif isinstance(node, ast.Yield) and isinstance(node.value, ast.Call):
+            call = node.value
+        else:
+            continue
+        name = _called_name(call.func)
+        if name == "hold_all" or (name == "campaign_lock"
+                                  and _guards_the_campaign(call)):
+            return True
     return False
 
 
@@ -301,17 +343,34 @@ def _wraps_target_under_lock(fn: ast.AST) -> bool:
     if not params:
         return False
     target = params[0]
+
+    # It has to be the wrapper the decorator RETURNS. Scanning every nested
+    # function reopened the same hole one level down: a decorator can define a
+    # `safe` closure that calls the target under the lock, never use it, and
+    # return an `unsafe` one that calls the target bare.
+    returned = {node.value.id for node in _own_body(fn)
+                if isinstance(node, ast.Return) and isinstance(node.value, ast.Name)}
+    if not returned:
+        return False
+
     for nested in ast.walk(fn):
-        if not isinstance(nested, (ast.FunctionDef, ast.AsyncFunctionDef)) or nested is fn:
+        if not isinstance(nested, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if nested is fn or nested.name not in returned:
             continue
         for node in _own_body(nested):
             if not isinstance(node, (ast.With, ast.AsyncWith)):
                 continue
-            if not any(_called_name(i.context_expr.func) in _LOCK_CALLS
-                       for i in node.items if isinstance(i.context_expr, ast.Call)):
+            # ...and the lock has to be this campaign's, the same check the
+            # direct path makes. Without it a wrapper entering
+            # `campaign_lock(sid)` laundered a cid-scoped writer.
+            if not any(isinstance(i.context_expr, ast.Call)
+                       and (_called_name(i.context_expr.func) == "hold_all"
+                            or (_called_name(i.context_expr.func) == "campaign_lock"
+                                and _guards_the_campaign(i.context_expr)))
+                       for i in node.items):
                 continue
-            # the target invoked within this `with` body
-            for inner in ast.walk(node):
+            for inner in ast.walk(node):     # the target invoked inside the lock
                 if isinstance(inner, ast.Call) and _called_name(inner.func) == target:
                     return True
     return False
@@ -354,7 +413,7 @@ def _own_calls(fn: ast.AST):
             yield node
 
 
-def _reaches_a_write(funcs: dict[str, ast.AST]) -> set[str]:
+def _reaches_a_write(funcs: dict[str, ast.AST], imported=frozenset()) -> set[str]:
     """Names that reach a write through module-local calls, ignoring locks.
 
     Deliberately lock-blind, unlike `_mutators`: it answers "is there a write
@@ -362,7 +421,7 @@ def _reaches_a_write(funcs: dict[str, ast.AST]) -> set[str]:
     `_serializing` has decided anything. Computing it the other way round would
     be circular.
     """
-    out = {name for name, fn in funcs.items() if _writes_directly(fn)}
+    out = {name for name, fn in funcs.items() if _writes_directly(fn, imported)}
     for _ in range(len(funcs) + 1):
         grown = set(out)
         for name, fn in funcs.items():
@@ -375,7 +434,7 @@ def _reaches_a_write(funcs: dict[str, ast.AST]) -> set[str]:
     return out
 
 
-def _serializing(funcs: dict[str, ast.AST]) -> set[str]:
+def _serializing(funcs: dict[str, ast.AST], imported=frozenset()) -> set[str]:
     """Names whose bodies establish the campaign lock.
 
     Three forms, all present in the package today: a direct
@@ -397,7 +456,7 @@ def _serializing(funcs: dict[str, ast.AST]) -> set[str]:
     # Local helpers that hand back a campaign lock. Entering one of these IS an
     # acquisition, even though the helper itself never enters anything.
     aliases = {name for name, fn in funcs.items() if _produces_lock(fn)}
-    writing = _reaches_a_write(funcs)
+    writing = _reaches_a_write(funcs, imported)
     out = {name for name, fn in funcs.items() if _locks_in_own_body(fn)}
     for _ in range(len(funcs) + 1):
         grown = set(out)
@@ -408,7 +467,7 @@ def _serializing(funcs: dict[str, ast.AST]) -> set[str]:
                 grown.add(name)                       # @_serialized and friends
             elif _enters_lock(fn, aliases | grown):
                 grown.add(name)                       # with _lock(cid): ...
-            elif not _writes_directly(fn):
+            elif not _writes_directly(fn, imported):
                 # Pure delegation: every local callee that reaches a write must
                 # itself be covered, and at least one must exist.
                 delegated = {_called_name(c.func) for c in _own_calls(fn)} & writing
@@ -420,7 +479,8 @@ def _serializing(funcs: dict[str, ast.AST]) -> set[str]:
     return out
 
 
-def _mutators(funcs: dict[str, ast.AST], serializing: set[str]) -> set[str]:
+def _mutators(funcs: dict[str, ast.AST], serializing: set[str],
+              imported=frozenset()) -> set[str]:
     """Names that publish a change to campaign state.
 
     Propagation stops at a serializing callee: it is an atomic unit, so calling
@@ -428,7 +488,7 @@ def _mutators(funcs: dict[str, ast.AST], serializing: set[str]) -> set[str]:
     every thin wrapper over a locked helper reads as an unlocked mutator and the
     guard drowns in false positives.
     """
-    out = {name for name, fn in funcs.items() if _writes_directly(fn)}
+    out = {name for name, fn in funcs.items() if _writes_directly(fn, imported)}
     for _ in range(len(funcs) + 1):
         grown = set(out)
         for name, fn in funcs.items():
@@ -480,8 +540,9 @@ def _analyze(path: pathlib.Path):
     src = path.read_text(encoding="utf-8")
     tree = ast.parse(src)
     funcs = _functions(tree)
-    serializing = _serializing(funcs)
-    mutators = _mutators(funcs, serializing)
+    imported = frozenset(_imported_writers(tree))
+    serializing = _serializing(funcs, imported)
+    mutators = _mutators(funcs, serializing, imported)
 
     campaign_mutators, unserialized = set(), set()
     for name in mutators:
@@ -659,8 +720,9 @@ def test_the_marker_is_not_a_rubber_stamp():
 def _probe(src: str):
     tree = ast.parse(src)
     funcs = _functions(tree)
-    serializing = _serializing(funcs)
-    return funcs, serializing, _mutators(funcs, serializing)
+    imported = frozenset(_imported_writers(tree))
+    serializing = _serializing(funcs, imported)
+    return funcs, serializing, _mutators(funcs, serializing, imported)
 
 
 def test_the_guard_detects_an_unlocked_mutator():
@@ -774,6 +836,78 @@ def test_this_repos_own_touch_function_is_not_a_filesystem_call():
     the bare name would have made every caller of it a direct writer."""
     _f, _s, mutators = _probe("def bump(cid):\n    campaigns.touch(cid)\n")
     assert not mutators, "campaigns.touch(cid) was read as a filesystem call"
+
+
+def test_a_directly_imported_writer_is_seen():
+    """`from .atomic import write_text` leaves the call an `ast.Name`, so there
+    is no receiver to key on and the attribute path skips it. `test_atomic_guard`
+    matches those names only as attributes, so it is not a fallback either —
+    nothing saw this form."""
+    src = ("from .atomic import write_text\n"
+           "def write_note(cid, t):\n"
+           "    write_text(p, t)\n")
+    _f, _s, mutators = _probe(src)
+    assert "write_note" in mutators, "a directly-imported writer was invisible"
+
+    aliased = ("from .atomic import write_text as _wt\n"
+               "def write_note(cid, t):\n"
+               "    _wt(p, t)\n")
+    _f, _s, mutators = _probe(aliased)
+    assert "write_note" in mutators, "the import alias was not followed"
+
+    unrelated = ("def write_text(a, b):\n    return a\n"
+                 "def helper(cid):\n    write_text(1, 2)\n")
+    _f, _s, mutators = _probe(unrelated)
+    assert not mutators, "a local function sharing the name was read as a writer"
+
+
+def test_the_returned_wrapper_is_the_one_that_must_lock():
+    """One level down from the decorator fix: define a `safe` closure that calls
+    the target under the lock, never use it, and return an `unsafe` one that
+    calls the target bare."""
+    src = ("def audited(fn):\n"
+           "    def safe(cid, *a):\n"
+           "        with locks.campaign_lock(cid):\n"
+           "            return fn(cid, *a)\n"
+           "    def unsafe(cid, *a):\n"
+           "        return fn(cid, *a)\n"
+           "    return unsafe\n"
+           "@audited\n"
+           "def append_message(cid, text):\n"
+           "    atomic.write_text(p, text)\n")
+    _f, serializing, _m = _probe(src)
+    assert "append_message" not in serializing, \
+        "an unused locking closure vouched for the wrapper actually returned"
+
+
+def test_a_decorator_locking_the_wrong_id_does_not_count():
+    """The direct path validates the lock's argument; the decorator path was
+    bypassing that check entirely."""
+    src = ("def audited(fn):\n"
+           "    def locked(cid, sid):\n"
+           "        with locks.campaign_lock(sid):\n"
+           "            return fn(cid, sid)\n"
+           "    return locked\n"
+           "@audited\n"
+           "def set_datetime(cid, sid):\n"
+           "    atomic.write_text(p, x)\n")
+    _f, serializing, _m = _probe(src)
+    assert "set_datetime" not in serializing, \
+        "a decorator holding another campaign's lock passed"
+
+
+def test_an_alias_must_return_the_lock_not_merely_call_it():
+    """A bare `campaign_lock(cid)` statement constructs a lock and drops it, so
+    a helper that does that and returns a `nullcontext` locks nothing."""
+    src = ("def _helper(cid):\n"
+           "    locks.campaign_lock(cid)\n"
+           "    return nullcontext()\n"
+           "def put(cid):\n"
+           "    with _helper(cid):\n"
+           "        atomic.write_text(p, x)\n")
+    _f, serializing, _m = _probe(src)
+    assert "put" not in serializing, \
+        "a helper that constructed and discarded the lock passed as an alias"
 
 
 def test_a_decorator_must_actually_wrap_its_target_under_the_lock():
