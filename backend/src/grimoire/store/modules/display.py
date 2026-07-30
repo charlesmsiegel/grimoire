@@ -16,6 +16,8 @@ import json
 import re
 from pathlib import Path
 
+from .fields import assembled_fields
+
 NODE_FORMS = ("row", "column", "group", "fields", "derived", "use")
 MAX_DEPTH = 32
 MAX_NODES = 1000
@@ -62,8 +64,6 @@ def _type_scope(sheets: dict, tid: str) -> dict:
     """Names a layout may reference for a sheet type: its group ids (with
     their field keys, for duplicate detection), assembled field keys, and
     reachable derived names."""
-    from .modules import assembled_fields  # deferred: modules imports us
-
     st = sheets.get("sheet_types", {}).get(tid)
     if not isinstance(st, dict):
         st = {}
@@ -95,8 +95,6 @@ def _union_scope(sheets: dict) -> dict:
     in sheets.json, the union of all sheet types' assembled field keys, and
     every group-/type-level derived name. Any name valid for at least one
     sheet type passes; a name that exists nowhere errors."""
-    from .modules import assembled_fields  # deferred: modules imports us
-
     groups = sheets.get("groups", {})
     if not isinstance(groups, dict):
         groups = {}

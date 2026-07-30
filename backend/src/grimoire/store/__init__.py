@@ -10,6 +10,12 @@ from . import (
     styles, suggest,
     sync, tags, taglines, thumbs, worlds,
 )
+# `module_display` was never exported here: it was bound as an attribute of
+# this package only as a side effect of the flat `modules.py` importing it.
+# Folding it into `modules/display.py` removes that side effect, so the name
+# is aliased explicitly. Deliberately absent from `__all__` -- it was not
+# there before either, and the facade's public list is frozen.
+from .modules import display as module_display
 from .appearances import AppearError
 from .campaigns import CampaignNotFound
 from .cards import CardParseError
