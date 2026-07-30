@@ -1,3 +1,6 @@
+import errno
+import os
+
 import pytest
 
 from grimoire.store import assets
@@ -192,9 +195,19 @@ def test_lookup_survives_a_sibling_vanishing_mid_scan(tmp_path, monkeypatch):
     real_stat = assets.Path.stat
 
     def vanishing(self, *a, **kw):
-        if self.name == "avatar.png":
-            return real_stat(self, *a, **kw)
-        raise FileNotFoundError(self)
+        # Only the file that actually vanished is absent. Raising for everything
+        # *except* avatar.png also made the enclosing directory look gone, and
+        # image_path checks `d.exists()` first -- which reaches Path.stat on 3.11
+        # but not on 3.14, so the inverted condition passed only by accident of
+        # the development interpreter's pathlib internals.
+        #
+        # The errno matters too: pathlib's exists() swallows an OSError only when
+        # _ignore_error() recognises its errno, and `FileNotFoundError(self)`
+        # carries none -- so a synthetic error without it does not behave like a
+        # real vanishing file.
+        if self.name == "avatar.jpg":
+            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), str(self))
+        return real_stat(self, *a, **kw)
 
     monkeypatch.setattr(assets.Path, "stat", vanishing)
     monkeypatch.setattr(assets.Path, "glob",
