@@ -7,8 +7,9 @@ import filecmp
 import shutil
 from pathlib import Path
 
-from .. import (appearances, assets, atomic, calendars, campaign_climate, characters, climates,
+from .. import (assets, atomic, calendars, campaign_climate, characters, climates,
                 entities, greetings, locks, modules, overlay, pcs, scenes, sheets)
+from ..appearances import paths as appearances_paths
 from ..frontmatter import dump_frontmatter, parse_frontmatter
 from ..paths import ensure_home, now_iso, slugify, uniquify
 from ..worlds import paths as worlds_paths
@@ -110,7 +111,7 @@ def ensure_campaign_slim(cid: str) -> None:
     if not wroot.exists():
         return
 
-    locked = set(appearances.record(cid))
+    locked = set(appearances_paths.record(cid))
     manifest = paths.read_manifest(cid)
     copied = set(manifest)   # every record the full copy tracked, before the loop prunes it
     for ref, base in sorted(list(manifest.items())):
@@ -125,7 +126,7 @@ def ensure_campaign_slim(cid: str) -> None:
                 p.unlink()
                 manifest.pop(ref)
             continue
-        if kind in appearances.ACTOR_KINDS:
+        if kind in appearances_paths.ACTOR_KINDS:
             if ref in locked:
                 manifest.pop(ref)   # a lock owns its base in appearances.json
                 continue

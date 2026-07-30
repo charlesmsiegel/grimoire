@@ -6,7 +6,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import appearances, atomic, characters, context, greetings, overlay, pcs, scenes
+from . import atomic, characters, context, greetings, overlay, pcs, scenes
+from .appearances import cast as appearances_cast, transitions as appearances_transitions, versions as appearances_versions
 from .campaigns import paths as campaigns_paths
 
 
@@ -65,7 +66,7 @@ def mark_greeting(cid: str, gid: str, status: str) -> None:
 
 def player_tags(cid: str) -> set[str]:
     out: set[str] = set()
-    for a in appearances.roster(cid):
+    for a in appearances_cast.roster(cid):
         if a["role"] == "player" and a["kind"] == "pcs":
             try:
                 out |= set(pcs.read_pc(overlay.pc_root(cid, a["id"]), a["id"])["meta"]["tags"])
@@ -103,26 +104,26 @@ def start_from_greeting(cid: str, sid: str, gid: str) -> str:
     scene_pcless = scene["meta"].get("pcless") == "true"
     if scene_pcless and not g["pcless"]:
         raise PlayError("an offscreen scene must start from an offscreen greeting")
-    if g["pcless"] and appearances.players_in_scene(cid, sid):
+    if g["pcless"] and appearances_cast.players_in_scene(cid, sid):
         raise PlayError("an offscreen greeting cannot start a scene with players seated")
     if not {a["id"]: a["available"] for a in available_greetings(cid)}.get(gid, False):
         raise PlayError(f"greeting {gid} is not available")
     # Cast everyone present at the opener. A locked version always wins; otherwise
     # the primary uses the greeting's version and co-present characters their default.
     for actor in dict.fromkeys(a for a in [g["character"], *g["present"]] if a):
-        version = appearances.locked_version(cid, "characters", actor)
+        version = appearances_versions.locked_version(cid, "characters", actor)
         if version is None:
             version = g["version"] if actor == g["character"] else \
                 characters.read_character(overlay.char_root(cid, actor), actor)["meta"]["default_version"]
             # A materialized actor's version set is authoritative. If the
             # campaign has purged the version this inherited greeting names,
             # don't let the first-appearance lock revive it from the world.
-            if actor == g["character"] and appearances.actor_hash(
+            if actor == g["character"] and appearances_versions.actor_hash(
                     overlay.char_root(cid, actor), "characters", actor, version) is None:
                 raise PlayError(
                     f"greeting {gid} needs version '{version}' of {actor}, "
                     f"which is no longer in this campaign")
-        appearances.appear(cid, sid, "characters", actor, version, "npc")
+        appearances_transitions.appear(cid, sid, "characters", actor, version, "npc")
     if g["pcless"] and not scene_pcless:
         scenes.set_pcless(cid, sid)  # before substitution: {{user}} needs the pcless fallback
     _mark_played(cid, gid)
@@ -140,6 +141,6 @@ def start_from_greeting(cid: str, sid: str, gid: str) -> str:
     # segmentation would then measure only the trailing block of the very turn
     # that sets the scene's length anchor.
     scenes.append_reply(cid, sid, scenes.split_reply(
-        text, frozenset(appearances.player_names(cid, sid))))
+        text, frozenset(appearances_cast.player_names(cid, sid))))
     # retitle last: any earlier failure leaves the caller's sid valid for cleanup
     return scenes.rename_scene(cid, sid, g["name"])

@@ -12,8 +12,9 @@ from __future__ import annotations
 
 import re
 
-from . import (appearances, characters, dice, entities, expressions,
+from . import (characters, dice, entities, expressions,
                locks, modules, overlay, pcs, sheets)
+from .appearances import cast as appearances_cast, paths as appearances_paths, versions as appearances_versions
 
 
 class CheckError(Exception):
@@ -88,10 +89,10 @@ def evaluate_tier(check_def: dict, defaults: dict, scope: dict) -> tuple[str | N
 
 def _actor_label(cid: str, kind: str, eid: str) -> str:
     """Display name for an actor/entity reference; falls back to the id."""
-    if kind in appearances.ACTOR_KINDS:
-        vid = appearances.locked_version(cid, kind, eid)
+    if kind in appearances_paths.ACTOR_KINDS:
+        vid = appearances_versions.locked_version(cid, kind, eid)
         if vid is not None:
-            name = appearances._actor_name(appearances.locked_actor_root(cid), kind, eid, vid)
+            name = appearances_cast._actor_name(appearances_paths.locked_actor_root(cid), kind, eid, vid)
             return name or eid
         # Never appeared: no locked version (and possibly no campaign copy).
         # A None vid must not reach read_card/read_persona (TypeError); the
@@ -202,7 +203,7 @@ def available_checks(cid: str, sid: str) -> list[dict]:
                 "sheet_type": sheet["sheet_type"], "checks": options}
 
     out: list[dict] = []
-    for actor in appearances.scene_cast(cid, sid):
+    for actor in appearances_cast.scene_cast(cid, sid):
         e = entry(actor["kind"], actor["id"], actor["name"])
         if e is not None:
             out.append(e)
