@@ -18,7 +18,8 @@ from pathlib import Path
 import markdown as _md_lib
 from markupsafe import escape
 
-from . import appearances, calendars, chronicle, characters, entities, overlay, pcs, scenes, worlds
+from . import calendars, chronicle, characters, entities, overlay, pcs, scenes, worlds
+from .appearances import cast as appearances_cast, paths as appearances_paths
 from .campaigns import paths as campaigns_paths, read as campaigns_read
 from .paths import slugify
 
@@ -128,7 +129,7 @@ def _chapter(cid: str, provider, sid: str, number: int, images: Images, prefix: 
             location = overlay.read_entity(cid, "locations", hist[0])["meta"].get("name")
         except entities.EntityNotFound:
             pass  # deleted location: header line silently omitted
-    cast = [a["name"] for a in appearances.scene_cast(cid, sid)]
+    cast = [a["name"] for a in appearances_cast.scene_cast(cid, sid)]
     # The transition tag is internal metadata (drift measurement treats these as
     # turn separators); it is never a speaker the reader should see. Dropping it
     # here keeps HTML, plain text and EPUB — all of which build from collect() —
@@ -145,7 +146,7 @@ def _chapter(cid: str, provider, sid: str, number: int, images: Images, prefix: 
 
 def _appendix_entries(cid: str, aroot: Path, sids: list[str], images: Images, prefix: str) -> list[dict]:
     entries: list[dict] = []
-    roster = sorted(appearances.roster(cid),
+    roster = sorted(appearances_cast.roster(cid),
                     key=lambda a: (a["role"] != "player", a["kind"], a["id"]))
     for a in roster:
         try:
@@ -202,7 +203,7 @@ def collect(cid: str, image_prefix: str = "images/") -> dict:
     sids = [s["id"] for s in sorted(scenes.list_scenes(cid), key=lambda s: s["id"])]
     chapters = [_chapter(cid, provider, sid, i, images, image_prefix)
                 for i, sid in enumerate(sids, start=1)]
-    appendix = _appendix_entries(cid, appearances.locked_actor_root(cid), sids, images, image_prefix)
+    appendix = _appendix_entries(cid, appearances_paths.locked_actor_root(cid), sids, images, image_prefix)
 
     # in-world date range: first dated scene's start — last dated scene's latest
     histories = [h for sid in sids if (h := scenes.get_time_history(cid, sid))]
@@ -400,7 +401,7 @@ def build_json(cid: str) -> tuple[bytes, str]:
                     "world": campaign["meta"].get("world", "")},
         "scenes": [scenes.read_scene(cid, sid) for sid in sids],
         "chronicle": chronicle.read_chronicle(cid),
-        "roster": appearances.roster(cid),
+        "roster": appearances_cast.roster(cid),
     }
     blob = json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True).encode("utf-8")
     return blob, f"{cid}.json"

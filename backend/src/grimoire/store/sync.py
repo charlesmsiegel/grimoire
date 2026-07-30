@@ -11,7 +11,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import appearances, atomic, characters, entities, greetings, overlay, pcs
+from . import atomic, characters, entities, greetings, overlay, pcs
+from .appearances import paths as appearances_paths, versions as appearances_versions
 from .campaigns import paths as campaigns_paths, read as campaigns_read
 
 
@@ -33,7 +34,7 @@ def incoming(cid: str) -> list[dict]:
     # read campaign.md / sync.md / appearances.json once and thread them through
     # the passes -- each used to re-read all three per pass
     manifest = campaigns_paths.read_manifest(cid)
-    locked = appearances.record(cid)
+    locked = appearances_paths.record(cid)
 
     refs: set[str] = set(manifest)
 
@@ -89,10 +90,10 @@ def _actor_incoming(wroot: Path, croot: Path, locked: dict) -> list[dict]:
     for ref, rec in sorted(locked.items()):
         kind, actor_id = ref.split("/", 1)
         vid = rec["version"]
-        world_h = appearances.actor_hash(wroot, kind, actor_id, vid)
+        world_h = appearances_versions.actor_hash(wroot, kind, actor_id, vid)
         if world_h is None or world_h == rec["base"]:
             continue  # world unchanged (or locked version deleted, which we skip)
-        mine_h = appearances.actor_hash(croot, kind, actor_id, vid)
+        mine_h = appearances_versions.actor_hash(croot, kind, actor_id, vid)
         status = "update" if mine_h == rec["base"] else "conflict"
         item = {"ref": {"kind": kind, "id": actor_id}, "status": status,
                 "world": _actor_blob(wroot, kind, actor_id, vid)}
@@ -116,7 +117,7 @@ def _actor_summary_blob(root: Path, kind: str, actor_id: str) -> dict:
 def _unpicked_incoming(wroot: Path, croot: Path, manifest: dict, locked: dict) -> list[dict]:
     """Whole-actor diffs for materialized actors with no version lock: one item per
     changed actor; accept dematerializes (revert to inherited), reject advances the base."""
-    refs = {r for r in manifest if r.partition("/")[0] in appearances.ACTOR_KINDS}
+    refs = {r for r in manifest if r.partition("/")[0] in appearances_paths.ACTOR_KINDS}
     out: list[dict] = []
     for ref in sorted(refs):
         if ref in locked:
@@ -138,11 +139,11 @@ def _unpicked_incoming(wroot: Path, croot: Path, manifest: dict, locked: dict) -
 def _advance_actor(cid: str, kind: str, actor_id: str, *, copy: bool) -> bool:
     wroot = campaigns_read.world_root_of(cid)
     croot = campaigns_paths.campaign_root(cid)
-    rec = appearances.record(cid).get(f"{kind}/{actor_id}")
+    rec = appearances_paths.record(cid).get(f"{kind}/{actor_id}")
     if rec is None:
         return False
     vid = rec["version"]
-    world_h = appearances.actor_hash(wroot, kind, actor_id, vid)
+    world_h = appearances_versions.actor_hash(wroot, kind, actor_id, vid)
     if world_h is None or rec["base"] == world_h:
         return False  # not pending
     if copy:
@@ -151,7 +152,7 @@ def _advance_actor(cid: str, kind: str, actor_id: str, *, copy: bool) -> bool:
         dst = croot / kind / actor_id / f"{vid}.{ext}"
         dst.parent.mkdir(parents=True, exist_ok=True)
         atomic.write_text(dst, src.read_text(encoding="utf-8"))
-    appearances.set_base(cid, kind, actor_id, world_h)
+    appearances_versions.set_base(cid, kind, actor_id, world_h)
     return True
 
 
@@ -176,8 +177,8 @@ def _advance(cid: str, refs: list[dict], *, copy: bool) -> None:
                 manifest["plotmap"] = world_h
             manifest_changed = touched = True
             continue
-        if kind in appearances.ACTOR_KINDS:
-            if appearances.record(cid).get(_ref_str(kind, eid)) is not None:
+        if kind in appearances_paths.ACTOR_KINDS:
+            if appearances_paths.record(cid).get(_ref_str(kind, eid)) is not None:
                 if _advance_actor(cid, kind, eid, copy=copy):   # locked flow: unchanged
                     touched = True
                 continue

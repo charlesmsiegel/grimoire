@@ -17,8 +17,9 @@ import threading
 from pathlib import Path
 
 from .. import prompts
-from . import (appearances, atomic, entities, locks, modules, overlay, rolls,
+from . import (atomic, entities, locks, modules, overlay, rolls,
                scenes, sheets)
+from .appearances import cast as appearances_cast
 from .campaigns import paths as campaigns_paths
 
 _LOCKS: dict[str, threading.Lock] = {}
@@ -182,7 +183,7 @@ def sheet_scope(cid: str, sid: str) -> list[tuple[str, str, str]]:
     scope Phase 4's mechanics_sheets context section uses (context._mechanics).
     Unsheeted entries are included; callers decide what to do with them."""
     out = [(a["kind"], a["id"], a.get("name", a["id"]))
-           for a in appearances.scene_cast(cid, sid)]
+           for a in appearances_cast.scene_cast(cid, sid)]
     history = scenes.get_location_history(cid, sid)
     if history:
         loc = history[-1]

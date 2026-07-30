@@ -10,8 +10,9 @@ from __future__ import annotations
 import json
 
 from .. import prompts
-from . import (appearances, calendars, characters, chronicle,
+from . import (calendars, characters, chronicle,
                greetings, overlay, pcs, plot)
+from .appearances import cast as appearances_cast, paths as appearances_paths
 from .campaigns import paths as campaigns_paths
 
 
@@ -27,7 +28,7 @@ def _birthdays(cid: str, now: str, roster: list[dict]) -> list[dict]:
     if not now:
         return []
     croot = campaigns_paths.campaign_root(cid)    # calendar.json is campaign-local
-    aroot = appearances.locked_actor_root(cid)    # roster actors are locked, so campaign-side
+    aroot = appearances_paths.locked_actor_root(cid)    # roster actors are locked, so campaign-side
     try:
         cfg = calendars.read_calendar(croot)
         provider = calendars.get_provider(cfg["primary"])
@@ -68,8 +69,8 @@ def _tok(ref: str) -> str:
 
 def build_snapshot(cid: str, offscreen: bool = False) -> dict:
     croot = campaigns_paths.campaign_root(cid)    # calendar.json is campaign-local
-    aroot = appearances.locked_actor_root(cid)    # roster actors are locked, so campaign-side
-    roster = appearances.roster(cid)
+    aroot = appearances_paths.locked_actor_root(cid)    # roster actors are locked, so campaign-side
+    roster = appearances_cast.roster(cid)
 
     try:
         open_threads = plot.open_threads(cid)
@@ -181,7 +182,7 @@ def build_prompt(snapshot: dict, greeting_candidates: list[dict] | None = None,
 
 def _valid_ids(cid: str):
     char_ids = {c["id"] for c in overlay.list_characters(cid)}
-    player_tokens = {f"{a['kind']}:{a['id']}" for a in appearances.roster(cid) if a["role"] == "player"}
+    player_tokens = {f"{a['kind']}:{a['id']}" for a in appearances_cast.roster(cid) if a["role"] == "player"}
     loc_ids = {e["id"] for e in overlay.list_entities(cid, "locations")}
     return char_ids, player_tokens, loc_ids
 

@@ -125,7 +125,7 @@ OWNERS: dict[str, dict[str, str]] = {
     "store/campaigns/lifecycle.py": {
         "ensure_campaign_slim": "rewrites the raw pre-overlay tree, by definition",
     },
-    "store/appearances.py": {
+    "store/appearances/versions.py": {
         "_set_default": "runs inside _lock, after the copy that materializes the actor",
     },
     "store/sync.py": {
@@ -306,6 +306,14 @@ def _resolver_imports(tree: ast.AST) -> tuple[dict[str, str], dict[str, tuple[st
     `from .assets import put_image as save` still matches `assets.put_image` in
     PURE_WRITERS -- otherwise renaming an import turns a sanctioned write into a
     permanent false positive.
+
+    A resolver package split into a subpackage (`appearances/cast.py`, ...)
+    adds a third form: `from .appearances import cast as appearances_cast`
+    binds a *submodule*, not a function, so `appearances_cast._actor_name(...)`
+    reaches the resolver the same way `appearances._actor_name(...)` always
+    did. Treating `a.name` as a submodule when a file of that name actually
+    exists under the resolver package keeps this an alias, not a bogus
+    `direct` entry for a function literally named "cast".
     """
     aliases: dict[str, str] = {}
     direct: dict[str, tuple[str, str]] = {}
@@ -315,6 +323,9 @@ def _resolver_imports(tree: ast.AST) -> tuple[dict[str, str], dict[str, tuple[st
             for a in node.names:
                 if a.name in RESOLVER_MODULES:          # from . import characters [as chars]
                     aliases[a.asname or a.name] = a.name
+                elif tail in RESOLVER_MODULES and (PACKAGE / "store" / tail / f"{a.name}.py").exists():
+                    # from .appearances import cast as appearances_cast
+                    aliases[a.asname or a.name] = tail
                 elif tail in RESOLVER_MODULES:          # from .characters import read_card
                     direct[a.asname or a.name] = (tail, a.name)
         elif isinstance(node, ast.Import):
