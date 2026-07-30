@@ -6,7 +6,8 @@ import filecmp
 import shutil
 from pathlib import Path
 
-from . import assets, atomic, calendars, characters, entities, greetings, pcs, worlds
+from . import (assets, atomic, calendars, characters, entities, greetings, locks, pcs,
+               worlds)
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import ensure_home, home, now_iso, safe_id, slugify, uniquify
 
@@ -183,28 +184,37 @@ def create_campaign(name: str, world_id: str, region: str | None = None,
     cid = uniquify(slugify(name), lambda c: campaign_root(c).exists())
     root = campaign_root(cid)
     root.mkdir(parents=True)
-    (root / "scenes").mkdir()
-    now = now_iso()
-    atomic.write_text(campaign_meta_path(cid), dump_frontmatter(
-        {"name": name, "world": world_id, "created": now, "updated": now,
-         "world_copy": "overlay",
-         **({"module": module} if module else {})}, ""))
-    # copy-on-write: nothing is copied up front; records materialize on divergence
-    # (store/overlay.py) and sync.md tracks bases for materialized records only
-    write_manifest(cid, {})
-    calendars.copy_calendar(worlds.world_root(world_id), root)
-    campaign_climate.write_default(cid, wanted_climate)
-    from . import sheets
-    sheets.seed(cid)
-    if region is not None or calendar is not None:
-        cfg = calendars.read_calendar(root)
-        if calendar is not None:
-            cfg["primary"]["provider"] = calendar
-            cfg["confirmed"] = True   # an explicit wizard choice
-        if region is not None:
-            cfg["primary"]["region"] = region
-        calendars.validate_calendar(cfg)   # unknown provider -> CalendarError
-        calendars.write_calendar(root, cfg)
+    # The lock spans PUBLICATION, not just the writes after it. `campaign.md` is
+    # what makes a directory a campaign to `list_campaigns`, so the moment it
+    # lands another grimoire process can find this campaign and start writing to
+    # it (#234 — the lock is cross-process). Serializing only the later steps
+    # does not help: that process can take the lock, write a sheet and release it
+    # inside the window, and `sheets.seed` would then overwrite a completed
+    # write with the world defaults. Holding from before publication through the
+    # last initializing write is what makes creation atomic to anyone watching.
+    with locks.campaign_lock(cid):
+        (root / "scenes").mkdir()
+        now = now_iso()
+        atomic.write_text(campaign_meta_path(cid), dump_frontmatter(
+            {"name": name, "world": world_id, "created": now, "updated": now,
+             "world_copy": "overlay",
+             **({"module": module} if module else {})}, ""))
+        # copy-on-write: nothing is copied up front; records materialize on divergence
+        # (store/overlay.py) and sync.md tracks bases for materialized records only
+        write_manifest(cid, {})
+        calendars.copy_calendar(worlds.world_root(world_id), root)
+        campaign_climate.write_default(cid, wanted_climate)
+        from . import sheets
+        sheets.seed(cid)                 # reentrant: takes this same lock again
+        if region is not None or calendar is not None:
+            cfg = calendars.read_calendar(root)
+            if calendar is not None:
+                cfg["primary"]["provider"] = calendar
+                cfg["confirmed"] = True   # an explicit wizard choice
+            if region is not None:
+                cfg["primary"]["region"] = region
+            calendars.validate_calendar(cfg)   # unknown provider -> CalendarError
+            calendars.write_calendar(root, cfg)
     return cid
 
 
