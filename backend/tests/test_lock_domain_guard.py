@@ -60,7 +60,9 @@ Honest about its reach — the house standard set by ``test_atomic_guard.py``:
      makes the two the same campaign;
   4. ``@<decorator>`` applied DIRECTLY to the function, whose returned wrapper
      invokes the decorated function under one of the above on every path it
-     executes, passing ``cid`` first.
+     executes, passing ``cid`` first — and whose target takes ``cid`` first and
+     runs its body when called, rather than deferring it (an ``async def`` or a
+     generator only *constructs* something inside the lock).
 
   Anything else — a computed iterable, a keyword-bound alias, a lock reached
   through an object this cannot resolve — reads as *unserialized*. That will
@@ -904,16 +906,13 @@ def _is_call_to(names: set[str]):
 def _target_aliases(wrapper: ast.AST, target: str) -> set[str]:
     """`target` and every local name assigned from it inside `wrapper`."""
     names = {target}
-    assigns = [n for n in ast.walk(wrapper) if isinstance(n, ast.Assign)]
-    for _ in range(len(assigns) + 1):
+    bound = list(_bindings(wrapper))
+    for _ in range(len(bound) + 1):
         grew = False
-        for node in assigns:
-            if not (isinstance(node.value, ast.Name) and node.value.id in names):
-                continue
-            for t in node.targets:
-                if isinstance(t, ast.Name) and t.id not in names:
-                    names.add(t.id)
-                    grew = True
+        for name, value in bound:
+            if isinstance(value, ast.Name) and value.id in names and name not in names:
+                names.add(name)
+                grew = True
         if not grew:
             break
     return names
@@ -1245,8 +1244,32 @@ def _innermost_decorator_locks(fn: ast.AST, decorating: set[str]) -> bool:
 
     No function in this package has more than one decorator today, so this costs
     nothing now and is here for the chain that gets written later.
+
+    Two things about the DECORATED function also have to hold, and neither was
+    checked -- the wrapper was validated in isolation, as if what it wraps could
+    not matter:
+
+    - **Its body must run inside the call.** A synchronous wrapper doing
+      `with lock: return fn(cid, *a)` around an `async def` or a generator only
+      *constructs* the coroutine or generator; the writes happen later, when
+      somebody awaits or iterates it, with the lock long released. A wrapper
+      that awaits or `yield from`s under the lock would be fine, and is not
+      recognized -- it fails loud and needs a marker. Nothing in this package
+      applies a locking decorator to a deferred body today.
+    - **Its `cid` must be its first parameter.** The wrapper locks its own first
+      argument and passes arguments through positionally, so
+      `@_serialized def put(sid, cid)` locks the scene id while the campaign id
+      lands on the target's second slot. This is the same positional-binding
+      rule `_locks_its_first_param` applies to aliases, at the fifth boundary an
+      id crosses; every `@_serialized` mutator in `scenes` already satisfies it.
     """
-    return bool(fn.decorator_list) and _decorator_name(fn.decorator_list[-1]) in decorating
+    if not (bool(fn.decorator_list) and _decorator_name(fn.decorator_list[-1]) in decorating):
+        return False
+    if isinstance(fn, ast.AsyncFunctionDef) or any(_is_yield(n) for n in _own_body(fn)):
+        return False                     # a deferred body; the wrapper's lock is
+                                         # released before the writes happen
+    params = [a.arg for a in [*fn.args.posonlyargs, *fn.args.args]]
+    return not _takes_cid(fn) or params[:1] == ["cid"]
 
 
 def _serializing(funcs: dict[str, ast.AST], surface=_Surface(),
@@ -1542,11 +1565,6 @@ def test_every_outside_entry_states_a_reason():
 def test_the_marker_is_not_a_rubber_stamp():
     marked = []
     for path in sorted(PACKAGE.rglob("*.py")):
-        if path == LOCKS_PY:            # same exact-path skip as `_survey`; by
-                                        # filename, a second `locks.py` anywhere
-                                        # in the package would be surveyed but
-                                        # have its markers left unaudited
-            continue
         src = path.read_text(encoding="utf-8")
         funcs = _functions(ast.parse(src))
         every = [d for ds in funcs.values() for d in ds]
@@ -2164,6 +2182,11 @@ def test_the_lock_module_is_surveyed_like_any_other():
     a future public `cid` writer there would be unclassified, unlocked and
     invisible.
 
+    The marker audit skipped it too, and for the same bad reason — so a bare
+    `# lock-domain-ok:` there would have been exempt from the minimum-reason
+    check and invisible to the exemption cap. Both skips are gone; the audit
+    below is what proves the second one.
+
     This one is a ratchet rather than a mutation-verified guard, and says so:
     `locks.py` publishes nothing today, so restoring the skip would not make it
     fail. Its value is entirely in the day that stops being true."""
@@ -2173,6 +2196,79 @@ def test_the_lock_module_is_surveyed_like_any_other():
         "now, so classify it rather than restoring the skip")
     unserialized, mutators = _analyze(LOCKS_PY)
     assert not mutators and not unserialized
+
+    # The marker audit reaches it: no unaudited exemptions hide in the one file
+    # whose whole purpose is the lock.
+    src = LOCKS_PY.read_text(encoding="utf-8")
+    funcs = _functions(ast.parse(src))
+    every = [d for ds in funcs.values() for d in ds]
+    marked = [n for n, defs in funcs.items() for fn in defs
+              if _exemption(src, fn, [o for o in every if o is not fn]) is not None]
+    assert not marked, f"unaudited `{MARKER}` in the lock module: {marked}"
+
+
+def test_a_decorator_does_not_cover_a_deferred_body():
+    """A synchronous wrapper around an `async def` or a generator only
+    constructs the coroutine; the writes run later, when somebody awaits or
+    iterates it, with the lock long released. The wrapper was validated in
+    isolation, as if what it wraps could not matter."""
+    dec = ("def _serialized(fn):\n"
+           "    def locked(cid, *a):\n"
+           "        with locks.campaign_lock(cid):\n"
+           "            return fn(cid, *a)\n"
+           "    return locked\n")
+    for body, why in [
+        ("@_serialized\nasync def put(cid):\n    atomic.write_text(p, x)\n", "async def"),
+        ("@_serialized\ndef put(cid):\n    atomic.write_text(p, x)\n    yield 1\n", "generator"),
+    ]:
+        _f, serializing, mutators = _probe(dec + body)
+        assert "put" in mutators
+        assert "put" not in serializing, f"a sync decorator covered a {why} body"
+
+    # The same decorator over a plain body is still the recognized form.
+    _f, serializing, _m = _probe(
+        dec + "@_serialized\ndef put(cid):\n    atomic.write_text(p, x)\n")
+    assert "put" in serializing
+
+
+def test_a_decorated_target_must_take_cid_first():
+    """The wrapper locks its own first argument and passes arguments through
+    positionally, so `@_serialized def put(sid, cid)` locks the scene id while
+    the campaign id lands on the target's second slot. Same positional-binding
+    rule as `_locks_its_first_param`, at the fifth boundary an id crosses."""
+    dec = ("def _serialized(fn):\n"
+           "    def locked(cid, *a):\n"
+           "        with locks.campaign_lock(cid):\n"
+           "            return fn(cid, *a)\n"
+           "    return locked\n")
+    _f, serializing, mutators = _probe(
+        dec + "@_serialized\ndef put(sid, cid):\n    atomic.write_text(p, x)\n")
+    assert "put" in mutators
+    assert "put" not in serializing, "the wrapper locked the wrong id for this target"
+
+    _f, serializing, _m = _probe(
+        dec + "@_serialized\ndef put(cid, sid):\n    atomic.write_text(p, x)\n")
+    assert "put" in serializing, "`cid` first was rejected"
+
+
+def test_an_annotated_alias_of_the_decorated_target_is_followed():
+    """`_target_aliases` was the one assignment walker still reading
+    `ast.Assign` directly instead of going through `_bindings` — exactly the
+    gap round thirteen predicted would be next, in the helper introduced to
+    close that class."""
+    src = ("def _serialized(fn):\n"
+           "    def locked(cid, *a):\n"
+           "        with locks.campaign_lock(cid):\n"
+           "            fn(cid, *a)\n"
+           "        target: Callable = fn\n"
+           "        return target(cid, *a)\n"
+           "    return locked\n"
+           "@_serialized\n"
+           "def put(cid):\n"
+           "    atomic.write_text(p, x)\n")
+    _f, serializing, mutators = _probe(src)
+    assert "put" in mutators
+    assert "put" not in serializing, "an annotated rebinding of the target was invisible"
 
 
 def test_a_writer_bound_by_assignment_is_seen():
