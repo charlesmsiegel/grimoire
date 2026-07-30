@@ -510,28 +510,34 @@ def world_sheet_modules(wid: str) -> list[str]:
     return sorted(p.name for p in d.iterdir() if p.is_dir() and safe_id(p.name))
 
 
-# lock-domain-ok: runs inside create_campaign, before the new cid has been
-# returned to any caller, so no concurrent holder of that campaign lock can
-# exist yet. The single call site is what makes this true — see campaigns.py.
 def seed(cid: str) -> int:
     """Copy world starting sheets for the campaign's resolved module.
     Called once from create_campaign; changing the module later never
-    re-seeds (spec)."""
-    mid = modules.resolve(cid)
-    if mid is None:
-        return 0
-    src = campaigns.world_root_of(cid) / "sheets" / mid
-    if not src.is_dir():
-        return 0
-    dst = _campaign_dir(cid)
-    dst.mkdir(parents=True, exist_ok=True)
-    n = 0
-    for p in sorted(src.glob("*.json")):
-        # through the helper, not shutil.copy2: a partial copy must never
-        # appear under a real sheet name
-        atomic.write_bytes(dst / p.name, p.read_bytes())
-        n += 1
-    return n
+    re-seeds (spec).
+
+    Takes the campaign lock even though it runs during creation. "Nobody else
+    has this cid yet" is true only *in process*: ``create_campaign`` publishes
+    ``campaign.md`` several operations before it gets here, and
+    ``list_campaigns`` reports any directory holding that file — so a second
+    grimoire process (the case ``campaign_lock`` exists for, #234) can discover
+    the campaign mid-creation and write a sheet this copy would then overwrite.
+    """
+    with locks.campaign_lock(cid):
+        mid = modules.resolve(cid)
+        if mid is None:
+            return 0
+        src = campaigns.world_root_of(cid) / "sheets" / mid
+        if not src.is_dir():
+            return 0
+        dst = _campaign_dir(cid)
+        dst.mkdir(parents=True, exist_ok=True)
+        n = 0
+        for p in sorted(src.glob("*.json")):
+            # through the helper, not shutil.copy2: a partial copy must never
+            # appear under a real sheet name
+            atomic.write_bytes(dst / p.name, p.read_bytes())
+            n += 1
+        return n
 
 
 def _type_kinds(sheets_def: dict) -> set[str]:
