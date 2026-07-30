@@ -3,7 +3,8 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
-  api, type Actor, type AbsorbPhase, type SceneMeta, type Message, type RosterEntry, type SceneAbsorb,
+  api, type Actor, type AbsorbPhase, type Dossiers, type SceneMeta, type Message,
+  type RosterEntry, type SceneAbsorb,
   type SceneDatetime, type StagedEdit, type ProposalRecord, type SceneCheckActor,
   type ResponsePresetSummary, type ResponseOverride, type ResponseBundle,
 } from "../api/client";
@@ -40,6 +41,23 @@ const PHASE_LABELS: Record<AbsorbPhase["name"], string> = {
   dossiers: "NPC dossiers",
   audit: "mechanics audit",
 };
+
+// The dossier phase has five distinguishable bad endings and the wording has to
+// match the edit list beside it: "prepared", never "refreshed" (a dossier is
+// staged here and only written on save, #235), and never "failed" for a phase
+// that produced something. Ordered most-specific first.
+function dossierNotice(d: Dossiers): string {
+  if (d.budget_exhausted && !d.attempted) return `No NPC dossier was prepared: ${d.reason}`;
+  if (d.failed.length > 0) {
+    return d.status === "failed" ? "No NPC dossier could be prepared"
+                                 : "Some NPC dossiers could not be prepared";
+  }
+  // Nothing went wrong per-NPC, so the reason is the whole phase's story: a
+  // partial run (some prepared, the rest dropped) or a phase that never got off
+  // the ground at all (an unreadable cast).
+  return d.status === "degraded" ? `Some NPC dossiers were not prepared: ${d.reason}`
+                                 : `NPC dossier refresh failed: ${d.reason}`;
+}
 
 // The scene rail lists scenes most-recently-edited first, but the displayed
 // number must reflect story order — the id's own leading number (its
@@ -855,15 +873,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
               </div>)}
             {(absorb.dossiers.status === "failed" || absorb.dossiers.status === "degraded") && (
               <div className="mechanics-notice">
-                {/* "prepared", not "refreshed": the dossier is staged here and only
-                    written when the review is saved (#235). */}
-                <p>{absorb.dossiers.budget_exhausted && !absorb.dossiers.attempted
-                    ? `No NPC dossier was prepared: ${absorb.dossiers.reason}`
-                    : absorb.dossiers.failed.length === 0
-                      ? `NPC dossier refresh failed: ${absorb.dossiers.reason}`
-                      : absorb.dossiers.status === "failed"
-                        ? "No NPC dossier could be prepared"
-                        : "Some NPC dossiers could not be prepared"}</p>
+                <p>{dossierNotice(absorb.dossiers)}</p>
                 {absorb.dossiers.failed.map((d, i) => (
                   <p className="field-hint" key={i}>{d.id}: {d.reason}</p>))}
                 {absorb.dossiers.skipped.length > 0 && (
