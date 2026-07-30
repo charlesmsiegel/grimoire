@@ -1,4 +1,0 @@
-deferred grimoire.claude_agent::ClaudeAgentClient.stream::claude_agent_sdk
-deferred grimoire.prompts::_env::jinja2
-deferred grimoire.store.context.tokens::_encoder::tiktoken
-deferred grimoire.store.epub::_env::jinja2
