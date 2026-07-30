@@ -293,13 +293,19 @@ module 'st.campaigns' (most likely due to a circular import)
 it as a module object.**
 
 ```python
-from ..campaigns import read        # yes
+from ..campaigns import read        # yes — binds a submodule
 ...
 read.world_refs()
 
 from ..campaigns import world_refs  # no — reads a name off a package __init__
-from .. import campaigns            # no — same hazard once anything is read at module scope
+from .. import campaigns            # legal — a module object, not a name
 ```
+
+The precise hazard is *binding a non-module name off a package that may still
+be initializing*. `from .. import campaigns` is safe on its own, because the
+module object is bound without reading through it; reading an attribute off it
+at module scope would close a real cycle and is caught by the cycle rule
+instead. Prototyping confirmed both halves of this.
 
 Verified on the prototype under the hostile `__init__` ordering: this form
 imports cleanly regardless of order, because binding a submodule does not
@@ -367,11 +373,12 @@ of `test_atomic_guard.py` and `test_overlay_guard.py`:
 2. Fails on any third-party or stdlib import inside a function body.
 3. Builds the module-level import graph over `backend/src/grimoire/` and fails
    on any cycle, naming the offending path.
-4. Fails on any intra-store cross-package import that names something other
-   than a submodule — `from ..campaigns import world_refs` and
-   `from .. import campaigns` both fail; `from ..campaigns import read`
-   passes. Rule 3 alone does not catch this, since the file graph is acyclic
-   either way.
+4. Fails on any intra-store relative import that binds a **non-module name**
+   off a package: `from ..campaigns import world_refs` fails, while
+   `from ..campaigns import read` and `from .. import campaigns` pass.
+   `__init__.py` files are exempt — re-exporting is their job, and they
+   import their own submodules first. Rule 3 alone does not catch this, since
+   the file graph is acyclic either way.
 
 The guard's scan scope is `backend/src/grimoire/` only. Tests, `scripts/` and
 `evals/` are not covered — a test that imports inside a function to exercise
@@ -398,20 +405,28 @@ is independently testable.
    `pathlib` calls `os.stat(path, follow_symlinks=...)`, so a `tmp_path`
    cleanup during teardown crashes pytest with an INTERNALERROR instead of
    reporting results. Prerequisite for a trustworthy baseline.
-1. Land the guard test **xfail-marked**, so it reports the exact starting set
-   of violations.
-2. Leaf extractions: `campaigns/paths.py`, `worlds/paths.py`,
-   `modules/fields.py`, `appearances/cast.py`. This alone removes most
-   back-edges.
+1. Land the guard test with a **ratchet baseline** rather than an xfail:
+   `backend/tests/import_guard_baseline.txt` lists the violations that exist
+   at that moment, one per line. A violation absent from the baseline fails,
+   and a baseline line that no longer occurs *also* fails, so the file cannot
+   decay into a standing exemption list. Every later task deletes its own
+   lines, which makes progress mechanically checked rather than asserted.
 
-   Each of these converts `foo.py` into a `foo/` package whose `__init__.py`
-   re-exports everything, with only the extracted names moved out and the
-   remaining body landing in `foo/_rest.py` for the moment. That keeps the
-   step small and independently landable; the per-kind split in step 3 is what
-   dissolves `_rest.py` into its final files. No `_rest.py` survives step 3.
-3. Per-kind lifecycle splits, one kind per commit.
-4. The four pure-size splits: `module_edit`, `absorb`, `context`, `sheets`.
-5. Hoist the four third-party imports; drop the xfail.
+   Measured starting baseline: **58 lines** — 57 deferred imports and the one
+   `audit → scene_refs → scenes` cycle. (57, not 53, because the four
+   third-party lazy imports are violations under rule 2 as well.)
+2. Per-kind splits, one kind per commit, in dependency order: `campaigns`,
+   `worlds`, `modules`, `appearances`, `sheets`, `audit`, `scenes`.
+
+   No interim scaffolding is needed. While one side of a pair is still a flat
+   module, the other side's deferred import simply stays in place and stays on
+   the baseline; the task that splits the second side removes both. Each task
+   ends with a green suite.
+3. The three remaining pure-size splits: `module_edit`, `absorb`, `context`.
+   (`sheets` is a size split too, but it carries cycle edges, so it lands in
+   step 2 with the other record kinds.)
+4. Hoist the four third-party imports.
+5. Delete the now-empty baseline file and the code path that reads it.
 
 ## Verification
 
