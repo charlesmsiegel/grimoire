@@ -11,7 +11,7 @@ import json
 
 from .. import prompts
 from . import (calendars, characters, chronicle,
-               greetings, overlay, pcs, plot)
+               greetings, overlay, pcs, playing, plot)
 from .appearances import cast as appearances_cast, paths as appearances_paths
 from .campaigns import paths as campaigns_paths
 
@@ -156,7 +156,6 @@ GREETING_EXCERPT = 300
 def greeting_candidates(cid: str, after: str | None = None, pcless: bool = False) -> list[dict]:
     """Available greetings worth ranking — only when more than two are startable
     (with two or fewer the chooser simply shows them all)."""
-    from . import playing  # lazy: playing pulls in context; keep the import graph flat
     avail = [g for g in playing.available_greetings(cid, after)
              if g["available"] and g.get("pcless", False) == pcless]
     if len(avail) <= 2:

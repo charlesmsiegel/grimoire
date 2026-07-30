@@ -9,8 +9,7 @@ running timeline. The recap read-forward reads from here.
 Pure file IO. The extraction prompt/parse now lives in the absorb package
 (absorb/prompt.py, absorb/parse.py); the LLM call lives in the route layer — the split
 every LLM-backed store module follows (see absorb/prompt.py,
-suggest.py, dossiers.py). No module-load import of scenes/appearances/entities
-(cycle-free).
+suggest.py, dossiers.py).
 """
 
 from __future__ import annotations
@@ -18,9 +17,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import atomic
+from .. import prompts
+from . import atomic, entities, overlay
+from .appearances import cast as appearances_cast
 from .campaigns import paths as campaigns_paths
 from .paths import now_iso
+from .scenes import read as scenes_read, serialize as scenes_serialize
 
 
 def _chronicle_path(cid: str) -> Path:
@@ -81,9 +83,8 @@ def append_timeline(cid: str, events: list[dict]) -> None:
 def scene_facts(cid: str, sid: str) -> dict:
     """Deterministic facts the LLM should not have to infer: present cast refs, the
     current location's display name, and the current native datetime."""
-    from . import appearances, entities, overlay, scenes
-    cast = [f"{a['kind']}/{a['id']}" for a in appearances.scene_cast(cid, sid)]
-    loc_hist = scenes.get_location_history(cid, sid)
+    cast = [f"{a['kind']}/{a['id']}" for a in appearances_cast.scene_cast(cid, sid)]
+    loc_hist = scenes_read.get_location_history(cid, sid)
     location = ""
     if loc_hist:
         try:
@@ -92,7 +93,7 @@ def scene_facts(cid: str, sid: str) -> dict:
             )["meta"].get("name", loc_hist[-1])
         except entities.EntityNotFound:
             location = loc_hist[-1]
-    time_hist = scenes.get_time_history(cid, sid)
+    time_hist = scenes_read.get_time_history(cid, sid)
     return {"cast": cast, "location": location, "date": time_hist[-1] if time_hist else ""}
 
 
@@ -104,14 +105,9 @@ def transcript_text(messages: list[dict]) -> str:
     than relying on each caller to normalize raw `scenes.read_scene` messages
     itself. `ROLL_SPEAKER` is left untouched: manual dice-roll lines are real
     transcript content and their labelling is intentional.
-
-    Local import: `scenes` transitively imports this module (via scene_refs),
-    so a module-level import here would cycle.
     """
-    from .. import prompts
-    from . import scenes
     normalized = [
-        {**m, "speaker": None} if m.get("speaker") == scenes.TRANSITION_SPEAKER else m
+        {**m, "speaker": None} if m.get("speaker") == scenes_serialize.TRANSITION_SPEAKER else m
         for m in messages
     ]
     return prompts.render("snippets/transcript.j2", messages=normalized)

@@ -28,9 +28,15 @@ import json
 import uuid
 from contextlib import contextmanager
 
-from . import atomic, locks
+from . import atomic, checks, locks, rolls
 from .campaigns import paths as campaigns_paths
 from .paths import now_iso
+from .scenes import (
+    paths as scenes_paths,
+    read as scenes_read,
+    serialize as scenes_serialize,
+    write as scenes_write,
+)
 
 NON_TERMINAL = ("pending", "resolving", "resolved", "declined")
 
@@ -240,7 +246,6 @@ def project(cid: str, sid: str, pid: str) -> dict | None:
     roll_id/line_intent backfills persist via ``update_resolution``, which
     writes metadata without touching terminal status, so a same-id superseded
     record keeps them (a status CAS would silently lose and drop them)."""
-    from . import checks, rolls, scenes  # function-level: avoid import cycles
     with locks.campaign_lock(cid):
         rec = get(cid, sid)
         if (rec is None or rec.get("id") != pid
@@ -254,13 +259,13 @@ def project(cid: str, sid: str, pid: str) -> dict | None:
         res = {**res, "roll_id": entry["id"]}
         update_resolution(cid, sid, pid, res)
         if "line_intent" not in res:
-            res = {**res, "line_intent": len(scenes.read_scene(cid, sid)["messages"])}
+            res = {**res, "line_intent": len(scenes_read.read_scene(cid, sid)["messages"])}
             update_resolution(cid, sid, pid, res)
         line = checks.format_check_roll(res)
-        if not any(m.get("speaker") == scenes.ROLL_SPEAKER and m["content"] == line
-                   for m in scenes.read_scene(cid, sid)["messages"][res["line_intent"]:]):
-            scenes.append_message(cid, sid, "assistant", line,
-                                  speaker=scenes.ROLL_SPEAKER)
+        if not any(m.get("speaker") == scenes_serialize.ROLL_SPEAKER and m["content"] == line
+                   for m in scenes_read.read_scene(cid, sid)["messages"][res["line_intent"]:]):
+            scenes_write.append_message(cid, sid, "assistant", line,
+                                        speaker=scenes_serialize.ROLL_SPEAKER)
         return res
 
 
@@ -325,7 +330,6 @@ def commit_narration(cid: str, sid: str, pid: str, persist) -> bool:
     marker guarantees everything past it is our own, so no foreign text
     is ever trimmed.
     """
-    from . import scenes  # function-level: avoid import-order surprises
     with locks.campaign_lock(cid):
         data = _read(cid)
         rec = data.get(sid)
@@ -343,10 +347,10 @@ def commit_narration(cid: str, sid: str, pid: str, persist) -> bool:
         rec = data[sid]
         intent = rec.get("narration_intent")
         if isinstance(intent, int):
-            scenes.trim_continuation(cid, sid, intent)
+            scenes_write.trim_continuation(cid, sid, intent)
         try:
-            rec["narration_intent"] = len(scenes.read_scene(cid, sid)["messages"])
-        except scenes.SceneNotFound:
+            rec["narration_intent"] = len(scenes_read.read_scene(cid, sid)["messages"])
+        except scenes_paths.SceneNotFound:
             # No scene file yet ⇒ empty transcript ⇒ intent 0: a retry
             # trims nothing, which is right when nothing was ever written.
             rec["narration_intent"] = 0

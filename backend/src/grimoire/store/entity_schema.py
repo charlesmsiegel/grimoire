@@ -12,6 +12,8 @@ from __future__ import annotations
 import math
 from typing import Callable
 
+from . import climates
+
 FIELDS: dict[str, tuple[dict[str, str], ...]] = {
     "locations": (
         {"key": "climate", "label": "Climate", "widget": "text"},
@@ -42,7 +44,6 @@ def invalid_keys(kind: str, fields: dict) -> list[str]:
 
 
 def _valid_climate(value: str) -> bool:
-    from . import climates  # imported lazily: climates imports paths, not this
     return climates.get(value) is not None
 
 
