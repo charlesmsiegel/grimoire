@@ -7,6 +7,7 @@ import pytest
 
 from grimoire.store import campaigns, locks, module_edit, modules, worlds
 from grimoire.store.frontmatter import parse_frontmatter
+from grimoire.store.module_edit import migrate as me_migrate
 
 
 def _zip_bytes(entries: dict) -> bytes:
@@ -623,12 +624,15 @@ def test_journaled_migration_replays(monkeypatch, tmp_path):
     cp = _write_campaign_sheet(cid, "characters", "mara", "warden", {"strength": 3})
     # Perform the rename with migration suppressed to simulate the crash,
     # leaving a journal exactly as _apply writes it post-swap.
-    real = module_edit._run_migration
-    monkeypatch.setattr(module_edit, "_run_migration",
+    # Patched on module_edit.migrate, the module that defines it: _apply and
+    # _replay_journal both call it as their own global, so the facade
+    # attribute is not the binding they read.
+    real = me_migrate._run_migration
+    monkeypatch.setattr(me_migrate, "_run_migration",
                         lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt()))
     with pytest.raises(KeyboardInterrupt):
         module_edit.rename(mid, "field", {"from": "strength", "group": "attributes"}, "brawn")
-    monkeypatch.setattr(module_edit, "_run_migration", real)
+    monkeypatch.setattr(me_migrate, "_run_migration", real)
     # journal survived; pack already published; sheet not yet migrated
     assert json.loads(cp.read_text(encoding="utf-8"))["fields"] == {"strength": 3}
     module_edit.recover()
@@ -911,7 +915,11 @@ def test_delete_module_rejects_builtin_before_campaign_locks(monkeypatch, tmp_pa
 
     def _boom():
         raise AssertionError("_campaign_locks must not run for a builtin delete")
-    monkeypatch.setattr(module_edit, "_campaign_locks", _boom)
+    # module_edit.packs.delete_module reaches this through the migrate module
+    # object, so patching the defining module is what the caller reads --
+    # patching the facade attribute would leave delete_module calling the
+    # original and this test would assert nothing.
+    monkeypatch.setattr(me_migrate, "_campaign_locks", _boom)
     with pytest.raises(modules.ModuleError):
         module_edit.delete_module("d20-basic")
 

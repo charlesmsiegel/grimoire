@@ -19,7 +19,6 @@ deferred grimoire.store.epub::_env::grimoire.prompts
 deferred grimoire.store.epub::_env::jinja2
 deferred grimoire.store.export::_avatar::grimoire.store.assets
 deferred grimoire.store.export::_resolve_image::grimoire.store.assets
-deferred grimoire.store.module_edit::rename.mutate::grimoire.store.frontmatter
 deferred grimoire.store.plot::render_open::grimoire.prompts
 deferred grimoire.store.proposals::commit_narration::grimoire.store.scenes
 deferred grimoire.store.proposals::project::grimoire.store.checks
