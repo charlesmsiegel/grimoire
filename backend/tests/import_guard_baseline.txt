@@ -9,7 +9,7 @@ deferred grimoire.store.chronicle::scene_facts::grimoire.store.overlay
 deferred grimoire.store.chronicle::scene_facts::grimoire.store.scenes
 deferred grimoire.store.chronicle::transcript_text::grimoire.prompts
 deferred grimoire.store.chronicle::transcript_text::grimoire.store.scenes
-deferred grimoire.store.context::_encoder::tiktoken
+deferred grimoire.store.context.tokens::_encoder::tiktoken
 deferred grimoire.store.entity_schema::_valid_climate::grimoire.store.climates
 deferred grimoire.store.epub::_env::grimoire.prompts
 deferred grimoire.store.epub::_env::jinja2
