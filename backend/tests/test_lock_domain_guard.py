@@ -57,8 +57,9 @@ Honest about its reach — the house standard set by ``test_atomic_guard.py``:
   3. ``with <alias>(cid, ...)`` — a module-local helper whose FIRST parameter is
      ``cid`` and which returns or yields one of the above, so positional binding
      makes the two the same campaign;
-  4. ``@<decorator>`` whose returned wrapper invokes the decorated function
-     under one of the above on every path it executes.
+  4. ``@<decorator>`` applied DIRECTLY to the function, whose returned wrapper
+     invokes the decorated function under one of the above on every path it
+     executes, passing ``cid`` first.
 
   Anything else — a computed iterable, a keyword-bound alias, a lock reached
   through an object this cannot resolve — reads as *unserialized*. That will
@@ -66,11 +67,19 @@ Honest about its reach — the house standard set by ``test_atomic_guard.py``:
   the intended trade: the marker is cheap and visible, and a false alarm costs a
   comment while a false negative costs a transcript.
 
-  Two things the whitelist deliberately does *not* trust: a name that only
-  module scope may bind (a lock alias or decorator resolved from a nested
-  ``def`` in some unrelated factory is not the name module scope actually
-  binds), and a name reached through an attribute (``@hooks.safe`` is not this
-  module's ``safe``). Both read as unserialized.
+  Three things the whitelist deliberately does *not* trust. A name that only
+  module scope may bind — a lock alias or decorator resolved from a nested
+  ``def`` in some unrelated factory is not the name module scope actually binds.
+  A name reached through an attribute — ``@hooks.safe`` is not this module's
+  ``safe``. And a decorator that is not the innermost one, because composition
+  order decides whether the write happens inside the lock: ``@safe`` over
+  ``@defer`` locks around a call that returns a callback and writes nothing.
+
+  Running through all four forms is one rule that took five rounds to state in
+  one place: **an acquisition only counts when this campaign's id reaches the
+  parameter the lock is keyed on.** It has to be checked at every boundary the
+  id crosses — into an alias, into a delegated helper, into a decorated target —
+  and each boundary was a separate finding before it was a single rule.
 - **The mutation surface is inverted too, inside the filesystem namespace.**
   The other half of the same lesson, learned one round later. "What counts as
   publishing" was an enumeration, and six rounds each added exactly one more
@@ -80,6 +89,11 @@ Honest about its reach — the house standard set by ``test_atomic_guard.py``:
   ``os`` or ``shutil`` is a publication unless its name is a known reader, and
   ``shutil.copytree`` — used twice in this package and matched by no
   enumeration — is caught by that inversion rather than by a seventh entry.
+
+  Which namespace a receiver names is resolved through the module's import
+  bindings, not by its spelling: ``import shutil as fs`` defeated the first
+  version, and since ``copytree`` matched no enumeration either, the module
+  dropped out of the survey altogether rather than reading as unlocked.
 
   It stops at the namespace boundary, and that boundary is real: ``p.foo()``
   cannot be told from ``some_dict.foo()`` without type inference, so a
@@ -106,6 +120,7 @@ from __future__ import annotations
 import ast
 import functools
 import pathlib
+import typing
 
 import grimoire
 from grimoire.store import locks
@@ -275,6 +290,35 @@ def _takes_cid(fn: ast.AST) -> bool:
                for a in [*args.posonlyargs, *args.args, *args.kwonlyargs])
 
 
+def _fs_namespaces(tree: ast.AST) -> dict[str, str]:
+    """Local name -> the filesystem namespace it refers to.
+
+    The inverted namespace check keyed on the receiver's spelling, so
+    `import shutil as fs; fs.copytree(...)` escaped it entirely -- and because
+    `copytree` is in no enumeration either, the module vanished from the survey
+    rather than merely reading as unlocked. Import bindings are resolved instead
+    of trusted.
+
+    `import os.path as p` is deliberately NOT mapped: the alias binds the
+    submodule, and `os.path` publishes nothing, so mapping it to `os` would
+    read every `p.join(...)` as a write.
+    """
+    out = {name: name for name in (*_FS_NAMESPACES, "atomic")}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.asname and "." in alias.name:
+                    continue             # binds a submodule, not the root
+                root = alias.name.split(".")[0]
+                if root in _FS_NAMESPACES:
+                    out[alias.asname or root] = root
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name in (*_FS_NAMESPACES, "atomic"):
+                    out[alias.asname or alias.name] = alias.name
+    return out
+
+
 def _imported_writers(tree: ast.AST) -> set[str]:
     """Local names bound by `from <atomic|os|shutil> import <primitive>`.
 
@@ -305,7 +349,23 @@ def _imported_writers(tree: ast.AST) -> set[str]:
     return out
 
 
-def _writes_directly(fn: ast.AST, imported: frozenset[str] = frozenset()) -> bool:
+class _Surface(typing.NamedTuple):
+    """What counts as publication in one module: the names it imported out of a
+    filesystem namespace, and what each local receiver name refers to.
+
+    Carried together because both halves answer the same question and drifted
+    apart when only one was threaded -- the namespace inversion keyed on the
+    literal spellings `os`/`shutil` while `_imported_writers` already resolved
+    bindings, so `import shutil as fs` defeated one and not the other."""
+    imported: frozenset = frozenset()
+    namespaces: dict = {}
+
+    @classmethod
+    def of(cls, tree: ast.AST) -> "_Surface":
+        return cls(frozenset(_imported_writers(tree)), _fs_namespaces(tree))
+
+
+def _writes_directly(fn: ast.AST, surface: _Surface = _Surface()) -> bool:
     """Whether `fn` publishes a change to disk itself.
 
     `Path.replace` — a real atomic rename — is deliberately NOT matched: it is
@@ -318,7 +378,7 @@ def _writes_directly(fn: ast.AST, imported: frozenset[str] = frozenset()) -> boo
         name = _called_name(node.func)
         if isinstance(node.func, ast.Name):
             # `from .atomic import write_text` — no receiver to key on.
-            if name in imported:
+            if name in surface.imported:
                 return True
             if name == "open" and _is_write_mode(node):
                 return True              # the builtin, not a method
@@ -332,9 +392,15 @@ def _writes_directly(fn: ast.AST, imported: frozenset[str] = frozenset()) -> boo
         # reads its receiver as `path`, which names no namespace here, so it
         # falls through to the enumeration and matches nothing -- which is
         # right, since `os.path` publishes nothing.
-        if receiver in _FS_NAMESPACES and name not in _FS_READERS:
+        #
+        # Resolved through the module's import bindings, not matched against the
+        # literal spellings: `import shutil as fs` defeated the spelling check,
+        # and since `copytree` is in no enumeration either, the module dropped
+        # out of the survey altogether rather than reading as unlocked.
+        namespace = surface.namespaces.get(receiver)
+        if namespace in _FS_NAMESPACES and name not in _FS_READERS:
             return True
-        if receiver == "atomic" and name not in _ATOMIC_READERS:
+        if namespace == "atomic" and name not in _ATOMIC_READERS:
             return True
         if name in _ATOMIC_WRITERS:
             # ANY receiver, not just `atomic`. The claim that `test_atomic_guard`
@@ -762,6 +828,20 @@ def _module_level(tree: ast.AST) -> set[str]:
     return out - poisoned
 
 
+def _is_multi_campaign_holder(fn: ast.AST) -> bool:
+    """`fn` holds EVERY campaign lock, so a caller's campaign is covered whatever
+    it is — `module_edit._campaign_locks` and the world-module rebind route.
+
+    Recognized only as `locks.hold_all(...)` entered directly, on every context
+    it enters. A helper serialized some other way (a decorator, delegation) is
+    not resolvable here and reads as not-a-holder, which fails loud.
+    """
+    entered = list(_with_context_calls(fn))
+    return bool(entered) and all(
+        _receiver_name(c.func) == "locks" and _called_name(c.func) == "hold_all"
+        for c in entered)
+
+
 def _binds_the_campaign(call: ast.Call, defs) -> bool:
     """The callee's own `cid` parameter receives THIS function's `cid`.
 
@@ -778,15 +858,33 @@ def _binds_the_campaign(call: ast.Call, defs) -> bool:
     locks, which loses updates exactly as if there were no lock — the same
     argument-binding hole `_enters_lock` closed for aliases, on the other path.
 
-    A callee with no `cid` parameter is a multi-campaign holder (`hold_all`);
-    there is nothing to bind and nothing to check. Anything this cannot index —
-    a starred argument, a position the call does not reach — fails loud.
+    A callee with no `cid` parameter used to be waved through as a multi-campaign
+    holder, which was true of the shape that motivated it and false in general:
+
+        cid = "some-global"
+        def helper():
+            with locks.campaign_lock(cid):    # locks a module global
+                atomic.write_text(p, x)
+
+        def put(cid):
+            helper()                          # a DIFFERENT campaign's lock
+
+    `helper` is serializing, so `_serializing` accepted `put` and `_mutators`
+    also stopped propagating at it — `put` was reported by neither, the same
+    double silence the argument-swap case produced. Only the genuine `hold_all`
+    shape bypasses binding now; a campaign-locking helper with no parameter to
+    tie to the caller's `cid` fails loud.
+
+    Anything this cannot index — a starred argument, a position the call does
+    not reach — fails loud too.
     """
     starred = any(isinstance(a, ast.Starred) for a in call.args)
     for fn in defs:
         params = [a.arg for a in [*fn.args.posonlyargs, *fn.args.args]]
         if "cid" not in params:
-            continue
+            if _is_multi_campaign_holder(fn):
+                continue                 # holds every campaign; nothing to bind
+            return False
         passed = [k.value for k in call.keywords if k.arg == "cid"]
         if passed:
             if not all(isinstance(v, ast.Name) and v.id == "cid" for v in passed):
@@ -824,6 +922,22 @@ def _wraps_target_under_lock(fn: ast.AST) -> bool:
 
     The decorated function is identified by the decorator's own first parameter,
     which is what `@_serialized`'s `fn` is.
+
+    A fourth thing, and the same hole as everywhere else: the invocation has to
+    BIND this campaign. The wrapper's lock expression was validated while the
+    arguments handed to the target were not, so
+
+        def _serialized(fn):
+            def locked(sid, cid, *a):
+                with locks.campaign_lock(cid):
+                    return fn(sid, cid, *a)   # the target's `cid` gets `sid`
+            return locked
+
+    read as protective while two decorated calls for one campaign ran under two
+    different locks. The target must receive `cid` first positionally (or as the
+    keyword `cid`), which is the same positional-binding rule aliases and
+    delegation already use, and which the real `_serialized` satisfies —
+    `return fn(cid, *args, **kwargs)`.
     """
     params = [a.arg for a in [*fn.args.posonlyargs, *fn.args.args]]
     if not params:
@@ -848,8 +962,23 @@ def _wraps_target_under_lock(fn: ast.AST) -> bool:
 
     if set(wrappers) != returned:
         return False                     # a returned name this cannot resolve
-    return all(_every_one_locked(w, w, _is_call_to(_target_aliases(w, target)))
-               for defs in wrappers.values() for w in defs)
+    for w in [w for defs in wrappers.values() for w in defs]:
+        is_target = _is_call_to(_target_aliases(w, target))
+        # Checked over every syntactic invocation, not only the ones
+        # `_every_one_locked` walks: a mis-bound call this cannot reach is not
+        # a call this may assume is bound correctly.
+        if not all(_guards_the_campaign(c) or _passes_cid_by_keyword(c)
+                   for c in ast.walk(w) if is_target(c)):
+            return False
+        if not _every_one_locked(w, w, is_target):
+            return False
+    return True
+
+
+def _passes_cid_by_keyword(call: ast.Call) -> bool:
+    """`f(cid=cid)` — the other spelling `_guards_the_campaign` does not read."""
+    return any(k.arg == "cid" and isinstance(k.value, ast.Name)
+               and k.value.id == "cid" for k in call.keywords)
 
 
 def _locks_anywhere(fn: ast.AST) -> bool:
@@ -895,7 +1024,7 @@ def _own_calls(fn: ast.AST):
             yield node
 
 
-def _reaches_a_write(funcs: dict[str, ast.AST], imported=frozenset()) -> set[str]:
+def _reaches_a_write(funcs: dict[str, ast.AST], surface=_Surface()) -> set[str]:
     """Names that reach a write through module-local calls, ignoring locks.
 
     Deliberately lock-blind, unlike `_mutators`: it answers "is there a write
@@ -903,7 +1032,7 @@ def _reaches_a_write(funcs: dict[str, ast.AST], imported=frozenset()) -> set[str
     `_serializing` has decided anything. Computing it the other way round would
     be circular.
     """
-    out = {n for n, ds in funcs.items() if _any(ds, lambda d: _writes_directly(d, imported))}
+    out = {n for n, ds in funcs.items() if _any(ds, lambda d: _writes_directly(d, surface))}
     for _ in range(len(funcs) + 1):
         grown = set(out)
         for name, defs in funcs.items():
@@ -916,7 +1045,33 @@ def _reaches_a_write(funcs: dict[str, ast.AST], imported=frozenset()) -> set[str
     return out
 
 
-def _serializing(funcs: dict[str, ast.AST], imported=frozenset(),
+def _innermost_decorator_locks(fn: ast.AST, decorating: set[str]) -> bool:
+    """A recognized locking decorator is applied DIRECTLY to `fn`.
+
+    "Any decorator in the chain locks" ignored composition order, and order is
+    what decides whether the write happens inside the lock:
+
+        @safe            # locks, and calls what it wraps
+        @defer           # returns a callback instead of running the body
+        def put(cid): atomic.write_text(p, x)
+
+    `defer` is applied first, so `safe` locks around `defer(put)` — which hands
+    back a callback and writes nothing. The lock is released, then the callback
+    runs the write. `put` read as serialized while nothing serialized it.
+
+    The innermost decorator is the one applied to the function itself, so if it
+    locks, the write is inside the lock. Anything further out then wraps an
+    already-serialized callable and cannot un-serialize it — it may defer or
+    skip the whole locked unit, but never split the lock from the write. Any
+    other arrangement is a chain this cannot resolve and fails loud.
+
+    No function in this package has more than one decorator today, so this costs
+    nothing now and is here for the chain that gets written later.
+    """
+    return bool(fn.decorator_list) and _decorator_name(fn.decorator_list[-1]) in decorating
+
+
+def _serializing(funcs: dict[str, ast.AST], surface=_Surface(),
                  module_level: set[str] | None = None) -> set[str]:
     """Names whose bodies establish the campaign lock.
 
@@ -946,7 +1101,7 @@ def _serializing(funcs: dict[str, ast.AST], imported=frozenset(),
     aliases = {n for n, ds in funcs.items()
                if n in scope and _all(ds, _produces_lock)
                and _all(ds, _locks_its_first_param)}
-    writing = _reaches_a_write(funcs, imported)
+    writing = _reaches_a_write(funcs, surface)
     out = {n for n, ds in funcs.items() if _all(ds, _locks_in_own_body)}
     for _ in range(len(funcs) + 1):
         grown = set(out)
@@ -954,12 +1109,12 @@ def _serializing(funcs: dict[str, ast.AST], imported=frozenset(),
             if name in grown:
                 continue
 
-            def covered(fn, grown=grown, imported=imported):
-                if any(_decorator_name(d) in decorating for d in fn.decorator_list):
+            def covered(fn, grown=grown, surface=surface):
+                if _innermost_decorator_locks(fn, decorating):
                     return True                       # @_serialized and friends
                 if _enters_lock(fn, aliases):
                     return True                       # with _lock(cid): ...
-                if _writes_directly(fn, imported):
+                if _writes_directly(fn, surface):
                     return False
                 # Pure delegation: every local callee that reaches a write must
                 # itself be covered, on this campaign, and at least one must exist.
@@ -979,7 +1134,7 @@ def _serializing(funcs: dict[str, ast.AST], imported=frozenset(),
 
 
 def _mutators(funcs: dict[str, ast.AST], serializing: set[str],
-              imported=frozenset()) -> set[str]:
+              surface=_Surface()) -> set[str]:
     """Names that publish a change to campaign state.
 
     Propagation stops at a serializing callee: it is an atomic unit, so calling
@@ -998,7 +1153,7 @@ def _mutators(funcs: dict[str, ast.AST], serializing: set[str],
         name = _called_name(call.func)
         return name in serializing and _binds_the_campaign(call, funcs.get(name, []))
 
-    out = {n for n, ds in funcs.items() if _any(ds, lambda d: _writes_directly(d, imported))}
+    out = {n for n, ds in funcs.items() if _any(ds, lambda d: _writes_directly(d, surface))}
     for _ in range(len(funcs) + 1):
         grown = set(out)
         for name, defs in funcs.items():
@@ -1049,9 +1204,9 @@ def _analyze(path: pathlib.Path):
     src = path.read_text(encoding="utf-8")
     tree = ast.parse(src)
     funcs = _functions(tree)
-    imported = frozenset(_imported_writers(tree))
-    serializing = _serializing(funcs, imported, _module_level(tree))
-    mutators = _mutators(funcs, serializing, imported)
+    surface = _Surface.of(tree)
+    serializing = _serializing(funcs, surface, _module_level(tree))
+    mutators = _mutators(funcs, serializing, surface)
 
     every = [d for ds in funcs.values() for d in ds]
     campaign_mutators, unserialized = set(), set()
@@ -1233,9 +1388,9 @@ def test_the_marker_is_not_a_rubber_stamp():
 def _probe(src: str):
     tree = ast.parse(src)
     funcs = _functions(tree)
-    imported = frozenset(_imported_writers(tree))
-    serializing = _serializing(funcs, imported, _module_level(tree))
-    return funcs, serializing, _mutators(funcs, serializing, imported)
+    surface = _Surface.of(tree)
+    serializing = _serializing(funcs, surface, _module_level(tree))
+    return funcs, serializing, _mutators(funcs, serializing, surface)
 
 
 def test_the_guard_detects_an_unlocked_mutator():
@@ -1602,6 +1757,104 @@ def test_delegation_must_bind_this_campaign_to_the_locked_parameter():
                     (helper + "def put(cid, sid):\n    _write(cid=cid, sid=sid)\n", "keyword")]:
         _f, serializing, _m = _probe(ok)
         assert "put" in serializing, f"correct {why} binding was rejected"
+
+
+def test_a_decorator_must_bind_this_campaign_to_its_target():
+    """The wrapper's lock expression was validated; the arguments it hands the
+    decorated function were not. `fn(sid, cid)` sends the caller's `sid` to the
+    target's first parameter, so two decorated calls for one campaign run under
+    two different locks — the delegation hole, on the decorator path."""
+    src = ("def _serialized(fn):\n"
+           "    def locked(sid, cid, *a):\n"
+           "        with locks.campaign_lock(cid):\n"
+           "            return fn(sid, cid, *a)\n"
+           "    return locked\n"
+           "@_serialized\n"
+           "def put(cid, sid):\n"
+           "    atomic.write_text(p, x)\n")
+    _f, serializing, mutators = _probe(src)
+    assert "put" in mutators
+    assert "put" not in serializing, "the decorator bound the wrong id to its target"
+
+    # The real shape -- `return fn(cid, *args, **kwargs)` -- still qualifies, so
+    # this narrows the rule rather than rejecting decorators generally.
+    ok = src.replace("return fn(sid, cid, *a)", "return fn(cid, sid, *a)")
+    _f, serializing, _m = _probe(ok)
+    assert "put" in serializing
+
+
+def test_only_a_hold_all_helper_may_skip_argument_binding():
+    """A callee with no `cid` parameter was waved through as a multi-campaign
+    holder. True of `hold_all`, false of a helper that locks a module global —
+    and that one was reported by neither check, since `_mutators` also stopped
+    propagating at it."""
+    src = ("cid = 'a-global'\n"
+           "def helper():\n"
+           "    with locks.campaign_lock(cid):\n"
+           "        atomic.write_text(p, x)\n"
+           "def put(cid):\n"
+           "    helper()\n")
+    _f, serializing, mutators = _probe(src)
+    assert "put" in mutators, "the caller was reported by neither check"
+    assert "put" not in serializing, "a helper locking a global vouched for the caller"
+
+    # The shape the bypass exists for: `hold_all` covers every campaign, so
+    # there is genuinely nothing to bind.
+    holder = ("def _every_campaign():\n"
+              "    with locks.hold_all(all_cids()):\n"
+              "        atomic.write_text(p, x)\n"
+              "def put(cid):\n"
+              "    _every_campaign()\n")
+    _f, serializing, _m = _probe(holder)
+    assert "put" in serializing, "a genuine multi-campaign holder was rejected"
+
+
+def test_a_filesystem_namespace_is_resolved_through_its_import():
+    """`import shutil as fs` defeated the inverted namespace check, which keyed
+    on the spelling. Worse than reading as unlocked: `copytree` is in no
+    enumeration either, so the module dropped out of the survey entirely."""
+    for src, why in [
+        ("import shutil as fs\ndef put(cid):\n    fs.copytree(a, b)\n", "shutil as fs"),
+        ("import os as fs\ndef put(cid):\n    fs.truncate(p, 0)\n", "os as fs"),
+        ("import os.path\nimport shutil as sh\ndef put(cid):\n    sh.move(a, b)\n",
+         "shutil as sh beside an os.path import"),
+    ]:
+        _f, _s, mutators = _probe(src)
+        assert mutators, f"an aliased namespace was invisible ({why})"
+
+    # `import os.path as p` binds the SUBMODULE, which publishes nothing --
+    # mapping it to `os` would read every `p.join(...)` as a write.
+    _f, _s, mutators = _probe(
+        "import os.path as p\ndef read(cid):\n    return p.join(root, cid)\n")
+    assert not mutators, "os.path was read as a publication through its alias"
+
+
+def test_the_locking_decorator_must_be_the_one_applied_to_the_function():
+    """Composition order decides whether the write is inside the lock. `@safe`
+    over `@defer` locks around a call that returns a callback and writes
+    nothing; the write happens later, unlocked. Accepting any locking name
+    anywhere in the chain missed that entirely."""
+    chain = ("def defer(fn):\n"
+             "    def later(*a):\n"
+             "        return lambda: fn(*a)\n"
+             "    return later\n"
+             "def safe(fn):\n"
+             "    def locked(cid, *a):\n"
+             "        with locks.campaign_lock(cid):\n"
+             "            return fn(cid, *a)\n"
+             "    return locked\n"
+             "@safe\n"
+             "@defer\n"
+             "def put(cid):\n"
+             "    atomic.write_text(p, x)\n")
+    _f, serializing, mutators = _probe(chain)
+    assert "put" in mutators
+    assert "put" not in serializing, "a deferring decorator inside the lock was ignored"
+
+    # Innermost and locking: anything further out wraps an already-serialized
+    # callable and cannot split the lock from the write.
+    _f, serializing, _m = _probe(chain.replace("@safe\n@defer\n", "@defer\n@safe\n"))
+    assert "put" in serializing, "a locking decorator applied directly was rejected"
 
 
 def test_the_decorated_target_is_matched_by_name_not_by_spelling():
