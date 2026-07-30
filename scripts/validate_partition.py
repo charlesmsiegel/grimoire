@@ -42,6 +42,11 @@ def parse_spec() -> dict[str, dict[str, str]]:
 
 
 def toplevel_names(tree: ast.Module) -> dict[str, ast.AST]:
+    """Every top-level binding, annotated assignments included.
+
+    `FILE_KINDS: tuple[str, ...] = (...)` is an AnnAssign, and missing it made
+    a name shared by four proposed files invisible to this check.
+    """
     got: dict[str, ast.AST] = {}
     for n in tree.body:
         if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
@@ -50,6 +55,8 @@ def toplevel_names(tree: ast.Module) -> dict[str, ast.AST]:
             for t in n.targets:
                 if isinstance(t, ast.Name):
                     got[t.id] = n
+        elif isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name):
+            got[n.target.id] = n
     return got
 
 
@@ -93,10 +100,12 @@ def main() -> int:
             t = ast.parse(p.read_text(encoding="utf-8"))
             trees[src] = t
             for name in toplevel_names(t):
-                owner[name] = mapping.get(name, f"<UNASSIGNED:{src}>")
+                # One node per unassigned name, never a shared bucket: lumping
+                # them together hid every cycle that ran through two different
+                # unplaced names.
+                owner[name] = mapping.get(name, f"<UNASSIGNED:{name}>")
 
-        unassigned = sorted({v[12:-1] and k for k, v in owner.items()
-                             if v.startswith("<UNASSIGNED")})
+        unassigned = sorted(k for k, v in owner.items() if v.startswith("<UNASSIGNED"))
         graph: dict[str, set[str]] = {}
         for src, t in trees.items():
             for name, node in toplevel_names(t).items():
@@ -108,12 +117,22 @@ def main() -> int:
                         if dest != home:
                             graph[home].add(dest)
         cycles = sccs(graph)
-        status = "OK " if not cycles else "CYCLE"
+        # An unplaced name is not a clean partition. Where it lands can create
+        # a cycle this graph cannot see -- SYNTHETIC_SPEAKERS is read by both
+        # turns.py and write.py, so putting it in the wrong one closes a loop.
+        ok = not cycles and not unassigned
+        status = "OK   " if ok else ("CYCLE" if cycles else "GAPS ")
         print(f"[{status}] {mod}: {len(mapping)} names mapped, "
               f"{len(unassigned)} unassigned")
         if unassigned:
-            print(f"        unassigned: {', '.join(unassigned[:12])}"
-                  + (" ..." if len(unassigned) > 12 else ""))
+            bad += 1
+            for name in unassigned:
+                users = sorted({owner[u] for u, node in
+                                ((u, n) for u, n in toplevel_names(trees[src]).items())
+                                if any(isinstance(x, ast.Name) and x.id == name
+                                       for x in ast.walk(node))} - {f"<UNASSIGNED:{name}>"})
+                print(f"        UNPLACED {name}"
+                      + (f" -- read by {', '.join(users)}" if users else " -- unread"))
         for c in cycles:
             bad += 1
             print(f"        CYCLE: {' <-> '.join(c)}")
