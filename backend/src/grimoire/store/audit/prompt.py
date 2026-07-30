@@ -1,17 +1,18 @@
 """Part 2a: the audit prompt -- sheet scope, rendered sheet blocks, roll lines.
 
 This is the only part of the package that reads scene state
-(``scenes.get_location_history``), which is exactly why it lives apart from
+(``scenes/read.py``'s ``get_location_history``), which is exactly why it lives apart from
 ``baselines``: ``scenes`` calls into ``baselines``, never into here.
 """
 
 from __future__ import annotations
 
 from ... import prompts
-from .. import entities, overlay, rolls, scenes
+from .. import entities, overlay, rolls
 from ..appearances import cast as appearances_cast
 from ..modules import (binding as modules_binding, fields as modules_fields,
                        pack as modules_pack)
+from ..scenes import read as scenes_read
 from ..sheets import reader as sheets_reader, schema as sheets_schema
 from . import baselines
 
@@ -22,7 +23,7 @@ def sheet_scope(cid: str, sid: str) -> list[tuple[str, str, str]]:
     Unsheeted entries are included; callers decide what to do with them."""
     out = [(a["kind"], a["id"], a.get("name", a["id"]))
            for a in appearances_cast.scene_cast(cid, sid)]
-    history = scenes.get_location_history(cid, sid)
+    history = scenes_read.get_location_history(cid, sid)
     if history:
         loc = history[-1]
         try:

@@ -17,9 +17,10 @@ from .. import prompts
 from . import (appearances, calendars, characters, checks, chronicle,
                config, dice, dossiers, entities, groupstate, length_drift, lengths, locks,
                modules, overlay,
-               pcs, playstate, plot, relationships, response_presets, scenes, sheets, styles,
+               pcs, playstate, plot, relationships, response_presets, sheets, styles,
                weather)
 from .campaigns import paths as campaigns_paths, read as campaigns_read
+from .scenes import read as scenes_read, turns as scenes_turns
 
 
 def activate(entries: list[dict], recent_text: str, present: frozenset = frozenset()) -> list[dict]:
@@ -69,7 +70,7 @@ def scene_substitutions(cid: str, sid: str) -> dict[str, str]:
         except (characters.CharacterNotFound, characters.VersionNotFound,
                 pcs.PCNotFound, pcs.PCVersionNotFound):
             continue
-    if not any(player_names) and scenes.is_pcless(cid, sid):
+    if not any(player_names) and scenes_read.is_pcless(cid, sid):
         player_names = _campaign_player_refs(cid, aroot)[1]
     return {"{{user}}": ", ".join(n for n in player_names if n)}
 
@@ -85,7 +86,7 @@ def _datetime_subs(cid: str, sid: str) -> dict[str, str]:
     the campaign's primary calendar. {} when the scene has no time yet or the
     stored datetime no longer parses -- _substitute then leaves the tokens
     literal for _strip_unknown_macros to drop."""
-    history = scenes.get_time_history(cid, sid)
+    history = scenes_read.get_time_history(cid, sid)
     if not history:
         return {}
     native = history[-1]
@@ -311,7 +312,7 @@ def cast_datetime_facts(cid: str, sid: str, native: str) -> list[dict]:
 
 
 def _today_data(cid: str, sid: str, croot) -> dict | None:
-    history = scenes.get_time_history(cid, sid)
+    history = scenes_read.get_time_history(cid, sid)
     if not history:
         return None
     cfg = calendars.read_calendar(croot)
@@ -332,8 +333,8 @@ def _weather_data(cid: str, sid: str) -> dict | None:
     raising for a missing location, a missing moment, or a stored moment the
     campaign's calendar can no longer parse.
     """
-    locations = scenes.get_location_history(cid, sid)
-    moments = scenes.get_time_history(cid, sid)
+    locations = scenes_read.get_location_history(cid, sid)
+    moments = scenes_read.get_time_history(cid, sid)
     got = weather.current_weather(cid, locations[-1] if locations else None,
                                   moments[-1] if moments else None)
     if not got:
@@ -426,7 +427,7 @@ def _mechanics(cid: str, sid: str, cast, recent_text: str) -> dict:
         pack = modules.load_pack(mid)
         sheets_def = pack["sheets"] if isinstance(pack["sheets"], dict) else {}
 
-        history_ids = scenes.get_location_history(cid, sid)
+        history_ids = scenes_read.get_location_history(cid, sid)
         current_loc = history_ids[-1] if history_ids else None
         actors = [(a["kind"], a["id"], a["name"]) for a in cast]
         if current_loc:
@@ -505,7 +506,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     selects the full story-so-far variant over the compact recap. `turn` is a
     one-shot, unpersisted override (e.g. a per-turn response-length chip) that
     outranks every stored scope in response_presets.resolve -- see build_messages."""
-    scene = scenes.read_scene(cid, sid)
+    scene = scenes_read.read_scene(cid, sid)
     history = [dict(m) for m in scene["messages"]]
     croot = campaigns_paths.campaign_root(cid)    # campaign-local: dossiers, calendar, group state
     aroot = appearances.locked_actor_root(cid)    # cast/roster actors are locked, so campaign-side
@@ -558,7 +559,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     if wi_seed:  # opener: the prompt stands in for the (absent) recent history
         recent_text = (recent_text + "\n" + wi_seed).strip()
 
-    history_ids = scenes.get_location_history(cid, sid)
+    history_ids = scenes_read.get_location_history(cid, sid)
     current_loc = history_ids[-1] if history_ids else None
     current_setting = ""
     exclude: frozenset = frozenset()
@@ -616,7 +617,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     # The roster is passed as a thunk: it opens one card file per campaign actor,
     # and measure() bails out immediately on a scene with no recorded turns —
     # which is every scene until its first tracked generation lands.
-    drift = length_drift.measure(history, scenes.get_turn_sizes(cid, sid),
+    drift = length_drift.measure(history, scenes_turns.get_turn_sizes(cid, sid),
                                  lambda: _drift_roster(cid, npc_names, player_names),
                                  {k: budget[k] for k in lengths.KNOBS})
     length_correction = (prompts.render("scene/length_correction.j2",
