@@ -74,9 +74,18 @@ Honest about its reach — the house standard set by ``test_atomic_guard.py``:
   A name reached through an attribute — ``@hooks.safe`` is not this module's
   ``safe``. A decorator that is not the innermost one, because composition order
   decides whether the write happens inside the lock: ``@safe`` over ``@defer``
-  locks around a call that returns a callback and writes nothing. And the
-  spelling ``locks`` itself, in any module that rebinds the name — see
-  ``_rebinds_locks``.
+  locks around a call that returns a callback and writes nothing. And any name a
+  binding elsewhere in the module can shadow — the spelling ``locks``
+  (``_rebinds_locks``), or an alias or decorator a parameter rebinds
+  (``_shadowed_names``).
+
+  That last one is the second rule this file had to learn to state once. **A
+  name is not a binding.** It was fixed four separate times before it was
+  written down — ``campaign_lock=nullcontext`` as a parameter, then ``locks``
+  as a parameter, then a validated alias as a parameter — and on the mutation
+  side the same rule appears as ``import shutil as fs`` and
+  ``publish = atomic.write_text``. Every trusted spelling is now resolved to
+  what actually binds it, and a name this cannot resolve fails loud.
 
   Running through all four forms is one rule that took five rounds to state in
   one place: **an acquisition only counts when this campaign's id reaches the
@@ -372,8 +381,50 @@ class _Surface(typing.NamedTuple):
 
     @classmethod
     def of(cls, tree: ast.AST) -> "_Surface":
-        return cls(frozenset(_imported_writers(tree)), _fs_namespaces(tree),
-                   not _rebinds_locks(tree))
+        namespaces = _fs_namespaces(tree)
+        writers = _imported_writers(tree) | _assigned_writers(tree, namespaces)
+        return cls(frozenset(writers), namespaces, not _rebinds_locks(tree))
+
+
+def _assigned_writers(tree: ast.AST, namespaces: dict) -> set[str]:
+    """Local names bound to a publication primitive by ASSIGNMENT.
+
+    `_imported_writers` covered `from .atomic import write_text` and the bare
+    `write_text(p, x)` that follows it. It did not cover
+
+        publish = atomic.write_text
+        def put(cid):
+            publish(p, data)            # seen by nothing
+
+    which is the same binding question asked with a different keyword, and had
+    the same consequence the `import shutil as fs` alias did: the call falls
+    through the bare-name branch, the module never reads as mutating, and it
+    leaves the survey entirely rather than reading as unlocked.
+
+    Iterated so `a = atomic.write_text; b = a` resolves, the way `_functions`
+    already resolves re-export chains.
+    """
+    out: set[str] = set()
+    assigns = [n for n in ast.walk(tree) if isinstance(n, ast.Assign)]
+    for _ in range(len(assigns) + 1):
+        grew = False
+        for node in assigns:
+            value = node.value
+            if isinstance(value, ast.Attribute):
+                writer = _names_a_writer(value.attr, _receiver_name(value), namespaces)
+            elif isinstance(value, ast.Name):
+                writer = value.id in out
+            else:
+                continue
+            if not writer:
+                continue
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id not in out:
+                    out.add(target.id)
+                    grew = True
+        if not grew:
+            break
+    return out
 
 
 def _rebinds_locks(tree: ast.AST) -> bool:
@@ -391,7 +442,9 @@ def _rebinds_locks(tree: ast.AST) -> bool:
     This is the SAME defect the receiver check was introduced to fix
     (`def put(cid, campaign_lock=nullcontext)`), moved one level up — patched at
     the instance rather than at the class, which is the pattern this guard's
-    review keeps finding in it.
+    review keeps finding in it. `_shadowed_names` is the general form; this is
+    the one name that is a receiver rather than a callee, so it is answered
+    separately and by the same rule.
 
     Answered for the whole module rather than per function, deliberately. A
     binding in one function does not shadow another, so this is coarser than
@@ -411,6 +464,32 @@ def _rebinds_locks(tree: ast.AST) -> bool:
                 and node.name.rsplit(".", 1)[-1] != "locks":
             return True                  # `import json as locks`
     return False
+
+
+def _shadowed_names(tree: ast.AST) -> set[str]:
+    """Names bound by a PARAMETER anywhere in this module.
+
+    The general form of the `locks` rule, and the same defect a third time: a
+    module-level `helper` validated as a lock alias, or `_serialized` validated
+    as a locking decorator, is not the `helper` or `_serialized` that a
+    parameter of the same name refers to —
+
+        def put(cid, helper=nullcontext):
+            with helper(cid):            # nullcontext holds nothing
+                atomic.write_text(p, x)
+
+    `_module_level` already refuses a name that module scope rebinds to
+    something unresolvable. A parameter rebinds it too, and was not looked at,
+    so the whitelist kept vouching for the module-level definition while the
+    call reached the parameter.
+
+    Whole-module and parameters-only, for the reason `_rebinds_locks` gives:
+    per-function scoping is what the previous two versions of this rule tried,
+    and the coarse answer is the one that cannot be sidestepped by moving the
+    binding. Assignments are left to `_module_level`, which resolves the
+    legitimate `put = _put` re-export rather than poisoning it.
+    """
+    return {node.arg for node in ast.walk(tree) if isinstance(node, ast.arg)}
 
 
 def _writes_directly(fn: ast.AST, surface: _Surface = _Surface()) -> bool:
@@ -445,47 +524,69 @@ def _writes_directly(fn: ast.AST, surface: _Surface = _Surface()) -> bool:
         # literal spellings: `import shutil as fs` defeated the spelling check,
         # and since `copytree` is in no enumeration either, the module dropped
         # out of the survey altogether rather than reading as unlocked.
-        namespace = surface.namespaces.get(receiver)
-        if namespace in _FS_NAMESPACES and name not in _FS_READERS:
-            return True
-        if namespace == "atomic" and name not in _ATOMIC_READERS:
-            return True
-        if name in _ATOMIC_WRITERS:
-            # ANY receiver, not just `atomic`. The claim that `test_atomic_guard`
-            # reduces publication to the helper surface was wrong twice over: it
-            # matches these names only as attributes, and it lets a raw write
-            # through entirely when a human clears it with `# atomic-ok:`. Two
-            # such exemptions exist today. A write that guard forgives is still
-            # a write this one has to see.
-            return True
-        if name in ("write", "fdopen") and receiver == "os":
-            # `os.write(fd, b)` / `os.fdopen(fd, "wb")` bypass `open()` entirely.
-            # `test_atomic_guard` matches both; this did not, so an os-level
-            # write -- especially one that guard has forgiven with a marker --
-            # was invisible here.
-            return True
-        if name == "mkdir":
-            # A directory is a namespace entry others can observe, and neither
-            # guard looked for one -- a mutator that publishes state purely by
-            # creating an initialization or completion directory was invisible.
-            return True
-        if name in _FS_ONLY:
+        if _names_a_writer(name, receiver, surface.namespaces):
             return True
         if name == "open" and _is_write_mode(node):
             return True                  # the raw form `atomic` itself wraps
-        if name in _FS_AMBIGUOUS and receiver in _FS_MODULES:
-            return True
-        if name == "touch" and receiver not in _TOUCH_FUNCTIONS:
-            # `Path.touch()` publishes a pathname others can observe (a marker
-            # or completion file) while writing no bytes, so neither this
-            # guard's writers nor `test_atomic_guard` would see it.
-            #
-            # Keyed on the receiver, NOT on arity. Arity looked like a clean
-            # discriminator against this package's own `campaigns.touch(cid)`
-            # and was simply wrong: `Path.touch(self, mode=0o666,
-            # exist_ok=True)` takes both positionally, so `marker.touch(0o600)`
-            # is a real file creation that a zero-positional-args test rejects.
-            return True
+    return False
+
+
+def _names_a_writer(name: str | None, receiver: str | None, namespaces: dict) -> bool:
+    """Whether `receiver.name` publishes, judged from the two names alone.
+
+    Split out of `_writes_directly` so that a CALL and a BINDING of the same
+    attribute are answered by one rule. `publish = atomic.write_text` followed
+    by `publish(p, data)` was seen by neither: the call reaches the bare-name
+    branch, which only knew names from `from ... import ...`. So the module left
+    the survey entirely rather than reading as unlocked -- the same failure the
+    `import shutil as fs` alias produced, one binding form along.
+
+    Everything here is argument-independent on purpose; `open(p, "w")` is the
+    one primitive that needs its arguments, and it stays at the call site.
+    """
+    namespace = namespaces.get(receiver)
+    # The inverted namespace, checked BEFORE the enumerated names so the
+    # enumeration is a fallback for receivers this cannot identify rather than
+    # the primary rule. `os.path.join` is unaffected: `_receiver_name` reads its
+    # receiver as `path`, which names no namespace here, so it falls through to
+    # the enumeration and matches nothing -- right, since `os.path` publishes
+    # nothing. Resolved through the module's import bindings, not matched
+    # against the literal spellings.
+    if namespace in _FS_NAMESPACES and name not in _FS_READERS:
+        return True
+    if namespace == "atomic" and name not in _ATOMIC_READERS:
+        return True
+    if name in _ATOMIC_WRITERS:
+        # ANY receiver, not just `atomic`. The claim that `test_atomic_guard`
+        # reduces publication to the helper surface was wrong twice over: it
+        # matches these names only as attributes, and it lets a raw write
+        # through entirely when a human clears it with `# atomic-ok:`. Two such
+        # exemptions exist today. A write that guard forgives is still a write
+        # this one has to see.
+        return True
+    if name in ("write", "fdopen") and receiver == "os":
+        # `os.write(fd, b)` / `os.fdopen(fd, "wb")` bypass `open()` entirely.
+        return True
+    if name == "mkdir":
+        # A directory is a namespace entry others can observe, and neither guard
+        # looked for one -- a mutator that publishes state purely by creating an
+        # initialization or completion directory was invisible.
+        return True
+    if name in _FS_ONLY:
+        return True
+    if name in _FS_AMBIGUOUS and receiver in _FS_MODULES:
+        return True
+    if name == "touch" and receiver not in _TOUCH_FUNCTIONS:
+        # `Path.touch()` publishes a pathname others can observe (a marker or
+        # completion file) while writing no bytes, so neither this guard's
+        # writers nor `test_atomic_guard` would see it.
+        #
+        # Keyed on the receiver, NOT on arity. Arity looked like a clean
+        # discriminator against this package's own `campaigns.touch(cid)` and
+        # was simply wrong: `Path.touch(self, mode=0o666, exist_ok=True)` takes
+        # both positionally, so `marker.touch(0o600)` is a real file creation
+        # that a zero-positional-args test rejects.
+        return True
     return False
 
 
@@ -873,7 +974,9 @@ def _module_level(tree: ast.AST) -> set[str]:
                     poisoned.add(target.id)
         if not grew:
             break
-    return out - poisoned
+    # ...and a name any parameter in this module shadows is not a name module
+    # scope can vouch for either -- see `_shadowed_names`.
+    return out - poisoned - _shadowed_names(tree)
 
 
 def _binds_the_campaign(call: ast.Call, defs) -> bool:
@@ -1916,12 +2019,93 @@ def test_the_locks_receiver_must_be_the_locks_module():
         assert "put" not in serializing, f"`locks` shadowed by {why} still read as the module"
 
     # Unshadowed, the same body is the real acquisition.
-    _f, serializing, _m = _probe(
+    _f, serializing, _mm = _probe(
         "from . import locks\n"
         "def put(cid):\n"
         "    with locks.campaign_lock(cid):\n"
         "        atomic.write_text(p, x)\n")
     assert "put" in serializing, "the real `locks` import was rejected"
+
+
+def test_a_parameter_shadows_the_name_the_whitelist_validated():
+    """The `locks` rule, generalized — and the same defect a third time.
+
+    A module-level `helper` validated as a lock alias, or `_serialized`
+    validated as a locking decorator, is not what a parameter of that name
+    refers to. `_module_level` already refused a name module scope rebinds to
+    something unresolvable; a parameter rebinds it too and was not looked at, so
+    the whitelist kept vouching for the definition while the call reached the
+    parameter."""
+    alias = ("from contextlib import contextmanager\n"
+             "@contextmanager\n"
+             "def helper(cid):\n"
+             "    with locks.campaign_lock(cid):\n"
+             "        yield\n"
+             "def put(cid, helper=nullcontext):\n"
+             "    with helper(cid):\n"
+             "        atomic.write_text(p, x)\n")
+    _f, serializing, mutators = _probe(alias)
+    assert "put" in mutators
+    assert "put" not in serializing, "a parameter borrowed the module-level alias"
+
+    # The decorator whitelist has the same seam, and it is closed by the same
+    # rule rather than by a second one.
+    decorator = ("def _serialized(fn):\n"
+                 "    def locked(cid, *a):\n"
+                 "        with locks.campaign_lock(cid):\n"
+                 "            return fn(cid, *a)\n"
+                 "    return locked\n"
+                 "def factory(_serialized=identity):\n"
+                 "    return _serialized\n"
+                 "@_serialized\n"
+                 "def put(cid):\n"
+                 "    atomic.write_text(p, x)\n")
+    _f, serializing, _m = _probe(decorator)
+    assert "put" not in serializing, "a parameter borrowed the module-level decorator"
+
+    # Without the shadowing parameter both are recognized, so this narrows the
+    # whitelist rather than disabling it.
+    _f, serializing, _m = _probe(alias.replace("def put(cid, helper=nullcontext):",
+                                               "def put(cid):"))
+    assert "put" in serializing
+    _f, serializing, _m = _probe(
+        decorator.replace("def factory(_serialized=identity):\n    return _serialized\n", ""))
+    assert "put" in serializing
+
+
+def test_a_writer_bound_by_assignment_is_seen():
+    """`from .atomic import write_text` was resolved; `publish = atomic.write_text`
+    was not. Same binding question, different keyword — and the same consequence
+    as the `import shutil as fs` alias: the call falls through the bare-name
+    branch and the module leaves the survey entirely rather than reading as
+    unlocked."""
+    for src, why in [
+        ("publish = atomic.write_text\n"
+         "def put(cid):\n"
+         "    publish(p, data)\n", "atomic.write_text"),
+        ("import shutil\n"
+         "wipe = shutil.rmtree\n"
+         "def put(cid):\n"
+         "    wipe(root)\n", "shutil.rmtree"),
+        ("import os as fs\n"
+         "cut = fs.truncate\n"
+         "def put(cid):\n"
+         "    cut(p, 0)\n", "an aliased namespace, then assigned"),
+        ("publish = atomic.write_text\n"
+         "alias = publish\n"
+         "def put(cid):\n"
+         "    alias(p, data)\n", "a chain of assignments"),
+    ]:
+        _f, _s, mutators = _probe(src)
+        assert mutators, f"a writer bound from {why} was invisible ({src!r})"
+
+    # A reader bound the same way is still a reader -- the rule is the writer
+    # test, applied to a binding instead of a call.
+    _f, _s, mutators = _probe("import os\n"
+                              "look = os.stat\n"
+                              "def read(cid):\n"
+                              "    return look(p).st_mtime\n")
+    assert not mutators, "`os.stat` bound by assignment was read as a publication"
 
 
 def test_a_filesystem_namespace_is_resolved_through_its_import():
