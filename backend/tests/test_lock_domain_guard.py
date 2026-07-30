@@ -170,6 +170,15 @@ def _writes_directly(fn: ast.AST) -> bool:
             return True
         if name in _FS_AMBIGUOUS and receiver in _FS_MODULES:
             return True
+        if name == "touch" and not node.args:
+            # `Path.touch()` publishes a pathname others can observe (a marker
+            # or completion file) while writing no bytes, so neither this
+            # guard's writers nor `test_atomic_guard` would see it. Matched on
+            # arity because this codebase has its own `campaigns.touch(cid)`:
+            # `Path.touch` takes only keywords (mode=, exist_ok=), the module
+            # function takes a positional cid, so zero positional args
+            # separates them without a receiver to key on.
+            return True
     return False
 
 
@@ -199,20 +208,76 @@ def _own_body(fn: ast.AST):
         stack.extend(ast.iter_child_nodes(node))
 
 
+def _guards_the_campaign(call: ast.Call) -> bool:
+    """The lock being entered is keyed on `cid` — this codebase's name for the
+    campaign id, and the same convention `_takes_cid` uses to decide a function
+    is in scope at all.
+
+    Checking only the callee name let a mutator enter the WRONG lock and pass:
+    `with locks.campaign_lock(sid): atomic.write_text(...)` serializes two
+    concurrent calls for one campaign under two different locks, which loses
+    updates exactly as if there were no lock.
+
+    Matched on the name `cid` rather than on membership in this function's
+    parameters, because a closure that captures `cid` from an enclosing scope
+    locks the right campaign while having no parameter of its own.
+    """
+    return bool(call.args) and isinstance(call.args[0], ast.Name) \
+        and call.args[0].id == "cid"
+
+
+def _produces_lock(fn: ast.AST) -> bool:
+    """`fn` hands back a campaign lock for someone else to enter.
+
+    `audit`-shaped aliasing: a one-line helper that *returns* `campaign_lock(cid)`
+    never enters it, so it is not itself serialized — but `with _alias(cid):` in
+    a caller is a real acquisition. Kept separate from `_locks_in_own_body` so
+    that distinction survives.
+    """
+    return any(_called_name(c.func) in _LOCK_CALLS for c in _own_calls(fn))
+
+
 def _locks_in_own_body(fn: ast.AST) -> bool:
-    """`fn`'s own body acquires the campaign lock."""
-    return any(isinstance(n, ast.Call) and _called_name(n.func) in _LOCK_CALLS
-               for n in _own_body(fn))
+    """`fn`'s own body ENTERS the campaign lock for its own campaign.
+
+    Being entered is the point, not merely called. `_ProcessScopedLock` acquires
+    in `__enter__`, so a bare `locks.campaign_lock(cid)` statement constructs a
+    lock and locks nothing -- and reading any mention of the name as an
+    acquisition would have let `campaign_lock(cid); atomic.write_text(...)` pass
+    completely unlocked. Every acquisition in this package is a `with`; the one
+    place calling `.acquire()` directly is `hold_all`, inside `locks.py`, which
+    this guard does not scan.
+
+    `hold_all` qualifies on name alone: it takes an iterable of ids rather than
+    one `cid`, so there is no single argument to tie to this function.
+    """
+    return _enters_lock(fn, ())
+
+
+def _enters_lock(fn: ast.AST, aliases) -> bool:
+    """`fn` enters `campaign_lock`/`hold_all` directly, or a local alias of one,
+    keyed on this campaign."""
+    for call in _with_context_calls(fn):
+        name = _called_name(call.func)
+        if name == "hold_all":
+            return True
+        if name in ("campaign_lock", *aliases) and _guards_the_campaign(call):
+            return True
+    return False
 
 
 def _locks_anywhere(fn: ast.AST) -> bool:
-    """`fn` or something nested in it acquires the lock.
+    """`fn`, or a function nested in it, establishes the lock.
 
     Only meaningful for a decorator: `scenes._serialized` holds the lock in the
     `locked` closure it returns, so the acquisition that covers every decorated
-    mutator is nested by construction.
+    mutator is nested by construction -- and that closure takes `cid` as its own
+    first parameter, so the argument check still applies where it matters.
     """
-    return any(_called_name(c.func) in _LOCK_CALLS for c in _calls(fn))
+    if _locks_in_own_body(fn):
+        return True
+    return any(_locks_in_own_body(n) for n in ast.walk(fn)
+               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n is not fn)
 
 
 def _with_context_names(fn: ast.AST) -> set[str]:
@@ -223,16 +288,20 @@ def _with_context_names(fn: ast.AST) -> set[str]:
     covered. `with _lock(cid): atomic.write_text(...)` serializes that write;
     `_locked_helper(cid); atomic.write_text(...)` does not serialize anything.
     """
-    out: set[str] = set()
-    for node in _own_body(fn):           # own body: a `with` inside a nested
-        if isinstance(node, (ast.With, ast.AsyncWith)):   # def covers that def
+    return {name for name in map(lambda c: _called_name(c.func),
+                                 _with_context_calls(fn)) if name is not None}
+
+
+def _with_context_calls(fn: ast.AST):
+    """The `f(...)` of every `with f(...)` in `fn`'s own body.
+
+    Own body only: a `with` inside a nested def covers that def, not this one.
+    """
+    for node in _own_body(fn):
+        if isinstance(node, (ast.With, ast.AsyncWith)):
             for item in node.items:
-                expr = item.context_expr
-                if isinstance(expr, ast.Call):
-                    name = _called_name(expr.func)
-                    if name is not None:
-                        out.add(name)
-    return out
+                if isinstance(item.context_expr, ast.Call):
+                    yield item.context_expr
 
 
 def _own_calls(fn: ast.AST):
@@ -260,6 +329,9 @@ def _serializing(funcs: dict[str, ast.AST]) -> set[str]:
     # A decorator's acquisition is nested inside the wrapper it returns, so it is
     # the one case that must look through nested defs -- see `_locks_anywhere`.
     decorating = {name for name, fn in funcs.items() if _locks_anywhere(fn)}
+    # Local helpers that hand back a campaign lock. Entering one of these IS an
+    # acquisition, even though the helper itself never enters anything.
+    aliases = {name for name, fn in funcs.items() if _produces_lock(fn)}
     out = {name for name, fn in funcs.items() if _locks_in_own_body(fn)}
     for _ in range(len(funcs) + 1):
         grown = set(out)
@@ -268,7 +340,7 @@ def _serializing(funcs: dict[str, ast.AST]) -> set[str]:
                 continue
             if any(_called_name(d) in decorating for d in fn.decorator_list):
                 grown.add(name)                       # @_serialized and friends
-            elif _with_context_names(fn) & grown:
+            elif _enters_lock(fn, aliases | grown):
                 grown.add(name)                       # with _lock(cid): ...
             elif not _writes_directly(fn) and any(
                     _called_name(c.func) in grown for c in _own_calls(fn)):
@@ -403,14 +475,33 @@ def test_every_campaign_mutating_module_is_classified():
         "is not open for new entries:\n  " + "\n  ".join(unclassified))
 
 
+# The backlog exactly as it stood when this guard landed. Frozen HERE, not
+# derived from `locks.UNREVIEWED`, because that is the whole point: the
+# declaration is the thing under test and cannot also be the baseline.
+_UNREVIEWED_AT_LANDING = frozenset({
+    "store.appearances", "store.assets", "store.campaign_climate",
+    "store.changes", "store.characters", "store.chronicle", "store.commits",
+    "store.dossiers", "store.modules", "store.overlay", "store.playing",
+    "store.playstate", "store.plot", "store.relationships", "store.sync",
+    "store.taglines", "store.weather.overrides",
+})
+
+
 def test_the_unreviewed_backlog_only_shrinks():
     """A third bucket is a temptation: it takes an entry with no reason. It is
     allowed to exist only because it cannot grow — every module in it predates
-    this guard, and a new mutator has to be classified for real."""
-    assert len(locks.UNREVIEWED) <= 17, (
-        f"`locks.UNREVIEWED` has grown to {len(locks.UNREVIEWED)}; it is a "
-        "frozen backlog of modules that predate this guard. Classify the new "
-        "module into DOMAIN_MODULES or OUTSIDE_DOMAIN instead.")
+    this guard, and a new mutator has to be classified for real.
+
+    Membership, not cardinality. A count-only bound let one legacy entry be
+    swapped for a brand-new module in the same change: the length stays put, the
+    classification and phantom checks are satisfied, and an unreviewed mutator
+    joins the backlog without anyone reviewing it. Names are checked because
+    names are what the guarantee is about."""
+    added = sorted(set(locks.UNREVIEWED) - _UNREVIEWED_AT_LANDING)
+    assert not added, (
+        "`locks.UNREVIEWED` is a frozen backlog of modules that predate this "
+        "guard; it may only shrink. Classify these into DOMAIN_MODULES or "
+        "OUTSIDE_DOMAIN instead:\n  " + "\n  ".join(added))
 
 
 def test_no_module_is_declared_twice():
@@ -484,7 +575,7 @@ def test_the_marker_is_not_a_rubber_stamp():
                 marked.append((f"{_module_name(path)}.{name}", reason))
     unexplained = [loc for loc, reason in marked if len(reason) < 15]
     assert not unexplained, f"`{MARKER}` with no real reason: {unexplained}"
-    assert len(marked) <= 3, (
+    assert len(marked) <= 2, (
         f"{len(marked)} {MARKER} exemptions; each is a hole in the exclusion, "
         f"so they need review rather than a raised limit: {marked}")
 
@@ -558,6 +649,59 @@ def test_a_context_manager_that_locks_covers_the_bodys_own_writes():
            "        atomic.write_text(p, x)\n")
     _funcs, serializing, _m = _probe(src)
     assert "clear" in serializing
+
+
+def test_a_lock_that_is_never_entered_does_not_count():
+    """`_ProcessScopedLock` acquires in `__enter__`. A bare call constructs the
+    lock object and locks nothing, so reading any mention of the name as an
+    acquisition let a completely unlocked mutator pass."""
+    src = ("def append(cid):\n"
+           "    locks.campaign_lock(cid)\n"
+           "    atomic.write_text(p, x)\n")
+    _funcs, serializing, mutators = _probe(src)
+    assert mutators == {"append"}
+    assert "append" not in serializing, \
+        "a lock that was constructed but never entered read as serialization"
+
+
+def test_entering_the_lock_for_a_different_id_does_not_count():
+    """Two concurrent calls for one `cid` serialized under two different locks
+    lose an update exactly as if there were no lock at all."""
+    wrong = ("def set_datetime(cid, sid):\n"
+             "    with locks.campaign_lock(sid):\n"
+             "        atomic.write_text(p, x)\n")
+    _f, serializing, _m = _probe(wrong)
+    assert "set_datetime" not in serializing, "the wrong campaign's lock passed"
+
+    right = ("def set_datetime(cid, sid):\n"
+             "    with locks.campaign_lock(cid):\n"
+             "        atomic.write_text(p, x)\n")
+    _f, serializing, _m = _probe(right)
+    assert "set_datetime" in serializing
+
+
+def test_hold_all_qualifies_without_a_single_cid():
+    """The multi-campaign form takes an iterable, so there is no one argument to
+    tie to the caller — it must not be caught by the cid check."""
+    src = ("def rebind(all_cids):\n"
+           "    with locks.hold_all(all_cids):\n"
+           "        atomic.write_text(p, x)\n")
+    _f, serializing, _m = _probe(src)
+    assert "rebind" in serializing
+
+
+def test_creating_an_empty_file_counts_as_a_mutation():
+    """`Path.touch()` publishes a pathname others can observe while writing no
+    bytes, so neither this guard's writers nor the atomic guard would see it."""
+    _f, _s, mutators = _probe("def mark(cid):\n    (root / 'done').touch()\n")
+    assert mutators, "Path.touch() was not seen as publishing state"
+
+
+def test_this_repos_own_touch_function_is_not_a_filesystem_call():
+    """`campaigns.touch(cid)` is a module function, not `Path.touch`. Matching
+    the bare name would have made every caller of it a direct writer."""
+    _f, _s, mutators = _probe("def bump(cid):\n    campaigns.touch(cid)\n")
+    assert not mutators, "campaigns.touch(cid) was read as a filesystem call"
 
 
 def test_a_lock_inside_a_callback_does_not_cover_the_enclosing_body():
