@@ -2,7 +2,8 @@ import json
 
 import pytest
 
-from grimoire.store import campaigns, characters, entities, locks, modules, pcs, sheets, worlds
+from grimoire.store import (atomic, campaigns, characters, entities, locks, modules, pcs,
+                            sheets, worlds)
 
 
 def _campaign(monkeypatch, tmp_path, module="pool-basic"):
@@ -301,8 +302,11 @@ def test_atomic_write_failure_leaves_no_tmp_file(tmp_path, monkeypatch):
     def boom(*a, **kw):
         raise OSError("disk full")
 
-    # sheets writes through store.atomic since #233; patch the replace there
-    monkeypatch.setattr(sheets.atomic.os, "replace", boom)
+    # sheets writes through store.atomic since #233; patch the replace there.
+    # Reached through `store.atomic` directly rather than `sheets.atomic`: the
+    # importing file is now sheets/paths.py, and the package facade does not
+    # re-bind its dependencies.
+    monkeypatch.setattr(atomic.os, "replace", boom)
     with pytest.raises(OSError):
         sheets._atomic_write_json(p, {"sheet_type": "medium", "fields": {}})
     assert not p.exists()
@@ -788,15 +792,18 @@ def test_write_resolves_module_inside_the_lock(monkeypatch, tmp_path):
     module A, lose the CPU to a rebind publishing B under the lock, then
     write under A after B is visible."""
     _wid, cid = _campaign(monkeypatch, tmp_path)
-    from grimoire.store import modules as modules_mod
-    real = modules_mod.resolve
+    # The module object, not the `modules` package: sheets/ names the submodule
+    # it imports (`from ..modules import binding as modules_binding`), so it
+    # holds its own reference and only `modules.binding.resolve` is patchable.
+    from grimoire.store.modules import binding as modules_binding
+    real = modules_binding.resolve
     seen = []
 
     def spy(c):
         seen.append(locks.campaign_lock(c)._is_owned())  # RLock: owned by us?
         return real(c)
 
-    monkeypatch.setattr(modules_mod, "resolve", spy)
+    monkeypatch.setattr(modules_binding, "resolve", spy)
     sheets.write(cid, "characters", "mara", "medium", None, expected=None)
     assert seen and all(seen)
 
@@ -1123,15 +1130,18 @@ def test_set_field_resolves_module_inside_the_lock(monkeypatch, tmp_path):
     test_write_resolves_module_inside_the_lock above."""
     cid, s = _setup_medium_sheet(monkeypatch, tmp_path)
     live = s["fields"]["essence"]
-    from grimoire.store import modules as modules_mod
-    real = modules_mod.resolve
+    # The module object, not the `modules` package: sheets/ names the submodule
+    # it imports (`from ..modules import binding as modules_binding`), so it
+    # holds its own reference and only `modules.binding.resolve` is patchable.
+    from grimoire.store.modules import binding as modules_binding
+    real = modules_binding.resolve
     seen = []
 
     def spy(c):
         seen.append(locks.campaign_lock(c)._is_owned())  # RLock: owned by us?
         return real(c)
 
-    monkeypatch.setattr(modules_mod, "resolve", spy)
+    monkeypatch.setattr(modules_binding, "resolve", spy)
     sheets.set_field(cid, "characters", "mara", "essence",
                      {"current": live["current"] - 1}, expect=live)
     assert seen and all(seen)

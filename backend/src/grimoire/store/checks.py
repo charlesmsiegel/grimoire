@@ -13,8 +13,9 @@ from __future__ import annotations
 import re
 
 from . import (characters, dice, entities, expressions,
-               locks, modules, overlay, pcs, sheets)
+               locks, modules, overlay, pcs)
 from .appearances import cast as appearances_cast, paths as appearances_paths, versions as appearances_versions
+from .sheets import paths as sheets_paths, reader as sheets_reader, schema as sheets_schema
 
 
 class CheckError(Exception):
@@ -126,9 +127,9 @@ def resolve_check(cid: str, check_id: str, actor_ref: str, difficulty: int | Non
         defaults = defaults if isinstance(defaults, dict) else {}
 
         kind, sep, eid = (actor_ref or "").partition(":")
-        if not sep or kind not in sheets.FILE_KINDS:
+        if not sep or kind not in sheets_paths.FILE_KINDS:
             raise CheckError(f"bad actor reference {actor_ref!r}")
-        sheet = sheets.read(cid, kind, eid)
+        sheet = sheets_reader.read(cid, kind, eid)
         if sheet is None:
             raise CheckError(f"{actor_ref} has no sheet")
         if sheet["errors"]:
@@ -146,7 +147,7 @@ def resolve_check(cid: str, check_id: str, actor_ref: str, difficulty: int | Non
         if difficulty is None:
             difficulty = check.get("difficulty", defaults.get("difficulty"))
 
-        scope = dict(sheets.expression_scope(sheet, sheets_def))
+        scope = dict(sheets_schema.expression_scope(sheet, sheets_def))
         scope["modifier"] = modifier if isinstance(modifier, int) and not isinstance(modifier, bool) else 0
         if isinstance(difficulty, int) and not isinstance(difficulty, bool):
             scope["difficulty"] = difficulty
@@ -188,7 +189,7 @@ def available_checks(cid: str, sid: str) -> list[dict]:
     sheet_types = sheets_def.get("sheet_types", {})
 
     def entry(kind: str, eid: str, label: str) -> dict | None:
-        sheet = sheets.read(cid, kind, eid)
+        sheet = sheets_reader.read(cid, kind, eid)
         if sheet is None or sheet["errors"]:
             return None
         st = sheet_types.get(sheet["sheet_type"])
