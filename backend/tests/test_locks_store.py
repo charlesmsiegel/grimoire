@@ -18,6 +18,8 @@ import pytest
 
 from grimoire.store import (audit, campaigns, dice, locks, proposals, rolls, scenes, sheets,
                             worlds)
+from grimoire.store.sheets import (advancement as sheets_advancement,
+                                   creation as sheets_creation, writer as sheets_writer)
 
 
 def _campaign(monkeypatch, tmp_path, name="Run", module="pool-basic"):
@@ -301,7 +303,11 @@ def test_rolls_has_no_private_lock_registry():
     assert not hasattr(rolls, "_lock")
 
 
-@pytest.mark.parametrize("mod", [sheets, proposals, audit, scenes, rolls])
+#: `sheets` is a package now, so its borrowers are the three files that
+#: actually take the lock; the facade imports no `locks` of its own and is
+#: checked separately below.
+@pytest.mark.parametrize("mod", [sheets_writer, sheets_creation, sheets_advancement,
+                                 proposals, audit, scenes, rolls])
 def test_borrowers_neither_re_export_nor_re_implement_the_registry(mod):
     """The lock domain is discoverable from store/locks.py only if no module
     re-exports or re-implements it: `sheets.lock_for()` was the old name and
@@ -312,6 +318,15 @@ def test_borrowers_neither_re_export_nor_re_implement_the_registry(mod):
     assert not hasattr(mod, "_campaign_locks")
     assert not hasattr(mod, "campaign_lock")
     assert mod.locks is locks
+
+
+def test_the_sheets_facade_re_exports_no_part_of_the_registry():
+    """The other half of the rule above, for the one borrower that is a
+    package: `sheets/__init__.py` re-exports every name its own files define,
+    so a registry name reintroduced anywhere under `sheets/` surfaces here."""
+    assert not hasattr(sheets, "lock_for")
+    assert not hasattr(sheets, "_campaign_locks")
+    assert not hasattr(sheets, "campaign_lock")
 
 
 def test_module_edit_holds_every_campaign_lock_from_this_registry():
