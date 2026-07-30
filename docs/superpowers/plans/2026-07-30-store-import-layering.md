@@ -361,6 +361,33 @@ def test_no_import_violations_outside_the_baseline():
           f"`# {MARKER} <reason>` comment on the import.")
 
 
+def test_no_submodule_is_shadowed_by_a_facade_export():
+    """A package attribute that should be a module still is one.
+
+    `sheets.read`, `module_edit.rename` and `absorb.materialize` are public
+    *functions*, so a same-named submodule is overwritten the moment the
+    package re-exports the function. A later `from ..sheets import read` then
+    binds the function, and `read.list_refs(...)` raises AttributeError at
+    call time -- having passed both import and the cycle check above. This
+    catches the collision at its source instead.
+    """
+    import importlib
+    import types
+
+    shadowed = []
+    for mod in sorted(PACKAGES):
+        pkg = importlib.import_module(mod)
+        for path in (pathlib.Path(pkg.__file__).parent).glob("*.py"):
+            if path.name == "__init__.py":
+                continue
+            bound = getattr(pkg, path.stem, None)
+            if bound is not None and not isinstance(bound, types.ModuleType):
+                shadowed.append(f"{mod}.{path.stem} is {type(bound).__name__}, not a module")
+    assert not shadowed, (
+        "submodules shadowed by a facade export -- rename the file:\n  "
+        + "\n  ".join(shadowed))
+
+
 def test_the_baseline_has_no_stale_entries():
     """Every baseline line still describes a real violation.
 
@@ -437,6 +464,14 @@ print('marker exemption works')
 ```
 
 Expected: `marker exemption works`. Then `git checkout backend/src/grimoire/store/suggest.py`.
+
+- [ ] **Step 6b: Confirm the anti-shadowing rule holds today**
+
+```bash
+backend/.venv/bin/python -m pytest backend/tests/test_import_guard.py::test_no_submodule_is_shadowed_by_a_facade_export -q
+```
+
+Expected: PASS — no package shadows a submodule yet. It becomes load-bearing from Task 7 onward, where `sheets`, `module_edit` and `absorb` each contain a public function whose name a submodule would otherwise take.
 
 - [ ] **Step 7: Prove a self-import is reported as a cycle**
 
@@ -738,6 +773,27 @@ a leaf; it now lives above the core with a top-level import."
 
 `display.py` starts with `from .fields import assembled_fields` and the two in-function imports go away. `pack.py` imports `from . import display` and calls `display.load_display(...)` at line ~681 of the old file — keep it a module-object call so `test_module_display.py:361` can still patch `_load_theme`.
 
+- [ ] **Step 1b: Repair `DEFAULT_BUILTIN_DIR` for its new depth**
+
+`modules.py:39` reads `Path(__file__).resolve().parent / "builtin_modules"`. In `modules/pack.py` that resolves to `store/modules/builtin_modules/`, which does not exist — every shipped pack would raise `ModuleNotFound`. The data directory stays where it is; the expression walks one more level up:
+
+```python
+DEFAULT_BUILTIN_DIR = Path(__file__).resolve().parent.parent / "builtin_modules"
+```
+
+Verify before moving on:
+
+```bash
+backend/.venv/bin/python -c "
+from grimoire.store.modules import pack
+print(sorted(p.name for p in pack.builtin_dir().iterdir()))
+"
+```
+
+Expected: `['d20-basic', 'pool-basic']`. An empty list or a missing directory means the path is still wrong.
+
+(`modules.py:39` is the only `__file__`-relative path in any module this plan splits — `epub.py:26` and `climates/__init__.py:20` also compute one, but neither module moves.)
+
 - [ ] **Step 2: Add the `module_display` compatibility alias**
 
 `store/__init__.py` never exported `module_display`; it was only ever bound as a side effect of `modules.py:18`. `backend/tests/test_module_display.py:3` imports it. Add an explicit alias so that keeps working:
@@ -746,7 +802,7 @@ a leaf; it now lives above the core with a top-level import."
 from .modules import display as module_display
 ```
 
-Add `"module_display"` to `__all__`. This binds the *same module object*, so `monkeypatch.setattr(module_display, "_load_theme", boom)` at `test_module_display.py:361` still intercepts the call made from `pack.py`.
+Do **not** add `"module_display"` to `__all__` — it is not there today, and Task 2 froze the current list, so adding it would fail the public-API check in this task's own verification. The alias alone restores both `from grimoire.store import module_display` and the `dir()` entry. It binds the *same module object*, so `monkeypatch.setattr(module_display, "_load_theme", boom)` at `test_module_display.py:361` still intercepts the call made from `pack.py`.
 
 - [ ] **Step 3: Leave the sheets and audit patches alone**
 
@@ -801,6 +857,8 @@ the name was only ever bound as a side effect of modules importing it."
 
 `cast.py` is the whole point: `player_names`, `scene_cast` and `players_in_scene` read only the appearances record and actor roots — they touch no scene state. Only `appear`/`leave`/`suggestions` do. That is what lets `scenes` import `cast` at module scope in Task 9.
 
+`repoint_scenes` goes in **`paths.py`**, not `transitions.py`. `scene_refs.py:14` imports `appearances` for it and iterates the six ref-holding stores at `:21`. If it sat in `transitions.py` — which hoists an import of the still-flat `scenes.py`, which already imports `scene_refs` — this task would create a fresh, unbaselined `scenes → scene_refs → appearances.transitions → scenes` SCC. It calls only `record` and `_write`, so the record-level leaf is where the call graph puts it anyway.
+
 - [ ] **Step 1: Apply the recipe**
 
 `transitions.py` still needs `scenes`, which is flat until Task 9, so it keeps `from .. import scenes` at module top — legal module-object form, and `scenes.py` does not import `appearances` at module scope, so no cycle. The three in-function `from . import scenes` lines in `appear`, `leave` and `suggestions` are deleted.
@@ -832,7 +890,7 @@ Separating them is what lets scenes import the cast side at module scope."
 ### Task 7: Split `sheets`
 
 **Files:**
-- Create: `backend/src/grimoire/store/sheets/__init__.py`, `paths.py`, `schema.py`, `read.py`, `pools.py`, `write.py`, `creation.py`, `coverage.py`, `advance.py`
+- Create: `backend/src/grimoire/store/sheets/__init__.py`, `paths.py`, `schema.py`, `reader.py`, `pools.py`, `writer.py`, `creation.py`, `tally.py`, `advancement.py`
 - Delete: `backend/src/grimoire/store/sheets.py`
 - Modify: `backend/tests/import_guard_baseline.txt`
 
@@ -840,14 +898,14 @@ Separating them is what lets scenes import the cast side at module scope."
 - Produces:
   - `sheets/paths.py`: `SheetError`, `SheetConflict`, `sheet_kind`, `_campaign_dir`, `_campaign_path`, `_world_dir`, `_world_path`, `_next_gen`, `_atomic_write_json`
   - `sheets/schema.py`: `_MUTABLE_TYPES`, `default_fields`, `_compute_derived`, `expression_scope`, `instance_errors`, `canonical_field_value`
-  - `sheets/read.py`: `read(cid, kind, eid) -> dict`, `read_world(...)`, `list_refs(cid) -> list[tuple[str, str]]`, `world_list_refs`, `world_sheet_modules`
-  - `sheets/write.py`: `write(...)`, `write_world(...)`, `delete(...)`, `set_field(...)`, `_set_field_locked(...)`
-  - `sheets/coverage.py`: `seed(cid) -> None`, `coverage`, `world_coverage`
+  - `sheets/reader.py`: `read(cid, kind, eid) -> dict`, `read_world(...)`, `list_refs(cid) -> list[tuple[str, str]]`, `world_list_refs`, `world_sheet_modules`
+  - `sheets/writer.py`: `write(...)`, `write_world(...)`, `delete(...)`, `set_field(...)`, `_set_field_locked(...)`
+  - `sheets/tally.py`: `seed(cid) -> None`, `coverage`, `world_coverage`
 - Consumes: `modules/pack.py`, `modules/fields.py`, `modules/binding.py`, `campaigns/paths.py`, `worlds/paths.py`, `overlay`.
 
 Note the two intentional name collisions from the spec: `sheets.delete_world` (deletes a world's sheets) is unrelated to `worlds.delete_world`, and `_pool_group_fields` exists separately in `modules/fields.py` and `sheets/pools.py`. Both keep their names.
 
-`audit` currently reaches into `sheets._MUTABLE_TYPES` and `sheets._set_field_locked`. After this task those are ordinary exports of `schema.py` and `write.py`; Task 8 imports them normally.
+`audit` currently reaches into `sheets._MUTABLE_TYPES` and `sheets._set_field_locked`. After this task those are ordinary exports of `schema.py` and `writer.py`; Task 8 imports them normally.
 
 - [ ] **Step 1: Apply the recipe**
 
@@ -883,7 +941,7 @@ module boundary."
   - `audit/baselines.py`: `read_baselines(cid) -> dict`, `schema_stamp(mid) -> str`, `capture_baseline(cid, sid) -> None`, `baseline_entry_valid`, `baseline_field`, `clear_baselines`, `repoint_scenes`
   - `audit/prompt.py`: `sheet_scope`, `render_value`, `sheet_blocks`, `roll_lines`, `build_prompt`
   - `audit/apply.py`: `AuditParseError`, `parse_output`, `apply_delta`, `materialize`
-- Consumes: `sheets/read.py`, `sheets/schema.py`, `sheets/write.py`, `modules/pack.py`, `modules/binding.py`, `campaigns/paths.py`, `overlay`, `rolls`, `appearances/cast.py`.
+- Consumes: `sheets/reader.py`, `sheets/schema.py`, `sheets/writer.py`, `modules/pack.py`, `modules/binding.py`, `campaigns/paths.py`, `overlay`, `rolls`, `appearances/cast.py`.
 
 This is the split that breaks the one cycle live in the graph today. `capture_baseline` uses `modules.resolve`, `campaigns.campaign_root`, `sheets.list_refs` and `locks` — never `scenes`. Only `prompt.py` reads `scenes.get_location_history`. So `scenes/lifecycle.py → audit/baselines.py` and `audit/prompt.py → scenes/read.py` never meet.
 
@@ -909,9 +967,12 @@ Then prove it still injects: drop the patch line and confirm the test fails.
 
 ```
 deferred grimoire.store.absorb::apply_edits::grimoire.store.audit
+cycle grimoire.store.audit,grimoire.store.scene_refs,grimoire.store.scenes
 ```
 
-Hoist that import to the top of `absorb.py` in this task — `audit` is now importable without closing a loop.
+The cycle line goes **here, not in Task 9**. This task's consumer retargeting points `scene_refs` at `audit.baselines`, which does not import `scenes`, while only `audit/prompt.py` reads `scenes` — so the SCC is gone the moment this task lands, and leaving its baseline line in place would fail this task's own `test_the_baseline_has_no_stale_entries`.
+
+Hoist the absorb import to the top of `absorb.py` in this task — `audit` is now importable without closing a loop.
 
 - [ ] **Step 4: Verify**
 
@@ -989,14 +1050,15 @@ Then prove the widening still works: temporarily narrow it to only `scenes_read`
 deferred grimoire.store.scenes::read_scene::grimoire.store.appearances
 deferred grimoire.store.scenes::edit_message::grimoire.store.appearances
 deferred grimoire.store.scenes::_create_scene::grimoire.store.audit
-cycle grimoire.store.audit,grimoire.store.scene_refs,grimoire.store.scenes
 ```
+
+(The `cycle` line was already removed in Task 8, where the SCC actually disappeared.)
 
 - [ ] **Step 4: Verify**
 
 Four verification commands. Kind-specific: `backend/tests/test_scene_store.py backend/tests/test_scene_refs.py backend/tests/test_locks_store.py backend/tests/test_appearances_store.py backend/tests/test_routes.py`.
 
-The `cycle` line disappearing is the headline: after this task the store's module graph is acyclic.
+After this task the store's module graph is acyclic and every remaining baseline line is a plain deferred import.
 
 - [ ] **Step 5: Commit**
 
@@ -1015,7 +1077,7 @@ readers are needed by read/write, so nothing imports in both directions."
 Pure size. 1297 lines holding the five concerns the codebase atlas names, plus `rename` — a single 229-line function with its own helper cluster.
 
 **Files:**
-- Create: `backend/src/grimoire/store/module_edit/__init__.py`, `staging.py`, `journal.py`, `packs.py`, `migrate.py`, `layout.py`, `rename.py`, `edits.py`
+- Create: `backend/src/grimoire/store/module_edit/__init__.py`, `staging.py`, `packs.py`, `migrate.py`, `layout.py`, `renaming.py`, `edits.py`
 - Delete: `backend/src/grimoire/store/module_edit.py`
 - Modify: `backend/tests/test_module_edit.py:627`, `:631`, `:914`
 - Modify: `backend/tests/import_guard_baseline.txt`
@@ -1023,6 +1085,10 @@ Pure size. 1297 lines holding the five concerns the codebase atlas names, plus `
 **Interfaces:**
 - Produces: function placement is in the spec's `module_edit/` table. Public entry points (`create_module`, `delete_module`, `duplicate_module`, `import_module`, `export_module`, `rename`, `recover`, the `upsert_*`/`delete_*` family, `set_layout`, `set_theme`, `set_manifest`, `check_proposal_guard`) all stay re-exported from `module_edit/__init__.py`.
 - Consumes: `modules/pack.py`, `modules/validate.py`, `locks`, `atomic`.
+
+There is no `journal.py`. Crash recovery and migration are one concern, not two: `recover` takes `_campaign_locks` (`module_edit.py:268`), `_replay_journal` calls `_run_migration` (`:318`), and `_apply` calls back into `recover` and `_require_user_root` (`:565-566`). Splitting them would produce a `journal ↔ migrate` cycle that this task's own guard run would reject, so `migrate.py` holds both — the journal it replays *is* the migration journal.
+
+`renaming.py`, not `rename.py`: `module_edit.rename` is a public function, and a same-named submodule gets shadowed by the facade re-export (see the naming hazard in the spec).
 
 - [ ] **Step 1: Apply the recipe**
 
@@ -1066,12 +1132,12 @@ get a file; rename alone was 229 lines with its own helper cluster."
 ### Task 11: Split `absorb`
 
 **Files:**
-- Create: `backend/src/grimoire/store/absorb/__init__.py`, `prompt.py`, `parse.py`, `materialize.py`, `weather.py`, `apply.py`, `snapshots.py`
+- Create: `backend/src/grimoire/store/absorb/__init__.py`, `prompt.py`, `parse.py`, `materializer.py`, `weather.py`, `apply.py`, `snapshots.py`
 - Delete: `backend/src/grimoire/store/absorb.py`
 - Modify: `backend/tests/import_guard_baseline.txt`
 
 **Interfaces:**
-- Produces: `absorb/prompt.py::build_prompt`, `absorb/parse.py::{extract_object, parse_output}`, `absorb/materialize.py::materialize`, `absorb/apply.py::apply_edits`, `absorb/snapshots.py::{relationships_snapshot, plot_snapshot, group_snapshot, state_snapshot}`.
+- Produces: `absorb/prompt.py::build_prompt`, `absorb/parse.py::{extract_object, parse_output}`, `absorb/materializer.py::materialize`, `absorb/apply.py::apply_edits`, `absorb/snapshots.py::{relationships_snapshot, plot_snapshot, group_snapshot, state_snapshot}`.
 - Consumes: the eighteen store modules `absorb` reads, now via their new submodules.
 
 - [ ] **Step 1: Apply the recipe**
@@ -1116,7 +1182,7 @@ each edit domain now has its own, so the blast radius of a change is visible."
 - Modify: `backend/tests/import_guard_baseline.txt`
 
 **Interfaces:**
-- Produces: `context/assemble.py::{build_messages, build_director_messages, build_opener_messages, context_sections, activate}`, `context/macros.py::expand_macros`, `context/tokens.py::count_tokens`.
+- Produces: `context/assemble.py::{build_messages, build_director_messages, build_opener_messages, context_sections}`, `context/world_state.py::activate`, `context/macros.py::expand_macros`, `context/tokens.py::count_tokens`.
 - Consumes: the twenty-odd store modules `context` reads.
 
 This is the app's widest reader (fan-out 57) and sits on the play path, so the verification here matters more than elsewhere.

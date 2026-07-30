@@ -134,10 +134,10 @@ sites across files does not change locking behavior.
 
 | File | Layer | Contents |
 |---|---|---|
-| `paths.py` | L1 | `AppearError`, `_ref`, `_split`, `_path`, `locked_actor_root`, `record`, `_write` |
+| `paths.py` | L1 | `AppearError`, `_ref`, `_split`, `_path`, `locked_actor_root`, `record`, `_write`, `repoint_scenes` |
 | `versions.py` | L1 | `set_base`, `actor_hash`, `_version_ext`, `_meta_name`, `_copy_actor`, `_purge_other_versions`, `_set_default`, `_drop_manifest_ref`, `_lock`, `pick_version`, `import_version`, `locked_version` |
 | `cast.py` | L2 | `_actor_name`, `players_in_scene`, `player_names`, `scene_cast`, `cast_detail`, `roster`, `roster_names`, `is_appeared` |
-| `transitions.py` | L3 | `appear`, `leave`, `repoint_scenes`, `suggestions` |
+| `transitions.py` | L3 | `appear`, `leave`, `suggestions` |
 
 ### `modules/`
 
@@ -150,6 +150,37 @@ sites across files does not change locking behavior.
 | `display.py` | L2 | all of today's `module_display.py` |
 | `binding.py` | L3 | `_write_key`, `set_world_module`, `set_campaign_module`, `resolve` |
 | `admin.py` | L3 | `create_module`, `delete_module` |
+
+### Two hazards these subpackages introduce
+
+**A submodule may not share a name with a public function of the same module.**
+`sheets.read`, `sheets.write`, `sheets.coverage`, `sheets.advance`,
+`module_edit.rename` and `absorb.materialize` are all existing public
+functions. A `sheets/read.py` would be shadowed the moment
+`sheets/__init__.py` runs `from .reader import read`, because the function
+overwrites the package attribute that held the submodule. A later
+`from ..sheets import read` then binds the *function*, and
+`read.list_refs(...)` raises `AttributeError: 'function' object has no
+attribute 'list_refs'` — at call time, having passed both import and the
+cycle guard. Verified on a prototype. Hence `reader.py`, `writer.py`,
+`tally.py`, `advancement.py`, `renaming.py` and `materializer.py`: the
+*facade function names are unchanged*, only the file names differ.
+
+**Moving code changes `__file__`, and one module computes a path from it.**
+`backend/src/grimoire/store/modules.py:39` defines
+`DEFAULT_BUILTIN_DIR = Path(__file__).resolve().parent / "builtin_modules"`.
+Relocated to `store/modules/pack.py` that resolves to
+`store/modules/builtin_modules/`, which does not exist, so `pack_root` would
+raise `ModuleNotFound` for every shipped pack. The data directory stays at
+`store/builtin_modules/` (Android packaging references it); `pack.py` must
+walk one extra level up:
+
+```python
+DEFAULT_BUILTIN_DIR = Path(__file__).resolve().parent.parent / "builtin_modules"
+```
+
+Any other `__file__`-relative path in a module being moved needs the same
+treatment — grep for `__file__` before splitting a module.
 
 `module_display.py` disappears as a top-level module. Note that
 `store/__init__.py` does **not** currently export it — neither its `from . import
@@ -167,12 +198,12 @@ to the same module object leaves that working.
 |---|---|---|
 | `paths.py` | L1 | `SheetError`, `SheetConflict`, `sheet_kind`, `_campaign_dir`, `_campaign_path`, `_world_dir`, `_world_path`, `_next_gen`, `_atomic_write_json` |
 | `schema.py` | L1 | `_MUTABLE_TYPES`, `_int_or`, `default_fields`, `_numeric_scope`, `_compute_derived`, `expression_scope`, `_validate_instance`, `instance_errors`, `canonical_field_value` |
-| `read.py` | L2 | `_read_path`, `read`, `read_world`, `list_refs`, `world_list_refs`, `world_sheet_modules` |
+| `reader.py` | L2 | `_read_path`, `read`, `read_world`, `list_refs`, `world_list_refs`, `world_sheet_modules` |
 | `pools.py` | L2 | `_pool_floor`, `_pool_group_fields`, `_pool_budget` |
-| `write.py` | L2 | `_validate_write_target`, `_checked_write`, `_stored_snapshot`, `_check_expected`, `write`, `write_world`, `delete`, `set_field`, `_set_field_locked` |
+| `writer.py` | L2 | `_validate_write_target`, `_checked_write`, `_stored_snapshot`, `_check_expected`, `write`, `write_world`, `delete`, `set_field`, `_set_field_locked` |
 | `creation.py` | L3 | `_assert_world_entity_exists`, `_assert_campaign_entity_exists`, `_checked_creation_write`, `write_creation`, `write_world_creation`, `delete_world` |
-| `coverage.py` | L3 | `_type_kinds`, `_tally`, `coverage`, `world_coverage`, `seed` |
-| `advance.py` | L3 | `_advancement_cost`, `advance` |
+| `tally.py` | L3 | `_type_kinds`, `_tally`, `coverage`, `world_coverage`, `seed` |
+| `advancement.py` | L3 | `_advancement_cost`, `advance` |
 
 Two name collisions in the tables above are real and intentional, not typos.
 `_pool_group_fields` exists separately in today's `modules.py` and `sheets.py`
@@ -196,11 +227,10 @@ The atlas names five concerns in this file; the split separates them plus
 | File | Contents |
 |---|---|
 | `staging.py` | `locked`, `_staging_root`, `new_mid`, `_publish` |
-| `journal.py` | `recover`, `_replay_journal`, `_require_user_root` |
 | `packs.py` | `duplicate_module`, `create_module`, `delete_module`, `export_module`, `import_module`, `_member_parts`, `_check_archive` |
-| `migrate.py` | `_sheet_files`, `_migrate_file`, `_would_migrate`, `_migrate_preview`, `_file_kind`, `_iter_ref_values`, `_content_ids`, `_sidecar_stats_at`, `_impact`, `_run_migration`, `_campaign_locks`, `_result`, `_sample`, `_apply` |
+| `migrate.py` | `_sheet_files`, `_migrate_file`, `_would_migrate`, `_migrate_preview`, `_file_kind`, `_iter_ref_values`, `_content_ids`, `_sidecar_stats_at`, `_impact`, `_run_migration`, `_campaign_locks`, `_result`, `_sample`, `_apply`, `recover`, `_replay_journal`, `_require_user_root` |
 | `layout.py` | `_edit_tree`, `_specialize_layout`, `_prune_node`, `_prune_layout`, `_layout_name_edit` |
-| `rename.py` | `_RenameCollision`, `rename`, `_field_keys`, `_group_scope`, `_rewrite_expr`, `_rewrite_exprs`, `_rewrite_placeholders`, `_rename_map_key`, `_composing_tids`, `_fragment_users` |
+| `renaming.py` | `_RenameCollision`, `rename`, `_field_keys`, `_group_scope`, `_rewrite_expr`, `_rewrite_exprs`, `_rewrite_placeholders`, `_rename_map_key`, `_composing_tids`, `_fragment_users` |
 | `edits.py` | `set_manifest`, `_read_json`, `_write_json`, `_read_sheets`, `check_proposal_guard`, `upsert_group`, `delete_group`, `upsert_sheet_type`, `delete_sheet_type`, `upsert_check`, `delete_check`, `set_check_defaults`, `_rule_meta`, `upsert_rule`, `delete_rule`, `upsert_content`, `delete_content`, `set_layout`, `set_theme` |
 
 ### `absorb/`
@@ -209,7 +239,7 @@ The atlas names five concerns in this file; the split separates them plus
 |---|---|
 | `prompt.py` | `build_prompt` |
 | `parse.py` | `_int05`, `_truthy`, `_confidence`, `extract_object`, `parse_output` |
-| `materialize.py` | `materialize`, `_char_name`, `_actor_exists`, `_entity_kind`, `_DossierTargetGone`, `_new_character_provenance`, `_new_character_dossier` |
+| `materializer.py` | `materialize`, `_char_name`, `_actor_exists`, `_entity_kind`, `_DossierTargetGone`, `_new_character_provenance`, `_new_character_dossier` |
 | `weather.py` | `_weather_edits`, `_apply_weather` |
 | `apply.py` | `apply_edits` |
 | `snapshots.py` | `relationships_snapshot`, `plot_snapshot`, `group_snapshot`, `state_snapshot`, `_snapshot_line` |
@@ -220,10 +250,10 @@ The atlas names five concerns in this file; the split separates them plus
 |---|---|
 | `macros.py` | `_substitute`, `scene_substitutions`, `_datetime_subs`, `_expand_random`, `_expand_rolls`, `_strip_unknown_macros`, `expand_macros` |
 | `cast.py` | `_char_name`, `_cast_directory_data`, `_drift_roster`, `cast_datetime_facts`, `_campaign_player_refs` |
-| `world_state.py` | `_world_info`, `_today_data`, `_weather_data`, `_character_states`, `_group_states` |
+| `world_state.py` | `activate`, `_world_info`, `_today_data`, `_weather_data`, `_character_states`, `_group_states` |
 | `mechanics.py` | `_sheet_type_label`, `_sheet_summary_lines`, `_rule_keys_match`, `_mechanics` |
 | `story.py` | `_relationship_lines`, `_story_entries`, `_project_history` |
-| `assemble.py` | `activate`, `_assemble`, `_system_text`, `build_messages`, `build_director_messages`, `build_opener_messages`, `context_sections` |
+| `assemble.py` | `_assemble`, `_system_text`, `build_messages`, `build_director_messages`, `build_opener_messages`, `context_sections` |
 | `tokens.py` | `_encoder`, `count_tokens` |
 
 ## Cuts verified against the source
