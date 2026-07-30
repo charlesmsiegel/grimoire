@@ -3130,7 +3130,12 @@ def test_a_dossier_call_cancelled_mid_flight_counts_as_attempted(
     import asyncio
 
     cid, sid = npc_module_scene
-    client.put("/api/config", json={"absorb_budget": "0.05"})
+    # Real seconds, not the fake clock: only a genuine asyncio timeout cancels a
+    # call that is already in flight. 0.5s is the whole absorb's ceiling, so the
+    # extraction and the store reads before the dossier call have to fit inside
+    # it or this tests the *unattempted* path by accident -- they take ~10ms
+    # here, and the margin is deliberately 10x rather than snug.
+    client.put("/api/config", json={"absorb_budget": "0.5"})
 
     class SlowDossier:
         def __init__(self):
@@ -3143,7 +3148,7 @@ def test_a_dossier_call_cancelled_mid_flight_counts_as_attempted(
             self.calls += 1
             if self.calls == 1:
                 return ABSORB_JSON
-            await asyncio.sleep(5)   # cancelled by the budget after ~0.05s
+            await asyncio.sleep(5)   # still running when the budget expires
             return "never"
 
     client.app.dependency_overrides[routes.get_llm] = lambda: SlowDossier()
@@ -3152,6 +3157,37 @@ def test_a_dossier_call_cancelled_mid_flight_counts_as_attempted(
 
     assert _phase(body, "dossiers")["attempted"] is True
     assert _phase(body, "dossiers")["budget_exhausted"] is True
+
+
+def test_an_upstream_timeout_is_not_mistaken_for_the_budget(
+        client, npc_module_scene, monkeypatch):
+    """The two arrive as the same LLMError kind on purpose (`_Budget.run`), so
+    only the detail sentinel tells them apart. A stalled provider with budget to
+    spare is not something a bigger budget fixes -- saying it is would send the
+    user to the wrong setting."""
+    from grimoire.llm_errors import LLMError
+
+    cid, sid = npc_module_scene
+    client.put("/api/config", json={"absorb_budget": "600"})
+    clock = [0.0]
+    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+
+    class StallsOnAudit(ClockEatingFake):
+        async def complete(self, m, cfg):
+            if self.calls == 2:                       # the audit, budget untouched
+                self.calls += 1
+                raise LLMError("timeout", "no data for 90s")
+            return await super().complete(m, cfg)
+
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: StallsOnAudit(clock, 1.0, [ABSORB_JSON, "Aese is steady."])
+
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+
+    audit = _phase(body, "audit")
+    assert audit["status"] == "failed" and audit["attempted"] is True
+    assert audit["budget_exhausted"] is False
+    assert "no data for 90s" in audit["reason"]
 
 
 def test_audit_retry_reports_its_own_fresh_budget(client, npc_module_scene, monkeypatch):
