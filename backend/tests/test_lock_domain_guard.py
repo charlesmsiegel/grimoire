@@ -121,20 +121,33 @@ def _receiver_name(func: ast.expr) -> str | None:
     return None
 
 
-def _functions(tree: ast.AST) -> dict[str, ast.AST]:
-    """Every function in the module by name, nested ones included.
+def _functions(tree: ast.AST) -> dict[str, list[ast.AST]]:
+    """Every function in the module, grouped by name, nested ones included.
 
-    A dict keyed by name cannot represent two functions sharing one name
-    (a conditional redefinition, a method matching a module-level name). The
-    collision is resolved toward the *first* definition rather than the last,
-    because callers in this package reach module-level helpers, and letting a
-    class method shadow `_write` would silently redirect the whole analysis.
+    EVERY definition, not the first one. Keeping only the first discarded the
+    implementation that actually runs: an `@overload` stub ahead of a writing
+    body left the guard analyzing the stub, so the module read as non-mutating;
+    a conditional definition whose first branch locks and whose second does not
+    read as serialized. Both are silent false negatives.
+
+    The predicates below resolve a group conservatively in the direction that
+    fails loud -- a name MUTATES if any definition does, and SERIALIZES only if
+    every definition does -- so an ambiguous name can never be quieter than its
+    worst branch.
     """
-    out: dict[str, ast.AST] = {}
+    out: dict[str, list[ast.AST]] = {}
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            out.setdefault(node.name, node)
+            out.setdefault(node.name, []).append(node)
     return out
+
+
+def _any(defs, predicate) -> bool:
+    return any(predicate(d) for d in defs)
+
+
+def _all(defs, predicate) -> bool:
+    return bool(defs) and all(predicate(d) for d in defs)
 
 
 def _calls(fn: ast.AST):
@@ -271,8 +284,20 @@ def _produces_lock(fn: ast.AST) -> bool:
     `def _helper(cid): log(campaign_lock); return nullcontext()` stand in for an
     acquisition, and would accept a helper that locks some *other* id — the same
     two holes the direct path already closes.
+
+    And the acquisition has to still be HELD when the caller's body runs.
+    Deferring to `_locks_in_own_body` accepted a helper that takes the lock,
+    releases it, and hands back something else —
+
+        def helper(cid):
+            with locks.campaign_lock(cid):
+                pass
+            return nullcontext()        # caller's write runs unlocked
+
+    so the `@contextmanager` case is recognized by its `yield` sitting INSIDE
+    the `with`, which is what keeps the lock open across the caller's block.
     """
-    if _locks_in_own_body(fn):
+    if _yields_inside_lock(fn):
         return True                      # a @contextmanager that yields inside
     for node in _own_body(fn):
         # `return`/`yield` ONLY. Accepting a bare expression statement was a
@@ -311,14 +336,60 @@ def _locks_in_own_body(fn: ast.AST) -> bool:
     return _enters_lock(fn, ())
 
 
+def _holds_this_campaign(call: ast.Call, fn: ast.AST) -> bool:
+    """`hold_all(...)` demonstrably covers this function's campaign.
+
+    Unconditional acceptance was wrong for a `cid`-scoped writer:
+    `with locks.hold_all([sid])` holds *a* set of campaign locks, not
+    necessarily this one, so concurrent writes to `cid` stayed unprotected while
+    the guard passed. A function that takes no `cid` is a multi-campaign holder
+    (`module_edit._campaign_locks`, the world-module rebind route) and is not
+    campaign-scoped, so there is nothing to tie; one that does take `cid` has to
+    mention it in the argument. An expression this cannot read fails loud.
+    """
+    if not _takes_cid(fn):
+        return True
+    return any(isinstance(n, ast.Name) and n.id == "cid"
+               for a in call.args for n in ast.walk(a))
+
+
 def _enters_lock(fn: ast.AST, aliases) -> bool:
     """`fn` enters `campaign_lock`/`hold_all` directly, or a local alias of one,
-    keyed on this campaign."""
+    keyed on this campaign.
+
+    `aliases` is deliberately NOT "every name that serializes". A function can
+    hold the lock internally and hand back something else —
+
+        def helper(cid):
+            with locks.campaign_lock(cid):
+                pass
+            return nullcontext()
+
+    which serializes `helper`'s own body and nothing of its caller's. Only a
+    name that keeps the acquisition live across the caller's block qualifies,
+    which is what `_produces_lock` establishes.
+    """
     for call in _with_context_calls(fn):
         name = _called_name(call.func)
-        if name == "hold_all":
+        if name == "hold_all" and _holds_this_campaign(call, fn):
             return True
         if name in ("campaign_lock", *aliases) and _guards_the_campaign(call):
+            return True
+    return False
+
+
+def _yields_inside_lock(fn: ast.AST) -> bool:
+    """A `@contextmanager` whose `yield` sits inside `with campaign_lock(cid)`,
+    so the lock is still held while the caller's block runs."""
+    for node in _own_body(fn):
+        if not isinstance(node, (ast.With, ast.AsyncWith)):
+            continue
+        if not any(isinstance(i.context_expr, ast.Call)
+                   and _called_name(i.context_expr.func) == "campaign_lock"
+                   and _guards_the_campaign(i.context_expr)
+                   for i in node.items):
+            continue
+        if any(isinstance(n, ast.Yield) for n in _own_body(node)):
             return True
     return False
 
@@ -370,7 +441,11 @@ def _wraps_target_under_lock(fn: ast.AST) -> bool:
                                 and _guards_the_campaign(i.context_expr)))
                        for i in node.items):
                 continue
-            for inner in ast.walk(node):     # the target invoked inside the lock
+            # Directly inside the block, not merely lexically within it.
+            # `ast.walk` descended into nested defs and lambdas, so
+            # `later = lambda: fn(cid)` written inside the `with` but called
+            # after it counted as a protected invocation.
+            for inner in _own_body(node):
                 if isinstance(inner, ast.Call) and _called_name(inner.func) == target:
                     return True
     return False
@@ -421,12 +496,12 @@ def _reaches_a_write(funcs: dict[str, ast.AST], imported=frozenset()) -> set[str
     `_serializing` has decided anything. Computing it the other way round would
     be circular.
     """
-    out = {name for name, fn in funcs.items() if _writes_directly(fn, imported)}
+    out = {n for n, ds in funcs.items() if _any(ds, lambda d: _writes_directly(d, imported))}
     for _ in range(len(funcs) + 1):
         grown = set(out)
-        for name, fn in funcs.items():
-            if name not in grown and any(_called_name(c.func) in grown
-                                         for c in _own_calls(fn)):
+        for name, defs in funcs.items():
+            if name not in grown and _any(defs, lambda d: any(
+                    _called_name(c.func) in grown for c in _own_calls(d))):
                 grown.add(name)
         if grown == out:
             break
@@ -452,27 +527,32 @@ def _serializing(funcs: dict[str, ast.AST], imported=frozenset()) -> set[str]:
     """
     # A decorator's acquisition is nested inside the wrapper it returns, so it is
     # the one case that must look through nested defs -- see `_locks_anywhere`.
-    decorating = {name for name, fn in funcs.items() if _locks_anywhere(fn)}
+    decorating = {n for n, ds in funcs.items() if _all(ds, _locks_anywhere)}
     # Local helpers that hand back a campaign lock. Entering one of these IS an
     # acquisition, even though the helper itself never enters anything.
-    aliases = {name for name, fn in funcs.items() if _produces_lock(fn)}
+    aliases = {n for n, ds in funcs.items() if _all(ds, _produces_lock)}
     writing = _reaches_a_write(funcs, imported)
-    out = {name for name, fn in funcs.items() if _locks_in_own_body(fn)}
+    out = {n for n, ds in funcs.items() if _all(ds, _locks_in_own_body)}
     for _ in range(len(funcs) + 1):
         grown = set(out)
-        for name, fn in funcs.items():
+        for name, defs in funcs.items():
             if name in grown:
                 continue
-            if any(_called_name(d) in decorating for d in fn.decorator_list):
-                grown.add(name)                       # @_serialized and friends
-            elif _enters_lock(fn, aliases | grown):
-                grown.add(name)                       # with _lock(cid): ...
-            elif not _writes_directly(fn, imported):
+
+            def covered(fn, grown=grown, imported=imported):
+                if any(_called_name(d) in decorating for d in fn.decorator_list):
+                    return True                       # @_serialized and friends
+                if _enters_lock(fn, aliases):
+                    return True                       # with _lock(cid): ...
+                if _writes_directly(fn, imported):
+                    return False
                 # Pure delegation: every local callee that reaches a write must
                 # itself be covered, and at least one must exist.
                 delegated = {_called_name(c.func) for c in _own_calls(fn)} & writing
-                if delegated and delegated <= grown:
-                    grown.add(name)
+                return bool(delegated) and delegated <= grown
+
+            if _all(defs, covered):
+                grown.add(name)
         if grown == out:
             break
         out = grown
@@ -488,17 +568,16 @@ def _mutators(funcs: dict[str, ast.AST], serializing: set[str],
     every thin wrapper over a locked helper reads as an unlocked mutator and the
     guard drowns in false positives.
     """
-    out = {name for name, fn in funcs.items() if _writes_directly(fn, imported)}
+    out = {n for n, ds in funcs.items() if _any(ds, lambda d: _writes_directly(d, imported))}
     for _ in range(len(funcs) + 1):
         grown = set(out)
-        for name, fn in funcs.items():
+        for name, defs in funcs.items():
             if name in grown:
                 continue
-            for call in _calls(fn):
-                callee = _called_name(call.func)
-                if callee in grown and callee not in serializing:
-                    grown.add(name)
-                    break
+            if _any(defs, lambda d: any(
+                    _called_name(c.func) in grown and _called_name(c.func) not in serializing
+                    for c in _calls(d))):
+                grown.add(name)
         if grown == out:
             break
         out = grown
@@ -544,10 +623,11 @@ def _analyze(path: pathlib.Path):
     serializing = _serializing(funcs, imported)
     mutators = _mutators(funcs, serializing, imported)
 
+    every = [d for ds in funcs.values() for d in ds]
     campaign_mutators, unserialized = set(), set()
     for name in mutators:
-        fn = funcs[name]
-        if not _takes_cid(fn):
+        defs = funcs[name]
+        if not _any(defs, _takes_cid):
             continue
         if name.startswith("_"):
             # A private helper is not its own domain member: it runs under
@@ -562,8 +642,10 @@ def _analyze(path: pathlib.Path):
         campaign_mutators.add(name)
         if name in serializing:
             continue
-        others = [f for f in funcs.values() if f is not fn]
-        if _exemption(src, fn, others) is not None:
+        # EVERY definition must carry its own exemption; one marker cannot
+        # clear a name whose other branch is the unlocked one.
+        if _all(defs, lambda d: _exemption(src, d, [o for o in every if o is not d])
+                is not None):
             continue
         unserialized.add(name)
     return unserialized, campaign_mutators
@@ -701,11 +783,12 @@ def test_the_marker_is_not_a_rubber_stamp():
             continue
         src = path.read_text(encoding="utf-8")
         funcs = _functions(ast.parse(src))
-        for name, fn in funcs.items():
-            others = [f for f in funcs.values() if f is not fn]
-            reason = _exemption(src, fn, others)
-            if reason is not None:
-                marked.append((f"{_module_name(path)}.{name}", reason))
+        every = [d for ds in funcs.values() for d in ds]
+        for name, defs in funcs.items():
+            for fn in defs:
+                reason = _exemption(src, fn, [o for o in every if o is not fn])
+                if reason is not None:
+                    marked.append((f"{_module_name(path)}.{name}", reason))
     unexplained = [loc for loc, reason in marked if len(reason) < 15]
     assert not unexplained, f"`{MARKER}` with no real reason: {unexplained}"
     assert len(marked) <= 2, (
@@ -732,7 +815,7 @@ def test_the_guard_detects_an_unlocked_mutator():
     funcs, serializing, mutators = _probe(src)
     assert mutators == {"touch"}
     assert "touch" not in serializing
-    assert _takes_cid(funcs["touch"])
+    assert _takes_cid(funcs["touch"][0])
 
 
 def test_the_guard_accepts_a_directly_locked_mutator():
@@ -836,6 +919,96 @@ def test_this_repos_own_touch_function_is_not_a_filesystem_call():
     the bare name would have made every caller of it a direct writer."""
     _f, _s, mutators = _probe("def bump(cid):\n    campaigns.touch(cid)\n")
     assert not mutators, "campaigns.touch(cid) was read as a filesystem call"
+
+
+def test_an_alias_that_releases_before_returning_does_not_count():
+    """The acquisition has to still be held while the caller's block runs. A
+    helper that takes the lock, releases it, and hands back something else left
+    the caller's write unprotected."""
+    released = ("def helper(cid):\n"
+                "    with locks.campaign_lock(cid):\n"
+                "        pass\n"
+                "    return nullcontext()\n"
+                "def put(cid):\n"
+                "    with helper(cid):\n"
+                "        atomic.write_text(p, x)\n")
+    _f, serializing, _m = _probe(released)
+    assert "put" not in serializing, \
+        "a helper that released the lock before returning passed as an alias"
+
+    held = ("@contextlib.contextmanager\n"
+            "def helper(cid):\n"
+            "    with locks.campaign_lock(cid):\n"
+            "        yield\n"
+            "def put(cid):\n"
+            "    with helper(cid):\n"
+            "        atomic.write_text(p, x)\n")
+    _f, serializing, _m = _probe(held)
+    assert "put" in serializing, "the real @contextmanager alias regressed"
+
+
+def test_a_call_deferred_out_of_the_locked_block_does_not_count():
+    """The returned-wrapper check still walked into nested defs and lambdas, so
+    a target invocation written inside the `with` but executed after it read as
+    protected."""
+    src = ("def audited(fn):\n"
+           "    def locked(cid, *a):\n"
+           "        with locks.campaign_lock(cid):\n"
+           "            later = lambda: fn(cid, *a)\n"
+           "        return later()\n"
+           "    return locked\n"
+           "@audited\n"
+           "def append_message(cid, text):\n"
+           "    atomic.write_text(p, text)\n")
+    _f, serializing, _m = _probe(src)
+    assert "append_message" not in serializing, \
+        "a call deferred out of the locked block vouched for the decorator"
+
+
+def test_hold_all_must_cover_this_campaign():
+    """`hold_all` holds *a* set of campaign locks. For a cid-scoped writer it
+    has to be shown to include this one."""
+    wrong = ("def put(cid, sid):\n"
+             "    with locks.hold_all([sid]):\n"
+             "        atomic.write_text(p, x)\n")
+    _f, serializing, _m = _probe(wrong)
+    assert "put" not in serializing, "hold_all over another campaign passed"
+
+    right = ("def put(cid, sid):\n"
+             "    with locks.hold_all([cid, sid]):\n"
+             "        atomic.write_text(p, x)\n")
+    _f, serializing, _m = _probe(right)
+    assert "put" in serializing
+
+    multi = ("def rebind(all_cids):\n"
+             "    with locks.hold_all(all_cids):\n"
+             "        atomic.write_text(p, x)\n")
+    _f, serializing, _m = _probe(multi)
+    assert "rebind" in serializing, "the multi-campaign holder shape regressed"
+
+
+def test_every_definition_of_a_name_is_analyzed():
+    """Keeping only the first definition discarded the one that runs: an
+    `@overload` stub ahead of a writing body, or a conditional definition whose
+    first branch locks and whose second does not."""
+    overloaded = ("@overload\n"
+                  "def write_note(cid: str) -> None: ...\n"
+                  "def write_note(cid):\n"
+                  "    atomic.write_text(p, x)\n")
+    _f, _s, mutators = _probe(overloaded)
+    assert "write_note" in mutators, "the stub hid the implementation"
+
+    conditional = ("if FAST:\n"
+                   "    def put(cid):\n"
+                   "        with locks.campaign_lock(cid):\n"
+                   "            atomic.write_text(p, x)\n"
+                   "else:\n"
+                   "    def put(cid):\n"
+                   "        atomic.write_text(p, x)\n")
+    _f, serializing, mutators = _probe(conditional)
+    assert "put" in mutators
+    assert "put" not in serializing, \
+        "a locked first branch vouched for an unlocked second one"
 
 
 def test_a_directly_imported_writer_is_seen():
@@ -1093,7 +1266,7 @@ def test_a_function_without_a_cid_is_not_campaign_scoped():
     src = "def write_world(wid):\n    atomic.write_text(p, x)\n"
     funcs, _s, mutators = _probe(src)
     assert mutators == {"write_world"}
-    assert not _takes_cid(funcs["write_world"])
+    assert not _takes_cid(funcs["write_world"][0])
 
 
 def test_cyclic_helpers_terminate():
@@ -1112,8 +1285,8 @@ def test_a_marker_exempts_only_its_own_function():
            "def other(cid):\n"
            "    atomic.write_text(q, y)\n")
     funcs = _functions(ast.parse(src))
-    assert _exemption(src, funcs["seed"]) is not None
-    assert _exemption(src, funcs["other"]) is None
+    assert _exemption(src, funcs["seed"][0]) is not None
+    assert _exemption(src, funcs["other"][0]) is None
 
 
 def test_a_marker_above_a_decorator_attaches():
@@ -1126,7 +1299,7 @@ def test_a_marker_above_a_decorator_attaches():
            "def append_message(cid, text):\n"
            "    atomic.write_text(p, text)\n")
     funcs = _functions(ast.parse(src))
-    assert _exemption(src, funcs["append_message"]) is not None
+    assert _exemption(src, funcs["append_message"][0]) is not None
 
 
 def test_a_marker_inside_a_nested_function_does_not_exempt_the_outer_one():
@@ -1137,7 +1310,7 @@ def test_a_marker_inside_a_nested_function_does_not_exempt_the_outer_one():
            f"        pass  # {MARKER} this reason belongs to the closure\n"
            "    atomic.write_text(p, x)\n")
     funcs = _functions(ast.parse(src))
-    others = [f for f in funcs.values() if f is not funcs["outer"]]
-    assert _exemption(src, funcs["outer"], others) is None, \
+    others = [d for ds in funcs.values() for d in ds if d is not funcs["outer"][0]]
+    assert _exemption(src, funcs["outer"][0], others) is None, \
         "the enclosing mutator inherited a nested function's marker"
-    assert _exemption(src, funcs["inner"], [funcs["outer"]]) is not None
+    assert _exemption(src, funcs["inner"][0], [funcs["outer"][0]]) is not None
