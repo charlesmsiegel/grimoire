@@ -1394,6 +1394,56 @@ test("renaming the reviewed scene moves the review's id with it", async () => {
   expect((api.retryAudit as any).mock.calls[0][1]).toBe("s1-renamed");
 });
 
+test("renaming the reviewed scene repoints its staged plot edits too", async () => {
+  // `payload.scene` is embedded by absorb.materialize and handed straight to
+  // plot.set_movement on save. It lives only in this browser, so the server's
+  // scene_refs.repoint pass cannot reach it — a rename that moved only
+  // `absorbSid` would save beats pointing at a scene id that no longer exists.
+  const PLOT_EDIT = {
+    id: "plot:the-siege", kind: "plot", target: { kind: "plot", id: "the-siege" },
+    label: "The Siege", field: "status", before: "open", after: "escalating",
+    authored: false, payload: { id: "the-siege", title: "The Siege", status: "escalating", scene: "s1" },
+  };
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  (api.renameScene as any).mockResolvedValue({ id: "s1-renamed", title: "New" });
+  absorbWithPhases(PHASES_NONE_CUT, { edits: [PLOT_EDIT] });
+  (api.saveChronicle as any).mockResolvedValue({ id: "s1-renamed", one_line: "o", summary: "s",
+    keywords: [], cast: [], location: "", date: "", absorbed: "t", applied: [], failures: [] });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await screen.findByText("Review scene summary");
+
+  fireEvent.click(screen.getByRole("button", { name: /rename/i }));
+  const input = screen.getByDisplayValue("Old");
+  fireEvent.change(input, { target: { value: "New" } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  await waitFor(() => expect(api.renameScene).toHaveBeenCalled());
+
+  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  await waitFor(() => expect(api.saveChronicle).toHaveBeenCalled());
+  const saved = (api.saveChronicle as any).mock.calls[0][2];
+  expect(saved.edits[0].payload.scene).toBe("s1-renamed");
+});
+
+test("the budget notice never sends the reviewer back through End scene", async () => {
+  // End scene posts the *active* scene and replaces the review wholesale, so
+  // advising it here would tell the user to discard the edits this very notice
+  // has just told them are complete.
+  absorbWithPhases([
+    { name: "extraction", status: "ok", reason: null, attempted: true, budget_exhausted: false },
+    { name: "dossiers", status: "failed", reason: "the absorb time budget ran out",
+      attempted: false, budget_exhausted: true },
+    { name: "audit", status: "ok", reason: null, attempted: true, budget_exhausted: false },
+  ]);
+  await openAbsorb();
+
+  await screen.findByText(/only partly absorbed/);
+  expect(screen.getByText(/Raise the absorb budget/)).toBeInTheDocument();
+  expect(screen.queryByText(/end the scene again/i)).toBeNull();
+});
+
 test("a budget-cut dossier phase reads as never prepared, not as a failure", async () => {
   const over = {
     dossiers: { status: "failed",

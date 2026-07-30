@@ -391,16 +391,21 @@ async def _stage_dossiers(cid: str, sid: str, transcript: str, client: LLMClient
         croot = store.appearances.locked_actor_root(cid)   # cast actors are locked, so campaign-side
     except Exception as exc:  # noqa: BLE001 -- an unreadable cast is a failed phase, not a 500
         return [], {**out, "status": "failed", "reason": f"could not read the scene cast: {exc}"}
+    def drop_tail(i: int) -> None:
+        """Record the NPC at `i` and everyone after it as never reached.
+
+        The extraction call is the part worth keeping, so the tail is dropped
+        rather than run unbounded (#243) — but named, not silently, for the same
+        reason failures are (#236)."""
+        out["skipped"] = [b["id"] for b in cast[i:]
+                          if b["kind"] == "characters" and b["role"] == "npc"]
+        out["budget_exhausted"] = True
+
     for i, a in enumerate(cast):
         if a["kind"] != "characters" or a["role"] != "npc":
             continue  # dossiers feed the npc-only "Active elsewhere" tier; skip player cards
         if budget.spent():
-            # The extraction call is the part worth keeping, so the tail is
-            # dropped rather than run unbounded (#243) — but named, not
-            # silently, for the same reason failures are (#236).
-            out["skipped"] = [b["id"] for b in cast[i:]
-                              if b["kind"] == "characters" and b["role"] == "npc"]
-            out["budget_exhausted"] = True
+            drop_tail(i)
             break
         try:
             name = store.characters.read_character(croot, a["id"])["meta"].get("name", a["id"])
@@ -414,12 +419,14 @@ async def _stage_dossiers(cid: str, sid: str, transcript: str, client: LLMClient
             # reads and the prompt build above are not free, and a budget with
             # milliseconds left can be gone. `wait_for` cancels a task before
             # its first step, so a non-positive remainder means the request
-            # never leaves -- claiming it as an attempt would point the user at
-            # a failed call that never existed. Set before the await and never
-            # after: once the request is out, an answer that never comes back
-            # was still attempted.
-            if not budget.spent():
-                out["attempted"] = True
+            # never leaves -- and an unsent call is this NPC joining the skipped
+            # tail, not an LLMError against it.
+            if budget.spent():
+                drop_tail(i)
+                break
+            # Set before the await and never after: once the request is out, an
+            # answer that never comes back was still attempted.
+            out["attempted"] = True
             d_text = await budget.run(client.complete(msgs, conn))
             parsed_dossier = store.dossiers.parse_output(d_text)
             # stage_edit returns None for an unchanged paragraph AND for a blank
