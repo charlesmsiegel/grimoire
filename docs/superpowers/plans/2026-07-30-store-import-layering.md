@@ -65,16 +65,7 @@ Each task repeats its package's placement in an `**Interfaces:**` block, and a c
 
 Tasks 3-12 each create one package. Before writing any file, run the validator and confirm that package reports `[OK ]`. If a task's placement changes for any reason, re-run before committing — this is cheaper than discovering it from the guard after the files exist, and far cheaper than discovering it in review.
 
-- [ ] **Step 3: Commit**
-
-```bash
-git add scripts/validate_partition.py
-git commit -m "Add a partition validator for the store split
-
-Reads the spec's tables, resolves each name to its proposed file, and reports
-intra-package cycles with the function pairs that cause them. Hand-deriving
-this is what three rounds of review kept catching."
-```
+There is no commit step here. `scripts/validate_partition.py` ships with this plan, so Steps 1-2 only run it — `git commit` on an empty index would fail and stall the sequence.
 
 ---
 
@@ -1129,10 +1120,10 @@ The largest split, and the one that closes the last cycle.
 - Produces:
   - `scenes/paths.py`: `SceneNotFound`, `_scenes_dir`, `_scene_path`, `_require_campaign`
   - `scenes/locking.py`: `_serialized(fn)` — the campaign-lock decorator
-  - `scenes/serialize.py`: `match_name`, `_parse_messages`, `_serialize_messages`, `_block`, `_append_block`, `_numbering`, `repad`, `TRANSITION_SPEAKER`, `ROLL_SPEAKER`, `SYNTHETIC_SPEAKERS`
+  - `scenes/serialize.py`: `match_name`, `_parse_messages`, `_serialize_messages`, `_block`, `_append_block`, `_numbering`, `TRANSITION_SPEAKER`, `ROLL_SPEAKER`, `SYNTHETIC_SPEAKERS`
   - `scenes/read.py`: `read_scene(cid, sid) -> dict`, `read_scene_meta`, `list_scenes`, `is_pcless`, `get_dismissed`, `get_location_history`, `get_time_history`, `get_suggested_date`, `trailing_transitions`
   - `scenes/write.py`: `append_message`, `append_reply`, `split_reply`, `edit_message`, `remove_trailing_assistant_run`, `trim_continuation`, `mark_absorbed`, `set_response`, `RollMessageImmutable`, `RESPONSE_FIELDS` — `campaigns/lifecycle.py` retargets `scenes.RESPONSE_FIELDS` here, not to `serialize.py`
-  - `scenes/lifecycle.py`: `create_scene`, `rename_scene`, `delete_scene`
+  - `scenes/lifecycle.py`: `create_scene`, `rename_scene`, `delete_scene`, `repad` — `repad` calls `scene_refs.repoint`, and `scene_refs` imports `chronicle`, which must import `scenes.serialize` for `TRANSITION_SPEAKER`; leaving `repad` in `serialize.py` closes `chronicle → scenes.serialize → scene_refs → chronicle`
 - Consumes: `audit/baselines.py::capture_baseline`, `appearances/cast.py::player_names`, `scene_refs`, `campaigns/paths.py`, `overlay`.
 
 `_serialized` gets its own `locking.py` rather than sharing `serialize.py`: the names are a coincidence — `_serialized` runs a mutation under the campaign lock, `serialize.py` is transcript marshalling. It decorates 19 functions landing in four files, all of which import it. Its lock is reentrant, so spreading the call sites changes no locking behavior.
@@ -1149,7 +1140,13 @@ The largest split, and the one that closes the last cycle.
 
 `test_scene_store.py:996` is inside the `_slow_frontmatter` helper, which wraps `parse_frontmatter` in a `time.sleep` to widen the lost-update race window — without it the concurrency tests for #254 are coin flips that pass on broken code. It patches a name `scenes.py` imported from `frontmatter`, and after the split every scenes submodule holds its own binding, so patching one is not enough. Patch every submodule that imports it:
 
+The helper's module currently imports only the `scenes` facade, so every name below has to be bound first — otherwise it raises `NameError` before any concurrency test runs:
+
 ```python
+from grimoire.store import frontmatter
+from grimoire.store.scenes import (lifecycle as scenes_lifecycle, moment as scenes_moment,
+                                   read as scenes_read, write as scenes_write)
+...
     real = frontmatter.parse_frontmatter
 
     def slow(text):
@@ -1160,6 +1157,8 @@ The largest split, and the one that closes the last cycle.
     for mod in (scenes_read, scenes_write, scenes_moment, scenes_lifecycle):
         monkeypatch.setattr(mod, "parse_frontmatter", slow)
 ```
+
+Add `backend/tests/test_scene_store.py` to this task's Modify list for those imports as well as the patch change.
 
 Then prove the widening still works: temporarily narrow it to only `scenes_read` and confirm at least one `test_scene_store.py` concurrency test becomes flaky or fails. Restore the full loop afterwards. A race-window helper that silently stops widening turns these tests green permanently, which is worse than deleting them.
 
@@ -1378,7 +1377,7 @@ For each function-body import below, move it to the module top in the required f
 
 Work one module at a time and run the guard after each: a call site you missed is an `AttributeError` in that module's own tests, and a binding you pointed at a package instead of a submodule is a reported cycle.
 
-`calendars/base.py` is the one row that keeps a name-from-module import. `plugins` is a plain module, not a package, so `from .plugins import load_custom_providers` carries no partial-initialization hazard and both call sites stay as they are.
+`calendars/base.py` keeps a name-from-module import: `plugins` is a plain module, not a package, so `from .plugins import load_custom_providers` carries no partial-initialization hazard and both call sites (`get_provider`, `list_providers`) keep calling `load_custom_providers()` bare. Use that form — **not** `from . import plugins` with qualified calls. Whichever you pick, the import and the call sites must match; mixing the two leaves one of the names undefined at runtime.
 
 **Do not hand-write these imports. Generate them:**
 
@@ -1596,11 +1595,15 @@ import grimoire.claude_agent as claude_agent
         monkeypatch.setattr(claude_agent, _name, getattr(mod, _name))
 ```
 
-And the missing-SDK test at line 82, which sets `sys.modules["claude_agent_sdk"] = None` to force an `ImportError`, becomes a sentinel patch:
+And the missing-SDK test at line 82, which sets `sys.modules["claude_agent_sdk"] = None` to force an `ImportError`, becomes a sentinel patch — **both** names, not just `query`:
 
 ```python
     monkeypatch.setattr(claude_agent, "query", None)
+    monkeypatch.setattr(claude_agent, "_SDK_IMPORT_ERROR",
+                        ImportError("No module named 'claude_agent_sdk'"))
 ```
+
+Patching only `query` is wrong whenever the suite runs with the extra actually installed: `_SDK_IMPORT_ERROR` is then `None`, and `stream()` reaches `raise _SDK_IMPORT_ERROR`, giving `TypeError` instead of the expected `ClaudeAgentError`. Setting both makes the test simulate the absent-extra path regardless of environment.
 
 - [ ] **Step 3c: Prove the fake is actually observed**
 
