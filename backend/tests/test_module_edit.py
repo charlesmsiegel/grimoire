@@ -5,7 +5,7 @@ import zipfile
 
 import pytest
 
-from grimoire.store import campaigns, locks, module_edit, modules, sheets, worlds
+from grimoire.store import campaigns, locks, module_edit, modules, worlds
 from grimoire.store.frontmatter import parse_frontmatter
 
 
@@ -922,7 +922,7 @@ def test_delete_module_rejects_builtin_before_campaign_locks(monkeypatch, tmp_pa
 def test_llm_consumers_hold_campaign_lock(monkeypatch, tmp_path):
     """An edit holding the campaign locks excludes context assembly (proxy
     for all R2 consumers — they share the campaign_lock domain)."""
-    from grimoire.store import context, proposals
+    from grimoire.store import proposals
     mid = _mk_schema(monkeypatch, tmp_path)
     wid, cid = _bound_campaign(mid)
     # proposals lock domain is unified: campaign_lock(cid) blocks proposals.new

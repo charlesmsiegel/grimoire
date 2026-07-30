@@ -34,7 +34,7 @@ import json
 from contextlib import contextmanager
 from pathlib import Path
 
-from . import assets, atomic, campaigns, cards, characters, entities, greetings, groupstate, pcs, taglines, worlds
+from . import assets, atomic, campaigns, cards, characters, entities, greetings, groupstate, pcs, taglines
 from .paths import natural_key
 
 #: Record kinds a campaign inherits from its world. A `<campaign>/<kind>/...`
@@ -137,7 +137,7 @@ def _recorded_base(cid: str, ref: str, base: str, commit: Path):
                 manifest[ref] = previous
             try:
                 campaigns.write_manifest(cid, manifest)
-            except Exception:
+            except Exception:  # noqa: BLE001 - the copy's failure is the one worth raising
                 pass   # the copy's failure is the one worth raising
         raise
 

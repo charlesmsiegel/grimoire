@@ -47,7 +47,7 @@ def test_delete_removes_world(monkeypatch, tmp_path):
 
 def test_world_counts_include_greetings(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    from grimoire.store import greetings, worlds
+    from grimoire.store import worlds
     wid = worlds.create_world("Saltmarch")
     root = worlds.world_root(wid)
     (root / "greetings").mkdir()

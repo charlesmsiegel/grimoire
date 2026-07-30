@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 
 from .. import prompts
-from . import (appearances, campaigns, cards, changes, characters, chronicle, dossiers, entities,
+from . import (appearances, campaigns, cards, changes, characters, dossiers, entities,
                groupstate, overlay, pcs, playstate, plot, relationships, scenes, sheets)
 from .paths import slugify
 

@@ -1,4 +1,3 @@
-import pytest
 
 from grimoire.store import campaigns, chronicle, scenes, worlds
 

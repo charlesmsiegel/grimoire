@@ -1,7 +1,7 @@
 import pytest
 
 from grimoire.store import appearances as ap
-from grimoire.store import campaigns, characters, entities, greetings, overlay, pcs, sync, worlds
+from grimoire.store import campaigns, characters, entities, greetings, overlay, sync, worlds
 
 
 def home(monkeypatch, tmp_path):

@@ -5778,7 +5778,7 @@ def test_module_create_delete_routes_use_transactional_path(client):
     mid = r.json()["id"]
     pack = client.get(f"/api/modules/{mid}").json()
     assert pack["id"] == mid
-    assert client.delete(f"/api/modules/d20-basic").status_code == 400
+    assert client.delete("/api/modules/d20-basic").status_code == 400
 
 
 def test_module_rule_route(client):

@@ -1,0 +1,23 @@
+# The lint gate. Runs as `make check-lint` locally and as the `lint` CI job.
+#
+# Deliberately narrow: every selected rule maps to a real bug class or to a
+# convention this codebase already annotates for. E501 is NOT selected — at
+# ruff's default 88 columns it reports 2420 findings against a codebase whose
+# real distribution is p99 = 99, so line length is a formatter decision rather
+# than a lint gate. The rest of E7 (E701/E702/E731/E741) is deferred with it.
+target-version = "py311"
+line-length = 100                 # documentation only; E501 is not selected
+exclude = ["backend/.venv", "node_modules", "build", "dist", ".worktrees", "OLD"]
+
+[lint]
+# RUF100 is the rule most on this branch's theme: a noqa naming a rule that is
+# not enabled is an inert guard. E402 is enabled because the codebase already
+# believes in it -- 21 markers existed for deliberate sys.path-then-import
+# patterns, and deleting them to satisfy RUF100 would discard real information.
+select = ["F", "BLE", "E9", "E402", "RUF100"]
+
+[lint.per-file-ignores]
+# Named files, not a **/__init__.py glob: these two are the only aggregators,
+# and a glob would hand every future package initializer a blind spot.
+"backend/src/grimoire/store/__init__.py"  = ["F401"]  # 60-submodule aggregation
+"backend/src/grimoire/routes/__init__.py" = ["F401"]  # router aggregation
