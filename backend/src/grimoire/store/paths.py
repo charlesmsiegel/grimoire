@@ -34,7 +34,7 @@ def _read_pointer() -> dict:
     """
     return failsoft.read_json(
         _pointer_path(), dict,
-        f"its data_dir is ignored -- the store falls back to $GRIMOIRE_HOME if "
+        "its data_dir is ignored -- the store falls back to $GRIMOIRE_HOME if "
         f"set, else {DEFAULT_HOME}") or {}
 
 
