@@ -19,16 +19,23 @@
 - **Android:** `pyproject.toml` base deps must stay Android-installable; no `model_dump()`, `Field`, validators, or `ConfigDict`. Filesystem access goes through `store.paths`. This refactor adds no dependencies, so it only has to avoid regressing these.
 - **Privacy:** never use a real world/campaign/character name in a test fixture, commit message, or doc. Reuse existing placeholders (Seraphine, Mara, Winifred, Realm, Saltmarch).
 - **Test command:** `backend/.venv/bin/python -m pytest backend -q` (on Windows, `backend/.venv/Scripts/python.exe`).
-- **Known-failing baseline:** on a container running as uid 0, `test_atomic.py::test_a_read_only_record_is_not_silently_replaced` and `test_assets_store.py::test_lookup_survives_a_sibling_vanishing_mid_scan` fail because chmod-based read-only assertions cannot hold as root. Expect **2712 passed, 2 failed** there and a fully green suite as a normal user. Any *other* failure is a real regression.
+- **Known-failing baseline:** after Task 1, expect **2713 passed, 1 failed** on a container running as uid 0 — measured, not estimated. The one failure is `test_atomic.py::test_a_read_only_record_is_not_silently_replaced`, which cannot hold as root because chmod 0444 does not stop uid 0 writing. On a normal user account the suite is fully green. Any *other* failure is a real regression.
+
+  Do not repeat the earlier mistake of filing `test_assets_store.py::test_lookup_survives_a_sibling_vanishing_mid_scan` as a root artifact — it is a genuine test bug, fixed in Task 1.
 
 ---
 
-### Task 1: Repair the `os.stat` test stubs
+### Task 1: Repair the four broken `stat` stubs
 
-Three stubs in `test_atomic.py` accept one positional argument, but Python 3.11.15's `pathlib.Path.stat()` calls `os.stat(path, follow_symlinks=...)`. When pytest's `tmp_path` cleanup runs during teardown while the patch is live, it raises `TypeError` and pytest aborts the whole session with an INTERNALERROR instead of reporting results. Without this, no later task has a trustworthy baseline.
+Two independent test bugs stand between the suite and a trustworthy baseline.
+
+**`test_atomic.py`** — three stubs accept one positional argument, but Python 3.11.15's `pathlib.Path.stat()` calls `os.stat(path, follow_symlinks=...)`. When pytest's `tmp_path` cleanup runs during teardown while the patch is live, it raises `TypeError` and pytest aborts the whole session with an INTERNALERROR instead of reporting results.
+
+**`test_assets_store.py`** — `test_lookup_survives_a_sibling_vanishing_mid_scan` replaces `assets.Path.stat` with a stub that raises `FileNotFoundError` for *every* path except `avatar.png`. But `image_path` opens with `if not d.exists()` on the `default` **directory**, whose name is not `avatar.png`, so the stub raises there and `image_path` returns `None` before it ever reaches the scan the test is exercising. This fails regardless of uid.
 
 **Files:**
 - Modify: `backend/tests/test_atomic.py:150`, `:379`, `:402`
+- Modify: `backend/tests/test_assets_store.py:190-197`
 
 **Interfaces:**
 - Consumes: nothing.
@@ -64,20 +71,46 @@ Line 402:
 
 Leave the `listxattr` and `getxattr` stubs alone — nothing calls those with keywords.
 
-- [ ] **Step 3: Confirm the suite now completes**
+- [ ] **Step 3: Narrow the assets stub to the path that actually vanished**
+
+Confirm the failure first:
+
+```bash
+backend/.venv/bin/python -m pytest backend/tests/test_assets_store.py::test_lookup_survives_a_sibling_vanishing_mid_scan -q
+```
+
+Expected: `FileNotFoundError: .../characters/sera/assets/default` — the *directory*, not an image.
+
+In `backend/tests/test_assets_store.py`, invert the stub so only the unlinked sibling is missing:
+
+```python
+    def vanishing(self, *a, **kw):
+        # Only the sibling that put_image just unlinked is gone. Raising for
+        # every other path also broke `d.exists()` on the directory itself,
+        # which made image_path bail before it ever reached the scan.
+        if self.name == "avatar.jpg":
+            raise FileNotFoundError(self)
+        return real_stat(self, *a, **kw)
+```
+
+Re-run that test: expected PASS. The assertion it was always meant to make — `p.name == "avatar.png"`, newest-wins rather than `sorted()[0]` — is now actually exercised.
+
+- [ ] **Step 4: Confirm the suite now completes**
 
 Run: `backend/.venv/bin/python -m pytest backend -q`
 
-Expected: a real summary line. `2712 passed, 2 failed` as root, `2714 passed` as a normal user. No INTERNALERROR.
+Expected: a real summary line — `2713 passed, 1 failed` as root (the remaining failure being the chmod-based `test_a_read_only_record_is_not_silently_replaced`), fully green as a normal user. No INTERNALERROR.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add backend/tests/test_atomic.py
-git commit -m "Let the os.stat stubs take follow_symlinks
+git add backend/tests/test_atomic.py backend/tests/test_assets_store.py
+git commit -m "Repair four stat stubs that never exercised their assertions
 
-pathlib passes it as a keyword on 3.11, so tmp_path cleanup during
-teardown aborted the whole pytest session instead of reporting results."
+The os.stat stubs took one positional arg while pathlib passes
+follow_symlinks on 3.11, so tmp_path cleanup aborted the whole pytest
+session. The assets stub raised for every path but avatar.png, including
+the directory image_path checks first, so the scan under test never ran."
 ```
 
 ---
@@ -225,13 +258,19 @@ class _Walker(ast.NodeVisitor):
         them."""
         if not self.mod.startswith("grimoire.store") or self.is_pkg:
             return
-        if not n.level:                  # absolute imports are not this hazard
-            return
         pkg = self.mod.rsplit(".", 1)[0]
-        base = pkg.split(".")
-        if n.level > 1:
-            base = base[: len(base) - (n.level - 1)]
-        target = ".".join(base) + ("." + n.module if n.module else "")
+        if n.level:
+            base = pkg.split(".")
+            if n.level > 1:
+                base = base[: len(base) - (n.level - 1)]
+            target = ".".join(base) + ("." + n.module if n.module else "")
+        else:
+            # `from grimoire.store.campaigns import world_refs` does the same
+            # package-attribute lookup as the relative form and fails the same
+            # way; spelling it absolutely must not buy an exemption.
+            target = n.module or ""
+            if not target.startswith("grimoire.store"):
+                return
         if target not in PACKAGES or target == pkg:
             return
         for a in n.names:
@@ -245,13 +284,21 @@ def _collect():
         w = _Walker(mod, path.name == "__init__.py")
         w.visit(tree)
         graph[mod] = w.edges
-        others = [n for _, _, n in w.deferred] + [n for _, n in w.form]
+        flagged = [n for _, _, n in w.deferred] + [n for _, n in w.form]
+
+        def others(node):
+            """Every *other* flagged node. The identity exclusion is load-bearing:
+            passing the node itself makes `_shares_first_line(node, node)` true,
+            so `_sole_owner` rejects the node's own inline marker and no
+            `# import-ok:` exemption can ever be honoured."""
+            return [o for o in flagged if o is not node]
+
         for where, name, node in w.deferred:
-            if guard_markers.marker_reason(MARKER, src, node, others):
+            if guard_markers.marker_reason(MARKER, src, node, others(node)):
                 continue
             deferred.append(f"deferred {mod}::{where}::{name}")
         for target, node in w.form:
-            if guard_markers.marker_reason(MARKER, src, node, others):
+            if guard_markers.marker_reason(MARKER, src, node, others(node)):
                 continue
             form.append(f"form {mod}::{target}")
     return deferred, form, graph
@@ -281,7 +328,10 @@ def _cycles(graph: dict[str, set[str]]) -> list[str]:
                 comp.append(w)
                 if w == v:
                     break
-            if len(comp) > 1:
+            # A self-import (`read.py` doing `from . import read`) forms a
+            # one-node component and exposes the same partially-initialized
+            # module a larger cycle does, so size alone is not the test.
+            if len(comp) > 1 or comp[0] in graph.get(comp[0], ()):
                 out.append("cycle " + ",".join(sorted(comp)))
 
     for n in sorted(set(graph) | {t for v in graph.values() for t in v}):
@@ -364,10 +414,63 @@ Expected: FAIL, reporting `form grimoire.store.weather.settings::grimoire.store.
 
 Now revert that line: `git checkout backend/src/grimoire/store/weather/settings.py`, and re-run to confirm `2 passed`.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Prove the marker exemption actually works**
+
+A guard whose documented escape hatch silently never fires is worse than one with no escape hatch, because the first `# import-ok:` someone writes will look honoured and will not be. Test it directly.
+
+In `backend/src/grimoire/store/suggest.py:157`, temporarily replace the existing comment on the deferred import:
+
+```python
+    from . import playing  # import-ok: testing the marker
+```
+
+(Note the real line is indented 4 spaces and already carries a `# lazy: ...` comment — replace the whole comment, do not append.)
 
 ```bash
-git add backend/tests/test_import_guard.py backend/tests/import_guard_baseline.txt
+cd backend && .venv/bin/python -c "
+import sys; sys.path.insert(0,'src'); sys.path.insert(0,'.')
+from tests import test_import_guard as g
+hit = [v for v in g._violations() if 'store.suggest' in v]
+assert not hit, f'marker did not suppress: {hit}'
+print('marker exemption works')
+"
+```
+
+Expected: `marker exemption works`. Then `git checkout backend/src/grimoire/store/suggest.py`.
+
+- [ ] **Step 7: Prove a self-import is reported as a cycle**
+
+```bash
+cd backend && .venv/bin/python -c "
+import sys; sys.path.insert(0,'src'); sys.path.insert(0,'.')
+from tests import test_import_guard as g
+assert g._cycles({'a': {'a'}, 'b': set()}) == ['cycle a'], 'self-edge not reported'
+assert g._cycles({'a': {'b'}, 'b': set()}) == [], 'false positive on a plain edge'
+print('self-import detection works')
+"
+```
+
+- [ ] **Step 8: Capture the public-API baseline**
+
+Tasks 3-15 each assert the store's public surface has not drifted. That assertion needs a snapshot taken *before* any split, and it must cover `dir()` as well as `__all__` — `module_display` is reachable today only as a side-effect binding that never appears in `__all__`, so an `__all__`-only snapshot would not notice it disappearing.
+
+```bash
+cd backend && .venv/bin/python -c "
+import json, pathlib, grimoire.store as s
+b = {'all': sorted(s.__all__),
+     'dir': sorted(n for n in dir(s) if not n.startswith('_'))}
+pathlib.Path('tests/store_api_baseline.json').write_text(json.dumps(b, indent=2) + '\n')
+print(len(b['all']), 'exported,', len(b['dir']), 'public attributes captured')
+"
+```
+
+Expected: `81 exported, 101 public attributes captured`. Confirm `module_display` is present in the captured `dir` list — if it is not, the snapshot was taken against an already-modified tree.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add backend/tests/test_import_guard.py backend/tests/import_guard_baseline.txt \
+       backend/tests/store_api_baseline.json
 git commit -m "Guard the import graph with a ratchet baseline
 
 Fails on any in-function import, any module-level cycle, and any name bound
@@ -413,7 +516,16 @@ Every one of Tasks 3-9 ends with these four commands. They are not repeated per 
 
 ```bash
 # 1. nothing outside the store changed its view of the world
-backend/.venv/bin/python -c "import grimoire.store as s; print(sorted(s.__all__) == sorted(s.__all__))"
+backend/.venv/bin/python -c "
+import json, pathlib, grimoire.store as s
+expected = json.loads(pathlib.Path('backend/tests/store_api_baseline.json').read_text())
+actual = {'all': sorted(s.__all__), 'dir': sorted(n for n in dir(s) if not n.startswith('_'))}
+assert actual == expected, (
+    'public API drifted:\n  missing: %s\n  added:   %s' % (
+        sorted(set(expected['dir']) - set(actual['dir'])),
+        sorted(set(actual['dir']) - set(expected['dir']))))
+print('public API unchanged')
+"
 # 2. the guard agrees this task removed exactly its own violations
 backend/.venv/bin/python -m pytest backend/tests/test_import_guard.py -q
 # 3. the kind's own tests
@@ -424,9 +536,54 @@ backend/.venv/bin/python -m pytest backend -q
 
 Command 2 catches both halves: a violation you introduced (fails the first test) and a baseline line you deleted without actually fixing, or fixed without deleting (fails the second).
 
-### Two monkeypatches that deliberately need no change
+### Placement follows the call graph, not the name
 
-`test_locks_store.py:911` and `:912` patch `chronicle.absorb` and `chronicle.append_timeline`. Both are `chronicle`'s **own** functions (`chronicle.py:39`, `:69`) — `chronicle.absorb` has nothing to do with the `absorb` store module — and `chronicle` is not split by this plan. Leave them exactly as they are; "fixing" them is a way to break a working lock-depth test.
+A first pass at these tables derived each file from what its functions are *about*, and put four sets of mutually-dependent helpers in separate files — which would have made the guard reject the very task that created them. The spec's tables now reflect the corrected placement; these four are called out because they are the ones where the intuitive home is the wrong one:
+
+| Package | Helper | Lives with | Why |
+|---|---|---|---|
+| `campaigns` | `world_root_of` | `read.py` | calls `read_campaign`, which calls `campaign_meta_path` — otherwise `paths ↔ read` |
+| `modules` | `_load_rules`, `_load_content` | `pack.py` | `load_pack_at` calls them while `read_content` calls `pack_root` — otherwise `pack ↔ content` |
+| `appearances` | `_lock` | `versions.py` | calls `actor_hash`, `_copy_actor`, `_purge_other_versions`, `_set_default`, `_drop_manifest_ref` |
+| `scenes` | `_block` **and** `_append_block` | `serialize.py` | `_serialize_messages` calls `_append_block` while `append_message` calls `_block` — otherwise `serialize ↔ write` |
+
+**The rule, and the check to run before writing any package's files:** a helper belongs in the file whose other functions call it, not in the file its name suggests. Sketch the intra-package call graph first; if two proposed files call into each other, merge them or pull the shared helper down into a third.
+
+### Retarget consumers in the same task that creates the package
+
+Splitting `campaigns` is not enough on its own. Ten modules currently do `from . import campaigns` (`appearances.py:16`, `sheets.py:18`, and eight more). The moment `campaigns/__init__.py` imports `lifecycle`, and `lifecycle` imports `appearances`/`modules`/`sheets`, those flat modules' imports of the `campaigns` *package* close a cycle — `campaigns → lifecycle → appearances → campaigns`.
+
+So each split task must, in the same commit, retarget every existing consumer of the module it splits. Find them with:
+
+```bash
+grep -rn "from \. import .*\b<kind>\b\|from \.\. import .*\b<kind>\b" backend/src/grimoire/store/
+```
+
+and rewrite each to name the submodule it actually needs (`from .campaigns import paths as campaign_paths`, etc.), driven by what attributes it uses. The verification step's guard run is what confirms you found them all: a missed consumer shows up as a reported cycle.
+
+### Retargeting a monkeypatch depends on the caller, not the function
+
+A patch must land on **the binding the caller actually reads**. Two cases, and getting them backwards silently disables fault injection — the test still passes, but no longer proves anything.
+
+- **Caller uses the facade** — e.g. `routes/scenes.py:299` calls `store.audit.materialize(...)`, an attribute lookup on the package at call time. Patching `store.audit.materialize` works, before *and* after the split, because the package attribute is what gets read. Patching `audit.apply.materialize` would **not** be seen. **Leave these alone.**
+- **Caller imports the submodule** — once a store module is rewritten to `from .modules import binding`, it holds its own reference and only `modules.binding.resolve` is patchable.
+
+It follows that a retarget belongs in **the task that rewrites the caller's import**, not the task that moves the function. Corrected assignment:
+
+| Test site | Patched | Action |
+|---|---|---|
+| `test_routes.py:2853` | `audit.materialize` | **keep** — `routes/scenes.py:299` uses the facade |
+| `test_locks_store.py:865` | `scenes.append_message` | **keep** — the test drives an HTTP route, and `routes/mechanics.py:40`,`:202` use the facade |
+| `test_locks_store.py:911`,`:912` | `chronicle.absorb`, `chronicle.append_timeline` | **keep** — chronicle's own functions (`chronicle.py:39`,`:69`), unrelated to the `absorb` module, and chronicle is never split |
+| `test_module_display.py:361` | `module_display._load_theme` | **keep** — the Task 5 alias binds the same module object |
+| `test_sheets_store.py:799`,`:1134` | `modules.resolve` | retarget in **Task 7**, when `sheets`' imports are rewritten — not Task 5 |
+| `test_audit_store.py:100` | `modules.load_pack` | retarget in **Task 8**, when `audit`'s imports are rewritten |
+| `test_response_presets.py:601` | `campaigns.read_campaign` | retarget in **Task 13**, when `response_presets`' import is hoisted — not Task 3 |
+| `test_context.py:1157` | `context._drift_roster` | retarget in **Task 12** (caller is inside the same package) |
+| `test_module_edit.py:627`,`:631`,`:914` | `_run_migration`, `_campaign_locks` | retarget in **Task 10** (caller is inside the same package) |
+| `test_scene_store.py:996` | `scenes.parse_frontmatter` | retarget in **Task 9** — see that task, it needs every submodule patched |
+
+**Whenever you retarget one, prove it still injects.** Temporarily break the patched function's replacement (make it a no-op instead of raising, or drop the patch) and confirm the test fails. A fault-injection test that no longer injects is indistinguishable from a passing one.
 
 ### Task ordering is a dependency order
 
@@ -465,15 +622,9 @@ These move to the top of `campaigns/lifecycle.py` and their in-function `from . 
 
 Keep the comment on each explaining *why* the seed step exists; only the import placement changes.
 
-- [ ] **Step 3: Retarget the monkeypatch**
+- [ ] **Step 3: Leave `test_response_presets.py:601` alone**
 
-`backend/tests/test_response_presets.py:601` patches `campaigns.read_campaign`. `response_presets` will call it via the `read` submodule, so patch there:
-
-```python
-from grimoire.store.campaigns import read as campaigns_read
-...
-    monkeypatch.setattr(campaigns_read, "read_campaign", boom)
-```
+Do **not** retarget it here. `response_presets.usage` still does `from . import campaigns` inside the function at this point, so `campaigns.read_campaign` remains a call-time lookup on the package and the existing patch keeps working. Task 13 hoists that import and retargets the patch together.
 
 - [ ] **Step 4: Delete this task's baseline lines**
 
@@ -597,23 +748,11 @@ from .modules import display as module_display
 
 Add `"module_display"` to `__all__`. This binds the *same module object*, so `monkeypatch.setattr(module_display, "_load_theme", boom)` at `test_module_display.py:361` still intercepts the call made from `pack.py`.
 
-- [ ] **Step 3: Retarget the monkeypatches**
+- [ ] **Step 3: Leave the sheets and audit patches alone**
 
-`test_sheets_store.py:799` and `:1134` patch `modules.resolve`; `sheets` will call it through `binding`:
+`test_sheets_store.py:799`/`:1134` (`modules.resolve`) and `test_audit_store.py:100` (`modules.load_pack`) must **not** be retargeted here. `sheets` and `audit` still do `from . import modules`, so both names remain call-time lookups on the package and the existing patches keep working. They move in Tasks 7 and 8, alongside those modules' import rewrites.
 
-```python
-from grimoire.store.modules import binding as modules_binding
-...
-    monkeypatch.setattr(modules_binding, "resolve", spy)
-```
-
-`test_audit_store.py:100` patches `modules.load_pack`:
-
-```python
-from grimoire.store.modules import pack as modules_pack
-...
-    monkeypatch.setattr(modules_pack, "load_pack", _boom)
-```
+`test_module_display.py:361` also needs no change — the Step 2 alias binds the same module object that `pack.py` calls through.
 
 - [ ] **Step 4: Delete this task's baseline lines**
 
@@ -752,15 +891,19 @@ This is the split that breaks the one cycle live in the graph today. `capture_ba
 
 Preserve `capture_baseline`'s `locks.StoreBusy` re-raise and its long comment verbatim — that behavior is load-bearing (#234) and the comment explains why the one exception to "never raises" exists.
 
-- [ ] **Step 2: Retarget the monkeypatch**
+- [ ] **Step 2: Leave `test_routes.py:2853` alone, and retarget the modules patch**
 
-`test_routes.py:2853` patches `audit.materialize`:
+`routes/scenes.py:299` calls `store.audit.materialize(...)` — a call-time lookup on the package — so the existing facade patch keeps working and retargeting it to `audit.apply` would silently stop injecting the crash. Leave it untouched.
+
+`test_audit_store.py:100` patches `modules.load_pack`, and this task *does* rewrite audit's imports to name the submodule, so it moves here:
 
 ```python
-from grimoire.store.audit import apply as audit_apply
+from grimoire.store.modules import pack as modules_pack
 ...
-    monkeypatch.setattr(audit_apply, "materialize", ...)
+    monkeypatch.setattr(modules_pack, "load_pack", _boom)
 ```
+
+Then prove it still injects: drop the patch line and confirm the test fails.
 
 - [ ] **Step 3: Delete this task's baseline line**
 
@@ -1186,6 +1329,32 @@ except ImportError:      # optional `claude` extra
 ```
 
 `stream()` raises the same error it raises today when the SDK is missing — read the existing `except ImportError` path and preserve its message exactly.
+
+- [ ] **Step 3b: Rework how `test_claude_agent.py` installs its fake**
+
+A module-level import caches the SDK in a global, which breaks the existing test harness. `install_fake_sdk` (`tests/test_claude_agent.py:27`) does `monkeypatch.setitem(sys.modules, "claude_agent_sdk", mod)` at line 47 — but `grimoire.claude_agent` was already imported at collection time, so its global still holds `None` or the real SDK and the fake is never observed. Every test routed through `install_fake_sdk` (lines 56, 63, 90, 98, 107, 121) would stop testing what it claims.
+
+Patch the module global instead of the `sys.modules` entry:
+
+```python
+    monkeypatch.setattr(claude_agent, "claude_agent_sdk", mod)
+```
+
+And the missing-SDK test at line 82, which currently sets `sys.modules["claude_agent_sdk"] = None` to force an `ImportError`, becomes:
+
+```python
+    monkeypatch.setattr(claude_agent, "claude_agent_sdk", None)
+```
+
+- [ ] **Step 3c: Prove the fake is actually observed**
+
+An SDK double that silently stops being installed leaves these tests green and meaningless. Make the fake raise a sentinel and confirm the test sees it:
+
+```bash
+backend/.venv/bin/python -m pytest backend/tests/test_claude_agent.py -q
+```
+
+Expected: all pass. Then temporarily change `install_fake_sdk` to patch nothing at all and re-run — the success and exception-normalization tests must **fail**. Restore afterwards.
 
 - [ ] **Step 4: Verify the optional paths still degrade**
 
