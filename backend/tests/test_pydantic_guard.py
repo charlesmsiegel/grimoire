@@ -39,10 +39,16 @@ from . import guard_markers
 MARKER = "pydantic-ok:"
 SRC = pathlib.Path(__file__).resolve().parents[1] / "src" / "grimoire"
 
+# The public v2-only surface. Enumerated rather than pattern-matched on a
+# `model_` prefix: this codebase has plenty of legitimate `model_*` names of its
+# own (LLM model ids and settings), and flagging those would make the guard
+# useless. Add to this set when pydantic does.
 V2_ONLY = {
     "model_dump", "model_dump_json", "model_validate", "model_validate_json",
-    "model_json_schema", "model_copy", "model_construct", "model_rebuild",
-    "model_fields", "model_fields_set", "model_config", "ConfigDict",
+    "model_validate_strings", "model_json_schema", "model_copy",
+    "model_construct", "model_rebuild", "model_fields", "model_fields_set",
+    "model_computed_fields", "model_extra", "model_post_init",
+    "model_parametrized_name", "model_config", "ConfigDict",
     "TypeAdapter", "RootModel", "field_validator", "model_validator",
     "field_serializer", "model_serializer", "computed_field", "validate_call",
 }
@@ -104,6 +110,9 @@ PROHIBITED = [
     ("decorator call",
      "from pydantic import field_validator\n@field_validator('a')\ndef f():\n    pass\n"),
     ("type adapter", "from pydantic import TypeAdapter\nx = TypeAdapter(int)\n"),
+    ("validate strings", "def f(m):\n    return m.model_validate_strings({})\n"),
+    ("model_extra", "def f(m):\n    return m.model_extra\n"),
+    ("computed fields", "def f(m):\n    return m.model_computed_fields\n"),
     ("class dict config", "class M:\n    model_config = {'extra': 'forbid'}\n"),
     ("annotated config", "class M:\n    model_config: dict = {'extra': 'forbid'}\n"),
 ]
