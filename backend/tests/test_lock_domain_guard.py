@@ -173,7 +173,45 @@ def _writes_directly(fn: ast.AST) -> bool:
     return False
 
 
-def _locks_directly(fn: ast.AST) -> bool:
+def _own_body(fn: ast.AST):
+    """Nodes belonging to `fn` itself, NOT to functions nested inside it.
+
+    `ast.walk` descends into nested `def`s, and taking that at face value was a
+    hole: a lock inside a *callback* made the enclosing function read as
+    serialized while its own writes ran under nothing —
+
+        def outer(cid):
+            def _cb():
+                with locks.campaign_lock(cid): ...
+            atomic.write_text(p, x)     # serialized by nothing
+            register(_cb)
+
+    which is precisely the shape this package uses (`proposals` persists a reply
+    through a callback). The decorator case is the one place a nested lock really
+    does cover the outer name, and it is handled separately in `_serializing`.
+    """
+    stack = list(ast.iter_child_nodes(fn))
+    while stack:
+        node = stack.pop()
+        yield node
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            continue                     # its body is its own, not `fn`'s
+        stack.extend(ast.iter_child_nodes(node))
+
+
+def _locks_in_own_body(fn: ast.AST) -> bool:
+    """`fn`'s own body acquires the campaign lock."""
+    return any(isinstance(n, ast.Call) and _called_name(n.func) in _LOCK_CALLS
+               for n in _own_body(fn))
+
+
+def _locks_anywhere(fn: ast.AST) -> bool:
+    """`fn` or something nested in it acquires the lock.
+
+    Only meaningful for a decorator: `scenes._serialized` holds the lock in the
+    `locked` closure it returns, so the acquisition that covers every decorated
+    mutator is nested by construction.
+    """
     return any(_called_name(c.func) in _LOCK_CALLS for c in _calls(fn))
 
 
@@ -186,8 +224,8 @@ def _with_context_names(fn: ast.AST) -> set[str]:
     `_locked_helper(cid); atomic.write_text(...)` does not serialize anything.
     """
     out: set[str] = set()
-    for node in ast.walk(fn):
-        if isinstance(node, (ast.With, ast.AsyncWith)):
+    for node in _own_body(fn):           # own body: a `with` inside a nested
+        if isinstance(node, (ast.With, ast.AsyncWith)):   # def covers that def
             for item in node.items:
                 expr = item.context_expr
                 if isinstance(expr, ast.Call):
@@ -195,6 +233,14 @@ def _with_context_names(fn: ast.AST) -> set[str]:
                     if name is not None:
                         out.add(name)
     return out
+
+
+def _own_calls(fn: ast.AST):
+    """Calls `fn` makes itself. Delegation is only delegation when the caller
+    actually makes the call; one buried in a nested def is that def's."""
+    for node in _own_body(fn):
+        if isinstance(node, ast.Call):
+            yield node
 
 
 def _serializing(funcs: dict[str, ast.AST]) -> set[str]:
@@ -211,18 +257,21 @@ def _serializing(funcs: dict[str, ast.AST]) -> set[str]:
     writes on its own has an unserialized write, and treating that as covered is
     the exact hole this guard exists to close.
     """
-    out = {name for name, fn in funcs.items() if _locks_directly(fn)}
+    # A decorator's acquisition is nested inside the wrapper it returns, so it is
+    # the one case that must look through nested defs -- see `_locks_anywhere`.
+    decorating = {name for name, fn in funcs.items() if _locks_anywhere(fn)}
+    out = {name for name, fn in funcs.items() if _locks_in_own_body(fn)}
     for _ in range(len(funcs) + 1):
         grown = set(out)
         for name, fn in funcs.items():
             if name in grown:
                 continue
-            if any(_called_name(d) in grown for d in fn.decorator_list):
+            if any(_called_name(d) in decorating for d in fn.decorator_list):
                 grown.add(name)                       # @_serialized and friends
             elif _with_context_names(fn) & grown:
                 grown.add(name)                       # with _lock(cid): ...
             elif not _writes_directly(fn) and any(
-                    _called_name(c.func) in grown for c in _calls(fn)):
+                    _called_name(c.func) in grown for c in _own_calls(fn)):
                 grown.add(name)                       # pure delegation
         if grown == out:
             break
@@ -509,6 +558,24 @@ def test_a_context_manager_that_locks_covers_the_bodys_own_writes():
            "        atomic.write_text(p, x)\n")
     _funcs, serializing, _m = _probe(src)
     assert "clear" in serializing
+
+
+def test_a_lock_inside_a_callback_does_not_cover_the_enclosing_body():
+    """`ast.walk` descends into nested defs, so a lock taken in a callback made
+    the function around it read as serialized while its own write ran under
+    nothing. This package persists through callbacks (`proposals` commits a
+    narration that way), so the shape is not hypothetical."""
+    src = ("def outer(cid):\n"
+           "    def _cb():\n"
+           "        with locks.campaign_lock(cid):\n"
+           "            pass\n"
+           "    atomic.write_text(p, x)\n"
+           "    register(_cb)\n")
+    _funcs, serializing, mutators = _probe(src)
+    assert "outer" in mutators
+    assert "outer" not in serializing, \
+        "a nested closure's lock covered the enclosing function's own write"
+    assert "_cb" in serializing, "the closure itself still locks"
 
 
 def test_pure_delegation_to_a_locked_helper_is_covered():

@@ -138,12 +138,25 @@ first if you think one should be skipped.
     the **istanbul** provider and `all: true` are load-bearing there, and the
     comments say why — do not switch to the v8 provider, which reports a file
     no test imports as 100% covered rather than 0%.
-- Two architecture rules are enforced by tests that parse the package's own
-  ASTs, alongside the existing `test_atomic_guard.py` / `test_overlay_guard.py`:
-  `test_pydantic_guard.py` (v1/v2-agnostic pydantic) and `test_paths_guard.py`
-  (filesystem access goes through the resolvers). Clear a genuinely-safe call
-  with `# pydantic-ok: <reason>` / `# paths-ok: <reason>` — a marker with no
-  reason fails, deliberately.
+- Several architecture rules are enforced by tests that parse the package's own
+  ASTs: `test_atomic_guard.py` (every store write goes through `store.atomic`),
+  `test_overlay_guard.py`, `test_pydantic_guard.py` (v1/v2-agnostic pydantic),
+  `test_paths_guard.py` (filesystem access goes through the resolvers) and
+  `test_lock_domain_guard.py` (below). Clear a genuinely-safe call with
+  `# atomic-ok: <reason>` / `# overlay-ok: <reason>` / `# pydantic-ok: <reason>`
+  / `# paths-ok: <reason>` / `# lock-domain-ok: <reason>` — a marker with no
+  reason fails, deliberately, and each guard caps how many exist.
+- **Adding a module that mutates campaign-scoped state?** Classify it in
+  `store/locks.py`, or `test_lock_domain_guard.py` fails naming your module. The
+  campaign lock domain used to be a docstring list, which is how two mutators
+  shipped outside it; it is now `DOMAIN_MODULES` (its public `cid`-taking
+  mutators all take `locks.campaign_lock(cid)`), `OUTSIDE_DOMAIN` (deliberately
+  not, with the reason) and `UNREVIEWED` (a frozen backlog that may only shrink
+  — not open for new entries). A new mutator inside a `DOMAIN_MODULES` module
+  must take the lock or carry `# lock-domain-ok: <reason>`. Scene transcripts
+  are the artifact this protects: they cannot be regenerated, and `store/scenes`
+  serializes its whole mutator surface through `@_serialized` to keep two
+  concurrent read-modify-writes from losing one.
 - **After editing anything in `templates/`**, `make check` covers both harnesses
   that guard prompts: `scripts/verify_templates.py` (builders and templates agree
   byte-for-byte) and `evals/run.py` (see `evals/README.md`). Offline, the eval
