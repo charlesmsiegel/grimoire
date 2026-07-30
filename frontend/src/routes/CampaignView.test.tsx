@@ -1361,6 +1361,39 @@ test("Retry validation audits the review's scene, not whichever is on screen", a
   expect((api.retryAudit as any).mock.calls[0][1]).toBe("s1");
 });
 
+test("renaming the reviewed scene moves the review's id with it", async () => {
+  // A scene's id is derived from its title, so a rename mints a new one. The
+  // open review still points at the old id — and both the retry and the save
+  // would POST a scene that no longer exists. `renameScene` already migrates
+  // `seedPrompt.sid` for this reason; the review id belongs in that list.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  (api.renameScene as any).mockResolvedValue({ id: "s1-renamed", title: "New" });
+  const over = {
+    mechanics: { status: "failed", reason: "boom", warnings: [], dropped: [],
+                 attempted: true, budget_exhausted: false },
+  };
+  absorbWithPhases(phasesFor(over), over);
+  (api.retryAudit as any).mockResolvedValue({
+    mechanics: { status: "ok", reason: null, warnings: [], dropped: [],
+                 attempted: true, budget_exhausted: false },
+    edits: [] });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await screen.findByText("Review scene summary");
+
+  fireEvent.click(screen.getByRole("button", { name: /rename/i }));
+  const input = screen.getByDisplayValue("Old");
+  fireEvent.change(input, { target: { value: "New" } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  await waitFor(() => expect(api.renameScene).toHaveBeenCalled());
+
+  fireEvent.click(screen.getByRole("button", { name: /Retry validation/ }));
+  await waitFor(() => expect(api.retryAudit).toHaveBeenCalled());
+  expect((api.retryAudit as any).mock.calls[0][1]).toBe("s1-renamed");
+});
+
 test("a budget-cut dossier phase reads as never prepared, not as a failure", async () => {
   const over = {
     dossiers: { status: "failed",

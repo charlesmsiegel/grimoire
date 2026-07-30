@@ -410,10 +410,16 @@ async def _stage_dossiers(cid: str, sid: str, transcript: str, client: LLMClient
             # pass and this stale output would overwrite that newer one (#235).
             prior = store.dossiers.read(croot, a["id"])
             msgs = store.dossiers.build_prompt(name, prior, transcript)
-            # Set before the await, never after: the loop is only here because
-            # the budget still had room, so the request goes out even if the
-            # answer never comes back.
-            out["attempted"] = True
+            # Re-checked, because the loop's own check is stale by now: the two
+            # reads and the prompt build above are not free, and a budget with
+            # milliseconds left can be gone. `wait_for` cancels a task before
+            # its first step, so a non-positive remainder means the request
+            # never leaves -- claiming it as an attempt would point the user at
+            # a failed call that never existed. Set before the await and never
+            # after: once the request is out, an answer that never comes back
+            # was still attempted.
+            if not budget.spent():
+                out["attempted"] = True
             d_text = await budget.run(client.complete(msgs, conn))
             parsed_dossier = store.dossiers.parse_output(d_text)
             # stage_edit returns None for an unchanged paragraph AND for a blank

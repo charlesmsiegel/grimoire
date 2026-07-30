@@ -3159,6 +3159,35 @@ def test_a_dossier_call_cancelled_mid_flight_counts_as_attempted(
     assert _phase(body, "dossiers")["budget_exhausted"] is True
 
 
+def test_a_budget_spent_by_the_reads_before_the_call_is_not_an_attempt(
+        client, npc_module_scene, monkeypatch):
+    """The gap the loop's own budget check cannot cover: the character read, the
+    dossier read and the prompt build all happen after it, and a budget with
+    milliseconds left can be gone by the time the call is made. `wait_for`
+    cancels a task before its first step, so nothing goes out -- reporting that
+    as an attempt would point the user at a failed request that never existed."""
+    cid, sid = npc_module_scene
+    client.put("/api/config", json={"absorb_budget": "60"})
+    clock = [0.0]
+    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    fake = ClockEatingFake(clock, 30.0, [ABSORB_JSON, "Aese is steady."])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    real_read = store.dossiers.read
+
+    def slow_read(*a, **kw):
+        clock[0] += 40.0          # 30 left after the extraction, so this eats it
+        return real_read(*a, **kw)
+
+    monkeypatch.setattr(store.dossiers, "read", slow_read)
+
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+
+    assert fake.calls == 1                       # the dossier request never left
+    dossiers = _phase(body, "dossiers")
+    assert dossiers["attempted"] is False
+    assert dossiers["budget_exhausted"] is True
+
+
 def test_an_upstream_timeout_is_not_mistaken_for_the_budget(
         client, npc_module_scene, monkeypatch):
     """The two arrive as the same LLMError kind on purpose (`_Budget.run`), so
