@@ -168,6 +168,29 @@ def _functions(tree: ast.AST) -> dict[str, list[ast.AST]]:
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             out.setdefault(node.name, []).append(node)
+
+    # `put = _put` re-exports a function under another name, and that name is
+    # what callers use. Without this the analysis saw only `_put`, skipped it as
+    # a private helper, and never knew `put` existed -- so a domain module could
+    # expose an unlocked public mutator and pass. Iterated for `a = b; c = a`.
+    for _ in range(len(out) + 1):
+        grew = False
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Name):
+                continue
+            source = out.get(node.value.id)
+            if not source:
+                continue
+            for target in node.targets:
+                if not isinstance(target, ast.Name):
+                    continue
+                have = out.setdefault(target.id, [])
+                for d in source:
+                    if d not in have:
+                        have.append(d)
+                        grew = True
+        if not grew:
+            break
     return out
 
 
@@ -247,6 +270,12 @@ def _writes_directly(fn: ast.AST, imported: frozenset[str] = frozenset()) -> boo
             # through entirely when a human clears it with `# atomic-ok:`. Two
             # such exemptions exist today. A write that guard forgives is still
             # a write this one has to see.
+            return True
+        if name in ("write", "fdopen") and receiver == "os":
+            # `os.write(fd, b)` / `os.fdopen(fd, "wb")` bypass `open()` entirely.
+            # `test_atomic_guard` matches both; this did not, so an os-level
+            # write -- especially one that guard has forgiven with a marker --
+            # was invisible here.
             return True
         if name == "mkdir":
             # A directory is a namespace entry others can observe, and neither
@@ -533,7 +562,17 @@ def _every_one_locked(node: ast.AST, fn: ast.AST, want) -> bool:
 
 
 def _is_call_to(target: str):
-    return lambda n: isinstance(n, ast.Call) and _called_name(n.func) == target
+    """Calls to the decorated function itself.
+
+    Matched as a bare `ast.Name`, not by trailing attribute: `_called_name`
+    would read `hooks.fn(cid)` as an invocation of a target named `fn`, so a
+    wrapper could satisfy the lock with an unrelated call of the same spelling
+    and make the real one — `target = fn` called outside the block — invisible.
+    An aliased target now matches nothing, which leaves the wrapper with no
+    covered invocation at all and fails it closed.
+    """
+    return lambda n: (isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                      and n.func.id == target)
 
 
 def _is_yield(node: ast.AST) -> bool:
@@ -1144,6 +1183,54 @@ def test_a_raw_write_the_atomic_guard_forgives_is_still_a_mutation():
                 "def read_it(cid):\n    return open(p).read()\n"):
         _f, _s, mutators = _probe(src)
         assert not mutators, f"a read was mistaken for a write: {src!r}"
+
+
+def test_a_public_alias_of_a_private_mutator_is_analyzed():
+    """Private helpers are skipped as domain members because they run under
+    their callers' locks — but `put = _put` makes the private one callable under
+    a public name, and nothing was looking at that name."""
+    src = ("def _put(cid):\n"
+           "    atomic.write_text(p, x)\n"
+           "put = _put\n")
+    funcs, serializing, mutators = _probe(src)
+    assert "put" in funcs, "the alias was never collected"
+    assert "put" in mutators and "put" not in serializing
+
+    chained = ("def _put(cid):\n"
+               "    atomic.write_text(p, x)\n"
+               "mid = _put\n"
+               "put = mid\n")
+    funcs, _s, mutators = _probe(chained)
+    assert "put" in mutators, "an alias chain was not followed"
+
+
+def test_os_level_writes_are_mutations():
+    """`os.write` / `os.fdopen` bypass `open()` entirely. `test_atomic_guard`
+    matches both; this did not, so an os-level write — especially one that guard
+    has already forgiven with a marker — was invisible."""
+    for src in ("def put(cid):\n    os.write(fd, b'x')\n",
+                "def put(cid):\n    os.fdopen(fd, 'wb')\n"):
+        _f, _s, mutators = _probe(src)
+        assert mutators, f"an os-level write was invisible: {src!r}"
+
+
+def test_the_decorated_target_is_matched_by_name_not_by_spelling():
+    """Matching the trailing attribute let a wrapper satisfy the lock with an
+    unrelated `hooks.fn(cid)` while the real call — through an alias, outside
+    the block — was never counted."""
+    sham = ("def audited(fn):\n"
+            "    def locked(cid, *a):\n"
+            "        target = fn\n"
+            "        with locks.campaign_lock(cid):\n"
+            "            hooks.fn(cid)\n"
+            "        return target(cid, *a)\n"
+            "    return locked\n"
+            "@audited\n"
+            "def append_message(cid, text):\n"
+            "    atomic.write_text(p, text)\n")
+    _f, serializing, _m = _probe(sham)
+    assert "append_message" not in serializing, \
+        "an unrelated same-named call vouched for the decorator"
 
 
 def test_a_contextmanager_must_yield_under_the_lock_on_every_branch():
