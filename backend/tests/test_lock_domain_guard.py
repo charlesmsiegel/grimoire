@@ -227,14 +227,29 @@ def _guards_the_campaign(call: ast.Call) -> bool:
 
 
 def _produces_lock(fn: ast.AST) -> bool:
-    """`fn` hands back a campaign lock for someone else to enter.
+    """`fn` hands back a campaign lock, keyed on `cid`, for someone else to enter.
 
     `audit`-shaped aliasing: a one-line helper that *returns* `campaign_lock(cid)`
     never enters it, so it is not itself serialized — but `with _alias(cid):` in
     a caller is a real acquisition. Kept separate from `_locks_in_own_body` so
     that distinction survives.
+
+    It has to be a `return`/`yield` of the lock, not a mention of the name.
+    Accepting any helper that names `campaign_lock` would let
+    `def _helper(cid): log(campaign_lock); return nullcontext()` stand in for an
+    acquisition, and would accept a helper that locks some *other* id — the same
+    two holes the direct path already closes.
     """
-    return any(_called_name(c.func) in _LOCK_CALLS for c in _own_calls(fn))
+    if _locks_in_own_body(fn):
+        return True                      # a @contextmanager that yields inside
+    for node in _own_body(fn):
+        if isinstance(node, (ast.Return, ast.Expr)) and isinstance(node.value, ast.Call):
+            call = node.value
+            name = _called_name(call.func)
+            if name == "hold_all" or (name == "campaign_lock"
+                                      and _guards_the_campaign(call)):
+                return True
+    return False
 
 
 def _locks_in_own_body(fn: ast.AST) -> bool:
@@ -266,18 +281,45 @@ def _enters_lock(fn: ast.AST, aliases) -> bool:
     return False
 
 
-def _locks_anywhere(fn: ast.AST) -> bool:
-    """`fn`, or a function nested in it, establishes the lock.
+def _wraps_target_under_lock(fn: ast.AST) -> bool:
+    """`fn` is a decorator whose wrapper CALLS the decorated function while
+    holding the campaign lock — the `scenes._serialized` shape.
 
-    Only meaningful for a decorator: `scenes._serialized` holds the lock in the
-    `locked` closure it returns, so the acquisition that covers every decorated
-    mutator is nested by construction -- and that closure takes `cid` as its own
-    first parameter, so the argument check still applies where it matters.
+    Descending into nested defs is unavoidable here (a decorator's acquisition
+    lives in the closure it returns), but "some nested function locks" is not
+    enough on its own: a decorator carrying an unrelated locking callback, that
+    returns its target unchanged, would then launder every writer it decorates
+    through the guard. That would reopen the callback hole `_own_body` closed,
+    just via a different door.
+
+    So require the two facts that make a decorator protective: the wrapper takes
+    the lock, and the decorated function is invoked INSIDE that lock. The
+    decorated function is identified by the decorator's own first parameter,
+    which is what `@_serialized`'s `fn` is.
     """
-    if _locks_in_own_body(fn):
-        return True
-    return any(_locks_in_own_body(n) for n in ast.walk(fn)
-               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n is not fn)
+    params = [a.arg for a in [*fn.args.posonlyargs, *fn.args.args]]
+    if not params:
+        return False
+    target = params[0]
+    for nested in ast.walk(fn):
+        if not isinstance(nested, (ast.FunctionDef, ast.AsyncFunctionDef)) or nested is fn:
+            continue
+        for node in _own_body(nested):
+            if not isinstance(node, (ast.With, ast.AsyncWith)):
+                continue
+            if not any(_called_name(i.context_expr.func) in _LOCK_CALLS
+                       for i in node.items if isinstance(i.context_expr, ast.Call)):
+                continue
+            # the target invoked within this `with` body
+            for inner in ast.walk(node):
+                if isinstance(inner, ast.Call) and _called_name(inner.func) == target:
+                    return True
+    return False
+
+
+def _locks_anywhere(fn: ast.AST) -> bool:
+    """Whether applying `fn` as a decorator serializes what it decorates."""
+    return _locks_in_own_body(fn) or _wraps_target_under_lock(fn)
 
 
 def _with_context_names(fn: ast.AST) -> set[str]:
@@ -312,6 +354,27 @@ def _own_calls(fn: ast.AST):
             yield node
 
 
+def _reaches_a_write(funcs: dict[str, ast.AST]) -> set[str]:
+    """Names that reach a write through module-local calls, ignoring locks.
+
+    Deliberately lock-blind, unlike `_mutators`: it answers "is there a write
+    down this path at all", which is what the delegation rule needs before
+    `_serializing` has decided anything. Computing it the other way round would
+    be circular.
+    """
+    out = {name for name, fn in funcs.items() if _writes_directly(fn)}
+    for _ in range(len(funcs) + 1):
+        grown = set(out)
+        for name, fn in funcs.items():
+            if name not in grown and any(_called_name(c.func) in grown
+                                         for c in _own_calls(fn)):
+                grown.add(name)
+        if grown == out:
+            break
+        out = grown
+    return out
+
+
 def _serializing(funcs: dict[str, ast.AST]) -> set[str]:
     """Names whose bodies establish the campaign lock.
 
@@ -321,10 +384,12 @@ def _serializing(funcs: dict[str, ast.AST]) -> set[str]:
     every ``scenes`` mutator does it (``@_serialized``).
 
     Delegation counts too -- ``scenes.create_scene`` does its work in the
-    ``@_serialized`` ``_create_scene`` -- but *only* for a function that does
-    not also publish something itself. A function that calls a locked helper and
-    writes on its own has an unserialized write, and treating that as covered is
-    the exact hole this guard exists to close.
+    ``@_serialized`` ``_create_scene`` -- but only when EVERY write the wrapper
+    reaches is covered. Two ways that fails: the wrapper publishes something
+    itself, or it calls a second, unlocked helper alongside the locked one.
+    Accepting "some callee is locked" let the latter through, and because
+    `_analyze` skips private helpers, the unlocked write then had nowhere left
+    to be reported -- a domain module could hold an unserialized write and pass.
     """
     # A decorator's acquisition is nested inside the wrapper it returns, so it is
     # the one case that must look through nested defs -- see `_locks_anywhere`.
@@ -332,6 +397,7 @@ def _serializing(funcs: dict[str, ast.AST]) -> set[str]:
     # Local helpers that hand back a campaign lock. Entering one of these IS an
     # acquisition, even though the helper itself never enters anything.
     aliases = {name for name, fn in funcs.items() if _produces_lock(fn)}
+    writing = _reaches_a_write(funcs)
     out = {name for name, fn in funcs.items() if _locks_in_own_body(fn)}
     for _ in range(len(funcs) + 1):
         grown = set(out)
@@ -342,9 +408,12 @@ def _serializing(funcs: dict[str, ast.AST]) -> set[str]:
                 grown.add(name)                       # @_serialized and friends
             elif _enters_lock(fn, aliases | grown):
                 grown.add(name)                       # with _lock(cid): ...
-            elif not _writes_directly(fn) and any(
-                    _called_name(c.func) in grown for c in _own_calls(fn)):
-                grown.add(name)                       # pure delegation
+            elif not _writes_directly(fn):
+                # Pure delegation: every local callee that reaches a write must
+                # itself be covered, and at least one must exist.
+                delegated = {_called_name(c.func) for c in _own_calls(fn)} & writing
+                if delegated and delegated <= grown:
+                    grown.add(name)
         if grown == out:
             break
         out = grown
@@ -564,7 +633,10 @@ def test_every_outside_entry_states_a_reason():
 def test_the_marker_is_not_a_rubber_stamp():
     marked = []
     for path in sorted(PACKAGE.rglob("*.py")):
-        if path.name == "locks.py":
+        if path == LOCKS_PY:            # same exact-path skip as `_survey`; by
+                                        # filename, a second `locks.py` anywhere
+                                        # in the package would be surveyed but
+                                        # have its markers left unaudited
             continue
         src = path.read_text(encoding="utf-8")
         funcs = _functions(ast.parse(src))
@@ -702,6 +774,88 @@ def test_this_repos_own_touch_function_is_not_a_filesystem_call():
     the bare name would have made every caller of it a direct writer."""
     _f, _s, mutators = _probe("def bump(cid):\n    campaigns.touch(cid)\n")
     assert not mutators, "campaigns.touch(cid) was read as a filesystem call"
+
+
+def test_a_decorator_must_actually_wrap_its_target_under_the_lock():
+    """Decorator recognition has to descend into nested defs, which is a second
+    door into the callback hole: a decorator carrying an unrelated locking
+    callback, that hands its target back unchanged, would launder every writer
+    it decorates."""
+    sham = ("def audited(fn):\n"
+            "    def _report(cid):\n"
+            "        with locks.campaign_lock(cid):\n"
+            "            log(cid)\n"
+            "    schedule(_report)\n"
+            "    return fn\n"           # target returned UNWRAPPED
+            "@audited\n"
+            "def append_message(cid, text):\n"
+            "    atomic.write_text(p, text)\n")
+    _f, serializing, _m = _probe(sham)
+    assert "append_message" not in serializing, \
+        "a decorator that never wraps its target under the lock laundered a write"
+
+    real = ("def _serialized(fn):\n"
+            "    def locked(cid, *a):\n"
+            "        with locks.campaign_lock(cid):\n"
+            "            return fn(cid, *a)\n"
+            "    return locked\n"
+            "@_serialized\n"
+            "def append_message(cid, text):\n"
+            "    atomic.write_text(p, text)\n")
+    _f, serializing, _m = _probe(real)
+    assert "append_message" in serializing, "the real _serialized shape regressed"
+
+
+def test_delegation_requires_every_mutating_path_to_be_covered():
+    """A wrapper that calls a locked helper AND an unlocked private one was
+    marked serialized because *some* callee was. `_analyze` skips private
+    helpers, so the unlocked write then had nowhere left to be reported."""
+    src = ("def _serialized(fn):\n"
+           "    def locked(cid, *a):\n"
+           "        with locks.campaign_lock(cid):\n"
+           "            return fn(cid, *a)\n"
+           "    return locked\n"
+           "@_serialized\n"
+           "def _safe(cid):\n"
+           "    atomic.write_text(p, x)\n"
+           "def _unsafe(cid):\n"
+           "    atomic.write_text(q, y)\n"
+           "def publish(cid):\n"
+           "    _safe(cid)\n"
+           "    _unsafe(cid)\n")
+    _f, serializing, mutators = _probe(src)
+    assert "publish" in mutators
+    assert "publish" not in serializing, \
+        "an unlocked helper alongside a locked one passed as delegation"
+
+
+def test_a_helper_that_only_mentions_the_lock_is_not_an_alias():
+    """`_produces_lock` keyed on the callee name alone would accept a helper
+    that returns a `nullcontext`, or one that locks a different id."""
+    sham = ("def _helper(cid):\n"
+            "    log(campaign_lock)\n"
+            "    return nullcontext()\n"
+            "def put(cid):\n"
+            "    with _helper(cid):\n"
+            "        atomic.write_text(p, x)\n")
+    _f, serializing, _m = _probe(sham)
+    assert "put" not in serializing, "a nullcontext helper passed as a lock alias"
+
+    wrong = ("def _helper(sid):\n"
+             "    return locks.campaign_lock(sid)\n"
+             "def put(cid, sid):\n"
+             "    with _helper(sid):\n"
+             "        atomic.write_text(p, x)\n")
+    _f, serializing, _m = _probe(wrong)
+    assert "put" not in serializing, "an alias keyed on another id passed"
+
+    real = ("def _lock(cid):\n"
+            "    return locks.campaign_lock(cid)\n"
+            "def put(cid):\n"
+            "    with _lock(cid):\n"
+            "        atomic.write_text(p, x)\n")
+    _f, serializing, _m = _probe(real)
+    assert "put" in serializing, "the real audit-shaped alias regressed"
 
 
 def test_a_lock_inside_a_callback_does_not_cover_the_enclosing_body():
