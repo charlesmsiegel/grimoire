@@ -86,8 +86,8 @@ largest file drops from 1297 lines to about 250.
 
 | File | Layer | Contents |
 |---|---|---|
-| `paths.py` | L1 | `CampaignNotFound`, `_campaigns_dir`, `campaign_root`, `campaign_meta_path`, `world_root_of`, `campaign_exists`, `_manifest_path`, `read_manifest`, `write_manifest` |
-| `read.py` | L1 | `read_campaign`, `list_campaigns`, `world_refs`, `touch` |
+| `paths.py` | L1 | `CampaignNotFound`, `_campaigns_dir`, `campaign_root`, `campaign_meta_path`, `campaign_exists`, `_manifest_path`, `read_manifest`, `write_manifest` |
+| `read.py` | L1 | `read_campaign`, `list_campaigns`, `world_refs`, `touch`, `world_root_of` |
 | `lifecycle.py` | L3 | `create_campaign`, `delete_campaign`, `rename_campaign`, `ensure_campaign_slim`, `_tombstone_deleted_copied_assets`, `_prune_duplicate_files`, `set_campaign_response` |
 
 `paths.py` is the highest-value extraction in the whole refactor: `audit`,
@@ -109,10 +109,10 @@ names.
 |---|---|---|
 | `paths.py` | L1 | `SceneNotFound`, `_scenes_dir`, `_scene_path`, `_require_campaign` |
 | `locking.py` | L1 | `_serialized` |
-| `serialize.py` | L1 | `_label`, `_markers`, `match_name`, `_speaker_and_role`, `_parse_messages`, `_serialize_messages`, `_block`, `_numbering`, `repad` |
+| `serialize.py` | L1 | `_label`, `_markers`, `match_name`, `_speaker_and_role`, `_parse_messages`, `_serialize_messages`, `_block`, `_append_block`, `_numbering`, `repad` |
 | `read.py` | L2 | `read_scene`, `read_scene_meta`, `list_scenes`, `is_pcless`, `get_dismissed`, `get_location_history`, `get_time_history`, `get_suggested_date`, `trailing_transitions` |
 | `turns.py` | L2 | `_parse_turn_sizes`, `get_turn_sizes`, `_set_turn_sizes`, `_reconciled_turn_sizes`, `_trailing_model_run`, `_tracked_suffix_fits`, `_model_blocks`, `TurnSizesDesynced` |
-| `write.py` | L2 | `append_message`, `_append_block`, `append_reply`, `split_reply`, `edit_message`, `remove_trailing_assistant_run`, `trim_continuation`, `mark_absorbed`, `stamp_greeting`, `stamp_user_speaker`, `add_dismissed`, `set_pcless`, `set_response`, `RollMessageImmutable` |
+| `write.py` | L2 | `append_message`, `append_reply`, `split_reply`, `edit_message`, `remove_trailing_assistant_run`, `trim_continuation`, `mark_absorbed`, `stamp_greeting`, `stamp_user_speaker`, `add_dismissed`, `set_pcless`, `set_response`, `RollMessageImmutable` |
 | `moment.py` | L2 | `set_location`, `set_datetime`, `_apply_datetime`, `_stamp_start_date` |
 | `lifecycle.py` | L3 | `create_scene`, `_create_scene`, `_date_hint`, `rename_scene`, `delete_scene` |
 
@@ -134,8 +134,8 @@ sites across files does not change locking behavior.
 
 | File | Layer | Contents |
 |---|---|---|
-| `paths.py` | L1 | `AppearError`, `_ref`, `_split`, `_path`, `locked_actor_root`, `record`, `_write`, `_lock` |
-| `versions.py` | L1 | `set_base`, `actor_hash`, `_version_ext`, `_meta_name`, `_copy_actor`, `_purge_other_versions`, `_set_default`, `_drop_manifest_ref`, `pick_version`, `import_version`, `locked_version` |
+| `paths.py` | L1 | `AppearError`, `_ref`, `_split`, `_path`, `locked_actor_root`, `record`, `_write` |
+| `versions.py` | L1 | `set_base`, `actor_hash`, `_version_ext`, `_meta_name`, `_copy_actor`, `_purge_other_versions`, `_set_default`, `_drop_manifest_ref`, `_lock`, `pick_version`, `import_version`, `locked_version` |
 | `cast.py` | L2 | `_actor_name`, `players_in_scene`, `player_names`, `scene_cast`, `cast_detail`, `roster`, `roster_names`, `is_appeared` |
 | `transitions.py` | L3 | `appear`, `leave`, `repoint_scenes`, `suggestions` |
 
@@ -144,9 +144,9 @@ sites across files does not change locking behavior.
 | File | Layer | Contents |
 |---|---|---|
 | `fields.py` | L1 | `assembled_fields`, `numeric_names`, `_pool_group_fields` |
-| `pack.py` | L2 | `ModuleError`, `ModuleNotFound`, `ContentNotFound`, `builtin_dir`, `user_dir`, `_safe_mid`, `pack_root`, `load_pack`, `load_pack_at`, `_scan`, `list_modules` |
+| `pack.py` | L2 | `ModuleError`, `ModuleNotFound`, `ContentNotFound`, `builtin_dir`, `user_dir`, `_safe_mid`, `pack_root`, `load_pack`, `load_pack_at`, `_scan`, `list_modules`, `_load_rules`, `_load_content` |
 | `validate.py` | L2 | `_validate_manifest`, `_validate_field`, `_validate_derived`, `_validate_creation`, `_validate_advancement`, `_validate_outcomes`, `_validate_checks`, `_validate_sheets`, `validate_sheet_values`, `_as_list`, `_as_dict` |
-| `content.py` | L2 | `_load_rules`, `_load_content`, `read_content`, `read_rule`, `_split_csv` |
+| `content.py` | L2 | `read_content`, `read_rule`, `_split_csv` |
 | `display.py` | L2 | all of today's `module_display.py` |
 | `binding.py` | L3 | `_write_key`, `set_world_module`, `set_campaign_module`, `resolve` |
 | `admin.py` | L3 | `create_module`, `delete_module` |
@@ -400,11 +400,15 @@ package is exactly the mistake that produced the phantom 63-file SCC.
 Ordered so the graph is strictly less cyclic after every step, and each step
 is independently testable.
 
-0. Fix three `os.stat` stubs in `backend/tests/test_atomic.py` (lines 150,
-   379, 402). They accept one positional argument, but Python 3.11.15's
+0. Repair four broken `stat` stubs. Three in `backend/tests/test_atomic.py`
+   (lines 150, 379, 402) accept one positional argument, but Python 3.11.15's
    `pathlib` calls `os.stat(path, follow_symlinks=...)`, so a `tmp_path`
    cleanup during teardown crashes pytest with an INTERNALERROR instead of
-   reporting results. Prerequisite for a trustworthy baseline.
+   reporting results. The fourth, in
+   `test_assets_store.py::test_lookup_survives_a_sibling_vanishing_mid_scan`,
+   raises for every path except `avatar.png` — including the directory
+   `image_path` stats first — so the scan it means to exercise never runs.
+   Both are prerequisites for a trustworthy baseline.
 1. Land the guard test with a **ratchet baseline** rather than an xfail:
    `backend/tests/import_guard_baseline.txt` lists the violations that exist
    at that moment, one per line. A violation absent from the baseline fails,
@@ -431,11 +435,17 @@ is independently testable.
 ## Verification
 
 - `backend/.venv/bin/python -m pytest backend -q` after every step.
-  Baseline on this container: **2712 passed, 2 failed** — both failures
-  (`test_atomic.py::test_a_read_only_record_is_not_silently_replaced`,
-  `test_assets_store.py::test_lookup_survives_a_sibling_vanishing_mid_scan`)
-  are artifacts of running as uid 0, where chmod-based read-only assertions
-  cannot hold. On a normal user account the suite is green.
+  Baseline on this container, after the step-0 test repairs: **2713 passed,
+  1 failed**. The single failure,
+  `test_atomic.py::test_a_read_only_record_is_not_silently_replaced`, is an
+  artifact of running as uid 0, where chmod 0444 does not stop a write. On a
+  normal user account the suite is green.
+
+  `test_assets_store.py::test_lookup_survives_a_sibling_vanishing_mid_scan`
+  was initially misfiled here as a second root artifact. It is not: its
+  `Path.stat` stub raises for every path but `avatar.png`, including the
+  directory `image_path` checks first, so the function returns `None` before
+  reaching the scan under test — on any uid. Step 0 repairs it.
 - `scripts/verify_templates.py` and `evals/run.py` if any template-adjacent
   code moves.
 - The guard test itself, unmarked, at the end.
