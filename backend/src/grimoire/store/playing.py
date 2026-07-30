@@ -6,9 +6,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import atomic, characters, context, greetings, overlay, pcs
+from . import atomic, characters, greetings, overlay, pcs
 from .appearances import cast as appearances_cast, transitions as appearances_transitions, versions as appearances_versions
 from .campaigns import paths as campaigns_paths
+from .context import macros as context_macros
 from .scenes import (lifecycle as scenes_lifecycle, read as scenes_read,
                      write as scenes_write)
 
@@ -130,8 +131,8 @@ def start_from_greeting(cid: str, sid: str, gid: str) -> str:
         scenes_write.set_pcless(cid, sid)  # before substitution: {{user}} needs the pcless fallback
     _mark_played(cid, gid)
     scenes_write.stamp_greeting(cid, sid, gid)
-    text = context.expand_macros(overlay.read_greeting(cid, gid)["body"],
-                                 context.scene_substitutions(cid, sid), cid, sid)
+    text = context_macros.expand_macros(overlay.read_greeting(cid, gid)["body"],
+                                        context_macros.scene_substitutions(cid, sid), cid, sid)
     # append_reply, not append_message: the greeting is authored rather than
     # generated, but it is the strongest length anchor the model has at the
     # start of a scene and it WILL be matched, so it records a turn like any
