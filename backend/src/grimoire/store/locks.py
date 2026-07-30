@@ -116,12 +116,17 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
 #: a decision someone made and can defend, not merely the status quo.
 OUTSIDE_DOMAIN: dict[str, str] = {
     "store.campaigns": (
-        "The campaign meta file is read-modify-written by `rename_campaign`, "
-        "`set_campaign_response` and `touch`, so concurrent edits can lose a "
-        "rename; `delete_campaign` rmtrees a tree other holders may be writing "
-        "under. Left outside pending #254's judgment on whether taking the "
-        "lock here can deadlock against `module_edit`, which holds every "
-        "campaign lock across a pack swap and calls into this module."
+        "Known gap, not a considered exclusion -- recorded here so it stops "
+        "being invisible. `rename_campaign`, `set_campaign_response` and "
+        "`touch` each read-modify-write the campaign meta file, so two "
+        "concurrent ones lose an edit (a rename dropped by a `touch` that "
+        "read the older frontmatter); `touch` runs from `appearances` on every "
+        "actor change, which is what makes the overlap reachable. "
+        "`delete_campaign` rmtrees a tree that a lock holder may be writing "
+        "under -- `module_edit._campaign_locks` already records 'campaign "
+        "deletion takes no lock at all' as a known limit of its all-campaign "
+        "hold. Fixing these is a concurrency change that needs its own review, "
+        "which is why this guard classifies them rather than closing them."
     ),
 }
 
