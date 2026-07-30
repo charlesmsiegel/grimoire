@@ -757,7 +757,9 @@ Highest-value task: ten modules import `campaigns` for nothing but path helpers.
 
 Follow the recipe above. Function placement is in the spec's `campaigns/` table. `lifecycle.py` is the only part that imports `worlds`, `campaign_climate`, `climates`, `modules`, `sheets`, `overlay`, `appearances`, `scenes`.
 
-`worlds` is still a flat module at this point, so `lifecycle.py` writes `from .. import worlds` and calls `worlds.world_exists(...)`. That is the legal module-object form.
+**Both `read.py` and `lifecycle.py` import `worlds`**, not just `lifecycle.py`. `world_root_of` lives in `read.py` and calls `worlds.world_root`, catching `worlds.WorldNotFound` — both of which land in `worlds/paths.py`. Missing this means Task 4 produces `campaigns.read → worlds.__init__ → worlds.lifecycle → campaigns.read`.
+
+`worlds` is still a flat module at this point, so both write `from .. import worlds` and call `worlds.world_exists(...)`. That is the legal module-object form, and Task 4 Step 2 retargets both files to `worlds.paths` once the package exists.
 
 - [ ] **Step 2: Hoist the six deferred imports in `lifecycle.py`**
 
@@ -830,13 +832,15 @@ and `delete_world` calls `campaigns_read.world_refs()`. Keep the existing commen
 
 Delete `from . import campaigns  # function-level: campaigns imports worlds at module level` from inside `delete_world` — the comment is now false and the import is at the top.
 
-In `campaigns/lifecycle.py`, change `from .. import worlds` to the submodule form now that `worlds` is a package:
+In **both** `campaigns/lifecycle.py` and `campaigns/read.py`, change `from .. import worlds` to the submodule form now that `worlds` is a package:
 
 ```python
 from ..worlds import paths as worlds_paths, read as worlds_read
 ```
 
-and update its call sites (`worlds.world_exists` → `worlds_paths.world_exists`, and so on).
+and update the call sites (`worlds.world_exists` → `worlds_paths.world_exists`, and so on). `read.py` needs only `paths` — `world_root` and `WorldNotFound` both live there.
+
+Leaving `read.py` on `from .. import worlds` is a guard-visible cycle: `campaigns.read → worlds` (the package) `→ worlds.lifecycle → campaigns.read`. Confirm with `backend/.venv/bin/python -m pytest backend/tests/test_import_guard.py -q` before moving on.
 
 - [ ] **Step 3: Delete this task's baseline line**
 
@@ -963,7 +967,7 @@ the name was only ever bound as a side effect of modules importing it."
   - `appearances/paths.py`: `AppearError`, `_ref`, `_split`, `_path`, `locked_actor_root(cid) -> Path`, `record(cid) -> dict`, `_write`, `repoint_scenes`
   - `appearances/versions.py`: `set_base`, `actor_hash`, `_copy_actor`, `_purge_other_versions`, `_set_default`, `_drop_manifest_ref`, `pick_version`, `import_version`, `locked_version`, `_lock` — **not** `paths.py`: `_lock` calls five version helpers, and those call `record`/`_ref`/`_write` back, so splitting them closes `paths ↔ versions`
   - `appearances/cast.py`: `_actor_name`, `players_in_scene(cid, sid) -> list[dict]`, `player_names(cid, sid) -> list[str]`, `scene_cast(cid, sid) -> list[dict]`, `cast_detail`, `roster`, `roster_names`, `is_appeared`
-  - `appearances/transitions.py`: `appear`, `leave`, `repoint_scenes`, `suggestions`
+  - `appearances/transitions.py`: `appear`, `leave`, `suggestions` — **not** `repoint_scenes`, which belongs to `paths.py` (see below)
 - Consumes: `campaigns/paths.py`, `overlay`.
 
 `cast.py` is the whole point: `player_names`, `scene_cast` and `players_in_scene` read only the appearances record and actor roots — they touch no scene state. Only `appear`/`leave`/`suggestions` do. That is what lets `scenes` import `cast` at module scope in Task 9.
@@ -1220,7 +1224,7 @@ For `:914` to bite, `packs.py` must call `migrate._campaign_locks(...)` through 
 deferred grimoire.store.module_edit::rename.mutate::grimoire.store.frontmatter
 ```
 
-`frontmatter` is an L0 leaf, so this import simply moves to the top of `rename.py`.
+`frontmatter` is an L0 leaf, so this import simply moves to the top of `renaming.py` — the file is `renaming.py`, not `rename.py`, because `module_edit.rename` is a public function that a same-named submodule would shadow.
 
 - [ ] **Step 4: Verify**
 
@@ -1366,20 +1370,29 @@ Work one module at a time and run the guard after each: a call site you missed i
 
 `calendars/base.py` is the one row that keeps a name-from-module import. `plugins` is a plain module, not a package, so `from .plugins import load_custom_providers` carries no partial-initialization hazard and both call sites stay as they are.
 
-| Module | Was deferred inside | Now imports at top |
-|---|---|---|
-| `chronicle.py` | `scene_facts`, `transcript_text` | `from .. import prompts`; `from .appearances import cast`; `from . import entities, overlay`; `from .scenes import read as scenes_read` |
-| `proposals.py` | `project`, `commit_narration` | `from . import checks, rolls`; `from .scenes import read as scenes_read, write as scenes_write` |
-| `response_presets.py` | `usage`, `resolve`, `validity` | `from . import config, styles`; `from .campaigns import read as campaigns_read`; `from .scenes import read as scenes_read` |
-| `export.py` | `_resolve_image`, `_avatar` | `from . import assets` |
-| `entity_schema.py` | `_valid_climate` | `from . import climates` |
-| `suggest.py` | `greeting_candidates` | `from . import playing` |
-| `weather/__init__.py` | `sweep` | `from ..scenes import read as scenes_read` |
-| `checks.py` | `available_checks` | `from .scenes import read as scenes_read` |
-| `calendars/base.py` | `get_provider`, `list_providers` | `from .plugins import load_custom_providers` |
-| `plot.py` | `render_open` | `from .. import prompts` |
-| `relationships.py` | `render_present` | `from .. import prompts` |
-| `epub.py` | `_env` | `from .. import prompts` |
+**Do not hand-write these imports. Generate them:**
+
+```bash
+python3 scripts/validate_partition.py --imports
+```
+
+That prints, for every consumer of a split package, the exact submodules to import and every name it needs, resolved through the spec's placement tables. A hand-written version of this table was materially short — it missed that `chronicle.transcript_text` reads `scenes.TRANSITION_SPEAKER` (in `scenes/serialize.py`, not `read.py`), that `proposals` needs `scenes.ROLL_SPEAKER` and `scenes.SceneNotFound` (`serialize.py` and `paths.py`), and that `response_presets.usage` catches `campaigns.CampaignNotFound` and `scenes.SceneNotFound` (both `paths.py`). Each omission is a `NameError` or `AttributeError` at runtime, not something the cycle guard would catch.
+
+The command exits non-zero if any referenced name has no home in the spec, so a clean run is also a completeness check.
+
+Sample of its output, to show the shape:
+
+```
+--- chronicle.py
+    from .campaigns import paths
+        campaigns.campaign_root -> paths
+    from .scenes import read, serialize
+        scenes.TRANSITION_SPEAKER -> serialize
+        scenes.get_location_history -> read
+        scenes.get_time_history -> read
+```
+
+Delete each in-function import and the comment explaining its deferral (those comments become false), and rewrite the call sites to the new bindings.
 
 `calendars/base.py` needs care: hoisting `from . import plugins` must **not** cause user plugins to load at import time. `plugins.load_custom_providers()` stays a call inside `get_provider`/`list_providers`. Only the module import moves. `plugins.py` imports nothing from `base`, so this closes no loop — user plugin files import `base` themselves, at call time, when `base` is fully initialized.
 
@@ -1480,6 +1493,7 @@ import moves, not load_custom_providers()."
 - Modify: `backend/src/grimoire/store/epub.py:32-33`
 - Modify: `backend/src/grimoire/store/context/tokens.py`
 - Modify: `backend/src/grimoire/claude_agent.py:35`
+- Modify: `backend/tests/test_claude_agent.py` (the `claude_agent` module import, `install_fake_sdk` at `:27`, and the missing-SDK test at `:82`)
 - Modify: `backend/tests/import_guard_baseline.txt`
 
 **Interfaces:**
@@ -1554,9 +1568,11 @@ Preserve that message verbatim — `test_claude_agent.py` asserts on it.
 
 Module-level names are read once at import, which breaks the existing harness. `install_fake_sdk` (`tests/test_claude_agent.py:27`) does `monkeypatch.setitem(sys.modules, "claude_agent_sdk", mod)` at line 47 — but `grimoire.claude_agent` was already imported at collection time, so its six globals still hold the real SDK's objects (or `None`) and the fake is never observed. Every test routed through `install_fake_sdk` (lines 56, 63, 90, 98, 107, 121) would stop testing what it claims.
 
-Patch the six module globals instead of the `sys.modules` entry:
+Patch the six module globals instead of the `sys.modules` entry. The test currently imports only `ClaudeAgentClient` and `ClaudeAgentError`, so the module object itself has to be imported first or every `install_fake_sdk` call dies with `NameError` before it reaches the client:
 
 ```python
+import grimoire.claude_agent as claude_agent
+...
     for _name in ("AssistantMessage", "ClaudeAgentOptions", "CLINotFoundError",
                   "ProcessError", "TextBlock", "query"):
         monkeypatch.setattr(claude_agent, _name, getattr(mod, _name))
