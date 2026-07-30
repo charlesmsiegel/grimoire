@@ -8,9 +8,10 @@ import shutil
 from pathlib import Path
 
 from .. import (appearances, assets, atomic, calendars, campaign_climate, characters, climates,
-                entities, greetings, locks, modules, overlay, pcs, scenes, sheets, worlds)
+                entities, greetings, locks, modules, overlay, pcs, scenes, sheets)
 from ..frontmatter import dump_frontmatter, parse_frontmatter
 from ..paths import ensure_home, now_iso, slugify, uniquify
+from ..worlds import paths as worlds_paths
 from . import paths, read
 
 
@@ -18,12 +19,12 @@ def create_campaign(name: str, world_id: str, region: str | None = None,
                      calendar: str | None = None, module: str | None = None,
                      climate: str | None = None) -> str:
     ensure_home()
-    if not worlds.world_exists(world_id):
-        raise worlds.WorldNotFound(world_id)
+    if not worlds_paths.world_exists(world_id):
+        raise worlds_paths.WorldNotFound(world_id)
     # `world_exists` resolves case-insensitively where the filesystem does, so
     # the caller's spelling may not be the one on disk. Store the canonical one
     # or the reference is invisible to a later string comparison (#259 review).
-    world_id = worlds.canonical_id(world_id)
+    world_id = worlds_paths.canonical_id(world_id)
     if calendar is not None:
         calendars.get_provider({"provider": calendar})  # unknown id -> CalendarError before anything is created
     wanted_climate = climate or climates.FALLBACK_ID
@@ -44,7 +45,7 @@ def create_campaign(name: str, world_id: str, region: str | None = None,
     # normalizes, so the round trip through the campaign copy returned this
     # same dict. A malformed holiday now also fails before the directory is
     # created rather than after, which is what the checks above already do.
-    cfg = calendars.read_calendar(worlds.world_root(world_id))
+    cfg = calendars.read_calendar(worlds_paths.world_root(world_id))
     if calendar is not None:
         cfg["primary"]["provider"] = calendar
         cfg["confirmed"] = True          # an explicit wizard choice
@@ -238,6 +239,6 @@ def delete_campaign(cid: str) -> None:
     root = paths.campaign_root(cid)
     # same canonical-name requirement as delete_world: an rmtree must not
     # run for a spelling the store does not actually use (#259 review)
-    if not paths.campaign_meta_path(cid).exists() or not worlds.names_its_directory(root):
+    if not paths.campaign_meta_path(cid).exists() or not worlds_paths.names_its_directory(root):
         raise paths.CampaignNotFound(cid)
     shutil.rmtree(root)

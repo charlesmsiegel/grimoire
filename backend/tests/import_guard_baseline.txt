@@ -47,4 +47,3 @@ deferred grimoire.store.scenes::edit_message::grimoire.store.appearances
 deferred grimoire.store.scenes::read_scene::grimoire.store.appearances
 deferred grimoire.store.suggest::greeting_candidates::grimoire.store.playing
 deferred grimoire.store.weather::sweep::grimoire.store.scenes
-deferred grimoire.store.worlds::delete_world::grimoire.store.campaigns
