@@ -10,7 +10,8 @@ wind.
 from __future__ import annotations
 
 from . import blocks, draw as _draw, overrides, seasons, settings
-from .. import calendars, campaigns
+from .. import calendars
+from ..campaigns import paths as campaigns_paths
 
 AXES = overrides.AXES
 
@@ -23,7 +24,7 @@ def _moment(cid: str, native: str):
     reaches `raw.get(...)` and raises AttributeError.
     """
     try:
-        cfg = calendars.read_calendar(campaigns.campaign_root(cid))
+        cfg = calendars.read_calendar(campaigns_paths.campaign_root(cid))
         provider = calendars.get_provider(cfg["primary"])
         return provider, calendars.fixed_of(provider, native), calendars.minutes_of(native)
     except (calendars.CalendarError, KeyError, TypeError, AttributeError, OSError):

@@ -9,8 +9,9 @@ from __future__ import annotations
 import json
 
 from .. import prompts
-from . import (appearances, campaigns, cards, changes, characters, dossiers, entities,
+from . import (appearances, cards, changes, characters, dossiers, entities,
                groupstate, overlay, pcs, playstate, plot, relationships, scenes, sheets)
+from .campaigns import paths as campaigns_paths
 from .paths import slugify
 
 
@@ -202,7 +203,7 @@ def _entity_kind(cid: str, eid: str) -> str | None:
 def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
     """Turn the parsed edit lists into before/after StagedEdits against the campaign
     copies. Targets that don't exist are dropped (tolerated, not an error)."""
-    croot = campaigns.campaign_root(cid)
+    croot = campaigns_paths.campaign_root(cid)
     out: list[dict] = []
 
     for e in parsed.get("character_state_edits", []):
@@ -542,7 +543,7 @@ def _apply_weather(cid: str, edit: dict, after: str) -> bool:
     if not native or axis not in weather_store.AXES or not location:
         return False
     try:
-        cfg = calendars.read_calendar(campaigns.campaign_root(cid))
+        cfg = calendars.read_calendar(campaigns_paths.campaign_root(cid))
         provider = calendars.get_provider(cfg["primary"])
         fixed = calendars.fixed_of(provider, native)
         minutes = calendars.minutes_of(native)
@@ -572,7 +573,7 @@ def apply_edits(cid: str, edits: list[dict],
     of each applied *browsable* edit (characters/lore/locations) is captured into
     changes.json (the latest write-back delta per record); sheet edits are never
     browsable and never land there -- the sheet itself is the record."""
-    croot = campaigns.campaign_root(cid)
+    croot = campaigns_paths.campaign_root(cid)
     applied: list[str] = []
     failures: list[dict] = []
     recorded: dict[str, list[dict]] = {}
@@ -749,7 +750,7 @@ def group_snapshot(cid: str) -> str:
     """Every campaign group with its current state — feeds the absorb prompt so
     the model uses real ids and rewrites from stored values, not from memory."""
     try:
-        croot = campaigns.campaign_root(cid)
+        croot = campaigns_paths.campaign_root(cid)
         lines = []
         for meta in overlay.list_entities(cid, "groups"):
             st = groupstate.read_state(croot, meta["id"])

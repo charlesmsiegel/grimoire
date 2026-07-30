@@ -6,7 +6,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import appearances, atomic, campaigns, characters, context, greetings, overlay, pcs, scenes
+from . import appearances, atomic, characters, context, greetings, overlay, pcs, scenes
+from .campaigns import paths as campaigns_paths
 
 
 class PlayError(Exception):
@@ -17,7 +18,7 @@ _MARK_KEYS = ("played", "completed", "skipped")
 
 
 def _marks_path(cid: str) -> Path:
-    return campaigns.campaign_root(cid) / "played.json"
+    return campaigns_paths.campaign_root(cid) / "played.json"
 
 
 def read_marks(cid: str) -> dict[str, set[str]]:

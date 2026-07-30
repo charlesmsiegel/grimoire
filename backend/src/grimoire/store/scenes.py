@@ -12,7 +12,8 @@ import functools
 import re
 from pathlib import Path
 
-from . import atomic, calendars, campaigns, locks, overlay, scene_ids, scene_refs
+from . import atomic, calendars, locks, overlay, scene_ids, scene_refs
+from .campaigns import paths as campaigns_paths
 from .frontmatter import dump_frontmatter, parse_frontmatter, parse_frontmatter_head
 from .llm_connections import get_active as _get_active_connection
 from .paths import now_iso, safe_id, slugify, uniquify
@@ -95,7 +96,7 @@ class SceneNotFound(Exception):
 
 
 def _scenes_dir(cid: str) -> Path:
-    return campaigns.campaign_root(cid) / "scenes"
+    return campaigns_paths.campaign_root(cid) / "scenes"
 
 
 def _scene_path(cid: str, sid: str) -> Path:
@@ -103,8 +104,8 @@ def _scene_path(cid: str, sid: str) -> Path:
 
 
 def _require_campaign(cid: str) -> None:
-    if not campaigns.campaign_exists(cid):
-        raise campaigns.CampaignNotFound(cid)
+    if not campaigns_paths.campaign_exists(cid):
+        raise campaigns_paths.CampaignNotFound(cid)
 
 
 def _serialized(fn):
@@ -205,7 +206,7 @@ def _date_hint(cid: str, suggested_date: str | None) -> str:
         return ""
     try:
         provider = calendars.get_provider(
-            calendars.read_calendar(campaigns.campaign_root(cid))["primary"])
+            calendars.read_calendar(campaigns_paths.campaign_root(cid))["primary"])
         return calendars.normalize(provider, suggested_date)
     except (calendars.CalendarError, KeyError):
         return ""
@@ -843,7 +844,7 @@ def set_datetime(cid: str, sid: str, native: str) -> dict:
         raise SceneNotFound(sid)     # cheap pre-check; re-checked under the lock
     # Resolve the calendar BEFORE taking the lock — user-authored provider code
     # must not run under it (see _date_hint). Nothing here touches the scene.
-    cfg = calendars.read_calendar(campaigns.campaign_root(cid))
+    cfg = calendars.read_calendar(campaigns_paths.campaign_root(cid))
     provider = calendars.get_provider(cfg["primary"])
     canonical = calendars.normalize(provider, native)  # raises calendars.CalendarError
     return _apply_datetime(cid, sid, canonical, calendars.friendly(provider, canonical))

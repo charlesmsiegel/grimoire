@@ -28,7 +28,8 @@ import zipfile
 from contextlib import contextmanager
 from pathlib import Path
 
-from . import atomic, campaigns, locks, modules, proposals, sheets, worlds
+from . import atomic, locks, modules, proposals, sheets, worlds
+from .campaigns import paths as campaigns_paths, read as campaigns_read
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import home, safe_id, slugify, uniquify
 
@@ -329,11 +330,11 @@ def _sheet_files(mid: str):
         if d.is_dir():
             for p in sorted(d.glob("*.json")):
                 yield p, None
-    for c in campaigns.list_campaigns():
+    for c in campaigns_read.list_campaigns():
         cid = c["id"]
         if modules.resolve(cid) != mid:
             continue
-        d = campaigns.campaign_root(cid) / "sheets"
+        d = campaigns_paths.campaign_root(cid) / "sheets"
         if d.is_dir():
             for p in sorted(d.glob("*.json")):
                 yield p, cid
@@ -522,7 +523,7 @@ def _campaign_locks():
     another process creates afterwards is not covered, and campaign deletion
     takes no lock at all.
     """
-    with locks.hold_all(c["id"] for c in campaigns.list_campaigns()):
+    with locks.hold_all(c["id"] for c in campaigns_read.list_campaigns()):
         yield
 
 
@@ -877,7 +878,7 @@ def check_proposal_guard(mid: str, check_id: str):
     a non-terminal proposal referencing the check (spec: check rename row)."""
     def guard(_pack: dict) -> list[str]:
         blockers: list[str] = []
-        for c in campaigns.list_campaigns():
+        for c in campaigns_read.list_campaigns():
             cid = c["id"]
             if modules.resolve(cid) != mid:
                 continue

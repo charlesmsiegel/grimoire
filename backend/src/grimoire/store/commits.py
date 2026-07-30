@@ -24,7 +24,8 @@ import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 
-from . import atomic, campaigns
+from . import atomic
+from .campaigns import paths as campaigns_paths
 from .paths import now_iso
 
 #: How long a completed entry stays retryable. Deliberately time, not count: a
@@ -37,7 +38,7 @@ RETAIN_DAYS = 30
 
 
 def _path(cid: str):
-    return campaigns.campaign_root(cid) / "commits.json"
+    return campaigns_paths.campaign_root(cid) / "commits.json"
 
 
 def _read(cid: str) -> dict:

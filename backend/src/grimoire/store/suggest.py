@@ -10,8 +10,9 @@ from __future__ import annotations
 import json
 
 from .. import prompts
-from . import (appearances, calendars, campaigns, characters, chronicle,
+from . import (appearances, calendars, characters, chronicle,
                greetings, overlay, pcs, plot)
+from .campaigns import paths as campaigns_paths
 
 
 def _char_name(aroot, aid: str) -> str:
@@ -25,7 +26,7 @@ def _char_name(aroot, aid: str) -> str:
 def _birthdays(cid: str, now: str, roster: list[dict]) -> list[dict]:
     if not now:
         return []
-    croot = campaigns.campaign_root(cid)          # calendar.json is campaign-local
+    croot = campaigns_paths.campaign_root(cid)    # calendar.json is campaign-local
     aroot = appearances.locked_actor_root(cid)    # roster actors are locked, so campaign-side
     try:
         cfg = calendars.read_calendar(croot)
@@ -66,7 +67,7 @@ def _tok(ref: str) -> str:
 
 
 def build_snapshot(cid: str, offscreen: bool = False) -> dict:
-    croot = campaigns.campaign_root(cid)          # calendar.json is campaign-local
+    croot = campaigns_paths.campaign_root(cid)    # calendar.json is campaign-local
     aroot = appearances.locked_actor_root(cid)    # roster actors are locked, so campaign-side
     roster = appearances.roster(cid)
 
@@ -189,7 +190,7 @@ def _date_normalizer(cid: str):
     """Canonical native date or "" — a suggested date is only a hint, so never raise."""
     try:
         provider = calendars.get_provider(
-            calendars.read_calendar(campaigns.campaign_root(cid))["primary"])
+            calendars.read_calendar(campaigns_paths.campaign_root(cid))["primary"])
     except (calendars.CalendarError, KeyError):
         return lambda _s: ""
 
