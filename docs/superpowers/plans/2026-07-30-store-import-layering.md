@@ -16,6 +16,7 @@
 - **Public API is frozen.** `store/__init__.py` keeps its current `from . import (...)` list, its `from .x import Y` lines, and its `__all__`. All 338 `from grimoire.store import x` call sites stay untouched.
 - **Import form inside `store/`:** cross-package imports bind a *submodule* and keep it as a module object — `from ..campaigns import read` then `read.world_refs()`. Never `from ..campaigns import world_refs`. `from .. import campaigns` is legal.
 - **All imports at module scope.** No import inside a function body, grimoire or third-party.
+- **Hoisting preserves the import's *form*.** If a function body says `from jinja2 import Environment, ...`, the hoisted line is the same `from`-import — not `import jinja2`, which leaves every name unbound and turns the first call into a `NameError`. Check what the body actually references before moving the line: `tiktoken` is used as a module (`tiktoken.get_encoding`), while `jinja2` and `claude_agent_sdk` are used only through names pulled out of them.
 - **Android:** `pyproject.toml` base deps must stay Android-installable; no `model_dump()`, `Field`, validators, or `ConfigDict`. Filesystem access goes through `store.paths`. This refactor adds no dependencies, so it only has to avoid regressing these.
 - **Privacy:** never use a real world/campaign/character name in a test fixture, commit message, or doc. Reuse existing placeholders (Seraphine, Mara, Winifred, Realm, Saltmarch).
 - **Test command:** `backend/.venv/bin/python -m pytest backend -q` (on Windows, `backend/.venv/Scripts/python.exe`).
@@ -1018,15 +1019,9 @@ The largest split, and the one that closes the last cycle.
 
 `lifecycle.py` imports `from ..audit import baselines` and calls `baselines.capture_baseline(...)`; the in-function import in `_create_scene` goes away.
 
-- [ ] **Step 2: Retarget the monkeypatches**
+- [ ] **Step 2: Retarget only the helper; leave the facade patch alone**
 
-`test_locks_store.py:865` patches `scenes.append_message`:
-
-```python
-from grimoire.store.scenes import write as scenes_write
-...
-    monkeypatch.setattr(scenes_write, "append_message", spy_msg)
-```
+`test_locks_store.py:865` patches `scenes.append_message` and must stay exactly as it is — the test drives an HTTP route, and `routes/mechanics.py:40`,`:202` call `store.scenes.append_message(...)`, a call-time lookup on the package. Retargeting it to `scenes.write` would intercept neither route call, so `depths` would record only the roll write and the assertion at `test_locks_store.py:869` would fail. This is what the caller-based table above specifies; an earlier draft of this task contradicted it.
 
 `test_scene_store.py:996` is inside the `_slow_frontmatter` helper, which wraps `parse_frontmatter` in a `time.sleep` to widen the lost-update race window — without it the concurrency tests for #254 are coin flips that pass on broken code. It patches a name `scenes.py` imported from `frontmatter`, and after the split every scenes submodule holds its own binding, so patching one is not enough. Patch every submodule that imports it:
 
@@ -1250,6 +1245,12 @@ It must come **after** Task 9. Hoisting `chronicle → scenes` today would close
 
 For each function-body import below, move it to the module top in the required form and delete the in-function line plus any comment explaining the deferral (those comments become false).
 
+**These are not verbatim moves, and the call sites change with them.** Today's lines are mostly `from . import appearances, entities, overlay, scenes` — module-object form, which rule 3 permits. But after Tasks 3-9 those names are *packages*, so moving a line unchanged creates a package-level edge and closes real cycles: `chronicle → appearances → transitions → scenes → scene_refs → chronicle`, for one. Targeting the submodule avoids it, at the cost of rewriting each call site to the new binding — `appearances.scene_cast(...)` becomes `cast.scene_cast(...)`, `scenes.get_location_history(...)` becomes `scenes_read.get_location_history(...)`, and so on.
+
+Work one module at a time and run the guard after each: a call site you missed is an `AttributeError` in that module's own tests, and a binding you pointed at a package instead of a submodule is a reported cycle.
+
+`calendars/base.py` is the one row that keeps a name-from-module import. `plugins` is a plain module, not a package, so `from .plugins import load_custom_providers` carries no partial-initialization hazard and both call sites stay as they are.
+
 | Module | Was deferred inside | Now imports at top |
 |---|---|---|
 | `chronicle.py` | `scene_facts`, `transcript_text` | `from .. import prompts`; `from .appearances import cast`; `from . import entities, overlay`; `from .scenes import read as scenes_read` |
@@ -1260,7 +1261,7 @@ For each function-body import below, move it to the module top in the required f
 | `suggest.py` | `greeting_candidates` | `from . import playing` |
 | `weather/__init__.py` | `sweep` | `from ..scenes import read as scenes_read` |
 | `checks.py` | `available_checks` | `from .scenes import read as scenes_read` |
-| `calendars/base.py` | `get_provider`, `list_providers` | `from . import plugins` |
+| `calendars/base.py` | `get_provider`, `list_providers` | `from .plugins import load_custom_providers` |
 | `plot.py` | `render_open` | `from .. import prompts` |
 | `relationships.py` | `render_present` | `from .. import prompts` |
 | `epub.py` | `_env` | `from .. import prompts` |
@@ -1360,15 +1361,19 @@ import moves, not load_custom_providers()."
 
 `jinja2` is a base dependency, so it hoists plainly. `tiktoken` and `claude_agent_sdk` are optional extras (`desktop` and `claude`) and are absent on Android, so they need a module-level sentinel.
 
-- [ ] **Step 1: Hoist `jinja2` in both places**
+- [ ] **Step 1: Hoist `jinja2` as the three names it is actually used by**
 
-In `backend/src/grimoire/prompts.py`, move the import to the top and simplify `_env()`:
+Neither call site uses `jinja2` as a module. `prompts.py:30` and `epub.py:32` both do `from jinja2 import Environment, FileSystemLoader, StrictUndefined` and then call those names bare, so a bare `import jinja2` would leave all three unbound and `Environment(...)` would raise `NameError`. Hoist the `from`-import unchanged:
 
 ```python
-import jinja2
+from jinja2 import Environment, FileSystemLoader, StrictUndefined
 ```
 
-Do the same in `backend/src/grimoire/store/epub.py`. Keep `_env()`'s caching behavior exactly as it is; only the import moves.
+No sentinel — `jinja2` is a base dependency, so an `ImportError` here is a broken install and should surface.
+
+`epub.py:33` additionally defers `from ..prompts import templates_dir`; that one is covered by the Task 13 sweep and should already be at module scope. If it is not, hoist it here.
+
+Keep `_env()`'s `functools.lru_cache` behavior exactly as it is; only the imports move.
 
 - [ ] **Step 2: Give `tiktoken` a sentinel**
 
@@ -1383,33 +1388,51 @@ except ImportError:      # optional `desktop` extra; absent on Android
 
 `_encoder()` returns `None` when `tiktoken is None`, and `count_tokens` takes its existing heuristic path. Do not change the heuristic.
 
-- [ ] **Step 3: Give `claude_agent_sdk` a sentinel**
+- [ ] **Step 3: Hoist the six SDK names, not the module**
 
-At the top of `backend/src/grimoire/claude_agent.py`:
+`stream()` does not use `claude_agent_sdk` as a module — it pulls six names out of it (`claude_agent.py:35-36`): `AssistantMessage`, `ClaudeAgentOptions`, `CLINotFoundError`, `ProcessError`, `TextBlock`, `query`. A bare `import claude_agent_sdk` would leave every one of them unbound, and the installed-SDK path would raise `NameError` at `ClaudeAgentOptions(...)` before it ever reached `query`.
+
+Hoist the `from`-import itself, with the sentinel applied to each name:
 
 ```python
 try:
-    import claude_agent_sdk
-except ImportError:      # optional `claude` extra
-    claude_agent_sdk = None
+    from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions,
+                                  CLINotFoundError, ProcessError, TextBlock, query)
+except ImportError:      # optional `claude` extra; absent on Android
+    AssistantMessage = ClaudeAgentOptions = TextBlock = query = None
+    # Empty tuples, not None: these are used as `except` targets, and
+    # `except None` raises TypeError while `except ()` simply never matches.
+    CLINotFoundError = ProcessError = ()
 ```
 
-`stream()` raises the same error it raises today when the SDK is missing — read the existing `except ImportError` path and preserve its message exactly.
+`stream()` then opens by checking the sentinel, raising exactly the error the removed `except ImportError` raised:
+
+```python
+        if query is None:
+            raise ClaudeAgentError(
+                "missing_dependency",
+                "claude-agent-sdk is not installed — pip install \'grimoire[claude]\'",
+            )
+```
+
+Preserve that message verbatim — `test_claude_agent.py` asserts on it.
 
 - [ ] **Step 3b: Rework how `test_claude_agent.py` installs its fake**
 
-A module-level import caches the SDK in a global, which breaks the existing test harness. `install_fake_sdk` (`tests/test_claude_agent.py:27`) does `monkeypatch.setitem(sys.modules, "claude_agent_sdk", mod)` at line 47 — but `grimoire.claude_agent` was already imported at collection time, so its global still holds `None` or the real SDK and the fake is never observed. Every test routed through `install_fake_sdk` (lines 56, 63, 90, 98, 107, 121) would stop testing what it claims.
+Module-level names are read once at import, which breaks the existing harness. `install_fake_sdk` (`tests/test_claude_agent.py:27`) does `monkeypatch.setitem(sys.modules, "claude_agent_sdk", mod)` at line 47 — but `grimoire.claude_agent` was already imported at collection time, so its six globals still hold the real SDK's objects (or `None`) and the fake is never observed. Every test routed through `install_fake_sdk` (lines 56, 63, 90, 98, 107, 121) would stop testing what it claims.
 
-Patch the module global instead of the `sys.modules` entry:
+Patch the six module globals instead of the `sys.modules` entry:
 
 ```python
-    monkeypatch.setattr(claude_agent, "claude_agent_sdk", mod)
+    for _name in ("AssistantMessage", "ClaudeAgentOptions", "CLINotFoundError",
+                  "ProcessError", "TextBlock", "query"):
+        monkeypatch.setattr(claude_agent, _name, getattr(mod, _name))
 ```
 
-And the missing-SDK test at line 82, which currently sets `sys.modules["claude_agent_sdk"] = None` to force an `ImportError`, becomes:
+And the missing-SDK test at line 82, which sets `sys.modules["claude_agent_sdk"] = None` to force an `ImportError`, becomes a sentinel patch:
 
 ```python
-    monkeypatch.setattr(claude_agent, "claude_agent_sdk", None)
+    monkeypatch.setattr(claude_agent, "query", None)
 ```
 
 - [ ] **Step 3c: Prove the fake is actually observed**

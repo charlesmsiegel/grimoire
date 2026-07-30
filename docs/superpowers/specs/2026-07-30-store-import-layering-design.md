@@ -144,9 +144,9 @@ sites across files does not change locking behavior.
 | File | Layer | Contents |
 |---|---|---|
 | `fields.py` | L1 | `assembled_fields`, `numeric_names`, `_pool_group_fields` |
-| `pack.py` | L2 | `ModuleError`, `ModuleNotFound`, `ContentNotFound`, `builtin_dir`, `user_dir`, `_safe_mid`, `pack_root`, `load_pack`, `load_pack_at`, `_scan`, `list_modules`, `_load_rules`, `_load_content` |
+| `pack.py` | L2 | `ModuleError`, `ModuleNotFound`, `ContentNotFound`, `builtin_dir`, `user_dir`, `_safe_mid`, `pack_root`, `load_pack`, `load_pack_at`, `_scan`, `list_modules`, `_load_rules`, `_load_content`, `_split_csv` |
 | `validate.py` | L2 | `_validate_manifest`, `_validate_field`, `_validate_derived`, `_validate_creation`, `_validate_advancement`, `_validate_outcomes`, `_validate_checks`, `_validate_sheets`, `validate_sheet_values`, `_as_list`, `_as_dict` |
-| `content.py` | L2 | `read_content`, `read_rule`, `_split_csv` |
+| `content.py` | L2 | `read_content`, `read_rule` |
 | `display.py` | L2 | all of today's `module_display.py` |
 | `binding.py` | L3 | `_write_key`, `set_world_module`, `set_campaign_module`, `resolve` |
 | `admin.py` | L3 | `create_module`, `delete_module` |
@@ -226,12 +226,13 @@ The atlas names five concerns in this file; the split separates them plus
 
 | File | Contents |
 |---|---|
+| `packfile.py` | `_read_json`, `_write_json`, `_read_sheets` — the shared pack-file accessors |
 | `staging.py` | `locked`, `_staging_root`, `new_mid`, `_publish` |
 | `packs.py` | `duplicate_module`, `create_module`, `delete_module`, `export_module`, `import_module`, `_member_parts`, `_check_archive` |
 | `migrate.py` | `_sheet_files`, `_migrate_file`, `_would_migrate`, `_migrate_preview`, `_file_kind`, `_iter_ref_values`, `_content_ids`, `_sidecar_stats_at`, `_impact`, `_run_migration`, `_campaign_locks`, `_result`, `_sample`, `_apply`, `recover`, `_replay_journal`, `_require_user_root` |
 | `layout.py` | `_edit_tree`, `_specialize_layout`, `_prune_node`, `_prune_layout`, `_layout_name_edit` |
 | `renaming.py` | `_RenameCollision`, `rename`, `_field_keys`, `_group_scope`, `_rewrite_expr`, `_rewrite_exprs`, `_rewrite_placeholders`, `_rename_map_key`, `_composing_tids`, `_fragment_users` |
-| `edits.py` | `set_manifest`, `_read_json`, `_write_json`, `_read_sheets`, `check_proposal_guard`, `upsert_group`, `delete_group`, `upsert_sheet_type`, `delete_sheet_type`, `upsert_check`, `delete_check`, `set_check_defaults`, `_rule_meta`, `upsert_rule`, `delete_rule`, `upsert_content`, `delete_content`, `set_layout`, `set_theme` |
+| `edits.py` | `set_manifest`, `check_proposal_guard`, `upsert_group`, `delete_group`, `upsert_sheet_type`, `delete_sheet_type`, `upsert_check`, `delete_check`, `set_check_defaults`, `_rule_meta`, `upsert_rule`, `delete_rule`, `upsert_content`, `delete_content`, `set_layout`, `set_theme` |
 
 ### `absorb/`
 
