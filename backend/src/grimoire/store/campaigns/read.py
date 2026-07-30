@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .. import atomic, worlds
+from .. import atomic
 from ..frontmatter import dump_frontmatter, parse_frontmatter
+from ..worlds import paths as worlds_paths
 from ..paths import ensure_home, now_iso, safe_id
 from . import paths
 
@@ -38,8 +39,8 @@ def world_root_of(cid: str) -> Path:
     """
     wid = read_campaign(cid)["meta"].get("world", "")
     try:
-        return worlds.world_root(wid)
-    except worlds.WorldNotFound:
+        return worlds_paths.world_root(wid)
+    except worlds_paths.WorldNotFound:
         return paths.campaign_meta_path(cid) / _NO_WORLD
 
 
