@@ -1,0 +1,137 @@
+# The CI gate. Every job runs one `make check-*` target, so a failure here
+# reproduces locally with the same one-line command and CLAUDE.md does not
+# become a second, drifting copy of the invocations.
+#
+# Actions are pinned to commit SHAs, not tags: `@v4` is mutable, so a tag-pinned
+# workflow can change behaviour without a commit. The runner label is NOT such a
+# guarantee -- ubuntu-24.04 is a continuously updated image, so a toolchain
+# change inside it can still turn a green commit red. That exposure is accepted.
+#
+# PY=python on every job: the targets default to the backend/.venv interpreter
+# CLAUDE.md documents, which does not exist on a runner.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: backend (py${{ matrix.python }})
+    runs-on: ubuntu-24.04
+    strategy:
+      # Without this a 3.11 failure would hide a 3.14 one, and 3.11 has never
+      # been exercised at all -- it is only a floor pyproject.toml declares.
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.14"]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -e "./backend[dev]"
+      - run: pip check
+      - run: make check-py PY=python
+
+  frontend:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      # npm ci, never npm install: install rewrites resolution and would defeat
+      # the committed lockfile. The target does this.
+      - run: make check-web
+
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+      # No project install: ruff parses, it does not import. Pin matches the
+      # `dev` extra in backend/pyproject.toml -- an unpinned linter turns a
+      # green commit red on someone else's release schedule.
+      - run: pip install "ruff==0.16.0"
+      - run: make check-lint PY=python
+
+  templates:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+      # This one does import grimoire, unlike lint.
+      - run: pip install -e "./backend[dev]"
+      - run: make check-templates PY=python
+
+  pydantic1:
+    name: pydantic 1.10 (the Android dependency set)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          # Matches the runtime Chaquopy packages (build.gradle.kts).
+          python-version: "3.11"
+      # The target builds its own venv, asserts the resolved pydantic version
+      # before pytest, and runs pip check -- so this cannot pass on pydantic 2.
+      - run: make check-pydantic1 PY=python
+
+  apk:
+    name: android debug apk
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9  # v4
+        with:
+          distribution: temurin
+          java-version: "17"          # sourceCompatibility and jvmTarget are both 17
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        id: buildpy
+        with:
+          # Chaquopy 15's build-machine Python is distinct from the 3.11 runtime
+          # it packages, and the plugin supports at most 3.12. Set up explicitly
+          # rather than trusting whatever the runner image exposes.
+          python-version: "3.12"
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407  # v3
+        with:
+          packages: "platforms;android-34 build-tools;34.0.0"
+      # No NDK is installed, and none is needed: ndkVersion is unset, the only
+      # ndk {} block is abiFilters (which selects prebuilt ABIs and compiles
+      # nothing), there is no externalNativeBuild, Chaquopy consumes prebuilt
+      # wheels, and `make android-bootstrap` installs no NDK yet `make apk`
+      # succeeds locally. If this job proves otherwise, pin an explicit
+      # ndkVersion and install that exact package -- do not rely on whatever the
+      # image happens to carry.
+      #
+      # check-apk builds frontend/dist first (the assets pipeline stages it into
+      # the APK) and then reuses the `apk` target, which copies the output to
+      # build/grimoire-debug.apk.
+      - run: make check-apk BUILD_PYTHON="${{ steps.buildpy.outputs.python-path }}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: grimoire-debug-apk
+          path: build/grimoire-debug.apk
+          # Without this a build that produced no APK would upload nothing, warn,
+          # and leave the job green -- a vacuous check of exactly the kind this
+          # whole workflow exists to prevent.
+          if-no-files-found: error
