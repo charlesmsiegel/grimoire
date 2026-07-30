@@ -378,8 +378,9 @@ async def _run_audit(cid: str, sid: str, client: LLMClient, conn: dict,
         return [], {**mech, "status": "failed", "reason": str(exc),
                     "dropped": excluded}
     except Exception as exc:  # noqa: BLE001 -- LLMError, store errors, anything
-        # A budget overrun *here* was cancelled mid-flight, so the request did
-        # reach the model -- `attempted` stays true, unlike the pre-check above.
+        # A budget overrun reaching *this* handler was cancelled mid-flight, so
+        # the request did go out and `mech["attempted"]` stays true -- the never
+        # -sent case is `BudgetRefused`, caught above.
         return [], {**mech, "status": "failed", "reason": f"audit failed: {exc}",
                     "dropped": excluded, "budget_exhausted": _budget_overrun(exc)}
     dropped = excluded + dropped
