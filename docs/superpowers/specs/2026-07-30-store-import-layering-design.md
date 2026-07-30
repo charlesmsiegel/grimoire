@@ -87,7 +87,7 @@ largest file drops from 1297 lines to about 250.
 | File | Layer | Contents |
 |---|---|---|
 | `paths.py` | L1 | `CampaignNotFound`, `_campaigns_dir`, `campaign_root`, `campaign_meta_path`, `campaign_exists`, `_manifest_path`, `read_manifest`, `write_manifest` |
-| `read.py` | L1 | `read_campaign`, `list_campaigns`, `world_refs`, `touch`, `world_root_of` |
+| `read.py` | L1 | `read_campaign`, `list_campaigns`, `world_refs`, `touch`, `world_root_of`, `_NO_WORLD` |
 | `lifecycle.py` | L3 | `create_campaign`, `delete_campaign`, `rename_campaign`, `ensure_campaign_slim`, `_tombstone_deleted_copied_assets`, `_prune_duplicate_files`, `set_campaign_response` |
 
 `paths.py` is the highest-value extraction in the whole refactor: `audit`,
@@ -109,10 +109,10 @@ names.
 |---|---|---|
 | `paths.py` | L1 | `SceneNotFound`, `_scenes_dir`, `_scene_path`, `_require_campaign` |
 | `locking.py` | L1 | `_serialized` |
-| `serialize.py` | L1 | `_label`, `_markers`, `match_name`, `_speaker_and_role`, `_parse_messages`, `_serialize_messages`, `_block`, `_append_block`, `_numbering`, `repad` |
+| `serialize.py` | L1 | `_label`, `_markers`, `match_name`, `_speaker_and_role`, `_parse_messages`, `_serialize_messages`, `_block`, `_append_block`, `_numbering`, `repad`, `RESERVED_LABELS`, `ROLE_TO_LABEL`, `_MARKER`, `_SAFE_LABEL`, `ROLL_SPEAKER`, `TRANSITION_SPEAKER`, `SYNTHETIC_SPEAKERS` |
 | `read.py` | L2 | `read_scene`, `read_scene_meta`, `list_scenes`, `is_pcless`, `get_dismissed`, `get_location_history`, `get_time_history`, `get_suggested_date`, `trailing_transitions` |
 | `turns.py` | L2 | `_parse_turn_sizes`, `get_turn_sizes`, `_set_turn_sizes`, `_reconciled_turn_sizes`, `_trailing_model_run`, `_tracked_suffix_fits`, `_model_blocks`, `TurnSizesDesynced` |
-| `write.py` | L2 | `append_message`, `append_reply`, `split_reply`, `edit_message`, `remove_trailing_assistant_run`, `trim_continuation`, `mark_absorbed`, `stamp_greeting`, `stamp_user_speaker`, `add_dismissed`, `set_pcless`, `set_response`, `RollMessageImmutable` |
+| `write.py` | L2 | `append_message`, `append_reply`, `split_reply`, `edit_message`, `remove_trailing_assistant_run`, `trim_continuation`, `mark_absorbed`, `stamp_greeting`, `stamp_user_speaker`, `add_dismissed`, `set_pcless`, `set_response`, `RollMessageImmutable`, `RESPONSE_FIELDS` |
 | `moment.py` | L2 | `set_location`, `set_datetime`, `_apply_datetime`, `_stamp_start_date` |
 | `lifecycle.py` | L3 | `create_scene`, `_create_scene`, `_date_hint`, `rename_scene`, `delete_scene` |
 
@@ -134,7 +134,7 @@ sites across files does not change locking behavior.
 
 | File | Layer | Contents |
 |---|---|---|
-| `paths.py` | L1 | `AppearError`, `_ref`, `_split`, `_path`, `locked_actor_root`, `record`, `_write`, `repoint_scenes` |
+| `paths.py` | L1 | `AppearError`, `_ref`, `_split`, `_path`, `locked_actor_root`, `record`, `_write`, `repoint_scenes`, `ACTOR_KINDS` |
 | `versions.py` | L1 | `set_base`, `actor_hash`, `_version_ext`, `_meta_name`, `_copy_actor`, `_purge_other_versions`, `_set_default`, `_drop_manifest_ref`, `_lock`, `pick_version`, `import_version`, `locked_version` |
 | `cast.py` | L2 | `_actor_name`, `players_in_scene`, `player_names`, `scene_cast`, `cast_detail`, `roster`, `roster_names`, `is_appeared` |
 | `transitions.py` | L3 | `appear`, `leave`, `suggestions` |
@@ -143,11 +143,11 @@ sites across files does not change locking behavior.
 
 | File | Layer | Contents |
 |---|---|---|
-| `fields.py` | L1 | `assembled_fields`, `numeric_names`, `_pool_group_fields` |
-| `pack.py` | L2 | `ModuleError`, `ModuleNotFound`, `ContentNotFound`, `builtin_dir`, `user_dir`, `_safe_mid`, `pack_root`, `load_pack`, `load_pack_at`, `_scan`, `list_modules`, `_load_rules`, `_load_content`, `_split_csv` |
-| `validate.py` | L2 | `_validate_manifest`, `_validate_field`, `_validate_derived`, `_validate_creation`, `_validate_advancement`, `_validate_outcomes`, `_validate_checks`, `_validate_sheets`, `validate_sheet_values`, `_as_list`, `_as_dict` |
+| `fields.py` | L1 | `assembled_fields`, `numeric_names`, `_pool_group_fields`, `CONTENT_KINDS` |
+| `pack.py` | L2 | `ModuleError`, `ModuleNotFound`, `ContentNotFound`, `builtin_dir`, `user_dir`, `_safe_mid`, `pack_root`, `load_pack`, `load_pack_at`, `_scan`, `list_modules`, `_load_rules`, `_load_content`, `_split_csv`, `DEFAULT_BUILTIN_DIR`, `_MID_RE` |
+| `validate.py` | L2 | `_validate_manifest`, `_validate_field`, `_validate_derived`, `_validate_creation`, `_validate_advancement`, `_validate_outcomes`, `_validate_checks`, `_validate_sheets`, `validate_sheet_values`, `_as_list`, `_as_dict`, `FIELD_TYPES`, `SHEET_KINDS`, `RESERVED_NAMES`, `ROLL_SCOPE_NAMES`, `_RAISABLE_TYPES`, `_PLACEHOLDER` |
 | `content.py` | L2 | `read_content`, `read_rule` |
-| `display.py` | L2 | all of today's `module_display.py` |
+| `display.py` | L2 | all of today's `module_display.py`, `_entry`, `_read_json`, `_LayoutError`, `_type_scope`, `_union_scope`, `_Expander`, `_load_theme`, `_load_layout`, `load_display`, `COLOR_KEYS`, `CORNER_STYLES`, `DOT_SHAPES`, `FONT_KEYS`, `FONT_STACKS`, `_HEX`, `_MISSING`, `MAX_DEPTH`, `MAX_NODES`, `NODE_FORMS` |
 | `binding.py` | L3 | `_write_key`, `set_world_module`, `set_campaign_module`, `resolve` |
 | `admin.py` | L3 | `create_module`, `delete_module` |
 
@@ -196,7 +196,7 @@ to the same module object leaves that working.
 
 | File | Layer | Contents |
 |---|---|---|
-| `paths.py` | L1 | `SheetError`, `SheetConflict`, `sheet_kind`, `_campaign_dir`, `_campaign_path`, `_world_dir`, `_world_path`, `_next_gen`, `_atomic_write_json` |
+| `paths.py` | L1 | `SheetError`, `SheetConflict`, `sheet_kind`, `_campaign_dir`, `_campaign_path`, `_world_dir`, `_world_path`, `_next_gen`, `_atomic_write_json`, `FILE_KINDS` |
 | `schema.py` | L1 | `_MUTABLE_TYPES`, `_int_or`, `default_fields`, `_numeric_scope`, `_compute_derived`, `expression_scope`, `_validate_instance`, `instance_errors`, `canonical_field_value` |
 | `reader.py` | L2 | `_read_path`, `read`, `read_world`, `list_refs`, `world_list_refs`, `world_sheet_modules` |
 | `pools.py` | L2 | `_pool_floor`, `_pool_group_fields`, `_pool_budget` |
@@ -215,7 +215,7 @@ current names.
 
 | File | Layer | Contents |
 |---|---|---|
-| `baselines.py` | L2 | `_lock`, `_path`, `_write`, `read_baselines`, `schema_stamp`, `capture_baseline`, `baseline_entry_valid`, `baseline_field`, `clear_baselines`, `repoint_scenes` |
+| `baselines.py` | L2 | `_lock`, `_path`, `_write`, `read_baselines`, `schema_stamp`, `capture_baseline`, `baseline_entry_valid`, `baseline_field`, `clear_baselines`, `repoint_scenes`, `_LOCKS`, `_LOCKS_GUARD` |
 | `prompt.py` | L3 | `sheet_scope`, `_field_label`, `render_value`, `sheet_blocks`, `roll_lines`, `build_prompt` |
 | `apply.py` | L3 | `AuditParseError`, `parse_output`, `apply_delta`, `materialize` |
 
@@ -228,11 +228,11 @@ The atlas names five concerns in this file; the split separates them plus
 |---|---|
 | `packfile.py` | `_read_json`, `_write_json`, `_read_sheets` — the shared pack-file accessors |
 | `scope.py` | `_RenameCollision`, `_field_keys`, `_group_scope`, `_fragment_users` — the small shared helpers every other file reaches for |
-| `staging.py` | `locked`, `_staging_root`, `new_mid`, `_publish` |
-| `packs.py` | `duplicate_module`, `create_module`, `delete_module`, `export_module`, `import_module`, `_member_parts`, `_check_archive` |
+| `staging.py` | `locked`, `_staging_root`, `new_mid`, `_publish`, `_M` |
+| `packs.py` | `duplicate_module`, `create_module`, `delete_module`, `export_module`, `import_module`, `_member_parts`, `_check_archive`, `MAX_MEMBERS`, `MAX_UNCOMPRESSED`, `_DRIVE_OR_UNC` |
 | `migrate.py` | `_sheet_files`, `_migrate_file`, `_would_migrate`, `_migrate_preview`, `_file_kind`, `_iter_ref_values`, `_content_ids`, `_sidecar_stats_at`, `_impact`, `_run_migration`, `_campaign_locks`, `_result`, `_sample`, `_apply`, `recover`, `_replay_journal`, `_require_user_root` |
 | `layout.py` | `_edit_tree`, `_specialize_layout`, `_prune_node`, `_prune_layout`, `_layout_name_edit` |
-| `renaming.py` | `rename`, `check_proposal_guard`, `_rewrite_expr`, `_rewrite_exprs`, `_rewrite_placeholders`, `_rename_map_key`, `_composing_tids` |
+| `renaming.py` | `rename`, `check_proposal_guard`, `_rewrite_expr`, `_rewrite_exprs`, `_rewrite_placeholders`, `_rename_map_key`, `_composing_tids`, `_RENAME_KINDS`, `_SAFE_KEY` |
 | `edits.py` | `set_manifest`, `upsert_group`, `delete_group`, `upsert_sheet_type`, `delete_sheet_type`, `upsert_check`, `delete_check`, `set_check_defaults`, `_rule_meta`, `upsert_rule`, `delete_rule`, `upsert_content`, `delete_content`, `set_layout`, `set_theme` |
 
 ### `absorb/`
@@ -241,21 +241,21 @@ The atlas names five concerns in this file; the split separates them plus
 |---|---|
 | `prompt.py` | `build_prompt` |
 | `parse.py` | `_int05`, `_truthy`, `_confidence`, `extract_object`, `parse_output` |
-| `materializer.py` | `materialize`, `_char_name`, `_actor_exists`, `_entity_kind`, `_DossierTargetGone`, `_new_character_provenance`, `_new_character_dossier` |
+| `materializer.py` | `materialize`, `_char_name`, `_actor_exists`, `_entity_kind`, `_DossierTargetGone`, `_new_character_provenance`, `_new_character_dossier`, `_CARD_FIELDS` |
 | `weather.py` | `_weather_edits`, `_apply_weather` |
-| `apply.py` | `apply_edits` |
+| `apply.py` | `apply_edits`, `_BROWSABLE_KINDS` |
 | `snapshots.py` | `relationships_snapshot`, `plot_snapshot`, `group_snapshot`, `state_snapshot`, `_snapshot_line` |
 
 ### `context/`
 
 | File | Contents |
 |---|---|
-| `macros.py` | `_substitute`, `scene_substitutions`, `_datetime_subs`, `_expand_random`, `_expand_rolls`, `_strip_unknown_macros`, `expand_macros` |
+| `macros.py` | `_substitute`, `scene_substitutions`, `_datetime_subs`, `_expand_random`, `_expand_rolls`, `_strip_unknown_macros`, `expand_macros`, `_LITERAL_MACROS`, `_MACRO_TOKEN`, `_RANDOM_MACRO`, `_ROLL_MACRO` |
 | `cast.py` | `_char_name`, `_cast_directory_data`, `_drift_roster`, `cast_datetime_facts`, `_campaign_player_refs` |
 | `world_state.py` | `activate`, `_world_info`, `_today_data`, `_weather_data`, `_character_states`, `_group_states` |
 | `mechanics.py` | `_sheet_type_label`, `_sheet_summary_lines`, `_rule_keys_match`, `_mechanics` |
 | `story.py` | `_relationship_lines`, `_story_entries`, `_project_history` |
-| `assemble.py` | `_assemble`, `_system_text`, `build_messages`, `build_director_messages`, `build_opener_messages`, `context_sections` |
+| `assemble.py` | `_assemble`, `_system_text`, `build_messages`, `build_director_messages`, `build_opener_messages`, `context_sections`, `OPENER_RECAP_DEPTH`, `_SECTIONS` |
 | `tokens.py` | `_encoder`, `count_tokens` |
 
 ## Cuts verified against the source
