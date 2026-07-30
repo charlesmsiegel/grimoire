@@ -11,6 +11,13 @@ campaign-scoped mutator that keeps a private registry instead is invisible
 here and silently outside the exclusion (#255 — ``rolls`` was, until it
 joined).
 
+That sentence used to be the whole mechanism, and it is why this file had to
+admit four mutators sitting outside the domain with nothing to stop a fifth: a
+paragraph cannot fail a test run. The domain is now *declared* below, in
+``DOMAIN_MODULES`` / ``OUTSIDE_DOMAIN`` / ``UNREVIEWED``, and
+``tests/test_lock_domain_guard.py`` holds those declarations and the code to
+each other. The prose here explains the design; the constants are what binds.
+
 Who takes it:
 
 - every ``scenes`` mutator (``scenes._serialized``), ``create_scene``
@@ -61,10 +68,9 @@ Three limits on that, all deliberate:
   schedule. Detecting that after the fact (compare-and-swap on a content
   digest) is a separate, larger change.
 - **Not across OS users**, whose lock directories differ.
-- **Not every campaign mutation** — only the ones that take this lock.
-  ``rolls`` keeps a private process-local registry (#255), and
-  ``campaigns.rename_campaign`` / ``set_campaign_response`` / ``touch`` /
-  ``delete_campaign`` take no lock at all.
+- **Not every campaign mutation** — only the ones that take this lock. Which
+  those are is no longer a claim in this paragraph: see ``DOMAIN_MODULES`` and
+  the two lists of what sits outside it, below.
 
 Contention raises ``StoreBusy`` after ``LOCK_TIMEOUT``; one handler in
 ``main.create_app`` turns that into HTTP 409.
@@ -81,6 +87,70 @@ from contextlib import ExitStack, contextmanager
 from . import paths, proclock
 
 _registry_guard = threading.Lock()
+
+# --- the lock domain, declared ----------------------------------------------
+#
+# Enforced by `tests/test_lock_domain_guard.py`, which walks the package's ASTs
+# and works out for itself which modules mutate campaign-scoped state and which
+# of those serialize. Every such module must appear in exactly one of the three
+# names below, so a newly-written mutator cannot land outside the exclusion
+# without somebody saying so in code -- the #255 failure, where `rolls` ran a
+# private lock registry and no test could tell.
+#
+# The unit is a module rather than a function because that is the granularity a
+# reader reasons about ("are appearances serialized?"), and because a module's
+# private helpers run under whatever their callers hold. A member module may
+# still exempt one function with a `# lock-domain-ok: <reason>` comment; the
+# guard caps how many of those exist.
+
+#: Modules whose public campaign-scoped mutators all take `campaign_lock(cid)`.
+DOMAIN_MODULES: frozenset[str] = frozenset({
+    "store.scenes",
+    "store.sheets",
+    "store.audit",
+    "store.proposals",
+    "store.rolls",
+})
+
+#: Modules deliberately outside the exclusion, with the reason. An entry here is
+#: a decision someone made and can defend, not merely the status quo.
+OUTSIDE_DOMAIN: dict[str, str] = {
+    "store.campaigns": (
+        "The campaign meta file is read-modify-written by `rename_campaign`, "
+        "`set_campaign_response` and `touch`, so concurrent edits can lose a "
+        "rename; `delete_campaign` rmtrees a tree other holders may be writing "
+        "under. Left outside pending #254's judgment on whether taking the "
+        "lock here can deadlock against `module_edit`, which holds every "
+        "campaign lock across a pack swap and calls into this module."
+    ),
+}
+
+#: Modules that mutate campaign-scoped state without serializing and have never
+#: been assessed for lost-update risk. Not an endorsement -- a frozen backlog.
+#: The guard forbids it from GROWING, so this list can only shrink as modules
+#: are examined and moved into one of the two above. Anything new mutating
+#: campaign state fails the guard until it is classified.
+UNREVIEWED: frozenset[str] = frozenset({
+    "routes.weather",
+    "store.appearances",
+    "store.assets",
+    "store.campaign_climate",
+    "store.changes",
+    "store.characters",
+    "store.chronicle",
+    "store.commits",
+    "store.dossiers",
+    "store.export",
+    "store.modules",
+    "store.overlay",
+    "store.playing",
+    "store.playstate",
+    "store.plot",
+    "store.relationships",
+    "store.sync",
+    "store.taglines",
+    "store.weather.overrides",
+})
 
 # Longer than any legitimate hold, but bounded so a cross-process lock-order
 # inversion surfaces as a 409 naming the campaign rather than a wedged server.
