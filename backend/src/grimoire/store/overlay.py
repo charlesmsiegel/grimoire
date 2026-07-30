@@ -34,7 +34,8 @@ import json
 from contextlib import contextmanager
 from pathlib import Path
 
-from . import assets, atomic, campaigns, cards, characters, entities, greetings, groupstate, pcs, taglines
+from . import (assets, atomic, campaigns, cards, characters, entities, failsoft, greetings,
+               groupstate, pcs, taglines)
 from .paths import natural_key
 
 #: Record kinds a campaign inherits from its world. A `<campaign>/<kind>/...`
@@ -66,14 +67,20 @@ def _deleted_path(cid: str) -> Path:
 
 
 def deleted(cid: str) -> set[str]:
-    p = _deleted_path(cid)
-    if not p.exists():
-        return set()
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return set()
-    return set(data) if isinstance(data, list) else set()
+    """The campaign's tombstoned refs, empty when it has none.
+
+    A corrupt file reads as empty too, because a campaign that cannot be opened
+    at all is the worse failure -- but unlike the store's other fail-soft reads,
+    this one degrades toward *more* content: "nothing was deleted" is how every
+    record the user deleted campaign-side comes back, inherited from the world.
+    That is the one direction of failure a user cannot spot by looking, so
+    `failsoft` logs it (see that module for why only two reads do).
+    """
+    refs = failsoft.read_json(
+        _deleted_path(cid), list,
+        f"campaign {cid} reads as having no deletions, so records deleted here "
+        "will reappear, inherited from the world")
+    return set(refs) if refs else set()
 
 
 def add_deleted(cid: str, ref: str) -> None:

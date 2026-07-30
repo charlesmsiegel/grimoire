@@ -1,9 +1,16 @@
+import logging
 from pathlib import Path
 
 import pytest
 
-from grimoire.store import (assets, atomic, campaigns, characters, entities, greetings, overlay,
-                            pcs, sync, taglines, worlds)
+from grimoire.store import (assets, atomic, campaigns, characters, entities, failsoft, greetings,
+                            overlay, pcs, sync, taglines, worlds)
+
+
+@pytest.fixture(autouse=True)
+def _forget_corruption_warnings():
+    """`failsoft` dedupes on module state; tests must not inherit each other's."""
+    failsoft._warned.clear()
 
 
 def _pair(monkeypatch, tmp_path):
@@ -577,3 +584,69 @@ def test_base_without_a_copy_reads_through_and_rebases(monkeypatch, tmp_path):
     overlay.materialize_entity(cid, "lore", eid)
     assert campaigns.read_manifest(cid)[f"lore/{eid}"] == entities.entity_hash(wroot, "lore", eid)
     assert sync.incoming(cid) == []
+
+
+# ---- a corrupt deleted.json still fails soft, but says so ----
+#
+# Every other fail-soft read in the store degrades toward *less* content, which
+# the user notices. This one degrades toward more: an empty tombstone set means
+# "nothing was deleted", so deleted records return, inherited from the world.
+# The fallback stays -- an unopenable campaign is worse -- but it is reported.
+
+def _corrupt_tombstones(cid, text="{not a list"):
+    p = campaigns.campaign_root(cid) / "deleted.json"
+    p.write_text(text, encoding="utf-8")
+    return p
+
+
+def test_corrupt_tombstones_still_read_as_empty(monkeypatch, tmp_path, caplog):
+    _wid, _wroot, cid, eid = _pair(monkeypatch, tmp_path)
+    _thin(cid, "lore", eid)
+    overlay.delete_entity(cid, "lore", eid)
+    _corrupt_tombstones(cid)
+    with caplog.at_level(logging.WARNING):
+        assert overlay.deleted(cid) == set()
+
+
+def test_corrupt_tombstones_warn_with_path_and_consequence(monkeypatch, tmp_path, caplog):
+    _wid, _wroot, cid, eid = _pair(monkeypatch, tmp_path)
+    p = _corrupt_tombstones(cid)
+    with caplog.at_level(logging.WARNING):
+        overlay.deleted(cid)
+    assert len(caplog.records) == 1
+    msg = caplog.records[0].getMessage()
+    assert str(p) in msg
+    assert cid in msg and "reappear" in msg
+
+
+def test_tombstones_of_the_wrong_json_type_warn(monkeypatch, tmp_path, caplog):
+    """`{"lore/x": true}` parses, so only the shape check catches it -- and it
+    resurrects exactly as much as a parse error does."""
+    _wid, _wroot, cid, _eid = _pair(monkeypatch, tmp_path)
+    _corrupt_tombstones(cid, '{"lore/x": true}')
+    with caplog.at_level(logging.WARNING):
+        assert overlay.deleted(cid) == set()
+    assert len(caplog.records) == 1
+
+
+def test_intact_tombstones_are_silent(monkeypatch, tmp_path, caplog):
+    _wid, _wroot, cid, eid = _pair(monkeypatch, tmp_path)
+    _thin(cid, "lore", eid)
+    with caplog.at_level(logging.WARNING):
+        overlay.delete_entity(cid, "lore", eid)
+        assert overlay.deleted(cid) == {f"lore/{eid}"}
+        overlay.list_entities(cid, "lore")
+    assert caplog.records == []
+
+
+def test_a_listing_over_a_corrupt_file_warns_once(monkeypatch, tmp_path, caplog):
+    """`deleted()` runs ~2x per record listed; a warning per call would bury
+    the report it exists to make."""
+    _wid, wroot, cid, _eid = _pair(monkeypatch, tmp_path)
+    for i in range(10):
+        entities.create_entity(wroot, "lore", f"Entry {i}")
+    _corrupt_tombstones(cid)
+    with caplog.at_level(logging.WARNING):
+        overlay.list_entities(cid, "lore")
+        overlay.list_entities(cid, "lore")
+    assert len(caplog.records) == 1
