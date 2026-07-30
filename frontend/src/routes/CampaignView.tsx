@@ -618,9 +618,14 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   // proposals, leaving every other staged edit (prose/relationship/etc.)
   // exactly as the reviewer had it.
   async function retryAudit() {
-    if (!activeId) return;
+    // `absorbSid`, not `activeId` — the same reason saveAbsorb uses it. A review
+    // survives a scene switch (only Discard or a successful save clears it), so
+    // reading the rail would audit whatever the user has since opened and write
+    // that scene's verdict, sheet edits and phase row into this review.
+    const sid = absorbSid ?? activeId;
+    if (!sid) return;
     try {
-      const res = await api.retryAudit(cid, activeId);
+      const res = await api.retryAudit(cid, sid);
       // The audit phase row is a projection of `mechanics` (backend:
       // _phase_report), so it has to move with it — otherwise the panel keeps
       // reporting a budget that ran out for a step this retry has since run.

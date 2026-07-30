@@ -1329,6 +1329,38 @@ test("a successful audit retry clears the budget notice it was offered for", asy
   await waitFor(() => expect(screen.queryByText(/only partly absorbed/)).toBeNull());
 });
 
+test("Retry validation audits the review's scene, not whichever is on screen", async () => {
+  // A review outlives a scene switch (only Discard and a successful save clear
+  // it), so the retry has to follow `absorbSid` the way `saveAbsorb` already
+  // does — otherwise it audits the scene the user has since opened and writes
+  // that verdict, its sheet edits and its phase row into the other scene's
+  // review.
+  (api.listScenes as any).mockResolvedValue([
+    { id: "s1", title: "One", model: "", created: "", updated: "", date: "" },
+    { id: "s2", title: "Two", model: "", created: "", updated: "", date: "" }]);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  const over = {
+    mechanics: { status: "failed", reason: "the absorb time budget ran out before the audit could run",
+                 warnings: [], dropped: [], attempted: false, budget_exhausted: true },
+  };
+  absorbWithPhases(phasesFor(over), over);
+  (api.retryAudit as any).mockResolvedValue({
+    mechanics: { status: "ok", reason: null, warnings: [], dropped: [],
+                 attempted: true, budget_exhausted: false },
+    edits: [] });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await screen.findByText("Review scene summary");
+
+  fireEvent.click(screen.getByText(/Two/));                        // switch scenes
+  await waitFor(() => expect(api.getScene).toHaveBeenCalledWith("run", "s2"));
+  fireEvent.click(screen.getByRole("button", { name: /Retry validation/ }));
+
+  await waitFor(() => expect(api.retryAudit).toHaveBeenCalled());
+  expect((api.retryAudit as any).mock.calls[0][1]).toBe("s1");
+});
+
 test("a budget-cut dossier phase reads as never prepared, not as a failure", async () => {
   const over = {
     dossiers: { status: "failed",
