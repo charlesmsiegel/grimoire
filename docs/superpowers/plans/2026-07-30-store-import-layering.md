@@ -351,7 +351,12 @@ class _Walker(ast.NodeVisitor):
         parent = target.rsplit(".", 1)[0]
         if parent != pkg and parent.startswith("grimoire.store.") and parent in PACKAGES:
             for a in n.names:
-                if (f"{target}.{a.name}" not in MODULES
+                # `import *` binds every exported function by value, and
+                # _kind_of("*") is "other" -- so it slipped straight through
+                # the function test this rule turns on.
+                if a.name == "*":
+                    self.form.append((f"{target}.*", n))
+                elif (f"{target}.{a.name}" not in MODULES
                         and _kind_of(target, a.name) == "function"):
                     self.form.append((f"{target}.{a.name}", n))
 
@@ -955,7 +960,8 @@ the name was only ever bound as a side effect of modules importing it."
 
 **Interfaces:**
 - Produces:
-  - `appearances/paths.py`: `AppearError`, `_ref`, `_split`, `_path`, `locked_actor_root(cid) -> Path`, `record(cid) -> dict`, `_write`, `_lock`
+  - `appearances/paths.py`: `AppearError`, `_ref`, `_split`, `_path`, `locked_actor_root(cid) -> Path`, `record(cid) -> dict`, `_write`, `repoint_scenes`
+  - `appearances/versions.py`: `set_base`, `actor_hash`, `_copy_actor`, `_purge_other_versions`, `_set_default`, `_drop_manifest_ref`, `pick_version`, `import_version`, `locked_version`, `_lock` — **not** `paths.py`: `_lock` calls five version helpers, and those call `record`/`_ref`/`_write` back, so splitting them closes `paths ↔ versions`
   - `appearances/cast.py`: `_actor_name`, `players_in_scene(cid, sid) -> list[dict]`, `player_names(cid, sid) -> list[str]`, `scene_cast(cid, sid) -> list[dict]`, `cast_detail`, `roster`, `roster_names`, `is_appeared`
   - `appearances/transitions.py`: `appear`, `leave`, `repoint_scenes`, `suggestions`
 - Consumes: `campaigns/paths.py`, `overlay`.
@@ -1503,9 +1509,11 @@ At the top of `backend/src/grimoire/store/context/tokens.py`:
 ```python
 try:
     import tiktoken
-except ImportError:      # optional `desktop` extra; absent on Android
-    tiktoken = None
+except Exception:        # noqa: BLE001 -- see below
+    tiktoken = None      # optional `desktop` extra; absent on Android
 ```
+
+**`except Exception`, not `except ImportError`** — this is behaviour preservation, not carelessness. Today the import sits inside `_encoder()`, which `count_tokens` calls inside a broad `except Exception: return len(text) // 4` (`context.py:726-729`). So an installed-but-broken tiktoken — an incompatible build raising `ValueError` or `OSError` at import — currently degrades to the heuristic. Narrowing to `ImportError` while hoisting would instead let that propagate out of a *module-level* import, breaking `import grimoire.store.context.tokens` and with it the whole store facade. A refactor that turns a silent fallback into an app that will not start is not behaviour-preserving.
 
 `_encoder()` returns `None` when `tiktoken is None`, and `count_tokens` takes its existing heuristic path. Do not change the heuristic.
 
@@ -1519,12 +1527,16 @@ Hoist the `from`-import itself, with the sentinel applied to each name:
 try:
     from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions,
                                   CLINotFoundError, ProcessError, TextBlock, query)
-except ImportError:      # optional `claude` extra; absent on Android
+except Exception:        # noqa: BLE001 -- optional `claude` extra; absent on Android
     AssistantMessage = ClaudeAgentOptions = TextBlock = query = None
     # Empty tuples, not None: these are used as `except` targets, and
     # `except None` raises TypeError while `except ()` simply never matches.
     CLINotFoundError = ProcessError = ()
 ```
+
+`except Exception` here for the same reason as `tiktoken`, though the argument runs slightly differently. Today a non-`ImportError` from the SDK import escapes `stream()` and fails that one request. But `llm.py:11` does `from .claude_agent import ClaudeAgentClient` at module scope, so at module level the same exception would break `import grimoire.llm` and the app would not start. Catching broadly keeps the blast radius where it is: a broken install reports `missing_dependency` when the Claude provider is actually used.
+
+That is a deliberate, narrow behaviour change for the *installed-but-broken* case — the error message becomes `missing_dependency` rather than the SDK's own exception. The missing case, which is the one that actually happens on Android, is unchanged.
 
 `stream()` then opens by checking the sentinel, raising exactly the error the removed `except ImportError` raised:
 
