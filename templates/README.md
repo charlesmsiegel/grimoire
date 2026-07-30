@@ -65,15 +65,15 @@ mutable line marks "start X -> now Y" against `audit.baseline_field()`, each
 static line is marked `[static]`), `roll_lines` (`audit.roll_lines()` — the
 scene's roll-log entries), `transcript` (`snippets/transcript.j2`).
 
-### `scene/` — the context builder (`store/context.py`)
+### `scene/` — the context builder (`store/context/`)
 Serves POST …/chat, …/retry, …/regenerate (via `build_messages` /
 `build_director_messages`) and …/opener (via `build_opener_messages`).
 
-Message assembly (code-side, mirrored from `context.py`):
+Message assembly (code-side, mirrored from `context/assemble.py`):
 1. `system.j2` — one system message; omitted if it renders empty.
 2. The projected history: each stored message through
    `scene/history_line.j2`, consecutive same-role lines merged with a blank
-   line between them (`context._project_history`).
+   line between them (`context/story.py:_project_history`).
 3. Director turn only: the note as a user message — the player's text, or
    `scene/director_note.j2` when blank. Opener only: the (substituted)
    opener prompt as the user message (openers include no history).

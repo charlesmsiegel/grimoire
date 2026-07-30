@@ -54,6 +54,7 @@ def test_activate_unowned_unchanged():
 
 from grimoire.store import appearances as ap  # noqa: E402
 from grimoire.store import campaigns, characters, chronicle, entities, plot, pcs, scenes, worlds  # noqa: E402
+from grimoire.store.context import cast as context_cast  # noqa: E402
 
 
 def _campaign(monkeypatch, tmp_path):
@@ -1147,13 +1148,13 @@ def test_drift_roster_is_not_built_for_a_scene_with_nothing_to_measure(monkeypat
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     scenes.append_message(cid, sid, "user", "hello")
     calls = []
-    real = context._drift_roster
+    real = context_cast._drift_roster
 
     def counted(*args):
         calls.append(args)
         return real(*args)
 
-    monkeypatch.setattr(context, "_drift_roster", counted)
+    monkeypatch.setattr(context_cast, "_drift_roster", counted)
     context.build_messages(cid, sid)
     assert calls == []
     # once a generation has been recorded there IS something to measure
