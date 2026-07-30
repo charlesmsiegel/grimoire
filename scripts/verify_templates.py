@@ -299,7 +299,7 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
 
     tokens = [f"{a['kind']}:{a['id']}" for a in cast]
     relationship_lines = relationships.render_present(
-        cid, tokens, lambda t: relationships.actor_name(croot, t))
+        cid, tokens, lambda t: relationships.actor_name(cid, t))
 
     depth = full_recap or max(int(cfg.get("recap_depth", "5")), 0)
     records = chronicle.recent(cid, depth) if depth > 0 else []
