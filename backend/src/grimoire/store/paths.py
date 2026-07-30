@@ -8,7 +8,7 @@ import re
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
-from . import atomic
+from . import atomic, failsoft
 
 DEFAULT_HOME = Path.home() / ".grimoire"  # paths-ok: this IS the resolver's default root
 
@@ -24,14 +24,18 @@ def _pointer_path() -> Path:
 
 
 def _read_pointer() -> dict:
-    path = _pointer_path()
-    if not path.exists():
-        return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except (ValueError, OSError):
-        return {}
+    """The bootstrap pointer's contents, empty when it has none.
+
+    A corrupt pointer reads as empty too -- refusing to start over a bad
+    dotfile is the worse failure -- but that drops the user's ``data_dir`` and
+    sends the whole library back to ``~/.grimoire``, so someone who pointed
+    grimoire at a synced folder opens it to nothing. Silent relocation is not a
+    symptom anyone can trace to this file, so `failsoft` logs it.
+    """
+    return failsoft.read_json(
+        _pointer_path(), dict,
+        f"its data_dir is ignored -- the store falls back to $GRIMOIRE_HOME if "
+        f"set, else {DEFAULT_HOME}") or {}
 
 
 def _pointer_data_dir() -> Path | None:
