@@ -11,6 +11,26 @@ from typing import AsyncIterator
 
 from .llm_errors import LLMError
 
+# claude-agent-sdk lives in the `claude` extra, which Android does not install
+# (android/app/build.gradle.kts mirrors the *base* deps only), so the import has
+# to be survivable. `llm.py` imports ClaudeAgentClient at module scope, so an
+# exception escaping here would stop the app from starting; stream() re-raises
+# what was captured instead, leaving the failure at the same call it hit before.
+try:
+    from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions,
+                                  CLINotFoundError, ProcessError, TextBlock, query)
+    _SDK_IMPORT_ERROR: Exception | None = None
+except ImportError as exc:                  # the `claude` extra is not installed
+    AssistantMessage = ClaudeAgentOptions = TextBlock = query = None
+    # Empty tuples, not None: these are used as `except` targets, and
+    # `except None` raises TypeError while `except ()` simply never matches.
+    CLINotFoundError = ProcessError = ()
+    _SDK_IMPORT_ERROR = exc
+except Exception as exc:  # noqa: BLE001 - installed but broken; stream() re-raises it verbatim
+    AssistantMessage = ClaudeAgentOptions = TextBlock = query = None
+    CLINotFoundError = ProcessError = ()
+    _SDK_IMPORT_ERROR = exc
+
 
 class ClaudeAgentError(LLMError):
     pass
@@ -31,14 +51,13 @@ def _flatten(turns: list[dict]) -> str:
 
 class ClaudeAgentClient:
     async def stream(self, messages: list[dict], model: str) -> AsyncIterator[str]:
-        try:
-            from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions,
-                                          CLINotFoundError, ProcessError, TextBlock, query)
-        except ImportError as exc:
-            raise ClaudeAgentError(
-                "missing_dependency",
-                "claude-agent-sdk is not installed — pip install 'grimoire[claude]'",
-            ) from exc
+        if query is None:
+            if isinstance(_SDK_IMPORT_ERROR, ImportError):
+                raise ClaudeAgentError(
+                    "missing_dependency",
+                    "claude-agent-sdk is not installed — pip install 'grimoire[claude]'",
+                ) from _SDK_IMPORT_ERROR
+            raise _SDK_IMPORT_ERROR         # installed but broken: same exception, same place
         system, turns = _split_system(messages)
         options = ClaudeAgentOptions(
             system_prompt=system or None, model=model, allowed_tools=[], max_turns=1,

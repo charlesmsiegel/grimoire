@@ -1,9 +1,15 @@
-import sys
 import types
 
 import pytest
 
+import grimoire.claude_agent as claude_agent
 from grimoire.claude_agent import ClaudeAgentClient, ClaudeAgentError
+
+# The six SDK names are read once, at import; patching sys.modules would leave
+# grimoire.claude_agent still bound to the real objects, so the fake has to be
+# installed over the module globals instead.
+_SDK_NAMES = ("AssistantMessage", "ClaudeAgentOptions", "CLINotFoundError",
+              "ProcessError", "TextBlock", "query")
 
 
 class _TextBlock:
@@ -25,7 +31,7 @@ class _ProcessError(Exception):
 
 
 def install_fake_sdk(monkeypatch, replies=(), error=None):
-    """Install a stand-in claude_agent_sdk module; returns captured call args."""
+    """Bind stand-in SDK objects onto grimoire.claude_agent; returns call args."""
     captured = {}
 
     async def query(*, prompt, options):
@@ -44,7 +50,9 @@ def install_fake_sdk(monkeypatch, replies=(), error=None):
         CLINotFoundError=_CLINotFoundError,
         ProcessError=_ProcessError,
     )
-    monkeypatch.setitem(sys.modules, "claude_agent_sdk", mod)
+    for name in _SDK_NAMES:
+        monkeypatch.setattr(claude_agent, name, getattr(mod, name))
+    monkeypatch.setattr(claude_agent, "_SDK_IMPORT_ERROR", None)
     return captured
 
 
@@ -79,7 +87,12 @@ async def test_system_messages_become_system_prompt(monkeypatch):
 
 
 async def test_missing_sdk_is_normalized(monkeypatch):
-    monkeypatch.setitem(sys.modules, "claude_agent_sdk", None)  # import raises ImportError
+    # Both names, not just `query`: with the extra installed _SDK_IMPORT_ERROR is
+    # None, and stream() would hit `raise None` -> TypeError instead of the error
+    # under test. Setting both simulates the absent extra in either environment.
+    monkeypatch.setattr(claude_agent, "query", None)
+    monkeypatch.setattr(claude_agent, "_SDK_IMPORT_ERROR",
+                        ImportError("No module named 'claude_agent_sdk'"))
     client = ClaudeAgentClient()
     with pytest.raises(ClaudeAgentError) as exc:
         [c async for c in client.stream([{"role": "user", "content": "hi"}], "opus")]

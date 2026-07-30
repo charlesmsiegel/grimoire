@@ -11,6 +11,8 @@ import functools
 import os
 from pathlib import Path
 
+from jinja2 import Environment, FileSystemLoader, StrictUndefined
+
 DEFAULT_TEMPLATES_DIR = Path(__file__).resolve().parents[3] / "templates"  # paths-ok: DEFAULT_TEMPLATES_DIR only; GRIMOIRE_TEMPLATES overrides it on Android
 
 
@@ -27,7 +29,6 @@ def templates_dir() -> Path:
 
 @functools.lru_cache(maxsize=1)
 def _env():
-    from jinja2 import Environment, FileSystemLoader, StrictUndefined
     return Environment(loader=FileSystemLoader(str(templates_dir())),
                        undefined=StrictUndefined)
 
