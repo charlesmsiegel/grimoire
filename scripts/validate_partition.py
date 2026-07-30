@@ -175,10 +175,11 @@ def store_graph(spec: dict[str, dict[str, str]]) -> int:
         for name, fname in mapping.items():
             place[f"{pkg}.{name}"] = f"{pkg}.{fname}"
 
-    def node_for(mod: str, attr: str | None) -> str | None:
-        if mod in spec:
-            return place.get(f"{mod}.{attr}") if attr else None
-        return mod
+    def node_for(target: str, attr: str | None) -> str | None:
+        """`target` is a store-relative module, already resolved from its alias."""
+        if target in spec:                       # a split package: pick the leaf
+            return place.get(f"{target}.{attr}") if attr else None
+        return target                            # already a leaf or an unsplit module
 
     graph: dict[str, set[str]] = collections.defaultdict(set)
     for p in sorted(STORE.rglob("*.py")):
@@ -188,12 +189,33 @@ def store_graph(spec: dict[str, dict[str, str]]) -> int:
         if p.stem in absorbed:
             src_pkg = next(k for k, v in EXTRA_SOURCES.items() if p.stem in v)
         tree = ast.parse(p.read_text(encoding="utf-8"))
-        imported = set()
+        # local name -> store-relative module it actually refers to.
+        # Recording only the local name loses the target the moment the split
+        # tasks introduce `from ..worlds import paths as worlds_paths`: the
+        # walker saw `worlds_paths`, matched nothing, and silently dropped the
+        # edge -- so --graph would go blind exactly as packages get split.
+        imported: dict[str, str] = {}
+        here = list(rel.parts[:-1])                    # package dirs above this file
         for n in ast.walk(tree):
             if isinstance(n, ast.ImportFrom):
-                imported |= {a.asname or a.name for a in n.names}
+                if n.level:
+                    base = here[: len(here) - (n.level - 1)] if n.level > 1 else here
+                    prefix = base + (n.module.split(".") if n.module else [])
+                elif (n.module or "").startswith("grimoire.store"):
+                    prefix = (n.module or "").split(".")[2:]
+                else:
+                    continue
+                for a in n.names:
+                    local = a.asname or a.name
+                    target = ".".join([*prefix, a.name]) if prefix else a.name
+                    # `from .campaigns import read` -> campaigns.read;
+                    # `from . import campaigns`     -> campaigns
+                    imported[local] = target
             elif isinstance(n, ast.Import):
-                imported |= {(a.asname or a.name).split(".")[0] for a in n.names}
+                for a in n.names:
+                    if a.name.startswith("grimoire.store."):
+                        imported[(a.asname or a.name).split(".")[0]] = \
+                            a.name[len("grimoire.store."):]
         names = toplevel_names(tree)
         for fname, node in names.items():
             home = (place.get(f"{src_pkg}.{fname}") if src_pkg else
@@ -203,7 +225,7 @@ def store_graph(spec: dict[str, dict[str, str]]) -> int:
             for sub in ast.walk(node):
                 if (isinstance(sub, ast.Attribute) and isinstance(sub.value, ast.Name)
                         and sub.value.id in imported):
-                    dest = node_for(sub.value.id, sub.attr)
+                    dest = node_for(imported[sub.value.id], sub.attr)
                     if dest and dest != home:
                         graph[home].add(dest)
                 elif isinstance(sub, ast.Name) and src_pkg and sub.id in names:
@@ -211,6 +233,7 @@ def store_graph(spec: dict[str, dict[str, str]]) -> int:
                     if dest and dest != home:
                         graph[home].add(dest)
                 elif isinstance(sub, ast.Name) and sub.id in imported:
+                    tgt = imported[sub.id]
                     # A bare module reference -- `for mod in (appearances,
                     # audit, changes, chronicle, ...)` in scene_refs.py:21 --
                     # is a real edge that attribute-only walking missed. The
@@ -218,13 +241,15 @@ def store_graph(spec: dict[str, dict[str, str]]) -> int:
                     # resolve using the attributes taken on locals in this
                     # same function; edging to every file in the package
                     # instead over-approximates into one useless SCC.
-                    if sub.id in spec:
-                        for attr in _local_attrs(node, imported):
-                            dest = place.get(f"{sub.id}.{attr}")
+                    if tgt in spec:
+                        for attr in _local_attrs(node, set(imported)):
+                            dest = place.get(f"{tgt}.{attr}")
                             if dest and dest != home:
                                 graph[home].add(dest)
-                    elif sub.id != home and (STORE / f"{sub.id}.py").exists():
-                        graph[home].add(sub.id)
+                    elif tgt != home and (
+                            (STORE / f"{tgt}.py").exists()
+                            or (STORE / pathlib.Path(*tgt.split("."))).with_suffix(".py").exists()):
+                        graph[home].add(tgt)
     cycles = sccs(graph)
     for c in cycles:
         # Members of the SCC, not a path -- joining them with arrows implied an
