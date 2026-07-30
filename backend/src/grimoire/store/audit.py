@@ -144,11 +144,19 @@ def baseline_field(cid: str, sid: str, kind: str, eid: str, field_key: str):
         return None
 
 
+# lock-domain-ok: touches only sheet_baselines.json, so the narrower baseline
+# lock is enough mutual exclusion; capture_baseline/apply_delta take the
+# campaign lock because they read sheets as well. Limit worth stating: `_lock`
+# is a process-local threading.Lock, so unlike campaign_lock this does not
+# exclude a second grimoire process — the private-registry shape #255 removed
+# from rolls, kept here because the baseline is derived and regenerable.
 def clear_baselines(cid: str) -> None:
     with _lock(cid):
         _write(cid, {})
 
 
+# lock-domain-ok: baseline-file-only for the same reason as clear_baselines, so
+# the baseline lock is enough; process-local, so not cross-process exclusion.
 def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
     with _lock(cid):
         data = read_baselines(cid)
