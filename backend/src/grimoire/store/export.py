@@ -18,8 +18,9 @@ from pathlib import Path
 import markdown as _md_lib
 from markupsafe import escape
 
-from . import calendars, chronicle, characters, entities, overlay, pcs, scenes, worlds
+from . import calendars, chronicle, characters, entities, overlay, pcs, worlds
 from .appearances import cast as appearances_cast, paths as appearances_paths
+from .scenes import read as scenes_read, serialize as scenes_serialize
 from .campaigns import paths as campaigns_paths, read as campaigns_read
 from .paths import slugify
 
@@ -117,13 +118,13 @@ def _actor_sections(aroot: Path, kind: str, actor_id: str, vid: str) -> tuple[st
 
 
 def _chapter(cid: str, provider, sid: str, number: int, images: Images, prefix: str) -> dict:
-    scene = scenes.read_scene(cid, sid)
+    scene = scenes_read.read_scene(cid, sid)
     meta = scene["meta"]
     title = meta.get("title", sid)
-    times = scenes.get_time_history(cid, sid)
+    times = scenes_read.get_time_history(cid, sid)
     date = _friendly_or_none(provider, times[0]) if times else None
     location = None
-    hist = scenes.get_location_history(cid, sid)
+    hist = scenes_read.get_location_history(cid, sid)
     if hist:
         try:
             location = overlay.read_entity(cid, "locations", hist[0])["meta"].get("name")
@@ -136,7 +137,7 @@ def _chapter(cid: str, provider, sid: str, number: int, images: Images, prefix: 
     # rendering a transition as the unlabelled narration it has always been, and
     # makes pre-tag and post-tag transitions look identical in a book.
     messages = [{"role": m["role"],
-                 "speaker": None if m.get("speaker") == scenes.TRANSITION_SPEAKER
+                 "speaker": None if m.get("speaker") == scenes_serialize.TRANSITION_SPEAKER
                             else m.get("speaker"),
                  "content": rewrite_images(m["content"], cid, images, prefix)}
                 for m in scene["messages"]]
@@ -165,7 +166,7 @@ def _appendix_entries(cid: str, aroot: Path, sids: list[str], images: Images, pr
 
     visited: dict[str, None] = {}  # insertion-ordered de-dupe
     for sid in sids:
-        for eid in scenes.get_location_history(cid, sid):
+        for eid in scenes_read.get_location_history(cid, sid):
             visited.setdefault(eid, None)
     locs = []
     for eid in visited:
@@ -200,13 +201,13 @@ def collect(cid: str, image_prefix: str = "images/") -> dict:
     provider = calendars.get_provider(calendars.read_calendar(croot)["primary"])
     images = Images()
 
-    sids = [s["id"] for s in sorted(scenes.list_scenes(cid), key=lambda s: s["id"])]
+    sids = [s["id"] for s in sorted(scenes_read.list_scenes(cid), key=lambda s: s["id"])]
     chapters = [_chapter(cid, provider, sid, i, images, image_prefix)
                 for i, sid in enumerate(sids, start=1)]
     appendix = _appendix_entries(cid, appearances_paths.locked_actor_root(cid), sids, images, image_prefix)
 
     # in-world date range: first dated scene's start — last dated scene's latest
-    histories = [h for sid in sids if (h := scenes.get_time_history(cid, sid))]
+    histories = [h for sid in sids if (h := scenes_read.get_time_history(cid, sid))]
     date_range = None
     if histories:
         first = _friendly_or_none(provider, histories[0][0])
@@ -395,11 +396,11 @@ def build_json(cid: str) -> tuple[bytes, str]:
     """Machine-readable dump: scene metas + messages verbatim, chronicle, and
     roster — nearest to the on-disk data, no image resolution or rendering."""
     campaign = campaigns_read.read_campaign(cid)  # raises CampaignNotFound
-    sids = [s["id"] for s in sorted(scenes.list_scenes(cid), key=lambda s: s["id"])]
+    sids = [s["id"] for s in sorted(scenes_read.list_scenes(cid), key=lambda s: s["id"])]
     payload = {
         "campaign": {"id": cid, "name": campaign["meta"].get("name", cid),
                     "world": campaign["meta"].get("world", "")},
-        "scenes": [scenes.read_scene(cid, sid) for sid in sids],
+        "scenes": [scenes_read.read_scene(cid, sid) for sid in sids],
         "chronicle": chronicle.read_chronicle(cid),
         "roster": appearances_cast.roster(cid),
     }

@@ -3,7 +3,9 @@ import time
 
 import pytest
 
-from grimoire.store import appearances, campaigns, pcs, scenes, worlds
+from grimoire.store import appearances, campaigns, frontmatter, pcs, scenes, worlds
+from grimoire.store.scenes import (lifecycle as scenes_lifecycle, moment as scenes_moment,
+                                   read as scenes_read, write as scenes_write)
 
 
 def _campaign(monkeypatch, tmp_path):
@@ -985,15 +987,22 @@ def _widen_the_write_window(monkeypatch, delay=0.05):
     Without this the window is microseconds wide and a lost-update test is a
     coin flip that passes on the broken code most of the time -- which is
     exactly how this bug survived to #254.
+
+    EVERY submodule that imported the name, not just one: `parse_frontmatter`
+    is imported by value into `read`, `write`, `moment` and `lifecycle`, so
+    each holds its own binding and patching one leaves the others fast. A
+    partial patch narrows the window back to microseconds and turns these
+    tests permanently green -- which is worse than deleting them.
     """
-    real = scenes.parse_frontmatter
+    real = frontmatter.parse_frontmatter
 
     def slow(text):
         parsed = real(text)
         time.sleep(delay)
         return parsed
 
-    monkeypatch.setattr(scenes, "parse_frontmatter", slow)
+    for mod in (scenes_read, scenes_write, scenes_moment, scenes_lifecycle):
+        monkeypatch.setattr(mod, "parse_frontmatter", slow)
 
 
 def _run_together(calls):

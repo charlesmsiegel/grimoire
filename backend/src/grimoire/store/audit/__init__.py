@@ -12,11 +12,12 @@ Spec: docs/superpowers/specs/2026-07-12-mechanics-phase5-absorb-validation-desig
 from __future__ import annotations
 
 # Submodules before names, and `baselines` before `prompt`: `prompt` imports
-# `scenes`, whose module body imports `scene_refs`, which imports
-# `audit.baselines` right back. That name has to be bound on this
-# half-initialized package by then, and it is -- because `baselines` itself
-# imports no scene state, which is the whole point of the cut (it is what
-# removed the audit/scene_refs/scenes cycle). `apply` reads both siblings.
+# `scenes/read.py`, and initializing that package runs `scenes/lifecycle.py`,
+# which imports `audit.baselines` -- both directly and through `scene_refs`.
+# That name has to be bound on this half-initialized package by then, and it
+# is -- because `baselines` itself imports no scene state, which is the whole
+# point of the cut (it is what removed the audit/scene_refs/scenes cycle).
+# `apply` reads both siblings.
 from . import baselines, prompt, apply  # noqa: F401
 from .baselines import (  # noqa: F401
     _LOCKS, _LOCKS_GUARD, _lock, _path, _write, baseline_entry_valid,

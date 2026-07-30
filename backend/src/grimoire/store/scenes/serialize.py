@@ -1,0 +1,130 @@
+"""Transcript marshalling: the `**<Speaker>:**` marker grammar, both directions.
+
+Parsing a stored body into messages, serializing messages back, and the
+speaker labels the rest of the store reads (`ROLL_SPEAKER`,
+`TRANSITION_SPEAKER`). `_numbering` lives here too — it reads scene *ids* off
+disk, and `lifecycle.py` is its only caller.
+"""
+
+from __future__ import annotations
+
+import re
+
+from .. import scene_ids
+from . import paths
+
+# The body is a script: every message is `**<Speaker>:** content`. Role is not
+# stored — a message is user-side iff its speaker is "You" or a role=player
+# cast member's name (derived in read_scene). Reserved labels keep legacy
+# files working; their parens sub-speaker form is read but never written.
+RESERVED_LABELS = {"You": "user", "Grimoire": "assistant"}
+ROLE_TO_LABEL = {"user": "You", "assistant": "Grimoire"}
+# Manual dice rolls are appended as assistant-role messages (so they render
+# like any other transcript line) but tagged with this speaker so reroll
+# logic can tell them apart from an actual LLM reply — rerolling must never
+# silently drop a roll line while its entry lives on in rolls.json. Prefixed
+# with U+2063 (invisible separator, no visible glyph) so the marker can never
+# collide with an ordinary typed speaker label or cast name — a real
+# character or NPC named "Roll" round-trips as plain "Roll", not this.
+ROLL_SPEAKER = "⁣Roll"
+# Scene transitions (location change, time advance, cast join/leave) are
+# appended as assistant-role messages so they render inline, but no model wrote
+# them. Tagged with this speaker so drift measurement can treat them as turn
+# SEPARATORS rather than counting them as model prose — untagged, a transition
+# between two replies merges them into one apparently-oversized turn. Same
+# U+2063 prefix as ROLL_SPEAKER, for the same anti-collision reason.
+#
+# It is INTERNAL METADATA and is never displayed: the app transcript, HTML and
+# plain-text export and the EPUB all drop it, so a tagged transition renders as
+# the unlabelled narration it was before tagging — identical to the untagged
+# ones already sitting in every existing campaign.
+TRANSITION_SPEAKER = "⁣Scene"
+# Speakers that mark a message as not-model-output. Both are excluded from
+# drift metrics and neither is ever consumed by reroll — a roll BLOCKS reroll
+# (its transcript line must stay in lockstep with rolls.json), a trailing
+# transition is stepped over and preserved.
+SYNTHETIC_SPEAKERS = (ROLL_SPEAKER, TRANSITION_SPEAKER)
+_MARKER = re.compile(r"^\*\*([^*\n]{1,64}?)(?: \(([^)\n]+)\))?:\*\*[ ]?", re.MULTILINE)
+_SAFE_LABEL = re.compile(r"^[^*\n]{1,64}$")
+
+
+def _label(role: str, speaker: str | None) -> str:
+    if speaker and _SAFE_LABEL.match(speaker) and speaker not in RESERVED_LABELS:
+        return speaker
+    return ROLE_TO_LABEL[role]
+
+
+def _markers(body: str) -> list[re.Match]:
+    """Marker matches that actually start a message: at the top of the body or
+    after a blank line (the serializer always writes blank lines between
+    messages; this keeps bold-label lines inside a paragraph as content)."""
+    return [m for m in _MARKER.finditer(body)
+            if m.start() == 0 or body[max(0, m.start() - 2):m.start()] == "\n\n"]
+
+
+def match_name(label: str, names) -> str | None:
+    """The cast name `label` refers to, if unambiguous: exact match first
+    (case-insensitive), else the single name the label is a word-boundary
+    prefix of — "Winifred" names "Winifred Vance"; "Flo" names no one,
+    and neither does "Winifred" with two Florences present."""
+    low = label.strip().lower()
+    if not low:
+        return None
+    exact = [n for n in names if n.lower() == low]
+    if exact:
+        return exact[0] if len(exact) == 1 else None
+    prefixed = [n for n in names
+                if n.lower().startswith(low) and not n[len(low)].isalnum()]
+    return prefixed[0] if len(prefixed) == 1 else None
+
+
+def _speaker_and_role(m: re.Match, players: frozenset[str]) -> tuple[str | None, str]:
+    base, sub = m.group(1), m.group(2)
+    if base in RESERVED_LABELS:
+        return sub, RESERVED_LABELS[base]
+    speaker = f"{base} ({sub})" if sub else base
+    return speaker, "user" if match_name(speaker, players) else "assistant"
+
+
+def _numbering(cid: str) -> tuple[int, int]:
+    """(next number, current pad width) from the files on disk — no stored
+    counter. Width starts at MIN_WIDTH and follows the widest number present;
+    legacy (unmigrated) stems don't parse and are ignored."""
+    top, width = 0, scene_ids.MIN_WIDTH
+    d = paths._scenes_dir(cid)
+    if d.exists():
+        for p in d.glob("*.md"):
+            parsed = scene_ids.parse_sid(p.stem)
+            if parsed:
+                top = max(top, parsed["number"])
+                width = max(width, parsed["width"])
+    return top + 1, width
+
+
+def _parse_messages(body: str, players: frozenset[str]) -> list[dict]:
+    matches = _markers(body)
+    messages = []
+    for i, m in enumerate(matches):
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
+        speaker, role = _speaker_and_role(m, players)
+        msg = {"role": role, "content": body[start:end].strip()}
+        if speaker:
+            msg["speaker"] = speaker
+        messages.append(msg)
+    return messages
+
+
+def _block(role: str, speaker: str | None, content: str) -> str:
+    return f"**{_label(role, speaker)}:** {content.strip()}\n"
+
+
+def _append_block(body: str, block: str) -> str:
+    return (body.rstrip() + "\n\n" + block) if body.strip() else block
+
+
+def _serialize_messages(messages: list[dict]) -> str:
+    body = ""
+    for m in messages:
+        body = _append_block(body, _block(m["role"], m.get("speaker"), m["content"]))
+    return body

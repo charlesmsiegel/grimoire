@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import atomic, cards, characters, entities, greetings, locks, overlay, scene_ids, scene_refs, scenes, worlds
+from . import atomic, cards, characters, entities, greetings, locks, overlay, scene_ids, scene_refs, worlds
 from .appearances import paths as appearances_paths, versions as appearances_versions
 from .campaigns import paths as campaigns_paths, read as campaigns_read
 from .frontmatter import parse_frontmatter
 from .paths import home, safe_id, slugify, uniquify
+from .scenes import lifecycle as scenes_lifecycle
 
 
 def migrate_scene_ids() -> None:
@@ -66,7 +67,7 @@ def _migrate_campaign_locked(cid: str) -> None:
     for old, new in mapping.items():
         (d / f"{old}.md").rename(d / f"{new}.md")
     scene_refs.repoint(cid, mapping)
-    scenes.repad(cid, width)  # widths must stay uniform if legacy count outgrew them
+    scenes_lifecycle.repad(cid, width)  # widths must stay uniform if legacy count outgrew them
 
 
 def bake_char_macros() -> None:

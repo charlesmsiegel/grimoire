@@ -8,10 +8,11 @@ import shutil
 from pathlib import Path
 
 from .. import (assets, atomic, calendars, campaign_climate, characters, climates,
-                entities, greetings, locks, modules, overlay, pcs, scenes, sheets)
+                entities, greetings, locks, modules, overlay, pcs, sheets)
 from ..appearances import paths as appearances_paths
 from ..frontmatter import dump_frontmatter, parse_frontmatter
 from ..paths import ensure_home, now_iso, slugify, uniquify
+from ..scenes import write as scenes_write
 from ..worlds import paths as worlds_paths
 from . import paths, read
 
@@ -230,7 +231,7 @@ def set_campaign_response(cid: str, fields: dict) -> None:
     if not mp.exists():
         raise paths.CampaignNotFound(cid)
     meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
-    for key in scenes.RESPONSE_FIELDS:
+    for key in scenes_write.RESPONSE_FIELDS:
         if key in fields:
             meta[key] = str(fields[key] or "")
     atomic.write_text(mp, dump_frontmatter(meta, body))
