@@ -10,8 +10,9 @@ import json
 
 from .. import prompts
 from . import (appearances, cards, changes, characters, dossiers, entities,
-               groupstate, overlay, pcs, playstate, plot, relationships, scenes, sheets)
+               groupstate, overlay, pcs, playstate, plot, relationships, sheets)
 from .audit import apply as audit_apply
+from .scenes import moment as scenes_moment, read as scenes_read
 from .campaigns import paths as campaigns_paths
 from .paths import slugify
 
@@ -706,8 +707,8 @@ def apply_edits(cid: str, edits: list[dict],
                 p = e["payload"]
                 new_eid = overlay.create_entity(cid, "locations", p["name"], after,
                                                 p.get("keys", ""), sd_prompt=p.get("sd_prompt", ""))
-                if sid and p.get("current_setting") and not scenes.get_location_history(cid, sid):
-                    scenes.set_location(cid, sid, new_eid)
+                if sid and p.get("current_setting") and not scenes_read.get_location_history(cid, sid):
+                    scenes_moment.set_location(cid, sid, new_eid)
                 target = {"kind": "locations", "id": new_eid}
             elif kind == "new_lore":
                 p = e["payload"]

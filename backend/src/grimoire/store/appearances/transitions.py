@@ -9,10 +9,12 @@ from __future__ import annotations
 import re
 
 from .. import characters, overlay
-# scenes is still flat until Task 9; scenes.py does not import appearances at
-# module scope (only lazily, inside functions), so this closes no cycle.
-from .. import scenes
 from ..campaigns import read as campaigns_read
+# Only the read/write/serialize leaves, never the `scenes` facade: `scenes/
+# read.py` imports `cast.py` from this package, so binding whole packages in
+# both directions would close a cycle these file-level edges do not.
+from ..scenes import (paths as scenes_paths, read as scenes_read,
+                      serialize as scenes_serialize, write as scenes_write)
 from . import cast, paths, versions
 
 
@@ -40,13 +42,13 @@ def appear(cid: str, scene_id: str, kind: str, actor_id: str, version_id: str, r
     if not narrate:
         return
     try:
-        has_messages = bool(scenes.read_scene(cid, scene_id)["messages"])
-    except scenes.SceneNotFound:
+        has_messages = bool(scenes_read.read_scene(cid, scene_id)["messages"])
+    except scenes_paths.SceneNotFound:
         return  # synthetic/test scene id with no backing file: nothing to narrate into
     if has_messages:
         name = cast._actor_name(paths.locked_actor_root(cid), kind, actor_id, version_id) or actor_id
-        scenes.append_message(cid, scene_id, "assistant", f"*{name} joins the scene.*",
-                              speaker=scenes.TRANSITION_SPEAKER)
+        scenes_write.append_message(cid, scene_id, "assistant", f"*{name} joins the scene.*",
+                              speaker=scenes_serialize.TRANSITION_SPEAKER)
 
 
 def leave(cid: str, scene_id: str, kind: str, actor_id: str) -> None:
@@ -69,18 +71,18 @@ def leave(cid: str, scene_id: str, kind: str, actor_id: str) -> None:
     rec["scenes"].remove(scene_id)
     paths._write(cid, data)
     try:
-        has_messages = bool(scenes.read_scene(cid, scene_id)["messages"])
-    except scenes.SceneNotFound:
+        has_messages = bool(scenes_read.read_scene(cid, scene_id)["messages"])
+    except scenes_paths.SceneNotFound:
         return
     if has_messages:
         name = cast._actor_name(paths.locked_actor_root(cid), kind, actor_id, version) or actor_id
-        scenes.append_message(cid, scene_id, "assistant", f"*{name} leaves the scene.*",
-                              speaker=scenes.TRANSITION_SPEAKER)
+        scenes_write.append_message(cid, scene_id, "assistant", f"*{name} leaves the scene.*",
+                              speaker=scenes_serialize.TRANSITION_SPEAKER)
 
 
 def suggestions(cid: str, scene_id: str) -> list[dict]:
     appeared_chars = {actor_id for ref in paths.record(cid) for k, actor_id in [paths._split(ref)] if k == "characters"}
-    dismissed = set(scenes.get_dismissed(cid, scene_id))
+    dismissed = set(scenes_read.get_dismissed(cid, scene_id))
     in_scene_chars = [a["id"] for a in cast.scene_cast(cid, scene_id) if a["kind"] == "characters"]
     candidates = [c for c in overlay.list_characters(cid)
                   if c["id"] not in appeared_chars and c["id"] not in dismissed and c["id"] not in in_scene_chars]

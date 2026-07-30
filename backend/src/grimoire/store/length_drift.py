@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import re
 
-from . import fence, scenes
+from . import fence
+from .scenes import serialize as scenes_serialize
 
 WINDOW = 3          # turns measured; a constant, deliberately not a setting
 # The two overshoot thresholds, public because they ARE the codebase's
@@ -29,7 +30,7 @@ _ROLL_FENCE = re.compile(fence.OPENER.pattern + r".*?(?:```|\Z)",
 
 def _is_model_block(m: dict) -> bool:
     return (m.get("role") == "assistant"
-            and m.get("speaker") not in scenes.SYNTHETIC_SPEAKERS)
+            and m.get("speaker") not in scenes_serialize.SYNTHETIC_SPEAKERS)
 
 
 def segment(messages: list[dict], turn_sizes: list[int]) -> list[list[dict]]:
@@ -71,7 +72,7 @@ def _identity(speaker: str, cast_names) -> str:
     model wrote, so one character can appear as 'Winifred' and 'Winifred Vance';
     counting raw strings inflates the speaker count into a false violation while
     letting that same character slip under blocks_per_speaker."""
-    return scenes.match_name(speaker, cast_names) or speaker
+    return scenes_serialize.match_name(speaker, cast_names) or speaker
 
 
 def measure(messages: list[dict], turn_sizes: list[int], cast_names,

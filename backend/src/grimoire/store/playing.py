@@ -6,9 +6,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import atomic, characters, context, greetings, overlay, pcs, scenes
+from . import atomic, characters, context, greetings, overlay, pcs
 from .appearances import cast as appearances_cast, transitions as appearances_transitions, versions as appearances_versions
 from .campaigns import paths as campaigns_paths
+from .scenes import (lifecycle as scenes_lifecycle, read as scenes_read,
+                     write as scenes_write)
 
 
 class PlayError(Exception):
@@ -87,7 +89,7 @@ def available_greetings(cid: str, after: str | None = None) -> list[dict]:
         g["mark"] = mark_of.get(g["id"])
     unlocked: set[str] = set()
     if after:
-        gid = scenes.read_scene(cid, after)["meta"].get("greeting", "")
+        gid = scenes_read.read_scene(cid, after)["meta"].get("greeting", "")
         if gid:
             unlocked = set(greetings.edges_of(plotmap, gid)["leads_to"])
     for g in out:
@@ -98,7 +100,7 @@ def available_greetings(cid: str, after: str | None = None) -> list[dict]:
 
 def start_from_greeting(cid: str, sid: str, gid: str) -> str:
     g = overlay.read_greeting(cid, gid)["meta"]   # raises GreetingNotFound
-    scene = scenes.read_scene(cid, sid)               # raises SceneNotFound
+    scene = scenes_read.read_scene(cid, sid)               # raises SceneNotFound
     if scene["messages"]:
         raise PlayError("scene already has messages")
     scene_pcless = scene["meta"].get("pcless") == "true"
@@ -125,9 +127,9 @@ def start_from_greeting(cid: str, sid: str, gid: str) -> str:
                     f"which is no longer in this campaign")
         appearances_transitions.appear(cid, sid, "characters", actor, version, "npc")
     if g["pcless"] and not scene_pcless:
-        scenes.set_pcless(cid, sid)  # before substitution: {{user}} needs the pcless fallback
+        scenes_write.set_pcless(cid, sid)  # before substitution: {{user}} needs the pcless fallback
     _mark_played(cid, gid)
-    scenes.stamp_greeting(cid, sid, gid)
+    scenes_write.stamp_greeting(cid, sid, gid)
     text = context.expand_macros(overlay.read_greeting(cid, gid)["body"],
                                  context.scene_substitutions(cid, sid), cid, sid)
     # append_reply, not append_message: the greeting is authored rather than
@@ -140,7 +142,7 @@ def start_from_greeting(cid: str, sid: str, gid: str) -> str:
     # _parse_messages re-splits it into N messages at read time; drift
     # segmentation would then measure only the trailing block of the very turn
     # that sets the scene's length anchor.
-    scenes.append_reply(cid, sid, scenes.split_reply(
+    scenes_write.append_reply(cid, sid, scenes_write.split_reply(
         text, frozenset(appearances_cast.player_names(cid, sid))))
     # retitle last: any earlier failure leaves the caller's sid valid for cleanup
-    return scenes.rename_scene(cid, sid, g["name"])
+    return scenes_lifecycle.rename_scene(cid, sid, g["name"])
