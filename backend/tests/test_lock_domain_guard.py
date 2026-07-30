@@ -124,11 +124,18 @@ Honest about its reach — the house standard set by ``test_atomic_guard.py``:
   inside a *different* module's unserialized mutator is not itself flagged. The
   callee is flagged in its own file instead, which is where the fix goes; what
   this misses is the caller that spans two such calls non-atomically.
-- **It checks that a lock is taken, never that it is taken widely enough.** A
-  read-modify-write whose read sits outside the ``with`` is exactly the bug
-  ``scenes._serialized`` was written to fix ("The lock has to span the READ as
-  well as the write"), and it is invisible here: the function locks, so it
-  passes. Likewise two individually-locked calls made non-atomically.
+- **Every WRITE must run under the lock; the READ need not.** The write half is
+  checked: a function that locks around part of its body and publishes outside
+  that block fails, on every branch, including through a comprehension. That was
+  not true until round fifteen -- entering a lock anywhere made the whole
+  function read as serialized -- and it is the one limit here that got narrower
+  rather than being restated.
+
+  The read half is still open, and it is the bug ``scenes._serialized`` was
+  written to fix ("The lock has to span the READ as well as the write"). A
+  read-modify-write whose read sits outside the ``with`` passes, because
+  nothing here can tell which values a write depends on. Likewise two
+  individually-locked calls made non-atomically.
 - **It does not decide which list a module belongs in.** Classification is a
   human judgment about whether that state can lose an update; the guard only
   insists the judgment be written down, stay true, and be revisited when the
@@ -529,34 +536,36 @@ def _writes_directly(fn: ast.AST, surface: _Surface = _Surface()) -> bool:
     campaign mutation; `os.replace`, which is how `store.atomic` actually
     publishes, is matched.
     """
-    for node in _calls(fn):
-        name = _called_name(node.func)
-        if isinstance(node.func, ast.Name):
-            # `from .atomic import write_text` — no receiver to key on.
-            if name in surface.imported:
-                return True
-            if name == "open" and _is_write_mode(node):
-                return True              # the builtin, not a method
-            continue
-        if not isinstance(node.func, ast.Attribute):
-            continue
-        receiver = _receiver_name(node.func)
-        # The inverted namespace, checked BEFORE the enumerated names so the
-        # enumeration is a fallback for receivers this cannot identify rather
-        # than the primary rule. `os.path.join` is unaffected: `_receiver_name`
-        # reads its receiver as `path`, which names no namespace here, so it
-        # falls through to the enumeration and matches nothing -- which is
-        # right, since `os.path` publishes nothing.
-        #
-        # Resolved through the module's import bindings, not matched against the
-        # literal spellings: `import shutil as fs` defeated the spelling check,
-        # and since `copytree` is in no enumeration either, the module dropped
-        # out of the survey altogether rather than reading as unlocked.
-        if _names_a_writer(name, receiver, surface.namespaces):
+    return any(_is_write_call(node, surface) for node in _calls(fn))
+
+
+def _is_write_call(node: ast.Call, surface: _Surface = _Surface()) -> bool:
+    """Whether this ONE call publishes.
+
+    Split out so that "does this function write?" and "does THIS write run under
+    the lock?" are the same question asked twice, rather than two rules. The
+    second question had no answer at all until round fifteen: a mutator could
+    enter the lock around `pass` and write after it.
+    """
+    name = _called_name(node.func)
+    if isinstance(node.func, ast.Name):
+        # `from .atomic import write_text` — no receiver to key on.
+        if name in surface.imported:
             return True
-        if name == "open" and _is_write_mode(node):
-            return True                  # the raw form `atomic` itself wraps
-    return False
+        return name == "open" and _is_write_mode(node)   # the builtin, not a method
+    if not isinstance(node.func, ast.Attribute):
+        return False
+    receiver = _receiver_name(node.func)
+    # The inverted namespace, checked BEFORE the enumerated names so the
+    # enumeration is a fallback for receivers this cannot identify rather than
+    # the primary rule. `os.path.join` is unaffected: `_receiver_name` reads its
+    # receiver as `path`, which names no namespace here, so it falls through to
+    # the enumeration and matches nothing -- right, since `os.path` publishes
+    # nothing. Resolved through the module's import bindings, not matched
+    # against the literal spellings.
+    if _names_a_writer(name, receiver, surface.namespaces):
+        return True
+    return name == "open" and _is_write_mode(node)       # the raw form `atomic` wraps
 
 
 def _names_a_writer(name: str | None, receiver: str | None, namespaces: dict) -> bool:
@@ -691,7 +700,7 @@ def _produces_lock(fn: ast.AST) -> bool:
 
     `audit`-shaped aliasing: a one-line helper that *returns* `campaign_lock(cid)`
     never enters it, so it is not itself serialized — but `with _alias(cid):` in
-    a caller is a real acquisition. Kept separate from `_locks_in_own_body` so
+    a caller is a real acquisition. Kept separate from `_enters_lock` so
     that distinction survives.
 
     It has to be a `return`/`yield` of the lock, not a mention of the name.
@@ -701,7 +710,7 @@ def _produces_lock(fn: ast.AST) -> bool:
     two holes the direct path already closes.
 
     And the acquisition has to still be HELD when the caller's body runs.
-    Deferring to `_locks_in_own_body` accepted a helper that takes the lock,
+    Deferring to `_enters_lock` accepted a helper that takes the lock,
     releases it, and hands back something else —
 
         def helper(cid):
@@ -722,23 +731,6 @@ def _produces_lock(fn: ast.AST) -> bool:
     returns = [n.value for n in _own_body(fn)
                if isinstance(n, ast.Return) and n.value is not None]
     return bool(returns) and all(_is_lock_context(v, fn) for v in returns)
-
-
-def _locks_in_own_body(fn: ast.AST) -> bool:
-    """`fn`'s own body ENTERS the campaign lock for its own campaign.
-
-    Being entered is the point, not merely called. `_ProcessScopedLock` acquires
-    in `__enter__`, so a bare `locks.campaign_lock(cid)` statement constructs a
-    lock and locks nothing -- and reading any mention of the name as an
-    acquisition would have let `campaign_lock(cid); atomic.write_text(...)` pass
-    completely unlocked. Every acquisition in this package is a `with`; the one
-    place calling `.acquire()` directly is `hold_all`, inside `locks.py`, which
-    this guard does not scan.
-
-    `hold_all` qualifies on name alone: it takes an iterable of ids rather than
-    one `cid`, so there is no single argument to tie to this function.
-    """
-    return _enters_lock(fn, ())
 
 
 def _holds_this_campaign(call: ast.Call, fn: ast.AST) -> bool:
@@ -834,7 +826,7 @@ def _yields_inside_lock(fn: ast.AST) -> bool:
     return _every_one_locked(fn, fn, _is_yield)
 
 
-def _under_lock(node: ast.AST, fn: ast.AST, locked: bool, want):
+def _under_lock(node: ast.AST, fn: ast.AST, locked: bool, want, aliases=()):
     """Yield, for every node matching `want` that this node executes DIRECTLY,
     whether it runs while a campaign lock is held.
 
@@ -853,18 +845,27 @@ def _under_lock(node: ast.AST, fn: ast.AST, locked: bool, want):
             continue                       # deferred, not executed here
         if isinstance(child, (ast.With, ast.AsyncWith)):
             inner = locked or any(_is_lock_context(i.context_expr, fn)
+                                  or _is_alias_context(i.context_expr, aliases)
                                   for i in child.items)
             for item in child.items:       # the context expressions themselves
-                yield from _under_lock(item, fn, locked, want)
+                yield from _under_lock(item, fn, locked, want, aliases)
             for stmt in child.body:
-                yield from _under_lock(stmt, fn, inner, want)
+                yield from _under_lock(stmt, fn, inner, want, aliases)
             continue
         if want(child):
             yield locked
-        yield from _under_lock(child, fn, locked, want)
+        yield from _under_lock(child, fn, locked, want, aliases)
 
 
-def _every_one_locked(node: ast.AST, fn: ast.AST, want) -> bool:
+def _is_alias_context(expr: ast.expr, aliases) -> bool:
+    """`with <alias>(cid, ...)` — a module-local helper that hands back this
+    campaign's lock. The alias arm of `_enters_lock`, extracted so the traversal
+    and the direct check agree on what an acquisition is."""
+    return (isinstance(expr, ast.Call) and _called_name(expr.func) in aliases
+            and _guards_the_campaign(expr))
+
+
+def _every_one_locked(node: ast.AST, fn: ast.AST, want, aliases=()) -> bool:
     """`node` does the thing at least once, and EVERY time it does, under a lock.
 
     "At least one occurrence is locked" was the wrong polarity in four separate
@@ -873,7 +874,7 @@ def _every_one_locked(node: ast.AST, fn: ast.AST, want) -> bool:
     invoking its target on a flagged fast path, an alias returning a lock on one
     branch and something else on another. All four are this function now.
     """
-    seen = list(_under_lock(node, fn, False, want))
+    seen = list(_under_lock(node, fn, False, want, aliases))
     return bool(seen) and all(seen)
 
 
@@ -1163,7 +1164,7 @@ def _locks_anywhere(fn: ast.AST) -> bool:
 
     Only the returned wrapper counts. A lock in the decorator's OWN body is held
     while the decoration runs -- once, at import -- and is long released by the
-    time the decorated function is ever called, so `_locks_in_own_body(fn)` was
+    time the decorated function is ever called, so a lock entered in the decorator's own body was
     never evidence of anything here.
     """
     return _wraps_target_under_lock(fn)
@@ -1308,7 +1309,11 @@ def _serializing(funcs: dict[str, ast.AST], surface=_Surface(),
                if n in scope and _all(ds, _produces_lock)
                and _all(ds, _locks_its_first_param)}
     writing = _reaches_a_write(funcs, surface)
-    out = {n for n, ds in funcs.items() if _all(ds, _locks_in_own_body)}
+    # No seed: the fixed point below decides every name by one rule. The seed
+    # used to answer "does this body lock?" with a bare `_enters_lock`, which was
+    # a second, weaker rule for the same question -- and weaker in the way that
+    # mattered, since it asked only whether a lock is entered somewhere.
+    out: set[str] = set()
     for _ in range(len(funcs) + 1):
         grown = set(out)
         for name, defs in funcs.items():
@@ -1318,10 +1323,19 @@ def _serializing(funcs: dict[str, ast.AST], surface=_Surface(),
             def covered(fn, grown=grown, surface=surface):
                 if _innermost_decorator_locks(fn, decorating):
                     return True                       # @_serialized and friends
+                if _writes_directly(fn, surface):
+                    # Checked BEFORE `_enters_lock`, which was the bug: entering
+                    # a lock anywhere made the whole function read as serialized,
+                    # so `with locks.campaign_lock(cid): pass` followed by
+                    # `atomic.write_text(...)` passed while writing unlocked.
+                    # Where the writes run is the question, and the traversal
+                    # that answers it for yields and decorator targets simply
+                    # was not asked here.
+                    return _every_one_locked(
+                        fn, fn, lambda n: isinstance(n, ast.Call)
+                        and _is_write_call(n, surface), aliases)
                 if _enters_lock(fn, aliases):
                     return True                       # with _lock(cid): ...
-                if _writes_directly(fn, surface):
-                    return False
                 # Pure delegation: every local callee that reaches a write must
                 # itself be covered, on this campaign, and at least one must exist.
                 delegated = [c for c in _own_calls(fn)
@@ -2205,6 +2219,76 @@ def test_the_lock_module_is_surveyed_like_any_other():
     marked = [n for n, defs in funcs.items() for fn in defs
               if _exemption(src, fn, [o for o in every if o is not fn]) is not None]
     assert not marked, f"unaudited `{MARKER}` in the lock module: {marked}"
+
+
+def test_every_write_must_execute_under_the_lock():
+    """Entering the lock somewhere made the WHOLE function read as serialized.
+
+    The sharpest hole on this branch, and the one the guard's own machinery
+    already had the answer to: `_under_lock` has asked "does every occurrence of
+    this run while the lock is held?" since round six, for yields and for
+    decorator target invocations. It was never asked about the function's own
+    writes, so
+
+        def put(cid):
+            with locks.campaign_lock(cid):
+                pass
+            atomic.write_text(p, x)      # completely unlocked
+
+    passed. This is NOT the documented limit -- that one is a read-modify-write
+    whose *read* sits outside the block, which still passes and is stated in the
+    module docstring. This was the write itself outside it.
+    """
+    for src, why in [
+        ("def put(cid):\n"
+         "    with locks.campaign_lock(cid):\n"
+         "        pass\n"
+         "    atomic.write_text(p, x)\n", "after the block"),
+        ("def put(cid):\n"
+         "    atomic.write_text(p, x)\n"
+         "    with locks.campaign_lock(cid):\n"
+         "        log(cid)\n", "before the block"),
+        ("def put(cid):\n"
+         "    with locks.campaign_lock(cid):\n"
+         "        atomic.write_text(p, x)\n"
+         "    atomic.write_text(q, y)\n", "one write locked, one not"),
+        ("def put(cid):\n"
+         "    if flag:\n"
+         "        with locks.campaign_lock(cid):\n"
+         "            atomic.write_text(p, x)\n"
+         "    else:\n"
+         "        atomic.write_text(q, y)\n", "an unlocked branch"),
+        ("def put(cid):\n"
+         "    with locks.campaign_lock(cid):\n"
+         "        pass\n"
+         "    [atomic.write_text(p, v) for v in vs]\n", "inside a comprehension"),
+    ]:
+        _f, serializing, mutators = _probe(src)
+        assert "put" in mutators
+        assert "put" not in serializing, f"a write {why} read as serialized ({src!r})"
+
+    # ...and the shapes that ARE covered still are, including through the alias
+    # and `hold_all` arms, which the traversal had to learn about to answer this.
+    for src, why in [
+        ("def put(cid):\n"
+         "    with locks.campaign_lock(cid):\n"
+         "        for v in vs:\n"
+         "            if v:\n"
+         "                atomic.write_text(p, v)\n", "nested blocks inside the lock"),
+        ("from contextlib import contextmanager\n"
+         "@contextmanager\n"
+         "def _lock(cid):\n"
+         "    with locks.campaign_lock(cid):\n"
+         "        yield\n"
+         "def put(cid):\n"
+         "    with _lock(cid):\n"
+         "        atomic.write_text(p, x)\n", "a module-local alias"),
+        ("def put(cid):\n"
+         "    with locks.hold_all([cid]):\n"
+         "        atomic.write_text(p, x)\n", "hold_all covering this campaign"),
+    ]:
+        _f, serializing, _m = _probe(src)
+        assert "put" in serializing, f"{why} was rejected ({src!r})"
 
 
 def test_a_decorator_does_not_cover_a_deferred_body():
