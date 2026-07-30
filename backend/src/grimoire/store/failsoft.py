@@ -24,12 +24,18 @@ Warnings are deduplicated on the file's (mtime, size). Both callers run tens to
 hundreds of times per request -- a 20-character listing costs 41 tombstone reads
 and 224 pointer reads -- and one report is diagnosable where four hundred
 identical lines are just noise. Any read that does not warn -- parsed, or simply
-absent -- forgets the path, so the cache holds exactly the files that are corrupt
-*right now* rather than every file that ever was. That keeps it from growing (a
-campaign deleted after its tombstones went bad leaves nothing behind), and it
-means a repair that does not hold gets reported again even if the file comes back
-byte-for-byte identical, which is exactly what a sync client rolling a file back
-does.
+absent -- forgets the path, so a repair that does not hold gets reported again
+even if the file comes back byte-for-byte identical, which is exactly what a sync
+client rolling a file back does.
+
+Reads alone cannot bound the cache, though, because a path can leave the store
+without a final read: ``campaigns.delete_campaign`` drops the whole tree with one
+``shutil.rmtree``, and nothing ever asks about that campaign's tombstones again
+(Codex review). Rather than hook every present and future deletion -- the
+copy-pasted-guard failure ``paths.safe_id`` already records as #240 -- the cache
+carries a hard cap and evicts oldest-first. Reaching it means the store has
+``_MAX_WARNED`` files corrupt at once, which no dedup policy improves on, and the
+cost of an eviction is one repeated warning.
 
 The cache is plain module state, deliberately unlocked. Every operation on it is
 a single dict get/set/pop, so concurrent readers cannot corrupt it, and the only
@@ -50,10 +56,15 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
-#: Paths currently known corrupt -> the (mtime_ns, size) that was warned about.
-#: ``None`` means the signature could not be taken, which never matches, so an
-#: unstattable file is reported on every read rather than silently once.
+#: Paths known corrupt -> the (mtime_ns, size) that was warned about. ``None``
+#: means the signature could not be taken, which never matches, so an unstattable
+#: file is reported on every read rather than silently once.
 _warned: dict[Path, tuple[int, int] | None] = {}
+
+#: Ceiling on `_warned`, so a path that vanishes by rmtree cannot pin a row for
+#: the life of the process. Far above any real number of simultaneously-corrupt
+#: store files, so eviction is the pathological case, not the common one.
+_MAX_WARNED = 256
 
 
 def _signature(path: Path) -> tuple[int, int] | None:
@@ -69,6 +80,8 @@ def _warn(path: Path, detail: str, consequence: str) -> None:
     if signature is not None and _warned.get(path) == signature:
         return
     _warned[path] = signature
+    while len(_warned) > _MAX_WARNED:
+        del _warned[next(iter(_warned))]   # dicts iterate in insertion order: oldest first
     log.warning("%s is unusable (%s) -- %s", path, detail, consequence)
 
 
