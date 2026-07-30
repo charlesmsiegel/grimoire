@@ -227,12 +227,13 @@ The atlas names five concerns in this file; the split separates them plus
 | File | Contents |
 |---|---|
 | `packfile.py` | `_read_json`, `_write_json`, `_read_sheets` — the shared pack-file accessors |
+| `scope.py` | `_RenameCollision`, `_field_keys`, `_group_scope`, `_fragment_users` — the small shared helpers every other file reaches for |
 | `staging.py` | `locked`, `_staging_root`, `new_mid`, `_publish` |
 | `packs.py` | `duplicate_module`, `create_module`, `delete_module`, `export_module`, `import_module`, `_member_parts`, `_check_archive` |
 | `migrate.py` | `_sheet_files`, `_migrate_file`, `_would_migrate`, `_migrate_preview`, `_file_kind`, `_iter_ref_values`, `_content_ids`, `_sidecar_stats_at`, `_impact`, `_run_migration`, `_campaign_locks`, `_result`, `_sample`, `_apply`, `recover`, `_replay_journal`, `_require_user_root` |
 | `layout.py` | `_edit_tree`, `_specialize_layout`, `_prune_node`, `_prune_layout`, `_layout_name_edit` |
-| `renaming.py` | `_RenameCollision`, `rename`, `_field_keys`, `_group_scope`, `_rewrite_expr`, `_rewrite_exprs`, `_rewrite_placeholders`, `_rename_map_key`, `_composing_tids`, `_fragment_users` |
-| `edits.py` | `set_manifest`, `check_proposal_guard`, `upsert_group`, `delete_group`, `upsert_sheet_type`, `delete_sheet_type`, `upsert_check`, `delete_check`, `set_check_defaults`, `_rule_meta`, `upsert_rule`, `delete_rule`, `upsert_content`, `delete_content`, `set_layout`, `set_theme` |
+| `renaming.py` | `rename`, `check_proposal_guard`, `_rewrite_expr`, `_rewrite_exprs`, `_rewrite_placeholders`, `_rename_map_key`, `_composing_tids` |
+| `edits.py` | `set_manifest`, `upsert_group`, `delete_group`, `upsert_sheet_type`, `delete_sheet_type`, `upsert_check`, `delete_check`, `set_check_defaults`, `_rule_meta`, `upsert_rule`, `delete_rule`, `upsert_content`, `delete_content`, `set_layout`, `set_theme` |
 
 ### `absorb/`
 
