@@ -23,10 +23,18 @@ that is written down.
 Warnings are deduplicated on the file's (mtime, size). Both callers run tens to
 hundreds of times per request -- a 20-character listing costs 41 tombstone reads
 and 224 pointer reads -- and one report is diagnosable where four hundred
-identical lines are just noise. A successful read forgets the path, so the cache
-means "corrupt right now" rather than "was corrupt once": a repair that does not
-hold gets reported again even if the file comes back byte-for-byte identical,
-which is exactly what a sync client rolling a file back does.
+identical lines are just noise. Any read that does not warn -- parsed, or simply
+absent -- forgets the path, so the cache holds exactly the files that are corrupt
+*right now* rather than every file that ever was. That keeps it from growing (a
+campaign deleted after its tombstones went bad leaves nothing behind), and it
+means a repair that does not hold gets reported again even if the file comes back
+byte-for-byte identical, which is exactly what a sync client rolling a file back
+does.
+
+The cache is plain module state, deliberately unlocked. Every operation on it is
+a single dict get/set/pop, so concurrent readers cannot corrupt it, and the only
+race -- two threads warning about the same file at once -- costs a duplicate log
+line. A lock on a read this hot would buy nothing.
 
 Nothing else should be routed through here without the same argument. The other
 fail-soft sites (``audit``, ``changes``, ``commits``, ...) are deliberately
@@ -81,6 +89,7 @@ def read_json(path: Path, expect: type, consequence: str) -> Any | None:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
+        _warned.pop(path, None)   # gone is not corrupt, and holds no entry
         return None
     except (ValueError, OSError) as exc:   # ValueError covers JSON and UTF-8 decoding
         _warn(path, f"{type(exc).__name__}: {exc}", consequence)

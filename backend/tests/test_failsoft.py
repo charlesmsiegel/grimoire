@@ -125,8 +125,26 @@ def test_a_file_that_breaks_again_identically_warns_again(tmp_path, caplog):
         failsoft.read_json(p, dict, "x")
         p.write_text("{not json", encoding="utf-8")
         os.utime(p, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+        # Without this the test could pass vacuously on a filesystem whose mtime
+        # does not round-trip: a *different* signature warns for the wrong reason.
+        assert (p.stat().st_mtime_ns, p.stat().st_size) == (stamp.st_mtime_ns, stamp.st_size)
         failsoft.read_json(p, dict, "x")
     assert len(caplog.records) == 2
+
+
+def test_a_deleted_file_is_forgotten(tmp_path, caplog):
+    """A path that goes away leaves no entry behind: the cache tracks files that
+    are corrupt now, and a campaign removed after its tombstones went bad must
+    not pin a row in it for the life of the process."""
+    p = tmp_path / "f.json"
+    p.write_text("{not json", encoding="utf-8")
+    with caplog.at_level(logging.WARNING):
+        failsoft.read_json(p, dict, "x")
+        assert p in failsoft._warned
+        p.unlink()
+        failsoft.read_json(p, dict, "x")
+    assert p not in failsoft._warned
+    assert len(caplog.records) == 1
 
 
 def test_two_corrupt_files_each_warn(tmp_path, caplog):
