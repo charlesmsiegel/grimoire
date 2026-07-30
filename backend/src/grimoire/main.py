@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from .routes import router
 from .store import locks, migrations, module_edit
 
-DEFAULT_DIST = Path(__file__).resolve().parents[2].parent / "frontend" / "dist"
+DEFAULT_DIST = Path(__file__).resolve().parents[2].parent / "frontend" / "dist"  # paths-ok: DEFAULT_DIST only; GRIMOIRE_DIST overrides it on Android
 
 
 def dist_dir() -> Path:

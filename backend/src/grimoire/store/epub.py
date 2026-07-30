@@ -23,7 +23,7 @@ from . import export as _export
 from .export import EXT_MEDIA as _EXT_MEDIA
 from .paths import now_iso
 
-FONTS_DIR = Path(__file__).resolve().parents[1] / "assets" / "fonts"
+FONTS_DIR = Path(__file__).resolve().parents[1] / "assets" / "fonts"  # paths-ok: package-relative, so the fonts ship inside the wheel
 
 
 @functools.lru_cache(maxsize=1)

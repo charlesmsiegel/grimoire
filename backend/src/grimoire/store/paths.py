@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from . import atomic
 
-DEFAULT_HOME = Path.home() / ".grimoire"
+DEFAULT_HOME = Path.home() / ".grimoire"  # paths-ok: this IS the resolver's default root
 
 
 def _pointer_path() -> Path:
@@ -20,7 +20,7 @@ def _pointer_path() -> Path:
     points at, so it cannot also store the pointer (chicken/egg). It sits
     beside the default store as a sibling dotfile.
     """
-    return Path.home() / ".grimoire.json"
+    return Path.home() / ".grimoire.json"  # paths-ok: the bootstrap pointer cannot live inside the directory it names
 
 
 def _read_pointer() -> dict:
@@ -36,7 +36,7 @@ def _read_pointer() -> dict:
 
 def _pointer_data_dir() -> Path | None:
     raw = _read_pointer().get("data_dir")
-    return Path(raw).expanduser() if raw else None
+    return Path(raw).expanduser() if raw else None  # paths-ok: expanding the user's own configured storage path is the feature
 
 
 def home() -> Path:
@@ -77,7 +77,7 @@ def set_data_dir(path: str | Path | None) -> Path:
         atomic.write_text(pointer, json.dumps(data, indent=2) + "\n")
         return ensure_home()
 
-    resolved = Path(str(path).strip()).expanduser()
+    resolved = Path(str(path).strip()).expanduser()  # paths-ok: same, for a path arriving from the Configuration page
     if resolved.exists() and not resolved.is_dir():
         raise ValueError(f"{resolved} exists but is not a directory")
     resolved.mkdir(parents=True, exist_ok=True)

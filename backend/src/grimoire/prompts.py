@@ -11,7 +11,7 @@ import functools
 import os
 from pathlib import Path
 
-DEFAULT_TEMPLATES_DIR = Path(__file__).resolve().parents[3] / "templates"
+DEFAULT_TEMPLATES_DIR = Path(__file__).resolve().parents[3] / "templates"  # paths-ok: DEFAULT_TEMPLATES_DIR only; GRIMOIRE_TEMPLATES overrides it on Android
 
 
 def templates_dir() -> Path:
