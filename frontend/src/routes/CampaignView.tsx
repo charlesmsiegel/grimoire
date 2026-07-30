@@ -350,21 +350,32 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     selectScene(id);
   }
 
+  // A scene's id is its filename, so a rename mints a new one. `scene_refs.repoint`
+  // carries every *persisted* reference across; an open review holds two more that
+  // live only in this browser and no server-side repointer can see:
+  //   - `absorbSid`, the id its save and its audit retry POST; and
+  //   - `payload.scene` on each staged plot edit, which absorb.materialize
+  //     embedded and apply_edits passes straight to plot.set_movement — so a save
+  //     after a rename would append beats pointing at a scene that is gone.
+  function reviewSceneRenamed(oldId: string, newId: string) {
+    setAbsorbSid((s) => (s === oldId ? newId : s));
+    setEditRows((rows) => rows.map((r) => (
+      r.kind === "plot" && r.payload?.scene === oldId
+        ? { ...r, payload: { ...r.payload, scene: newId } } : r)));
+  }
+
   async function renameScene(id: string, title: string) {
     const { id: newId } = await api.renameScene(cid, id, title);
     if (activeId === id) setActiveId(newId);
     setSeedPrompt((p) => (p && p.sid === id ? { ...p, sid: newId } : p));
-    // An open review holds the id it was absorbed from, and both its save and
-    // its audit retry POST that id — so a rename must carry it along or they
-    // 404 against a scene that no longer exists.
-    setAbsorbSid((s) => (s === id ? newId : s));
+    reviewSceneRenamed(id, newId);
     setScenes(await api.listScenes(cid));
   }
 
   // the first date set renames the scene file — re-list and adopt the new id
   async function sceneRenamed(id: string) {
     setSeedPrompt((p) => (p && p.sid === activeId ? { ...p, sid: id } : p));
-    setAbsorbSid((s) => (s === activeId ? id : s));   // same reason as renameScene
+    if (activeId) reviewSceneRenamed(activeId, id);
     setScenes(await api.listScenes(cid));
     selectScene(id);
   }
@@ -854,10 +865,15 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
             {budgetCutPhases.length > 0 && (
               <div className="mechanics-notice">
                 <p>This scene was only partly absorbed: the absorb time budget ran out.</p>
+                {/* Deliberately does NOT point at End scene: that button posts the
+                    *active* scene and replaces this review wholesale, discarding
+                    every edit the reviewer has already approved or typed. The audit
+                    has its own scoped Retry below; the dossier phase has none, so
+                    the honest advice is the setting, not a destructive re-run. */}
                 <p className="field-hint">
                   Cut short: {budgetCutPhases.map((p) => PHASE_LABELS[p.name]).join(", ")}. The
-                  summary and its edits above are complete. Raise the absorb budget on the
-                  Configuration page, or end the scene again to retry the rest.
+                  summary and its edits above are complete and safe to save. Raise the absorb
+                  budget on the Configuration page so the next scene gets the rest.
                 </p>
               </div>)}
             {absorb.mechanics.status === "ok" && absorb.mechanics.warnings.length === 0 && (

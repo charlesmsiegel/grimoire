@@ -3186,6 +3186,11 @@ def test_a_budget_spent_by_the_reads_before_the_call_is_not_an_attempt(
     dossiers = _phase(body, "dossiers")
     assert dossiers["attempted"] is False
     assert dossiers["budget_exhausted"] is True
+    # ... and the per-NPC lists agree with the flags: a call that was never made
+    # is not an LLMError against that NPC, it is one more NPC never reached.
+    assert body["dossiers"]["failed"] == []
+    assert body["dossiers"]["skipped"] == ["aese"]
+    assert "budget" in body["dossiers"]["reason"]
 
 
 def test_an_upstream_timeout_is_not_mistaken_for_the_budget(
