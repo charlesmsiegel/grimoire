@@ -84,7 +84,7 @@ def _user_home() -> Path:
             candidate = None
         if candidate is not None and candidate.parent != candidate and candidate.is_dir():
             return candidate
-    return Path.home()
+    return Path.home()  # paths-ok: machine-local lock state, deliberately outside the data root
 
 
 def lock_dir() -> Path:
