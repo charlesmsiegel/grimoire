@@ -1293,6 +1293,25 @@ test("a budget-cut audit reads as never run, and still offers the retry", async 
   expect(screen.getByRole("button", { name: /Retry validation/ })).toBeInTheDocument();
 });
 
+test("a successful audit retry clears the budget notice it was offered for", async () => {
+  // Retry replaces `mechanics`; the phase row it was projected from has to
+  // move with it, or the panel keeps warning about a step that has since run.
+  const over = {
+    mechanics: { status: "failed", reason: "the absorb time budget ran out before the audit could run",
+                 warnings: [], dropped: [], attempted: false, budget_exhausted: true },
+  };
+  absorbWithPhases(phasesFor(over), over);
+  (api.retryAudit as any).mockResolvedValue({
+    mechanics: { status: "ok", reason: null, warnings: [], dropped: [],
+                 attempted: true, budget_exhausted: false },
+    edits: [] });
+  await openAbsorb();
+
+  await screen.findByText(/only partly absorbed/);
+  fireEvent.click(screen.getByRole("button", { name: /Retry validation/ }));
+  await waitFor(() => expect(screen.queryByText(/only partly absorbed/)).toBeNull());
+});
+
 test("a budget-cut dossier phase reads as never prepared, not as a failure", async () => {
   const over = {
     dossiers: { status: "failed",
