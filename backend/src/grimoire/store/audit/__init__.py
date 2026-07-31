@@ -14,10 +14,11 @@ from __future__ import annotations
 # Submodules before names, and `baselines` before `prompt`: `prompt` imports
 # `scenes/read.py`, and initializing that package runs `scenes/lifecycle.py`,
 # which imports `audit.baselines` -- both directly and through `scene_refs`.
-# That name has to be bound on this half-initialized package by then, and it
-# is -- because `baselines` itself imports no scene state, which is the whole
-# point of the cut (it is what removed the audit/scene_refs/scenes cycle).
-# `apply` reads both siblings.
+# The order is a reading aid, not a requirement: that re-entry binds a
+# submodule, which imports on demand even with this package half-initialized.
+# What does matter is that `baselines` itself imports no scene state, which is
+# the whole point of the cut (it is what removed the audit/scene_refs/scenes
+# cycle). `apply` reads both siblings.
 from . import baselines, prompt, apply  # noqa: F401
 from .baselines import (  # noqa: F401
     _LOCKS, _LOCKS_GUARD, _lock, _path, _write, baseline_entry_valid,

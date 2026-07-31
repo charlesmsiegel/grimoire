@@ -142,7 +142,7 @@ def grade_roll_fence(text: str, allowed_checks: set[str],
 # parse_output rebuilds a dict of every key it knows, so parsing an empty
 # object yields the full contract with each key at its default: str for the two
 # prose fields, list for every section. Deriving it means a section added to
-# absorb.py and templates/absorb/system.j2 is graded from the day it lands,
+# absorb/parse.py and templates/absorb/system.j2 is graded from the day it lands,
 # where a hand-kept tuple would silently stop covering it — which is exactly
 # how this grader originally shipped missing four sections.
 _ABSORB_CONTRACT = absorb.parse_output("{}")

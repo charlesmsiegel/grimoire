@@ -161,9 +161,13 @@ first if you think one should be skipped.
   graph is acyclic**, enforced by `backend/tests/test_import_guard.py`. Inside
   `store/`, a cross-package import binds a *submodule* and keeps it as a module
   object — `from ..campaigns import read` then `read.world_refs()`, never
-  `from ..campaigns import world_refs`. Binding a name off a package that is
-  still initializing raises at import time while the file graph stays acyclic,
-  so the cycle check alone would not catch it. The marker is `# import-ok:
+  `from ..campaigns import world_refs`, and never `from ..campaigns.read import
+  world_refs` either. Two distinct reasons: binding a name off a package that is
+  still initializing raises at import time, and binding a function by value off
+  a sibling package's leaf module makes the caller cache it, so a test patching
+  `campaigns.read.world_refs` silently stops intercepting and goes green while
+  injecting nothing. Both leave the file graph acyclic, so the cycle check alone
+  would catch neither. The marker is `# import-ok:
   <reason>`, same convention as the guards above — and, given how often this
   refactor caught a stated reason that wasn't actually true, the reason must
   hold up, not merely be present.

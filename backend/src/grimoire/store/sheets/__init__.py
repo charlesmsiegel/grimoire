@@ -17,10 +17,10 @@ from __future__ import annotations
 #
 # The file names deliberately differ from the public function names --
 # `reader`/`writer`/`tally`/`advancement`, not `read`/`write`/`coverage`/
-# `advance`. Same-named files would be overwritten by the `from .reader import
-# read` line below, and a later `from ..sheets import read` would silently bind
-# the *function*: an AttributeError at call time, past both the import and the
-# cycle guard. test_import_guard.py's
+# `advance`. Same-named files would be overwritten by `read` in the
+# `from .reader import (...)` block below, and a later `from ..sheets import
+# read` would silently bind the *function*: an AttributeError at call time,
+# past both the import and the cycle guard. test_import_guard.py's
 # `test_no_submodule_is_shadowed_by_a_facade_export` enforces this.
 from . import (paths, schema, pools, reader, writer, creation, tally,  # noqa: F401
                advancement)

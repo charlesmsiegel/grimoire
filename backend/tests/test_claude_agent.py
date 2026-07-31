@@ -105,6 +105,10 @@ async def test_cli_not_found_is_missing_dependency(monkeypatch):
     with pytest.raises(ClaudeAgentError) as exc:
         [c async for c in client.stream([{"role": "user", "content": "hi"}], "opus")]
     assert exc.value.kind == "missing_dependency"
+    # The detail, not just the kind: the absent-extra path raises that same kind
+    # with the pip-install message, so without this the test passes on an
+    # environment with no `claude` extra even if the fake were never installed.
+    assert exc.value.detail == "claude not installed"
 
 
 async def test_process_error_is_bad_response(monkeypatch):
