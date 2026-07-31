@@ -70,16 +70,20 @@ Honest about its reach — the house standard set by ``test_atomic_guard.py``:
   the intended trade: the marker is cheap and visible, and a false alarm costs a
   comment while a false negative costs a transcript.
 
-  Four things the whitelist deliberately does *not* trust. A name that only
+  Five things the whitelist deliberately does *not* trust. A name that only
   module scope may bind — a lock alias or decorator resolved from a nested
   ``def`` in some unrelated factory is not the name module scope actually binds.
   A name reached through an attribute — ``@hooks.safe`` is not this module's
-  ``safe``. A decorator that is not the innermost one, because composition order
+  ``safe`` — and neither is ``hooks.helper(cid)`` this module's lock alias. A
+  decorator that is not the innermost one, because composition order
   decides whether the write happens inside the lock: ``@safe`` over ``@defer``
   locks around a call that returns a callback and writes nothing. And any name a
   binding elsewhere in the module can shadow — the spelling ``locks``
-  (``_rebinds_locks``), or an alias or decorator a parameter rebinds
-  (``_shadowed_names``).
+  (``_rebinds_locks``), or an alias or decorator rebound by a parameter, a loop
+  target, a ``with ... as``, an import, or an assignment from any of those
+  (``_shadowed_names`` and ``_module_level``). And ``cid`` itself, in a function
+  whose body reassigns it (``_rebinds_cid``) — every rule here reads that name
+  as "this function's campaign", which is a claim about the parameter.
 
   That last one is the second rule this file had to learn to state once. **A
   name is not a binding.** It was fixed four separate times before it was
@@ -386,6 +390,20 @@ def _fs_namespaces(tree: ast.AST) -> dict[str, str]:
             for alias in node.names:
                 if alias.name in (*_FS_NAMESPACES, "atomic"):
                     out[alias.asname or alias.name] = alias.name
+    # `import shutil; fs = shutil` binds the MODULE OBJECT, which the import
+    # scan above cannot see. Round sixteen resolved import aliases and left
+    # assignment aliases, so `fs.copytree(...)` still fell through -- and since
+    # `copytree` is in no enumeration, the module left the survey rather than
+    # reading as unlocked. Iterated for `a = shutil; b = a`.
+    bound = list(_bindings(tree))
+    for _ in range(len(bound) + 1):
+        grew = False
+        for name, value in bound:
+            if isinstance(value, ast.Name) and value.id in out and name not in out:
+                out[name] = out[value.id]
+                grew = True
+        if not grew:
+            break
     return out
 
 
@@ -473,6 +491,27 @@ def _assigned_writers(tree: ast.AST, namespaces: dict) -> set[str]:
         if not grew:
             break
     return out
+
+
+def _rebinds_cid(fn: ast.AST) -> bool:
+    """`fn` assigns to `cid` in its own body.
+
+    Every rule in this guard is keyed on the NAME `cid` meaning this function's
+    campaign, which is a claim about the parameter and stops being true the
+    moment the body rebinds it:
+
+        def put(cid, target):
+            with locks.campaign_lock(cid):
+                cid = target             # the lock is on the OLD cid
+                atomic.write_text(root / cid, x)
+
+    Two calls with different originals and the same `target` then write one
+    campaign while holding two different locks. This is the same "a name is not
+    a binding" rule the module-scope checks apply, pointed at the one name
+    everything else here trusts.
+    """
+    return any(isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)
+               and n.id == "cid" for n in _own_body(fn))
 
 
 def _rebinds_locks(tree: ast.AST) -> bool:
@@ -857,7 +896,7 @@ def _enters_lock(fn: ast.AST, aliases) -> bool:
         # other campaign entirely. `aliases` therefore holds only helpers whose
         # FIRST parameter is the one they lock, and the call must pass `cid`
         # first positionally.
-        if _called_name(call.func) in aliases and _guards_the_campaign(call):
+        if _is_alias_context(call, aliases):
             return True
     return False
 
@@ -922,8 +961,12 @@ def _is_alias_context(expr: ast.expr, aliases) -> bool:
     """`with <alias>(cid, ...)` — a module-local helper that hands back this
     campaign's lock. The alias arm of `_enters_lock`, extracted so the traversal
     and the direct check agree on what an acquisition is."""
-    return (isinstance(expr, ast.Call) and _called_name(expr.func) in aliases
-            and _guards_the_campaign(expr))
+    # A bare `ast.Name`, for the reason the decorator path already gives:
+    # `_called_name` reads `hooks.helper(cid)` as the local `helper`, so a
+    # foreign context manager borrowed a validated local alias. Same defect,
+    # the one path that had not been narrowed.
+    return (isinstance(expr, ast.Call) and isinstance(expr.func, ast.Name)
+            and expr.func.id in aliases and _guards_the_campaign(expr))
 
 
 def _suspends_under_lock(fn: ast.AST, aliases=()) -> bool:
@@ -952,7 +995,15 @@ def _suspends_under_lock(fn: ast.AST, aliases=()) -> bool:
 
 
 def _is_suspension(node: ast.AST) -> bool:
-    return isinstance(node, (ast.Await, ast.AsyncFor, ast.AsyncWith))
+    """Every way control can leave a function while it still "holds" the lock.
+
+    `yield` belongs here for the same reason `await` does: the generator is
+    resumed by whoever iterates it, and a second generator on the same thread
+    re-enters the thread-owned RLock in between. The decorated-generator shape
+    was already rejected; a generator that takes the lock DIRECTLY reached this
+    predicate, which listed only the async forms."""
+    return isinstance(node, (ast.Await, ast.AsyncFor, ast.AsyncWith,
+                             ast.Yield, ast.YieldFrom))
 
 
 def _every_one_locked(node: ast.AST, fn: ast.AST, want, aliases=()) -> bool:
@@ -1058,6 +1109,7 @@ def _module_level(tree: ast.AST) -> set[str]:
     defined: set[str] = set()
     assigned: list[tuple[str, ast.AST]] = []
     imported: set[str] = set()
+    rebound: set[str] = set()
 
     def scan(body):
         for node in body:
@@ -1075,7 +1127,16 @@ def _module_level(tree: ast.AST) -> set[str]:
                 # analysis cannot follow the import, so the name is poisoned.
                 imported.update((a.asname or a.name).split(".")[0] for a in node.names)
             elif isinstance(node, (ast.If, ast.Try, ast.With, ast.AsyncWith,
-                                   ast.For, ast.While)):
+                                   ast.For, ast.AsyncFor, ast.While)):
+                # `for helper in [nullcontext]:` and `with x() as helper:` bind
+                # at module scope as surely as `=` does, and the scan looked
+                # only at their bodies. Nothing here can resolve what they bind
+                # to, so the name is poisoned.
+                for target in ([node.target] if isinstance(node, (ast.For, ast.AsyncFor))
+                               else [i.optional_vars for i in getattr(node, "items", [])]):
+                    for sub in ast.walk(target) if target is not None else ():
+                        if isinstance(sub, ast.Name):
+                            rebound.add(sub.id)
                 for attr in ("body", "orelse", "finalbody", "handlers"):
                     inner = getattr(node, attr, [])
                     scan([h for h in inner] if attr != "handlers"
@@ -1083,17 +1144,21 @@ def _module_level(tree: ast.AST) -> set[str]:
 
     scan(tree.body)
     out = set(defined)
-    poisoned = set(imported)
+    poisoned = set(imported) | rebound
     for _ in range(len(assigned) + 1):
-        grew = False
+        before = (len(out), len(poisoned))
         for name, value in assigned:
-            if isinstance(value, ast.Name) and value.id in out:
-                if name not in out:
-                    out.add(name)
-                    grew = True
+            # A poisoned source poisons what it is copied into. Checking only
+            # membership in `out` let `safe = hooks.identity; alias = safe`
+            # revive the rebound name: `safe` was in both sets, and the alias
+            # resolution read the wrong one.
+            if isinstance(value, ast.Name) and value.id in poisoned:
+                poisoned.add(name)
+            elif isinstance(value, ast.Name) and value.id in out:
+                out.add(name)
             else:
                 poisoned.add(name)
-        if not grew:
+        if (len(out), len(poisoned)) == before:
             break
     # ...and a name any parameter in this module shadows is not a name module
     # scope can vouch for either -- see `_shadowed_names`.
@@ -1414,6 +1479,9 @@ def _serializing(funcs: dict[str, ast.AST], surface=_Surface(),
             def covered(fn, grown=grown, surface=surface):
                 if _innermost_decorator_locks(fn, decorating):
                     return True                       # @_serialized and friends
+                if _rebinds_cid(fn):
+                    return False          # the lock is keyed on a name the body
+                                          # reassigns -- see `_rebinds_cid`
                 if _suspends_under_lock(fn, aliases):
                     return False          # an RLock is thread-owned, not task-
                                           # owned -- see `_suspends_under_lock`
@@ -2425,6 +2493,117 @@ def test_a_suspension_under_the_lock_is_not_serialization():
         "    with locks.campaign_lock(cid):\n"
         "        atomic.write_text(p, x)\n")
     assert "put" in serializing, "an await outside the lock was rejected"
+
+
+ALIAS_SRC = ("from contextlib import contextmanager\n"
+             "@contextmanager\n"
+             "def helper(cid):\n"
+             "    with locks.campaign_lock(cid):\n"
+             "        yield\n")
+DECORATOR_SRC = ("def safe(fn):\n"
+                 "    def locked(cid, *a):\n"
+                 "        with locks.campaign_lock(cid):\n"
+                 "            return fn(cid, *a)\n"
+                 "    return locked\n")
+
+
+def test_a_body_may_not_rebind_the_campaign_it_locked():
+    """Every rule here is keyed on the NAME `cid` meaning this function's
+    campaign — a claim about the parameter that stops being true the moment the
+    body reassigns it. Two calls with different originals and the same target
+    then write one campaign under two different locks."""
+    _f, serializing, mutators = _probe(
+        "def put(cid, target):\n"
+        "    with locks.campaign_lock(cid):\n"
+        "        cid = target\n"
+        "        atomic.write_text(root / cid, x)\n")
+    assert "put" in mutators
+    assert "put" not in serializing, "the body rebound the id the lock was keyed on"
+
+    _f, serializing, _m = _probe(
+        "def put(cid, target):\n"
+        "    with locks.campaign_lock(cid):\n"
+        "        atomic.write_text(root / cid, x)\n")
+    assert "put" in serializing
+
+
+def test_loop_and_with_targets_rebind_module_scope():
+    """`=`, `import` and parameters were treated as bindings; `for x in ...`
+    and `with ... as x` were not, though they bind at module scope just as
+    surely. The predicted next binding form, at the predicted place."""
+    for rebind, why in [
+        ("for helper in [nullcontext]:\n    pass\n", "a loop target"),
+        ("with ctx() as helper:\n    pass\n", "a with-as target"),
+    ]:
+        _f, serializing, mutators = _probe(
+            ALIAS_SRC + rebind +
+            "def put(cid):\n"
+            "    with helper(cid):\n"
+            "        atomic.write_text(p, x)\n")
+        assert "put" in mutators
+        assert "put" not in serializing, f"{why} did not poison the alias"
+
+
+def test_poisoning_propagates_along_an_alias_chain():
+    """`safe = hooks.identity; alias = safe` revived the rebound name: `safe`
+    was in both the resolved set and the poisoned one, and the alias resolution
+    read the wrong one."""
+    _f, serializing, mutators = _probe(
+        DECORATOR_SRC +
+        "safe = hooks.identity\n"
+        "alias = safe\n"
+        "@alias\n"
+        "def put(cid):\n"
+        "    atomic.write_text(p, x)\n")
+    assert "put" in mutators
+    assert "put" not in serializing, "a poisoned name was revived by aliasing it"
+
+
+def test_an_alias_reached_through_an_attribute_is_not_the_local_one():
+    """`hooks.helper(cid)` is not this module's `helper`. The decorator path was
+    narrowed to bare names in round ten; the alias path was not."""
+    _f, serializing, mutators = _probe(
+        ALIAS_SRC +
+        "def put(cid):\n"
+        "    with hooks.helper(cid):\n"
+        "        atomic.write_text(p, x)\n")
+    assert "put" in mutators
+    assert "put" not in serializing, "a foreign context manager borrowed the local alias"
+
+    _f, serializing, _m = _probe(
+        ALIAS_SRC +
+        "def put(cid):\n"
+        "    with helper(cid):\n"
+        "        atomic.write_text(p, x)\n")
+    assert "put" in serializing, "the local alias was rejected"
+
+
+def test_a_yield_under_the_lock_is_a_suspension():
+    """A generator resumes when its caller iterates it, and a second generator
+    on the same thread re-enters the thread-owned RLock in between. The
+    decorated-generator shape was rejected in round fourteen; one that takes the
+    lock directly reached the suspension check, which listed only async forms."""
+    _f, serializing, mutators = _probe(
+        "def put(cid):\n"
+        "    with locks.campaign_lock(cid):\n"
+        "        data = read(p)\n"
+        "        yield data\n"
+        "        atomic.write_text(p, data)\n")
+    assert "put" in mutators
+    assert "put" not in serializing, "a yield under the lock read as serialized"
+
+
+def test_a_namespace_bound_by_assignment_is_resolved():
+    """Round sixteen resolved `import shutil as fs`; `import shutil; fs = shutil`
+    binds the module OBJECT, which the import scan cannot see. Same consequence
+    — `copytree` is in no enumeration, so the module left the survey."""
+    for src, why in [
+        ("import shutil\nfs = shutil\ndef put(cid):\n    fs.copytree(a, b)\n", "shutil"),
+        ("import os\nsys = os\nalias = sys\ndef put(cid):\n    alias.truncate(p, 0)\n",
+         "a chain of assignments"),
+    ]:
+        _f, _s, mutators = _probe(src)
+        assert mutators, f"a namespace bound from {why} was invisible ({src!r})"
 
 
 def test_a_delegated_write_must_be_positioned_too():
