@@ -50,7 +50,8 @@ Honest about its reach — the house standard set by ``test_atomic_guard.py``:
   problem is spotted, only these are recognized:
 
   1. ``with locks.campaign_lock(cid)`` — receiver ``locks``, which nothing in
-     the module rebinds, and argument exactly the name ``cid``;
+     the module rebinds, and the campaign passed as the name ``cid``, first
+     positionally or as the keyword ``cid``;
   2. ``with locks.hold_all([... cid ...])`` — a literal container that visibly
      contains ``cid`` (or any argument at all, in a function that takes no
      ``cid`` — that covers the function's own body only, and never vouches for
@@ -289,13 +290,19 @@ def _bindings(tree: ast.AST):
     and `_analyze` skipped the private writer as private: a domain module could
     expose an unlocked public mutator and pass.
 
-    Walrus is deliberately absent: it binds inside an expression, never at the
-    module scope these callers care about.
+    `ast.NamedExpr` is here because the reason it was excluded was simply wrong.
+    The comment said a walrus "binds inside an expression, never at the module
+    scope these callers care about" -- but `if (helper := nullcontext): pass` at
+    module level rebinds `helper` for the whole module. That was a factual claim
+    of mine, not a limitation of the AST, and it is the fourth time on this
+    branch that the defect was a sentence rather than the code.
     """
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
             targets, value = node.targets, node.value
         elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets, value = [node.target], node.value
+        elif isinstance(node, ast.NamedExpr):
             targets, value = [node.target], node.value
         else:
             continue
@@ -859,8 +866,13 @@ def _guards_the_campaign(call: ast.Call) -> bool:
     parameters, because a closure that captures `cid` from an enclosing scope
     locks the right campaign while having no parameter of its own.
     """
-    return bool(call.args) and isinstance(call.args[0], ast.Name) \
-        and call.args[0].id == "cid"
+    # The keyword form is the same acquisition -- `campaign_lock` declares an
+    # ordinary `cid` parameter -- and rejecting it would have forced valid code
+    # to be rewritten or exempted. The second false positive this review has
+    # produced, and like the first it costs a reader real code rather than
+    # letting a race through.
+    return (bool(call.args) and isinstance(call.args[0], ast.Name)
+            and call.args[0].id == "cid") or _passes_cid_by_keyword(call)
 
 
 def _locks_its_first_param(fn: ast.AST) -> bool:
@@ -1063,8 +1075,15 @@ def _under_lock(node: ast.AST, fn: ast.AST, locked: bool, want, aliases=()):
     correction this guard has needed at four other sites.
     """
     def visit(child, locked):
-        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda,
+                              ast.GeneratorExp)):
             return                         # deferred, not executed here
+                                           # `(f(x) for x in xs)` runs when the
+                                           # caller iterates it, which for a
+                                           # value returned OUT of the lock is
+                                           # after the lock is gone. A list or
+                                           # set comprehension is eager and
+                                           # deliberately still descended into.
         if want(child):
             yield locked
         if isinstance(child, (ast.With, ast.AsyncWith)):
@@ -1240,6 +1259,14 @@ def _module_level(tree: ast.AST) -> set[str]:
 
     def scan(body):
         for node in body:
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                     ast.ClassDef)):
+                # A walrus anywhere in a module-level statement -- an `if` test,
+                # a comprehension condition -- binds at module scope. Nothing
+                # here can resolve what it binds, so it poisons.
+                rebound.update(w.target.id for w in ast.walk(node)
+                               if isinstance(w, ast.NamedExpr)
+                               and isinstance(w.target, ast.Name))
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 defined.add(node.name)          # its body is a new scope; stop
             elif isinstance(node, ast.ClassDef):
@@ -2647,6 +2674,78 @@ DECORATOR_SRC = ("def safe(fn):\n"
                  "        with locks.campaign_lock(cid):\n"
                  "            return fn(cid, *a)\n"
                  "    return locked\n")
+
+
+def test_a_module_scope_walrus_rebinds():
+    """`if (helper := nullcontext): pass` at module level rebinds `helper` for
+    the whole module. The comment excluding walrus said it "binds inside an
+    expression, never at the module scope these callers care about" — a factual
+    claim of mine, and wrong. The fourth time on this branch that the defect was
+    a sentence rather than the code."""
+    _f, serializing, mutators = _probe(
+        ALIAS_SRC + "if (helper := nullcontext):\n    pass\n"
+        "def put(cid):\n"
+        "    with helper(cid):\n"
+        "        atomic.write_text(p, x)\n")
+    assert "put" in mutators
+    assert "put" not in serializing, "a module-scope walrus did not poison the alias"
+
+
+def test_a_generator_expression_defers_its_writes():
+    """`return (write(x) for x in xs)` runs when the caller iterates it — after
+    the function returned and the lock went away. A generator expression has no
+    `Yield` node for the suspension check to see, so the traversal has to treat
+    it as deferred, exactly as it treats a lambda."""
+    _f, serializing, mutators = _probe(
+        "def put(cid):\n"
+        "    with locks.campaign_lock(cid):\n"
+        "        return (atomic.write_text(p, i) for i in items)\n")
+    assert "put" in mutators
+    assert "put" not in serializing, "a write deferred into a genexp read as locked"
+
+    # A list comprehension is EAGER and must still be descended into -- both
+    # directions, since round fifteen relies on catching an unlocked one.
+    _f, serializing, _m = _probe(
+        "def put(cid):\n"
+        "    with locks.campaign_lock(cid):\n"
+        "        [atomic.write_text(p, i) for i in items]\n")
+    assert "put" in serializing, "an eager comprehension inside the lock was rejected"
+    _f, serializing, _m = _probe(
+        "def put(cid):\n"
+        "    with locks.campaign_lock(cid):\n"
+        "        pass\n"
+        "    [atomic.write_text(p, i) for i in items]\n")
+    assert "put" not in serializing, "an eager comprehension outside the lock passed"
+
+
+def test_the_campaign_id_may_be_passed_by_keyword():
+    """`campaign_lock` declares an ordinary `cid` parameter, so
+    `campaign_lock(cid=cid)` is the same acquisition. Rejecting it would have
+    forced valid code to be rewritten or exempted — the second false positive
+    this review produced, and like the first it costs a reader real code rather
+    than letting a race through."""
+    for src, why in [
+        ("def put(cid):\n"
+         "    with locks.campaign_lock(cid=cid):\n"
+         "        atomic.write_text(p, x)\n", "the direct acquisition"),
+        ("from contextlib import contextmanager\n"
+         "@contextmanager\n"
+         "def helper(cid):\n"
+         "    with locks.campaign_lock(cid):\n"
+         "        yield\n"
+         "def put(cid):\n"
+         "    with helper(cid=cid):\n"
+         "        atomic.write_text(p, x)\n", "an alias"),
+    ]:
+        _f, serializing, _m = _probe(src)
+        assert "put" in serializing, f"{why} by keyword was rejected"
+
+    # ...and the keyword must still carry THIS campaign.
+    _f, serializing, _m = _probe(
+        "def put(cid, sid):\n"
+        "    with locks.campaign_lock(cid=sid):\n"
+        "        atomic.write_text(p, x)\n")
+    assert "put" not in serializing, "a keyword bound to another id was accepted"
 
 
 def test_destructuring_binds_a_public_name():
