@@ -29,7 +29,7 @@ from .paths import (  # noqa: F401
     _campaign_path, _next_gen, _world_dir, _world_path, sheet_kind,
 )
 from .schema import (  # noqa: F401
-    _MUTABLE_TYPES, _compute_derived, _int_or, _numeric_scope,
+    MUTABLE_TYPES, _compute_derived, _int_or, _numeric_scope,
     _validate_instance, canonical_field_value, default_fields,
     expression_scope, instance_errors,
 )
@@ -39,8 +39,8 @@ from .reader import (  # noqa: F401
     world_sheet_modules,
 )
 from .writer import (  # noqa: F401
-    _check_expected, _checked_write, _set_field_locked, _stored_snapshot,
-    _validate_write_target, delete, set_field, write, write_world,
+    _check_expected, _checked_write, _stored_snapshot, _validate_write_target,
+    delete, set_field, set_field_locked, write, write_world,
 )
 from .creation import (  # noqa: F401
     _assert_campaign_entity_exists, _assert_world_entity_exists,

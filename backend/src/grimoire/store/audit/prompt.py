@@ -69,7 +69,7 @@ def sheet_blocks(cid: str, sid: str) -> tuple[list[str], list[dict]]:
             key = f.get("key")
             if not isinstance(key, str) or key not in merged:
                 continue
-            if f.get("type") in sheets_schema._MUTABLE_TYPES:
+            if f.get("type") in sheets_schema.MUTABLE_TYPES:
                 start = baselines.baseline_field(cid, sid, kind, eid, key)
                 if start is None:
                     lines.append(f"  {render_value(f, merged[key])}  "

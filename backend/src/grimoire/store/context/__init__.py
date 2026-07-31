@@ -41,4 +41,8 @@ from .assemble import (  # noqa: F401
     build_director_messages, build_messages, build_opener_messages,
     context_sections,
 )
+# `_encoder` is re-exported by value for compatibility with callers that read
+# `context._encoder`. Patching it here no longer intercepts: `count_tokens`
+# lives in tokens.py and calls that module's global, so a test that wants a
+# stub encoder has to patch `context.tokens._encoder` instead.
 from .tokens import _encoder, count_tokens  # noqa: F401

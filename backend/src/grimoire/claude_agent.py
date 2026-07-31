@@ -14,8 +14,8 @@ from .llm_errors import LLMError
 # claude-agent-sdk lives in the `claude` extra, which Android does not install
 # (android/app/build.gradle.kts mirrors the *base* deps only), so the import has
 # to be survivable. `llm.py` imports ClaudeAgentClient at module scope, so an
-# exception escaping here would stop the app from starting; stream() re-raises
-# what was captured instead, leaving the failure at the same call it hit before.
+# exception escaping here would stop the app from starting; stream() reports what
+# was captured instead, leaving the failure at the same call it hit before.
 try:
     from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions,
                                   CLINotFoundError, ProcessError, TextBlock, query)
@@ -26,10 +26,35 @@ except ImportError as exc:                  # the `claude` extra is not installe
     # `except None` raises TypeError while `except ()` simply never matches.
     CLINotFoundError = ProcessError = ()
     _SDK_IMPORT_ERROR = exc
-except Exception as exc:  # noqa: BLE001 - installed but broken; stream() re-raises it verbatim
+except Exception as exc:  # noqa: BLE001 - installed but broken; stream() re-raises its type/message
     AssistantMessage = ClaudeAgentOptions = TextBlock = query = None
     CLINotFoundError = ProcessError = ()
     _SDK_IMPORT_ERROR = exc
+
+
+def _sdk_failure() -> Exception:
+    """A **fresh** exception carrying the captured import failure's type and
+    message, for stream() to raise on the broken-install path.
+
+    Not the captured object itself. `raise` records the raise site on the
+    exception's own `__traceback__`, so raising one module-level object over
+    and over grows a single traceback without bound -- and every frame it
+    keeps holds that call's locals, i.e. the prompt. The lazy import this
+    replaced could not do that: a module that raises while executing is
+    dropped from `sys.modules`, so each call re-ran the import and got a new
+    object with a traceback of its own.
+
+    `type(exc)(*exc.args)` rebuilds every exception whose `__init__` keeps
+    BaseException's signature, which is the overwhelming majority; a type that
+    takes something else falls back to the captured object with its traceback
+    cleared, which is equally growth-free -- it just loses the import
+    traceback, as the reconstruction does too.
+    """
+    exc = _SDK_IMPORT_ERROR
+    try:
+        return type(exc)(*exc.args)
+    except Exception:  # noqa: BLE001 - an unreconstructible type must not mask the real failure
+        return exc.with_traceback(None)
 
 
 class ClaudeAgentError(LLMError):
@@ -57,7 +82,7 @@ class ClaudeAgentClient:
                     "missing_dependency",
                     "claude-agent-sdk is not installed — pip install 'grimoire[claude]'",
                 ) from _SDK_IMPORT_ERROR
-            raise _SDK_IMPORT_ERROR         # installed but broken: same exception, same place
+            raise _sdk_failure()            # installed but broken: same type/message, same place
         system, turns = _split_system(messages)
         options = ClaudeAgentOptions(
             system_prompt=system or None, model=model, allowed_tools=[], max_turns=1,

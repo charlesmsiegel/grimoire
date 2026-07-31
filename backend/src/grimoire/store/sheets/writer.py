@@ -18,7 +18,7 @@ from ..modules import (binding as modules_binding, fields as modules_fields,
 from ..paths import safe_id
 from . import paths, schema
 from .paths import FILE_KINDS, SheetConflict, SheetError
-from .schema import _MUTABLE_TYPES
+from .schema import MUTABLE_TYPES
 
 
 def _validate_write_target(mid: str, file_kind: str, eid: str, sheet_type: str) -> dict:
@@ -142,8 +142,8 @@ def write_world(wid: str, mid: str, kind: str, eid: str, sheet_type: str,
 # ---- set_field (mechanics Phase 5, Task 5): per-field strict-CAS apply ----
 
 
-def _set_field_locked(mid: str, cid: str, kind: str, eid: str,
-                      field_key: str, value, expect) -> None:
+def set_field_locked(mid: str, cid: str, kind: str, eid: str,
+                     field_key: str, value, expect) -> None:
     """Body of set_field; caller holds locks.campaign_lock(cid) and resolved mid once."""
     if kind not in FILE_KINDS:
         raise SheetError(f"unknown sheet kind {kind!r}")
@@ -161,7 +161,7 @@ def _set_field_locked(mid: str, cid: str, kind: str, eid: str,
     fdefs = {f["key"]: f for f in modules_fields.assembled_fields(sheets_def, stored["sheet_type"])
              if isinstance(f, dict) and isinstance(f.get("key"), str)}
     fdef = fdefs.get(field_key)
-    if fdef is None or fdef.get("type") not in _MUTABLE_TYPES:
+    if fdef is None or fdef.get("type") not in MUTABLE_TYPES:
         raise SheetError(f"{field_key!r} is not a mutable field of this sheet")
     merged = {**schema.default_fields(sheets_def, stored["sheet_type"]), **stored["fields"]}
     live = merged.get(field_key)
@@ -189,4 +189,4 @@ def set_field(cid: str, kind: str, eid: str, field_key: str, value, expect) -> N
         mid = modules_binding.resolve(cid)
         if mid is None:
             raise SheetError("no module resolved for this campaign")
-        _set_field_locked(mid, cid, kind, eid, field_key, value, expect)
+        set_field_locked(mid, cid, kind, eid, field_key, value, expect)

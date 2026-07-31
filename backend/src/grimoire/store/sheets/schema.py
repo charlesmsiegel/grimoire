@@ -126,7 +126,7 @@ def instance_errors(pack: dict, file_kind: str, sheet_type, fields: dict) -> lis
 # ---- set_field (mechanics Phase 5, Task 5): the schema half of the per-field
 # strict-CAS apply, whose lock/IO half lives in writer.py ----
 
-_MUTABLE_TYPES = ("resource", "track", "list")
+MUTABLE_TYPES = ("resource", "track", "list")
 
 
 def canonical_field_value(fdef: dict, value, live):

@@ -990,9 +990,12 @@ def _widen_the_write_window(monkeypatch, delay=0.05):
 
     EVERY submodule that imported the name, not just one: `parse_frontmatter`
     is imported by value into `read`, `write`, `moment` and `lifecycle`, so
-    each holds its own binding and patching one leaves the others fast. A
-    partial patch narrows the window back to microseconds and turns these
-    tests permanently green -- which is worse than deleting them.
+    each holds its own binding and patching one leaves the others fast. The
+    three tests below mutate only through `write`, and `write` alone would
+    widen their window today; every importer is patched so that a lost-update
+    test written against another entry point -- `moment` and `lifecycle` are
+    read-modify-writes too -- is not silently narrow, back to microseconds and
+    green on broken code.
     """
     real = frontmatter.parse_frontmatter
 
