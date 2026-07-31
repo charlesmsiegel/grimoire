@@ -544,6 +544,54 @@ def _local_call_name(node: ast.AST) -> str | None:
         and isinstance(node.func, ast.Name) else None
 
 
+def _bound_names(node: ast.AST) -> set[str]:
+    """Every name this ONE node binds, whatever syntax does the binding.
+
+    Four scans in this file ask that question -- `_rebinds_cid`,
+    `_rebinds_locks`, `_locally_bound` and `_module_level` -- and each grew its
+    own answer, so each knew a different subset of Python's binding forms.
+    `_rebinds_cid` learned `except ... as`, `match` captures and
+    `global`/`nonlocal` in round twenty; `_locally_bound` learned `import` in
+    round twenty-four; `_rebinds_locks` and `_module_level` learned neither. The
+    result was that the SAME rebinding poisoned `cid` and not `locks`:
+
+        def put(cid, source):
+            match source:
+                case locks:              # binds `locks` to whatever `source` is
+                    pass
+            with locks.campaign_lock(cid):    # `source.campaign_lock` locks nothing
+                atomic.write_text(p, x)
+
+    That is the branch's recurring defect stated exactly: a correct rule with an
+    incomplete list of the places it is applied -- except that here the list was
+    of binding FORMS and there were four copies of it. One list, four callers.
+
+    A `def` or `class` binds its name too, and is included: a module-level
+    `def locks(...)` is not the locks module. `_module_level` is the one caller
+    that must tell a definition from a rebinding, so it keeps its own handling
+    of those two node types and uses this for everything else.
+    """
+    if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+        return {node.id}
+    if isinstance(node, ast.arg):
+        return {node.arg}
+    if isinstance(node, ast.alias):
+        return {(node.asname or node.name).split(".")[0]}
+    # These forms store the bound name as a plain string on the node rather than
+    # as an `ast.Name`, which is why a Name-only scan could not see any of them.
+    if isinstance(node, ast.ExceptHandler) and node.name:
+        return {node.name}
+    if isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
+        return {node.name}
+    if isinstance(node, ast.MatchMapping) and node.rest:
+        return {node.rest}
+    if isinstance(node, (ast.Global, ast.Nonlocal)):
+        return set(node.names)
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return {node.name}
+    return set()
+
+
 def _locally_bound(fn: ast.AST) -> set[str]:
     """Names `fn` binds itself -- parameters, and anything its own body stores.
 
@@ -554,15 +602,9 @@ def _locally_bound(fn: ast.AST) -> set[str]:
     function bodies, so nothing looked. Answered per function, where it costs
     nothing.
     """
-    params = {n.arg for n in ast.walk(fn.args) if isinstance(n, ast.arg)} \
+    params = set().union(*(_bound_names(n) for n in ast.walk(fn.args))) \
         if hasattr(fn, "args") else set()
-    # `from contextlib import nullcontext as helper` inside the body binds
-    # `helper` too, and an import is an `ast.alias` rather than a Name store --
-    # the same node-type blind spot that hid `except ... as` from `_rebinds_cid`.
-    imported = {(a.asname or a.name).split(".")[0] for a in _own_body(fn)
-                if isinstance(a, ast.alias)}
-    return params | imported | {n.id for n in _own_body(fn)
-                                if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
+    return params.union(*(_bound_names(n) for n in _own_body(fn)), set())
 
 
 def _rebinds_cid(fn: ast.AST) -> bool:
@@ -582,22 +624,15 @@ def _rebinds_cid(fn: ast.AST) -> bool:
     a binding" rule the module-scope checks apply, pointed at the one name
     everything else here trusts.
     """
-    for node in _own_body(fn):
-        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store) \
-                and node.id == "cid":
-            return True
-        # Two forms store the bound name as a plain string on the node rather
-        # than as an `ast.Name`, so a Name-only scan could not see them:
-        # `except Redirect as cid` and a `match` capture named `cid`.
-        if isinstance(node, ast.ExceptHandler) and node.name == "cid":
-            return True
-        if isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name == "cid":
-            return True
-        if isinstance(node, ast.MatchMapping) and node.rest == "cid":
-            return True
-        if isinstance(node, (ast.Global, ast.Nonlocal)) and "cid" in node.names:
-            return True
-    return False
+    # The BODY, not the signature: `_bound_names` reports a parameter as a
+    # binding, which is right for every other caller and wrong here -- `cid`
+    # arriving as a parameter is the premise, not a rebinding of it.
+    # A lambda's `body` is a single expression rather than a list of statements,
+    # and it reaches here through `_functions`, which binds lambdas to names.
+    body = getattr(fn, "body", [])
+    return any("cid" in _bound_names(node)
+               for stmt in (body if isinstance(body, list) else [body])
+               for node in (stmt, *_own_body(stmt)))
 
 
 def _rebinds_locks(tree: ast.AST, package: str = "store") -> bool:
@@ -637,11 +672,14 @@ def _rebinds_locks(tree: ast.AST, package: str = "store") -> bool:
                 and isinstance(node.value, ast.Name):
             watched.add(node.value.id)
     for node in ast.walk(tree):
-        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store) \
-                and node.id in watched:
-            return True                  # assignment, `for`, `with ... as`, walrus
-        if isinstance(node, ast.arg) and node.arg in watched:
-            return True                  # a parameter, of any function here
+        # Assignment, `for`, `with ... as`, walrus, a parameter of any function
+        # here, `except ... as`, a `match` capture, `global`, a `def` or `class`
+        # of that name -- every form, because they are one list now. This scan
+        # knew the first two, and `_rebinds_cid` knew the rest; see
+        # `_bound_names`. An `import` is excluded and resolved below instead,
+        # since that is the one binding that can name the real module.
+        if not isinstance(node, ast.alias) and _bound_names(node) & watched:
+            return True
     # An import binds a watched name to whatever module it came FROM, and the
     # previous version exempted any import whose source symbol happened to be
     # spelled `locks` -- so `from hooks import locks` was trusted. The spelling
@@ -1318,20 +1356,34 @@ def _module_level(tree: ast.AST) -> set[str]:
                 # analysis cannot follow the import, so the name is poisoned.
                 imported.update((a.asname or a.name).split(".")[0] for a in node.names)
             elif isinstance(node, (ast.If, ast.Try, ast.With, ast.AsyncWith,
-                                   ast.For, ast.AsyncFor, ast.While)):
-                # `for helper in [nullcontext]:` and `with x() as helper:` bind
-                # at module scope as surely as `=` does, and the scan looked
-                # only at their bodies. Nothing here can resolve what they bind
-                # to, so the name is poisoned.
-                for target in ([node.target] if isinstance(node, (ast.For, ast.AsyncFor))
-                               else [i.optional_vars for i in getattr(node, "items", [])]):
-                    for sub in ast.walk(target) if target is not None else ():
-                        if isinstance(sub, ast.Name):
-                            rebound.add(sub.id)
-                for attr in ("body", "orelse", "finalbody", "handlers"):
+                                   ast.For, ast.AsyncFor, ast.While, ast.Match)):
+                # `for helper in [nullcontext]:`, `with x() as helper:`,
+                # `except E as helper:` and `case helper:` all bind at module
+                # scope as surely as `=` does, and the scan looked only at their
+                # bodies. Nothing here can resolve what they bind to, so the name
+                # is poisoned. One list of binding forms -- see `_bound_names`,
+                # which this reaches for everything except the `def`/`class`
+                # above, the two it must record as DEFINITIONS instead.
+                for sub in _own_body(node):
+                    # `_own_body` rather than `ast.walk`: a `def` nested in this
+                    # block binds ITS parameters and locals in its own scope, and
+                    # walking into them would poison module scope with names that
+                    # never reach it. The `def` and `class` names themselves are
+                    # left to the recursion below, which records them as
+                    # definitions -- a conditional import guard is the shape that
+                    # puts one here, and it is legitimate.
+                    if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                        ast.ClassDef)):
+                        continue
+                    rebound.update(_bound_names(sub))
+                for attr in ("body", "orelse", "finalbody", "handlers", "cases"):
                     inner = getattr(node, attr, [])
-                    scan([h for h in inner] if attr != "handlers"
-                         else [s for h in inner for s in h.body])
+                    if attr == "handlers":
+                        scan([s for h in inner for s in h.body])
+                    elif attr == "cases":
+                        scan([s for c in inner for s in c.body])
+                    else:
+                        scan(list(inner))
 
     scan(tree.body)
     out = set(defined)
@@ -1663,6 +1715,24 @@ def _is_deferred(defs) -> bool:
                or any(_is_yield(n) for n in _own_body(d)) for d in defs)
 
 
+def _delegates_deferred(fn: ast.AST, funcs: dict, writing: set[str]) -> bool:
+    """`fn` hands its mutation to a callee whose body runs later.
+
+    `return _write(cid)` where `_write` is an `async def` or a generator function
+    CONSTRUCTS a coroutine or a generator and returns it; the writes happen when
+    somebody awaits or iterates the result, by which point any lock held around
+    the call is gone. Round twenty-three added this check to the undecorated
+    path, and round twenty-four's review found the decorator path returning
+    above it -- so `@safe def put(cid): return _write(cid)` read as serialized.
+
+    Extracted for that reason rather than repeated at the second site: the two
+    paths asking the same question separately is what let one of them keep an
+    older answer, and this file has now been fixed six times for exactly that.
+    """
+    return any(_is_deferred(funcs.get(_local_call_name(c), []))
+               for c in _own_calls(fn) if _local_call_name(c) in writing)
+
+
 def _defers_a_write(fn: ast.AST, surface: _Surface = _Surface()) -> bool:
     """`fn` publishes, but no publication runs while the wrapper's lock is held.
 
@@ -1744,18 +1814,24 @@ def _serializing(funcs: dict[str, ast.AST], surface=_Surface(),
             def covered(fn, grown=grown, surface=surface):
                 # An alias this function rebinds is not the module's alias.
                 local = aliases - _locally_bound(fn)
-                if _innermost_decorator_locks(fn, decorating):
-                    # ...unless the body defers every write past the wrapper's
-                    # lock -- into a genexp, a lambda, or a returned nested def.
-                    # The decorator path returns before the traversal below ever
-                    # runs, and none of those constructs carries a `Yield` for
-                    # the generator check to catch. Narrow on purpose: a body
-                    # that writes directly is unaffected by whatever else it
-                    # constructs, which is what `scenes.append_reply` needs.
-                    return not _defers_a_write(fn, surface)
+                # BEFORE the decorator branch. The wrapper locks the id it was
+                # handed, so a body that reassigns `cid` writes a campaign the
+                # wrapper never locked -- exactly the round-eighteen defect, at
+                # the one path that returned above the check. Two calls with
+                # different originals and the same target then write one campaign
+                # while holding two different locks.
                 if _rebinds_cid(fn):
                     return False          # the lock is keyed on a name the body
                                           # reassigns -- see `_rebinds_cid`
+                if _innermost_decorator_locks(fn, decorating):
+                    # The wrapper covers the body's own execution, so what is
+                    # left to ask is what the body only CONSTRUCTS: a write
+                    # deferred into a genexp, a lambda or a returned nested def,
+                    # or a call to a delegate whose body runs later. Both are
+                    # checks the undecorated path already makes below, and this
+                    # branch returned above both of them.
+                    return not (_defers_a_write(fn, surface)
+                                or _delegates_deferred(fn, funcs, writing))
                 if _suspends_under_lock(fn, local):
                     return False          # an RLock is thread-owned, not task-
                                           # owned -- see `_suspends_under_lock`
@@ -1794,8 +1870,7 @@ def _serializing(funcs: dict[str, ast.AST], surface=_Surface(),
                 if not all(_under_lock(fn, fn, False, unprotected, local)):
                     return False
                 # ...and position cannot save a call whose body runs later.
-                if any(_is_deferred(funcs.get(_local_call_name(c), []))
-                       for c in delegated):
+                if _delegates_deferred(fn, funcs, writing):
                     return False
                 # ...and something must actually establish the lock, rather than
                 # the function simply doing nothing that needs one.
@@ -2854,6 +2929,120 @@ def test_delegation_to_a_deferred_callee_is_not_covered():
         "    with locks.campaign_lock(cid):\n"
         "        return _write(cid)\n")
     assert "put" in serializing, "an ordinary delegated callee was rejected"
+
+
+def test_a_decorated_body_may_not_delegate_to_a_deferred_callee():
+    """The rule above, at the path that returned above it. `@safe def put(cid):
+    return _write(cid)` with a deferred `_write` constructs a coroutine under the
+    wrapper's lock and writes after it is released. Round twenty-three added the
+    check to the undecorated path only — the sixth time on this branch that the
+    defect was one path keeping an older answer to a question two paths ask."""
+    dec = ("def safe(fn):\n"
+           "    def locked(cid, *a):\n"
+           "        with locks.campaign_lock(cid):\n"
+           "            return fn(cid, *a)\n"
+           "    return locked\n")
+    for callee, why in [
+        ("async def _write(cid):\n    atomic.write_text(q, y)\n", "an async callee"),
+        ("def _write(cid):\n    atomic.write_text(q, y)\n    yield 1\n", "a generator callee"),
+    ]:
+        _f, serializing, mutators = _probe(
+            dec + callee + "@safe\ndef put(cid):\n    return _write(cid)\n")
+        assert "put" in mutators
+        assert "put" not in serializing, f"a decorated body delegating to {why} was covered"
+
+    # Merely binding the result is the same thing; it is the call that defers.
+    _f, serializing, _m = _probe(
+        dec + "async def _write(cid):\n    atomic.write_text(q, y)\n"
+        "@safe\ndef put(cid):\n    task = _write(cid)\n    return task\n")
+    assert "put" not in serializing, "a bound deferred delegate was covered"
+
+    # An ordinary callee under the decorator is still covered.
+    _f, serializing, _m = _probe(
+        dec + "def _write(cid):\n    atomic.write_text(q, y)\n"
+        "@safe\ndef put(cid):\n    _write(cid)\n")
+    assert "put" in serializing, "an ordinary delegated callee was rejected"
+
+
+def test_a_decorated_body_may_not_rebind_the_campaign_it_locked():
+    """Round eighteen's rule, at the same path. The wrapper locks the id it was
+    handed, so `@safe def put(cid, target): cid = target; write(...)` writes a
+    campaign the wrapper never locked — two calls with different originals and
+    one target write it while holding two different locks. The decorator branch
+    returned above the check that says so."""
+    dec = ("def safe(fn):\n"
+           "    def locked(cid, *a):\n"
+           "        with locks.campaign_lock(cid):\n"
+           "            return fn(cid, *a)\n"
+           "    return locked\n")
+    for body, why in [
+        ("    cid = target\n", "an assignment"),
+        ("    match target:\n        case cid:\n            pass\n", "a match capture"),
+    ]:
+        _f, serializing, mutators = _probe(
+            dec + "@safe\ndef put(cid, target):\n" + body
+            + "    atomic.write_text(root / cid, x)\n")
+        assert "put" in mutators
+        assert "put" not in serializing, f"a decorated body rebinding cid by {why} was covered"
+
+    _f, serializing, _m = _probe(
+        dec + "@safe\ndef put(cid, target):\n    atomic.write_text(root / cid, x)\n")
+    assert "put" in serializing, "a decorated body that rebinds nothing was rejected"
+
+
+def test_one_list_of_binding_forms_serves_every_scan():
+    """Four scans asked "what does this bind?" and each grew its own answer, so
+    the SAME rebinding poisoned `cid` and not `locks`. `_rebinds_cid` knew
+    `except ... as`, `match` captures and `global`; `_locally_bound` knew
+    `import`; `_rebinds_locks` and `_module_level` knew neither. One list now,
+    four callers — the branch's recurring defect, except that here the
+    incomplete list was of binding FORMS and there were four copies of it."""
+    write = "    with locks.campaign_lock(cid):\n        atomic.write_text(p, x)\n"
+    for prefix, why in [
+        ("def put(cid, source):\n    match source:\n        case locks:\n            pass\n",
+         "a match capture"),
+        ("def put(cid):\n    try:\n        pass\n    except Exception as locks:\n        pass\n",
+         "an except-as"),
+        ("def put(cid):\n    global locks\n", "a global declaration"),
+    ]:
+        _f, serializing, mutators = _probe(prefix + write)
+        assert "put" in mutators
+        assert "put" not in serializing, f"`locks` rebound by {why} was still trusted"
+
+    # A `def` or `class` of that name binds it as surely as `=` does.
+    for defn, why in [("def locks():\n    pass\n", "a def"),
+                      ("class locks:\n    pass\n", "a class")]:
+        _f, serializing, _m = _probe(defn + "def put(cid):\n" + write)
+        assert "put" not in serializing, f"`locks` shadowed by {why} was still trusted"
+
+    # The same forms against a module-level alias, which is the other whitelist
+    # they were invisible to.
+    for rebind, why in [
+        ("try:\n    pass\nexcept Exception as helper:\n    pass\n", "an except-as"),
+        ("match source:\n    case helper:\n        pass\n", "a match capture"),
+    ]:
+        _f, serializing, _m = _probe(
+            ALIAS_SRC + rebind + "def put(cid):\n"
+            "    with helper(cid):\n        atomic.write_text(p, x)\n")
+        assert "put" not in serializing, f"the alias survived {why} at module scope"
+
+    # ...and a nested `def` of the alias's name inside a body shadows it there.
+    _f, serializing, _m = _probe(
+        ALIAS_SRC + "def put(cid):\n    def helper(c):\n        return nullcontext()\n"
+        "    with helper(cid):\n        atomic.write_text(p, x)\n")
+    assert "put" not in serializing, "a nested def did not shadow the module alias"
+
+    # The loud side of the trade has a bound: legitimate module-level control
+    # flow around definitions and unrelated names must still resolve.
+    for benign, why in [
+        ("if True:\n    def other(cid):\n        pass\n", "a conditional definition"),
+        ("try:\n    import json\nexcept ImportError:\n    json = None\n", "an import guard"),
+        ("match source:\n    case other:\n        pass\n", "an unrelated capture"),
+    ]:
+        _f, serializing, _m = _probe(
+            ALIAS_SRC + benign + "def put(cid):\n"
+            "    with helper(cid):\n        atomic.write_text(p, x)\n")
+        assert "put" in serializing, f"{why} poisoned an unrelated alias"
 
 
 def test_a_class_rebinds_its_name():
