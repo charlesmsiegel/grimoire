@@ -157,6 +157,16 @@ first if you think one should be skipped.
   are the artifact this protects: they cannot be regenerated, and `store/scenes`
   serializes its whole mutator surface through `@_serialized` to keep two
   concurrent read-modify-writes from losing one.
+- **Imports in `backend/src/grimoire/` are all at module scope and the module
+  graph is acyclic**, enforced by `backend/tests/test_import_guard.py`. Inside
+  `store/`, a cross-package import binds a *submodule* and keeps it as a module
+  object — `from ..campaigns import read` then `read.world_refs()`, never
+  `from ..campaigns import world_refs`. Binding a name off a package that is
+  still initializing raises at import time while the file graph stays acyclic,
+  so the cycle check alone would not catch it. The marker is `# import-ok:
+  <reason>`, same convention as the guards above — and, given how often this
+  refactor caught a stated reason that wasn't actually true, the reason must
+  hold up, not merely be present.
 - **After editing anything in `templates/`**, `make check` covers both harnesses
   that guard prompts: `scripts/verify_templates.py` (builders and templates agree
   byte-for-byte) and `evals/run.py` (see `evals/README.md`). Offline, the eval
