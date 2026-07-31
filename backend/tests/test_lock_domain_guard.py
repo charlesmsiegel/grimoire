@@ -1411,27 +1411,45 @@ def _serializing(funcs: dict[str, ast.AST], surface=_Surface(),
                 if _suspends_under_lock(fn, aliases):
                     return False          # an RLock is thread-owned, not task-
                                           # owned -- see `_suspends_under_lock`
-                if _writes_directly(fn, surface):
-                    # Checked BEFORE `_enters_lock`, which was the bug: entering
-                    # a lock anywhere made the whole function read as serialized,
-                    # so `with locks.campaign_lock(cid): pass` followed by
-                    # `atomic.write_text(...)` passed while writing unlocked.
-                    # Where the writes run is the question, and the traversal
-                    # that answers it for yields and decorator targets simply
-                    # was not asked here.
-                    return _every_one_locked(
+                # A function mutates in two ways -- by writing, and by calling
+                # something that writes -- and BOTH have to be positioned inside
+                # the lock. Checking the writes and then RETURNING was the
+                # round-fifteen fix's own gap: a locked `atomic.write_text(...)`
+                # followed by an unlocked `_unsafe(cid)` was accepted, and since
+                # `_analyze` skips private helpers the delegate had nowhere left
+                # to be reported either.
+                writes = _writes_directly(fn, surface)
+                if writes and not _every_one_locked(
                         fn, fn, lambda n: isinstance(n, ast.Call)
-                        and _is_write_call(n, surface), aliases)
-                if _enters_lock(fn, aliases):
-                    return True                       # with _lock(cid): ...
-                # Pure delegation: every local callee that reaches a write must
-                # itself be covered, on this campaign, and at least one must exist.
+                        and _is_write_call(n, surface), aliases):
+                    return False          # a write outside the block -- and "at
+                                          # least one" catches a write that only
+                                          # a nested def performs
                 delegated = [c for c in _own_calls(fn)
                              if _called_name(c.func) in writing]
-                return bool(delegated) and all(
-                    _called_name(c.func) in grown
-                    and _binds_the_campaign(c, funcs[_called_name(c.func)])
-                    for c in delegated)
+
+                def unprotected(node):
+                    """A call that mutates and is not covered by the CALLEE.
+
+                    A delegate that serializes on this campaign is an atomic
+                    unit wherever it is called. One that does not is a mutation
+                    of this function's own, so it has to sit inside this
+                    function's lock -- which is how `with lock: _helper(cid)`
+                    stays legal while the same call after the block does not.
+                    """
+                    if not isinstance(node, ast.Call):
+                        return False
+                    name = _called_name(node.func)
+                    if name not in writing:
+                        return False
+                    return not (name in grown
+                                and _binds_the_campaign(node, funcs.get(name, [])))
+
+                if not all(_under_lock(fn, fn, False, unprotected, aliases)):
+                    return False
+                # ...and something must actually establish the lock, rather than
+                # the function simply doing nothing that needs one.
+                return writes or bool(delegated) or _enters_lock(fn, aliases)
 
             if _all(defs, covered):
                 grown.add(name)
@@ -2401,6 +2419,47 @@ def test_a_suspension_under_the_lock_is_not_serialization():
         "    with locks.campaign_lock(cid):\n"
         "        atomic.write_text(p, x)\n")
     assert "put" in serializing, "an await outside the lock was rejected"
+
+
+def test_a_delegated_write_must_be_positioned_too():
+    """A function mutates two ways — by writing, and by calling something that
+    writes — and both have to sit inside the lock.
+
+    Round fifteen made the WRITES' position matter and then returned, so a
+    locked `atomic.write_text(...)` followed by an unlocked `_unsafe(cid)` was
+    accepted. And because `_analyze` skips private helpers, the delegate had
+    nowhere left to be reported: neither check named it. The finding is in the
+    code the previous round added, for the fourth round running."""
+    _f, serializing, mutators = _probe(
+        "def _unsafe(cid):\n"
+        "    atomic.write_text(q, y)\n"
+        "def put(cid):\n"
+        "    with locks.campaign_lock(cid):\n"
+        "        atomic.write_text(p, x)\n"
+        "    _unsafe(cid)\n")
+    assert "put" in mutators, "reported by neither check"
+    assert "put" not in serializing, "an unlocked delegate after a locked write passed"
+
+    # The SAME helper called inside the block is covered by the caller's lock --
+    # position is the rule, not the callee's own serialization.
+    _f, serializing, _m = _probe(
+        "def _unsafe(cid):\n"
+        "    atomic.write_text(q, y)\n"
+        "def put(cid):\n"
+        "    with locks.campaign_lock(cid):\n"
+        "        atomic.write_text(p, x)\n"
+        "        _unsafe(cid)\n")
+    assert "put" in serializing, "a delegate inside the lock was rejected"
+
+    # A delegate that serializes on this campaign itself is an atomic unit
+    # wherever it is called, which is how `scenes.create_scene` works.
+    _f, serializing, _m = _probe(
+        "def _w(cid):\n"
+        "    with locks.campaign_lock(cid):\n"
+        "        atomic.write_text(q, y)\n"
+        "def put(cid):\n"
+        "    _w(cid)\n")
+    assert "put" in serializing, "delegation to a locked helper was rejected"
 
 
 def test_every_write_must_execute_under_the_lock():
