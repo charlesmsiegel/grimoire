@@ -556,8 +556,13 @@ def _locally_bound(fn: ast.AST) -> set[str]:
     """
     params = {n.arg for n in ast.walk(fn.args) if isinstance(n, ast.arg)} \
         if hasattr(fn, "args") else set()
-    return params | {n.id for n in _own_body(fn)
-                     if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
+    # `from contextlib import nullcontext as helper` inside the body binds
+    # `helper` too, and an import is an `ast.alias` rather than a Name store --
+    # the same node-type blind spot that hid `except ... as` from `_rebinds_cid`.
+    imported = {(a.asname or a.name).split(".")[0] for a in _own_body(fn)
+                if isinstance(a, ast.alias)}
+    return params | imported | {n.id for n in _own_body(fn)
+                                if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
 
 
 def _rebinds_cid(fn: ast.AST) -> bool:
@@ -680,7 +685,10 @@ def _rebinds_locks(tree: ast.AST, package: str = "store") -> bool:
             for alias in node.names:
                 bound = alias.asname or alias.name.split(".")[0]
                 written = tuple(alias.name.split("."))
-                if bound in watched and written[1:] not in trusted:
+                # Stripping the first component let `import hooks.store.locks
+                # as locks` through: its tail IS ("store", "locks"). The root
+                # has to be checked, not dropped.
+                if bound in watched and written not in {("grimoire", *p) for p in trusted}:
                     return True          # `import json as locks`
     return False
 
@@ -1593,13 +1601,25 @@ def _innermost_decorator_locks(fn: ast.AST, decorating: set[str]) -> bool:
     runs the write. `put` read as serialized while nothing serialized it.
 
     The innermost decorator is the one applied to the function itself, so if it
-    locks, the write is inside the lock. Anything further out then wraps an
-    already-serialized callable and cannot un-serialize it — it may defer or
-    skip the whole locked unit, but never split the lock from the write. Any
-    other arrangement is a chain this cannot resolve and fails loud.
+    locks, the write is inside the lock. It was then claimed that anything
+    further out "wraps an already-serialized callable and cannot un-serialize
+    it", and that is FALSE. `scenes._serialized` uses `functools.wraps`, which
+    sets `__wrapped__` on the wrapper, so an outer decorator can reach straight
+    past the lock to the raw body:
 
-    No function in this package has more than one decorator today, so this costs
-    nothing now and is here for the chain that gets written later.
+        @bypass          # `return fn.__wrapped__`
+        @_serialized
+        def put(cid): atomic.write_text(p, x)
+
+    `put` is now the undecorated function under a name this vouched for. A
+    stated reason, and wrong again -- the fifth on this branch, and the same
+    shape each time: the rule was right and the sentence justifying its reach
+    was not checked against the code it described.
+
+    So the chain is not walked at all: exactly ONE decorator, and it must lock.
+    Anything longer fails loud and needs a marker naming what the outer
+    decorators do. No function in this package has more than one decorator
+    today, so the strict form costs nothing now.
 
     Two things about the DECORATED function also have to hold, and neither was
     checked -- the wrapper was validated in isolation, as if what it wraps could
@@ -1620,7 +1640,7 @@ def _innermost_decorator_locks(fn: ast.AST, decorating: set[str]) -> bool:
       id crosses; every `@_serialized` mutator in `scenes` already satisfies it.
     """
     decorators = getattr(fn, "decorator_list", [])
-    if not (decorators and _decorator_name(decorators[-1]) in decorating):
+    if len(decorators) != 1 or _decorator_name(decorators[0]) not in decorating:
         return False
     if isinstance(fn, ast.AsyncFunctionDef) or any(_is_yield(n) for n in _own_body(fn)):
         return False                     # a deferred body; the wrapper's lock is
@@ -1644,14 +1664,34 @@ def _is_deferred(defs) -> bool:
 
 
 def _defers_a_write(fn: ast.AST, surface: _Surface = _Surface()) -> bool:
-    """A publication sitting inside a generator expression.
+    """`fn` publishes, but no publication runs while the wrapper's lock is held.
 
-    `(atomic.write_text(p, x) for x in xs)` runs when somebody iterates it, so a
-    lock held while the genexp is *constructed* is gone by the time it writes.
+    A decorator's lock is held for exactly one call: the one that runs the
+    decorated body. Anything the body only CONSTRUCTS -- a generator expression,
+    a lambda, a nested `def` handed back to the caller -- writes later, with the
+    lock long released:
+
+        @_serialized
+        def put(cid):
+            return lambda: atomic.write_text(p, x)   # runs after the lock
+
+    Round twenty-one wrote this as a search for a genexp holding a write, which
+    answered "is it deferred THIS way?" -- and the answer was one construct out
+    of three, so the lambda above read as serialized. The question is inverted
+    here to the one that has no list behind it: this function writes, so does any
+    of its writing run DIRECTLY? `_under_lock` already refuses to descend into
+    every deferred construct, so asking it with `locked=True` and taking `any`
+    yields exactly the writes that execute in the body itself. Nothing new has to
+    be enumerated when the fourth deferral form is invented.
+
+    Still narrow where it was narrow: a body with a direct write and a harmless
+    genexp beside it is unaffected, which is what `scenes.append_reply` is.
     """
-    return any(_is_write_call(call, surface)
-               for gen in ast.walk(fn) if isinstance(gen, ast.GeneratorExp)
-               for call in ast.walk(gen) if isinstance(call, ast.Call))
+    if not _writes_directly(fn, surface):
+        return False
+    return not any(_under_lock(fn, fn, True,
+                               lambda n: isinstance(n, ast.Call)
+                               and _is_write_call(n, surface)))
 
 
 def _serializing(funcs: dict[str, ast.AST], surface=_Surface(),
@@ -1705,14 +1745,13 @@ def _serializing(funcs: dict[str, ast.AST], surface=_Surface(),
                 # An alias this function rebinds is not the module's alias.
                 local = aliases - _locally_bound(fn)
                 if _innermost_decorator_locks(fn, decorating):
-                    # ...unless the body defers its write past the wrapper's
-                    # lock. `_under_lock` learned that a `GeneratorExp` is
-                    # deferred in round twenty-one; the decorator path returns
-                    # before that traversal ever runs, and a `GeneratorExp`
-                    # carries no `Yield` for the generator check to catch.
-                    # Narrow on purpose: only a genexp CONTAINING a write is
-                    # rejected, because `scenes.append_reply` is `@_serialized`
-                    # and uses one for something harmless.
+                    # ...unless the body defers every write past the wrapper's
+                    # lock -- into a genexp, a lambda, or a returned nested def.
+                    # The decorator path returns before the traversal below ever
+                    # runs, and none of those constructs carries a `Yield` for
+                    # the generator check to catch. Narrow on purpose: a body
+                    # that writes directly is unaffected by whatever else it
+                    # constructs, which is what `scenes.append_reply` needs.
                     return not _defers_a_write(fn, surface)
                 if _rebinds_cid(fn):
                     return False          # the lock is keyed on a name the body
@@ -2877,6 +2916,59 @@ def test_a_decorated_body_may_not_defer_its_write_into_a_genexp():
     assert "put" in serializing, "a harmless genexp under the decorator was rejected"
 
 
+def test_a_decorated_body_may_not_defer_its_write_at_all():
+    """A generator expression was one deferral form out of three. A lambda and a
+    nested `def` handed back to the caller do the same thing and were missed,
+    because round twenty-one asked "is it deferred THIS way?" rather than "does
+    any of this writing run under the lock?" — the recurring shape on this
+    branch, an enumeration standing in for the property."""
+    dec = ("def _serialized(fn):\n"
+           "    def locked(cid, *a):\n"
+           "        with locks.campaign_lock(cid):\n"
+           "            return fn(cid, *a)\n"
+           "    return locked\n")
+    for body, why in [
+        ("    return lambda: atomic.write_text(p, x)\n", "a lambda"),
+        ("    def later():\n        atomic.write_text(p, x)\n    return later\n",
+         "a nested def"),
+    ]:
+        _f, serializing, mutators = _probe(dec + "@_serialized\ndef put(cid):\n" + body)
+        assert "put" in mutators
+        assert "put" not in serializing, f"a write deferred into {why} read as locked"
+
+    # A body that writes directly is untouched, whatever it also constructs.
+    _f, serializing, _m = _probe(
+        dec + "@_serialized\ndef put(cid):\n"
+        "    atomic.write_text(p, x)\n"
+        "    return lambda: read(p)\n")
+    assert "put" in serializing, "a direct write beside a harmless lambda was rejected"
+
+
+def test_an_outer_decorator_may_unwrap_the_lock():
+    """Round fourteen accepted a chain whose innermost decorator locks, on the
+    reasoning that anything further out "wraps an already-serialized callable and
+    cannot un-serialize it". `scenes._serialized` uses `functools.wraps`, which
+    sets `__wrapped__`, so an outer decorator reaches straight past the lock to
+    the raw body. The rule was right and the sentence justifying its reach was
+    never checked against the code — the fifth defect of that shape here."""
+    src = ("def bypass(fn):\n"
+           "    return fn.__wrapped__\n"
+           "def _serialized(fn):\n"
+           "    def locked(cid, *a):\n"
+           "        with locks.campaign_lock(cid):\n"
+           "            return fn(cid, *a)\n"
+           "    return locked\n"
+           "@bypass\n@_serialized\ndef put(cid):\n"
+           "    atomic.write_text(p, x)\n")
+    _f, serializing, mutators = _probe(src)
+    assert "put" in mutators
+    assert "put" not in serializing, "an outer decorator unwrapped the lock unnoticed"
+
+    # The single decorator still resolves; no `scenes` mutator has more than one.
+    _f, serializing, _m = _probe(src.replace("@bypass\n", ""))
+    assert "put" in serializing, "the lone locking decorator was rejected"
+
+
 def test_a_module_scope_walrus_rebinds():
     """`if (helper := nullcontext): pass` at module level rebinds `helper` for
     the whole module. The comment excluding walrus said it "binds inside an
@@ -3118,6 +3210,44 @@ def test_the_locks_import_must_name_the_store_module():
         "    with locks.campaign_lock(cid):\n"
         "        atomic.write_text(p, x)\n", "store.weather")
     assert "put" not in serializing, "a relative import was not resolved against its package"
+
+
+def test_a_dotted_import_bound_as_locks_is_still_judged_by_its_path():
+    """`import a.b as locks` binds the name through `Import`, not `ImportFrom`,
+    and that branch only asked whether the bound name was `locks` — it never
+    asked what module it named. So `import hooks.store.locks as locks` was
+    trusted on the strength of its own alias, which is exactly the "package
+    membership is not identity" defect the `ImportFrom` branch had fixed one
+    statement form along."""
+    _f, serializing, mutators = _probe(
+        "import hooks.store.locks as locks\n"
+        "def put(cid):\n"
+        "    with locks.campaign_lock(cid):\n"
+        "        atomic.write_text(p, x)\n")
+    assert "put" in mutators
+    assert "put" not in serializing, "a foreign dotted module was trusted as `locks`"
+
+    _f, serializing, _m = _probe(
+        "import grimoire.store.locks as locks\n"
+        "def put(cid):\n"
+        "    with locks.campaign_lock(cid):\n"
+        "        atomic.write_text(p, x)\n")
+    assert "put" in serializing, "the real module's absolute path was rejected"
+
+
+def test_a_function_local_import_shadows_the_alias():
+    """`_locally_bound` read parameters and `Name` stores, so a body rebinding a
+    validated alias by ASSIGNMENT was caught while the same rebinding by IMPORT
+    was not — `from contextlib import nullcontext as helper` binds through
+    `ast.alias`, which nothing looked at. One rule, one binding form short."""
+    _f, serializing, mutators = _probe(
+        ALIAS_SRC +
+        "def put(cid):\n"
+        "    from contextlib import nullcontext as helper\n"
+        "    with helper(cid):\n"
+        "        atomic.write_text(p, x)\n")
+    assert "put" in mutators
+    assert "put" not in serializing, "a local import kept the module alias"
 
 
 def test_a_delegated_call_must_be_module_local():
@@ -3523,10 +3653,16 @@ def test_the_locking_decorator_must_be_the_one_applied_to_the_function():
     assert "put" in mutators
     assert "put" not in serializing, "a deferring decorator inside the lock was ignored"
 
-    # Innermost and locking: anything further out wraps an already-serialized
-    # callable and cannot split the lock from the write.
+    # Swapping them puts the locking decorator innermost, which round fourteen
+    # accepted on the reasoning that an outer decorator "cannot un-serialize"
+    # what it wraps. It can -- see `test_an_outer_decorator_may_unwrap_the_lock`
+    # -- so a chain of any length is now refused whichever way it is ordered.
     _f, serializing, _m = _probe(chain.replace("@safe\n@defer\n", "@defer\n@safe\n"))
-    assert "put" in serializing, "a locking decorator applied directly was rejected"
+    assert "put" not in serializing, "a two-decorator chain was resolved"
+
+    # The single decorator is still recognized; the rule narrowed, not broke.
+    _f, serializing, _m = _probe(chain.replace("@safe\n@defer\n", "@safe\n"))
+    assert "put" in serializing, "a locking decorator applied alone was rejected"
 
 
 def test_the_decorated_target_is_matched_by_name_not_by_spelling():
