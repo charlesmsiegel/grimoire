@@ -10,8 +10,9 @@ from __future__ import annotations
 
 # Submodules before names, and in dependency order: `serialize` reaches into
 # `paths`, `read`/`turns` into both, `write` into `read`/`turns`, `moment` into
-# `write`, and `lifecycle` into `serialize`. Binding a later one first would
-# import it through a half-initialized sibling.
+# `write`, and `lifecycle` into `serialize`. The order is a reading aid, not a
+# requirement -- binding a submodule imports it on demand whatever the order,
+# so listing them this way just makes the graph readable off the line.
 from . import paths, locking, serialize, read, turns, write, moment, lifecycle  # noqa: F401
 from .paths import SceneNotFound, _require_campaign, _scene_path, _scenes_dir  # noqa: F401
 from .locking import _serialized  # noqa: F401

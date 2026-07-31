@@ -178,7 +178,7 @@ def test_fence_survives_being_split_across_stream_deltas():
 
 def _absorb_json(**overrides) -> str:
     """A complete absorb object, built from the SAME derived contract the
-    grader checks — so a new section added to absorb.py appears here too,
+    grader checks — so a new section added to absorb/parse.py appears here too,
     rather than turning every test in this block red."""
     obj = {k: "filled in" for k in graders.ABSORB_TEXT}
     obj.update({k: [] for k in graders.ABSORB_LISTS})
