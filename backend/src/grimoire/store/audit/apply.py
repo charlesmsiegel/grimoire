@@ -51,7 +51,7 @@ def apply_delta(cid: str, sid: str, edit: dict) -> None:
     write (set_field's body) -- never two lock acquisitions, so a concurrent
     write can't land between the check and the write. The module is resolved
     here, inside the lock, and that same mid is threaded through to
-    _set_field_locked; sheets.read still re-resolves it internally too, but
+    set_field_locked; sheets.read still re-resolves it internally too, but
     rebinds only ever publish under this same lock (see sheets.write's
     rebind-serialization note), so both resolutions are guaranteed to agree.
     Raises sheets.SheetConflict / sheets.SheetError; never returns a failure
@@ -73,8 +73,8 @@ def apply_delta(cid: str, sid: str, edit: dict) -> None:
             raise sheets_paths.SheetError("entity has no readable sheet")
         if not baselines.baseline_entry_valid(cid, sid, kind, eid, mid, sheet):
             raise sheets_paths.SheetError("no valid scene baseline for this entity")
-        sheets_writer._set_field_locked(mid, cid, kind, eid, field_key,
-                                        payload.get("value"), payload.get("expect"))
+        sheets_writer.set_field_locked(mid, cid, kind, eid, field_key,
+                                       payload.get("value"), payload.get("expect"))
 
 
 def materialize(cid: str, sid: str, parsed: dict) -> tuple[list[dict], list[dict]]:
@@ -103,7 +103,7 @@ def materialize(cid: str, sid: str, parsed: dict) -> tuple[list[dict], list[dict
                                                                      sheet["sheet_type"])
                  if isinstance(f, dict) and isinstance(f.get("key"), str)}
         fdef = fdefs.get(field_key)
-        if fdef is None or fdef.get("type") not in sheets_schema._MUTABLE_TYPES:
+        if fdef is None or fdef.get("type") not in sheets_schema.MUTABLE_TYPES:
             drop("not a mutable field of this sheet"); continue
         merged = {**sheets_schema.default_fields(sheets_def, sheet["sheet_type"]),
                   **sheet["fields"]}
