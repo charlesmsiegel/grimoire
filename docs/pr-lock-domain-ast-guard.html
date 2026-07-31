@@ -208,7 +208,7 @@ footer.doc{max-width:1280px;margin:0 auto;padding:0 28px 34px;color:var(--text-f
   <div class="kpi"><b>+3645 / −48</b><span>lines</span></div>
   <div class="kpi"><b>0</b><span>signature changes</span></div>
   <div class="kpi"><b>3</b><span>concurrency bugs fixed</span></div>
-  <div class="kpi"><b>83</b><span>new tests</span></div>
+  <div class="kpi"><b>89</b><span>new tests</span></div>
   <div class="kpi"><b>2</b><span>exemptions used (cap 2)</span></div>
 </div>
 
@@ -298,9 +298,9 @@ footer.doc{max-width:1280px;margin:0 auto;padding:0 28px 34px;color:var(--text-f
 
 <div class="kpis">
   <div class="kpi accent"><div class="n">7</div><div class="l">files changed</div></div>
-  <div class="kpi good"><div class="n">+3,454</div><div class="l">additions</div></div>
+  <div class="kpi good"><div class="n">+3,633</div><div class="l">additions</div></div>
   <div class="kpi bad"><div class="n">−49</div><div class="l">deletions</div></div>
-  <div class="kpi"><div class="n">37</div><div class="l">commits</div></div>
+  <div class="kpi"><div class="n">39</div><div class="l">commits</div></div>
   <div class="kpi warn"><div class="n">3</div><div class="l">directories touched</div></div>
 </div>
 <div class="callout"><b>Footprint shape: moderately spread.</b> A tightly clustered change usually means one concern; a diff smeared across many directories can indicate shotgun surgery — one logical change forced through poorly separated modules — or several unrelated changes bundled into one PR.</div>
@@ -308,21 +308,21 @@ footer.doc{max-width:1280px;margin:0 auto;padding:0 28px 34px;color:var(--text-f
 <h2>Change map</h2>
 <p class="dim">Area = lines changed · color = heuristic risk score · hover for details.</p>
 <div class="viz" data-render="treemap" style="height:480px"></div>
-<script type="application/json">{"items":[{"name":"backend/src/grimoire/store/campaigns.py","value":79,"metric":9,"meta":"+56/\u221223 \u00b7 source"},{"name":"backend/src/grimoire/store/locks.py","value":81,"metric":7,"meta":"+77/\u22124 \u00b7 source"},{"name":"backend/src/grimoire/store/sheets.py","value":41,"metric":5,"meta":"+25/\u221216 \u00b7 source"},{"name":"backend/src/grimoire/store/audit.py","value":8,"metric":5,"meta":"+8/\u22120 \u00b7 source"},{"name":"backend/tests/test_lock_domain_guard.py","value":3237,"metric":0,"meta":"+3237/\u22120 \u00b7 test"},{"name":"backend/tests/test_locks_store.py","value":32,"metric":0,"meta":"+32/\u22120 \u00b7 test"},{"name":"CLAUDE.md","value":25,"metric":0,"meta":"+19/\u22126 \u00b7 docs"}],"valueLabel":"lines changed","metricLabel":"risk score"}</script>
+<script type="application/json">{"items":[{"name":"backend/src/grimoire/store/campaigns.py","value":79,"metric":9,"meta":"+56/\u221223 \u00b7 source"},{"name":"backend/src/grimoire/store/locks.py","value":81,"metric":7,"meta":"+77/\u22124 \u00b7 source"},{"name":"backend/src/grimoire/store/sheets.py","value":41,"metric":5,"meta":"+25/\u221216 \u00b7 source"},{"name":"backend/src/grimoire/store/audit.py","value":8,"metric":5,"meta":"+8/\u22120 \u00b7 source"},{"name":"backend/tests/test_lock_domain_guard.py","value":3416,"metric":0,"meta":"+3416/\u22120 \u00b7 test"},{"name":"backend/tests/test_locks_store.py","value":32,"metric":0,"meta":"+32/\u22120 \u00b7 test"},{"name":"CLAUDE.md","value":25,"metric":0,"meta":"+19/\u22126 \u00b7 docs"}],"valueLabel":"lines changed","metricLabel":"risk score"}</script>
 
 <h2>By category</h2>
 <div class="tbl-wrap"><table>
 <thead><tr><th>Category</th><th class="num">Files</th><th class="num">+/−</th><th>Volume</th></tr></thead>
-<tbody><tr><td><span class='badge good'>test</span></td><td class='num'>2</td><td class='num'><span class='plusminus'><span class='p'>+3,269</span> <span class='m'>−0</span></span></td><td><div class="bar "><i style="width:100.0%"></i></div></td></tr>
-<tr><td><span class='badge accent'>source</span></td><td class='num'>4</td><td class='num'><span class='plusminus'><span class='p'>+166</span> <span class='m'>−43</span></span></td><td><div class="bar "><i style="width:6.4%"></i></div></td></tr>
+<tbody><tr><td><span class='badge good'>test</span></td><td class='num'>2</td><td class='num'><span class='plusminus'><span class='p'>+3,448</span> <span class='m'>−0</span></span></td><td><div class="bar "><i style="width:100.0%"></i></div></td></tr>
+<tr><td><span class='badge accent'>source</span></td><td class='num'>4</td><td class='num'><span class='plusminus'><span class='p'>+166</span> <span class='m'>−43</span></span></td><td><div class="bar "><i style="width:6.1%"></i></div></td></tr>
 <tr><td><span class='badge neutral'>docs</span></td><td class='num'>1</td><td class='num'><span class='plusminus'><span class='p'>+19</span> <span class='m'>−6</span></span></td><td><div class="bar "><i style="width:1.5%"></i></div></td></tr></tbody></table></div>
 
 <h2>Files, risk-ordered</h2>
 <p class="dim">Reviewer attention is a budget — spend it top-down. Score combines category weight, risky patterns in added lines, signature changes, and large removals. Heuristic, not verdict.</p>
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>File</th><th>Category</th><th class="num">+/−</th><th>Change</th><th class="num">Risk</th><th>Why</th></tr></thead>
-<tbody><tr><td><code>backend/src/grimoire/store/campaigns.py</code> </td><td><span class='badge accent'>source</span></td><td class='num'><span class='plusminus'><span class='p'>+56</span> <span class='m'>−23</span></span></td><td data-sort='79'><div class='dbar'><i class='a' style='width:1.7%'></i><i class='d' style='width:0.7%'></i></div></td><td class='num'>9</td><td class='dim' style='font-size:12px'>concurrency×12, security×1, retries/timeouts×1</td></tr><tr><td><code>backend/src/grimoire/store/locks.py</code> </td><td><span class='badge accent'>source</span></td><td class='num'><span class='plusminus'><span class='p'>+77</span> <span class='m'>−4</span></span></td><td data-sort='81'><div class='dbar'><i class='a' style='width:2.4%'></i><i class='d' style='width:0.1%'></i></div></td><td class='num'>7</td><td class='dim' style='font-size:12px'>concurrency×6, transactions×1</td></tr><tr><td><code>backend/src/grimoire/store/sheets.py</code> </td><td><span class='badge accent'>source</span></td><td class='num'><span class='plusminus'><span class='p'>+25</span> <span class='m'>−16</span></span></td><td data-sort='41'><div class='dbar'><i class='a' style='width:0.8%'></i><i class='d' style='width:0.5%'></i></div></td><td class='num'>5</td><td class='dim' style='font-size:12px'>concurrency×3</td></tr><tr><td><code>backend/src/grimoire/store/audit.py</code> </td><td><span class='badge accent'>source</span></td><td class='num'><span class='plusminus'><span class='p'>+8</span> <span class='m'>−0</span></span></td><td data-sort='8'><div class='dbar'><i class='a' style='width:0.2%'></i><i class='d' style='width:0.0%'></i></div></td><td class='num'>5</td><td class='dim' style='font-size:12px'>concurrency×6</td></tr><tr><td><code>backend/tests/test_lock_domain_guard.py</code> <span class='badge good'>new</span></td><td><span class='badge good'>test</span></td><td class='num'><span class='plusminus'><span class='p'>+3237</span> <span class='m'>−0</span></span></td><td data-sort='3237'><div class='dbar'><i class='a' style='width:100.0%'></i><i class='d' style='width:0.0%'></i></div></td><td class='num'>0</td><td class='dim' style='font-size:12px'></td></tr><tr><td><code>backend/tests/test_locks_store.py</code> </td><td><span class='badge good'>test</span></td><td class='num'><span class='plusminus'><span class='p'>+32</span> <span class='m'>−0</span></span></td><td data-sort='32'><div class='dbar'><i class='a' style='width:1.0%'></i><i class='d' style='width:0.0%'></i></div></td><td class='num'>0</td><td class='dim' style='font-size:12px'></td></tr><tr><td><code>CLAUDE.md</code> </td><td><span class='badge neutral'>docs</span></td><td class='num'><span class='plusminus'><span class='p'>+19</span> <span class='m'>−6</span></span></td><td data-sort='25'><div class='dbar'><i class='a' style='width:0.6%'></i><i class='d' style='width:0.2%'></i></div></td><td class='num'>0</td><td class='dim' style='font-size:12px'></td></tr></tbody></table></div>
-<details><summary>37 commits in range</summary><div class='body'><ul><li><code>bfaaeda</code> State the delegation half of the rule in the docstring</li><li><code>94566ff</code> Position the delegated writes too, not only the direct ones (Codex round 17)</li><li><code>282ccf5</code> Record round sixteen, and the first entry on the cost side of the ledger</li><li><code>c684373</code> Make the traversal uniform, and stop trusting a fourth spelling (Codex round 16)</li><li><code>83646fa</code> Record round fifteen, and correct a claim the report was making</li><li><code>6b607ac</code> Ask where the writes run, not whether a lock exists (Codex round 15)</li><li><code>d3b64d1</code> Record round fourteen, and the shape the whole review has had</li><li><code>943f147</code> Check what the decorator wraps, not only the wrapper (Codex round 14)</li><li><code>86a3431</code> Record round thirteen, and name the enumeration under the rule</li><li><code>16fb6de</code> Resolve names at every binding form, and stop exempting the lock module (Codex round 13)</li><li><code>cc22dd4</code> Record round twelve, and that the verification method was unsound</li><li><code>47b5425</code> Resolve every trusted name to its binding (Codex round 12)</li><li><code>80c4d6e</code> Record round eleven, including that round ten shipped its own regression</li><li><code>8c002e0</code> Stop trusting a spelling, and stop inferring coverage from a missing parameter (Codex round 11)</li><li><code>dabe3e0</code> Record round ten, and that it was one rule rather than four findings</li><li><code>9faa24c</code> Bind the campaign at every boundary an id crosses (Codex round 10)</li><li><code>fe6a481</code> Record round nine in the review report</li><li><code>197171e</code> Invert the mutation surface, and get plugin code out of the lock (Codex round 9)</li><li><code>045d8de</code> Record round eight, and that the inversion was partial</li><li><code>f725009</code> Three false negatives the whitelist inversion did not cover (Codex round 8)</li><li><code>86b9c5d</code> Record round seven, and the inversion, in the review report</li><li><code>bfbd68b</code> Invert lock recognition to a closed whitelist (Codex round 7)</li><li><code>33efa71</code> Record round six in the review report</li><li><code>54df202</code> One traversal, one polarity rule (Codex round 6)</li><li><code>3cbb2f2</code> Rewrite the review report&#x27;s defect record against the actual history</li><li><code>fa1e842</code> Restructure the decorator check; touch by receiver (Codex round 5)</li><li><code>42ab7e4</code> Close four more guard holes (Codex round 4)</li><li><code>ae852f9</code> Refresh the review report for the round-three findings</li><li><code>cf15428</code> Close four more guard holes (Codex round 3)</li><li><code>07b271e</code> Refresh the review report: campaign-creation race and the round-two findings</li></ul></div></details>
+<tbody><tr><td><code>backend/src/grimoire/store/campaigns.py</code> </td><td><span class='badge accent'>source</span></td><td class='num'><span class='plusminus'><span class='p'>+56</span> <span class='m'>−23</span></span></td><td data-sort='79'><div class='dbar'><i class='a' style='width:1.6%'></i><i class='d' style='width:0.7%'></i></div></td><td class='num'>9</td><td class='dim' style='font-size:12px'>concurrency×12, security×1, retries/timeouts×1</td></tr><tr><td><code>backend/src/grimoire/store/locks.py</code> </td><td><span class='badge accent'>source</span></td><td class='num'><span class='plusminus'><span class='p'>+77</span> <span class='m'>−4</span></span></td><td data-sort='81'><div class='dbar'><i class='a' style='width:2.3%'></i><i class='d' style='width:0.1%'></i></div></td><td class='num'>7</td><td class='dim' style='font-size:12px'>concurrency×6, transactions×1</td></tr><tr><td><code>backend/src/grimoire/store/sheets.py</code> </td><td><span class='badge accent'>source</span></td><td class='num'><span class='plusminus'><span class='p'>+25</span> <span class='m'>−16</span></span></td><td data-sort='41'><div class='dbar'><i class='a' style='width:0.7%'></i><i class='d' style='width:0.5%'></i></div></td><td class='num'>5</td><td class='dim' style='font-size:12px'>concurrency×3</td></tr><tr><td><code>backend/src/grimoire/store/audit.py</code> </td><td><span class='badge accent'>source</span></td><td class='num'><span class='plusminus'><span class='p'>+8</span> <span class='m'>−0</span></span></td><td data-sort='8'><div class='dbar'><i class='a' style='width:0.2%'></i><i class='d' style='width:0.0%'></i></div></td><td class='num'>5</td><td class='dim' style='font-size:12px'>concurrency×6</td></tr><tr><td><code>backend/tests/test_lock_domain_guard.py</code> <span class='badge good'>new</span></td><td><span class='badge good'>test</span></td><td class='num'><span class='plusminus'><span class='p'>+3416</span> <span class='m'>−0</span></span></td><td data-sort='3416'><div class='dbar'><i class='a' style='width:100.0%'></i><i class='d' style='width:0.0%'></i></div></td><td class='num'>0</td><td class='dim' style='font-size:12px'></td></tr><tr><td><code>backend/tests/test_locks_store.py</code> </td><td><span class='badge good'>test</span></td><td class='num'><span class='plusminus'><span class='p'>+32</span> <span class='m'>−0</span></span></td><td data-sort='32'><div class='dbar'><i class='a' style='width:0.9%'></i><i class='d' style='width:0.0%'></i></div></td><td class='num'>0</td><td class='dim' style='font-size:12px'></td></tr><tr><td><code>CLAUDE.md</code> </td><td><span class='badge neutral'>docs</span></td><td class='num'><span class='plusminus'><span class='p'>+19</span> <span class='m'>−6</span></span></td><td data-sort='25'><div class='dbar'><i class='a' style='width:0.6%'></i><i class='d' style='width:0.2%'></i></div></td><td class='num'>0</td><td class='dim' style='font-size:12px'></td></tr></tbody></table></div>
+<details><summary>39 commits in range</summary><div class='body'><ul><li><code>1920212</code> Bindings, suspensions, and the one name everything trusts (Codex round 18)</li><li><code>db47ca1</code> Record round seventeen, and the first time the probes prevented a defect</li><li><code>bfaaeda</code> State the delegation half of the rule in the docstring</li><li><code>94566ff</code> Position the delegated writes too, not only the direct ones (Codex round 17)</li><li><code>282ccf5</code> Record round sixteen, and the first entry on the cost side of the ledger</li><li><code>c684373</code> Make the traversal uniform, and stop trusting a fourth spelling (Codex round 16)</li><li><code>83646fa</code> Record round fifteen, and correct a claim the report was making</li><li><code>6b607ac</code> Ask where the writes run, not whether a lock exists (Codex round 15)</li><li><code>d3b64d1</code> Record round fourteen, and the shape the whole review has had</li><li><code>943f147</code> Check what the decorator wraps, not only the wrapper (Codex round 14)</li><li><code>86a3431</code> Record round thirteen, and name the enumeration under the rule</li><li><code>16fb6de</code> Resolve names at every binding form, and stop exempting the lock module (Codex round 13)</li><li><code>cc22dd4</code> Record round twelve, and that the verification method was unsound</li><li><code>47b5425</code> Resolve every trusted name to its binding (Codex round 12)</li><li><code>80c4d6e</code> Record round eleven, including that round ten shipped its own regression</li><li><code>8c002e0</code> Stop trusting a spelling, and stop inferring coverage from a missing parameter (Codex round 11)</li><li><code>dabe3e0</code> Record round ten, and that it was one rule rather than four findings</li><li><code>9faa24c</code> Bind the campaign at every boundary an id crosses (Codex round 10)</li><li><code>fe6a481</code> Record round nine in the review report</li><li><code>197171e</code> Invert the mutation surface, and get plugin code out of the lock (Codex round 9)</li><li><code>045d8de</code> Record round eight, and that the inversion was partial</li><li><code>f725009</code> Three false negatives the whitelist inversion did not cover (Codex round 8)</li><li><code>86b9c5d</code> Record round seven, and the inversion, in the review report</li><li><code>bfbd68b</code> Invert lock recognition to a closed whitelist (Codex round 7)</li><li><code>33efa71</code> Record round six in the review report</li><li><code>54df202</code> One traversal, one polarity rule (Codex round 6)</li><li><code>3cbb2f2</code> Rewrite the review report&#x27;s defect record against the actual history</li><li><code>fa1e842</code> Restructure the decorator check; touch by receiver (Codex round 5)</li><li><code>42ab7e4</code> Close four more guard holes (Codex round 4)</li><li><code>ae852f9</code> Refresh the review report for the round-three findings</li></ul></div></details>
 
 
 </section>
@@ -338,7 +338,7 @@ footer.doc{max-width:1280px;margin:0 auto;padding:0 28px 34px;color:var(--text-f
 
 <div class="tbl-wrap"><table class="sortable">
 <thead><tr><th>Prompt / template changed</th><th class="num">+/−</th><th>Loaded at</th></tr></thead>
-<tbody><tr><td><code>CLAUDE.md</code></td><td class='num'><span class='plusminus'><span class='p'>+19</span> <span class='m'>−6</span></span></td><td><code>docs/pr-fix-241-split-routes.html:309</code> <code>docs/pr-lock-domain-ast-guard.html:311</code></td></tr><tr><td><code>backend/src/grimoire/store/audit.py</code></td><td class='num'><span class='plusminus'><span class='p'>+8</span> <span class='m'>−0</span></span></td><td><code>docs/codemap.html:466</code> <code>docs/pr-251.html:268</code> <code>docs/pr-252.html:457</code> <code>docs/pr-255-rolls-campaign-lock.html:373</code> <code>docs/pr-lock-domain-ast-guard.html:311</code></td></tr><tr><td><code>backend/src/grimoire/store/campaigns.py</code></td><td class='num'><span class='plusminus'><span class='p'>+56</span> <span class='m'>−23</span></span></td><td><code>backend/tests/test_overlay_guard.py:125</code> <code>docs/codemap.html:466</code> <code>docs/pr-252.html:457</code> <code>docs/pr-259.html:295</code> <code>docs/pr-fix-237-climate-module.html:307</code> <code>docs/pr-fix-248-enforce-overlay-reads.html:334</code> <code>docs/pr-lock-domain-ast-guard.html:311</code></td></tr><tr><td><code>backend/src/grimoire/store/locks.py</code></td><td class='num'><span class='plusminus'><span class='p'>+77</span> <span class='m'>−4</span></span></td><td><code>docs/codemap.html:466</code> <code>docs/pr-251.html:268</code> <code>docs/pr-254.html:267</code> <code>docs/pr-255-rolls-campaign-lock.html:328</code> <code>docs/pr-fix-241-split-routes.html:309</code> <code>docs/pr-lock-domain-ast-guard.html:311</code></td></tr><tr><td><code>backend/src/grimoire/store/sheets.py</code></td><td class='num'><span class='plusminus'><span class='p'>+25</span> <span class='m'>−16</span></span></td><td><code>docs/codemap.html:466</code> <code>docs/pr-251.html:268</code> <code>docs/pr-252.html:457</code> <code>docs/pr-259.html:295</code> <code>docs/pr-fix-247-overlay-materialize-atomic.html:370</code> <code>docs/pr-lock-domain-ast-guard.html:311</code></td></tr><tr><td><code>backend/tests/test_lock_domain_guard.py</code></td><td class='num'><span class='plusminus'><span class='p'>+3237</span> <span class='m'>−0</span></span></td><td><code>docs/pr-lock-domain-ast-guard.html:311</code></td></tr><tr><td><code>backend/tests/test_locks_store.py</code></td><td class='num'><span class='plusminus'><span class='p'>+32</span> <span class='m'>−0</span></span></td><td><code>docs/pr-251.html:268</code> <code>docs/pr-254.html:267</code> <code>docs/pr-255-rolls-campaign-lock.html:328</code> <code>docs/pr-fix-241-split-routes.html:309</code> <code>docs/pr-lock-domain-ast-guard.html:311</code></td></tr></tbody></table></div>
+<tbody><tr><td><code>CLAUDE.md</code></td><td class='num'><span class='plusminus'><span class='p'>+19</span> <span class='m'>−6</span></span></td><td><code>docs/pr-fix-241-split-routes.html:309</code> <code>docs/pr-lock-domain-ast-guard.html:311</code></td></tr><tr><td><code>backend/src/grimoire/store/audit.py</code></td><td class='num'><span class='plusminus'><span class='p'>+8</span> <span class='m'>−0</span></span></td><td><code>docs/codemap.html:466</code> <code>docs/pr-251.html:268</code> <code>docs/pr-252.html:457</code> <code>docs/pr-255-rolls-campaign-lock.html:373</code> <code>docs/pr-lock-domain-ast-guard.html:311</code></td></tr><tr><td><code>backend/src/grimoire/store/campaigns.py</code></td><td class='num'><span class='plusminus'><span class='p'>+56</span> <span class='m'>−23</span></span></td><td><code>backend/tests/test_overlay_guard.py:125</code> <code>docs/codemap.html:466</code> <code>docs/pr-252.html:457</code> <code>docs/pr-259.html:295</code> <code>docs/pr-fix-237-climate-module.html:307</code> <code>docs/pr-fix-248-enforce-overlay-reads.html:334</code> <code>docs/pr-lock-domain-ast-guard.html:311</code></td></tr><tr><td><code>backend/src/grimoire/store/locks.py</code></td><td class='num'><span class='plusminus'><span class='p'>+77</span> <span class='m'>−4</span></span></td><td><code>docs/codemap.html:466</code> <code>docs/pr-251.html:268</code> <code>docs/pr-254.html:267</code> <code>docs/pr-255-rolls-campaign-lock.html:328</code> <code>docs/pr-fix-241-split-routes.html:309</code> <code>docs/pr-lock-domain-ast-guard.html:311</code></td></tr><tr><td><code>backend/src/grimoire/store/sheets.py</code></td><td class='num'><span class='plusminus'><span class='p'>+25</span> <span class='m'>−16</span></span></td><td><code>docs/codemap.html:466</code> <code>docs/pr-251.html:268</code> <code>docs/pr-252.html:457</code> <code>docs/pr-259.html:295</code> <code>docs/pr-fix-247-overlay-materialize-atomic.html:370</code> <code>docs/pr-lock-domain-ast-guard.html:311</code></td></tr><tr><td><code>backend/tests/test_lock_domain_guard.py</code></td><td class='num'><span class='plusminus'><span class='p'>+3416</span> <span class='m'>−0</span></span></td><td><code>docs/pr-lock-domain-ast-guard.html:311</code></td></tr><tr><td><code>backend/tests/test_locks_store.py</code></td><td class='num'><span class='plusminus'><span class='p'>+32</span> <span class='m'>−0</span></span></td><td><code>docs/pr-251.html:268</code> <code>docs/pr-254.html:267</code> <code>docs/pr-255-rolls-campaign-lock.html:328</code> <code>docs/pr-fix-241-split-routes.html:309</code> <code>docs/pr-lock-domain-ast-guard.html:311</code></td></tr></tbody></table></div>
 
 <h2>Test delta</h2>
 <p class="dim">Match is heuristic: a changed test counts as covering a source file if it shares a name stem or mentions the file's changed symbols. 4 of 4 changed source files have matching test changes.</p>
@@ -527,14 +527,14 @@ sequenceDiagram
       </tbody>
     </table>
   </div>
-  <p>In total 82 self-tests pin the detector's own semantics in
+  <p>In total 88 self-tests pin the detector's own semantics in
   <code>backend/tests/test_lock_domain_guard.py</code> — that a decorator counts
   only when it wraps its target under the lock on every executed path, that
   <strong>every</strong> write in a locking function runs inside the block (not
   merely that the block exists), that pure delegation to a locked helper is
   <em>not</em> flagged while a wrapper with a write of its own <em>is</em>, and
   that cyclic helpers terminate.</p>
-  <p>The twenty-five detector fixes from rounds nine through seventeen were
+  <p>The thirty-one detector fixes from rounds nine through eighteen were
   mutation-tested the same way: each was reverted <em>alone</em> and its test
   confirmed red. Read that claim with the Review Walkthrough's round-twelve
   note in mind — the harness making it was itself defective until that round,
@@ -551,7 +551,7 @@ sequenceDiagram
   by reviewing the guard — one real race fixed in campaign creation. That race
   is the only runtime change and is the thing to read closely; everything else
   is constants, comments and tests.</p>
-  <p><strong>One decision needs a human, not a test.</strong> After seventeen review
+  <p><strong>One decision needs a human, not a test.</strong> After eighteen review
   rounds both of the guard's polarities were inverted to a closed whitelist that
   <em>fails loud</em>: a form it does not recognize reads as unserialized. It is
   therefore deliberately stricter than the codebase, and its value depends on
@@ -571,7 +571,7 @@ sequenceDiagram
   (<code>backend/src/grimoire/store/locks.py:138</code>) admits 17 modules with
   no per-module reason. That is defensible — inventing 17 rationales for modules
   nobody audited would be worse, and the set is barred from growing
-  (<code>backend/tests/test_lock_domain_guard.py:1627</code>) — but it should be
+  (<code>backend/tests/test_lock_domain_guard.py:1695</code>) — but it should be
   read as a backlog, not as protection.</p>
   <p>One real question for the author: <strong>should test-only data live in
   production code?</strong> Nothing in <code>grimoire</code> imports these three
@@ -628,7 +628,7 @@ sequenceDiagram
     <span class="badge neutral">+644</span></h4>
   <p><span class="badge good">the strongest part of the change</span> Over half
   the file is self-tests of the detector — which is the right ratio, because a
-  guard that cannot fail reads as coverage. 82 of them, one per defect found
+  guard that cannot fail reads as coverage. 88 of them, one per defect found
   across nine review passes plus the semantics each fix depends on — including
   one deliberate counterweight,
   <code>test_the_real_serialized_decorator_still_qualifies</code>, because four
@@ -638,8 +638,8 @@ sequenceDiagram
 
 <div class="card">
   <h3>Defects found during review and fixed</h3>
-  <p>Five from a local review pass before the PR opened, then sixty-two across
-  seventeen Codex rounds. <strong>Every one was a real defect</strong> — none was
+  <p>Five from a local review pass before the PR opened, then sixty-eight across
+  eighteen Codex rounds. <strong>Every one was a real defect</strong> — none was
   dismissed — and every one is pinned by a test that fails without its fix.
   Classification of the tree never changed across any of them, which is the
   evidence they closed false negatives rather than moved the boundary.</p>
@@ -1033,6 +1033,36 @@ sequenceDiagram
           <td><strong>A locked write followed by an unlocked delegate</strong> — reported by neither check</td>
           <td><span class="badge bad">fixed — delegations are positional too</span></td>
         </tr>
+        <tr>
+          <td>Codex 18<br/><code>db47ca1</code></td>
+          <td><code>with campaign_lock(cid): cid = target</code> — the body rebinds the key</td>
+          <td><span class="badge bad">fixed — the last untested name in the file</span></td>
+        </tr>
+        <tr>
+          <td>Codex 18<br/><code>db47ca1</code></td>
+          <td><code>for helper in [nullcontext]</code> / <code>with x() as helper</code> at module scope</td>
+          <td><span class="badge bad">fixed — the binding form predicted two rounds earlier</span></td>
+        </tr>
+        <tr>
+          <td>Codex 18<br/><code>db47ca1</code></td>
+          <td><code>safe = hooks.identity; alias = safe</code> revived a poisoned name</td>
+          <td><span class="badge bad">fixed — poison propagates along the chain</span></td>
+        </tr>
+        <tr>
+          <td>Codex 18<br/><code>db47ca1</code></td>
+          <td><code>hooks.helper(cid)</code> matched the local alias</td>
+          <td><span class="badge bad">fixed — the path round ten did not narrow</span></td>
+        </tr>
+        <tr>
+          <td>Codex 18<br/><code>db47ca1</code></td>
+          <td>A <code>yield</code> under the lock is a suspension, like <code>await</code></td>
+          <td><span class="badge bad">fixed — the direct generator shape</span></td>
+        </tr>
+        <tr>
+          <td>Codex 18<br/><code>db47ca1</code></td>
+          <td><code>import shutil; fs = shutil</code> binds the module object</td>
+          <td><span class="badge bad">fixed — assignment aliases of namespaces</span></td>
+        </tr>
       </tbody>
     </table>
   </div>
@@ -1191,7 +1221,7 @@ sequenceDiagram
     weight to put on the guard: <em>every rule here was stated after being fixed
     at four or five instances, and the round after each rule was stated found it
     unapplied at one more site.</em> That is not an argument the guard is
-    unsound — its classification of the tree has never changed across sixty-two
+    unsound — its classification of the tree has never changed across sixty-eight
     findings — but it is the reason the docstring's list of recognized forms,
     rather than the code, is the thing to read before trusting it.</p>
     <p><strong>Round fifteen is the exception worth reading, because it made a
@@ -1237,6 +1267,20 @@ sequenceDiagram
     "what else satisfies this new check?" probes caught it before the commit
     rather than the next round catching it after — which is the first time on
     this PR that step prevented a defect instead of documenting one.</p>
+    <p><strong>Round eighteen is where the prediction finally paid.</strong> Six
+    findings, and every one fell in a class this report had already named: four
+    unenumerated binding forms (a loop target, a <code>with ... as</code>, an
+    assignment from a poisoned name, an assignment of a module object) and two
+    about what a lock covers (a <code>yield</code> is a suspension like
+    <code>await</code>; a body may not reassign <code>cid</code>). Five of the
+    six were in code from rounds twelve through seventeen.</p>
+    <p>That last one is worth naming on its own. Every rule in the guard reads
+    the name <code>cid</code> as "this function's campaign" — and that is a
+    claim about the parameter, which a body is free to break. Eighteen rounds
+    of "a name is not a binding" applied to other people's names, and the name
+    the whole analysis is keyed on was the one still trusted without checking.
+    A reader who wants a single sentence for how this guard failed can use that
+    one.</p></p>
   </div>
 </div>
 
@@ -1258,7 +1302,7 @@ sequenceDiagram
           <td>New backlog list (<code>UNREVIEWED</code>)</td>
           <td>Removal path, or permanent?</td>
           <td><span class="badge good">yes</span> — may only shrink
-          (<code>backend/tests/test_lock_domain_guard.py:1627</code>); phantom
+          (<code>backend/tests/test_lock_domain_guard.py:1695</code>); phantom
           entries must be dropped (<code>:374</code>); entries that get fixed must
           be promoted (<code>:400</code>).</td>
         </tr>
@@ -1334,11 +1378,11 @@ sequenceDiagram
     <li><s>The ratchet bound <code>17</code> duplicates the size of a set
     defined in another file.</s> <strong>Fixed in a later round</strong> — the
     ratchet compares <em>membership</em> against a frozen baseline
-    (<code>backend/tests/test_lock_domain_guard.py:1627</code>), because a
+    (<code>backend/tests/test_lock_domain_guard.py:1695</code>), because a
     count-only bound let one legacy entry be swapped for a brand-new module
     without the length moving.</li>
     <li><code>_survey()</code> returns a cached mutable dict
-    (<code>backend/tests/test_lock_domain_guard.py:1572</code>); no current caller
+    (<code>backend/tests/test_lock_domain_guard.py:1640</code>); no current caller
     mutates it.</li>
   </ol>
   <p><strong>Not reviewed:</strong> the 17 <code>UNREVIEWED</code> modules were
