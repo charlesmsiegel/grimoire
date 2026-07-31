@@ -85,7 +85,14 @@ Honest about its reach — the house standard set by ``test_atomic_guard.py``:
   assignment from any of those, or an assignment inside the calling function
   (``_shadowed_names``, ``_module_level`` and ``_locally_bound``). A call
   reached through an attribute is never module-local — not as a lock, not as an
-  alias, and not as a delegate (``_local_call_name``). And ``cid`` itself, in a function
+  alias, and not as a delegate (``_local_call_name``). And an alias carrying any
+  decorator but ``@contextmanager``, since a decorator replaces what the name
+  means and only that one's semantics are modelled here.
+
+  What is still trusted on its spelling, stated rather than papered over:
+  ``open``, ``os``/``shutil`` where no import binds them, and ``contextlib`` /
+  ``contextmanager``. A module that rebinds those is not checked. Only ``locks``
+  and the names the whitelist validates are resolved to their bindings. And ``cid`` itself, in a function
   whose body reassigns it (``_rebinds_cid``) — every rule here reads that name
   as "this function's campaign", which is a claim about the parameter.
 
@@ -295,6 +302,16 @@ def _bindings(tree: ast.AST):
         for target in targets:
             if isinstance(target, ast.Name):
                 yield target.id, value
+            elif isinstance(target, (ast.Tuple, ast.List)):
+                # `put, other = _put, helper`. Paired element-wise when the
+                # shapes match; otherwise each name is yielded against the whole
+                # right-hand side, which resolves to nothing and therefore
+                # poisons rather than being ignored.
+                paired = (isinstance(value, (ast.Tuple, ast.List))
+                          and len(value.elts) == len(target.elts))
+                for i, element in enumerate(target.elts):
+                    if isinstance(element, ast.Name):
+                        yield element.id, value.elts[i] if paired else value
 
 
 def _functions(tree: ast.AST) -> dict[str, list[ast.AST]]:
@@ -549,8 +566,22 @@ def _rebinds_cid(fn: ast.AST) -> bool:
     a binding" rule the module-scope checks apply, pointed at the one name
     everything else here trusts.
     """
-    return any(isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)
-               and n.id == "cid" for n in _own_body(fn))
+    for node in _own_body(fn):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store) \
+                and node.id == "cid":
+            return True
+        # Two forms store the bound name as a plain string on the node rather
+        # than as an `ast.Name`, so a Name-only scan could not see them:
+        # `except Redirect as cid` and a `match` capture named `cid`.
+        if isinstance(node, ast.ExceptHandler) and node.name == "cid":
+            return True
+        if isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name == "cid":
+            return True
+        if isinstance(node, ast.MatchMapping) and node.rest == "cid":
+            return True
+        if isinstance(node, (ast.Global, ast.Nonlocal)) and "cid" in node.names:
+            return True
+    return False
 
 
 def _rebinds_locks(tree: ast.AST) -> bool:
@@ -680,7 +711,7 @@ def _is_write_call(node: ast.Call, surface: _Surface = _Surface()) -> bool:
         # `from .atomic import write_text` — no receiver to key on.
         if name in surface.imported:
             return True
-        return name == "open" and _is_write_mode(node, (1,))  # builtin: path first
+        return name == "open" and _is_write_mode(node, (1,), (1,))  # path first
     if not isinstance(node.func, ast.Attribute):
         return False
     receiver = _receiver_name(node.func)
@@ -755,7 +786,7 @@ def _names_a_writer(name: str | None, receiver: str | None, namespaces: dict) ->
     return False
 
 
-def _is_write_mode(node: ast.Call, positions=(0, 1)) -> bool:
+def _is_write_mode(node: ast.Call, positions=(0, 1), strict=()) -> bool:
     """`open(p, "w")` / `p.open("w")` in any writable mode -- mirrors
     `test_atomic_guard._is_write_mode`, tested for the characters that make a
     mode writable rather than enumerating literals.
@@ -770,12 +801,22 @@ def _is_write_mode(node: ast.Call, positions=(0, 1)) -> bool:
     the mode first and `codecs.open(p, "w")` puts it second.
     """
     args = [node.args[i] for i in positions if i < len(node.args)]
-    for arg in [*args, *(k.value for k in node.keywords if k.arg == "mode")]:
+    keywords = [k.value for k in node.keywords if k.arg == "mode"]
+    for arg in [*args, *keywords]:
         if isinstance(arg, ast.Constant) and isinstance(arg.value, str) \
                 and 0 < len(arg.value) <= 3 and set(arg.value) <= set("rwaxbt+") \
                 and any(c in arg.value for c in "wax+"):
             return True
-    return False
+    # A mode this cannot read is not a mode it may assume is read-only:
+    # `mode = "w"; open(path, mode)` published, and the handle's `.write()` is
+    # not matched either, so the module vanished from the survey. Fail closed --
+    # but only where the argument is UNAMBIGUOUSLY the mode. `strict` is empty
+    # for an attribute call, because `p.open(x)` and `codecs.open(x, "w")` put
+    # different things in position 0 and guessing there costs false alarms.
+    unreadable = [a for a in [*(node.args[i] for i in strict if i < len(node.args)),
+                              *keywords]
+                  if not (isinstance(a, ast.Constant) and isinstance(a.value, str))]
+    return bool(unreadable)
 
 
 def _own_body(fn: ast.AST):
@@ -834,6 +875,30 @@ def _locks_its_first_param(fn: ast.AST) -> bool:
     return bool(params) and params[0] == "cid"
 
 
+# The one decorator whose semantics `_produces_lock` models: it requires the
+# yield to sit inside the lock, which is exactly what `@contextmanager` means.
+# Matched on the dotted spelling, in both forms this package writes. The
+# residual limit, stated rather than papered over: a module that rebinds
+# `contextlib` or `contextmanager` itself is not checked -- the same trust this
+# guard already extends to the spellings `open` and `os`.
+_CONTEXTMANAGERS = ("contextmanager", "asynccontextmanager",
+                    "contextlib.contextmanager", "contextlib.asynccontextmanager")
+
+
+def _dotted(expr: ast.expr) -> str | None:
+    """`f`, `m.f` and `pkg.m.f` as written, or None for anything else."""
+    if isinstance(expr, ast.Call):
+        expr = expr.func
+    parts = []
+    while isinstance(expr, ast.Attribute):
+        parts.append(expr.attr)
+        expr = expr.value
+    if not isinstance(expr, ast.Name):
+        return None
+    parts.append(expr.id)
+    return ".".join(reversed(parts))
+
+
 def _produces_lock(fn: ast.AST) -> bool:
     """`fn` hands back a campaign lock, keyed on `cid`, for someone else to enter.
 
@@ -860,6 +925,14 @@ def _produces_lock(fn: ast.AST) -> bool:
     so the `@contextmanager` case is recognized by its `yield` sitting INSIDE
     the `with`, which is what keeps the lock open across the caller's block.
     """
+    # A decorator applied to the helper replaces what the name means, and this
+    # analyzed the undecorated body: `@replace_with_nullcontext def helper(cid):
+    # return locks.campaign_lock(cid)` read as a lock producer. Only
+    # `@contextmanager` is recognized -- it is the one whose semantics this
+    # already models, by requiring the yield to sit inside the lock.
+    if any(_dotted(d) not in _CONTEXTMANAGERS
+           for d in getattr(fn, "decorator_list", [])):
+        return False
     if any(_is_yield(n) for n in _own_body(fn)):
         return _yields_inside_lock(fn)   # a @contextmanager, judged by its yields
 
@@ -1360,6 +1433,16 @@ def _wraps_target_under_lock(fn: ast.AST) -> bool:
         # a call this may assume is bound correctly.
         if not all(_guards_the_campaign(c) or _passes_cid_by_keyword(c)
                    for c in ast.walk(w) if is_target(c)):
+            return False
+        # `_every_one_locked` deliberately does not descend into nested defs,
+        # because code there runs later -- which means a target invocation
+        # registered as a callback is invisible to it while the one direct call
+        # answers for both. Anything the traversal cannot reach fails closed.
+        deferred = [n for nested in ast.walk(w)
+                    if isinstance(nested, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                           ast.Lambda)) and nested is not w
+                    for n in ast.walk(nested) if is_target(n)]
+        if deferred:
             return False
         if not _every_one_locked(w, w, is_target):
             return False
@@ -2564,6 +2647,118 @@ DECORATOR_SRC = ("def safe(fn):\n"
                  "        with locks.campaign_lock(cid):\n"
                  "            return fn(cid, *a)\n"
                  "    return locked\n")
+
+
+def test_destructuring_binds_a_public_name():
+    """`put, other = _put, helper` binds through an `ast.Tuple` target, which
+    `_bindings` did not read — so the public name was never collected, the
+    private writer was skipped as private, and the module could leave the
+    survey entirely."""
+    funcs, _s, mutators = _probe(
+        "def _put(cid):\n    atomic.write_text(p, x)\n"
+        "def helper(cid):\n    pass\n"
+        "put, other = _put, helper\n")
+    assert "put" in funcs and "put" in mutators
+
+    # An unpacking this cannot pair resolves to nothing, which poisons rather
+    # than silently aliasing.
+    _f, serializing, _m = _probe(
+        ALIAS_SRC + "helper, spare = pair()\n"
+        "def put(cid):\n"
+        "    with helper(cid):\n"
+        "        atomic.write_text(p, x)\n")
+    assert "put" not in serializing
+
+
+def test_cid_may_be_rebound_without_an_ast_name():
+    """`except Redirect as cid` and a `match` capture store the bound name as a
+    plain string on the node, so the Name-only scan could not see them. The
+    binding forms named as still-unenumerated two rounds ago."""
+    for src, why in [
+        ("def put(cid):\n"
+         "    with locks.campaign_lock(cid):\n"
+         "        try:\n"
+         "            go()\n"
+         "        except Redirect as cid:\n"
+         "            atomic.write_text(root / cid, x)\n", "except-as"),
+        ("def put(cid, msg):\n"
+         "    with locks.campaign_lock(cid):\n"
+         "        match msg:\n"
+         "            case {'to': cid}:\n"
+         "                atomic.write_text(root / cid, x)\n", "a match capture"),
+        ("def put(cid):\n"
+         "    global cid\n"
+         "    with locks.campaign_lock(cid):\n"
+         "        atomic.write_text(p, x)\n", "a global declaration"),
+    ]:
+        _f, serializing, _m = _probe(src)
+        assert "put" not in serializing, f"{why} rebound `cid` unnoticed"
+
+
+def test_a_mode_this_cannot_read_is_not_read_only():
+    """`mode = "w"; open(path, mode)` published while the guard saw no write,
+    and the handle's `.write()` is not matched either — so the module vanished
+    from the survey. The builtin's second argument is unambiguously the mode,
+    so a non-literal there fails closed."""
+    for src, why in [
+        ("def put(cid):\n    mode = 'w'\n    open(path, mode).write(x)\n", "a variable"),
+        ("def put(cid):\n    open(path, mode=chosen()).write(x)\n", "a computed keyword"),
+    ]:
+        _f, _s, mutators = _probe(src)
+        assert mutators, f"{why} mode was assumed read-only ({src!r})"
+
+    # An attribute call keeps the literal-only rule: `p.open(x)` and
+    # `codecs.open(x, "w")` put different things in position 0, and guessing
+    # there costs false alarms -- the cost this guard already paid once.
+    _f, _s, mutators = _probe("def read(cid):\n    return p.open(chosen()).read()\n")
+    assert not mutators
+
+
+def test_a_target_invoked_from_a_callback_is_not_covered():
+    """`_every_one_locked` does not descend into nested defs, because code there
+    runs later — so a target invocation registered as a callback was invisible
+    while the one direct call answered for both."""
+    _f, serializing, mutators = _probe(
+        "def safe(fn):\n"
+        "    def locked(cid, *a):\n"
+        "        with locks.campaign_lock(cid):\n"
+        "            fn(cid, *a)\n"
+        "        def later():\n"
+        "            fn(cid, *a)\n"
+        "        register(later)\n"
+        "    return locked\n"
+        "@safe\n"
+        "def put(cid):\n"
+        "    atomic.write_text(p, x)\n")
+    assert "put" in mutators
+    assert "put" not in serializing, "a deferred target invocation was invisible"
+
+
+def test_a_decorated_alias_is_not_its_undecorated_body():
+    """A decorator replaces what the name means, and this analyzed the body it
+    was applied to. Only `@contextmanager` is recognized — the one decorator
+    whose semantics `_produces_lock` already models."""
+    _f, serializing, mutators = _probe(
+        "@replace_with_nullcontext\n"
+        "def helper(cid):\n"
+        "    return locks.campaign_lock(cid)\n"
+        "def put(cid):\n"
+        "    with helper(cid):\n"
+        "        atomic.write_text(p, x)\n")
+    assert "put" in mutators
+    assert "put" not in serializing, "a transformed alias kept its old meaning"
+
+    # Both spellings of the recognized decorator still qualify.
+    for dec in ("from contextlib import contextmanager\n@contextmanager\n",
+                "import contextlib\n@contextlib.contextmanager\n"):
+        _f, serializing, _m = _probe(
+            dec + "def helper(cid):\n"
+            "    with locks.campaign_lock(cid):\n"
+            "        yield\n"
+            "def put(cid):\n"
+            "    with helper(cid):\n"
+            "        atomic.write_text(p, x)\n")
+        assert "put" in serializing, f"the real @contextmanager alias regressed ({dec!r})"
 
 
 def test_a_function_local_rebinding_poisons_the_alias():
