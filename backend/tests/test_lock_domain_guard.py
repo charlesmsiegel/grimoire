@@ -124,6 +124,13 @@ Honest about its reach — the house standard set by ``test_atomic_guard.py``:
   inside a *different* module's unserialized mutator is not itself flagged. The
   callee is flagged in its own file instead, which is where the fix goes; what
   this misses is the caller that spans two such calls non-atomically.
+- **A campaign lock held across a suspension point is not serialization.**
+  ``_ProcessScopedLock`` is a ``threading.RLock`` plus a file lock, and an RLock
+  is owned by a thread rather than a task, so two coroutines on one event-loop
+  thread both "hold" it across an ``await`` — the second re-enters, and skips
+  the file lock. An ``async def`` that awaits inside the lock therefore reads as
+  unserialized here. Nothing in this package does that today; the rule exists
+  for the one written later.
 - **Every WRITE must run under the lock; the READ need not.** The write half is
   checked: a function that locks around part of its body and publishes outside
   that block fails, on every branch, including through a comprehension. That was
@@ -299,6 +306,15 @@ def _functions(tree: ast.AST) -> dict[str, list[ast.AST]]:
     # what callers use. Without this the analysis saw only `_put`, skipped it as
     # a private helper, and never knew `put` existed -- so a domain module could
     # expose an unlocked public mutator and pass. Iterated for `a = b; c = a`.
+    # `put = lambda cid: atomic.write_text(p, x)` defines a public mutator with
+    # no `def` anywhere, so a collector keyed on FunctionDef saw nothing -- not
+    # an unlocked mutator, but no function at all, and potentially no module.
+    # The binding forms are `_bindings`' job; what a binding may point AT is
+    # this one's, and a lambda was missing from that list.
+    for name, value in _bindings(tree):
+        if isinstance(value, ast.Lambda):
+            out.setdefault(name, []).append(value)
+
     for _ in range(len(out) + 1):
         grew = False
         for name, value in _bindings(tree):
@@ -495,9 +511,22 @@ def _rebinds_locks(tree: ast.AST) -> bool:
             return True                  # assignment, `for`, `with ... as`, walrus
         if isinstance(node, ast.arg) and node.arg in watched:
             return True                  # a parameter, of any function here
-        if isinstance(node, ast.alias) and (node.asname or node.name) in watched \
-                and node.name.rsplit(".", 1)[-1] not in watched:
-            return True                  # `import json as locks`
+    # An import binds a watched name to whatever module it came FROM, and the
+    # previous version exempted any import whose source symbol happened to be
+    # spelled `locks` -- so `from hooks import locks` was trusted. The spelling
+    # again, one binding form further out. Trust is now the module it comes
+    # from: a relative import, or an absolute one rooted in this package.
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            ours = node.level > 0 or (node.module or "").split(".")[0] == "grimoire"
+            for alias in node.names:
+                if (alias.asname or alias.name) in watched and not ours:
+                    return True          # `from hooks import locks`
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                bound = alias.asname or alias.name.split(".")[0]
+                if bound in watched and alias.name.split(".")[0] != "grimoire":
+                    return True          # `import json as locks`
     return False
 
 
@@ -552,7 +581,7 @@ def _is_write_call(node: ast.Call, surface: _Surface = _Surface()) -> bool:
         # `from .atomic import write_text` — no receiver to key on.
         if name in surface.imported:
             return True
-        return name == "open" and _is_write_mode(node)   # the builtin, not a method
+        return name == "open" and _is_write_mode(node, (1,))  # builtin: path first
     if not isinstance(node.func, ast.Attribute):
         return False
     receiver = _receiver_name(node.func)
@@ -627,11 +656,22 @@ def _names_a_writer(name: str | None, receiver: str | None, namespaces: dict) ->
     return False
 
 
-def _is_write_mode(node: ast.Call) -> bool:
+def _is_write_mode(node: ast.Call, positions=(0, 1)) -> bool:
     """`open(p, "w")` / `p.open("w")` in any writable mode -- mirrors
     `test_atomic_guard._is_write_mode`, tested for the characters that make a
-    mode writable rather than enumerating literals."""
-    for arg in [*node.args[:2], *(k.value for k in node.keywords if k.arg == "mode")]:
+    mode writable rather than enumerating literals.
+
+    `positions` says where the mode can be, and it matters: the builtin takes
+    the PATH first, so scanning both positions read `open("a")` -- a filename --
+    as append mode. That is the first FALSE POSITIVE this review has produced,
+    and it is the failure this guard's stated trade accepts, so it is worth
+    naming rather than quietly fixing: a read-only module would have been pushed
+    into the declaration, or a reader given a lock it does not need. Bare
+    `open` passes `(1,)`; an attribute call keeps both, since `p.open("w")` puts
+    the mode first and `codecs.open(p, "w")` puts it second.
+    """
+    args = [node.args[i] for i in positions if i < len(node.args)]
+    for arg in [*args, *(k.value for k in node.keywords if k.arg == "mode")]:
         if isinstance(arg, ast.Constant) and isinstance(arg.value, str) \
                 and 0 < len(arg.value) <= 3 and set(arg.value) <= set("rwaxbt+") \
                 and any(c in arg.value for c in "wax+"):
@@ -839,22 +879,37 @@ def _under_lock(node: ast.AST, fn: ast.AST, locked: bool, want, aliases=()):
     than stopping at the first, because `locked` differs per branch -- an early
     `return fn(cid)` under a feature flag has to be visible beside the locked
     fallback rather than hidden by it.
+
+    Every node is examined by the SAME step, `visit`, including the statements
+    inside a `with` body. The previous shape tested a node only where it
+    appeared as a child of the node being iterated, and handed `with` bodies to
+    a fresh top-level call -- so a statement in a `with` body was never itself
+    tested, and a `with` nested inside another `with` never had its own context
+    evaluated. That made `with suppress(OSError): with campaign_lock(cid): ...`
+    read as unlocked, a false alarm on legitimate code, and made `async with`
+    invisible as a suspension point. One step, applied everywhere, is the same
+    correction this guard has needed at four other sites.
     """
-    for child in ast.iter_child_nodes(node):
+    def visit(child, locked):
         if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
-            continue                       # deferred, not executed here
+            return                         # deferred, not executed here
+        if want(child):
+            yield locked
         if isinstance(child, (ast.With, ast.AsyncWith)):
             inner = locked or any(_is_lock_context(i.context_expr, fn)
                                   or _is_alias_context(i.context_expr, aliases)
                                   for i in child.items)
-            for item in child.items:       # the context expressions themselves
-                yield from _under_lock(item, fn, locked, want, aliases)
+            for item in child.items:       # the context expressions themselves,
+                for sub in ast.iter_child_nodes(item):   # evaluated before the
+                    yield from visit(sub, locked)        # lock is held
             for stmt in child.body:
-                yield from _under_lock(stmt, fn, inner, want, aliases)
-            continue
-        if want(child):
-            yield locked
-        yield from _under_lock(child, fn, locked, want, aliases)
+                yield from visit(stmt, inner)
+            return
+        for sub in ast.iter_child_nodes(child):
+            yield from visit(sub, locked)
+
+    for child in ast.iter_child_nodes(node):
+        yield from visit(child, locked)
 
 
 def _is_alias_context(expr: ast.expr, aliases) -> bool:
@@ -863,6 +918,35 @@ def _is_alias_context(expr: ast.expr, aliases) -> bool:
     and the direct check agree on what an acquisition is."""
     return (isinstance(expr, ast.Call) and _called_name(expr.func) in aliases
             and _guards_the_campaign(expr))
+
+
+def _suspends_under_lock(fn: ast.AST, aliases=()) -> bool:
+    """`fn` reaches a suspension point while holding the campaign lock.
+
+    `_ProcessScopedLock` is a `threading.RLock` plus an OS file lock, and an
+    RLock is owned by a THREAD, not by a task. So on one event-loop thread:
+
+        async def put(cid):
+            with locks.campaign_lock(cid):
+                await flush()            # task A suspends, still "holding" it
+                atomic.write_text(p, x)
+
+    task B entering the same block re-enters the RLock successfully -- same
+    thread -- increments `_depth`, and skips the file-lock acquisition
+    entirely. Both tasks then run the read-modify-write concurrently, which is
+    the lost update the lock exists to prevent, with the guard passing.
+
+    The reentrancy that makes this possible is load-bearing elsewhere
+    (`audit.apply_delta` calls `sheets.set_field` under a held lock), so this
+    is not a bug in the lock; it is a shape the lock does not support. Nothing
+    in this package holds a campaign lock in an `async def` today -- checked
+    before adding this -- so it fails loud for the one somebody writes later.
+    """
+    return any(_under_lock(fn, fn, False, _is_suspension, aliases))
+
+
+def _is_suspension(node: ast.AST) -> bool:
+    return isinstance(node, (ast.Await, ast.AsyncFor, ast.AsyncWith))
 
 
 def _every_one_locked(node: ast.AST, fn: ast.AST, want, aliases=()) -> bool:
@@ -1264,7 +1348,8 @@ def _innermost_decorator_locks(fn: ast.AST, decorating: set[str]) -> bool:
       rule `_locks_its_first_param` applies to aliases, at the fifth boundary an
       id crosses; every `@_serialized` mutator in `scenes` already satisfies it.
     """
-    if not (bool(fn.decorator_list) and _decorator_name(fn.decorator_list[-1]) in decorating):
+    decorators = getattr(fn, "decorator_list", [])
+    if not (decorators and _decorator_name(decorators[-1]) in decorating):
         return False
     if isinstance(fn, ast.AsyncFunctionDef) or any(_is_yield(n) for n in _own_body(fn)):
         return False                     # a deferred body; the wrapper's lock is
@@ -1323,6 +1408,9 @@ def _serializing(funcs: dict[str, ast.AST], surface=_Surface(),
             def covered(fn, grown=grown, surface=surface):
                 if _innermost_decorator_locks(fn, decorating):
                     return True                       # @_serialized and friends
+                if _suspends_under_lock(fn, aliases):
+                    return False          # an RLock is thread-owned, not task-
+                                          # owned -- see `_suspends_under_lock`
                 if _writes_directly(fn, surface):
                     # Checked BEFORE `_enters_lock`, which was the bug: entering
                     # a lock anywhere made the whole function read as serialized,
@@ -2221,6 +2309,100 @@ def test_the_lock_module_is_surveyed_like_any_other():
     assert not marked, f"unaudited `{MARKER}` in the lock module: {marked}"
 
 
+def test_an_import_of_locks_must_come_from_this_package():
+    """`from hooks import locks` binds the name to a foreign module. The rule
+    exempted any import whose source symbol was spelled `locks`, which is the
+    spelling standing in for the binding one form further out — the same defect
+    at its fourth site."""
+    _f, serializing, mutators = _probe(
+        "from hooks import locks\n"
+        "def put(cid):\n"
+        "    with locks.campaign_lock(cid):\n"
+        "        atomic.write_text(p, x)\n")
+    assert "put" in mutators
+    assert "put" not in serializing, "a foreign `locks` import was trusted"
+
+    for src, why in [
+        ("from . import locks\n", "a relative import"),
+        ("from grimoire.store import locks\n", "an absolute import from this package"),
+    ]:
+        _f, serializing, _m = _probe(
+            src + "def put(cid):\n"
+            "    with locks.campaign_lock(cid):\n"
+            "        atomic.write_text(p, x)\n")
+        assert "put" in serializing, f"{why} was rejected"
+
+
+def test_a_lambda_bound_to_a_name_is_a_mutator():
+    """`put = lambda cid: atomic.write_text(p, x)` defines a public mutator
+    with no `def` anywhere. The collector was keyed on `FunctionDef`, so this
+    was not an unlocked mutator — it was no function at all, and potentially no
+    module in the survey either."""
+    funcs, serializing, mutators = _probe(
+        "put = lambda cid: atomic.write_text(path, data)\n")
+    assert "put" in funcs and "put" in mutators
+    assert "put" not in serializing
+
+
+def test_a_filename_is_not_a_mode():
+    """The first FALSE POSITIVE this review produced, and worth a test of its
+    own because it is the failure the guard's trade accepts. The builtin takes
+    the PATH first, so scanning both positions read `open("a")` as append mode
+    and reported a reader as an unlocked mutator."""
+    for src, why in [
+        ("def read(cid):\n    return open('a').read()\n", "a filename that spells a mode"),
+        ("def read(cid):\n    return open('w').read()\n", "a filename that spells `w`"),
+        ("def read(cid):\n    return open(p).read()\n", "an ordinary read"),
+    ]:
+        _f, _s, mutators = _probe(src)
+        assert not mutators, f"{why} was read as a write ({src!r})"
+
+    # ...while the real write forms still register, in both spellings.
+    for src, why in [
+        ("def put(cid):\n    open(p, 'w').write(x)\n", "builtin with a mode"),
+        ("def put(cid):\n    p.open('w').write(x)\n", "Path.open, mode first"),
+        ("def put(cid):\n    open(p, mode='a').write(x)\n", "keyword mode"),
+    ]:
+        _f, _s, mutators = _probe(src)
+        assert mutators, f"{why} was missed ({src!r})"
+
+
+def test_a_suspension_under_the_lock_is_not_serialization():
+    """`_ProcessScopedLock` wraps a `threading.RLock`, which is owned by a
+    thread, not a task. Two coroutines on one event-loop thread both "acquire"
+    it across an await — the second re-enters, increments the depth, and skips
+    the file lock — so the writes overlap while the guard passes.
+
+    Nothing in this package holds a campaign lock inside an `async def` today;
+    this fails loud for the one somebody writes later."""
+    for src, why in [
+        ("async def put(cid):\n"
+         "    with locks.campaign_lock(cid):\n"
+         "        await flush()\n"
+         "        atomic.write_text(p, x)\n", "await"),
+        ("async def put(cid):\n"
+         "    with locks.campaign_lock(cid):\n"
+         "        async with session() as s:\n"
+         "            atomic.write_text(p, x)\n", "async with"),
+        ("async def put(cid):\n"
+         "    with locks.campaign_lock(cid):\n"
+         "        async for row in rows():\n"
+         "            atomic.write_text(p, row)\n", "async for"),
+    ]:
+        _f, serializing, mutators = _probe(src)
+        assert "put" in mutators
+        assert "put" not in serializing, f"a {why} under the lock read as serialized"
+
+    # An async function whose suspension is OUTSIDE the lock is still fine --
+    # the rule is about the critical section, not about being async.
+    _f, serializing, _m = _probe(
+        "async def put(cid):\n"
+        "    await flush()\n"
+        "    with locks.campaign_lock(cid):\n"
+        "        atomic.write_text(p, x)\n")
+    assert "put" in serializing, "an await outside the lock was rejected"
+
+
 def test_every_write_must_execute_under_the_lock():
     """Entering the lock somewhere made the WHOLE function read as serialized.
 
@@ -2286,6 +2468,16 @@ def test_every_write_must_execute_under_the_lock():
         ("def put(cid):\n"
          "    with locks.hold_all([cid]):\n"
          "        atomic.write_text(p, x)\n", "hold_all covering this campaign"),
+        # The lock nested INSIDE another `with`. This was a false alarm on
+        # legitimate code until the traversal was made uniform: a `with` reached
+        # as a body statement never had its own context evaluated.
+        ("def put(cid):\n"
+         "    with suppress(OSError):\n"
+         "        with locks.campaign_lock(cid):\n"
+         "            atomic.write_text(p, x)\n", "a lock inside an unrelated with"),
+        ("def put(cid):\n"
+         "    with open(log) as f, locks.campaign_lock(cid):\n"
+         "        atomic.write_text(p, x)\n", "a lock beside another context manager"),
     ]:
         _f, serializing, _m = _probe(src)
         assert "put" in serializing, f"{why} was rejected ({src!r})"
