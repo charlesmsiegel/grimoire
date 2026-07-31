@@ -2,9 +2,10 @@
 frontmatter flags a scene carries (dismissals, pcless, greeting, response
 settings, the absorbed marker).
 
-Every function here is a read-modify-write of the whole scene file, so every
-one of them runs under `locking._serialized`. Transcript and `turn_sizes` go
-out in a single write — see `turns._set_turn_sizes`.
+Every function that touches the scene file rewrites the whole of it, so every
+one of those runs under `locking._serialized`; `split_reply` is the exception —
+it parses a reply string and reads no file. Transcript and `turn_sizes` go out
+in a single write — see `turns._set_turn_sizes`.
 """
 
 from __future__ import annotations

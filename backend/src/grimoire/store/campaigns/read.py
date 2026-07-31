@@ -35,7 +35,7 @@ def world_root_of(cid: str) -> Path:
     directory that has been deleted already reads as inheriting nothing, and a
     reference that cannot name one is no different. Raises CampaignNotFound
     for a campaign that isn't there. Callers holding a world id they know is
-    set should use `worlds.world_root` directly.
+    set should use `worlds_paths.world_root` directly.
     """
     wid = read_campaign(cid)["meta"].get("world", "")
     try:

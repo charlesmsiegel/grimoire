@@ -180,7 +180,7 @@ def resolve_check(cid: str, check_id: str, actor_ref: str, difficulty: int | Non
 def available_checks(cid: str, sid: str) -> list[dict]:
     """Sheeted scene cast + sheeted current location, each with the check ids
     their sheet type is gated for. Uses the same current-location source as
-    context._assemble (scenes.get_location_history's last entry)."""
+    context._assemble (scenes_read.get_location_history's last entry)."""
     mid = modules.resolve(cid)
     if mid is None:
         return []

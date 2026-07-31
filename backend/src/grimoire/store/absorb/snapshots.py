@@ -2,8 +2,9 @@
 
 Each one renders stored state the model must rewrite from rather than recall:
 present-cast feelings and bonds, open plot threads, every group's state, and
-the present NPCs' standing. All are read-only and tolerant of a garbled file --
-a broken snapshot omits its block instead of failing the absorb.
+the present NPCs' standing. All are read-only. The first three are tolerant of
+a garbled file -- a broken snapshot omits its block instead of failing the
+absorb; `state_snapshot` is not, catching only a missing character record.
 """
 
 from __future__ import annotations
