@@ -1,4 +1,20 @@
-"""Filesystem-as-database for grimoire: markdown files under ~/.grimoire/."""
+"""Filesystem-as-database for grimoire: markdown files under ~/.grimoire/.
+
+The imports below are ordered for readability, not correctness: the module
+graph under ``store/`` is acyclic and every import is at module scope,
+enforced by ``backend/tests/test_import_guard.py``, so nothing here depends
+on a sibling having already run first. This file itself is exempt from that
+guard's stricter rule on cross-package imports -- re-exporting names like
+``CampaignNotFound`` below is exactly a facade's job -- but every other
+module under ``store/`` is held to it: a cross-package import there must
+bind a *submodule*, not a name, e.g. ``from ..campaigns import read`` and
+then ``read.world_refs(...)`` at the call site, never ``from ..campaigns
+import world_refs``. Binding a name off a package that may still be
+initializing raises at import time, and binding a function by value from a
+submodule silently defeats any test that tries to patch it -- both survive
+the acyclic check untouched, which is why the import-form rule has to be
+checked, and recorded, separately.
+"""
 
 from __future__ import annotations
 
