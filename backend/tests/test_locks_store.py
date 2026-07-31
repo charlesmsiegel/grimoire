@@ -216,8 +216,11 @@ def test_campaign_creation_never_runs_calendar_plugin_code_under_the_lock(monkey
     wid = worlds.create_world("Saltmarch")
     free = []
 
+    # `store.campaigns` is a package now, so the calendars module is reached
+    # directly rather than through it -- the same object `campaigns.lifecycle`
+    # binds, which is why patching an attribute on it still intercepts.
     for name in ("get_provider", "validate_calendar"):
-        real = getattr(campaigns.calendars, name)
+        real = getattr(calendars, name)
 
         def watched(*args, _real=real):
             # The cid is not returned until creation finishes, so probe the id
@@ -225,7 +228,7 @@ def test_campaign_creation_never_runs_calendar_plugin_code_under_the_lock(monkey
             free.append(_lock_is_free("saltmarch"))
             return _real(*args)
 
-        monkeypatch.setattr(campaigns.calendars, name, watched)
+        monkeypatch.setattr(calendars, name, watched)
 
     cid = campaigns.create_campaign("Saltmarch", wid, calendar="hebrew", region="IL")
     assert cid == "saltmarch", "the probe watched a different campaign's lock"
