@@ -1166,6 +1166,11 @@ def _is_suspension(node: ast.AST) -> bool:
     re-enters the thread-owned RLock in between. The decorated-generator shape
     was already rejected; a generator that takes the lock DIRECTLY reached this
     predicate, which listed only the async forms."""
+    if isinstance(node, ast.comprehension):
+        # `[f(x) async for x in src()]` suspends at every iteration, and Python
+        # records that as a FLAG on the comprehension clause rather than as an
+        # `AsyncFor` or an `Await` -- so a node-type list could not see it.
+        return bool(node.is_async)
     return isinstance(node, (ast.Await, ast.AsyncFor, ast.AsyncWith,
                              ast.Yield, ast.YieldFrom))
 
@@ -1474,10 +1479,13 @@ def _wraps_target_under_lock(fn: ast.AST) -> bool:
     if set(wrappers) != returned:
         return False                     # a returned name this cannot resolve
     for w in [w for defs in wrappers.values() for w in defs]:
-        if _suspends_under_lock(w):
+        if _suspends_under_lock(w) or _rebinds_cid(w):
             return False                 # the WRAPPER suspends -- round fourteen
                                          # rejected an async decorated target and
-                                         # left the async wrapper accepted
+                                         # left the async wrapper accepted -- or
+                                         # reassigns the id it locked, which
+                                         # round eighteen checked only on the
+                                         # ordinary path
         is_target = _is_call_to(_target_aliases(w, target))
         # Checked over every syntactic invocation, not only the ones
         # `_every_one_locked` walks: a mis-bound call this cannot reach is not
@@ -1621,6 +1629,20 @@ def _innermost_decorator_locks(fn: ast.AST, decorating: set[str]) -> bool:
     return not _takes_cid(fn) or params[:1] == ["cid"]
 
 
+def _is_deferred(defs) -> bool:
+    """Calling this name only CONSTRUCTS something; its body runs later.
+
+    An `async def` returns a coroutine and a generator function returns a
+    generator, so `with lock: return _write(cid)` publishes nothing inside the
+    block -- the caller awaits or iterates the result once the lock is gone.
+    The decorator path has rejected this shape since round fourteen; delegation
+    classified the call by its syntactic POSITION alone and never asked what it
+    was calling.
+    """
+    return any(isinstance(d, ast.AsyncFunctionDef)
+               or any(_is_yield(n) for n in _own_body(d)) for d in defs)
+
+
 def _defers_a_write(fn: ast.AST, surface: _Surface = _Surface()) -> bool:
     """A publication sitting inside a generator expression.
 
@@ -1731,6 +1753,10 @@ def _serializing(funcs: dict[str, ast.AST], surface=_Surface(),
                                 and _binds_the_campaign(node, funcs.get(name, [])))
 
                 if not all(_under_lock(fn, fn, False, unprotected, local)):
+                    return False
+                # ...and position cannot save a call whose body runs later.
+                if any(_is_deferred(funcs.get(_local_call_name(c), []))
+                       for c in delegated):
                     return False
                 # ...and something must actually establish the lock, rather than
                 # the function simply doing nothing that needs one.
@@ -2722,6 +2748,73 @@ DECORATOR_SRC = ("def safe(fn):\n"
                  "        with locks.campaign_lock(cid):\n"
                  "            return fn(cid, *a)\n"
                  "    return locked\n")
+
+
+def test_an_async_comprehension_suspends():
+    """`[f(x) async for x in src()]` suspends at every iteration, and Python
+    records that as a FLAG on the comprehension clause rather than as an
+    `AsyncFor` or an `Await` — so a list of node types could not see it. The
+    suspension rule was right; the list of forms carrying a suspension was
+    short, which is this branch's recurring shape."""
+    _f, serializing, mutators = _probe(
+        "async def put(cid):\n"
+        "    with locks.campaign_lock(cid):\n"
+        "        [atomic.write_text(p, x) async for x in source()]\n")
+    assert "put" in mutators
+    assert "put" not in serializing, "an async comprehension read as uninterrupted"
+
+    # A synchronous comprehension is not a suspension and stays covered.
+    _f, serializing, _m = _probe(
+        "def put(cid):\n"
+        "    with locks.campaign_lock(cid):\n"
+        "        [atomic.write_text(p, x) for x in source()]\n")
+    assert "put" in serializing
+
+
+def test_a_wrapper_may_not_rebind_the_campaign_it_locked():
+    """Round eighteen stopped a body reassigning the id its lock was keyed on,
+    on the ordinary path. A decorator's returned wrapper is a body too, and the
+    check was not applied there — so the wrapper could lock `cid`, remap it, and
+    hand the target a different campaign."""
+    _f, serializing, mutators = _probe(
+        "def safe(fn):\n"
+        "    def locked(cid, *a):\n"
+        "        with locks.campaign_lock(cid):\n"
+        "            cid = remap(cid)\n"
+        "            return fn(cid, *a)\n"
+        "    return locked\n"
+        "@safe\n"
+        "def put(cid):\n"
+        "    atomic.write_text(p, x)\n")
+    assert "put" in mutators
+    assert "put" not in serializing, "the wrapper remapped the id it locked"
+
+
+def test_delegation_to_a_deferred_callee_is_not_covered():
+    """`with lock: return _write(cid)` where `_write` is an `async def` or a
+    generator publishes nothing inside the block — the caller awaits or iterates
+    the result once the lock is gone. The decorator path has rejected this shape
+    since round fourteen; delegation classified the call by its POSITION alone
+    and never asked what it was calling."""
+    for callee, why in [
+        ("async def _write(cid):\n    atomic.write_text(q, y)\n", "an async callee"),
+        ("def _write(cid):\n    atomic.write_text(q, y)\n    yield 1\n", "a generator callee"),
+    ]:
+        _f, serializing, mutators = _probe(
+            callee + "def put(cid):\n"
+            "    with locks.campaign_lock(cid):\n"
+            "        return _write(cid)\n")
+        assert "put" in mutators
+        assert "put" not in serializing, f"delegation to {why} read as covered"
+
+    # An ordinary callee under the lock is still covered -- the rule is about
+    # deferral, not about delegation.
+    _f, serializing, _m = _probe(
+        "def _write(cid):\n    atomic.write_text(q, y)\n"
+        "def put(cid):\n"
+        "    with locks.campaign_lock(cid):\n"
+        "        return _write(cid)\n")
+    assert "put" in serializing, "an ordinary delegated callee was rejected"
 
 
 def test_a_class_rebinds_its_name():
