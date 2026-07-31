@@ -14,10 +14,11 @@ Three rules, one scan:
    second silently defeats every test that patches it. Rule 2 catches
    neither -- the file graph stays perfectly acyclic either way.
 
-Ratchet, not a cliff: `import_guard_baseline.txt` lists the violations that
-existed when this guard landed. A violation missing from the baseline fails,
-and a baseline entry that no longer occurs *also* fails -- so the file cannot
-rot into a permanent exemption list, and every removal is recorded.
+This guard shipped with a ratchet baseline while the rest of the package was
+brought into line; that baseline is gone now that the violation count is
+zero, so the rule is absolute: any violation fails, with no grandfathered
+exceptions. The only way around a hit is `# import-ok: <reason>` on the
+import itself, and only when the reason is actually true.
 """
 
 from __future__ import annotations
@@ -30,7 +31,6 @@ import grimoire
 from . import guard_markers
 
 PACKAGE = pathlib.Path(grimoire.__file__).parent
-BASELINE = pathlib.Path(__file__).parent / "import_guard_baseline.txt"
 
 MARKER = "import-ok:"
 
@@ -246,18 +246,11 @@ def _violations() -> list[str]:
     return sorted(deferred + form + _cycles(graph))
 
 
-def _baseline() -> list[str]:
-    if not BASELINE.exists():
-        return []
-    return sorted(line.strip() for line in BASELINE.read_text(encoding="utf-8").splitlines()
-                  if line.strip() and not line.startswith("#"))
-
-
-def test_no_import_violations_outside_the_baseline():
-    """A new deferred import, bad import form, or cycle fails here."""
-    new = [v for v in _violations() if v not in _baseline()]
-    assert not new, (
-        "new import-graph violations:\n  " + "\n  ".join(new)
+def test_no_import_violations():
+    """Every import is at module scope and the module graph is acyclic."""
+    found = _violations()
+    assert not found, (
+        "import-graph violations:\n  " + "\n  ".join(found)
         + f"\n\nFix them, or -- only with a stated reason -- add a "
           f"`# {MARKER} <reason>` comment on the import.")
 
@@ -287,17 +280,3 @@ def test_no_submodule_is_shadowed_by_a_facade_export():
     assert not shadowed, (
         "submodules shadowed by a facade export -- rename the file:\n  "
         + "\n  ".join(shadowed))
-
-
-def test_the_baseline_has_no_stale_entries():
-    """Every baseline line still describes a real violation.
-
-    Without this the file becomes a permanent exemption list: entries for code
-    that was already fixed would sit there licensing a future reintroduction
-    under the same name.
-    """
-    live = _violations()
-    stale = [b for b in _baseline() if b not in live]
-    assert not stale, (
-        "baseline entries no longer occur -- delete these lines:\n  "
-        + "\n  ".join(stale))
