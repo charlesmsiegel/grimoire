@@ -527,14 +527,14 @@ sequenceDiagram
       </tbody>
     </table>
   </div>
-  <p>In total 110 self-tests pin the detector's own semantics in
+  <p>In total 113 self-tests pin the detector's own semantics in
   <code>backend/tests/test_lock_domain_guard.py</code> — that a decorator counts
   only when it wraps its target under the lock on every executed path, that
   <strong>every</strong> write in a locking function runs inside the block (not
   merely that the block exists), that pure delegation to a locked helper is
   <em>not</em> flagged while a wrapper with a write of its own <em>is</em>, and
   that cyclic helpers terminate.</p>
-  <p>The fifty-two detector fixes from rounds nine through twenty-four were
+  <p>The fifty-five detector fixes from rounds nine through twenty-five were
   mutation-tested the same way: each was reverted <em>alone</em> and its test
   confirmed red. Read that claim with the Review Walkthrough's round-twelve
   note in mind — the harness making it was itself defective until that round,
@@ -551,7 +551,7 @@ sequenceDiagram
   by reviewing the guard — one real race fixed in campaign creation. That race
   is the only runtime change and is the thing to read closely; everything else
   is constants, comments and tests.</p>
-  <p><strong>One decision needs a human, not a test.</strong> After twenty-four review
+  <p><strong>One decision needs a human, not a test.</strong> After twenty-five review
   rounds both of the guard's polarities were inverted to a closed whitelist that
   <em>fails loud</em>: a form it does not recognize reads as unserialized. It is
   therefore deliberately stricter than the codebase, and its value depends on
@@ -571,7 +571,7 @@ sequenceDiagram
   (<code>backend/src/grimoire/store/locks.py:138</code>) admits 17 modules with
   no per-module reason. That is defensible — inventing 17 rationales for modules
   nobody audited would be worse, and the set is barred from growing
-  (<code>backend/tests/test_lock_domain_guard.py:1968</code>) — but it should be
+  (<code>backend/tests/test_lock_domain_guard.py:2042</code>) — but it should be
   read as a backlog, not as protection.</p>
   <p>One real question for the author: <strong>should test-only data live in
   production code?</strong> Nothing in <code>grimoire</code> imports these three
@@ -625,11 +625,11 @@ sequenceDiagram
   the full suite passes with no hang.</p>
 
   <h4><code>backend/tests/test_lock_domain_guard.py</code>
-    <span class="badge neutral">+4208</span></h4>
+    <span class="badge neutral">+4396</span></h4>
   <p><span class="badge good">the strongest part of the change</span> Over half
   the file is self-tests of the detector — which is the right ratio, because a
-  guard that cannot fail reads as coverage. 110 of them, one per defect found
-  across twenty-four review rounds plus the semantics each fix depends on — including
+  guard that cannot fail reads as coverage. 113 of them, one per defect found
+  across twenty-five review rounds plus the semantics each fix depends on — including
   one deliberate counterweight,
   <code>test_the_real_serialized_decorator_still_qualifies</code>, because four
   simultaneous strictness increases is exactly when a guard quietly starts
@@ -638,8 +638,8 @@ sequenceDiagram
 
 <div class="card">
   <h3>Defects found during review and fixed</h3>
-  <p>Five from a local review pass before the PR opened, then ninety-one across
-  twenty-four Codex rounds. <strong>Every one was a real defect</strong> — none was
+  <p>Five from a local review pass before the PR opened, then ninety-four across
+  twenty-five Codex rounds. <strong>Every one was a real defect</strong> — none was
   dismissed — and every one is pinned by a test that fails without its fix.
   Classification of the tree never changed across any of them, which is the
   evidence they closed false negatives rather than moved the boundary.</p>
@@ -1269,6 +1269,15 @@ sequenceDiagram
     so the claims stand — but until this round they were luckier than they were
     sound, and a reader should weight the earlier "mutation-verified" language
     accordingly.</p>
+    <p><em>The same theme recurred in round twenty-five, from the other side.</em>
+    The mutation harness rewrites the guard file in place, and it was left
+    running while the full backend suite was also running — so the suite read a
+    mutated source and reported two guard tests as failing that pass on the
+    committed file. Loud again, and caught, but the mechanism is symmetric: had
+    the timing differed it would have reported a mutated file as <em>passing</em>.
+    The harness and the suite are run serially now. Both incidents say the same
+    thing about this PR — the verification is the part most worth distrusting,
+    because it is the part with no second check behind it.</p>
   </div>
 
   <div class="callout warn">
@@ -1347,7 +1356,7 @@ sequenceDiagram
     weight to put on the guard: <em>every rule here was stated after being fixed
     at four or five instances, and the round after each rule was stated found it
     unapplied at one more site.</em> That is not an argument the guard is
-    unsound — its classification of the tree has never changed across ninety-one
+    unsound — its classification of the tree has never changed across ninety-four
     findings — but it is the reason the docstring's list of recognized forms,
     rather than the code, is the thing to read before trusting it.</p>
     <p><strong>Round fifteen is the exception worth reading, because it made a
@@ -1373,7 +1382,7 @@ sequenceDiagram
     read-only module being pushed into the declaration rather than anything
     silent. Round twenty-one added the second — <code>campaign_lock(cid=cid)</code>
     rejected, which would have forced valid code to be rewritten or exempted.
-    Two false positives in ninety-one findings, both loud, both costing a reader
+    Two false positives in ninety-four findings, both loud, both costing a reader
     code rather than letting a race through: that is the shape of the trade the
     docstring promised, and it is now measurable rather than asserted.</p>
     <p>Chasing round sixteen's <code>async with</code> case then surfaced a
@@ -1466,7 +1475,7 @@ sequenceDiagram
     decorator, and it must lock; anything longer fails loud. No function in the
     package has two decorators, so the strict form costs nothing today.</p>
     <p>Worth stating plainly, because it is the clearest measurement in this
-    report: of the ninety-one findings, five were a stated reason that was
+    report: of the ninety-four findings, five were a stated reason that was
     factually wrong about the code it described, and four of those five were
     load-bearing — the guard's reach rested on them. A test would not have caught
     any of them, because each was a claim about <em>why</em> a check did not need
@@ -1474,6 +1483,38 @@ sequenceDiagram
     adversarially rather than trusting them, and it is the reason this PR's
     docstrings now say what was believed and found false rather than only what
     is true.</p>
+    <p><strong>Round twenty-five is the one that names the shape exactly, because
+    all three of its findings were the same defect and the fix was to stop having
+    the defect rather than to close three more instances of it.</strong> Two were
+    the decorator path returning above a check the undecorated path makes: a body
+    delegating to a deferred callee (round twenty-three's rule) and a body
+    reassigning <code>cid</code> (round eighteen's rule). The third was
+    <code>_rebinds_locks</code> not seeing a <code>match</code> capture that
+    <code>_rebinds_cid</code> has seen since round twenty.</p>
+    <p>That third one is the interesting one. <em>Four</em> scans in this file ask
+    "what names does this node bind?" — <code>_rebinds_cid</code>,
+    <code>_rebinds_locks</code>, <code>_locally_bound</code> and
+    <code>_module_level</code> — and each had grown its own answer. So the list of
+    binding forms this report has been tracking since round thirteen was not one
+    incomplete list; it was <em>four</em> incomplete lists, each learning a
+    different subset in a different round. There is one now,
+    <code>_bound_names</code>, and the four callers share it.</p>
+    <p>The consolidation is what makes the round worth reading rather than the
+    three fixes. Asking "what else satisfies this?" against the shared list
+    surfaced <strong>four more instances the review had not reported</strong>:
+    <code>except ... as locks</code> and <code>global locks</code> alongside the
+    reported <code>match</code> capture; the same two forms at module scope
+    against a validated alias rather than against <code>locks</code>; a
+    <code>match</code> capture of <code>cid</code> under a decorator rather than
+    an assignment; and a nested <code>def</code> shadowing an alias inside a body.
+    Closing the class closed seven things, of which the review had named three.
+    Every one of them had been reachable since the rule was written.</p>
+    <p>It also cost nothing on the loud side, which is the part that had to be
+    checked rather than assumed: a conditional definition, a
+    <code>try/except ImportError</code> import guard and an unrelated
+    module-scope <code>match</code> all still resolve, and the package's
+    classification is unchanged. Two false positives in twenty-five rounds
+    remains the whole cost ledger.</p>
   </div>
 </div>
 
@@ -1495,9 +1536,9 @@ sequenceDiagram
           <td>New backlog list (<code>UNREVIEWED</code>)</td>
           <td>Removal path, or permanent?</td>
           <td><span class="badge good">yes</span> — may only shrink
-          (<code>backend/tests/test_lock_domain_guard.py:1968</code>); phantom
-          entries must be dropped (<code>:1992</code>); entries that get fixed must
-          be promoted (<code>:2028</code>).</td>
+          (<code>backend/tests/test_lock_domain_guard.py:2042</code>); phantom
+          entries must be dropped (<code>:2066</code>); entries that get fixed must
+          be promoted (<code>:2102</code>).</td>
         </tr>
         <tr>
           <td>New declaration that can drift from code</td>
@@ -1571,11 +1612,11 @@ sequenceDiagram
     <li><s>The ratchet bound <code>17</code> duplicates the size of a set
     defined in another file.</s> <strong>Fixed in a later round</strong> — the
     ratchet compares <em>membership</em> against a frozen baseline
-    (<code>backend/tests/test_lock_domain_guard.py:1968</code>), because a
+    (<code>backend/tests/test_lock_domain_guard.py:2042</code>), because a
     count-only bound let one legacy entry be swapped for a brand-new module
     without the length moving.</li>
     <li><code>_survey()</code> returns a cached mutable dict
-    (<code>backend/tests/test_lock_domain_guard.py:1923</code>); no current caller
+    (<code>backend/tests/test_lock_domain_guard.py:1997</code>); no current caller
     mutates it.</li>
   </ol>
   <p><strong>Not reviewed:</strong> the 17 <code>UNREVIEWED</code> modules were
