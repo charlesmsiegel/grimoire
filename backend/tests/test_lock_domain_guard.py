@@ -131,12 +131,18 @@ Honest about its reach — the house standard set by ``test_atomic_guard.py``:
   the file lock. An ``async def`` that awaits inside the lock therefore reads as
   unserialized here. Nothing in this package does that today; the rule exists
   for the one written later.
-- **Every WRITE must run under the lock; the READ need not.** The write half is
-  checked: a function that locks around part of its body and publishes outside
-  that block fails, on every branch, including through a comprehension. That was
-  not true until round fifteen -- entering a lock anywhere made the whole
-  function read as serialized -- and it is the one limit here that got narrower
-  rather than being restated.
+- **Every MUTATION must run under the lock; the READ need not.** A function
+  mutates two ways -- by writing, and by calling something that writes -- and
+  both are positional. A function that locks around part of its body and
+  publishes outside that block fails, on every branch and through a
+  comprehension; so does one whose locked write is followed by a call to a
+  local helper that writes without serializing on this campaign. A helper that
+  DOES serialize on this campaign is an atomic unit wherever it is called,
+  which is what ``scenes.create_scene`` relies on.
+
+  Neither half was true until rounds fifteen and seventeen -- entering a lock
+  anywhere made the whole function read as serialized -- and this is the one
+  limit here that got narrower rather than being restated.
 
   The read half is still open, and it is the bug ``scenes._serialized`` was
   written to fix ("The lock has to span the READ as well as the write"). A
