@@ -33,6 +33,10 @@ a paragraph where nothing did.
 
 Honest about its reach — the house standard set by ``test_atomic_guard.py``:
 
+- **"Public" is approximated by the absence of a leading underscore, with
+  dunders excepted.** A private helper runs under its callers' locks and is
+  charged to them; a protocol method like ``__setitem__`` is a public entry
+  point wearing underscores, and is analyzed.
 - **"Campaign-scoped" is approximated by a ``cid`` parameter.** That is the
   codebase's own convention, not a proof. A mutator that derives the campaign id
   some other way (from a path, a scene record, a request object) is not seen.
@@ -478,10 +482,10 @@ class _Surface(typing.NamedTuple):
     trusted_locks: bool = True
 
     @classmethod
-    def of(cls, tree: ast.AST) -> "_Surface":
+    def of(cls, tree: ast.AST, package: str = "store") -> "_Surface":
         namespaces = _fs_namespaces(tree)
         writers = _imported_writers(tree) | _assigned_writers(tree, namespaces)
-        return cls(frozenset(writers), namespaces, not _rebinds_locks(tree))
+        return cls(frozenset(writers), namespaces, not _rebinds_locks(tree, package))
 
 
 def _assigned_writers(tree: ast.AST, namespaces: dict) -> set[str]:
@@ -591,7 +595,7 @@ def _rebinds_cid(fn: ast.AST) -> bool:
     return False
 
 
-def _rebinds_locks(tree: ast.AST) -> bool:
+def _rebinds_locks(tree: ast.AST, package: str = "store") -> bool:
     """Whether anything in this module binds the name `locks` other than an
     import of the real module.
 
@@ -648,21 +652,35 @@ def _rebinds_locks(tree: ast.AST) -> bool:
     # `from .hooks import locks` is relative and is not the store's lock, and
     # `from grimoire import store` is absolute and IS the store; an
     # origin-shaped rule got both wrong in opposite directions.
-    trusted = {("locks",), ("store", "locks"), ("grimoire", "store", "locks"),
-               ("store",), ("grimoire", "store")}
+    # A relative import is resolved against the importing module's own package,
+    # which is the whole point of one. Matching the written path treated
+    # `from . import locks` as `store.locks` everywhere -- true in `store/`,
+    # false in `store/weather/`, where it names a sibling that need not lock
+    # anything. This package has three such subpackages.
+    trusted = {("store", "locks"), ("store",)}
+    here = package.split(".") if package else []
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
-            prefix = tuple(node.module.split(".")) if node.module else ()
+            if node.level:               # `.` is this package, `..` its parent
+                base = here[:len(here) - node.level + 1]
+            else:
+                base = []                # absolute; `grimoire.` is stripped below
+            prefix = node.module.split(".") if node.module else []
             for alias in node.names:
                 if (alias.asname or alias.name) not in watched:
                     continue
-                path = (*prefix, alias.name)
-                if path not in trusted or not (node.level > 0 or path[0] == "grimoire"):
-                    return True          # `from hooks import locks`
+                path = [*base, *prefix, alias.name]
+                if path[:1] == ["grimoire"]:
+                    path = path[1:]
+                elif not node.level:
+                    return True          # an absolute import of something else
+                if tuple(path) not in trusted:
+                    return True          # `from .hooks import locks`
         elif isinstance(node, ast.Import):
             for alias in node.names:
                 bound = alias.asname or alias.name.split(".")[0]
-                if bound in watched and tuple(alias.name.split(".")) not in trusted:
+                written = tuple(alias.name.split("."))
+                if bound in watched and written[1:] not in trusted:
                     return True          # `import json as locks`
     return False
 
@@ -1270,7 +1288,13 @@ def _module_level(tree: ast.AST) -> set[str]:
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 defined.add(node.name)          # its body is a new scope; stop
             elif isinstance(node, ast.ClassDef):
-                continue                        # also a new scope
+                # A new scope for its BODY, and a binding for its NAME:
+                # `class helper(nullcontext): pass` after a locking `def helper`
+                # replaces it. The scan skipped the whole node and so recorded
+                # neither -- the one module-scope binding form left after the
+                # loop, with-as, import and walrus cases.
+                rebound.add(node.name)
+                continue
             elif isinstance(node, (ast.Assign, ast.AnnAssign)):
                 assigned.extend(_bindings(node))
             elif isinstance(node, (ast.Import, ast.ImportFrom)):
@@ -1597,6 +1621,17 @@ def _innermost_decorator_locks(fn: ast.AST, decorating: set[str]) -> bool:
     return not _takes_cid(fn) or params[:1] == ["cid"]
 
 
+def _defers_a_write(fn: ast.AST, surface: _Surface = _Surface()) -> bool:
+    """A publication sitting inside a generator expression.
+
+    `(atomic.write_text(p, x) for x in xs)` runs when somebody iterates it, so a
+    lock held while the genexp is *constructed* is gone by the time it writes.
+    """
+    return any(_is_write_call(call, surface)
+               for gen in ast.walk(fn) if isinstance(gen, ast.GeneratorExp)
+               for call in ast.walk(gen) if isinstance(call, ast.Call))
+
+
 def _serializing(funcs: dict[str, ast.AST], surface=_Surface(),
                  module_level: set[str] | None = None) -> set[str]:
     """Names whose bodies establish the campaign lock.
@@ -1648,7 +1683,15 @@ def _serializing(funcs: dict[str, ast.AST], surface=_Surface(),
                 # An alias this function rebinds is not the module's alias.
                 local = aliases - _locally_bound(fn)
                 if _innermost_decorator_locks(fn, decorating):
-                    return True                       # @_serialized and friends
+                    # ...unless the body defers its write past the wrapper's
+                    # lock. `_under_lock` learned that a `GeneratorExp` is
+                    # deferred in round twenty-one; the decorator path returns
+                    # before that traversal ever runs, and a `GeneratorExp`
+                    # carries no `Yield` for the generator check to catch.
+                    # Narrow on purpose: only a genexp CONTAINING a write is
+                    # rejected, because `scenes.append_reply` is `@_serialized`
+                    # and uses one for something harmless.
+                    return not _defers_a_write(fn, surface)
                 if _rebinds_cid(fn):
                     return False          # the lock is keyed on a name the body
                                           # reassigns -- see `_rebinds_cid`
@@ -1773,7 +1816,7 @@ def _analyze(path: pathlib.Path):
     src = path.read_text(encoding="utf-8")
     tree = ast.parse(src)
     funcs = _functions(tree)
-    surface = _Surface.of(tree)
+    surface = _Surface.of(tree, ".".join(_module_name(path).split(".")[:-1]))
     serializing = _serializing(funcs, surface, _module_level(tree))
     mutators = _mutators(funcs, serializing, surface)
 
@@ -1783,7 +1826,12 @@ def _analyze(path: pathlib.Path):
         defs = funcs[name]
         if not _any(defs, _takes_cid):
             continue
-        if name.startswith("_"):
+        if name.startswith("_") and not (name.startswith("__")
+                                         and name.endswith("__")):
+            # ...but a dunder is a PUBLIC entry point wearing underscores.
+            # `obj[cid] = value` reaches `__setitem__`, so a module whose only
+            # writer is an unlocked one disappeared from the survey entirely.
+            #
             # A private helper is not its own domain member: it runs under
             # whatever its callers hold, which is how `rolls._write`,
             # `proposals._write` and `sheets._set_field_locked` are written.
@@ -1947,10 +1995,10 @@ def test_the_marker_is_not_a_rubber_stamp():
 # "A guard that cannot fail is worse than none -- it reads as coverage."
 # (test_atomic_guard.py)
 
-def _probe(src: str):
+def _probe(src: str, package: str = "store"):
     tree = ast.parse(src)
     funcs = _functions(tree)
-    surface = _Surface.of(tree)
+    surface = _Surface.of(tree, package)
     serializing = _serializing(funcs, surface, _module_level(tree))
     return funcs, serializing, _mutators(funcs, serializing, surface)
 
@@ -2676,6 +2724,66 @@ DECORATOR_SRC = ("def safe(fn):\n"
                  "    return locked\n")
 
 
+def test_a_class_rebinds_its_name():
+    """`class helper(nullcontext): pass` after a locking `def helper` replaces
+    it. The scan skipped the whole `ClassDef` — correctly for its body, which is
+    a new scope, and wrongly for its NAME. The last module-scope binding form
+    after the loop, with-as, import and walrus cases."""
+    _f, serializing, mutators = _probe(
+        "def helper(cid):\n"
+        "    return locks.campaign_lock(cid)\n"
+        "class helper(contextlib.nullcontext):\n"
+        "    pass\n"
+        "def put(cid):\n"
+        "    with helper(cid):\n"
+        "        atomic.write_text(p, x)\n")
+    assert "put" in mutators
+    assert "put" not in serializing, "a class did not poison the name it binds"
+
+
+def test_a_dunder_is_public_whatever_its_underscores():
+    """`obj[cid] = value` reaches `__setitem__`. The private-helper skip is a
+    prefix test, so a module whose only writer was an unlocked protocol method
+    disappeared from the survey entirely."""
+    src = ("class Store:\n"
+           "    def __setitem__(self, cid, value):\n"
+           "        atomic.write_text(p, value)\n")
+    probe_file = PACKAGE / "store" / "_lock_domain_probe.py"
+    probe_file.write_text(src, encoding="utf-8")
+    try:
+        unserialized, mutators = _analyze(probe_file)
+    finally:
+        probe_file.unlink()
+    assert "__setitem__" in mutators, "a public protocol writer was skipped as private"
+    assert "__setitem__" in unserialized
+
+
+def test_a_decorated_body_may_not_defer_its_write_into_a_genexp():
+    """`@_serialized def put(cid): return (write(x) for x in xs)` constructs the
+    generator under the lock and writes after it. `_under_lock` learned this in
+    round twenty-one, but the decorator path returns before that traversal ever
+    runs — and a `GeneratorExp` carries no `Yield` for the generator check."""
+    dec = ("def _serialized(fn):\n"
+           "    def locked(cid, *a):\n"
+           "        with locks.campaign_lock(cid):\n"
+           "            return fn(cid, *a)\n"
+           "    return locked\n")
+    _f, serializing, mutators = _probe(
+        dec + "@_serialized\ndef put(cid):\n"
+        "    return (atomic.write_text(p, x) for x in xs)\n")
+    assert "put" in mutators
+    assert "put" not in serializing, "a write deferred into a genexp read as locked"
+
+    # Narrow on purpose: `scenes.append_reply` is `@_serialized` and uses a
+    # generator expression for something harmless, so only a genexp CONTAINING
+    # a write is rejected.
+    _f, serializing, _m = _probe(
+        dec + "@_serialized\ndef put(cid):\n"
+        "    if any(x for x in xs):\n"
+        "        atomic.write_text(p, x)\n")
+    assert "put" in serializing, "a harmless genexp under the decorator was rejected"
+
+
 def test_a_module_scope_walrus_rebinds():
     """`if (helper := nullcontext): pass` at module level rebinds `helper` for
     the whole module. The comment excluding walrus said it "binds inside an
@@ -2894,16 +3002,29 @@ def test_the_locks_import_must_name_the_store_module():
         assert "put" in mutators
         assert "put" not in serializing, f"`locks` from {why} was trusted"
 
-    for src, why in [
-        ("from . import locks\n", "the store-internal form"),
-        ("from .store import locks\n", "a sibling package"),
-        ("from grimoire.store import locks\n", "the absolute form"),
+    # ...and each spelling is judged against the package doing the importing,
+    # which is what makes `from . import locks` right in `store/` and wrong in
+    # `store/weather/`. Both real spellings in this package are here.
+    for src, package, why in [
+        ("from . import locks\n", "store", "the store-internal form"),
+        ("from .store import locks\n", "", "a module above the store package"),
+        ("from ..store import locks\n", "routes", "a sibling package"),
+        ("from grimoire.store import locks\n", "store", "the absolute form"),
     ]:
         _f, serializing, _m = _probe(
             src + "def put(cid):\n"
             "    with locks.campaign_lock(cid):\n"
-            "        atomic.write_text(p, x)\n")
+            "        atomic.write_text(p, x)\n", package)
         assert "put" in serializing, f"{why} was rejected"
+
+    # The same relative spelling in a NESTED package names a sibling module,
+    # not the store's lock.
+    _f, serializing, _m = _probe(
+        "from . import locks\n"
+        "def put(cid):\n"
+        "    with locks.campaign_lock(cid):\n"
+        "        atomic.write_text(p, x)\n", "store.weather")
+    assert "put" not in serializing, "a relative import was not resolved against its package"
 
 
 def test_a_delegated_call_must_be_module_local():
