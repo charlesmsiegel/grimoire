@@ -78,10 +78,14 @@ Honest about its reach — the house standard set by ``test_atomic_guard.py``:
   decorator that is not the innermost one, because composition order
   decides whether the write happens inside the lock: ``@safe`` over ``@defer``
   locks around a call that returns a callback and writes nothing. And any name a
-  binding elsewhere in the module can shadow — the spelling ``locks``
-  (``_rebinds_locks``), or an alias or decorator rebound by a parameter, a loop
-  target, a ``with ... as``, an import, or an assignment from any of those
-  (``_shadowed_names`` and ``_module_level``). And ``cid`` itself, in a function
+  binding elsewhere in the module can shadow — the spelling ``locks``, which
+  must be imported on a path that names ``grimoire.store.locks`` itself and not
+  merely something in the package (``_rebinds_locks``), or an alias or decorator
+  rebound by a parameter, a loop target, a ``with ... as``, an import, an
+  assignment from any of those, or an assignment inside the calling function
+  (``_shadowed_names``, ``_module_level`` and ``_locally_bound``). A call
+  reached through an attribute is never module-local — not as a lock, not as an
+  alias, and not as a delegate (``_local_call_name``). And ``cid`` itself, in a function
   whose body reassigns it (``_rebinds_cid``) — every rule here reads that name
   as "this function's campaign", which is a claim about the parameter.
 
@@ -493,6 +497,41 @@ def _assigned_writers(tree: ast.AST, namespaces: dict) -> set[str]:
     return out
 
 
+def _local_call_name(node: ast.AST) -> str | None:
+    """The MODULE-LOCAL name a call invokes, or None for anything else.
+
+    `_called_name` reads the trailing attribute, so `hooks._write(cid)` looked
+    like this module's `_write`. That mattered in three places at once, all of
+    them places where resolving to a local name GRANTS safety: it made a foreign
+    call count as delegation to a serialized helper, made it an atomic unit that
+    stops mutation propagation, and excused it from the position check. The
+    caller was then reported by neither guard -- the foreign module skips the
+    private helper as private, and this one thought it was covered.
+
+    Only used where a match buys safety. `_reaches_a_write` deliberately keeps
+    the receiver-blind name, because there over-matching is the conservative
+    direction.
+    """
+    return node.func.id if isinstance(node, ast.Call) \
+        and isinstance(node.func, ast.Name) else None
+
+
+def _locally_bound(fn: ast.AST) -> set[str]:
+    """Names `fn` binds itself -- parameters, and anything its own body stores.
+
+    `_shadowed_names` answers this module-wide and for parameters only, because
+    poisoning every name any function assigns would poison half the module. But
+    a mutator that writes `helper = nullcontext` in its OWN body is not calling
+    the module-level `helper`, and module-wide analysis deliberately stops at
+    function bodies, so nothing looked. Answered per function, where it costs
+    nothing.
+    """
+    params = {n.arg for n in ast.walk(fn.args) if isinstance(n, ast.arg)} \
+        if hasattr(fn, "args") else set()
+    return params | {n.id for n in _own_body(fn)
+                     if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
+
+
 def _rebinds_cid(fn: ast.AST) -> bool:
     """`fn` assigns to `cid` in its own body.
 
@@ -561,16 +600,31 @@ def _rebinds_locks(tree: ast.AST) -> bool:
     # spelled `locks` -- so `from hooks import locks` was trusted. The spelling
     # again, one binding form further out. Trust is now the module it comes
     # from: a relative import, or an absolute one rooted in this package.
+    # Package membership is not identity: `from .hooks import locks` is
+    # relative and still not `store.locks`. Only the spellings that name the
+    # store package are trusted -- `from . import locks` inside `store/`,
+    # `from .store import locks` from a sibling package, and the absolute form.
+    # Both spellings the package actually uses are here; anything else poisons.
+    # The dotted path an import actually binds must name `grimoire.store` or
+    # `grimoire.store.locks` -- the object, not merely a module in the package.
+    # `from .hooks import locks` is relative and is not the store's lock, and
+    # `from grimoire import store` is absolute and IS the store; an
+    # origin-shaped rule got both wrong in opposite directions.
+    trusted = {("locks",), ("store", "locks"), ("grimoire", "store", "locks"),
+               ("store",), ("grimoire", "store")}
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
-            ours = node.level > 0 or (node.module or "").split(".")[0] == "grimoire"
+            prefix = tuple(node.module.split(".")) if node.module else ()
             for alias in node.names:
-                if (alias.asname or alias.name) in watched and not ours:
+                if (alias.asname or alias.name) not in watched:
+                    continue
+                path = (*prefix, alias.name)
+                if path not in trusted or not (node.level > 0 or path[0] == "grimoire"):
                     return True          # `from hooks import locks`
         elif isinstance(node, ast.Import):
             for alias in node.names:
                 bound = alias.asname or alias.name.split(".")[0]
-                if bound in watched and alias.name.split(".")[0] != "grimoire":
+                if bound in watched and tuple(alias.name.split(".")) not in trusted:
                     return True          # `import json as locks`
     return False
 
@@ -1296,6 +1350,10 @@ def _wraps_target_under_lock(fn: ast.AST) -> bool:
     if set(wrappers) != returned:
         return False                     # a returned name this cannot resolve
     for w in [w for defs in wrappers.values() for w in defs]:
+        if _suspends_under_lock(w):
+            return False                 # the WRAPPER suspends -- round fourteen
+                                         # rejected an async decorated target and
+                                         # left the async wrapper accepted
         is_target = _is_call_to(_target_aliases(w, target))
         # Checked over every syntactic invocation, not only the ones
         # `_every_one_locked` walks: a mis-bound call this cannot reach is not
@@ -1477,12 +1535,14 @@ def _serializing(funcs: dict[str, ast.AST], surface=_Surface(),
                 continue
 
             def covered(fn, grown=grown, surface=surface):
+                # An alias this function rebinds is not the module's alias.
+                local = aliases - _locally_bound(fn)
                 if _innermost_decorator_locks(fn, decorating):
                     return True                       # @_serialized and friends
                 if _rebinds_cid(fn):
                     return False          # the lock is keyed on a name the body
                                           # reassigns -- see `_rebinds_cid`
-                if _suspends_under_lock(fn, aliases):
+                if _suspends_under_lock(fn, local):
                     return False          # an RLock is thread-owned, not task-
                                           # owned -- see `_suspends_under_lock`
                 # A function mutates in two ways -- by writing, and by calling
@@ -1495,12 +1555,12 @@ def _serializing(funcs: dict[str, ast.AST], surface=_Surface(),
                 writes = _writes_directly(fn, surface)
                 if writes and not _every_one_locked(
                         fn, fn, lambda n: isinstance(n, ast.Call)
-                        and _is_write_call(n, surface), aliases):
+                        and _is_write_call(n, surface), local):
                     return False          # a write outside the block -- and "at
                                           # least one" catches a write that only
                                           # a nested def performs
                 delegated = [c for c in _own_calls(fn)
-                             if _called_name(c.func) in writing]
+                             if _local_call_name(c) in writing]
 
                 def unprotected(node):
                     """A call that mutates and is not covered by the CALLEE.
@@ -1511,19 +1571,17 @@ def _serializing(funcs: dict[str, ast.AST], surface=_Surface(),
                     function's lock -- which is how `with lock: _helper(cid)`
                     stays legal while the same call after the block does not.
                     """
-                    if not isinstance(node, ast.Call):
-                        return False
-                    name = _called_name(node.func)
-                    if name not in writing:
+                    name = _local_call_name(node)
+                    if name is None or name not in writing:
                         return False
                     return not (name in grown
                                 and _binds_the_campaign(node, funcs.get(name, [])))
 
-                if not all(_under_lock(fn, fn, False, unprotected, aliases)):
+                if not all(_under_lock(fn, fn, False, unprotected, local)):
                     return False
                 # ...and something must actually establish the lock, rather than
                 # the function simply doing nothing that needs one.
-                return writes or bool(delegated) or _enters_lock(fn, aliases)
+                return writes or bool(delegated) or _enters_lock(fn, local)
 
             if _all(defs, covered):
                 grown.add(name)
@@ -1550,8 +1608,9 @@ def _mutators(funcs: dict[str, ast.AST], serializing: set[str],
     taken no lock at all.
     """
     def atomic_unit(call: ast.Call) -> bool:
-        name = _called_name(call.func)
-        return name in serializing and _binds_the_campaign(call, funcs.get(name, []))
+        name = _local_call_name(call)     # a foreign `hooks._write(cid)` is not
+        return (name is not None and name in serializing  # this module's helper
+                and _binds_the_campaign(call, funcs.get(name, [])))
 
     out = {n for n, ds in funcs.items() if _any(ds, lambda d: _writes_directly(d, surface))}
     for _ in range(len(funcs) + 1):
@@ -2505,6 +2564,94 @@ DECORATOR_SRC = ("def safe(fn):\n"
                  "        with locks.campaign_lock(cid):\n"
                  "            return fn(cid, *a)\n"
                  "    return locked\n")
+
+
+def test_a_function_local_rebinding_poisons_the_alias():
+    """`_shadowed_names` answers module-wide and for parameters only, because
+    poisoning every name any function assigns would poison half the module. A
+    mutator writing `helper = nullcontext` in its OWN body is still not calling
+    the module-level `helper`, and module-scope analysis deliberately stops at
+    function bodies — so nothing looked. Answered per function, where it is
+    free."""
+    _f, serializing, mutators = _probe(
+        ALIAS_SRC +
+        "def put(cid):\n"
+        "    helper = nullcontext\n"
+        "    with helper(cid):\n"
+        "        atomic.write_text(p, x)\n")
+    assert "put" in mutators
+    assert "put" not in serializing, "a local rebinding kept the module alias"
+
+
+def test_the_locks_import_must_name_the_store_module():
+    """Package membership is not identity. `from .hooks import locks` is
+    relative and is not the store's lock; `from grimoire import store` is
+    absolute and IS the store. An origin-shaped rule got both wrong in opposite
+    directions, so the rule is the dotted path the import binds."""
+    for src, why in [
+        ("from .hooks import locks\n", "a package-local module that is not store"),
+        ("from grimoire.hooks import locks\n", "an absolute path inside the package"),
+        ("import json as locks\n", "an unrelated module"),
+    ]:
+        _f, serializing, mutators = _probe(
+            src + "def put(cid):\n"
+            "    with locks.campaign_lock(cid):\n"
+            "        atomic.write_text(p, x)\n")
+        assert "put" in mutators
+        assert "put" not in serializing, f"`locks` from {why} was trusted"
+
+    for src, why in [
+        ("from . import locks\n", "the store-internal form"),
+        ("from .store import locks\n", "a sibling package"),
+        ("from grimoire.store import locks\n", "the absolute form"),
+    ]:
+        _f, serializing, _m = _probe(
+            src + "def put(cid):\n"
+            "    with locks.campaign_lock(cid):\n"
+            "        atomic.write_text(p, x)\n")
+        assert "put" in serializing, f"{why} was rejected"
+
+
+def test_a_delegated_call_must_be_module_local():
+    """`hooks._write(cid)` is not this module's `_write`, and reading the
+    trailing attribute made it count as delegation to a serialized helper, an
+    atomic unit that stops mutation propagation, and exempt from the position
+    check — all three at once. The caller was then reported by neither guard:
+    the foreign module skips its own private helper as private."""
+    _f, serializing, mutators = _probe(
+        "def _write(cid):\n"
+        "    with locks.campaign_lock(cid):\n"
+        "        atomic.write_text(q, y)\n"
+        "def put(cid):\n"
+        "    hooks._write(cid)\n")
+    assert "put" not in serializing, "a foreign call borrowed the local helper's lock"
+
+    _f, serializing, _m = _probe(
+        "def _write(cid):\n"
+        "    with locks.campaign_lock(cid):\n"
+        "        atomic.write_text(q, y)\n"
+        "def put(cid):\n"
+        "    _write(cid)\n")
+    assert "put" in serializing, "the module-local call was rejected"
+
+
+def test_a_decorator_wrapper_may_not_suspend_under_the_lock():
+    """Round fourteen rejected an async decorated TARGET. A decorator whose
+    returned WRAPPER awaits inside the lock has the same defect — the RLock is
+    thread-owned, so another coroutine re-enters during the await — and reached
+    the check from the other side."""
+    _f, serializing, mutators = _probe(
+        "def safe(fn):\n"
+        "    async def locked(cid, *a):\n"
+        "        with locks.campaign_lock(cid):\n"
+        "            await flush()\n"
+        "            return fn(cid, *a)\n"
+        "    return locked\n"
+        "@safe\n"
+        "def put(cid):\n"
+        "    atomic.write_text(p, x)\n")
+    assert "put" in mutators
+    assert "put" not in serializing, "an async wrapper suspending under the lock passed"
 
 
 def test_a_body_may_not_rebind_the_campaign_it_locked():
