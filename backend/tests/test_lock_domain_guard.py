@@ -15,8 +15,8 @@ all serialize), ``locks.OUTSIDE_DOMAIN`` (deliberately not, with the reason) and
 backlog), then holds those declarations and the code to each other:
 
 - a module in ``DOMAIN_MODULES`` must have *every* public campaign-scoped
-  mutator serialize, so a new ``scenes`` mutator that forgets ``@_serialized``
-  fails — the transcript-loss case of #254;
+  mutator serialize, so a new ``scenes`` mutator that forgets
+  ``@locking._serialized`` fails — the transcript-loss case of #254;
 - a module that mutates campaign state and appears in none of the three fails
   until somebody classifies it, and ``UNREVIEWED`` may not grow. This is the
   #255 shape, and the only check here that would have caught it;
@@ -67,7 +67,14 @@ Honest about its reach — the house standard set by ``test_atomic_guard.py``:
      invokes the decorated function under one of the above on every path it
      executes, passing ``cid`` first — and whose target takes ``cid`` first and
      runs its body when called, rather than deferring it (an ``async def`` or a
-     generator only *constructs* something inside the lock).
+     generator only *constructs* something inside the lock). The decorator may
+     be defined in this module or in a sibling module of this package reached
+     through a relative import (``@locking._serialized``, which is every
+     ``scenes`` mutator since that module became a package) — the receiver is
+     resolved to a FILE and that file's definition is put through the identical
+     test, so this is one more spelling of the same property and not a weaker
+     rule. A receiver that does not resolve reads as *unserialized*, like
+     anything else the whitelist cannot resolve.
 
   Anything else — a computed iterable, a keyword-bound alias, a lock reached
   through an object this cannot resolve — reads as *unserialized*. That will
@@ -78,8 +85,11 @@ Honest about its reach — the house standard set by ``test_atomic_guard.py``:
   Five things the whitelist deliberately does *not* trust. A name that only
   module scope may bind — a lock alias or decorator resolved from a nested
   ``def`` in some unrelated factory is not the name module scope actually binds.
-  A name reached through an attribute — ``@hooks.safe`` is not this module's
-  ``safe`` — and neither is ``hooks.helper(cid)`` this module's lock alias. A
+  A name reached through an attribute, on the attribute alone — ``@hooks.safe``
+  is not this module's ``safe``, and it counts only when ``hooks`` resolves to a
+  file of this package whose ``safe`` passes the decorator test itself
+  (``_sibling_modules``); ``hooks.helper(cid)`` is never this module's lock
+  alias, since only the decorator form is resolved across files. A
   decorator that is not the innermost one, because composition order
   decides whether the write happens inside the lock: ``@safe`` over ``@defer``
   locks around a call that returns a callback and writes nothing. And any name a
@@ -139,11 +149,18 @@ Honest about its reach — the house standard set by ``test_atomic_guard.py``:
   cannot be told from ``some_dict.foo()`` without type inference, so a
   path-valued receiver keeps the enumerated names and keeps their blind spots
   (``Path.replace`` is the documented one).
-- **Analysis is per-module.** Mutation propagates through a module's own
-  helpers, never across an import, so a function whose only mutation happens
-  inside a *different* module's unserialized mutator is not itself flagged. The
-  callee is flagged in its own file instead, which is where the fix goes; what
-  this misses is the caller that spans two such calls non-atomically.
+- **Analysis is per-module, with one exception that reads and does not
+  propagate.** Mutation propagates through a module's own helpers, never across
+  an import, so a function whose only mutation happens inside a *different*
+  module's unserialized mutator is not itself flagged. The callee is flagged in
+  its own file instead, which is where the fix goes; what this misses is the
+  caller that spans two such calls non-atomically — and a package that splits a
+  mutator away from the helper it writes through loses coverage that way, which
+  is how ``sheets.write`` and ``appearances.leave`` left the survey when those
+  modules became packages. The exception is the decorator in a sibling module
+  (form 4 above): that file is parsed to answer one question about one ``def``,
+  and nothing crosses the boundary in either direction. It is a hop, not a call
+  graph — the sibling's own decorator imports are not followed.
 - **A campaign lock held across a suspension point is not serialization.**
   ``_ProcessScopedLock`` is a ``threading.RLock`` plus a file lock, and an RLock
   is owned by a thread rather than a task, so two coroutines on one event-loop
@@ -1276,22 +1293,139 @@ def _target_aliases(wrapper: ast.AST, target: str) -> set[str]:
 
 
 def _decorator_name(decorator: ast.expr) -> str | None:
-    """The MODULE-LOCAL name a decorator applies, or None for anything else.
+    """The name a decorator applies: a module-local `safe`, or the `mod.name` of
+    one reached through a module object. None for anything else.
 
     `_called_name` was used here and reads a trailing attribute, so `@hooks.safe`
     resolved to `safe` — and a module that happened to define its own locking
     `safe` decorator vouched for every unrelated `@hooks.safe` in the file. The
     decorated function then read as serialized while nothing locked it.
 
-    An attribute decorator reaches into another module, which this per-module
-    analysis cannot follow, so it is not recognized and fails loud instead. A
-    decorator *factory* (`@retry(3)`) is let through to `_locks_anywhere`, which
-    rejects it on its own terms: its first parameter is the option, not the
-    function, so no invocation of the target is ever found.
+    So an attribute decorator keeps its receiver rather than being reduced to
+    its tail: `@hooks.safe` is the name `"hooks.safe"`, which the local `safe`
+    can never answer for. Whether that dotted name is in `decorating` at all is
+    `_sibling_decorators`' question, and it answers it by resolving `hooks` to a
+    file and holding that file's `safe` to the same test — anything it cannot
+    resolve stays out of the set and fails loud, as before. Only a plain
+    receiver is spelled out; `@a.b.safe` is None, since nothing here resolves a
+    two-step attribute chain.
+
+    A decorator *factory* (`@retry(3)`) is let through to `_locks_anywhere`,
+    which rejects it on its own terms: its first parameter is the option, not
+    the function, so no invocation of the target is ever found.
     """
     if isinstance(decorator, ast.Call):
         decorator = decorator.func
-    return decorator.id if isinstance(decorator, ast.Name) else None
+    if isinstance(decorator, ast.Name):
+        return decorator.id
+    if isinstance(decorator, ast.Attribute) and isinstance(decorator.value, ast.Name):
+        return f"{decorator.value.id}.{decorator.attr}"
+    return None
+
+
+def _sibling_modules(tree: ast.AST, path: pathlib.Path,
+                     package: str) -> dict[str, tuple[pathlib.Path, str]]:
+    """Names bound to another module of this package, as (file, its package).
+
+    `from . import locking` then `@locking._serialized` is how `store/scenes`
+    wears its lock decorator now that the package is split across files, and
+    nothing here could see it: `decorating` is built from THIS file's functions,
+    so no attribute decorator could ever enter it whatever it wrapped. That is a
+    false negative with nothing to do with locking — it would bite any package
+    that factors its decorator into its own module — which is why it is fixed
+    here rather than exempted in `locks.py`.
+
+    Only a RELATIVE import is resolved, and only to a file that exists: the
+    point is to reach a module of this package whose source can be read, and an
+    absolute import may name anything on `sys.path`. `node.level` is walked on
+    the path and on the dotted package name together, because the two must
+    agree — the package string is what `_rebinds_locks` needs on the far side,
+    and resolving it from the written path instead is the bug that read
+    `from . import locks` in `store/weather/` as `store.locks`.
+
+    A name is not a binding, this file's oldest lesson (`_rebinds_locks`,
+    `_module_level`): the receiver of a dotted decorator is that same spelling
+    one level further out. So a name is returned only when this import is its
+    ONLY binding in the module — anything assigned, imported twice, taken as a
+    parameter, or bound by a loop, a `with ... as`, an `except ... as` or a
+    `match` capture is dropped and fails loud.
+    """
+    here = package.split(".") if package else []
+    resolved: dict[str, tuple[pathlib.Path, str]] = {}
+    imported: dict[str, int] = {}
+    rebound: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.alias):
+            for name in _bound_names(node):
+                imported[name] = imported.get(name, 0) + 1
+        else:
+            # Every binding form there is, minus the import handled above --
+            # see `_bound_names`. `ast.arg` is in there, so a parameter named
+            # after the sibling poisons it the way `_shadowed_names` poisons an
+            # alias.
+            rebound |= _bound_names(node)
+        if not isinstance(node, ast.ImportFrom) or not node.level:
+            continue                     # absolute: it may not even be ours
+        base = path.parent
+        for _ in range(node.level - 1):  # `.` is this package, `..` its parent
+            base = base.parent
+        prefix = node.module.split(".") if node.module else []
+        for part in prefix:
+            base = base / part
+        pkg = ".".join([*here[:len(here) - node.level + 1], *prefix])
+        for alias in node.names:
+            file = base / f"{alias.name}.py"
+            if file.is_file():           # a package's `__init__.py` is not a
+                resolved[alias.asname or alias.name] = (file, pkg)  # sibling
+    return {name: value for name, value in resolved.items()
+            if name not in rebound and imported.get(name) == 1}
+
+
+@functools.cache
+def _locking_decorators(src: str, package: str) -> frozenset[str]:
+    """The module-scope names in ONE module's source that serialize what they
+    decorate.
+
+    Exactly the test `_serializing` applies to a decorator defined beside its
+    mutators — `_locks_anywhere` on every definition of the name, drawn from
+    that file's own module scope, and only if that file does not rebind `locks`
+    — so a decorator recognized across a file boundary has been held to the
+    same property, not a weaker one. In particular a sibling whose wrapper does
+    not take `locks.campaign_lock` vouches for nothing, and a sibling that
+    binds `locks` to something else vouches for nothing at all.
+
+    One hop, not a traversal: `_locks_anywhere` reads the sibling's own body,
+    so a sibling that re-exports a decorator it imported from a third module has
+    no definition here to satisfy it and fails loud.
+
+    Cached because every module in `store/` imports several siblings, and the
+    survey would otherwise re-parse each of them once per importer. Keyed on
+    the SOURCE rather than on the path, which is not a micro-optimization: a
+    path-keyed cache answers for a file whose contents have since changed, so
+    the probe that edits a decorator and re-asks would be told the old answer.
+    """
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:                  # unparsable vouches for nothing,
+        return frozenset()               # rather than for everything
+    if _rebinds_locks(tree, package):
+        return frozenset()
+    scope = _module_level(tree)
+    return frozenset(name for name, defs in _functions(tree).items()
+                     if name in scope and _all(defs, _locks_anywhere))
+
+
+def _sibling_decorators(tree: ast.AST, path: pathlib.Path,
+                        package: str) -> frozenset[str]:
+    """`mod.name` spellings this module may decorate with and have it count."""
+    out: set[str] = set()
+    for bound, (file, pkg) in _sibling_modules(tree, path, package).items():
+        try:
+            src = file.read_text(encoding="utf-8")
+        except OSError:                  # unreadable, same as unparsable
+            continue
+        out |= {f"{bound}.{name}" for name in _locking_decorators(src, pkg)}
+    return frozenset(out)
 
 
 def _module_level(tree: ast.AST) -> set[str]:
@@ -1765,13 +1899,14 @@ def _defers_a_write(fn: ast.AST, surface: _Surface = _Surface()) -> bool:
 
 
 def _serializing(funcs: dict[str, ast.AST], surface=_Surface(),
-                 module_level: set[str] | None = None) -> set[str]:
+                 module_level: set[str] | None = None,
+                 imported: frozenset[str] = frozenset()) -> set[str]:
     """Names whose bodies establish the campaign lock.
 
     Three forms, all present in the package today: a direct
     ``with locks.campaign_lock(cid)``; a module-local alias like
     ``audit._lock``; and a decorator that wraps the body in one, which is how
-    every ``scenes`` mutator does it (``@_serialized``).
+    every ``scenes`` mutator does it (``@locking._serialized``).
 
     Delegation counts too -- ``scenes.create_scene`` does its work in the
     ``@_serialized`` ``_create_scene`` -- but only when EVERY write the wrapper
@@ -1783,6 +1918,18 @@ def _serializing(funcs: dict[str, ast.AST], surface=_Surface(),
     ``module_level`` is the set of names allowed to vouch for a lock -- see
     `_module_level`. ``None`` means "every name", which is only for callers
     that have no tree to draw it from; every real caller passes it.
+
+    ``imported`` is the same permission for the dotted spellings a decorator
+    reached through a sibling module wears -- ``locking._serialized`` -- and it
+    is EMPTY by default, so a caller that hands over no resolved sibling gets
+    exactly today's module-local answer. `_sibling_decorators` is what fills it,
+    and it fills it only with names it resolved to a file and put through
+    `_locks_anywhere` itself.
+
+    It does not pass through ``module_level``, which is a set of bare names and
+    has nothing to say about a dotted one; the equivalent discipline -- the
+    receiver must be bound by that import and by nothing else in the module --
+    is `_sibling_modules`' job instead.
     """
     if not surface.trusted_locks:
         # Something here binds the name `locks`, so no `locks.campaign_lock(...)`
@@ -1793,7 +1940,7 @@ def _serializing(funcs: dict[str, ast.AST], surface=_Surface(),
     # A decorator's acquisition is nested inside the wrapper it returns, so it is
     # the one case that must look through nested defs -- see `_locks_anywhere`.
     decorating = {n for n, ds in funcs.items()
-                  if n in scope and _all(ds, _locks_anywhere)}
+                  if n in scope and _all(ds, _locks_anywhere)} | set(imported)
     # Local helpers that hand back a campaign lock. Entering one of these IS an
     # acquisition, even though the helper itself never enters anything.
     aliases = {n for n, ds in funcs.items()
@@ -1956,8 +2103,10 @@ def _analyze(path: pathlib.Path):
     src = path.read_text(encoding="utf-8")
     tree = ast.parse(src)
     funcs = _functions(tree)
-    surface = _Surface.of(tree, ".".join(_module_name(path).split(".")[:-1]))
-    serializing = _serializing(funcs, surface, _module_level(tree))
+    package = ".".join(_module_name(path).split(".")[:-1])
+    surface = _Surface.of(tree, package)
+    serializing = _serializing(funcs, surface, _module_level(tree),
+                               _sibling_decorators(tree, path, package))
     mutators = _mutators(funcs, serializing, surface)
 
     every = [d for ds in funcs.values() for d in ds]
@@ -2030,10 +2179,26 @@ def test_every_campaign_mutating_module_is_classified():
 # The backlog exactly as it stood when this guard landed. Frozen HERE, not
 # derived from `locks.UNREVIEWED`, because that is the whole point: the
 # declaration is the thing under test and cannot also be the baseline.
+#
+# Two entries are RE-KEYED, not added. `store.appearances` and `store.modules`
+# each became a package after this landed, and the entry names a module, so the
+# unreviewed code moved to `store.appearances.{paths,transitions,versions}` and
+# `store.modules.binding` without one line of it being reviewed. Re-keying is a
+# rename of the baseline; it is not the growth this test forbids, and the
+# distinction is checkable: the survey's mutators for the new names are a subset
+# of the ones the old names carried before the split, so no function that was
+# outside this backlog is inside it now. The original entries are named beside
+# each replacement so the substitution stays auditable rather than becoming the
+# swap `test_the_unreviewed_backlog_only_shrinks` exists to catch.
 _UNREVIEWED_AT_LANDING = frozenset({
-    "store.appearances", "store.assets", "store.campaign_climate",
+    "store.appearances.paths",         # was store.appearances
+    "store.appearances.transitions",   # was store.appearances
+    "store.appearances.versions",      # was store.appearances
+    "store.assets", "store.campaign_climate",
     "store.changes", "store.characters", "store.chronicle", "store.commits",
-    "store.dossiers", "store.modules", "store.overlay", "store.playing",
+    "store.dossiers",
+    "store.modules.binding",           # was store.modules
+    "store.overlay", "store.playing",
     "store.playstate", "store.plot", "store.relationships", "store.sync",
     "store.taglines", "store.weather.overrides",
 })
@@ -2456,6 +2621,120 @@ def test_a_decorator_from_another_module_is_not_this_modules_decorator():
     # attribute decorators rather than breaking decorator recognition.
     _f, serializing, _m = _probe(src.replace("@hooks.safe", "@safe"))
     assert "put" in serializing
+
+
+# `@locking._serialized` -- a decorator reached through a sibling module. The
+# receiver has to be resolved to a FILE for any of this to mean anything, so
+# these probes write one instead of parsing a string; `_probe` above cannot
+# reach the code below.
+SIBLING_LOCK = ("from .. import locks\n"
+                "def _serialized(fn):\n"
+                "    def locked(cid, *a, **kw):\n"
+                "        with locks.campaign_lock(cid):\n"
+                "            return fn(cid, *a, **kw)\n"
+                "    return locked\n")
+SIBLING_USER = ("from . import locking\n"
+                "@locking._serialized\n"
+                "def put(cid):\n"
+                "    atomic.write_text(p, x)\n")
+
+
+def _probe_sibling(tmp_path, src, sibling=SIBLING_LOCK, name="locking",
+                   package="store.scenes"):
+    """`_probe` for a module whose decorator lives in a sibling file."""
+    (tmp_path / f"{name}.py").write_text(sibling, encoding="utf-8")
+    path = tmp_path / "write.py"
+    path.write_text(src, encoding="utf-8")
+    tree = ast.parse(src)
+    funcs = _functions(tree)
+    surface = _Surface.of(tree, package)
+    serializing = _serializing(funcs, surface, _module_level(tree),
+                               _sibling_decorators(tree, path, package))
+    return funcs, serializing, _mutators(funcs, serializing, surface)
+
+
+def test_a_decorator_reached_through_a_sibling_module_is_resolved(tmp_path):
+    """`decorating` is built from THIS file's functions, so once `store/scenes`
+    became a package and its `@_serialized` moved into `scenes/locking.py`, all
+    seventeen of its mutators read as unserialized — a decorator in another file
+    could not enter the set whatever it did. The lock never changed; only which
+    file it was written in did.
+
+    Resolution is by relative import to a real file, and the sibling's `def` is
+    then held to `_locks_anywhere` exactly as a local one is. The second half
+    is the whole point: a sibling whose wrapper does NOT take the campaign lock
+    vouches for nothing, so this recognizes another spelling of the property
+    rather than trusting a name."""
+    _f, serializing, mutators = _probe_sibling(tmp_path, SIBLING_USER)
+    assert "put" in mutators
+    assert "put" in serializing, "a decorator in a sibling module was invisible"
+
+    unlocked = SIBLING_LOCK.replace("        with locks.campaign_lock(cid):\n", "")
+    unlocked = unlocked.replace("            return", "        return")
+    _f, serializing, _m = _probe_sibling(tmp_path, SIBLING_USER, unlocked)
+    assert "put" not in serializing, "a sibling decorator that locks nothing vouched anyway"
+
+
+def test_a_sibling_decorator_must_bind_this_campaign_to_its_target(tmp_path):
+    """Everything a local decorator must satisfy, the sibling must too — this is
+    `test_a_decorator_must_bind_this_campaign_to_its_target` one file over.
+    `fn(sid, cid, *a)` sends the caller's `sid` to the target's first parameter,
+    so two decorated calls for one campaign run under two different locks."""
+    swapped = SIBLING_LOCK.replace("def locked(cid, *a, **kw):",
+                                   "def locked(sid, cid, *a, **kw):") \
+                          .replace("return fn(cid, *a, **kw)", "return fn(sid, cid, *a, **kw)")
+    _f, serializing, mutators = _probe_sibling(
+        tmp_path, SIBLING_USER.replace("def put(cid):", "def put(cid, sid):"), swapped)
+    assert "put" in mutators
+    assert "put" not in serializing, "a sibling decorator bound the wrong id to its target"
+
+
+def test_a_sibling_that_rebinds_locks_vouches_for_nothing(tmp_path):
+    """`_rebinds_locks` is asked of the SIBLING's tree, not only of the importer.
+    A module whose `locks` is a parameter, an assignment or an import from
+    somewhere that is not `grimoire.store.locks` has no known campaign lock to
+    lend, and the importer cannot see that from its own file."""
+    for sibling, why in [
+        (SIBLING_LOCK.replace("from .. import locks\n", "from .hooks import locks\n"),
+         "an import that is not the store's locks"),
+        (SIBLING_LOCK.replace("def locked(cid, *a, **kw):", "def locked(cid, locks, *a, **kw):"),
+         "a parameter shadowing the module"),
+    ]:
+        _f, serializing, mutators = _probe_sibling(tmp_path, SIBLING_USER, sibling)
+        assert "put" in mutators
+        assert "put" not in serializing, f"a sibling with {why} still vouched"
+
+
+def test_only_a_resolved_sibling_may_vouch(tmp_path):
+    """The extension resolves a receiver to a file; it does not trust a dotted
+    spelling. Nothing that fails to resolve — no import at all, an absolute one
+    that may name anything on `sys.path`, a name this module also binds itself —
+    may put its decorator in `decorating`, which is the same "a name is not a
+    binding" rule the rest of this file is built out of (`_rebinds_locks`,
+    `_module_level`, `_shadowed_names`)."""
+    for src, why in [
+        (SIBLING_USER.replace("from . import locking\n", ""), "no import at all"),
+        (SIBLING_USER.replace("from . import locking\n", "import locking\n"),
+         "an absolute import"),
+        (SIBLING_USER.replace("from . import locking\n",
+                              "from . import locking\nlocking = contextlib\n"),
+         "a module-scope rebinding"),
+        (SIBLING_USER.replace("def put(cid):", "def put(cid, locking=None):"),
+         "a parameter of that name"),
+        (SIBLING_USER.replace("from . import locking\n",
+                              "from . import locking\nfrom .other import locking\n"),
+         "a second import of the same name"),
+    ]:
+        _f, serializing, mutators = _probe_sibling(tmp_path, src)
+        assert "put" in mutators
+        assert "put" not in serializing, f"{why} still resolved to the sibling"
+
+    # ...and a sibling that merely RE-EXPORTS a decorator has no definition here
+    # for `_locks_anywhere` to read, so resolution stops after one hop rather
+    # than chaining through files this never opened.
+    _f, serializing, _m = _probe_sibling(
+        tmp_path, SIBLING_USER, "from .deeper import _serialized\n")
+    assert "put" not in serializing, "a re-exported decorator was followed a second hop"
 
 
 def test_only_module_scope_can_vouch_for_a_lock():
