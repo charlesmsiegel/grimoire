@@ -104,11 +104,24 @@ _registry_guard = threading.Lock()
 # still exempt one function with a `# lock-domain-ok: <reason>` comment; the
 # guard caps how many of those exist.
 
+# The unit is the module the mutators actually live in, so splitting a module
+# into a package re-keys its entry onto the submodules that inherited its
+# functions. That is a rename, not a reclassification: the guard re-derives the
+# verdict from the code either way, and every function each old entry covered is
+# still covered by the entries that replaced it.
+
 #: Modules whose public campaign-scoped mutators all take `campaign_lock(cid)`.
 DOMAIN_MODULES: frozenset[str] = frozenset({
-    "store.scenes",
-    "store.sheets",
-    "store.audit",
+    # The three `store.scenes` submodules that mutate. Each public mutator in
+    # them either wears the package's `@locking._serialized` -- `campaign_lock`
+    # around the whole body -- or delegates to a private one that does, which is
+    # how `create_scene` and `set_datetime` resolve a calendar before the lock.
+    "store.scenes.write",
+    "store.scenes.moment",
+    "store.scenes.lifecycle",
+    "store.sheets.tally",
+    "store.sheets.writer",
+    "store.audit.baselines",
     "store.proposals",
     "store.rolls",
 })
@@ -116,18 +129,41 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
 #: Modules deliberately outside the exclusion, with the reason. An entry here is
 #: a decision someone made and can defend, not merely the status quo.
 OUTSIDE_DOMAIN: dict[str, str] = {
-    "store.campaigns": (
+    # One `store.campaigns` entry until the module became a package; the reason
+    # below is that entry's, split across the three submodules its mutators
+    # landed in. Nothing was reassessed and nothing changed hands.
+    "store.campaigns.lifecycle": (
         "Known gap, not a considered exclusion -- recorded here so it stops "
-        "being invisible. `rename_campaign`, `set_campaign_response` and "
-        "`touch` each read-modify-write the campaign meta file, so two "
-        "concurrent ones lose an edit (a rename dropped by a `touch` that "
-        "read the older frontmatter); `touch` runs from `appearances` on every "
-        "actor change, which is what makes the overlap reachable. "
-        "`delete_campaign` rmtrees a tree that a lock holder may be writing "
-        "under -- `module_edit._campaign_locks` already records 'campaign "
-        "deletion takes no lock at all' as a known limit of its all-campaign "
-        "hold. Fixing these is a concurrency change that needs its own review, "
-        "which is why this guard classifies them rather than closing them."
+        "being invisible. `rename_campaign` and `set_campaign_response` each "
+        "read-modify-write the campaign meta file, so two concurrent ones lose "
+        "an edit (a rename dropped by a `touch` that read the older "
+        "frontmatter -- see `store.campaigns.read`). `delete_campaign` rmtrees "
+        "a tree that a lock holder may be writing under -- "
+        "`module_edit._campaign_locks` already records 'campaign deletion "
+        "takes no lock at all' as a known limit of its all-campaign hold. "
+        "`ensure_campaign_slim` rewrites that same meta file and is unlocked "
+        "for the same reason as the two above. Fixing these is a concurrency "
+        "change that needs its own review, which is why this guard classifies "
+        "them rather than closing them."
+    ),
+    "store.campaigns.read": (
+        "`touch` read-modify-writes the campaign meta file unlocked, so it can "
+        "drop a concurrent `rename_campaign` or `set_campaign_response` by "
+        "publishing frontmatter it read before that edit landed. It runs from "
+        "`appearances` on every actor change (`transitions.appear`, "
+        "`versions.pick_version`, `versions.import_version`), which is what "
+        "makes the overlap reachable. Same known gap as "
+        "`store.campaigns.lifecycle`, whose mutators it races."
+    ),
+    "store.campaigns.paths": (
+        "`write_manifest` republishes the whole campaign manifest from a dict "
+        "its callers read a moment earlier -- `overlay`, `sync`, `migrations` "
+        "and `appearances.versions` all read-modify-write it that way -- so "
+        "two concurrent callers lose one of the two edits. It was inside the "
+        "single `store.campaigns` entry before the split, covered by that "
+        "module-level declaration without being named in its prose; it is "
+        "named here rather than promoted, because nothing about it was "
+        "reviewed."
     ),
 }
 
@@ -136,8 +172,16 @@ OUTSIDE_DOMAIN: dict[str, str] = {
 #: The guard forbids it from GROWING, so this list can only shrink as modules
 #: are examined and moved into one of the two above. Anything new mutating
 #: campaign state fails the guard until it is classified.
+#: Two entries are re-keyed rather than new (see the note above DOMAIN_MODULES):
+#: `store.appearances` became a package and its mutators landed in `paths`,
+#: `transitions` and `versions`; `store.modules` became a package and
+#: `set_campaign_module` landed in `binding`. Same functions, same absence of a
+#: review -- the backlog did not grow, it was spelled out at the granularity the
+#: code now has.
 UNREVIEWED: frozenset[str] = frozenset({
-    "store.appearances",
+    "store.appearances.paths",         # was store.appearances
+    "store.appearances.transitions",   # was store.appearances
+    "store.appearances.versions",      # was store.appearances
     "store.assets",
     "store.campaign_climate",
     "store.changes",
@@ -145,7 +189,7 @@ UNREVIEWED: frozenset[str] = frozenset({
     "store.chronicle",
     "store.commits",
     "store.dossiers",
-    "store.modules",
+    "store.modules.binding",           # was store.modules
     "store.overlay",
     "store.playing",
     "store.playstate",
