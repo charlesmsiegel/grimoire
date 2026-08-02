@@ -214,11 +214,17 @@ def _timeline_already_has(cid: str, events: list[dict], before=_NO_PREIMAGE) -> 
     that offset. A batch belonging to another scene lies before the offset and is
     no longer reachable by this question at all.
 
-    `startswith` rather than equality on the remainder, so an append that landed
-    and was then followed by somebody else's is still recognized as landed.
-    Anything else -- a head that no longer matches, or a remainder that is not
-    ours -- returns False and the batch is filed. That is the deliberate
-    direction: a duplicate is visible and repairable, a dropped scene is neither.
+    The remainder must be ours EXACTLY, or ours followed by a line break: an
+    append that landed and was then followed by somebody else's is still
+    recognized as landed, but a bare `startswith` is not enough for that. Our
+    last rendered line is a prefix of any longer line beginning with the same
+    text -- ours reading `She paid` against another writer's `She paid in full`
+    -- so the prefix test read a different batch as our completed append and the
+    retry dropped this scene's event. Only whole rendered lines count, which is
+    what the newline says. Anything else -- a head that no longer matches, or a
+    remainder that is not ours -- returns False and the batch is filed. That is
+    the deliberate direction: a duplicate is visible and repairable, a dropped
+    scene is neither.
 
     A pre-image is durable and is still not the flag the top of this docstring
     rules out: it records what was true BEFORE the step, so failing to write it
@@ -245,7 +251,8 @@ def _timeline_already_has(cid: str, events: list[dict], before=_NO_PREIMAGE) -> 
             cur[:size].encode("utf-8")).hexdigest() != before.get("digest"):
         return False                      # not the file this scene started from
     want = "\n" + "\n".join(_timeline_lines(events))
-    return cur[size:].startswith(want)
+    rest = cur[size:]
+    return rest == want or rest.startswith(want + "\n")
 
 
 def apply_scene(cid: str, sid: str, parsed: dict, edits: list[dict],

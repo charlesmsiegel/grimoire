@@ -926,6 +926,14 @@ def test_the_positional_check_answers_only_for_this_scene(monkeypatch, tmp_path)
     chronicle.append_timeline(cid, [{"date": "Firstmonth 9", "text": "A different errand."}])
     assert ingest_scene._timeline_already_has(cid, events, theirs) is False
 
+    # A LONGER line with the same prefix is a different batch, not ours. Our
+    # rendered line is a prefix of it, so a bare `startswith` read somebody
+    # else's append as this scene's completed one and dropped the event.
+    short = [{"date": "Firstmonth 3", "text": "She paid"}]
+    before = ingest_scene._timeline_preimage(cid)
+    chronicle.append_timeline(cid, [{"date": "Firstmonth 3", "text": "She paid in full"}])
+    assert ingest_scene._timeline_already_has(cid, short, before) is False
+
     # No pre-image at all, and a malformed one: file the batch.
     assert ingest_scene._timeline_already_has(cid, events) is False
     assert ingest_scene._timeline_already_has(cid, events, {"size": "no"}) is False
