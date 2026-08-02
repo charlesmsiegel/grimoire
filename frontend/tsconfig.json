@@ -10,7 +10,10 @@
     "strict": true,
     "noUnusedLocals": true,
     "noEmit": true,
-    "types": ["vite/client", "vitest/globals", "@testing-library/jest-dom"]
+    // "node" is here for tests that read a source file off disk rather than
+    // importing it -- vitest stubs CSS modules to an empty string, so the
+    // stylesheet guard in pickerLayout.test.ts has to use node:fs.
+    "types": ["node", "vite/client", "vitest/globals", "@testing-library/jest-dom"]
   },
   "include": ["src"]
 }

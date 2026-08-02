@@ -365,8 +365,13 @@ button.primary { background: var(--accent); color: var(--on-accent); border: var
 .view h2 { font-family: var(--fd); }
 .view .muted { color: var(--muted); }
 .view .muted a { color: var(--accent); }
-.picker { display: flex; gap: 8px; margin: 12px 0 20px; }
-.picker input, .picker select { background: var(--surface); color: var(--ink); border: 1px solid var(--muted); padding: 8px; }
+/* A picker is a control plus the button that acts on it. It wraps, and its
+   controls carry min-width: 0 / max-width: 100%, because a <select> otherwise
+   refuses to shrink below its widest option: a long location or character name
+   used to push the trailing button clean outside a narrow column. */
+.picker { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 20px; }
+.picker input, .picker select { background: var(--surface); color: var(--ink);
+  border: 1px solid var(--muted); padding: 8px; min-width: 0; max-width: 100%; }
 .picker input { flex: 1; }
 .list { display: flex; flex-direction: column; }
 
@@ -736,6 +741,10 @@ button.primary { background: var(--accent); color: var(--on-accent); border: var
 }
 .inspector .side-section { padding: 14px 16px; border-bottom: var(--rw) solid var(--rule); }
 .inspector .side-section:last-of-type { border-bottom: none; }
+/* The inspector is a 286px column, too narrow to seat the cast picker's three
+   selects and its button on one line. Wrapping alone would leave each control
+   at its intrinsic width and the lines ragged; growing them fills each line. */
+.inspector .picker select { flex: 1 1 auto; }
 .inspector .side-section-head {
   display: flex; align-items: center; justify-content: space-between; width: 100%;
   background: none; border: none; padding: 0; margin: 0 0 6px; cursor: pointer; text-align: left;
