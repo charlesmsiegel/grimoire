@@ -244,12 +244,33 @@ def test_absorb_flags_a_null_entry_inside_a_section():
         {"id": "characters/mara", "current_state": "Wary."}]
 
 
-def test_absorb_records_a_parser_crash_as_a_check_rather_than_raising():
-    """A grader that raises takes the whole run down instead of reporting the
-    bad output it was handed."""
+def test_a_scalar_section_fails_its_check_without_crashing_the_parser():
+    """The two halves of the same shape, and why the grader scores the RAW
+    object: `parse_output` now treats a non-list section as empty rather than
+    iterating it (a model really does send `3` or `null`, and a 500 there costs
+    an otherwise usable absorb after the tokens were spent) — so the tolerant
+    result cannot fail an "is it a list?" check. The grader sees the model's
+    own object and fails the section anyway."""
     bad = _absorb_json(character_state_edits=3)      # int where a list belongs
-    with pytest.raises(TypeError):
-        absorb.parse_output(bad)                     # the crash is real, not theoretical
+    assert absorb.parse_output(bad)["character_state_edits"] == []
+    assert "absorb.character_state_edits" in failed(graders.grade_absorb(bad)[0])
+
+
+def test_absorb_records_a_parser_crash_as_a_check_rather_than_raising(monkeypatch):
+    """A grader that raises takes the whole run down instead of reporting the
+    bad output it was handed.
+
+    The crash is injected rather than provoked with a malformed shape: the
+    scalar section this was written against no longer crashes the parser (see
+    above), and picking whichever shape still does would put the grader's
+    contract at the mercy of the parser's tolerance — the next hardening pass
+    would silently stop testing this."""
+    bad = _absorb_json(character_state_edits=3)
+
+    def _raises(_text):
+        raise TypeError("boom")
+
+    monkeypatch.setattr(graders.absorb, "parse_output", _raises)
     checks, parsed = graders.grade_absorb(bad)
     assert failed(checks) == {"absorb.character_state_edits", "absorb.parses"}
     assert parsed == {}

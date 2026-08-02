@@ -27,6 +27,11 @@
     {"id": "find-the-ledger", "title": "Find the ledger", "status": "advanced",
      "beat": "Winifred named the ledger to Seraphine and got a reaction instead of a denial."}
   ],
+  "commitment_movements": [
+    {"id": "the-midnight-deadline", "title": "Seraphine's midnight deadline",
+     "kind": "threat", "status": "open", "due": "midnight",
+     "beat": "Seraphine repeated the midnight limit and then admitted the ledger is why she does not sleep."}
+  ],
   "new_characters": [],
   "new_locations": [],
   "new_lore": [],

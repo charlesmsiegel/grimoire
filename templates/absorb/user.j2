@@ -7,6 +7,8 @@
                      snippets/feeling_line.j2, snippets/bond_line.j2) | None
       plot_snapshot — rendered thread lines, "\n"-joined (see
                       snippets/plot_thread_line/absorb.j2) | None
+      commitment_snapshot — rendered commitment lines, "\n"-joined (see
+                      snippets/commitment_line/absorb.j2) | None
       group_snapshot — rendered "- groups/<gid> (<Name>): <state>" lines,
                         "\n"-joined (see absorb.group_snapshot) | None
       transcript — str (see snippets/transcript.j2) -#}
@@ -22,6 +24,7 @@
 {%- if rel_snapshot -%}{%- set _ = head.append("Current relationships:\n" ~ rel_snapshot) -%}{%- endif -%}
 {%- if group_snapshot -%}{%- set _ = head.append("Groups:\n" ~ group_snapshot) -%}{%- endif -%}
 {%- if plot_snapshot -%}{%- set _ = head.append("Current plot threads:\n" ~ plot_snapshot) -%}{%- endif -%}
+{%- if commitment_snapshot -%}{%- set _ = head.append("Open commitments:\n" ~ commitment_snapshot) -%}{%- endif -%}
 {%- if head -%}
 {{ head | join("\n") }}
 

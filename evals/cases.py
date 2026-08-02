@@ -37,9 +37,9 @@ from pathlib import Path
 from typing import Callable
 
 from grimoire.store import (appearances, campaigns, characters, checks, chronicle,
-                            config, context, entities, groupstate, lengths, pcs,
-                            playstate, plot, relationships, response_presets,
-                            scenes, sheets, worlds)
+                            commitments, config, context, entities, groupstate,
+                            lengths, pcs, playstate, plot, relationships,
+                            response_presets, scenes, sheets, worlds)
 from grimoire.store import absorb as absorb_store
 
 from . import graders
@@ -289,6 +289,9 @@ def build_absorb() -> dict:
     relationships.set_feeling(cid, f"characters:{sera}", f"pcs:{pid}", 2, 3, 1, "owes her a favour")
     plot.set_movement(cid, "find-the-ledger", "Find the ledger", "open",
                       "Winifred learned it exists.", sid)
+    commitments.set_movement(cid, "the-midnight-deadline", "Seraphine's midnight deadline",
+                             "threat", "open", "midnight",
+                             "Seraphine gave Winifred until midnight and no further.", sid)
 
     scenes.append_message(cid, sid, "user", "Whose crates are those?", speaker="Winifred")
     scenes.append_reply(cid, sid, [
@@ -408,7 +411,8 @@ def _absorb_prompt(ctx: dict) -> list[dict]:
                                      absorb_store.state_snapshot(cid, sid),
                                      absorb_store.relationships_snapshot(cid, sid),
                                      absorb_store.plot_snapshot(cid),
-                                     absorb_store.group_snapshot(cid))
+                                     absorb_store.group_snapshot(cid),
+                                     absorb_store.commitment_snapshot(cid))
 
 
 CASES: tuple[Case, ...] = (

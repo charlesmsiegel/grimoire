@@ -1166,7 +1166,8 @@ async def post_absorb(cid: str, sid: str, force: bool = False,
     messages = store.absorb.build_prompt(
         transcript, facts,
         store.absorb.state_snapshot(cid, sid), store.absorb.relationships_snapshot(cid, sid),
-        store.absorb.plot_snapshot(cid), store.absorb.group_snapshot(cid))
+        store.absorb.plot_snapshot(cid), store.absorb.group_snapshot(cid),
+        store.absorb.commitment_snapshot(cid))
     budget = _Budget(store.config.absorb_budget())
     try:
         text = await budget.run(client.complete(messages, conn))

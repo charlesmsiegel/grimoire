@@ -392,7 +392,8 @@ export type CastDetail = { kind: "characters" | "pcs"; id: string; name: string;
 export type TimelineEvent = { date: string; text: string };
 export type StagedEdit = {
   id: string; kind: "character_state" | "lore" | "authored" | "relationship" | "bond" | "plot"
-    | "new_character" | "new_location" | "new_lore" | "sheet" | "dossier" | "voice_drift";
+    | "commitment" | "new_character" | "new_location" | "new_lore" | "sheet" | "dossier"
+    | "voice_drift";
   target: { kind: string; id: string }; label: string; field: string;
   before: string; after: string; authored: boolean;
   payload?: Record<string, unknown>;
@@ -490,6 +491,21 @@ export type RecordChange = {
   ref: { kind: string; id: string }; name: string;
   scene: { id: string; title: string; date: string };
   fields: FieldDiff[];
+};
+
+// continuity ledger (#117). `kind` is promise | threat | foreshadowing and
+// `status` open | fulfilled | broken | expired — a commitment resolves, where a
+// plot thread only advances. Contradictions are the fourth section this view is
+// named for and arrive with #111.
+export type LedgerScene = { id: string; title: string; date: string };
+export type PlotThread = {
+  id: string; title: string; status: string;
+  last_scene: string; latest_beat: string; scene: LedgerScene;
+};
+export type Commitment = PlotThread & { kind: string; due: string };
+export type LedgerFact = { id: string; one_line: string; date: string; title: string };
+export type Ledger = {
+  plot: PlotThread[]; commitments: Commitment[]; chronicle: LedgerFact[];
 };
 
 // lorebook import
@@ -691,6 +707,12 @@ export const api = {
   deleteCampaign: (cid: string) => request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}`),
   campaignChanges: (cid: string) =>
     request<RecordChange[]>("GET", `/api/campaigns/${cid}/changes`),
+  // Never shared with an in-flight read of the same path: the ledger is re-read
+  // precisely when the records behind it have moved (an absorb save, a scene
+  // rename), and the dedupe would answer that with the pre-change response.
+  // It has one consumer, so the sharing it opts out of was buying nothing.
+  campaignLedger: (cid: string) =>
+    request<Ledger>("GET", `/api/campaigns/${cid}/ledger`, undefined, { fresh: true }),
 
   // scenes
   listScenes: (cid: string) => request<SceneMeta[]>("GET", `/api/campaigns/${cid}/scenes`),

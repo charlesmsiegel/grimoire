@@ -517,3 +517,31 @@ test("getScene passes the window as limit/before query params", async () => {
     expect.objectContaining({ method: "GET" }),
   );
 });
+
+test("overlapping identical GETs share one request", async () => {
+  // The behaviour the ledger opts out of below, pinned first so the opt-out
+  // reads as a deliberate exception rather than as the rule.
+  let settle: (v: unknown) => void = () => {};
+  const fetchMock = vi.fn().mockReturnValue(new Promise((res) => { settle = res; }));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const a = api.listScenes("run");
+  const b = api.listScenes("run");
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  settle(jsonOk([]));
+  await Promise.all([a, b]);
+});
+
+test("a ledger read never joins an in-flight one", async () => {
+  // The ledger is re-read precisely when the records behind it have moved — an
+  // absorb save, a scene rename. Sharing the pre-change request would answer
+  // the refresh with exactly the data it was asked to replace, and nothing
+  // would fetch again afterwards.
+  let settle: (v: unknown) => void = () => {};
+  const fetchMock = vi.fn().mockReturnValue(new Promise((res) => { settle = res; }));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const first = api.campaignLedger("run");
+  const second = api.campaignLedger("run");
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  settle(jsonOk({ plot: [], commitments: [], chronicle: [] }));
+  await Promise.all([first, second]);
+});

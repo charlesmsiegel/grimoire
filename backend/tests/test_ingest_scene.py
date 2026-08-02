@@ -175,8 +175,8 @@ def test_run_absorb_and_apply_scene(monkeypatch, tmp_path):
     assert result["parsed"]["one_line"] == "Marisol needles Julian."
     assert any(e["kind"] == "character_state" for e in result["edits"])
 
-    applied = ingest_scene.apply_scene(cid, sid, result["parsed"], result["edits"])
-    assert applied
+    applied, failures = ingest_scene.apply_scene(cid, sid, result["parsed"], result["edits"])
+    assert applied and failures == []
     st = playstate.read_state(croot, "marisol")
     assert "wary of Julian" in st["current_state"]
     assert client.calls[0][1]["model"] == "test/model" and client.calls[0][1]["api_key"] == "k"
@@ -295,3 +295,487 @@ def test_two_scenes_accumulate_state_in_order(monkeypatch, tmp_path):
     asyncio.run(ingest_scene.ingest_one_scene(cid, scene2, FakeClient(text2), conn))
 
     assert any("wary of Julian" in v for v in captured.values())
+
+
+def test_run_absorb_primes_the_prompt_with_open_commitments(monkeypatch, tmp_path):
+    """A later imported scene has to be able to resolve a commitment an earlier
+    import opened. Without its id in the prompt the model can only file a
+    duplicate."""
+    from grimoire.store import commitments, worlds as worlds_store
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    ingest_scene.ensure_character(cid, {"name": "Marisol"})
+    sid = ingest_scene.build_scene(cid, {
+        "title": "The Reckoning",
+        "characters": [{"kind": "characters", "id": "marisol"}],
+        "turns": [{"role": "assistant", "speaker": "Marisol", "content": "\"You've grown bold.\""}],
+    })
+    commitments.set_movement(cid, "the-oath", "Marisol's oath", "promise", "open",
+                             "by midwinter", "She swore it on the stair.", "earlier-scene")
+
+    client = FakeClient("{}")
+    asyncio.run(ingest_scene.run_absorb(cid, sid, client, {"kind": "openrouter"}))
+    user_message = client.calls[0][0][1]["content"]
+    assert "Open commitments:" in user_message
+    assert "the-oath: Marisol's oath (promise, open), due by midwinter" in user_message
+
+
+_PARTIAL_SCENE = {
+    "key": "file1-scene01",
+    "title": "The Reckoning",
+    "characters": [{"kind": "characters", "id": "marisol"}],
+    "turns": [{"role": "assistant", "speaker": "Marisol", "content": "\"You've grown bold.\""}],
+}
+
+#: One timeline event and two edits: the plot beat lands, the commitment does not.
+#: Both halves matter — the timeline append and the applied beat are the two things
+#: a whole-scene retry would file twice.
+_PARTIAL_OUTPUT = json_module.dumps({
+    "one_line": "Marisol needles Julian.", "summary": "s", "keywords": [],
+    "timeline_events": [{"date": "Firstmonth 3", "text": "Marisol swore on the stair."}],
+    "character_state_edits": [], "lore_edits": [], "authored_edits": [],
+    "relationship_deltas": [], "bond_changes": [],
+    "plot_movements": [{"id": "the-siege", "title": "The siege", "status": "open",
+                        "beat": "The gate held."}],
+    "commitment_movements": [{"id": "", "title": "The debt", "kind": "promise",
+                              "status": "open", "beat": "Sworn."}],
+})
+
+
+def _break_commitments_during_apply(monkeypatch):
+    """Break `commitments.json` between staging and saving, which `apply_edits`
+    reports as a failure for that row while the plot row still lands."""
+    from grimoire.store import campaigns as campaigns_store
+    real_apply = ingest_scene.absorb.apply_edits
+
+    def _break_then_apply(cid_, edits, sid_):
+        (campaigns_store.campaign_root(cid_) / "commitments.json").write_text(
+            "{ no", encoding="utf-8")
+        return real_apply(cid_, edits, sid_)
+
+    monkeypatch.setattr(ingest_scene.absorb, "apply_edits", _break_then_apply)
+    return real_apply
+
+
+def test_a_scene_whose_edits_did_not_all_land_is_not_marked_done(monkeypatch, tmp_path):
+    """`apply_edits` reports commitment failures now (#115), and a batch import is
+    exactly where nobody is watching: marking the scene `done` would make the loss
+    permanent, since a done key is skipped outright on the next run. It is recorded
+    `incomplete` with the reasons, and the retry resumes on the same sid rather than
+    minting a duplicate scene."""
+    from grimoire.store import campaigns as campaigns_store, scenes, worlds as worlds_store
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    ingest_scene.ensure_character(cid, {"name": "Marisol"})
+    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+
+    real_apply = _break_commitments_during_apply(monkeypatch)
+    first = asyncio.run(ingest_scene.ingest_one_scene(
+        cid, _PARTIAL_SCENE, FakeClient(_PARTIAL_OUTPUT), conn))
+    assert first["status"] == "incomplete"
+    assert first["failures"] and "commitment" in first["failures"][0]["id"]
+
+    # the retry resumes rather than skipping or duplicating
+    monkeypatch.setattr(ingest_scene.absorb, "apply_edits", real_apply)
+    (campaigns_store.campaign_root(cid) / "commitments.json").unlink()
+    second = asyncio.run(ingest_scene.ingest_one_scene(
+        cid, _PARTIAL_SCENE, FakeClient(_PARTIAL_OUTPUT), conn))
+    assert second["status"] == "done" and second["sid"] == first["sid"]
+    assert len(scenes.list_scenes(cid)) == 1
+
+
+def test_an_incomplete_scene_retries_only_the_rows_that_did_not_land(monkeypatch, tmp_path):
+    """Resuming an `incomplete` scene must replay the unapplied rows and nothing
+    else. Re-running the whole scene is not a neutral retry: `append_timeline`
+    appends, and so do plot and commitment beats, so the run that recovers the
+    lost row would file every row that already landed a second time -- a
+    duplicate beat under the same scene id, which no later run can tell from two
+    real ones.
+
+    The first version of this test used no timeline events and a single failing
+    edit, which is exactly the shape that cannot show the bug. It has both here:
+    the timeline event and the plot beat are the rows that already landed, and
+    the assertion is that the retry leaves them at one each."""
+    from grimoire.store import campaigns as campaigns_store, commitments, plot, \
+        worlds as worlds_store
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    ingest_scene.ensure_character(cid, {"name": "Marisol"})
+    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+    timeline = campaigns_store.campaign_root(cid) / "timeline.md"
+
+    real_apply = _break_commitments_during_apply(monkeypatch)
+    first = asyncio.run(ingest_scene.ingest_one_scene(
+        cid, _PARTIAL_SCENE, FakeClient(_PARTIAL_OUTPUT), conn))
+    assert first["status"] == "incomplete"
+    assert [e["id"] for e in first["pending"]] == ["commitment:the-debt"]   # only the loser
+    assert first["applied"] == ["plot:the-siege"]
+    assert len(plot.get(cid, "the-siege")["beats"]) == 1
+    assert timeline.read_text(encoding="utf-8").count("swore on the stair") == 1
+
+    # The retry is not allowed to call the model again either: the rows were
+    # approved and persisted, so re-extracting would spend tokens to produce a
+    # second, possibly different, set of them.
+    monkeypatch.setattr(ingest_scene.absorb, "apply_edits", real_apply)
+    (campaigns_store.campaign_root(cid) / "commitments.json").unlink()
+    client = FakeClient(_PARTIAL_OUTPUT)
+    second = asyncio.run(ingest_scene.ingest_one_scene(cid, _PARTIAL_SCENE, client, conn))
+
+    assert second["status"] == "done"
+    assert client.calls == []                                        # no second extraction
+    assert timeline.read_text(encoding="utf-8").count("swore on the stair") == 1
+    assert len(plot.get(cid, "the-siege")["beats"]) == 1              # not re-applied
+    assert [b["text"] for b in commitments.get(cid, "the-debt")["beats"]] == ["Sworn."]
+    assert sorted(second["applied"]) == ["commitment:the-debt", "plot:the-siege"]
+    assert "pending" not in second and "failures" not in second
+
+
+def test_apply_scene_holds_the_campaign_lock_across_the_whole_sequence(monkeypatch, tmp_path):
+    """The conflict pass `apply_edits` runs before its first write only means
+    anything if no other writer can move a record between the verdict and the
+    write. `commitments.set_movement` locks its own write and nothing wider, so
+    without a hold here a concurrent live save lands a newer movement inside that
+    window and this older ingested beat is appended after it -- rewinding
+    `last_scene` instead of being reported. Same hold, for the same reason, as
+    the web chronicle-save route."""
+    import contextlib
+
+    from grimoire.store import worlds as worlds_store
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    ingest_scene.ensure_character(cid, {"name": "Marisol"})
+    sid = ingest_scene.build_scene(cid, _PARTIAL_SCENE)
+
+    events: list[str] = []
+    real_lock, real_timeline = ingest_scene.locks.campaign_lock, ingest_scene.chronicle.append_timeline
+    real_apply = ingest_scene.absorb.apply_edits
+
+    @contextlib.contextmanager
+    def _recording_lock(cid_):
+        events.append("acquire")
+        with real_lock(cid_):
+            yield
+        events.append("release")
+
+    def _recording_timeline(cid_, evs):
+        events.append("timeline")
+        return real_timeline(cid_, evs)
+
+    def _recording_apply(cid_, edits_, sid_):
+        events.append("apply-start")
+        try:
+            return real_apply(cid_, edits_, sid_)
+        finally:
+            events.append("apply-end")
+
+    monkeypatch.setattr(ingest_scene.locks, "campaign_lock", _recording_lock)
+    monkeypatch.setattr(ingest_scene.chronicle, "append_timeline", _recording_timeline)
+    monkeypatch.setattr(ingest_scene.absorb, "apply_edits", _recording_apply)
+
+    parsed = ingest_scene.absorb.parse_output(_PARTIAL_OUTPUT)
+    ingest_scene.apply_scene(cid, sid, parsed, ingest_scene.absorb.materialize(cid, sid, parsed))
+
+    # The outer hold opens before the first write and closes after the last one;
+    # the inner acquisitions in between are the store mutators' own, reentrant.
+    assert events[0] == "acquire" and events[-1] == "release"
+    assert events.index("timeline") < events.index("apply-start") < events.index("apply-end")
+
+
+def _move_commitment_during_apply(monkeypatch):
+    """Another writer advances `the-debt` between staging and applying, so the
+    staged row's `before` no longer matches and `batch_verdicts` reports a
+    conflict rather than an I/O error."""
+    from grimoire.store import commitments
+    real_apply = ingest_scene.absorb.apply_edits
+
+    def _move_then_apply(cid_, edits, sid_):
+        commitments.set_movement(cid_, "the-debt", "The debt", "promise", "open", "",
+                                 "Someone else moved it first.", "live-scene")
+        return real_apply(cid_, edits, sid_)
+
+    monkeypatch.setattr(ingest_scene.absorb, "apply_edits", _move_then_apply)
+    return real_apply
+
+
+def test_a_conflicting_row_is_not_replayed_on_the_next_run(monkeypatch, tmp_path):
+    """A conflict and an I/O error are both failures and are not both retryable.
+
+    An error is the store refusing a write, and the same row lands once that
+    clears. A conflict is the row's staged `before` disagreeing with a record
+    that has since moved — and the stored row still carries that same `before`,
+    so replaying it reproduces the identical verdict forever. Retrying it would
+    leave the scene `incomplete` on every future run while re-acquiring the lock
+    and re-reading the store to be told the same thing."""
+    from grimoire.store import campaigns as campaigns_store, commitments, plot, \
+        worlds as worlds_store
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    ingest_scene.ensure_character(cid, {"name": "Marisol"})
+    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+    timeline = campaigns_store.campaign_root(cid) / "timeline.md"
+
+    _move_commitment_during_apply(monkeypatch)
+    first = asyncio.run(ingest_scene.ingest_one_scene(
+        cid, _PARTIAL_SCENE, FakeClient(_PARTIAL_OUTPUT), conn))
+    assert first["status"] == "incomplete"
+    assert [f["kind"] for f in first["failures"]] == ["conflict"]
+    assert "pending" not in first                       # nothing here can be replayed
+    assert [b["text"] for b in commitments.get(cid, "the-debt")["beats"]] == \
+        ["Someone else moved it first."]                # the ingested beat did not land
+
+    # The next run reports the same standing failure and touches nothing.
+    client = FakeClient(_PARTIAL_OUTPUT)
+    second = asyncio.run(ingest_scene.ingest_one_scene(cid, _PARTIAL_SCENE, client, conn))
+    assert second["status"] == "incomplete" and second["failures"] == first["failures"]
+    assert client.calls == []                           # no re-extraction
+    assert timeline.read_text(encoding="utf-8").count("swore on the stair") == 1
+    assert len(plot.get(cid, "the-siege")["beats"]) == 1
+    assert len(commitments.get(cid, "the-debt")["beats"]) == 1
+
+
+def test_a_conflict_is_carried_across_a_retry_that_clears_the_io_failure(monkeypatch, tmp_path):
+    """A scene can fail both ways at once. The retry replays the I/O row, and the
+    conflict has to survive that — otherwise the run that fixes the disk reports
+    `done` on a scene still missing a movement, which is the silent loss the
+    whole `incomplete` status exists to prevent."""
+    from grimoire.store import campaigns as campaigns_store, worlds as worlds_store
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    ingest_scene.ensure_character(cid, {"name": "Marisol"})
+    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+    croot = campaigns_store.campaign_root(cid)
+
+    # Hand-write the entry the first attempt would have produced: one conflict
+    # (unreplayable) beside one error (replayable), so the retry has both.
+    sid = ingest_scene.build_scene(cid, _PARTIAL_SCENE)
+    ingest_scene.save_manifest(cid, {_PARTIAL_SCENE["key"]: {
+        "status": "incomplete", "sid": sid, "one_line": "x", "applied": [],
+        "failures": [{"id": "commitment:the-debt", "kind": "conflict", "reason": "moved"},
+                     {"id": "plot:the-siege", "kind": "error", "reason": "disk full"}],
+        "pending": [{"id": "plot:the-siege", "kind": "plot", "target": {"kind": "plot",
+                     "id": "the-siege"}, "field": "beat", "before": "", "after": "The gate held.",
+                     "payload": {"id": "the-siege", "title": "The siege", "status": "open",
+                                 "scene": sid}}]}})
+    assert not (croot / "plot.json").exists()
+
+    result = asyncio.run(ingest_scene.ingest_one_scene(
+        cid, _PARTIAL_SCENE, FakeClient(_PARTIAL_OUTPUT), conn))
+    assert result["applied"] == ["plot:the-siege"]              # the I/O row landed
+    assert result["status"] == "incomplete"                     # but the conflict still stands
+    assert [f["kind"] for f in result["failures"]] == ["conflict"]
+    assert "pending" not in result                              # and nothing is left to replay
+
+
+def test_the_cli_exits_nonzero_when_a_scene_is_incomplete(monkeypatch, tmp_path, capsys):
+    """The batch driver works through a log in strict scene order and its only
+    signal is the exit status. Scene N+1 is absorbed against the state scene N
+    wrote, so carrying on past a scene whose movement never landed extracts every
+    later scene against a snapshot missing it — the damage compounds down the
+    file, silently."""
+    from grimoire.store import worlds as worlds_store
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    ingest_scene.ensure_character(cid, {"name": "Marisol"})
+
+    scene_file = tmp_path / "scene.json"
+    scene_file.write_text(json_module.dumps(_PARTIAL_SCENE), encoding="utf-8")
+    monkeypatch.setattr(ingest_scene.llm_connections, "get_active",
+                        lambda: {"kind": "openrouter", "model": "m", "api_key": "k"})
+    monkeypatch.setattr(ingest_scene, "LLMClient", lambda: FakeClient(_PARTIAL_OUTPUT))
+    monkeypatch.setattr(sys, "argv",
+                        ["ingest_scene.py", "ingest", "--campaign", cid,
+                         "--input", str(scene_file)])
+
+    _break_commitments_during_apply(monkeypatch)
+    assert ingest_scene.main() == 1
+    err = capsys.readouterr().err
+    assert "did not land" in err and "re-run this same command" in err
+
+    # A clean scene still exits 0 — the nonzero code has to mean something.
+    (campaigns.campaign_root(cid) / "commitments.json").unlink()
+    monkeypatch.setattr(ingest_scene.absorb, "apply_edits",
+                        ingest_scene.absorb.apply.apply_edits)
+    assert ingest_scene.main() == 0
+
+
+def test_a_renamed_scene_stops_the_resume_rather_than_writing_to_a_ghost(monkeypatch, tmp_path):
+    """A scene rename is an id change, and `scene_refs.repoint` follows the seven
+    stores that persist scene ids — not this script's manifest, which is its own
+    journal. So an `incomplete` entry can outlive the id it names.
+
+    Resuming anyway writes beats and change records stamped with an id no scene
+    has, which is worse than not resuming: nothing surfaces it and the manifest
+    then says `done`. Rebuilding is not the alternative either — a rename means
+    the scene is still there under another name, and rebuilding duplicates it."""
+    from grimoire.store import campaigns as campaigns_store, commitments, plot, scenes, \
+        worlds as worlds_store
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    ingest_scene.ensure_character(cid, {"name": "Marisol"})
+    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+
+    _break_commitments_during_apply(monkeypatch)
+    first = asyncio.run(ingest_scene.ingest_one_scene(
+        cid, _PARTIAL_SCENE, FakeClient(_PARTIAL_OUTPUT), conn))
+    assert first["status"] == "incomplete" and first["pending"]
+
+    (campaigns_store.campaign_root(cid) / "commitments.json").unlink()
+    new_sid = scenes.rename_scene(cid, first["sid"], "The Reckoning, Revisited")
+    assert new_sid != first["sid"]
+
+    client = FakeClient(_PARTIAL_OUTPUT)
+    second = asyncio.run(ingest_scene.ingest_one_scene(cid, _PARTIAL_SCENE, client, conn))
+    assert second["status"] == "incomplete"
+    assert first["sid"] in second["detail"]           # names the id that went missing
+    assert client.calls == []                         # no re-extraction, no rebuild
+    assert len(scenes.list_scenes(cid)) == 1          # and no duplicate scene
+    assert commitments.read(cid) == {}                # nothing written against the ghost
+    assert plot.get(cid, "the-siege")["beats"][0]["scene"] == new_sid   # the store followed
+
+
+def test_the_cli_reports_a_resume_whose_scene_vanished(monkeypatch, tmp_path, capsys):
+    """Same stop, through the exit code the batch driver actually reads."""
+    from grimoire.store import worlds as worlds_store
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    ingest_scene.ensure_character(cid, {"name": "Marisol"})
+    sid = ingest_scene.build_scene(cid, _PARTIAL_SCENE)
+    ingest_scene.save_manifest(cid, {_PARTIAL_SCENE["key"]: {"status": "in_progress",
+                                                             "sid": sid + "-gone"}})
+
+    scene_file = tmp_path / "scene.json"
+    scene_file.write_text(json_module.dumps(_PARTIAL_SCENE), encoding="utf-8")
+    monkeypatch.setattr(ingest_scene.llm_connections, "get_active",
+                        lambda: {"kind": "openrouter", "model": "m", "api_key": "k"})
+    monkeypatch.setattr(ingest_scene, "LLMClient", lambda: FakeClient(_PARTIAL_OUTPUT))
+    monkeypatch.setattr(sys, "argv",
+                        ["ingest_scene.py", "ingest", "--campaign", cid,
+                         "--input", str(scene_file)])
+
+    assert ingest_scene.main() == 1
+    assert "no longer exists" in capsys.readouterr().err
+
+
+def test_resolve_closes_a_conflicted_scene_without_rebuilding_it(monkeypatch, tmp_path):
+    """The recovery this replaces was worse than the problem it recovered from.
+    A standing conflict cannot be replayed, so the only way out of `incomplete`
+    was deleting the key — and a deleted key is an unknown scene: the next run
+    takes the no-entry branch, calls `build_scene`, and absorbs the transcript
+    again, duplicating the scene, its timeline events and every beat that
+    already landed. That is what the manifest entry exists to prevent, produced
+    by following the instruction printed when nothing else could finish it."""
+    from grimoire.store import campaigns as campaigns_store, commitments, plot, scenes, \
+        worlds as worlds_store
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    ingest_scene.ensure_character(cid, {"name": "Marisol"})
+    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+    timeline = campaigns_store.campaign_root(cid) / "timeline.md"
+
+    _move_commitment_during_apply(monkeypatch)
+    first = asyncio.run(ingest_scene.ingest_one_scene(
+        cid, _PARTIAL_SCENE, FakeClient(_PARTIAL_OUTPUT), conn))
+    assert first["status"] == "incomplete" and "pending" not in first
+
+    ok, closed = ingest_scene.resolve_key(cid, _PARTIAL_SCENE["key"])
+    assert ok
+    assert closed["status"] == "done" and closed["sid"] == first["sid"]
+    # The scene is done because a person dealt with it, not because every row
+    # landed — the manifest must not read as if it had.
+    assert [f["kind"] for f in closed["reconciled"]] == ["conflict"]
+    assert "failures" not in closed and "pending" not in closed
+
+    client = FakeClient(_PARTIAL_OUTPUT)
+    after = asyncio.run(ingest_scene.ingest_one_scene(cid, _PARTIAL_SCENE, client, conn))
+    assert after["status"] == "skipped"
+    assert client.calls == []                                        # no re-absorb
+    assert len(scenes.list_scenes(cid)) == 1                         # no duplicate scene
+    assert timeline.read_text(encoding="utf-8").count("swore on the stair") == 1
+    assert len(plot.get(cid, "the-siege")["beats"]) == 1
+    assert len(commitments.get(cid, "the-debt")["beats"]) == 1
+
+
+def test_resolve_refuses_a_key_it_should_not_close(monkeypatch, tmp_path):
+    """It closes a scene that absorbed and could not finish — not an unknown key
+    (a typo would silently invent an entry) and not one still mid-flight."""
+    from grimoire.store import worlds as worlds_store
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+
+    ok, why = ingest_scene.resolve_key(cid, "file1-scene99")
+    assert not ok and "no manifest entry" in why
+
+    ingest_scene.save_manifest(cid, {"k": {"status": "in_progress", "sid": "001--x"}})
+    ok, why = ingest_scene.resolve_key(cid, "k")
+    assert not ok and "not incomplete" in why
+    assert ingest_scene.load_manifest(cid)["k"]["status"] == "in_progress"   # untouched
+
+    # Idempotent on a key that is already closed: re-running a recovery step
+    # must not be an error.
+    ingest_scene.save_manifest(cid, {"k": {"status": "done", "sid": "001--x"}})
+    ok, entry = ingest_scene.resolve_key(cid, "k")
+    assert ok and entry["status"] == "done"
+
+
+def test_the_cli_points_at_resolve_rather_than_at_deleting_the_key(monkeypatch, tmp_path, capsys):
+    """The instruction is the fix here: the old one told the operator to do the
+    thing that duplicates the scene."""
+    from grimoire.store import worlds as worlds_store
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    ingest_scene.ensure_character(cid, {"name": "Marisol"})
+
+    scene_file = tmp_path / "scene.json"
+    scene_file.write_text(json_module.dumps(_PARTIAL_SCENE), encoding="utf-8")
+    monkeypatch.setattr(ingest_scene.llm_connections, "get_active",
+                        lambda: {"kind": "openrouter", "model": "m", "api_key": "k"})
+    monkeypatch.setattr(ingest_scene, "LLMClient", lambda: FakeClient(_PARTIAL_OUTPUT))
+    monkeypatch.setattr(sys, "argv",
+                        ["ingest_scene.py", "ingest", "--campaign", cid,
+                         "--input", str(scene_file)])
+
+    _move_commitment_during_apply(monkeypatch)
+    assert ingest_scene.main() == 1
+    err = capsys.readouterr().err
+    assert f"resolve --campaign {cid} --key {_PARTIAL_SCENE['key']}" in err
+    assert "do NOT delete the key" in err
+
+
+def test_the_resume_revalidates_the_scene_inside_the_lock(monkeypatch, tmp_path):
+    """Checking before taking the lock is a check-then-act. `scenes` mutators
+    serialize on the same campaign lock, so a rename that starts after the check
+    completes before the replay acquires it — and the replay then stamps beats
+    and change records with an id no scene has, then marks the entry done."""
+    from grimoire.store import campaigns as campaigns_store, commitments, scenes, \
+        worlds as worlds_store
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    ingest_scene.ensure_character(cid, {"name": "Marisol"})
+    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+
+    _break_commitments_during_apply(monkeypatch)
+    first = asyncio.run(ingest_scene.ingest_one_scene(
+        cid, _PARTIAL_SCENE, FakeClient(_PARTIAL_OUTPUT), conn))
+    assert first["status"] == "incomplete" and first["pending"]
+    (campaigns_store.campaign_root(cid) / "commitments.json").unlink()
+    monkeypatch.setattr(ingest_scene.absorb, "apply_edits",
+                        ingest_scene.absorb.apply.apply_edits)
+
+    # The rename lands in the window the unlocked check cannot cover: after it
+    # has answered, before the replay takes the lock.
+    real_exists, seen = ingest_scene._scene_exists, []
+
+    def _rename_after_the_check(cid_, sid_):
+        ok = real_exists(cid_, sid_)
+        if ok and not seen:
+            seen.append(sid_)
+            scenes.rename_scene(cid_, sid_, "The Reckoning, Revisited")
+        return ok
+
+    monkeypatch.setattr(ingest_scene, "_scene_exists", _rename_after_the_check)
+    second = asyncio.run(ingest_scene.ingest_one_scene(
+        cid, _PARTIAL_SCENE, FakeClient(_PARTIAL_OUTPUT), conn))
+
+    assert second["status"] == "incomplete"          # not done, and nothing written
+    assert first["sid"] in second["detail"]
+    assert commitments.read(cid) == {}               # no beat against the ghost id

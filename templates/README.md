@@ -12,11 +12,13 @@ code change.
   system message, `user.j2` the user message.
 - **Variants live in subfolders** (`scene_suggestions/instruction/`,
   `scene/opener_instruction/`, `scene/sections/story_so_far/`,
-  `snippets/plot_thread_line/`). A selector variable picks the file — either
+  `snippets/plot_thread_line/`, `snippets/commitment_line/`). A selector
+  variable picks the file — either
   via a dynamic `{% include %}` in the composing template, or by the caller
   choosing which file to render.
 - `snippets/` holds line formats that feed prompt *content* (transcripts,
-  relationship lines, plot-thread lines) and are shared across calls.
+  relationship lines, plot-thread lines, commitment lines) and are shared
+  across calls.
 - Files starting with `_` are macro libraries, not messages.
 
 Rendering contract: `jinja2.Environment(loader=FileSystemLoader("templates"),
@@ -82,7 +84,9 @@ Mirrors `store/absorb.py:build_prompt`. Messages: system, user.
 lines), `rel_snapshot` (`absorb.relationships_snapshot()` — lines per
 `snippets/feeling_line.j2` / `snippets/bond_line.j2`), `plot_snapshot`
 (`absorb.plot_snapshot()` — lines per `snippets/plot_thread_line/absorb.j2`),
-`transcript` (`snippets/transcript.j2`).
+`commitment_snapshot` (`absorb.commitment_snapshot()` — lines per
+`snippets/commitment_line/absorb.j2`), `transcript`
+(`snippets/transcript.j2`).
 
 ### `audit/` — the post-absorb mechanics audit inside POST …/absorb
 Mirrors `store/audit.py:build_prompt`. Messages: system, user.
@@ -156,7 +160,12 @@ substituted by code:
 - `npc_cards` — locked card `data` dicts of in-scene NPCs (also feeds the
   card-level system prompts, descriptions, message examples, post-history)
 - `states` — `[{name, current_state, knows, suspects}]` from
-  `playstate.read_state` for in-scene NPCs with any state
+  `playstate.read_state` for in-scene NPCs with any state. In a scene with a
+  player, `suspects` is POV-filtered (#116): a suspicion naming another
+  present actor is withheld, since it is a private and possibly false belief
+  the model cannot tell from a fact. A `pcless` scene is the director's own
+  view and gets the stored value unfiltered — `context/world_state.py:
+  _visible_suspects`
 - `relationship_lines` — `relationships.render_present()` lines
 - `players` — seated players: `{kind: "pcs", name, pronouns, summary,
   description}` (persona) or `{kind: "characters", name, description,
@@ -170,6 +179,9 @@ substituted by code:
   at `archive_depth` (`context.archive`). `sections/archive.j2` labels them as
   already concluded, or the model plays an old scene as the current one
 - `plot_lines` — `plot.render_open(cid, with_id=False)` lines
+- `commitment_lines` — `commitments.render_open(cid, with_id=False)` lines:
+  the unresolved promises, threats and foreshadowing (#115), which resolve
+  (fulfilled/broken/expired) rather than merely advancing like a plot thread
 - `today` — `calendars.today_facts()` fields + `cast`
   (`context.cast_datetime_facts()`), or None when the scene has no date
 - `current_setting` — the current location's body ("" if none)

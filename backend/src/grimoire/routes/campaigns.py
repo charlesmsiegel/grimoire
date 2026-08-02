@@ -1,6 +1,6 @@
 """Campaign-scoped routes: the campaign record, exports, the world->campaign
 sync inbox, calendar and climate settings, group state, the campaign's own
-copies of characters and PCs, and change review.
+copies of characters and PCs, change review, and the continuity ledger.
 
 Scenes, weather, mechanics and greetings have their own modules; the generic
 ``/campaigns/{cid}/{kind}`` entity surface lives in ``entities``.
@@ -315,6 +315,114 @@ def get_changes(cid: str):
                     "fields": fields})
     out.sort(key=lambda r: (r["ref"]["kind"], r["name"]))
     return out
+
+
+# The recent-facts tier of the ledger. Shorter than GET /chronicle's 50: that
+# route feeds the per-scene recap, where the reader is looking for one entry,
+# while this is a standing overview meant to be read top to bottom.
+LEDGER_RECENT = 20
+
+
+@router.get("/campaigns/{cid}/ledger")
+def get_ledger(cid: str):
+    """The continuity ledger (#117): what the campaign still owes, in one read.
+
+    Three sections, and one route rather than three, because they are read
+    together and share one failure policy — a garbled plot.json or
+    commitments.json costs its own section and nothing else, the same tolerance
+    `plot.render_open` and `get_changes` already apply. Splitting them would put
+    that policy in three places and make the panel reason about three loading
+    states to render one view.
+
+    Each thread and commitment carries the scene that last moved it, resolved
+    the same way `get_changes` resolves its labels: the title from the scene
+    list, the in-fiction date from the chronicle. Contradictions are the fourth
+    section this view is named for and are absent until #111 gives them a
+    record; commitment aging (overdue/stale) is #103's, which reads the `due`
+    and `last_scene` this already returns.
+    """
+    _campaign_root_or_404(cid)
+    scenes_by_id = {s["id"]: s for s in store.scenes.list_scenes(cid)}
+    try:
+        chron = store.chronicle.read_chronicle(cid)
+    except Exception:  # noqa: BLE001 — garbled chronicle.json: labels degrade, no 500
+        chron = {}
+    # Unparseable is not the only way that file can be wrong. `read_chronicle`
+    # is a bare `json.loads`, so a chronicle.json holding `[]` -- valid JSON of
+    # the wrong shape -- returns a list and raises nothing, and the `.get` below
+    # would then 500 the whole view for any campaign with one open thread. The
+    # shape is checked where it is used rather than trusted from the read.
+    if not isinstance(chron, dict):
+        chron = {}
+
+    def _txt(value, fallback: str = "") -> str:
+        """A projected field as text. The panel renders these directly, and React
+        refuses an object as a child -- so a hand-edited record with a
+        dict-valued `title` would blank the whole view rather than showing one
+        odd row. `_tolerant` cannot catch that: the read SUCCEEDS and the failure
+        happens in the browser. `commitments.open_commitments` normalizes its own
+        rows; `plot.open_threads` does not, and hardening `plot` is one of the
+        pre-existing items flagged on this PR, so the coercion sits here where
+        the ledger owns the projection."""
+        return value.strip() if isinstance(value, str) else fallback
+
+    def _scene(sid) -> dict:
+        # The row's OWN scene id is the third place a wrong shape can arrive,
+        # and the one the two checks above do not reach: these projections run
+        # outside `_tolerant`, so a commitment whose `last_scene` is `[]` reaches
+        # `scenes_by_id.get` as an unhashable key and 500s the view. Coerced per
+        # row rather than guarded per section, so one malformed record loses its
+        # scene label instead of emptying the section around it.
+        #
+        # The label's own fields go through `_txt` for the reason the row fields
+        # do: `LedgerPanel.sceneNote` interpolates them, so a non-string `date`
+        # in a hand-edited chronicle reaches the panel and renders as
+        # `[object Object]`. This nested projection feeds the plot and
+        # commitment sections, which the recent-facts coercion never touched.
+        if not isinstance(sid, str):
+            sid = ""
+        s = scenes_by_id.get(sid, {})
+        c = chron.get(sid)
+        c = c if isinstance(c, dict) else {}   # a per-scene entry can be wrong too
+        return {"id": sid, "title": _txt(s.get("title"), sid), "date": _txt(c.get("date"))}
+
+    def _tolerant(read):
+        try:
+            return read()
+        except Exception:  # noqa: BLE001 — a garbled file empties its section, not the view
+            return []
+
+    threads = [{**t, "id": _txt(t.get("id")), "title": _txt(t.get("title"), _txt(t.get("id"))),
+                "status": _txt(t.get("status"), "open"),
+                "last_scene": _txt(t.get("last_scene")),
+                "latest_beat": _txt(t.get("latest_beat"))}
+               for t in _tolerant(lambda: store.plot.open_threads(cid))
+               if isinstance(t, dict)]
+    owed = _tolerant(lambda: store.commitments.open_commitments(cid))
+    # Derived from `chron` rather than `chronicle.recent`, which sorts on the raw
+    # `id` of every record: one list-valued id makes that comparison raise and
+    # `_tolerant` empties the entire recent-facts section, losing every good fact
+    # to one bad row. Sorting on a coerced key keeps the rest. It also saves a
+    # second read of the same file.
+    recent = sorted((r for r in chron.values() if isinstance(r, dict)),
+                    key=lambda r: _txt(r.get("id")))[-LEDGER_RECENT:]
+    return {
+        "plot": [{**t, "scene": _scene(t["last_scene"])} for t in threads],
+        "commitments": [{**c, "scene": _scene(c["last_scene"])} for c in owed],
+        # Newest first: `chronicle.recent` returns the tail in ascending order,
+        # which is right for a recap read forward and backwards for a ledger.
+        # `one_line or summary`, the fallback every other chronicle consumer
+        # uses (`context/story.py:_story_entries`): a save may leave `one_line`
+        # empty, and a row with only its scene metadata is a blank line in the
+        # panel rather than a fact.
+        # `_scene` carries the same id coercion for the two sections above; a
+        # chronicle record's `id` needs it for the same reason, and its text
+        # needs `_txt` for the same reason the plot rows above do.
+        "chronicle": [{**_scene(r.get("id")),
+                       "one_line": _txt(r.get("one_line")) or _txt(r.get("summary")),
+                       "date": _txt(r.get("date"))}
+                      for r in reversed(recent)],
+    }
 
 
 # ---- campaign cast & suggestions ----

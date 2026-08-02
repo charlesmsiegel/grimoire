@@ -1163,6 +1163,786 @@ def test_drift_roster_is_not_built_for_a_scene_with_nothing_to_measure(monkeypat
     assert len(calls) == 1
 
 
+# ---- POV filtering of NPC suspicions (#116) ---------------------------------
+#
+# `knows` is what a character holds as fact and the narration may lean on;
+# `suspects` is a private, possibly-false belief. Handing every present NPC's
+# suspicions about each other to the model on every turn is how a scene gets
+# narration that quietly knows what nobody on stage has said.
+
+def _two_npc_scene(monkeypatch, tmp_path, pcless=False):
+    """Seraphine and Winifred both on stage, plus one absent character (Mara)
+    for suspicions to be about."""
+    from grimoire.store import appearances, campaigns, characters, scenes, worlds
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = campaigns.create_campaign("Run", worlds.create_world("W"))
+    croot = campaigns.campaign_root(cid)
+    ids = {}
+    for name in ("Seraphine Vale", "Winifred", "Mara"):
+        ids[name] = characters.create_character(croot, name, "main",
+                                                characters.blank_card(name))[0]
+    sid = scenes.create_scene(cid, "Now", pcless=pcless)
+    appearances.appear(cid, sid, "characters", ids["Seraphine Vale"], "main", "npc")
+    appearances.appear(cid, sid, "characters", ids["Winifred"], "main", "npc")
+    return cid, sid, croot, ids
+
+
+def _state_section(cid, sid):
+    return {s["label"]: s["text"]
+            for s in context.context_sections(cid, sid)}.get("Character state", "")
+
+
+def test_suspicion_about_a_present_actor_is_withheld(monkeypatch, tmp_path):
+    from grimoire.store import playstate
+    cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
+    playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
+        "Wary.", "The ledger is real.",
+        "Winifred is lying about the crates.\n\nMara sold the manifest."))
+    section = _state_section(cid, sid)
+    assert "Mara sold the manifest." in section       # a separate paragraph: kept
+    assert "Winifred is lying" not in section         # about someone in the room: withheld
+    assert "Knows: The ledger is real." in section    # the fact tier is never filtered
+    assert "Seraphine Vale: Wary." in section
+
+
+def test_a_first_name_reference_counts_as_naming_a_present_actor(monkeypatch, tmp_path):
+    from grimoire.store import playstate
+    cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
+    playstate.write_state(croot, ids["Winifred"], playstate.compose_body(
+        "Impatient.", "", "Seraphine is stalling."))   # card name is "Seraphine Vale"
+    assert "Seraphine is stalling" not in _state_section(cid, sid)
+
+
+def test_a_suspicion_about_oneself_is_kept(monkeypatch, tmp_path):
+    from grimoire.store import playstate
+    cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
+    playstate.write_state(croot, ids["Winifred"], playstate.compose_body(
+        "", "", "Winifred thinks she is being followed."))
+    # a character's own interiority is not a leak about somebody else
+    assert "Winifred thinks she is being followed." in _state_section(cid, sid)
+
+
+def test_a_suspicion_about_a_present_player_is_withheld(monkeypatch, tmp_path):
+    from grimoire.store import appearances, campaigns, characters, pcs, playstate, scenes, worlds
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = campaigns.create_campaign("Run", worlds.create_world("W"))
+    croot = campaigns.campaign_root(cid)
+    ch = characters.create_character(croot, "Seraphine", "main",
+                                     characters.blank_card("Seraphine"))[0]
+    pid, _ = pcs.create_pc(croot, "Winifred", [], persona=pcs.blank_persona("Winifred"))
+    sid = scenes.create_scene(cid, "Now")
+    appearances.appear(cid, sid, "characters", ch, "main", "npc")
+    appearances.appear(cid, sid, "pcs", pid, "default", "player")
+    playstate.write_state(croot, ch, playstate.compose_body(
+        "Wary.", "", "Winifred is working for the Guild."))
+    assert "working for the Guild" not in _state_section(cid, sid)
+
+
+def test_a_suspicion_naming_the_player_through_the_macro_is_withheld(monkeypatch, tmp_path):
+    """The one reference an alias sweep structurally cannot see. At storage time
+    the entry holds `{{user}}`, which matches no name; `_system_text` then
+    expands it to the present player's, and the private suspicion arrives at the
+    model reading like any other. The filter runs first, so the filter has to
+    know the macro."""
+    from grimoire.store import (appearances, campaigns, characters, context, pcs,
+                                playstate, scenes, worlds)
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = campaigns.create_campaign("Run", worlds.create_world("W"))
+    croot = campaigns.campaign_root(cid)
+    ch = characters.create_character(croot, "Seraphine", "main",
+                                     characters.blank_card("Seraphine"))[0]
+    pid, _ = pcs.create_pc(croot, "Winifred", [], persona=pcs.blank_persona("Winifred"))
+    sid = scenes.create_scene(cid, "Now")
+    appearances.appear(cid, sid, "characters", ch, "main", "npc")
+    appearances.appear(cid, sid, "pcs", pid, "default", "player")
+    playstate.write_state(croot, ch, playstate.compose_body(
+        "Wary.", "", "{{user}} is hiding the ledger.\n\nThe Guild sold the manifest."))
+    section = _state_section(cid, sid)
+    assert "hiding the ledger" not in section
+    assert "{{user}}" not in section                       # not merely unexpanded
+    assert "The Guild sold the manifest." in section       # the absent world still shows
+    # And nothing downstream re-introduces it once the macro resolves.
+    assert "hiding the ledger" not in context.expand_macros(
+        section, context.scene_substitutions(cid, sid), cid, sid)
+
+
+def test_an_npc_whose_only_state_is_a_withheld_suspicion_drops_out(monkeypatch, tmp_path):
+    from grimoire.store import playstate
+    cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
+    playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
+        "", "", "Winifred is lying."))
+    # nothing left to say about her: no name with a dangling colon, no empty entry
+    assert "Seraphine Vale" not in _state_section(cid, sid)
+
+
+def test_a_pcless_scene_gets_full_disclosure(monkeypatch, tmp_path):
+    from grimoire.store import playstate
+    cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path, pcless=True)
+    playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
+        "Wary.", "", "Winifred is lying about the crates."))
+    # a director turn has no player whose knowledge to respect, and moving NPCs
+    # by what they privately believe is the whole point of one
+    assert "Winifred is lying about the crates." in _state_section(cid, sid)
+
+
+def test_the_absorb_snapshot_is_not_filtered(monkeypatch, tmp_path):
+    """Absorb rewrites stored state from the snapshot. Filtering it there would
+    make the model rewrite `suspects` from a version with lines missing and
+    silently erase them on save."""
+    from grimoire.store import absorb, playstate
+    cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
+    playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
+        "Wary.", "", "Winifred is lying about the crates."))
+    snap = " ".join(absorb.state_snapshot(cid, sid).values())
+    assert "Winifred is lying about the crates." in snap
+
+
+def test_the_filter_uses_the_npc_s_own_name_not_the_card_s(monkeypatch, tmp_path):
+    """The block is labelled from the character's meta name; the cast list the
+    prompt's other sections use carries the locked CARD's name. A version rename
+    can make the two disagree, and if the filter read the card's, the NPC's own
+    interiority would be withheld as if it were about somebody else."""
+    from grimoire.store import appearances, campaigns, characters, playstate, scenes, worlds
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = campaigns.create_campaign("Run", worlds.create_world("W"))
+    croot = campaigns.campaign_root(cid)
+    ch = characters.create_character(croot, "Seraphine", "main",
+                                     characters.blank_card("Seraphine"))[0]
+    card = characters.read_card(croot, ch, "main")
+    card["data"]["name"] = "The Woman on the Pier"      # the card drifts from the meta name
+    characters.update_version(croot, ch, "main", card)
+    sid = scenes.create_scene(cid, "Now")
+    appearances.appear(cid, sid, "characters", ch, "main", "npc")
+    playstate.write_state(croot, ch, playstate.compose_body(
+        "", "", "Seraphine thinks she is being followed."))
+    assert "Seraphine thinks she is being followed." in _state_section(cid, sid)
+
+
+def test_a_multiline_suspicion_is_withheld_whole(monkeypatch, tmp_path):
+    """The unit is the ENTRY, not the physical line. Dropping only the line that
+    names the present actor publishes the half carrying the actual secret — the
+    filter defeated by a line break."""
+    from grimoire.store import playstate
+    cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
+    playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
+        "Wary.", "",
+        "Winifred is lying about the crates.\n"
+        "She plans to steal them at midnight.\n"
+        "\n"
+        "Mara sold the manifest."))
+    section = _state_section(cid, sid)
+    assert "Winifred is lying" not in section
+    assert "plans to steal them at midnight" not in section   # the continuation goes too
+    assert "Mara sold the manifest." in section               # a new entry survives
+
+
+def test_an_indented_or_bulleted_continuation_follows_its_entry(monkeypatch, tmp_path):
+    from grimoire.store import playstate
+    cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
+    playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
+        "Wary.", "",
+        "- Winifred is lying about the crates.\n"
+        "  The tally does not match the manifest.\n"
+        "- Mara sold the manifest."))
+    section = _state_section(cid, sid)
+    assert "Winifred is lying" not in section
+    assert "tally does not match" not in section   # indented continuation
+    assert "Mara sold the manifest." in section    # the next bullet is its own entry
+
+
+def test_a_new_entry_after_a_dropped_one_is_not_swept_up(monkeypatch, tmp_path):
+    """`dropping` has to reset on the next entry, or one named suspicion silently
+    becomes all-or-nothing for everything below it."""
+    from grimoire.store import playstate
+    cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
+    playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
+        "", "", "Winifred is lying.\n\nThe Guild is watching the pier.\n\n"
+                "A courier comes Thursday.")
+    )
+    section = _state_section(cid, sid)
+    assert "Winifred is lying" not in section
+    assert "The Guild is watching the pier." in section
+    assert "A courier comes Thursday." in section
+
+
+def test_an_entry_naming_a_present_actor_only_later_is_withheld_whole(monkeypatch, tmp_path):
+    """A streaming filter can drop a line but cannot take back one it already
+    kept, so an entry that names the actor in its SECOND line published its
+    first. Entries are judged whole."""
+    from grimoire.store import playstate
+    cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
+    playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
+        "Wary.", "",
+        "The theft was staged.\n"
+        "She thinks Winifred planted the evidence.\n"
+        "\n"
+        "Mara sold the manifest."))
+    section = _state_section(cid, sid)
+    assert "The theft was staged." not in section     # the setup goes with the attribution
+    assert "planted the evidence" not in section
+    assert "Mara sold the manifest." in section       # an unrelated entry survives
+
+
+def test_a_blank_line_does_not_merge_two_entries(monkeypatch, tmp_path):
+    """Paragraph spacing separates suspicions; a blank line must not let a named
+    entry swallow the paragraph after it."""
+    from grimoire.store import playstate
+    cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
+    playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
+        "", "", "Winifred is lying.\n\nThe Guild is watching the pier."))
+    section = _state_section(cid, sid)
+    assert "Winifred is lying" not in section
+    assert "The Guild is watching the pier." in section
+
+
+def test_a_suspicion_naming_the_card_name_is_withheld(monkeypatch, tmp_path):
+    """The block is labelled with the meta name, but the card's `data.name` is
+    what the description section, the transcript and the cast UI show — so it is
+    what another NPC's stored suspicion is likely to call them. Matching only
+    the meta name left that hole open."""
+    from grimoire.store import appearances, campaigns, characters, playstate, scenes, worlds
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = campaigns.create_campaign("Run", worlds.create_world("W"))
+    croot = campaigns.campaign_root(cid)
+    sera = characters.create_character(croot, "Seraphine", "main",
+                                       characters.blank_card("Seraphine"))[0]
+    card = characters.read_card(croot, sera, "main")
+    card["data"]["name"] = "The Woman on the Pier"     # the card drifts from the meta name
+    characters.update_version(croot, sera, "main", card)
+    win = characters.create_character(croot, "Winifred", "main",
+                                      characters.blank_card("Winifred"))[0]
+    sid = scenes.create_scene(cid, "Now")
+    appearances.appear(cid, sid, "characters", sera, "main", "npc")
+    appearances.appear(cid, sid, "characters", win, "main", "npc")
+    playstate.write_state(croot, win, playstate.compose_body(
+        "Impatient.", "", "The Woman on the Pier is hiding the ledger."))
+    assert "hiding the ledger" not in _state_section(cid, sid)
+
+
+def test_a_suspicion_naming_a_present_player_s_persona_is_withheld(monkeypatch, tmp_path):
+    """Players reach the filter through their persona name; that alias has to be
+    matched too."""
+    from grimoire.store import appearances, campaigns, characters, pcs, playstate, scenes, worlds
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = campaigns.create_campaign("Run", worlds.create_world("W"))
+    croot = campaigns.campaign_root(cid)
+    ch = characters.create_character(croot, "Seraphine", "main",
+                                     characters.blank_card("Seraphine"))[0]
+    pid, _ = pcs.create_pc(croot, "Winifred", [], persona=pcs.blank_persona("Winifred"))
+    sid = scenes.create_scene(cid, "Now")
+    appearances.appear(cid, sid, "characters", ch, "main", "npc")
+    appearances.appear(cid, sid, "pcs", pid, "default", "player")
+    playstate.write_state(croot, ch, playstate.compose_body(
+        "Wary.", "", "Winifred is working for the Guild."))
+    assert "working for the Guild" not in _state_section(cid, sid)
+
+
+def test_a_capitalized_continuation_stays_with_its_entry(monkeypatch, tmp_path):
+    """A paragraph is one entry. A whitelist of "words that continue a sentence"
+    leaked three times; "At" is not a pronoun, so the continuation read as a
+    fresh statement and survived while the line naming her was dropped."""
+    from grimoire.store import playstate
+    cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
+    playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
+        "Wary.", "", "Winifred is lying.\nAt midnight, she plans to steal the crates."))
+    section = _state_section(cid, sid)
+    assert "Winifred is lying" not in section
+    assert "steal the crates" not in section
+
+
+def test_a_bullet_keeps_finer_granularity_than_the_paragraph(monkeypatch, tmp_path):
+    """The cost of paragraph grouping is granularity; a bullet buys it back."""
+    from grimoire.store import playstate
+    cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
+    playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
+        "Wary.", "", "- Winifred is lying.\n- Mara sold the manifest."))
+    section = _state_section(cid, sid)
+    assert "Winifred is lying" not in section
+    assert "Mara sold the manifest." in section
+
+
+def test_an_epithet_card_name_does_not_match_every_line(monkeypatch, tmp_path):
+    """`The Woman on the Pier` once contributed the alias "The", so every
+    suspicion containing the word "the" was read as naming her and withheld.
+    Hiding almost all of an NPC's state is worse than the leak it was avoiding."""
+    from grimoire.store import appearances, campaigns, characters, playstate, scenes, worlds
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = campaigns.create_campaign("Run", worlds.create_world("W"))
+    croot = campaigns.campaign_root(cid)
+    sera = characters.create_character(croot, "Seraphine", "main",
+                                       characters.blank_card("Seraphine"))[0]
+    card = characters.read_card(croot, sera, "main")
+    card["data"]["name"] = "The Woman on the Pier"
+    characters.update_version(croot, sera, "main", card)
+    win = characters.create_character(croot, "Winifred", "main",
+                                      characters.blank_card("Winifred"))[0]
+    sid = scenes.create_scene(cid, "Now")
+    appearances.appear(cid, sid, "characters", sera, "main", "npc")
+    appearances.appear(cid, sid, "characters", win, "main", "npc")
+    playstate.write_state(croot, win, playstate.compose_body(
+        "Impatient.", "", "Mara keeps the tally in the back room."))
+    # unrelated, and contains "the" three times
+    assert "Mara keeps the tally in the back room." in _state_section(cid, sid)
+
+
+def test_a_one_word_name_that_is_an_ordinary_word_does_not_match_prose(monkeypatch, tmp_path):
+    """`Will`, `May`, `Hope`, `Grace` — plenty of names are also ordinary words,
+    and a case-insensitive whole-word match reads "Mara will steal the crates"
+    as naming Will. With that actor on stage most of every other NPC's state
+    disappears: the `The`-matches-everything bug again, reached without an
+    epithet. Case is the signal already in the text, so no list of ambiguous
+    names has to be right."""
+    from grimoire.store import appearances, campaigns, characters, playstate, scenes, worlds
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = campaigns.create_campaign("Run", worlds.create_world("W"))
+    croot = campaigns.campaign_root(cid)
+    will = characters.create_character(croot, "Will", "main",
+                                       characters.blank_card("Will"))[0]
+    win = characters.create_character(croot, "Winifred", "main",
+                                      characters.blank_card("Winifred"))[0]
+    sid = scenes.create_scene(cid, "Now")
+    appearances.appear(cid, sid, "characters", will, "main", "npc")
+    appearances.appear(cid, sid, "characters", win, "main", "npc")
+    playstate.write_state(croot, win, playstate.compose_body(
+        "Impatient.", "", "Mara will steal the crates.\n\nWill is lying about the tally."))
+    section = _state_section(cid, sid)
+    assert "Mara will steal the crates." in section     # the modal verb is not a name
+    assert "Will is lying" not in section               # the capitalized one is
+
+
+def test_a_name_in_a_script_without_word_separators_is_matched(monkeypatch, tmp_path):
+    """`\\b` sits between a word character and a non-word one, and in a script
+    written without spaces both neighbours are word characters — so the boundary
+    never matched and the filter did nothing whatsoever for a campaign not
+    written in a spaced script. Such a form is matched as a plain substring."""
+    from grimoire.store import appearances, campaigns, characters, playstate, scenes, worlds
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = campaigns.create_campaign("Run", worlds.create_world("W"))
+    croot = campaigns.campaign_root(cid)
+    ming = characters.create_character(croot, "Ming", "main",
+                                       characters.blank_card("Ming"))[0]
+    card = characters.read_card(croot, ming, "main")
+    card["data"]["name"] = "李明"
+    characters.update_version(croot, ming, "main", card)
+    win = characters.create_character(croot, "Winifred", "main",
+                                      characters.blank_card("Winifred"))[0]
+    sid = scenes.create_scene(cid, "Now")
+    appearances.appear(cid, sid, "characters", ming, "main", "npc")
+    appearances.appear(cid, sid, "characters", win, "main", "npc")
+    playstate.write_state(croot, win, playstate.compose_body(
+        "Impatient.", "", "李明藏着账本。\n\nThe Guild sold the manifest."))
+    section = _state_section(cid, sid)
+    assert "李明藏着账本" not in section
+    assert "The Guild sold the manifest." in section
+
+
+def test_two_actors_sharing_a_given_name_keep_their_own_interiority(monkeypatch, tmp_path):
+    """The self-suspicion exception is about the OWNER, and the collision is
+    between the derived aliases: `Mara Chen` and `Mara Vance` both shorten to
+    `Mara`, so subtracting stored names alone left it in `others` and the
+    owner's own line was withheld as if it named the other actor."""
+    from grimoire.store import appearances, campaigns, characters, playstate, scenes, worlds
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = campaigns.create_campaign("Run", worlds.create_world("W"))
+    croot = campaigns.campaign_root(cid)
+    chen = characters.create_character(croot, "Mara Chen", "main",
+                                       characters.blank_card("Mara Chen"))[0]
+    vance = characters.create_character(croot, "Mara Vance", "main",
+                                        characters.blank_card("Mara Vance"))[0]
+    sid = scenes.create_scene(cid, "Now")
+    appearances.appear(cid, sid, "characters", chen, "main", "npc")
+    appearances.appear(cid, sid, "characters", vance, "main", "npc")
+    playstate.write_state(croot, chen, playstate.compose_body(
+        "Uneasy.", "",
+        "Mara Chen fears she made a mistake.\n\nMara Vance is lying about the tally."))
+    section = _state_section(cid, sid)
+    assert "fears she made a mistake" in section     # her own interiority
+    assert "Mara Vance is lying" not in section      # the other actor, in full
+
+
+def test_a_suspicion_naming_an_honorific_card_by_given_name_is_withheld(monkeypatch, tmp_path):
+    """`Dr Mara Vance` used to yield no short alias at all, because the head was
+    an honorific — so the card was matched only in full and prose naming her the
+    way prose actually does reached the player-facing prompt."""
+    from grimoire.store import appearances, campaigns, characters, playstate, scenes, worlds
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = campaigns.create_campaign("Run", worlds.create_world("W"))
+    croot = campaigns.campaign_root(cid)
+    mara = characters.create_character(croot, "Mara", "main",
+                                       characters.blank_card("Mara"))[0]
+    card = characters.read_card(croot, mara, "main")
+    card["data"]["name"] = "Dr Mara Vance"
+    characters.update_version(croot, mara, "main", card)
+    win = characters.create_character(croot, "Winifred", "main",
+                                      characters.blank_card("Winifred"))[0]
+    sid = scenes.create_scene(cid, "Now")
+    appearances.appear(cid, sid, "characters", mara, "main", "npc")
+    appearances.appear(cid, sid, "characters", win, "main", "npc")
+    playstate.write_state(croot, win, playstate.compose_body(
+        "Impatient.", "", "Mara is hiding the ledger.\n\nThe Guild sold the manifest."))
+    section = _state_section(cid, sid)
+    assert "hiding the ledger" not in section
+    assert "The Guild sold the manifest." in section   # the absent world still shows
+
+
+def test_the_short_alias_is_only_derived_from_a_personal_name():
+    from grimoire.store.context import world_state
+    assert world_state._short_alias("Winifred Vance") == "Winifred"
+    assert world_state._short_alias("Seraphine Vale") == "Seraphine"
+    assert world_state._short_alias("Mara") == ""                    # nothing to shorten
+    # An ARTICLE ends the search: what follows one is a common noun, and
+    # deriving `Woman` here is the over-match that once emptied the block.
+    assert world_state._short_alias("The Woman on the Pier") == ""
+    assert world_state._short_alias("The Woman") == ""
+    # An HONORIFIC is stepped over: what follows a title is a name. These three
+    # used to return "" — the honorific was treated as a dead end, so a card
+    # named `Dr Mara Vance` was matched only in full and "Mara is hiding the
+    # ledger" reached the prompt.
+    assert world_state._short_alias("Dr Mara Vance") == "Mara"
+    assert world_state._short_alias("Lady Winifred") == "Winifred"
+    assert world_state._short_alias("Dr Vance") == "Vance"
+    # ...punctuated the conventional way too. Without stripping the period,
+    # `Dr.` matched neither set and came back as the alias itself: it missed the
+    # name it precedes and matched every line abbreviating a doctor.
+    assert world_state._short_alias("Dr. Mara Vance") == "Mara"
+    assert world_state._short_alias("St. Peter Vale") == "Peter"
+    # Two characters is a name; one is an initial, and `J` would match every
+    # capital J standing alone. Three used to be the floor as a proxy for "not a
+    # short ordinary word" — a job `_mentions` now does with case.
+    assert world_state._short_alias("Jo Li") == "Jo"
+    assert world_state._short_alias("Dr. Li Chen") == "Li"
+    assert world_state._short_alias("J Smith") == ""
+
+
+def test_a_four_token_personal_name_still_yields_its_given_name():
+    """The token cap was a proxy that failed on the thing it was meant to allow.
+    A given name, a middle name and two surnames is an ordinary personal name,
+    and capping at three meant the card matched only in full while prose said
+    "Winifred is hiding the ledger". What rejects an epithet is the ARTICLE."""
+    from grimoire.store.context import world_state
+    assert world_state._short_alias("Winifred Mara Saltmarch Vale") == "Winifred"
+    assert world_state._short_alias("Dr. Winifred Mara Saltmarch Vale") == "Winifred"
+    # ...and an epithet is still rejected at any length. Lower-cased, by the
+    # capitalization rule; title-cased, by the article wherever it sits.
+    assert world_state._short_alias("The Woman on the Pier") == ""
+    assert world_state._short_alias("Woman Of The Pier") == ""
+    assert world_state._short_alias("Keeper Of The Flame") == ""
+    assert world_state._short_alias("Dr.") == ""            # a bare honorific names nobody
+
+
+def test_a_suspicion_naming_the_given_name_of_a_long_named_actor_is_withheld(
+        monkeypatch, tmp_path):
+    """End to end: the alias has to reach the filter, not merely exist."""
+    from grimoire.store import appearances, campaigns, characters, playstate, scenes, worlds
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = campaigns.create_campaign("Run", worlds.create_world("W"))
+    croot = campaigns.campaign_root(cid)
+    long_name = "Winifred Mara Saltmarch Vale"
+    watcher = characters.create_character(croot, "Seraphine", "main",
+                                          characters.blank_card("Seraphine"))[0]
+    named = characters.create_character(croot, long_name, "main",
+                                        characters.blank_card(long_name))[0]
+    sid = scenes.create_scene(cid, "Now")
+    appearances.appear(cid, sid, "characters", watcher, "main", "npc")
+    appearances.appear(cid, sid, "characters", named, "main", "npc")
+    playstate.write_state(croot, watcher, playstate.compose_body(
+        "Wary.", "", "Winifred is hiding the ledger.\n\nThe Guild watches the pier."))
+    section = _state_section(cid, sid)
+    assert "hiding the ledger" not in section
+    assert "The Guild watches the pier." in section
+
+
+def test_a_bullet_under_a_named_heading_goes_with_the_heading(monkeypatch, tmp_path):
+    """The natural way to write these is a subject line and bullets under it.
+    Each bullet is its own entry and names nobody, so on its own verdict it
+    survived — publishing the private half of a suspicion whose subject was
+    withheld one line above. Same leak `_entries` exists to close, arriving
+    through the list marker instead of the line break."""
+    from grimoire.store import playstate
+    cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
+    playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
+        "Wary.", "",
+        "Winifred:\n"
+        "- is hiding the ledger\n"
+        "- plans to sell it at the pier\n"
+        "\n"
+        "Mara sold the manifest."))
+    section = _state_section(cid, sid)
+    assert "hiding the ledger" not in section
+    assert "plans to sell it" not in section          # every bullet under the heading
+    assert "Mara sold the manifest." in section       # the block after it is untouched
+
+
+def test_a_heading_that_names_nobody_does_not_cost_its_other_bullets(monkeypatch, tmp_path):
+    """Governed, not merged. Merging the block into one entry would bind an
+    innocuous `Suspicions:` to every bullet under it, so one named suspicion
+    would cost the whole list — and an unnamed heading is exactly where entry
+    granularity is worth keeping."""
+    from grimoire.store import playstate
+    cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
+    playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
+        "Wary.", "",
+        "Suspicions:\n"
+        "- Winifred is lying about the crates\n"
+        "- Mara sold the manifest"))
+    section = _state_section(cid, sid)
+    assert "Winifred is lying" not in section
+    assert "Suspicions:" in section
+    assert "Mara sold the manifest" in section
+
+
+def test_a_nested_bullet_goes_with_the_bullet_that_heads_it(monkeypatch, tmp_path):
+    """The chain is walked, not just one level: a sub-bullet under a named
+    bullet is as private as the bullet above it."""
+    from grimoire.store import playstate
+    cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
+    playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
+        "Wary.", "",
+        "Suspicions:\n"
+        "- Winifred:\n"
+        "  - keeps the ledger in the boathouse\n"
+        "- Mara sold the manifest"))
+    section = _state_section(cid, sid)
+    assert "boathouse" not in section
+    assert "Mara sold the manifest" in section
+
+
+def test_a_lowercase_particle_does_not_disqualify_a_personal_name():
+    """Nobiliary and patronymic particles are lower-case by convention INSIDE a
+    name. Requiring every token to be capitalized rejected those names whole, so
+    the card matched only in full while prose said the given name."""
+    from grimoire.store.context import world_state
+    assert world_state._short_alias("Winifred van Saltmarch") == "Winifred"
+    assert world_state._short_alias("Mara de la Vance") == "Mara"
+    assert world_state._short_alias("Dr. Seraphine von Realm") == "Seraphine"
+    # The head is still required to be capitalized, so a particle can never
+    # become the alias itself...
+    assert world_state._short_alias("van Saltmarch") == ""
+    # ...and the article rule is unchanged: `de la` passes, `the` does not.
+    assert world_state._short_alias("Woman of the Pier") == ""
+    assert world_state._short_alias("The Woman on the Pier") == ""
+
+
+def test_a_suspicion_naming_the_given_name_of_a_particled_actor_is_withheld(
+        monkeypatch, tmp_path):
+    from grimoire.store import appearances, campaigns, characters, playstate, scenes, worlds
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = campaigns.create_campaign("Run", worlds.create_world("W"))
+    croot = campaigns.campaign_root(cid)
+    particled = "Winifred van Saltmarch"
+    watcher = characters.create_character(croot, "Seraphine", "main",
+                                          characters.blank_card("Seraphine"))[0]
+    named = characters.create_character(croot, particled, "main",
+                                        characters.blank_card(particled))[0]
+    sid = scenes.create_scene(cid, "Now")
+    appearances.appear(cid, sid, "characters", watcher, "main", "npc")
+    appearances.appear(cid, sid, "characters", named, "main", "npc")
+    playstate.write_state(croot, watcher, playstate.compose_body(
+        "Wary.", "", "Winifred is hiding the ledger.\n\nThe Guild watches the pier."))
+    section = _state_section(cid, sid)
+    assert "hiding the ledger" not in section
+    assert "The Guild watches the pier." in section
+
+
+def test_an_emphasized_heading_still_governs_its_bullets(monkeypatch, tmp_path):
+    """These blocks are authored prose, and `**Winifred:**` is how a subject line
+    is conventionally written. A bare `endswith(":")` saw the closing `**`,
+    called it an ordinary line, and left the bullets ungoverned — so the subject
+    was withheld and the detail under it published."""
+    from grimoire.store import playstate
+    cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
+    playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
+        "Wary.", "",
+        "**Winifred:**\n"
+        "- is hiding the ledger\n"
+        "\n"
+        "_Mara:_\n"
+        "- sold the manifest"))
+    section = _state_section(cid, sid)
+    assert "hiding the ledger" not in section
+    assert "sold the manifest" in section      # an absent character's block is untouched
+
+
+def test_returning_to_the_outer_level_keeps_the_outer_heading(monkeypatch, tmp_path):
+    """A list can descend into a sub-heading and come back out. Tracking one
+    innermost heading, the way back out reset to "governed by nobody" instead of
+    to the heading it never left, so the last bullet — a suspicion about a
+    present actor, written without her name because the heading carried it —
+    came back ungoverned and reached the prompt."""
+    from grimoire.store import playstate
+    cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
+    playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
+        "Wary.", "",
+        "Winifred:\n"
+        "- Plans:\n"
+        "  - steal the ledger\n"
+        "- knows the truth about the pier\n"
+        "\n"
+        "Mara sold the manifest."))
+    section = _state_section(cid, sid)
+    assert "steal the ledger" not in section          # the nested bullet
+    assert "knows the truth" not in section           # and the one that came back out
+    assert "Mara sold the manifest." in section       # the block after it is untouched
+
+
+def test_a_sibling_sub_list_does_not_inherit_the_previous_sub_heading(monkeypatch, tmp_path):
+    """The pop is by indentation, so a sub-heading governs its own children and
+    stops there — an unnamed heading's bullets are not withheld because the
+    sub-heading beside it named someone."""
+    from grimoire.store import playstate
+    cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
+    playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
+        "Wary.", "",
+        "Suspicions:\n"
+        "- Winifred:\n"
+        "  - keeps the ledger in the boathouse\n"
+        "- The Guild:\n"
+        "  - is watching the pier"))
+    section = _state_section(cid, sid)
+    assert "boathouse" not in section
+    assert "is watching the pier" in section
+
+
+def test_the_surname_is_a_form_too():
+    """Prose refers to a character by surname as readily as by given name, and a
+    form set holding only the full name and the given name matched neither."""
+    from grimoire.store.context import world_state
+    assert world_state._surname_alias("Dr. Mara Vance") == "Vance"
+    assert world_state._surname_alias("Winifred Mara Saltmarch Vale") == "Vale"
+    assert world_state._surname_alias("Winifred van Saltmarch") == "Saltmarch"
+    assert world_state._surname_alias("Mara") == ""              # nothing follows it
+    assert world_state._surname_alias("Dr Vance") == ""          # already the given form
+    assert world_state._surname_alias("The Woman on the Pier") == ""   # not a name at all
+    assert world_state._forms({"Dr. Mara Vance"}) == {"Dr. Mara Vance", "Mara", "Vance"}
+
+
+def test_a_suspicion_naming_only_the_surname_is_withheld(monkeypatch, tmp_path):
+    from grimoire.store import appearances, campaigns, characters, playstate, scenes, worlds
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = campaigns.create_campaign("Run", worlds.create_world("W"))
+    croot = campaigns.campaign_root(cid)
+    full = "Dr. Mara Vance"
+    watcher = characters.create_character(croot, "Seraphine", "main",
+                                          characters.blank_card("Seraphine"))[0]
+    named = characters.create_character(croot, full, "main", characters.blank_card(full))[0]
+    sid = scenes.create_scene(cid, "Now")
+    appearances.appear(cid, sid, "characters", watcher, "main", "npc")
+    appearances.appear(cid, sid, "characters", named, "main", "npc")
+    playstate.write_state(croot, watcher, playstate.compose_body(
+        "Wary.", "", "Vance is hiding the ledger.\n\nThe Guild watches the pier."))
+    section = _state_section(cid, sid)
+    assert "hiding the ledger" not in section
+    assert "The Guild watches the pier." in section
+
+
+def test_a_punctuated_initial_is_still_not_an_alias():
+    """`J.` is two characters and one letter. Measuring the RAW token let the
+    conventional `J. Smith` through as the alias `J.` — the initial guard,
+    defeated by the punctuation that marks it as an initial. Every capitalized
+    `J.` in another NPC's suspicion then withheld the whole entry."""
+    from grimoire.store.context import world_state
+    assert world_state._short_alias("J. Smith") == ""
+    assert world_state._short_alias("Dr. J. Smith") == ""
+    assert world_state._short_alias("J Smith") == ""
+    assert world_state._surname_alias("J. Smith") == "Smith"   # the handle it does have
+
+
+def test_a_markdown_heading_governs_the_bullets_under_it(monkeypatch, tmp_path):
+    """`## Winifred` carries no colon, and — unlike a colon heading — it is
+    conventionally separated from its own list by a blank line, so it has to
+    survive the blank that ends an ordinary paragraph."""
+    from grimoire.store import playstate
+    cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
+    playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
+        "Wary.", "",
+        "## Winifred\n"
+        "\n"
+        "- is hiding the ledger\n"
+        "\n"
+        "## The Guild\n"
+        "\n"
+        "- is watching the pier"))
+    section = _state_section(cid, sid)
+    assert "hiding the ledger" not in section
+    assert "is watching the pier" in section     # the next section ends the previous one
+
+
+def test_an_indented_plain_heading_is_popped_on_the_way_out(monkeypatch, tmp_path):
+    """The mirror of the nesting leak, and it over-hides rather than leaks: an
+    indented `Nested:` stayed open after the list returned to the outer level,
+    so a bullet that belongs to the outer heading was withheld because the
+    nested one named someone."""
+    from grimoire.store import playstate
+    cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
+    playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
+        "Wary.", "",
+        "Notes:\n"
+        "- the tide turns at dusk\n"
+        "  Winifred:\n"
+        "  - keeps the ledger in the boathouse\n"
+        "- the Guild meets on Thursdays"))
+    section = _state_section(cid, sid)
+    assert "boathouse" not in section                    # still withheld
+    assert "the Guild meets on Thursdays" in section     # but the way back out is not
+
+
+def test_a_setext_heading_governs_the_bullets_under_it(monkeypatch, tmp_path):
+    """The other standard markdown heading: the title is an ordinary line and the
+    line BELOW it makes it a heading, so it is the one form not recognizable from
+    its own line. The title was withheld and the bullets under it were not."""
+    from grimoire.store import playstate
+    cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
+    playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
+        "Wary.", "",
+        "Winifred\n"
+        "--------\n"
+        "- is hiding the ledger\n"
+        "\n"
+        "The Guild\n"
+        "=========\n"
+        "- watches the pier"))
+    section = _state_section(cid, sid)
+    assert "hiding the ledger" not in section
+    assert "watches the pier" in section          # the next heading ends the first
+
+
+def test_a_horizontal_rule_is_not_read_as_a_heading(monkeypatch, tmp_path):
+    """`---` after a blank line underlines nothing. Treating the blank as a
+    heading would govern the whole list below it by an entry that names nobody —
+    harmless here, but it would make the rule look like it did something."""
+    from grimoire.store import playstate
+    cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
+    playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
+        "Wary.", "",
+        "Winifred is lying.\n"
+        "\n"
+        "---\n"
+        "- Mara sold the manifest"))
+    section = _state_section(cid, sid)
+    assert "Winifred is lying" not in section
+    assert "Mara sold the manifest" in section
+
+
+def test_a_suspicion_naming_a_player_s_container_name_is_withheld(monkeypatch, tmp_path):
+    """A PC's container name and its locked persona name can differ. Taking only
+    the persona left a suspicion written against the canonical PC name unmatched
+    — the asymmetry with the character branch was an oversight."""
+    from grimoire.store import appearances, campaigns, characters, pcs, playstate, scenes, worlds
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = campaigns.create_campaign("Run", worlds.create_world("W"))
+    croot = campaigns.campaign_root(cid)
+    ch = characters.create_character(croot, "Seraphine", "main",
+                                     characters.blank_card("Seraphine"))[0]
+    persona = pcs.blank_persona("Winifred")
+    persona["name"] = "The Harbourmaster's Daughter"     # persona drifts from the PC name
+    pid, vid = pcs.create_pc(croot, "Winifred", [], persona=persona)
+    sid = scenes.create_scene(cid, "Now")
+    appearances.appear(cid, sid, "characters", ch, "main", "npc")
+    appearances.appear(cid, sid, "pcs", pid, vid, "player")
+    playstate.write_state(croot, ch, playstate.compose_body(
+        "Wary.", "", "Winifred is working for the Guild."))
+    assert "working for the Guild" not in _state_section(cid, sid)
+
 # ---- archive retrieval (#127) ----
 #
 # Record ids sort against the SCENE id (`before`), and real scene ids carry an

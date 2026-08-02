@@ -135,21 +135,27 @@ for label, snap, cands, off in (("empty", EMPTY_SNAP, None, False),
     check(f"suggestions user ({label})", exp[1]["content"],
           render("scene_suggestions/user.j2", s=snap, offscreen=off, greeting_candidates=cands))
 
-for label, facts, st, rel, plt, grp in (
-        ("bare", {}, None, None, None, None),
+for label, facts, st, rel, plt, grp, cmt in (
+        ("bare", {}, None, None, None, None, None),
         ("full", {"location": "Night Dock", "date": "2026-07-05",
                   "cast": ["characters/seraphine-vale", "pcs/hero"]},
          {"Seraphine Vale": "Wounded. Knows: The ledger is real."},
          "Seraphine Vale → Hero: trust 2, affection 3, tension 4 (suspects a tail)",
          "find-the-ledger: Find the ledger (open) — Hero learned it exists.",
-         "- groups/salt-circle (Salt Circle): Goals: Expand.")):
-    exp = absorb.build_prompt(transcript, facts, st, rel, plt, grp)
+         "- groups/salt-circle (Salt Circle): Goals: Expand.",
+         "the-deadline: Midnight deadline (threat, open), due midnight "
+         "— Hero was given until midnight.")):
+    exp = absorb.build_prompt(transcript, facts, st, rel, plt, grp, cmt)
     check(f"absorb system ({label})", exp[0]["content"], render("absorb/system.j2"))
     check(f"absorb user ({label})", exp[1]["content"],
           render("absorb/user.j2", facts=facts, state_snapshot=st, rel_snapshot=rel,
-                 plot_snapshot=plt, group_snapshot=grp, transcript=transcript))
+                 plot_snapshot=plt, group_snapshot=grp, commitment_snapshot=cmt,
+                 transcript=transcript))
     if grp:
         assert "Groups:" in exp[1]["content"], f"absorb user ({label}) missing Groups: head line"
+    if cmt:
+        assert "Open commitments:" in exp[1]["content"], \
+            f"absorb user ({label}) missing Open commitments: head line"
 
 msgs = [{"role": "user", "content": "hi"},
         {"role": "user", "speaker": "Hero", "content": "yo"},
@@ -178,7 +184,8 @@ assert 'prompts.render("scene/roll_declined.j2")' in routes_src, \
 # ------------------------------------------------------------- store fixture
 
 from grimoire.store import appearances as ap  # noqa: E402
-from grimoire.store import (audit, calendars, campaigns, characters, checks, config,  # noqa: E402
+from grimoire.store import (audit, calendars, campaigns, characters, checks,  # noqa: E402
+                            commitments, config,
                             dossiers as dstore, entities, groupstate, length_drift, lengths, modules, pcs,
                             playstate, plot, response_presets, scenes, sheets, styles,
                             taglines as tstore, voice_anchors as vastore,
@@ -274,6 +281,8 @@ scenes.append_message(cid, sid, "user", "I follow her.", speaker="Hero")
 relationships.set_feeling(cid, f"characters:{sera}", f"pcs:{pid}", 2, 3, 4, "suspects a tail")
 relationships.set_bond(cid, f"characters:{sera}", f"pcs:{pid}", "reluctant allies")
 plot.set_movement(cid, "find-the-ledger", "Find the ledger", "open", "Hero learned it exists.", sid)
+commitments.set_movement(cid, "the-deadline", "Midnight deadline", "threat", "open",
+                         "midnight", "Hero was given until midnight.", sid)
 chronicle.absorb(cid, {"id": sid0, "one_line": "Hero met Kessler.",
                        "summary": "Hero met Doc Kessler in his clinic and traded a favor for gossip.",
                        "keywords": ["clinic"], "cast": [f"characters/{kessler}"],
@@ -515,7 +524,8 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
             "states": states, "relationship_lines": relationship_lines, "players": players,
             "ref_names": ref_names, "refs": refs, "story_entries": story_entries,
             "archive_entries": archive_entries,
-            "plot_lines": plot.render_open(cid, with_id=False), "today": today,
+            "plot_lines": plot.render_open(cid, with_id=False),
+            "commitment_lines": commitments.render_open(cid, with_id=False), "today": today,
             "weather": weather_now,
             "current_setting": current_setting, "world_info_bodies": world_info_bodies,
             "group_states": group_states,
@@ -553,6 +563,7 @@ def rendered_system(data: dict, opener: bool = False) -> str:
               "scene/sections/story_so_far/" + ("full" if data["story_full"] else "compact") + ".j2",
               "scene/sections/archive.j2",
               "scene/sections/plot_threads.j2",
+              "scene/sections/commitments.j2",
               "scene/sections/today.j2",
               "scene/sections/weather.j2",
               "scene/sections/current_setting.j2",
@@ -668,10 +679,12 @@ st_snap = absorb.state_snapshot(cid, sid)
 rel_snap = absorb.relationships_snapshot(cid, sid)
 plot_snap = absorb.plot_snapshot(cid)
 grp_snap = absorb.group_snapshot(cid)
-exp = absorb.build_prompt(tr, facts, st_snap, rel_snap, plot_snap, grp_snap)
+cmt_snap = absorb.commitment_snapshot(cid)
+exp = absorb.build_prompt(tr, facts, st_snap, rel_snap, plot_snap, grp_snap, cmt_snap)
 check("absorb user (store)", exp[1]["content"],
       render("absorb/user.j2", facts=facts, state_snapshot=st_snap, rel_snapshot=rel_snap,
-             plot_snapshot=plot_snap, group_snapshot=grp_snap, transcript=tr))
+             plot_snapshot=plot_snap, group_snapshot=grp_snap,
+             commitment_snapshot=cmt_snap, transcript=tr))
 for name, line in st_snap.items():
     st = playstate.read_state(croot, sera)
     check(f"state snapshot line (store, {name})", line,
@@ -689,6 +702,12 @@ check("plot lines (context form)", "\n".join(plot.render_open(cid, with_id=False
       "\n".join(render("snippets/plot_thread_line/context.j2", t=t) for t in threads))
 check("plot lines (absorb form)", "\n".join(plot.render_open(cid, with_id=True)),
       "\n".join(render("snippets/plot_thread_line/absorb.j2", t=t) for t in threads))
+
+owed = commitments.open_commitments(cid)
+check("commitment lines (context form)", "\n".join(commitments.render_open(cid, with_id=False)),
+      "\n".join(render("snippets/commitment_line/context.j2", c=c) for c in owed))
+check("commitment lines (absorb form)", "\n".join(commitments.render_open(cid, with_id=True)),
+      "\n".join(render("snippets/commitment_line/absorb.j2", c=c) for c in owed))
 
 # ---------------------------------------------------------------------------
 
