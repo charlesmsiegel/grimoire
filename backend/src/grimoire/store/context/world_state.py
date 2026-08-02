@@ -481,6 +481,17 @@ def _heads_a_list(stripped: str) -> bool:
     return bool(_ATX.match(stripped)) or stripped.rstrip(_EMPHASIS_TAIL).endswith(":")
 
 
+def _nested(open_heads: list, indent: int) -> int:
+    """The indent an ATX heading is nested at, or -1 when it is not in a list.
+
+    A heading is inside a list item when a bullet or colon heading SHALLOWER
+    than it is open -- that is what "written under it" means. Recorded at push
+    time because the enclosing governors are in scope exactly then; `_outdented`
+    reads it back.
+    """
+    return indent if any(h[2] != "atx" and h[1] < indent for h in open_heads) else -1
+
+
 def _outdented(top: tuple, indent: int) -> bool:
     """Whether an open ATX heading is closed by a line at `indent`.
 
@@ -489,10 +500,17 @@ def _outdented(top: tuple, indent: int) -> bool:
     list item belongs to that item, and the item ends where the indentation
     does: without this, `- Winifred` / `  ### Plans` left `Plans` governing
     every later line in the block, so unrelated statements outside the list were
-    withheld along with it. Only an indented heading can be closed this way; one
-    at column zero is a section of the document.
+    withheld along with it.
+
+    What makes a heading nested is the open LIST it sits inside, not its column.
+    Markdown allows a top-level heading up to three leading spaces, so `  ###
+    Winifred` at the start of a block is an ordinary section -- and closing it
+    because a later column-zero bullet is "less indented" withheld the line that
+    named her while publishing the subjectless bullet under it. The decision is
+    made once, where the heading is pushed and the enclosing governors are in
+    scope; -1 means "not inside a list" and never closes this way.
     """
-    return top[2] == "atx" and top[4] > indent
+    return top[2] == "atx" and top[4] >= 0 and top[4] > indent
 
 
 def _entries(suspects: str) -> list[list[str]]:
@@ -669,7 +687,7 @@ def _entries(suspects: str) -> list[list[str]]:
             # the second `Winifred` / `-------` block in a file would be
             # withheld along with the first.
             heads[len(out) - 1] = open_heads[-1][0] if open_heads else -1
-            open_heads.append((len(out) - 1, level, "atx", depth, indent))
+            open_heads.append((len(out) - 1, level, "atx", depth, _nested(open_heads, indent)))
         if atx:
             # A section ends at the next heading of its own level or shallower,
             # and takes every colon heading and bullet inside it along -- but
@@ -735,7 +753,7 @@ def _entries(suspects: str) -> list[list[str]]:
             # continuation still heads the bullets below it.
             open_heads.append((len(out) - 1, len(atx.group(1)) if atx else indent,
                                "atx" if atx else ("item" if item else "colon"),
-                               depth, indent))
+                               depth, _nested(open_heads, indent) if atx else indent))
     return list(zip(out, heads))
 
 

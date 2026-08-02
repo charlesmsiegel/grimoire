@@ -681,14 +681,105 @@ def test_a_failure_after_the_timeline_does_not_file_it_twice(monkeypatch, tmp_pa
         asyncio.run(ingest_scene.ingest_one_scene(
             cid, _PARTIAL_SCENE, FakeClient(_PARTIAL_OUTPUT), conn))
     assert timeline.read_text(encoding="utf-8").count("swore on the stair") == 1
-    # The step that cannot be repeated is recorded where the resume will read it.
-    assert ingest_scene.load_manifest(cid)[_PARTIAL_SCENE["key"]]["timeline_done"] is True
 
     again = asyncio.run(ingest_scene.ingest_one_scene(
         cid, _PARTIAL_SCENE, FakeClient(_PARTIAL_OUTPUT), conn))
     assert again["status"] == "done"
     assert timeline.read_text(encoding="utf-8").count("swore on the stair") == 1
     assert len(scenes.list_scenes(cid)) == 1          # and still no duplicate scene
+
+
+def test_the_timeline_is_not_refiled_even_with_no_manifest_record(monkeypatch, tmp_path):
+    """A flag written after the append cannot cover the case where the flag's
+    OWN write is what failed — the window just moves. So the resume asks the
+    artifact instead: here the manifest is wiped between the failure and the
+    retry, which is the worst version of that, and the events still land once."""
+    from grimoire.store import campaigns as campaigns_store, worlds as worlds_store
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    ingest_scene.ensure_character(cid, {"name": "Marisol"})
+    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+    timeline = campaigns_store.campaign_root(cid) / "timeline.md"
+
+    real_mark = ingest_scene.scenes.mark_absorbed
+
+    def _fails_once(*a, **kw):
+        monkeypatch.setattr(ingest_scene.scenes, "mark_absorbed", real_mark)
+        raise OSError("scene file temporarily unwritable")
+
+    monkeypatch.setattr(ingest_scene.scenes, "mark_absorbed", _fails_once)
+    with pytest.raises(OSError):
+        asyncio.run(ingest_scene.ingest_one_scene(
+            cid, _PARTIAL_SCENE, FakeClient(_PARTIAL_OUTPUT), conn))
+
+    sid = ingest_scene.load_manifest(cid)[_PARTIAL_SCENE["key"]]["sid"]
+    ingest_scene.save_manifest(cid, {})              # every note about it, gone
+    ingest_scene.save_manifest(cid, {_PARTIAL_SCENE["key"]: {"status": "in_progress",
+                                                             "sid": sid}})
+
+    asyncio.run(ingest_scene.ingest_one_scene(
+        cid, _PARTIAL_SCENE, FakeClient(_PARTIAL_OUTPUT), conn))
+    assert timeline.read_text(encoding="utf-8").count("swore on the stair") == 1
+
+
+def test_the_timeline_check_agrees_with_the_store(monkeypatch, tmp_path):
+    """The check renders the store's own line format, so a change on either side
+    has to fail HERE rather than silently making the check stop matching — which
+    would bring the duplicate events back with nothing to catch them."""
+    from grimoire.store import chronicle, worlds as worlds_store
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    events = [{"date": "Firstmonth 3", "text": "Marisol swore on the stair."},
+              {"date": "Firstmonth 4", "text": "The gate held."}]
+
+    assert ingest_scene._timeline_already_has(cid, events) is False   # nothing written yet
+    chronicle.append_timeline(cid, events)
+    assert ingest_scene._timeline_already_has(cid, events) is True
+
+    # Only as a contiguous block at the END: anything appended after it means
+    # this batch is no longer what the tail records.
+    chronicle.append_timeline(cid, [{"date": "Firstmonth 5", "text": "Elsewhere."}])
+    assert ingest_scene._timeline_already_has(cid, events) is False
+
+
+def test_a_resume_uses_the_saved_extraction(monkeypatch, tmp_path):
+    """The model is nondeterministic, so re-extracting on a retry pairs the new
+    chronicle record and edits with the OLD timeline events — and drops the
+    events that exist only in the new one. The extraction that produced what
+    landed is the one the resume has to finish."""
+    from grimoire.store import campaigns as campaigns_store, chronicle, worlds as worlds_store
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    ingest_scene.ensure_character(cid, {"name": "Marisol"})
+    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+    timeline = campaigns_store.campaign_root(cid) / "timeline.md"
+
+    real_mark = ingest_scene.scenes.mark_absorbed
+
+    def _fails_once(*a, **kw):
+        monkeypatch.setattr(ingest_scene.scenes, "mark_absorbed", real_mark)
+        raise OSError("scene file temporarily unwritable")
+
+    monkeypatch.setattr(ingest_scene.scenes, "mark_absorbed", _fails_once)
+    with pytest.raises(OSError):
+        asyncio.run(ingest_scene.ingest_one_scene(
+            cid, _PARTIAL_SCENE, FakeClient(_PARTIAL_OUTPUT), conn))
+    assert ingest_scene.load_manifest(cid)[_PARTIAL_SCENE["key"]]["parsed"]["one_line"] \
+        == "Marisol needles Julian."
+
+    # A second, DIFFERENT extraction is offered and must not be bought.
+    other = json_module.loads(_PARTIAL_OUTPUT)
+    other["one_line"] = "A different reading of the same scene."
+    other["timeline_events"] = [{"date": "Firstmonth 9", "text": "Something else entirely."}]
+    client = FakeClient(json_module.dumps(other))
+    done = asyncio.run(ingest_scene.ingest_one_scene(cid, _PARTIAL_SCENE, client, conn))
+
+    assert client.calls == []                                   # no second extraction
+    assert done["one_line"] == "Marisol needles Julian."
+    body = timeline.read_text(encoding="utf-8")
+    assert body.count("swore on the stair") == 1
+    assert "Something else entirely" not in body                # B never half-lands
+    assert chronicle.read_chronicle(cid)[done["sid"]]["one_line"] == "Marisol needles Julian."
 
 
 def test_a_vanished_scene_is_persisted_so_it_can_be_resolved(monkeypatch, tmp_path):
