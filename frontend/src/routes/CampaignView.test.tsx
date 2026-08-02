@@ -1743,6 +1743,44 @@ test("the swipe control renders on a windowed page, where indices are absolute",
   expect(await screen.findByText("2/2")).toBeInTheDocument();
 });
 
+test("a failed post-swap read does not retry the reader back onto the old scene", async () => {
+  // The retry is a second `selectScene`, and `selectScene` calls `setActive` —
+  // so once the reader has moved on it does not merely refresh a scene nobody
+  // is looking at, it navigates them back to it.
+  let rejectRefresh: (v: any) => void = () => {};
+  (api.listScenes as any).mockResolvedValue([
+    { id: "s1", title: "One", model: "", created: "", updated: "" },
+    { id: "s2", title: "Two", model: "", created: "", updated: "" },
+  ]);
+  const page = (c: string) => ({ meta: {}, messages: [
+    { role: "user", content: "hi" },
+    { role: "assistant", content: c === "s1" ? "a reply" : "the other scene" }] });
+  let firstLoadDone = false;
+  (api.getScene as any).mockImplementation(async (_c: string, s: string) => {
+    // the post-swap read-back — the only s1 read after the initial load
+    if (s === "s1" && firstLoadDone) return new Promise((_r, rej) => { rejectRefresh = rej; });
+    if (s === "s1") firstLoadDone = true;
+    return page(s);
+  });
+  (api.getAlternates as any).mockResolvedValue({
+    active: 1, alternates: [ALT("old"), ALT("a reply")] });
+  renderCampaign();
+  await screen.findByText("2/2");
+
+  fireEvent.click(screen.getByRole("button", { name: /previous alternate/i }));
+  await waitFor(() => expect(api.pickAlternate).toHaveBeenCalled());
+  fireEvent.click(await screen.findByText(/· Two$/));
+  await screen.findByText("the other scene");
+  const reads = (api.getScene as any).mock.calls.length;
+
+  rejectRefresh({ detail: "scene read failed" });   // s1's read-back gives up
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+  expect((api.getScene as any).mock.calls.length).toBe(reads);   // no retry issued
+  expect(screen.getByText(/· Two$/).closest(".row")).toHaveClass("active");
+  expect(screen.queryByText(/could not be re-read/)).toBeNull();
+});
+
 test("a swap that fails after the user moved on does not banner the new scene", async () => {
   // Switching scenes clears the banner on purpose — one scene's failure must
   // not offer its Retry against another. A swap rejecting afterwards put it

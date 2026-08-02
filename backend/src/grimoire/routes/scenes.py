@@ -569,7 +569,24 @@ def post_scene_alternate(cid: str, sid: str, vid: str):
             # No second repair here, unlike the partial-promotion path above:
             # the fallback there is to retire the decision, and retiring it is
             # precisely what has just failed.
-            _put_back(cid, sid, showing)
+            if showing is not None:
+                _put_back(cid, sid, showing)
+            else:
+                # The slot was EMPTY and `promote` has just filled it, so
+                # putting it back means emptying it again — there is no take to
+                # promote, and `_put_back` correctly reports nothing to do.
+                # Without this the reader is left with the archived take on
+                # screen beside a decision that was produced with the slot
+                # empty: the same mismatch the branch above exists to prevent,
+                # reached from the state a reroll that emitted a fence and no
+                # narration leaves behind.
+                #
+                # Safe to aim at the tail: the lock has been held since before
+                # `promote`, so the trailing run is the one it just appended.
+                try:
+                    store.scenes.remove_trailing_assistant_run(cid, sid)
+                except (OSError, store.scenes.TurnSizesDesynced, IndexError):
+                    pass    # the original failure is the one worth reporting
             raise
     return {"ok": True}
 
