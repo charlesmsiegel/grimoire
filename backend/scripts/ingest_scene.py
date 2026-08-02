@@ -153,6 +153,14 @@ def _timeline_already_has(cid: str, events: list[dict]) -> bool:
     The whole batch must match as a CONTIGUOUS block at the end. Matching
     anywhere would drop a batch that legitimately repeats an earlier one, and
     matching per line would drop the half of a batch that happens to recur.
+
+    Asked ONLY when resuming -- see `apply_scene`. Tail equality cannot tell a
+    retry from a new scene whose events repeat the batch before it, and two
+    consecutive scenes can honestly extract the same date and wording; on a
+    FIRST attempt this check would then skip the append and lose that scene's
+    events outright, which is worse than the duplicate it exists to prevent.
+    Scene identity decides whether to ask, and the artifact answers.
+
     Residual: a concurrent web absorb that appends between the crash and the
     resume moves this block off the tail, and the events are filed twice -- the
     behaviour before this fix, in a narrower window, rather than a new loss.
@@ -167,8 +175,8 @@ def _timeline_already_has(cid: str, events: list[dict]) -> bool:
     return have[-len(want):] == want
 
 
-def apply_scene(cid: str, sid: str, parsed: dict,
-                edits: list[dict]) -> tuple[list[str], list[dict]]:
+def apply_scene(cid: str, sid: str, parsed: dict, edits: list[dict],
+                resuming: bool = False) -> tuple[list[str], list[dict]]:
     """Write the scene's absorb through, returning what landed AND what did not.
 
     `append_timeline` is the one step here that APPENDS, where the chronicle
@@ -206,7 +214,11 @@ def apply_scene(cid: str, sid: str, parsed: dict,
         chronicle.absorb(cid, {"id": sid, "one_line": parsed["one_line"],
                                "summary": parsed["summary"],
                                "keywords": parsed["keywords"], **facts})
-        if not _timeline_already_has(cid, parsed["timeline_events"]):
+        # `resuming` is what makes the check safe: only a run finishing a scene
+        # a PREVIOUS run started can have already filed these events. A first
+        # attempt always appends, so a scene whose events legitimately repeat
+        # the one before it is not mistaken for a retry of it.
+        if not (resuming and _timeline_already_has(cid, parsed["timeline_events"])):
             chronicle.append_timeline(cid, parsed["timeline_events"])
         scenes.mark_absorbed(cid, sid, parsed["one_line"], parsed["summary"])
         return absorb.apply_edits(cid, edits, sid)
@@ -364,8 +376,10 @@ async def ingest_one_scene(cid: str, scene: dict, client: LLMClient, conn: dict)
         sid = entry["sid"]
         one_line = entry.get("one_line", "")
         # Carried, not re-derived: a retry that leaves the scene incomplete
-        # again must keep the extraction its timeline was written from.
+        # again must keep the extraction its timeline was written from, and the
+        # edits whose `before` records what the proposal actually saw.
         parsed = entry.get("parsed")
+        edits_taken = entry.get("edits")
         try:
             applied, failures = retry_edits(cid, sid, pending)
         except SceneVanished:
@@ -414,19 +428,33 @@ async def ingest_one_scene(cid: str, scene: dict, client: LLMClient, conn: dict)
         # `materialize` is re-run against the CURRENT store, so a record that
         # moved in between is judged fresh.
         stored = (entry or {}).get("parsed")
-        if isinstance(stored, dict):
+        stored_edits = (entry or {}).get("edits")
+        resuming = isinstance(stored, dict)
+        if resuming:
             parsed = stored
-            edits = absorb.materialize(cid, sid, parsed)
+            # The EDITS are resumed too, not re-materialized. Re-running
+            # `materialize` against the store as it is now takes each record's
+            # CURRENT value as the proposal's `before` -- so a movement another
+            # save made in between becomes the basis the stale row was written
+            # against instead of the conflict it is, and `apply_edits` waves it
+            # through: an older scene's beat appended after a newer one, or a
+            # commitment reopened after it was fulfilled. The whole point of
+            # `before` is that it records what the reviewer's proposal actually
+            # saw. (I argued the opposite one round ago; that was wrong, and
+            # this is why.)
+            edits = stored_edits if isinstance(stored_edits, list) \
+                else absorb.materialize(cid, sid, parsed)
         else:
             result = await run_absorb(cid, sid, client, conn)
             parsed, edits = result["parsed"], result["edits"]
             manifest[key] = {**(manifest.get(key) or {}), "status": "in_progress",
-                             "sid": sid, "parsed": parsed}
+                             "sid": sid, "parsed": parsed, "edits": edits}
             save_manifest(cid, manifest)
         one_line = parsed["one_line"]
+        edits_taken = edits
 
         try:
-            applied, failures = apply_scene(cid, sid, parsed, edits)
+            applied, failures = apply_scene(cid, sid, parsed, edits, resuming=resuming)
         except SceneVanished:
             return _record_vanished(cid, manifest, key, sid)
         pending = _unapplied(edits, failures)
@@ -446,6 +474,8 @@ async def ingest_one_scene(cid: str, scene: dict, client: LLMClient, conn: dict)
         # one that disagrees with what already landed.
         if isinstance(parsed, dict):
             manifest[key]["parsed"] = parsed
+        if isinstance(edits_taken, list):
+            manifest[key]["edits"] = edits_taken
         manifest[key]["failures"] = failures
         if pending:   # omitted when nothing is replayable, which is what the resume reads
             manifest[key]["pending"] = pending
