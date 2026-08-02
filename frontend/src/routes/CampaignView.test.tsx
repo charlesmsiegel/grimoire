@@ -119,7 +119,8 @@ beforeEach(() => {
   (api.addToCast as any).mockResolvedValue({ ok: true });
   (api.removeFromCast as any).mockResolvedValue({ ok: true });
   (api.getSceneLocation as any).mockResolvedValue({ current: null, visited: [] });
-  (api.getSceneContext as any).mockResolvedValue({ model: "m", total_tokens: 0, sections: [] });
+  (api.getSceneContext as any).mockResolvedValue({ model: "m", total_tokens: 0,
+    dropped_tokens: 0, budget_tokens: 0, sections: [] });
   (api.getCalendarConfig as any).mockResolvedValue({
     primary: { provider: "gregorian", region: "US", custom_holidays: [], anchor: null },
     secondary: null, confirmed: true });

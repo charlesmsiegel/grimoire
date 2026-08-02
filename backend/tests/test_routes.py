@@ -1062,6 +1062,36 @@ def test_scene_context_breakdown(client):
     assert "Character descriptions" in labels
     assert all(s["tokens"] > 0 for s in body["sections"])
     assert body["total_tokens"] == sum(s["tokens"] for s in body["sections"])
+    # no budget configured -> nothing is dropped and the packer is inert
+    assert body["budget_tokens"] == 0
+    assert body["dropped_tokens"] == 0
+    assert all(s["dropped"] is False and s["tier"] for s in body["sections"])
+
+
+def test_scene_context_reports_what_the_budget_dropped(client):
+    """The breakdown must account for a drop, not hide it: the dropped section
+    keeps its text and its tokens move out of the total that was sent."""
+    wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    # Alternating roles, and enough of them: the history is the bulk of the
+    # prompt and deeper than the trim floor. Roles have to alternate because
+    # _project_history merges consecutive same-role turns into one message,
+    # and it is the merged list the packer trims.
+    for n in range(6):
+        store.scenes.append_message(cid, sid, "user" if n % 2 == 0 else "assistant",
+                                    f"Turn {n} on the Saltmarch road. " * 40)
+    before = client.get(f"/api/campaigns/{cid}/scenes/{sid}/context").json()
+    client.put("/api/config", json={"context_budget": str(before["total_tokens"] // 2)})
+
+    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/context").json()
+    assert body["budget_tokens"] == before["total_tokens"] // 2
+    dropped = [s for s in body["sections"] if s["dropped"]]
+    trimmed = [s for s in body["sections"] if s["trimmed"]]
+    assert dropped or trimmed, "a halved budget dropped nothing"
+    assert all(s["text"] for s in dropped)                       # still inspectable
+    assert body["dropped_tokens"] == sum(s["tokens"] for s in dropped)
+    assert body["total_tokens"] == sum(s["tokens"] for s in body["sections"] if not s["dropped"])
+    assert body["total_tokens"] < before["total_tokens"]
 
 
 def test_edit_message_route(client):

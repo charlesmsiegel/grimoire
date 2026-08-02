@@ -43,13 +43,13 @@ def test_assemble_omits_weather_without_a_moment(monkeypatch, tmp_path):
 
 
 def test_weather_reaches_the_system_prompt(monkeypatch, tmp_path):
-    # _SECTIONS is only the token-breakdown view; the prompt itself comes from
-    # system.j2's hard-coded include chain. Registering in one and not the
-    # other yields a weather line in the breakdown and in no actual prompt.
+    # Registering a section in the breakdown and not in the prompt used to be
+    # possible -- they were two render paths -- and this test caught it. Both
+    # now come off `_SECTIONS`, so the assertion moves to the built prompt
+    # itself, which is what the claim was always really about.
     cid, sid = scene_at(monkeypatch, tmp_path)
     data = context._assemble(cid, sid)["data"]
-    rendered = prompts.render("scene/system.j2", **data)
-    assert data["weather"]["condition"] in rendered
+    assert data["weather"]["condition"] in context.build_messages(cid, sid)[0]["content"]
 
 
 def test_weather_is_in_the_token_breakdown(monkeypatch, tmp_path):
@@ -59,5 +59,4 @@ def test_weather_is_in_the_token_breakdown(monkeypatch, tmp_path):
 
 def test_no_weather_line_appears_when_there_is_none(monkeypatch, tmp_path):
     cid, sid = scene_at(monkeypatch, tmp_path, location=False)
-    data = context._assemble(cid, sid)["data"]
-    assert "Weather:" not in prompts.render("scene/system.j2", **data)
+    assert "Weather:" not in "\n".join(m["content"] for m in context.build_messages(cid, sid))

@@ -27,6 +27,8 @@ def _public_config(cfg: dict[str, str]) -> dict:
             "assistant_label": cfg.get("assistant_label", "Grimoire"),
             "llm_timeout": cfg.get("llm_timeout", store.config.DEFAULT_LLM_TIMEOUT),
             "absorb_budget": cfg.get("absorb_budget", store.config.DEFAULT_ABSORB_BUDGET),
+            "context_budget": cfg.get("context_budget", store.config.DEFAULT_CONTEXT_BUDGET),
+            "archive_depth": cfg.get("archive_depth", store.config.DEFAULT_ARCHIVE_DEPTH),
             "active_connection_id": active["id"] if active else "",
             "active_connection": ({"id": active["id"], "kind": active["kind"], "name": active["name"]}
                                    if active else None),

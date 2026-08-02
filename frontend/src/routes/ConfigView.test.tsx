@@ -19,7 +19,7 @@ const cfg = {
   theme: "codex", system_prompt: "", quote_color: "off", user_label: "You", assistant_label: "Grimoire",
   active_connection_id: "openrouter",
   active_connection: { id: "openrouter", kind: "openrouter", name: "OpenRouter" }, ready: true,
-  llm_timeout: "120", absorb_budget: "600",
+  llm_timeout: "120", absorb_budget: "600", context_budget: "0", archive_depth: "3",
 };
 const dataDir = {
   data_dir: "/home/u/.grimoire", default: "/home/u/.grimoire",
@@ -127,6 +127,18 @@ test("edits the timeouts and saves them", async () => {
   fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
   await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith(
     expect.objectContaining({ llm_timeout: "45", absorb_budget: "300" })));
+});
+
+test("edits the context budget and recalled-scene cap and saves them", async () => {
+  renderView();
+  const budget = await screen.findByLabelText(/context budget/i);
+  expect(budget).toHaveValue("0");                       // unbounded by default
+  expect(screen.getByLabelText(/recalled scenes/i)).toHaveValue("3");
+  fireEvent.change(budget, { target: { value: "32000" } });
+  fireEvent.change(screen.getByLabelText(/recalled scenes/i), { target: { value: "5" } });
+  fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+  await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith(
+    expect.objectContaining({ context_budget: "32000", archive_depth: "5" })));
 });
 
 test("links to the Connections page to manage keys/endpoints", async () => {

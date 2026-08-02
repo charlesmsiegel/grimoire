@@ -375,8 +375,7 @@ def test_the_override_note_reaches_the_prompt(client):
                      "note": "the Wintertide storm"})
     data = context._assemble(cid, sid)["data"]
     assert data["weather"]["notes"] == ["the Wintertide storm"]
-    from grimoire import prompts
-    assert "the Wintertide storm" in prompts.render("scene/system.j2", **data)
+    assert "the Wintertide storm" in context.build_messages(cid, sid)[0]["content"]
 
 
 def test_a_reversed_range_is_rejected(client):
