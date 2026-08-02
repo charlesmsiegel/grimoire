@@ -572,6 +572,31 @@ def test_a_calendar_plugins_long_date_cannot_overflow_the_id(monkeypatch, tmp_pa
     assert len(f"{sid}.alts.json") <= 255
 
 
+def test_repad_finds_an_unclearable_destination_before_it_moves_anything(monkeypatch, tmp_path):
+    """The destination clear is allowed to fail loudly — but `repad` renames
+    every transcript before `scene_refs.repoint` runs, so discovering it there
+    means the whole campaign has already moved. Clearing up front costs the
+    request and nothing else."""
+    cid = _campaign(monkeypatch, tmp_path)
+    narrow = _scene_with_reply(cid, "Saltmarch")
+    widened = scene_ids.format_sid(1, 4, None, "saltmarch")
+    scenes_paths._alts_path(cid, widened).write_text("{}", encoding="utf-8")
+    real = pathlib.Path.unlink
+
+    def stuck(self, missing_ok=False):
+        if self == scenes_paths._alts_path(cid, widened):
+            raise PermissionError(13, "in use")
+        return real(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(pathlib.Path, "unlink", stuck)
+    with pytest.raises(OSError):
+        scenes.repad(cid, 4)
+
+    # nothing moved: the scene is still at its old id, with its transcript
+    assert scenes_paths._scene_path(cid, narrow).exists()
+    assert not scenes_paths._scene_path(cid, widened).exists()
+
+
 def test_a_destination_orphan_that_will_not_clear_is_not_reported_as_moved(monkeypatch, tmp_path):
     """The tolerance the source cleanup earns does not extend to a destination.
     A destination is changing hands, so a sidecar left there attaches another

@@ -1367,7 +1367,12 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     // refreshes the messages without clearing it, so the form rebinds to the
     // *promoted* variant's message at the same absolute index and Save would
     // overwrite it with a draft of the text that variant replaced.
-    if (!activeId || busy || rolling || editing) return;
+    // `sceneLocked`, not just `busy`: `busy` clears the moment the socket dies
+    // while the post-cancel flush is still writing to this scene, and a swap in
+    // that window races the abort hook — landing first it loses the cancelled
+    // partial the hook was about to persist, landing second it parks it. Same
+    // rule every other transcript mutation outside `runStream` reads (#95).
+    if (!activeId || busy || rolling || editing || sceneLocked) return;
     const sid = activeId;
     // Send the variant's id, taken from the same snapshot the index came from.
     // Retention shifts every index when a full set gains a take, so a position
@@ -2185,13 +2190,13 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
                         {index === rerollAt && canSwipe && (
                           <span className="swipe-nav">
                             <button className="msg-edit" aria-label="Previous alternate"
-                                    disabled={rolling || editing !== null}
+                                    disabled={rolling || editing !== null || sceneLocked}
                                     onClick={() => pickAlternate(stepAlternate(-1))}>‹</button>
                             <span className="swipe-count" title={altTitle}>
                               {alternates.active === null ? "–" : alternates.active + 1}/{altCount}
                             </span>
                             <button className="msg-edit" aria-label="Next alternate"
-                                    disabled={rolling || editing !== null}
+                                    disabled={rolling || editing !== null || sceneLocked}
                                     onClick={() => pickAlternate(stepAlternate(1))}>›</button>
                           </span>
                         )}
