@@ -527,6 +527,31 @@ def test_a_malformed_row_never_escapes_as_an_exception(monkeypatch, tmp_path):
     assert entities.read_entity(croot, "lore", "the-pact")["body"].strip() == "Signed at dusk."
 
 
+def test_a_non_textual_before_or_after_does_not_crash_the_diff(monkeypatch, tmp_path):
+    """`merge_text` diffs both fields through `changes.line_diff`, whose
+    `.splitlines()` raises on a dict or a list — and for a mergeable kind that
+    call sits on the path of every conflicted row. `ChronicleSave` validates
+    only that a row is a dict, so these arrive straight off the wire."""
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "lore", "The Pact", body="Moved on.")
+
+    # No verdict rather than an exception. A row whose basis or whose proposal
+    # is not text cannot be diffed, and calling that a contradiction would be a
+    # guess; `apply_edits` keeps its own best-effort handling of the write.
+    assert conflicts.check_conflicts(cid, [
+        {"id": "f", "kind": "lore", "target": {"kind": "lore", "id": "the-pact"},
+         "before": {"old": "text"}, "after": "Broken by morning."},
+        {"id": "g", "kind": "lore", "target": {"kind": "lore", "id": "the-pact"},
+         "before": "Signed at dusk.", "after": ["not", "text"]},
+    ]) == []
+    # `null` is the one non-string that reads as a value: a client saying
+    # "nothing was stored", which against a non-empty entry is a conflict.
+    assert [r["id"] for r in conflicts.check_conflicts(cid, [
+        {"id": "h", "kind": "lore", "target": {"kind": "lore", "id": "the-pact"},
+         "before": None, "after": "Broken by morning."}])] == ["h"]
+
+
 def test_two_rows_sharing_an_edit_id_are_judged_separately(monkeypatch, tmp_path):
     """`materialize` dedupes only plot threads, so two lore proposals naming one
     entry really can share an id. The verdicts are positional for that reason."""
@@ -538,3 +563,91 @@ def test_two_rows_sharing_an_edit_id_are_judged_separately(monkeypatch, tmp_path
 
     assert conflicts.batch_verdicts(cid, [answered, stale]) == [
         None, conflicts.conflict_row(cid, stale)]
+
+
+def test_a_conflict_carries_its_position_in_the_submitted_batch(monkeypatch, tmp_path):
+    """Order alone cannot put a verdict back on its row: the response drops the
+    rows that were fine, so with two edits sharing an id a client matching on id
+    would hand the second row's conflict to the first."""
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "lore", "The Pact", body="Moved on.")
+    ok = {**_lore_edit("Signed at dusk.", "Broken by morning."),
+          "resolve": "replace", "resolve_from": "Moved on."}
+    drifted = _lore_edit("Signed at dusk.", "Sealed at noon.")
+
+    rows = conflicts.check_conflicts(cid, [ok, drifted])
+
+    assert len(rows) == 1
+    assert rows[0]["index"] == 1 and rows[0]["after"] == "Sealed at noon."
+
+
+# --- what the Changes panel is told the edit replaced -------------------------
+
+def test_an_answered_edit_is_logged_against_what_it_actually_replaced(monkeypatch, tmp_path):
+    """The reviewer merged over "Witnessed by the watch."; logging the staged
+    `before` instead would render that sentence as text this edit added."""
+    from grimoire.store import changes
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "lore", "The Pact", body="Witnessed by the watch.")
+    merged = "Witnessed by the watch.\n\nBroken by morning."
+
+    absorb.apply_edits(cid, [
+        {**_lore_edit("Signed at dusk.", merged), "resolve": "merge",
+         "resolve_from": "Witnessed by the watch.", "after": merged}], "s1")
+
+    entry = changes.read(cid)["lore/the-pact"]["fields"][0]
+    assert entry["before"] == "Witnessed by the watch."
+    assert entry["after"] == merged
+    # the diff the panel renders now attributes only the reviewer's line
+    assert [d["text"] for d in changes.line_diff(entry["before"], entry["after"])
+            if d["op"] == "insert"] == ["", "Broken by morning."]
+
+
+def test_an_unanswered_edit_is_still_logged_against_its_staged_before(monkeypatch, tmp_path):
+    from grimoire.store import changes
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "lore", "The Pact", body="Signed at dusk.")
+
+    absorb.apply_edits(cid, [
+        _lore_edit("Signed at dusk.", "Signed at dusk.\n\nBroken by morning.")], "s1")
+
+    assert changes.read(cid)["lore/the-pact"]["fields"][0]["before"] == "Signed at dusk."
+
+
+# --- a plot rename is not something an absorb undoes --------------------------
+
+def test_absorbing_a_beat_does_not_revert_a_renamed_thread(monkeypatch, tmp_path):
+    """`set_movement` overwrites any non-blank title, and `materialize` stages
+    the title as it stood at absorb time. A rename in between would be silently
+    undone by a beat the reviewer approved for entirely unrelated reasons."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Arrival")
+    plot.set_movement(cid, "the-map", "The map", "open", "Found in the bilge.", "s1")
+    staged = [e for e in absorb.materialize(
+        cid, sid, {"plot_movements": [{"id": "the-map", "beat": "It is a forgery."}]})
+        if e["kind"] == "plot"]
+    assert staged[0]["payload"]["title"] == "The map"      # staged title is the stored one
+
+    plot.set_movement(cid, "the-map", "The salvage charter", "open", "", "s2")
+    applied, failures = absorb.apply_edits(cid, staged)
+
+    assert applied == ["plot:the-map"] and failures == []
+    thread = plot.get(cid, "the-map")
+    assert thread["title"] == "The salvage charter"        # the rename stands
+    assert thread["beats"][-1]["text"] == "It is a forgery."   # and the beat landed
+
+
+def test_a_brand_new_thread_still_gets_its_title(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+
+    absorb.apply_edits(cid, [
+        {"id": "plot:the-tide-charter", "kind": "plot",
+         "target": {"kind": "plot", "id": "the-tide-charter"}, "field": "beat",
+         "before": "", "after": "Filed under salvage.",
+         "payload": {"id": "the-tide-charter", "title": "The Tide Charter",
+                     "status": "open", "scene": "s1"}}])
+
+    assert plot.get(cid, "the-tide-charter")["title"] == "The Tide Charter"
