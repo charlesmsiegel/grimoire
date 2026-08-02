@@ -286,9 +286,16 @@ def _second_alias(name: str) -> str:
     be, because both are worth matching. So the second token is taken as a form
     without deciding, and `_short_alias` keeps the head as well.
 
-    Particles and suffixes are stepped over as everywhere else, and a name whose
-    second token IS its surname yields nothing here -- `_surname_alias` already
-    has that one, and the point of this form is the token neither end reaches.
+    Everything that is not a name in its own right is stepped over, not just
+    particles and suffixes: a token `_usable` rejects is skipped too, so a
+    STACKED title (`Professor Dr. Mara Vance`) lands on `Mara` rather than
+    stopping on `Dr.` and yielding nothing, and an initial in that position
+    (`Professor J. Mara Vance`) does not consume the slot either.
+    `_name_tokens` strips only a leading token it RECOGNIZES as a title, which
+    is exactly the case this form exists for -- so the walk has to keep going
+    rather than trust the first interior token. A name whose second token IS its
+    surname yields nothing here: `_surname_alias` already has that one, and the
+    point of this form is the token neither end reaches.
 
     The cost is that a middle name becomes matchable, which is an over-hide only
     if some other line uses it for somebody else. That is a far smaller price
@@ -300,7 +307,8 @@ def _second_alias(name: str) -> str:
         return ""                        # the second token is the surname
     i = 1
     while i < len(parts) - 1 and (_word(parts[i]) in _PARTICLE
-                                  or _word(parts[i]) in _SUFFIX):
+                                  or _word(parts[i]) in _SUFFIX
+                                  or not _usable(parts[i])):
         i += 1
     return "" if i >= len(parts) - 1 else _usable(parts[i])
 
