@@ -2119,10 +2119,55 @@ test("Reroll survives the opening user post being off-window", async () => {
   // absent, so this is still a reply to something and still rerollable
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
-    { role: "assistant", content: "a reply" }], offset: 12, total: 13, has_older: true });
+    { role: "assistant", content: "a reply" }],
+    offset: 12, total: 13, has_older: true, has_user_message: true });
   renderCampaign();
   await screen.findByText("a reply");
   expect(screen.getByTitle("Reroll")).toBeInTheDocument();
+});
+
+test("no Reroll on an all-assistant transcript, however much history is above", async () => {
+  // an offscreen scene never stores a player turn, so unloaded history above
+  // the window is not evidence of one — and regenerate 400s on that transcript
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "assistant", content: "narration" }],
+    offset: 12, total: 13, has_older: true, has_user_message: false });
+  renderCampaign();
+  await screen.findByText("narration");
+  expect(screen.queryByTitle("Reroll")).toBeNull();
+});
+
+test("an older page that lands after a scene switch is dropped", async () => {
+  // otherwise scene A's posts prepend onto B and install A's offset, after
+  // which an edit sends B's id with an A-derived index — onto an unrelated post
+  (api.listScenes as any).mockResolvedValue([
+    { id: "s1", title: "First", model: "", created: "", updated: "" },
+    { id: "s2", title: "Second", model: "", created: "", updated: "" }]);
+  let releaseOlder: (() => void) | null = null;
+  (api.getScene as any).mockImplementation((_c: string, sid: string, w?: any) => {
+    if (sid === "s1" && w?.before === 5) {
+      return new Promise((resolve) => {
+        releaseOlder = () => resolve({ meta: {}, messages: [{ role: "user", content: "scene one, older" }],
+                                       offset: 4, total: 6, has_older: true, has_user_message: true });
+      });
+    }
+    return Promise.resolve(sid === "s2"
+      ? { meta: {}, messages: [{ role: "assistant", content: "scene two" }],
+          offset: 0, total: 1, has_older: false, has_user_message: false }
+      : { meta: {}, messages: [{ role: "assistant", content: "scene one, newest" }],
+          offset: 5, total: 6, has_older: true, has_user_message: true });
+  });
+  renderCampaign();
+  await screen.findByText("scene one, newest");
+  fireEvent.click(screen.getByRole("button", { name: /load .* older post/i }));
+  fireEvent.click(screen.getByText(/· Second$/));
+  await screen.findByText("scene two");
+  releaseOlder!();
+  await waitFor(() => expect(screen.getByText("scene two")).toBeInTheDocument());
+  expect(screen.queryByText("scene one, older")).toBeNull();
+  // and the retired page did not install scene one's offset on scene two
+  expect(screen.queryByRole("button", { name: /older post/i })).toBeNull();
 });
 
 test("a refresh of the open scene re-reads everything already on screen", async () => {

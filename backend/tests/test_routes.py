@@ -1096,6 +1096,28 @@ def test_get_scene_with_limit_returns_the_tail_and_a_cursor(client):
     assert (older["offset"], older["has_older"]) == (2, True)
 
 
+def test_get_scene_window_reports_a_user_turn_outside_it(client):
+    """What the client needs to know before offering Reroll: the window is all
+    assistant posts, but the transcript did open with a player turn."""
+    wid, cid = _campaign(client)
+    sid = _long_scene(client, cid, 6)
+    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}", params={"limit": 1}).json()
+    assert [m["role"] for m in body["messages"]] == ["assistant"]
+    assert body["has_user_message"] is True
+
+
+def test_get_scene_window_of_an_offscreen_scene_reports_no_user_turn(client):
+    # regenerate 400s on an all-assistant transcript, so the client must be
+    # able to tell that case apart from "the player's turn is off-window"
+    wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes",
+                      json={"title": "Offscreen", "pcless": True}).json()["id"]
+    for i in range(4):
+        store.scenes.append_message(cid, sid, "assistant", f"narration {i}")
+    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}", params={"limit": 2}).json()
+    assert body["has_older"] is True and body["has_user_message"] is False
+
+
 def test_get_scene_rejects_a_nonsense_window(client):
     wid, cid = _campaign(client)
     sid = _long_scene(client, cid, 3)

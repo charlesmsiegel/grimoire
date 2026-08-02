@@ -153,6 +153,17 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   // reply, an edit, a roll) re-reads this much rather than snapping back to
   // one page, so pages the reader already scrolled up to survive the re-fetch.
   const windowSizeRef = useRef(PAGE_SIZE);
+  // Whether a player turn exists ANYWHERE in the transcript (the server
+  // answers for the whole of it; null until a windowed read says). Reroll
+  // hangs off this: an offscreen scene never stores a user post, so no amount
+  // of unloaded history above the window implies one exists.
+  const [hasUserPost, setHasUserPost] = useState<boolean | null>(null);
+  // Every scene load takes the next token; a page that resolves after the
+  // window it was asked for has moved on is DROPPED. Without it an older-page
+  // request for scene A, still in flight when the reader switches to scene B,
+  // prepends A's posts onto B and installs A's offset — after which an edit
+  // sends B's id with an A-derived index and overwrites an unrelated post.
+  const windowTokenRef = useRef(0);
   const [streaming, setStreaming] = useState("");
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -357,6 +368,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     // refresh would tear down and re-mount a live SSE-delivered proposal
     // for no reason (flicker, and a stale ref by the time the re-fetch lands).
     const switchingScenes = id !== activeId;
+    const token = ++windowTokenRef.current; // retires any page still in flight
     setActiveId(id);
     if (switchingScenes) {
       // clear the previous scene's chip/popover synchronously so scene A's
@@ -388,9 +400,11 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       .then((r) => setSceneResponse(r ?? null))
       .catch(() => setSceneResponse(null));
     const scene = await api.getScene(cid, id, { limit: windowSizeRef.current });
+    if (windowTokenRef.current !== token) return; // a later select already landed
     setMessages(scene.messages);
     // an unwindowed reply (no `offset`) is the whole transcript, which starts at 0
     setFirstIndex(scene.offset ?? 0);
+    setHasUserPost(scene.has_user_message ?? null);
     setSceneResponsePreset(scene.meta.response_preset ?? "");
     setStreaming("");
     setCtxKey((n) => n + 1);
@@ -405,8 +419,12 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     loadingOlderRef.current = true;
     setLoadingOlder(true);
     const el = streamRef.current;
+    const token = windowTokenRef.current;
     try {
       const page = await api.getScene(cid, id, { limit: PAGE_SIZE, before: firstIndex });
+      // the reader moved on (another scene, or a refresh that re-read the
+      // window): this page describes a transcript that is no longer on screen
+      if (windowTokenRef.current !== token) return;
       if (!page.messages.length) {
         setFirstIndex(0); // the transcript shrank under us; nothing older is left
         return;
@@ -473,9 +491,11 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     if (activeId === s.id) {
       if (list.length) selectScene(list[0].id);
       else {
+        windowTokenRef.current += 1; // drop any page still in flight for it
         setActiveId(null);
         setMessages([]);
         setFirstIndex(0);
+        setHasUserPost(null);
       }
     }
   }
@@ -774,9 +794,12 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   const canReroll = rerollIndex >= 0 &&
     messages[rerollIndex].role === "assistant" &&
     messages[rerollIndex].speaker !== ROLL_SPEAKER &&
-    // "not the opener": posts below the window are unloaded, not absent, so
-    // an off-window user message still means this run had something to answer
-    (firstIndex > 0 || messages.some((x) => x.role === "user"));
+    // "not the opener" — the regenerate route refuses an all-assistant
+    // transcript, so this has to be true of the WHOLE scene, not the window.
+    // Only the server can say (an offscreen scene stores no user posts however
+    // long it runs, so "there is history above" proves nothing); the local
+    // scan is the fallback for an unwindowed read, which holds everything.
+    (hasUserPost ?? messages.some((x) => x.role === "user"));
   const rerollAt = rerollIndex < 0 ? -1 : firstIndex + rerollIndex;
 
   // The transition tag is internal drift metadata, never a speaker: a

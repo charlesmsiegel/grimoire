@@ -99,8 +99,12 @@ export type Scene = { meta: { id: string; title: string; response_preset?: strin
 // transcript plus the cursor to walk backwards from. `offset` is the absolute
 // index of `messages[0]` — the index `editMessage` takes — so a client holding
 // one page addresses a post exactly as one holding the whole scene does. The
-// three fields are absent from an unwindowed read, which returns the scene whole.
-export type ScenePage = Scene & { offset?: number; total?: number; has_older?: boolean };
+// fields are absent from an unwindowed read, which returns the scene whole.
+// `has_user_message` covers the WHOLE transcript, not the window: a tail page
+// cannot tell on its own whether the run it holds was answering a player.
+export type ScenePage = Scene & {
+  offset?: number; total?: number; has_older?: boolean; has_user_message?: boolean;
+};
 
 // entities (locations | lore)
 export type EntityKind = "locations" | "lore" | "items" | "groups" | "creatures";
