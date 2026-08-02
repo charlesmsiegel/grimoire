@@ -2784,6 +2784,105 @@ def test_a_resolution_landing_before_the_reroll_takes_the_lock_still_blocks_it(
     assert [m["content"] for m in msgs][:2] == ["hi", "a reply"]
 
 
+def test_a_swap_whose_scene_vanishes_before_the_lock_is_a_404(client, monkeypatch):
+    """A stale swap is a 404, not a 500 — including when the scene goes while the
+    request waits for the lock.
+
+    Reaching it needs the sidecar to OUTLIVE its transcript: `delete_scene` and
+    `rename_scene` take this same lock and move or remove both, so a plain race
+    with either already answers 404 off the empty sidecar. What is left is the
+    stranded case this PR's own `repoint_scenes` creates on purpose — a source
+    it could not read or publish, left where it is after the transcript has
+    already been renamed away.
+    """
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "old reply"}])
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["new reply."])
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
+    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/alternates").json()
+    vid = next(a["id"] for i, a in enumerate(body["alternates"]) if i != body["active"])
+    real_lock = store.locks.campaign_lock
+    stranded = {"done": False}
+
+    @contextlib.contextmanager
+    def racing(c):
+        with real_lock(c):
+            if not stranded["done"]:
+                stranded["done"] = True
+                # the transcript is gone by the time this request holds the lock
+                store.scenes.paths._scene_path(cid, sid).unlink()
+            yield
+
+    monkeypatch.setattr(store.locks, "campaign_lock", racing)
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/alternates/{vid}")
+    assert resp.status_code == 404
+
+
+def test_an_ephemeral_send_that_cannot_write_the_sidecar_keeps_the_decision(
+        client, monkeypatch):
+    """Retiring the decision before the sidecar is known to be writable retired
+    it for a turn that then produced nothing at all: the sidecar write raises,
+    no stream starts, and the pending decision is gone for good."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "old reply"}])
+    # a reroll whose stream died: the set survives, the slot is empty, and the
+    # decision the removed narration produced is deliberately still recoverable
+    store.alternates.archive(cid, sid, "steer it colder")
+    store.scenes.remove_trailing_assistant_run(cid, sid)
+    store.proposals.new(cid, sid, {"check": "athletics", "actor": None, "problems": []})
+    refuse = {"on": True}
+    # bound before the patch: `store.alternates.atomic` IS this module, so
+    # falling through to `atomic.write_text` would re-enter the replacement —
+    # and this request writes proposals.json through it too
+    real_write = atomic.write_text
+
+    def unwritable(path, text):
+        if refuse["on"] and path == store.scenes.paths._alts_path(cid, sid):
+            raise PermissionError(13, "read-only")
+        return real_write(path, text)
+
+    monkeypatch.setattr(store.alternates.atomic, "write_text", unwritable)
+    with pytest.raises(PermissionError):
+        client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": ""})
+    refuse["on"] = False
+
+    record = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert record["status"] == "pending"
+
+
+def test_a_retry_that_cannot_write_the_sidecar_keeps_the_decision(client, monkeypatch):
+    """`/retry` has the same ordering, so it has the same hole."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "old reply"}])
+    store.alternates.archive(cid, sid, "steer it colder")
+    store.scenes.remove_trailing_assistant_run(cid, sid)
+    store.proposals.new(cid, sid, {"check": "athletics", "actor": None, "problems": []})
+    refuse = {"on": True}
+    real_write = atomic.write_text   # see above: the fallback would re-enter
+
+    def unwritable(path, text):
+        if refuse["on"] and path == store.scenes.paths._alts_path(cid, sid):
+            raise PermissionError(13, "read-only")
+        return real_write(path, text)
+
+    monkeypatch.setattr(store.alternates.atomic, "write_text", unwritable)
+    with pytest.raises(PermissionError):
+        client.post(f"/api/campaigns/{cid}/scenes/{sid}/retry")
+    refuse["on"] = False
+
+    record = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert record["status"] == "pending"
+
+
 def test_a_swap_whose_transcript_write_fails_leaves_the_proposal_alone(client, monkeypatch):
     """The sidecar preflight only proves the SIDECAR is writable. `promote`
     rewrites the transcript too, and that write failing leaves the reader looking
