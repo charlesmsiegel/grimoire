@@ -1194,3 +1194,53 @@ def test_apply_edits_skips_non_dict_batch_items(scene_with_sheeted_cast):
     assert failures == []
     assert applied == ["lore:salt-cathedral"]
     assert entities.read_entity(croot, "lore", "salt-cathedral")["body"].strip() == "Flooded."
+
+
+# ---- the failure contract for the non-sheet kinds (#271) ----
+def test_apply_edits_reports_a_failed_non_sheet_write(scene_with_sheeted_cast, monkeypatch):
+    """Before #271 only sheet and dossier edits had an error contract; every
+    other kind was swallowed by a bare `except: continue`, so a save whose
+    approved lore edit hit a full disk still returned 200 saying nothing."""
+    from grimoire.store import entities, overlay
+    cid, sid = scene_with_sheeted_cast
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "lore", "Salt Cathedral", body="Ruined.")
+    monkeypatch.setattr(overlay, "update_entity",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("no space left on device")))
+    applied, failures = absorb.apply_edits(cid, [
+        {"id": "lore:salt-cathedral", "kind": "lore", "field": "body",
+         "target": {"kind": "lore", "id": "salt-cathedral"}, "after": "Flooded."}], sid)
+    assert applied == []
+    assert [(f["id"], f["kind"]) for f in failures] == [("lore:salt-cathedral", "error")]
+    assert "no space left" in failures[0]["reason"]
+    assert entities.read_entity(croot, "lore", "salt-cathedral")["body"].strip() == "Ruined."
+
+
+def test_apply_edits_reports_an_unknown_kind(scene_with_sheeted_cast):
+    """An approved row this build cannot apply is a change the reviewer will
+    never see land -- a mismatched frontend, or a kind dropped from the apply
+    branch. Silence there is the same lost edit by a different route."""
+    cid, sid = scene_with_sheeted_cast
+    applied, failures = absorb.apply_edits(cid, [
+        {"id": "invented:x", "kind": "invented",
+         "target": {"kind": "invented", "id": "x"}, "after": "..."}], sid)
+    assert applied == []
+    assert [(f["id"], f["kind"]) for f in failures] == [("invented:x", "error")]
+
+
+def test_apply_edits_reports_a_failed_changes_log(scene_with_sheeted_cast, monkeypatch):
+    """The edits landed; only the Changes panel's delta did not. Raising would
+    500 a commit that already succeeded, and silence would claim a write-back
+    history that is not there -- so it is reported alongside the applied ids."""
+    from grimoire.store import changes, entities
+    cid, sid = scene_with_sheeted_cast
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "lore", "Salt Cathedral", body="Ruined.")
+    monkeypatch.setattr(changes, "record",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("no space left on device")))
+    applied, failures = absorb.apply_edits(cid, [
+        {"id": "lore:salt-cathedral", "kind": "lore", "field": "body",
+         "target": {"kind": "lore", "id": "salt-cathedral"}, "after": "Flooded."}], sid)
+    assert applied == ["lore:salt-cathedral"]
+    assert [(f["id"], f["kind"]) for f in failures] == [("changes", "error")]
+    assert entities.read_entity(croot, "lore", "salt-cathedral")["body"].strip() == "Flooded."

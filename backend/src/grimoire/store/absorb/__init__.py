@@ -36,7 +36,7 @@ from .conflicts import (  # noqa: F401
     current_value, merge_text, plot_line, resolved,
 )
 from .materializer import (  # noqa: F401
-    _CARD_FIELDS, _DossierTargetGone, _actor_exists, _char_name, _entity_kind,
+    _CARD_FIELDS, _actor_exists, _char_name, _entity_kind,
     _new_character_dossier, _new_character_provenance, materialize,
 )
-from .apply import _BROWSABLE_KINDS, apply_edits  # noqa: F401
+from .apply import UNCONFIRMED, _BROWSABLE_KINDS, apply_edits  # noqa: F401

@@ -2406,10 +2406,12 @@ def test_replaying_a_save_with_the_same_token_applies_once(client):
     assert timeline.count("The tea was poured.") == 1
 
 
-def test_a_commit_that_died_midway_refuses_to_replay(client):
+def test_a_commit_that_died_before_recording_finishes_on_the_retry(client):
     """The token is reserved BEFORE the first non-idempotent write and completed
-    after the last, so the window between them is durable. A retry landing in it
-    must refuse rather than re-run appends whose first pass may have landed."""
+    after the last, so the window between them is durable. #271 gave that window
+    a journal: a retry landing in it RESUMES -- every step the journal already
+    accounts for is skipped, so nothing is appended twice and the commit stops
+    being stuck half-applied."""
     _, cid = _campaign(client)
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
@@ -2439,10 +2441,123 @@ def test_a_commit_that_died_midway_refuses_to_replay(client):
         store.commits.record = real_record
 
     retry = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle", json=save)
-    assert retry.status_code == 409 and retry.json()["kind"] == "commit_incomplete"
+    assert retry.status_code == 200
+    assert retry.json()["applied"] == ["plot:the-tea"]   # from the journal, not re-applied
+    assert retry.json()["failures"] == []
     assert len(store.plot.read(cid)["the-tea"]["beats"]) == 1      # not appended twice
     timeline = (store.campaigns.campaign_root(cid) / "timeline.md").read_text(encoding="utf-8")
     assert timeline.count("The tea was poured.") == 1
+    # and the resumed commit is now settled, so a further replay short-circuits
+    assert client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                      json=save).json() == retry.json()
+
+
+class _Crash(BaseException):
+    """A process death, not an application error: it escapes apply_edits'
+    per-edit handler the way a killed interpreter would."""
+
+
+def test_a_commit_that_died_mid_apply_resumes_without_repeating(client):
+    """The failure #271 opened with: a crash between the chronicle entry and the
+    last edit. The journal marks each edit attempted BEFORE it is attempted, so
+    the retry re-applies nothing that landed, reports the one edit whose outcome
+    nobody can know, and finishes the edits that never ran."""
+    _, cid = _campaign(client)
+    croot = store.campaigns.campaign_root(cid)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    store.entities.create_entity(croot, "lore", "Saltmarch", body="A port.")
+    store.entities.create_entity(croot, "lore", "The Wake", body="A festival.")
+    edits = [
+        {"id": "lore:saltmarch", "kind": "lore", "field": "body",
+         "target": {"kind": "lore", "id": "saltmarch"}, "after": "A flooded port."},
+        {"id": "plot:the-tide", "kind": "plot", "field": "beat", "after": "the tide rose",
+         "target": {"kind": "plot", "id": "the-tide"},
+         "payload": {"id": "the-tide", "title": "The Tide", "status": "open", "scene": sid}},
+        {"id": "lore:the-wake", "kind": "lore", "field": "body",
+         "target": {"kind": "lore", "id": "the-wake"}, "after": "A drowned festival."},
+    ]
+    save = {"one_line": "o", "summary": "s", "keywords": [],
+            "timeline_events": [{"date": "d1", "text": "The tide rose."}], "edits": edits,
+            "commit_token": store.commits.mint(store.commits.scene_epoch(cid, sid))}
+
+    real_set = store.plot.set_movement
+    store.plot.set_movement = lambda *a, **k: (_ for _ in ()).throw(_Crash("killed"))
+    try:
+        client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle", json=save)
+    except _Crash:
+        pass
+    finally:
+        store.plot.set_movement = real_set
+    assert store.entities.read_entity(croot, "lore", "saltmarch")["body"].strip() \
+        == "A flooded port."                       # landed before the crash
+    assert store.entities.read_entity(croot, "lore", "the-wake")["body"].strip() \
+        == "A festival."                           # never reached
+
+    retry = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle", json=save)
+    assert retry.status_code == 200
+    assert retry.json()["applied"] == ["lore:saltmarch", "lore:the-wake"]
+    # The plot beat is the one nobody can speak for: the journal says it was
+    # attempted and never says how it went, so it is reported, not re-run.
+    assert [(f["id"], f["kind"]) for f in retry.json()["failures"]] \
+        == [("plot:the-tide", "error")]
+    assert "the-tide" not in store.plot.read(cid)
+    timeline = (store.campaigns.campaign_root(cid) / "timeline.md").read_text(encoding="utf-8")
+    assert timeline.count("The tide rose.") == 1   # the append ran once, journal-guarded
+    # every applied edit's write-back delta survived the crash, including the
+    # one from the attempt that died -- changes.record only runs at the end
+    assert set(store.changes.read(cid)) == {"lore/saltmarch", "lore/the-wake"}
+
+
+def test_a_review_prepared_before_another_save_of_the_scene_is_refused(client):
+    """Two reviews of one scene carry different tokens, so the idempotency key
+    cannot order them and the second to save would append a second set of
+    timeline events and plot beats. The epoch stamped at mint is what does."""
+    _, cid = _campaign(client)
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "We poured the tea.")
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
+        '{"one_line": "o", "summary": "s", "keywords": [],'
+        ' "timeline_events": [{"date": "d1", "text": "The tea was poured."}],'
+        ' "plot_movements": [{"title": "The Tea", "beat": "poured", "status": "open"}]}')
+    first = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    # a second review of the same scene, opened while the first sat unsaved
+    second = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb?force=true").json()
+
+    def _save(body):
+        return {"one_line": "o", "summary": "s", "keywords": [],
+                "timeline_events": body["timeline_events"], "edits": body["edits"],
+                "commit_token": body["commit_token"]}
+
+    assert client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                      json=_save(second)).status_code == 200
+    stale = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle", json=_save(first))
+    assert stale.status_code == 409 and stale.json()["kind"] == "commit_superseded"
+    assert len(store.plot.read(cid)["the-tea"]["beats"]) == 1
+    timeline = (store.campaigns.campaign_root(cid) / "timeline.md").read_text(encoding="utf-8")
+    assert timeline.count("The tea was poured.") == 1
+
+
+def test_a_review_prepared_after_a_save_of_the_scene_still_commits(client):
+    """The other half of the epoch check: re-absorbing a saved scene and saving
+    that is the deliberate, supported flow (`?force=true`), not a stale review."""
+    _, cid = _campaign(client)
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "We poured the tea.")
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
+        '{"one_line": "o", "summary": "s", "keywords": [], "timeline_events": []}')
+
+    def _save(body):
+        return {"one_line": "o", "summary": "s", "keywords": [], "timeline_events": [],
+                "edits": body["edits"], "commit_token": body["commit_token"]}
+
+    first = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    assert client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                      json=_save(first)).status_code == 200
+    again = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb?force=true").json()
+    assert client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                      json=_save(again)).status_code == 200
 
 
 def test_editing_the_review_after_a_committed_save_is_refused(client):
@@ -2526,6 +2641,34 @@ def test_a_failed_dossier_write_is_reported(client):
     assert r.status_code == 200 and r.json()["applied"] == []
     assert [(f["id"], f["kind"]) for f in r.json()["failures"]] == [("dossier:aese", "error")]
     assert "no space left" in r.json()["failures"][0]["reason"]
+
+
+def test_a_failed_plot_write_reaches_the_reviewer(client):
+    """#271's third bullet: only sheet and dossier edits had a failure contract,
+    so a plot (or lore, state, relationship, bond, weather) write that failed
+    came back inside a 200 with nothing to say it had been dropped. The
+    chronicle is already marked absorbed by then and the review panel closes."""
+    _, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    edit = {"id": "plot:the-tide", "kind": "plot", "field": "beat", "after": "the tide rose",
+            "target": {"kind": "plot", "id": "the-tide"},
+            "payload": {"id": "the-tide", "title": "The Tide", "status": "open", "scene": sid}}
+    real_set = store.plot.set_movement
+
+    def boom(*a, **k):
+        raise OSError("no space left on device")
+
+    store.plot.set_movement = boom
+    try:
+        r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                       json={"one_line": "o", "summary": "s", "keywords": [],
+                             "timeline_events": [], "edits": [edit]})
+    finally:
+        store.plot.set_movement = real_set
+    assert r.status_code == 200 and r.json()["applied"] == []
+    assert [(f["id"], f["kind"]) for f in r.json()["failures"]] == [("plot:the-tide", "error")]
+    assert "no space left" in r.json()["failures"][0]["reason"]
+    assert "the-tide" not in store.plot.read(cid)
 
 
 def test_a_stale_dossier_conflict_reaches_the_reviewer(client):
@@ -6510,3 +6653,340 @@ def test_adjudication_leaves_resolving_when_the_revert_is_also_busy(client, monk
     after = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
     assert after["status"] == "resolving", "the failed revert should leave it here"
     assert after["status"] in store.proposals.NON_TERMINAL  # the next send retires it
+
+
+def test_a_rival_review_cannot_save_while_a_commit_is_unfinished(client):
+    """The epoch advances when a commit CLAIMS its token, not when it finishes.
+    Advanced at completion, a save that died partway would leave the epoch where
+    the rival was minted -- so the rival would pass its check and commit on top
+    of the half-applied one, and the retry would then complete it too."""
+    _, cid = _campaign(client)
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "We poured the tea.")
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
+        '{"one_line": "o", "summary": "s", "keywords": [],'
+        ' "timeline_events": [{"date": "d1", "text": "The tea was poured."}],'
+        ' "plot_movements": [{"title": "The Tea", "beat": "poured", "status": "open"}]}')
+    mine = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    rival = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb?force=true").json()
+
+    def _save(body):
+        return {"one_line": "o", "summary": "s", "keywords": [],
+                "timeline_events": body["timeline_events"], "edits": body["edits"],
+                "commit_token": body["commit_token"]}
+
+    # my save dies after claiming its token
+    real_record = store.commits.record
+    store.commits.record = lambda *a, **k: (_ for _ in ()).throw(OSError("died"))
+    try:
+        client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle", json=_save(mine))
+    except OSError:
+        pass
+    finally:
+        store.commits.record = real_record
+
+    blocked = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle", json=_save(rival))
+    assert blocked.status_code == 409 and blocked.json()["kind"] == "commit_superseded"
+    # ...and my retry still finishes MY commit, exactly once
+    assert client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                      json=_save(mine)).status_code == 200
+    assert len(store.plot.read(cid)["the-tea"]["beats"]) == 1
+    timeline = (store.campaigns.campaign_root(cid) / "timeline.md").read_text(encoding="utf-8")
+    assert timeline.count("The tea was poured.") == 1
+
+
+def test_a_wedged_commit_does_not_block_its_scene_forever(client):
+    """The cost of blocking rivals at the claim would be a scene nobody can ever
+    save again. Advancing the epoch (rather than latching a lock) means the next
+    re-absorb is minted past the wedge and saves normally."""
+    _, cid = _campaign(client)
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "We poured the tea.")
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
+        '{"one_line": "o", "summary": "s", "keywords": [], "timeline_events": []}')
+    lost = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    real_record = store.commits.record
+    store.commits.record = lambda *a, **k: (_ for _ in ()).throw(OSError("died"))
+    try:
+        client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                   json={"one_line": "o", "summary": "s", "keywords": [],
+                         "timeline_events": [], "edits": lost["edits"],
+                         "commit_token": lost["commit_token"]})
+    except OSError:
+        pass
+    finally:
+        store.commits.record = real_record
+
+    fresh = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb?force=true").json()
+    assert client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                      json={"one_line": "o", "summary": "s", "keywords": [],
+                            "timeline_events": [], "edits": fresh["edits"],
+                            "commit_token": fresh["commit_token"]}).status_code == 200
+
+
+def test_a_reservation_from_before_the_journal_is_refused(client):
+    """Upgrade case: a pre-#271 entry records that a commit began and nothing
+    about what it did. Resuming it as fresh work would re-append its timeline
+    events and re-apply every edit, so it keeps the old refusal."""
+    _, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    save = {"one_line": "o", "summary": "s", "keywords": [],
+            "timeline_events": [{"date": "d1", "text": "The tea was poured."}],
+            "edits": [], "commit_token": "0-" + "a" * 32}
+    fp = store.commits.fingerprint({k: v for k, v in save.items() if k != "commit_token"})
+    (store.campaigns.campaign_root(cid) / "commits.json").write_text(json.dumps({
+        save["commit_token"]: {"done": False, "result": None, "fingerprint": fp,
+                               "sid": sid, "at": "2026-07-29T00:00:00Z"}}),
+        encoding="utf-8")
+
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle", json=save)
+    assert r.status_code == 409 and r.json()["kind"] == "commit_incomplete"
+    assert not (store.campaigns.campaign_root(cid) / "timeline.md").exists()
+
+
+def test_a_timeline_append_that_raises_is_reported_not_left_unconfirmed(client):
+    """The append publishes by rename as its last act, so a raise means nothing
+    landed. Reporting it as merely "unconfirmed" would close the review on a 200
+    with the approved events silently absent."""
+    _, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    save = {"one_line": "o", "summary": "s", "keywords": [],
+            "timeline_events": [{"date": "d1", "text": "The tea was poured."}],
+            "edits": [], "commit_token": store.commits.mint(store.commits.scene_epoch(cid, sid))}
+    real_append = store.chronicle.append_timeline
+    store.chronicle.append_timeline = \
+        lambda *a, **k: (_ for _ in ()).throw(OSError("no space left on device"))
+    try:
+        r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle", json=save)
+    finally:
+        store.chronicle.append_timeline = real_append
+    assert r.status_code == 200
+    assert [(f["id"], f["kind"]) for f in r.json()["failures"]] == [("timeline", "error")]
+    assert "no space left" in r.json()["failures"][0]["reason"]
+
+
+def test_a_resumed_commit_does_not_rewrite_the_changes_panel(client):
+    """changes.record upserts "the latest write-back per record". Between the
+    crash and the retry another scene can install a genuinely newer entry for
+    the same record; replaying the old deltas would overwrite it while leaving
+    the record itself at the newer value."""
+    _, cid = _campaign(client)
+    croot = store.campaigns.campaign_root(cid)
+    first = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "One"}).json()["id"]
+    second = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Two"}).json()["id"]
+    store.entities.create_entity(croot, "lore", "Saltmarch", body="A port.")
+    save = {"one_line": "o", "summary": "s", "keywords": [], "timeline_events": [],
+            "edits": [{"id": "lore:saltmarch", "kind": "lore", "field": "body",
+                       "target": {"kind": "lore", "id": "saltmarch"},
+                       "before": "A port.", "after": "A flooded port."}],
+            "commit_token": store.commits.mint(store.commits.scene_epoch(cid, first))}
+    real_record = store.commits.record
+    store.commits.record = lambda *a, **k: (_ for _ in ()).throw(OSError("died"))
+    try:
+        client.put(f"/api/campaigns/{cid}/scenes/{first}/chronicle", json=save)
+    except OSError:
+        pass
+    finally:
+        store.commits.record = real_record
+    # a later scene edits the same record and owns the panel entry
+    store.changes.record(cid, second, {"lore/saltmarch": [
+        {"field": "body", "label": "Saltmarch", "before": "A flooded port.",
+         "after": "A drowned port."}]})
+
+    retry = client.put(f"/api/campaigns/{cid}/scenes/{first}/chronicle", json=save)
+    assert retry.status_code == 200
+    assert store.changes.read(cid)["lore/saltmarch"]["scene"] == second
+    assert [(f["id"], f["kind"]) for f in retry.json()["failures"]] == [("changes", "error")]
+
+
+def test_a_save_during_an_absorb_supersedes_the_review_it_was_preparing(client):
+    """The mint reads the epoch at the TOP of POST /absorb, not at the bottom.
+    A save landing during the LLM calls advances it, and a stamp taken afterwards
+    would match — waving through a proposal built entirely from pre-save state
+    and letting it append a second set of timeline events and plot beats."""
+    _, cid = _campaign(client)
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "We poured the tea.")
+    reply = ('{"one_line": "o", "summary": "s", "keywords": [],'
+             ' "timeline_events": [{"date": "d1", "text": "The tea was poured."}],'
+             ' "plot_movements": [{"title": "The Tea", "beat": "poured", "status": "open"}]}')
+
+    class _SavesMidAbsorb(FakeOpenRouterComplete):
+        """Someone else's review commits while this absorb waits on the model."""
+
+        def __init__(self):
+            super().__init__(reply)
+            self.fired = False
+
+        async def complete(self, messages, cfg):
+            if not self.fired:
+                self.fired = True
+                store.commits.reserve(cid, "rival", "fp", sid, {})
+                store.commits.record(cid, "rival", {"applied": []}, "fp", sid)
+            return await super().complete(messages, cfg)
+
+    client.app.dependency_overrides[routes.get_llm] = _SavesMidAbsorb
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                   json={"one_line": "o", "summary": "s", "keywords": [],
+                         "timeline_events": body["timeline_events"], "edits": body["edits"],
+                         "commit_token": body["commit_token"]})
+    assert r.status_code == 409 and r.json()["kind"] == "commit_superseded"
+    assert "the-tea" not in store.plot.read(cid)
+    assert not (store.campaigns.campaign_root(cid) / "timeline.md").exists()
+
+
+def test_a_wedged_commit_overtaken_by_a_newer_save_is_refused(client):
+    """The wedge deliberately leaves room for a re-absorb to save past it. Once
+    that newer save has landed it IS the record — resuming the old reservation
+    would rewrite the chronicle entry and the scene summary with the older
+    review on top of it. Stranded half-applied is the better of the two."""
+    _, cid = _campaign(client)
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "We poured the tea.")
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
+        '{"one_line": "the older review", "summary": "s", "keywords": [],'
+        ' "timeline_events": [], "plot_movements": []}')
+    stale = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    save = {"one_line": "the older review", "summary": "s", "keywords": [],
+            "timeline_events": [], "edits": stale["edits"],
+            "commit_token": stale["commit_token"]}
+
+    real_record = store.commits.record
+    store.commits.record = lambda *a, **k: (_ for _ in ()).throw(OSError("died"))
+    try:
+        client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle", json=save)
+    except OSError:
+        pass
+    finally:
+        store.commits.record = real_record
+
+    # the supported recovery: re-absorb past the wedge and save that
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
+        '{"one_line": "the newer review", "summary": "s2", "keywords": [],'
+        ' "timeline_events": [], "plot_movements": []}')
+    fresh = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb?force=true").json()
+    assert client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                      json={"one_line": "the newer review", "summary": "s2",
+                            "keywords": [], "timeline_events": [], "edits": fresh["edits"],
+                            "commit_token": fresh["commit_token"]}).status_code == 200
+
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle", json=save)
+    assert r.status_code == 409 and r.json()["kind"] == "commit_incomplete"
+    assert store.chronicle.read_chronicle(cid)[sid]["one_line"] == "the newer review"
+    assert store.scenes.read_scene(cid, sid)["meta"]["one_line"] == "the newer review"
+
+
+def test_a_review_of_a_deleted_scene_cannot_save_into_its_replacement(client):
+    """Scene ids are recycled — the numbering reuses the highest deleted number,
+    so remaking a scene under the same title hands it the same id. Every check
+    in the ledger identifies a scene by that id alone."""
+    _, cid = _campaign(client)
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "We poured the tea.")
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
+        '{"one_line": "o", "summary": "s", "keywords": [],'
+        ' "timeline_events": [{"date": "d1", "text": "The tea was poured."}],'
+        ' "plot_movements": [{"title": "The Tea", "beat": "poured", "status": "open"}]}')
+    orphan = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+
+    assert client.delete(f"/api/campaigns/{cid}/scenes/{sid}").status_code == 200
+    again = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    assert again == sid, "the id has to recycle for this test to mean anything"
+
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                   json={"one_line": "o", "summary": "s", "keywords": [],
+                         "timeline_events": orphan["timeline_events"],
+                         "edits": orphan["edits"],
+                         "commit_token": orphan["commit_token"]})
+    assert r.status_code == 409 and r.json()["kind"] == "commit_superseded"
+    assert sid not in store.chronicle.read_chronicle(cid)
+    assert "the-tea" not in store.plot.read(cid)
+
+
+def test_a_delete_that_cannot_retire_the_id_keeps_the_scene(client):
+    """The unlink is the irreversible half. A ledger write that failed after it
+    would leave the scene gone and its id un-retired — the exact state that lets
+    an outstanding review write into the replacement."""
+    _, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    real_retire = store.commits.retire_scene
+    store.commits.retire_scene = \
+        lambda *a, **k: (_ for _ in ()).throw(OSError("no space left on device"))
+    try:
+        with pytest.raises(OSError):
+            client.delete(f"/api/campaigns/{cid}/scenes/{sid}")
+    finally:
+        store.commits.retire_scene = real_retire
+    assert sid in [s["id"] for s in store.scenes.list_scenes(cid)]
+
+
+def test_a_known_changes_failure_survives_into_the_retry(client):
+    """changes.record publishes by atomic rename, so its exception proves nothing
+    landed. That is a better thing for a resumed commit to report than the
+    ambiguity `pending` stands for — even though both refuse to replay."""
+    _, cid = _campaign(client)
+    croot = store.campaigns.campaign_root(cid)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    store.entities.create_entity(croot, "lore", "Saltmarch", body="A port.")
+    save = {"one_line": "o", "summary": "s", "keywords": [], "timeline_events": [],
+            "edits": [{"id": "lore:saltmarch", "kind": "lore", "field": "body",
+                       "target": {"kind": "lore", "id": "saltmarch"},
+                       "before": "A port.", "after": "A flooded port."}],
+            "commit_token": store.commits.mint(store.commits.scene_epoch(cid, sid))}
+    real_changes, real_record = store.changes.record, store.commits.record
+    store.changes.record = \
+        lambda *a, **k: (_ for _ in ()).throw(OSError("no space left on device"))
+    store.commits.record = lambda *a, **k: (_ for _ in ()).throw(OSError("died"))
+    try:
+        client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle", json=save)
+    except OSError:
+        pass
+    finally:
+        store.changes.record, store.commits.record = real_changes, real_record
+
+    retry = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle", json=save)
+    assert retry.status_code == 200
+    reason = next(f["reason"] for f in retry.json()["failures"] if f["id"] == "changes")
+    assert "no space left" in reason          # the known failure, not UNCONFIRMED
+    assert "changes.json" not in [p.name for p in croot.iterdir()]
+
+
+def test_a_caller_minted_token_is_fenced_from_newer_saves_too(client):
+    """A direct API caller may send its own idempotency key, which carries no
+    epoch to derive. Fencing only server-minted tokens would leave the overtaken
+    resume wide open for exactly the callers that opted out of the mint."""
+    _, cid = _campaign(client)
+    croot = store.campaigns.campaign_root(cid)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    store.entities.create_entity(croot, "lore", "Saltmarch", body="A port.")
+    save = {"one_line": "the older review", "summary": "s", "keywords": [],
+            "timeline_events": [], "edits": [],
+            "commit_token": "a-key-of-my-own-choosing"}
+    assert store.commits.token_epoch(save["commit_token"]) is None
+
+    real_record = store.commits.record
+    store.commits.record = lambda *a, **k: (_ for _ in ()).throw(OSError("died"))
+    try:
+        client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle", json=save)
+    except OSError:
+        pass
+    finally:
+        store.commits.record = real_record
+
+    # a newer save of the same scene completes
+    assert client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                      json={"one_line": "the newer review", "summary": "s2",
+                            "keywords": [], "timeline_events": [], "edits": [],
+                            "commit_token": store.commits.mint(
+                                store.commits.scene_epoch(cid, sid))}).status_code == 200
+
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle", json=save)
+    assert r.status_code == 409 and r.json()["kind"] == "commit_incomplete"
+    assert store.chronicle.read_chronicle(cid)[sid]["one_line"] == "the newer review"
