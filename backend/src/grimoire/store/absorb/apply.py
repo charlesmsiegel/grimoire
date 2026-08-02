@@ -330,6 +330,25 @@ def _apply_one(cid: str, croot, e: dict, sid: str | None,
             # would be written without any of that having looked at it, so the
             # write goes where the checks went.
             mid = target["id"]
+            # A row STAGED AS NEW (`before` empty) whose id is now taken is not
+            # the same commitment: two reviews open at once can both propose one
+            # whose title slugs alike -- `Pay Mara` and `Pay, Mara` -- and the
+            # second conflicts once the first saves. If its reviewer answers
+            # Replace, writing to the taken id appends their beat, kind, status
+            # and deadline onto somebody else's commitment: two unrelated
+            # promises merged into one record, under whichever title landed
+            # first. So the id is reallocated by the SAME predicate materialize
+            # allocates with -- a collision is honoured only when the stored
+            # record is unresolved and carries the same title, which is the case
+            # where they really are one commitment.
+            #
+            # This is the one place the write moves off `target`, and it moves
+            # only to an id nothing holds: the target check exists to stop an
+            # existing record being overwritten unseen, and creating a new one
+            # overwrites nothing.
+            if not str(e.get("before", "")).strip():
+                mid = materializer._new_commitment_id(
+                    commitments.read(cid), {}, mid, p.get("title", ""))
             cur = commitments.get(cid, mid)
             stored_title = cur.get("title") if isinstance(cur, dict) else None
             title = "" if isinstance(stored_title, str) and stored_title.strip() \

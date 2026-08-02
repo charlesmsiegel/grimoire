@@ -862,3 +862,52 @@ def test_a_scene_whose_only_failure_created_a_record_stops_for_a_person(monkeypa
     client = FakeClient(text)
     second = asyncio.run(ingest_scene.ingest_one_scene(cid, _PARTIAL_SCENE, client, conn))
     assert second["status"] == "incomplete" and client.calls == []
+
+
+def test_an_ambiguous_edit_id_is_replayed_by_nobody():
+    """`apply_edits` reports a failure by id and nothing else, and `materialize`
+    does not promise uniqueness — two lore appends against one entry are both
+    `lore:<eid>`. Matching in order queues whichever came FIRST, which is the one
+    that landed, and drops the one that failed: the retry then re-applies stale
+    text and the scene reports `done` with the real proposal gone."""
+    edits = [{"id": "lore:the-pact", "kind": "lore", "after": "landed"},
+             {"id": "lore:the-pact", "kind": "lore", "after": "failed"},
+             {"id": "commitment:the-debt", "kind": "commitment"}]
+    failures = [{"id": "lore:the-pact", "kind": "error", "reason": "disk full"},
+                {"id": "commitment:the-debt", "kind": "error", "reason": "disk full"}]
+    assert [e["id"] for e in ingest_scene._unapplied(edits, failures)] == \
+        ["commitment:the-debt"]
+
+
+def test_an_unreplayable_failure_survives_a_successful_retry(monkeypatch, tmp_path):
+    """Conflicts were the first reason to carry failures forward; record-creating
+    rows and the `changes` log joined them, and a `kind == "conflict"` filter
+    silently dropped the new ones — so a retry that cleared the last I/O error
+    reported the scene `done` while a half-created character still stood."""
+    from grimoire.store import campaigns as campaigns_store, worlds as worlds_store
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    ingest_scene.ensure_character(cid, {"name": "Marisol"})
+    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+    sid = ingest_scene.build_scene(cid, _PARTIAL_SCENE)
+    stranded = {"id": "new_character:cassian", "kind": "error",
+                "reason": "could not seat the new character"}
+    pending = [{"id": "commitment:the-debt", "kind": "commitment", "field": "beat",
+                "target": {"kind": "commitments", "id": "the-debt"},
+                "before": "", "after": "Sworn.",
+                "payload": {"id": "the-debt", "title": "The debt", "kind": "promise",
+                            "status": "open", "due": None, "scene": sid}}]
+    ingest_scene.save_manifest(cid, {_PARTIAL_SCENE["key"]: {
+        "status": "incomplete", "sid": sid, "one_line": "x", "applied": [],
+        "failures": [stranded, {"id": "commitment:the-debt", "kind": "error",
+                                "reason": "disk full"}],
+        "pending": pending}})
+
+    result = asyncio.run(ingest_scene.ingest_one_scene(
+        cid, _PARTIAL_SCENE, FakeClient(_PARTIAL_OUTPUT), conn))
+
+    assert result["applied"] == ["commitment:the-debt"]      # the retry landed
+    assert result["status"] == "incomplete"                  # but the other still stands
+    assert result["failures"] == [stranded]
+    assert "pending" not in result                            # and it is not replayable
+    assert campaigns_store.campaign_root(cid).exists()

@@ -234,11 +234,21 @@ def _unapplied(edits: list[dict], failures: list[dict]) -> list[dict]:
     """
     outstanding = [f.get("id") for f in failures
                    if isinstance(f, dict) and f.get("kind") != "conflict"]
+    # An id shared by two rows cannot be resolved to one of them. `apply_edits`
+    # reports a failure by id and nothing else, and `materialize` does not
+    # promise uniqueness -- two lore appends against one entry are both
+    # `lore:<eid>`. Matching in order would queue whichever came FIRST, which is
+    # the one that landed, and drop the one that failed: the retry then re-applies
+    # stale text and reports the scene `done` with the real proposal gone. An
+    # ambiguous id is therefore replayed by nobody; the failure stands and a
+    # person reads it.
+    ids = [e.get("id") for e in edits if isinstance(e, dict)]
+    ambiguous = {i for i in ids if ids.count(i) > 1}
     pending: list[dict] = []
     for e in edits:
         if isinstance(e, dict) and e.get("id") in outstanding:
             outstanding.remove(e.get("id"))
-            if e.get("kind") not in _MULTI_STEP:
+            if e.get("kind") not in _MULTI_STEP and e.get("id") not in ambiguous:
                 pending.append(e)
     return pending
 
@@ -291,12 +301,19 @@ async def ingest_one_scene(cid: str, scene: dict, client: LLMClient, conn: dict)
             return {"key": key, **entry, "status": "incomplete", "detail": _vanished(sid)}
         # The first attempt's applied ids stay on the record: this run did not
         # re-apply them, and dropping them would report the scene as having
-        # landed only what the retry touched. Its conflicts stay too -- nothing
-        # replayed them, so a run that cleared the last I/O failure would
-        # otherwise report `done` on a scene still missing a movement.
+        # landed only what the retry touched.
         applied = [a for a in (entry.get("applied") or []) if isinstance(a, str)] + applied
+        # Every prior failure this run did NOT replay stays too, keyed on what
+        # was actually replayed rather than on `kind`. Conflicts were the first
+        # reason for this, then record-creating rows and the `changes` log
+        # joined them, and a `kind == "conflict"` filter silently dropped the
+        # new ones -- so a retry that cleared the last I/O error reported the
+        # scene `done` while a half-created character still stood unreconciled.
+        # The question is not what kind of failure it is; it is whether anything
+        # has since answered for it.
+        replayed = {e.get("id") for e in pending if isinstance(e, dict)}
         failures = [f for f in (entry.get("failures") or [])
-                    if isinstance(f, dict) and f.get("kind") == "conflict"] + failures
+                    if isinstance(f, dict) and f.get("id") not in replayed] + failures
         pending = _unapplied(pending, failures)
     else:
         # build_scene runs at most once per key: an "in_progress" entry means a

@@ -120,6 +120,11 @@ _PARTICLE = frozenset({
     "van", "von", "der", "den", "de", "del", "della", "di", "da", "do", "dos",
     "du", "la", "le", "ter", "ten", "bin", "ibn", "al", "af", "av",
 })
+#: Generational and honorary suffixes, which FOLLOW the family name. Stepped
+#: back over when choosing the surname form -- `Mara Vance Jr.` is a person
+#: called Vance, and taking the last token made `Jr` the alias while the name
+#: prose actually uses matched nothing.
+_SUFFIX = frozenset({"jr", "sr", "ii", "iii", "iv", "phd", "md", "esq"})
 #: First tokens that are ordinary words rather than a personal name. A name
 #: whose head is one of these yields no alias directly -- see `_short_alias`.
 _NOT_A_GIVEN_NAME = _HONORIFIC | _ARTICLE
@@ -227,14 +232,22 @@ def _surname_alias(name: str) -> str:
     entry OWNER's forms, so two actors sharing a surname drop it from each
     other's filter exactly as two sharing a given name do.
 
-    A trailing particle is not a surname (`Mara de` is a malformed name, not a
-    person called `de`), and the one-character rule is the initial rule again.
+    The family name is the last token that IS one: a generational suffix is
+    stepped back over (`Mara Vance Jr.` -> `Vance`), because taking the last
+    token blindly made `Jr` the alias and left `Vance` matching nothing — the
+    surname form pointing at the one token in the name that is not a name. A
+    trailing particle is stepped over for the same reason (`Mara de` is a
+    malformed name, not a person called `de`), and a name that is nothing but
+    suffixes after its head yields none. The one-character rule is the initial
+    rule again.
     """
     parts = _name_tokens(name)
     if len(parts) < 2:
         return ""                        # nothing follows the given name
-    tail = parts[-1]
-    return "" if _word(tail) in _PARTICLE else _usable(tail)
+    i = len(parts) - 1
+    while i > 0 and (_word(parts[i]) in _SUFFIX or _word(parts[i]) in _PARTICLE):
+        i -= 1
+    return "" if i == 0 else _usable(parts[i])
 
 
 def _usable(token: str) -> str:
