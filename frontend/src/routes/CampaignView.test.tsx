@@ -841,7 +841,62 @@ test("Replace authorizes the staged text and the next save carries it", async ()
   await waitFor(() => expect(api.saveChronicle).toHaveBeenCalledTimes(2));
   expect((api.saveChronicle as any).mock.calls[1][2].edits).toEqual([
     expect.objectContaining({ id: "lore:the-pact", resolve: "replace",
+                              // the value that was on screen, so a record that
+                              // moves again is refused rather than overwritten
+                              resolve_from: "Witnessed by the watch.",
                               after: "Signed at dusk.\n\nBroken by morning." })]);
+});
+
+test("answering one row leaves its duplicate-id sibling unanswered", async () => {
+  // `materialize` dedupes only plot threads, so two lore proposals naming one
+  // entry can share an edit id. Answering by id would silently answer both.
+  const { ApiError } = await vi.importActual<typeof import("../api/client")>("../api/client");
+  const twin = { ...LORE_REVIEW.edits[0], after: "Signed at dusk.\n\nSealed at noon." };
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  (api.absorbScene as any).mockResolvedValue({
+    ...LORE_REVIEW, edits: [LORE_REVIEW.edits[0], twin] });
+  (api.saveChronicle as any).mockRejectedValueOnce(new ApiError(
+    409, "some proposed changes no longer match what is stored", "edit_conflicts",
+    { conflicts: [PACT_CONFLICT, { ...PACT_CONFLICT, after: twin.after }] }));
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /Save summary/ }));
+  await screen.findByText(/2 proposed changes no longer match/);
+
+  fireEvent.click(screen.getAllByRole("button", { name: /Replace stored The Pact/ })[0]);
+
+  // one answered, one still waiting -- not both
+  expect(await screen.findByText(/One proposed change no longer matches/)).toBeTruthy();
+  expect(screen.getAllByRole("button", { name: /Replace stored The Pact/ })).toHaveLength(1);
+  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  await waitFor(() => expect(api.saveChronicle).toHaveBeenCalledTimes(2));
+  const sent = (api.saveChronicle as any).mock.calls[1][2].edits;
+  expect(sent.map((e: any) => e.resolve)).toEqual(["replace", undefined]);
+});
+
+test("a row that moves again after being answered comes back for a second answer", async () => {
+  const { ApiError } = await vi.importActual<typeof import("../api/client")>("../api/client");
+  await reviewIntoConflict();
+  fireEvent.click(screen.getByRole("button", { name: /Replace stored The Pact/ }));
+  (api.saveChronicle as any).mockRejectedValueOnce(new ApiError(
+    409, "some proposed changes no longer match what is stored", "edit_conflicts",
+    { conflicts: [{ ...PACT_CONFLICT, stored: "Rewritten by hand.",
+                    reason: "this changed again after you answered — the value you were "
+                            + "shown is not what is stored now",
+                    merged: "Rewritten by hand.\n\nBroken by morning." }] }));
+
+  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+
+  expect(await screen.findByText(/changed again after you answered/)).toBeTruthy();
+  expect(screen.getByText("Rewritten by hand.")).toBeTruthy();
+  // answering again re-stamps the snapshot with what is on screen NOW
+  fireEvent.click(screen.getByRole("button", { name: /Replace stored The Pact/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  await waitFor(() => expect(api.saveChronicle).toHaveBeenCalledTimes(3));
+  expect((api.saveChronicle as any).mock.calls[2][2].edits).toEqual([
+    expect.objectContaining({ resolve: "replace", resolve_from: "Rewritten by hand." })]);
 });
 
 test("Merge prefills the editable text with the server's draft", async () => {

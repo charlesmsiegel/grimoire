@@ -626,11 +626,21 @@ def put_chronicle(cid: str, sid: str, body: ChronicleSave):
         # branches above -- a replay of a save that already landed must return its
         # result, not be told the records it wrote now contradict it.
         #
-        # Inside the lock, so the verdict cannot go stale between the check and
-        # the apply that trusts it; and ahead of every write, so a 409 here leaves
-        # the chronicle untouched and this commit token unspent. The reviewer
-        # resolves each row (keep / replace / merge) and saves the same review
-        # again.
+        # This is the REVIEWER'S check, not the guard: it runs ahead of every
+        # write so a 409 leaves the chronicle untouched and this commit token
+        # unspent, letting the panel offer keep/replace/merge on a review that is
+        # still intact. The guard is `apply_edits`' own pass, which re-judges the
+        # batch immediately before it writes -- so a target that moves between
+        # here and there is still caught, as a conflict failure rather than a
+        # clean refusal.
+        #
+        # Neither pass makes check-and-write atomic, and the campaign lock does
+        # not either: `overlay` (and most of `locks.UNREVIEWED`) mutates without
+        # taking it, and the lock is machine-local, so a synced store sees none
+        # of it. Closing the remaining window means compare-and-swap in each
+        # mutator -- what `sheets.write(expected=...)` already does, and what the
+        # other seven would need -- which is the concurrency change `locks.py`
+        # says those modules are waiting on, not something to bolt on here.
         drifted = store.absorb.check_conflicts(cid, body.edits)
         if drifted:
             raise HTTPException(
