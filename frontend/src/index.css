@@ -224,6 +224,9 @@ body::before {
   text-shadow: var(--glow); line-height: 0.95; flex: none;
 }
 .stream { flex: 1; overflow-y: auto; padding: 24px 26px; }
+/* the older-history affordance sits above the oldest loaded post; scrolling
+   up here loads the next page on its own, so this is the visible fallback */
+.stream-older { display: flex; justify-content: center; margin: 0 0 16px; }
 .msg { display: flex; margin: 0 0 14px; position: relative; }
 .msg-body { flex: 1; min-width: 0; font-family: var(--fb); font-size: 16px; line-height: 1.62; color: var(--page-ink); }
 /* greeting art embedded in messages never overflows the text column */

@@ -86,9 +86,21 @@ async def post_scene_suggestions(cid: str, after: str | None = None, offscreen: 
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}")
-def get_scene(cid: str, sid: str):
+def get_scene(cid: str, sid: str, limit: int | None = None, before: int | None = None):
+    """The scene, whole by default. With `limit` the body is instead the last
+    `limit` messages ending before index `before` (default: the tail), plus
+    `offset`/`total`/`has_older` so the reader can page backwards — see
+    `scenes.read_scene_window`. Omitting `limit` keeps the unwindowed shape
+    every other caller of this route already reads.
+    """
+    if limit is not None and limit < 1:
+        raise HTTPException(status_code=400, detail="limit must be at least 1")
+    if before is not None and before < 0:
+        raise HTTPException(status_code=400, detail="before must not be negative")
     try:
-        return store.scenes.read_scene(cid, sid)
+        if limit is None:
+            return store.scenes.read_scene(cid, sid)
+        return store.scenes.read_scene_window(cid, sid, limit, before)
     except (store.scenes.SceneNotFound, store.campaigns.CampaignNotFound):
         # a scene path is built from campaign_root, so an unusable campaign id
         # surfaces here as CampaignNotFound -- still a 404, not a 500

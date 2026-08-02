@@ -1064,6 +1064,51 @@ def test_scene_context_breakdown(client):
     assert body["total_tokens"] == sum(s["tokens"] for s in body["sections"])
 
 
+# ---- windowed scene reads (#94) ----
+
+
+def _long_scene(client, cid, n):
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Long"}).json()["id"]
+    for i in range(n):
+        store.scenes.append_message(cid, sid, "user" if i % 2 == 0 else "assistant", f"post {i}")
+    return sid
+
+
+def test_get_scene_without_limit_is_unwindowed(client):
+    """The whole transcript, and no pagination fields — the shape every
+    existing caller of this route already reads."""
+    wid, cid = _campaign(client)
+    sid = _long_scene(client, cid, 6)
+    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()
+    assert [m["content"] for m in body["messages"]] == [f"post {i}" for i in range(6)]
+    assert "offset" not in body and "total" not in body
+
+
+def test_get_scene_with_limit_returns_the_tail_and_a_cursor(client):
+    wid, cid = _campaign(client)
+    sid = _long_scene(client, cid, 6)
+    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}", params={"limit": 2}).json()
+    assert [m["content"] for m in body["messages"]] == ["post 4", "post 5"]
+    assert (body["offset"], body["total"], body["has_older"]) == (4, 6, True)
+    older = client.get(f"/api/campaigns/{cid}/scenes/{sid}",
+                       params={"limit": 2, "before": body["offset"]}).json()
+    assert [m["content"] for m in older["messages"]] == ["post 2", "post 3"]
+    assert (older["offset"], older["has_older"]) == (2, True)
+
+
+def test_get_scene_rejects_a_nonsense_window(client):
+    wid, cid = _campaign(client)
+    sid = _long_scene(client, cid, 3)
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}", params={"limit": 0}).status_code == 400
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}",
+                      params={"limit": 2, "before": -1}).status_code == 400
+
+
+def test_get_scene_windowed_unknown_scene_is_404(client):
+    wid, cid = _campaign(client)
+    assert client.get(f"/api/campaigns/{cid}/scenes/nope", params={"limit": 2}).status_code == 404
+
+
 def test_edit_message_route(client):
     wid, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]

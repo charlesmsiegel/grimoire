@@ -95,6 +95,12 @@ export type CampaignMeta = {
 export type SceneMeta = { id: string; title: string; model: string; created: string; updated: string; date: string; pcless?: boolean };
 export type Message = { role: "user" | "assistant"; content: string; speaker?: string };
 export type Scene = { meta: { id: string; title: string; response_preset?: string }; messages: Message[] };
+// A windowed read (`getScene` with a `limit`) carries the tail of the
+// transcript plus the cursor to walk backwards from. `offset` is the absolute
+// index of `messages[0]` — the index `editMessage` takes — so a client holding
+// one page addresses a post exactly as one holding the whole scene does. The
+// three fields are absent from an unwindowed read, which returns the scene whole.
+export type ScenePage = Scene & { offset?: number; total?: number; has_older?: boolean };
 
 // entities (locations | lore)
 export type EntityKind = "locations" | "lore" | "items" | "groups" | "creatures";
@@ -589,8 +595,15 @@ export const api = {
   createScene: (cid: string, title?: string, suggestedDate?: string, pcless?: boolean) =>
     request<{ id: string }>("POST", `/api/campaigns/${cid}/scenes`,
       { title, suggested_date: suggestedDate, pcless }),
-  getScene: (cid: string, sid: string) =>
-    request<Scene>("GET", `/api/campaigns/${cid}/scenes/${sid}`),
+  getScene: (cid: string, sid: string, window?: { limit: number; before?: number }) => {
+    const qs = window
+      ? "?" + new URLSearchParams({
+          limit: String(window.limit),
+          ...(window.before === undefined ? {} : { before: String(window.before) }),
+        })
+      : "";
+    return request<ScenePage>("GET", `/api/campaigns/${cid}/scenes/${sid}${qs}`);
+  },
   renameScene: (cid: string, sid: string, title: string) =>
     request<{ id: string; title: string }>("PUT", `/api/campaigns/${cid}/scenes/${sid}`, { title }),
   deleteScene: (cid: string, sid: string) =>

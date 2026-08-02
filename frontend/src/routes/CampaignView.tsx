@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -33,6 +33,19 @@ const ROLL_SPEAKER = "⁣Roll";
 // separator and reroll steps over it, but it is NEVER displayed — a transition
 // renders as the unlabelled narration it was before the tag existed.
 const TRANSITION_SPEAKER = "⁣Scene";
+
+// Scene history loads a page at a time from the tail (#94). A scene that has
+// run for months is hundreds of posts, and mounting all of them costs a
+// visible pause on every scene switch; the reader almost always wants the
+// recent end. Older posts arrive by scrolling up (or the button that scroll
+// falls back to), which prepends the next page and holds the viewport still.
+const PAGE_SIZE = 60;
+// Scrolled this close to the top, "show me more" is what the reader means.
+const NEAR_TOP_PX = 120;
+// ...and this close to the bottom, they are following the reply as it streams,
+// so new content should keep scrolling itself into view. Farther up than this
+// they are reading something specific and must not be yanked away from it.
+const NEAR_BOTTOM_PX = 80;
 
 // Reader-facing names for the absorb steps the API reports in `phases`. The
 // wire names say where the work happens; these say what the reviewer lost.
@@ -126,6 +139,20 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   const [sceneSort, setSceneSort] = useState<SceneSort>("updated");
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  // `messages` is a WINDOW onto the transcript's tail, not the whole of it.
+  // `firstIndex` is the absolute index of `messages[0]`, so every index this
+  // component hands the API (edit, reroll) stays the index the backend means,
+  // and `firstIndex > 0` is exactly "there are older posts to load".
+  const [firstIndex, setFirstIndex] = useState(0);
+  // The guard is the REF; the state only drives the button's label. Scroll
+  // fires in bursts and setState is async, so two events in one tick would
+  // both read `loadingOlder === false` and prepend the same page twice.
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const loadingOlderRef = useRef(false);
+  // How much history is on screen. A refresh of the *same* scene (after a
+  // reply, an edit, a roll) re-reads this much rather than snapping back to
+  // one page, so pages the reader already scrolled up to survive the re-fetch.
+  const windowSizeRef = useRef(PAGE_SIZE);
   const [streaming, setStreaming] = useState("");
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -227,9 +254,34 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cid]);
 
-  useEffect(() => {
-    streamRef.current?.scrollTo({ top: streamRef.current.scrollHeight });
+  // Following the tail is the default and stays the default — but only while
+  // the reader is AT the tail. Two things now move the stream and they must
+  // not fight: new content at the bottom (scroll to it) and a page of older
+  // posts prepended at the top (hold the reader where they were, which means
+  // restoring the distance from the BOTTOM, since everything above them just
+  // grew). `atBottomRef` is written by onScroll below and starts true, so an
+  // untouched stream — and jsdom, where every scroll metric is 0 — follows.
+  const atBottomRef = useRef(true);
+  // distance from the bottom captured just before a prepend, consumed once
+  const prependAnchorRef = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    const el = streamRef.current;
+    if (!el) return;
+    const anchor = prependAnchorRef.current;
+    if (anchor !== null) {
+      prependAnchorRef.current = null;
+      el.scrollTop = el.scrollHeight - anchor;
+      return;
+    }
+    if (atBottomRef.current) el.scrollTo({ top: el.scrollHeight });
   }, [messages, streaming]);
+
+  function onStreamScroll() {
+    const el = streamRef.current;
+    if (!el) return;
+    atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX;
+    if (el.scrollTop <= NEAR_TOP_PX) loadOlder();
+  }
 
   // unstamped user lines fall back to the sole player's name on their plate
   const playerName = useMemo(() => {
@@ -316,6 +368,9 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       // the scene they picked it on — switching scenes must not carry it
       // silently onto an unrelated scene's next reply.
       setPendingResponse(null);
+      // a new scene opens at its most recent page, at the bottom
+      windowSizeRef.current = PAGE_SIZE;
+      atBottomRef.current = true;
     }
     api.getSceneDatetime(cid, id).then(setDt).catch(() => setDt(null));
     api.getCast(cid, id).then(setCast).catch(() => setCast([]));
@@ -332,11 +387,41 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     Promise.resolve(api.getSceneResponse?.(cid, id))
       .then((r) => setSceneResponse(r ?? null))
       .catch(() => setSceneResponse(null));
-    const scene = await api.getScene(cid, id);
+    const scene = await api.getScene(cid, id, { limit: windowSizeRef.current });
     setMessages(scene.messages);
+    // an unwindowed reply (no `offset`) is the whole transcript, which starts at 0
+    setFirstIndex(scene.offset ?? 0);
     setSceneResponsePreset(scene.meta.response_preset ?? "");
     setStreaming("");
     setCtxKey((n) => n + 1);
+  }
+
+  // Prepend the page of posts just above the window. Called by the scroll
+  // handler and by the button it backs; either way it is a no-op once the top
+  // of the transcript is on screen or another page is already in flight.
+  async function loadOlder() {
+    const id = activeId;
+    if (!id || loadingOlderRef.current || firstIndex <= 0) return;
+    loadingOlderRef.current = true;
+    setLoadingOlder(true);
+    const el = streamRef.current;
+    try {
+      const page = await api.getScene(cid, id, { limit: PAGE_SIZE, before: firstIndex });
+      if (!page.messages.length) {
+        setFirstIndex(0); // the transcript shrank under us; nothing older is left
+        return;
+      }
+      // Measure from the bottom, not the top: the prepend pushes everything
+      // down by however tall the new posts render, and only the layout effect
+      // (after paint, when that height exists) can undo it.
+      if (el) prependAnchorRef.current = el.scrollHeight - el.scrollTop;
+      windowSizeRef.current += page.messages.length;
+      setMessages((m) => [...page.messages, ...m]);
+      setFirstIndex(page.offset ?? 0);
+    } finally {
+      loadingOlderRef.current = false;
+      setLoadingOlder(false);
+    }
   }
 
   function newScene() {
@@ -390,6 +475,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       else {
         setActiveId(null);
         setMessages([]);
+        setFirstIndex(0);
       }
     }
   }
@@ -441,6 +527,9 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       setActiveId(id);
     }
     setInput("");
+    // the player just spoke: put them back at the tail even if they had
+    // scrolled up into older history to re-read something
+    atBottomRef.current = true;
     // ephemeral turns are never stored: a director note (offscreen scene) or —
     // in any scene — an empty send meaning "next NPC round"
     if (activePcless || !content) {
@@ -674,6 +763,9 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   // message beneath them rather than off the true last message. A manual dice
   // roll (backend tags it speaker "Roll") still blocks reroll outright — its
   // entry lives on in rolls.json and the line must stay in lockstep.
+  // window-relative; `rerollAt` below is the absolute index the rendered posts
+  // carry. Both the run and the transitions above it live in the loaded tail,
+  // so a windowed transcript reaches the same answer as a whole one.
   const rerollIndex = (() => {
     let i = messages.length - 1;
     while (i >= 0 && messages[i].speaker === TRANSITION_SPEAKER) i--;
@@ -682,7 +774,10 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   const canReroll = rerollIndex >= 0 &&
     messages[rerollIndex].role === "assistant" &&
     messages[rerollIndex].speaker !== ROLL_SPEAKER &&
-    messages.some((x) => x.role === "user");
+    // "not the opener": posts below the window are unloaded, not absent, so
+    // an off-window user message still means this run had something to answer
+    (firstIndex > 0 || messages.some((x) => x.role === "user"));
+  const rerollAt = rerollIndex < 0 ? -1 : firstIndex + rerollIndex;
 
   // The transition tag is internal drift metadata, never a speaker: a
   // transition renders as the unlabelled narration it was before the tag
@@ -711,7 +806,8 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   type Run = { speaker: string; pc: boolean; actor: Actor | undefined;
                posts: { m: Message; index: number }[] };
   const runs: Run[] = [];
-  messages.forEach((m, index) => {
+  messages.forEach((m, i) => {
+    const index = firstIndex + i; // absolute: what edit/reroll address it by
     const speaker = speakerOf(m);
     const last = runs[runs.length - 1];
     if (last && last.speaker === speaker) {
@@ -1040,7 +1136,18 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
             {activePcless && <span className="chip on offscreen-badge">Offscreen</span>}
           </h2>
         )}
-        <div className={"stream" + (colorQuotes ? " color-quotes" : "")} ref={streamRef}>
+        <div className={"stream" + (colorQuotes ? " color-quotes" : "")} ref={streamRef}
+             onScroll={onStreamScroll}>
+          {firstIndex > 0 && (
+            <div className="stream-older">
+              <button className="subtle" onClick={loadOlder} disabled={loadingOlder}>
+                {loadingOlder ? "Loading…" : (() => {
+                  const n = Math.min(PAGE_SIZE, firstIndex);
+                  return `Load ${n} older post${n === 1 ? "" : "s"}`;
+                })()}
+              </button>
+            </div>
+          )}
           {runs.map((run) => (
             <div className={"run" + (run.pc ? " pc" : "")} key={run.posts[0].index}>
               <div className={"plate" + (run.pc ? " pc" : "")}>
@@ -1068,7 +1175,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
                   <span className="msg-gutter">
                     {editing?.index !== index && !busy && (
                       <span className="gutter-icons">
-                        {index === rerollIndex && canReroll && (
+                        {index === rerollAt && canReroll && (
                           <button className="msg-edit" title="Reroll" aria-label="Reroll"
                                   disabled={rolling} onClick={() => setRerollPrompt("")}>↻</button>
                         )}
@@ -1079,7 +1186,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
                       </span>
                     )}
                     {rerollPrompt !== null && !busy &&
-                     index === rerollIndex && canReroll && (
+                     index === rerollAt && canReroll && (
                       <span className="reroll-pop">
                         <input
                           autoFocus
