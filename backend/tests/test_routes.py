@@ -2790,6 +2790,28 @@ def test_a_departed_speaker_sharing_the_label_still_disqualifies(client):
     assert [f["id"] for f in body["voice"]["failed"]] == ["aese"]
 
 
+def test_a_name_the_transcript_cannot_carry_fails_that_actor(client):
+    """`scenes.serialize._label` silently writes the generic role label for a
+    name it cannot form a marker from, so those lines land in the transcript as
+    "Grimoire". Pointing the judge at the card name would hunt for a speaker
+    that cannot appear -- and risk charging generic assistant prose to it."""
+    for bad in ("Aese *the Grey*", "Aese\nVane", "A" * 65):
+        cid, sid = _voice_scene(client)
+        aroot = store.appearances.locked_actor_root(cid)
+        card = store.characters.read_card(aroot, "aese", "main")
+        card["data"]["name"] = bad
+        store.characters.update_version(aroot, "aese", "main", card)
+
+        fake = FakeOpenRouterComplete([_EXTRACTION, _DOSSIER])
+        client.app.dependency_overrides[routes.get_llm] = lambda: fake
+        r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+
+        assert r.status_code == 200
+        assert fake.calls == 2                    # extraction + dossier, no voice call
+        assert [f["id"] for f in r.json()["voice"]["failed"]] == ["aese"]
+        assert "cannot appear as a transcript label" in r.json()["voice"]["failed"][0]["reason"]
+
+
 def test_an_unusable_card_name_fails_that_actor_not_the_absorb(client):
     """Cards are stored as arbitrary dicts, so `data.name` can be a number or an
     object — import and version PUT both accept them. Everything downstream
@@ -2809,7 +2831,7 @@ def test_an_unusable_card_name_fails_that_actor_not_the_absorb(client):
     assert fake.calls == 2                            # extraction + dossier, no voice call
     assert r.json()["voice"]["status"] == "failed"
     assert [f["id"] for f in r.json()["voice"]["failed"]] == ["aese"]
-    assert "no usable name" in r.json()["voice"]["failed"][0]["reason"]
+    assert "cannot appear as a transcript label" in r.json()["voice"]["failed"][0]["reason"]
 
 
 def test_a_unique_name_is_still_judged_alongside_a_clashing_pair(client):

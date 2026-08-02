@@ -2085,3 +2085,17 @@ def test_a_corrective_for_a_prefix_ambiguous_name_is_suppressed(monkeypatch, tmp
     ap.appear(cid, sid, "characters", "mara", "default", "npc")
 
     assert "drifted out of voice" not in context.build_messages(cid, sid)[-1]["content"]
+
+
+def test_reformatting_the_anchor_body_keeps_a_committed_flag_live(monkeypatch, tmp_path):
+    """End to end for the fingerprint's whitespace rule: rewrapping the anchor
+    must not silently retire the corrective judged against it."""
+    wid, cid, sid = _voice_scene(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    rec = voice_anchors.read_record(wroot, "winifred")
+    voice_drift.write(campaigns.campaign_root(cid), "winifred", "She hedged.",
+                      voice_drift.anchor_fingerprint(rec["text"], rec["id"]))
+    assert "drifted out of voice" in context.build_messages(cid, sid)[-1]["content"]
+
+    voice_anchors.write(wroot, "winifred", rec["text"].replace(". ", ".\n\n"))
+    assert "drifted out of voice" in context.build_messages(cid, sid)[-1]["content"]
