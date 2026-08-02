@@ -28,7 +28,7 @@ _BROWSABLE_KINDS = ("character_state", "dossier", "lore", "authored", "new_chara
                     "new_location", "new_lore")
 
 
-def _outside_drift(cid: str, e: dict, reading, landed: set[str]) -> dict | None:
+def _outside_drift(cid: str, e: dict, reading, landed: set[tuple]) -> dict | None:
     """The conflict somebody else's write introduced while this commit was down,
     or None.
 
@@ -46,17 +46,19 @@ def _outside_drift(cid: str, e: dict, reading, landed: set[str]) -> dict | None:
     change, judged fresh so the reviewer is shown the real `stored` and
     `merged`.
 
-    `landed` is matched by VALUE rather than by target: what identifies a target
-    differs per kind, and a second dispatch over the kinds here would be one more
-    place to forget a new one. The looseness costs only where an outside writer
-    stored precisely the text one of this commit's own edits had already written
-    -- in which case what is stored is the value this commit was going to
-    produce anyway.
+    `landed` holds (target, value) pairs, and BOTH have to match for a change to
+    count as this commit's own. Matching on the value alone would let an outside
+    write to a different record pass whenever it happened to store text one of
+    these edits had already written -- and with "" and other common state values
+    in play, that collision is ordinary rather than exotic. An edit whose target
+    `conflicts.target_key` cannot name is never exempted at all: unrecognised
+    means judged, not waved through.
     """
     if not isinstance(reading, str):
         return None   # nothing was read the first time: no drift to prove either way
     now = conflicts.current_value(cid, e)
-    if now is None or now == reading or now in landed:
+    key = conflicts.target_key(e)
+    if now is None or now == reading or (key is not None and (key, now) in landed):
         return None
     return conflicts.conflict_row(cid, e)
 
@@ -179,7 +181,17 @@ def _apply_one(cid: str, croot, e: dict, sid: str | None,
             # the stored one alone and still falls back to the id for a brand-new
             # thread, so the rename is not a conflict to resolve; it stands.
             title = "" if plot.get(cid, p["id"]) else p["title"]
-            plot.set_movement(cid, p["id"], title, p["status"], after, p["scene"])
+            # `sid` in preference to the staged `payload.scene`, which
+            # `materialize` sets to the very same scene. They differ in one case:
+            # the scene was RENAMED between a crashed commit and its retry. The
+            # ledger follows a rename (`commits.repoint_scenes`) so the retry is
+            # accepted, but the body cannot change -- the fingerprint refuses any
+            # retry whose body differs -- so the payload still names the old id.
+            # Writing that would stamp the beat and `last_scene` with a scene
+            # that no longer exists, and `plot.repoint_scenes` has already run,
+            # so nothing would come back for it. The payload stays the fallback
+            # for a caller that passes no `sid`.
+            plot.set_movement(cid, p["id"], title, p["status"], after, sid or p["scene"])
         elif kind == "new_character":
             p = e["payload"]
             card = characters.blank_card(p["name"])
@@ -319,7 +331,7 @@ def apply_edits(cid: str, edits: list[dict], sid: str | None = None,
         # edit 0, and a crash before that leaves nothing applied to be judged
         # against, so a recomputation there is judging the same store anyway.
         journal["verdicts"], journal["readings"] = verdicts, readings
-    landed: set[str] = set()
+    landed: set[tuple] = set()
     for i, e in enumerate(edits):
         slot = str(i)
         prior = outcomes.get(slot)
@@ -341,9 +353,12 @@ def apply_edits(cid: str, edits: list[dict], sid: str | None = None,
                 prior["read"] = conflicts.current_value(cid, e)
         if prior.get("state") == "applied":
             applied.append(prior.get("id", ""))
-            read = prior.get("read")
-            if isinstance(read, str):
-                landed.add(read)
+            read, key = prior.get("read"), conflicts.target_key(e)
+            # Recomputed from the edit rather than journalled beside the reading:
+            # the token's fingerprint has already refused any retry whose body
+            # differs, so this list is the one the first attempt worked from.
+            if isinstance(read, str) and key is not None:
+                landed.add((key, read))
         elif prior.get("state") == "pending":
             failures.append({"id": prior.get("id", ""), "kind": "error",
                              "reason": UNCONFIRMED})
