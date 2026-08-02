@@ -201,6 +201,9 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   // `post_chat` expands macros before storing, so what came back never has to
   // equal what was typed.
   const totalRef = useRef(0);
+  // Which scene `totalRef` is a count of. It is written by whichever read
+  // landed last, which is not necessarily the scene a turn is about to run on.
+  const totalSceneRef = useRef<string | null>(null);
   // Orders writes to the chip, because the proposal is read from two places
   // that can answer out of order. `selectScene` fires a read and does not await
   // it; the post-cancel `settleProposal` fires a later one deliberately. Making
@@ -412,7 +415,16 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   const [directorNote, setDirectorNote] = useState<string | null>(null);
 
   useEffect(() => { activeIdRef.current = activeId; }, [activeId]);
-  useEffect(() => () => { mountedRef.current = false; }, []);
+  // Set on the way in as well as cleared on the way out. StrictMode runs the
+  // setup/cleanup/setup cycle on mount in development, so a cleanup-only effect
+  // leaves the flag false for the whole life of the view — and `owns()` below
+  // reads it, which would have every post-cancel flush poll bow out before its
+  // first look and leave a flushed partial invisible until the next refresh
+  // (review, #95). Dev-only, but dev is where cancelling gets exercised.
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   // A write the caller knows the answer to — a live SSE proposal, or a clear
   // the player's own action implies. Retires every read still in flight, since
@@ -493,6 +505,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     // report no growth however much lands. The flush poll compares this across
     // ticks to notice a cancelled turn's partial arriving.
     totalRef.current = scene.total ?? scene.messages.length;
+    totalSceneRef.current = id;
     return totalRef.current;
   }
 
@@ -627,7 +640,11 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       waited += wait;
       wait = Math.min(wait * 2, FLUSH_POLL_MAX_MS);
       if (!owns()) return;
-      const n = await selectScene(id, owns);
+      // A read that fails is a tick that learned nothing, not the end of the
+      // wait: the flush this is watching for happens on the server whether or
+      // not one GET made it there, and throwing here would escape a `finally`
+      // (review, #95). Keep polling until the budget runs out.
+      const n = await selectScene(id, owns).catch(() => -1);
       if (!owns()) return;
       if (n > seen) return void await settleProposal(id, owns);
     }
@@ -663,9 +680,25 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   ) {
     const controller = new AbortController();
     abortRef.current = controller;
-    const totalBefore = totalRef.current;   // before this turn writes anything
     setBusy(true);
     setError(null);
+    // How long this scene's transcript was before the turn wrote anything —
+    // the baseline the pre-response restore below compares against.
+    //
+    // `totalRef` alone is not it. It holds whichever scene was read last, and a
+    // turn can start on a scene that has not been read yet: Send stays enabled
+    // while a freshly selected scene is still loading, and `send` creates a
+    // scene and streams into it without a read in between. Measuring this
+    // scene's growth against another scene's length decides the restore by
+    // which transcript happened to be longer — restoring a prompt that landed
+    // (the player sends it twice) or dropping one that never did (review, #95).
+    // So: use the ref only when it is this scene's, and otherwise read the one
+    // number needed, which costs a request only inside that window.
+    const totalBefore = totalSceneRef.current === id
+      ? totalRef.current
+      : await api.getScene(cid, id, { limit: 1 })
+          .then((s) => s.total ?? s.messages.length)
+          .catch(() => null);   // unknown — treated as unverifiable below
     let acc = "";
     // Three separate questions, and none of them is "did the promise resolve".
     // `finished`: a `done` frame arrived, which the backend sends only after
@@ -735,7 +768,24 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       // `windowTokenRef` and so retires the page this one has in flight. The
       // poll needs the scene check too because it *issues* fresh selects, which
       // bump that token themselves and cannot be retired by it.
-      const seen = await selectScene(id, () => !abortRef.current);
+      //
+      // Its failure is caught rather than thrown, because it is the *same*
+      // failure the turn just had: a POST that never reached the server usually
+      // means this GET will not either. Letting it escape from a `finally`
+      // skipped the restoration below and replaced the original error on the
+      // way out, so the one case that most needs the player's words back was
+      // the one case that dropped them (review, #95).
+      let seen = -1;
+      let refreshed = false;
+      try {
+        seen = await selectScene(id, () => !abortRef.current);
+        refreshed = true;
+      } catch (err: any) {
+        // Keep whatever the turn itself reported; say something if it reported
+        // nothing, since the view is now showing a transcript it could not
+        // confirm (a cancel raises no banner of its own).
+        setError((cur) => cur ?? (err?.detail ?? String(err)));
+      }
       // Anything that ended without `done` may have left a partial the backend
       // is still flushing — a cancel, or a body cut short. An error frame is
       // NOT one of those: the backend ran its handler before sending it, so the
@@ -751,10 +801,28 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       // landed, so the prompt exists nowhere and the composer has to have it
       // back. `seen < 0` is `selectScene` bowing out to a newer owner — it did
       // not look, so it cannot say.
-      if (unreached && seen >= 0 && seen <= totalBefore) onPromptUnstored?.();
+      //
+      // And when the transcript cannot answer — the refresh failed, or this
+      // scene's length before the turn was never established — restore anyway.
+      // Both mean the same thing: nothing proves the post landed. Erring the
+      // other way risks a duplicate the player can see and delete; erring this
+      // way destroys text that exists in no other place.
+      const unverifiable = !refreshed || totalBefore === null;
+      if (unreached && (unverifiable || (seen >= 0 && seen <= totalBefore))) {
+        onPromptUnstored?.();
+      }
       // Nothing to wait for when the request never arrived: there is no turn
       // on the server to have produced a partial.
-      if (!finished && !errored && !unreached) await awaitFlushedPartial(id, seen);
+      //
+      // The poll needs a length to watch for growth past, and a refresh that
+      // failed did not produce one. Fall back to this scene's pre-turn length:
+      // still the right question (did the flush land?), just measured from
+      // where the turn started. `-1` only when even that is unknown, which
+      // makes the first successful read count as growth — the poll refreshes
+      // once and stops, which is what an unmeasurable scene can honestly do.
+      if (!finished && !errored && !unreached) {
+        await awaitFlushedPartial(id, refreshed ? seen : (totalBefore ?? -1));
+      }
     }
     // Landed means the backend said so, not that the promise resolved.
     return finished && !errored;
