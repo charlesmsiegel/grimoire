@@ -145,9 +145,15 @@ def _name_tokens(name: str) -> list[str]:
         return []                        # one bare token needs no alias
     if not parts:
         return []                        # a bare honorific names nobody
-    if not all(p[:1].isupper() or _word(p) in _PARTICLE for p in parts[1:]):
+    # NOT `isupper()`: a script without letter case -- Arabic, Hebrew, the CJK
+    # scripts -- answers False to it for every token, so requiring upper case
+    # rejected every multi-token name written in one and derived no alias at
+    # all. That is the `\b` failure again: not a missed edge, an entire class of
+    # campaign for which this filter did nothing. What actually marks an epithet
+    # is a token that is explicitly LOWER case, and an uncased token is neither.
+    if not all(not p[:1].islower() or _word(p) in _PARTICLE for p in parts[1:]):
         return []                        # "The Woman on the Pier" -- an epithet
-    if not parts[0][:1].isupper():
+    if parts[0][:1].islower():
         return []                        # a particle is never the head
     if any(_word(p) in _ARTICLE for p in parts):
         return []                        # "Woman Of The Pier" -- the same, title-cased
@@ -406,6 +412,7 @@ def _entries(suspects: str) -> list[list[str]]:
     out: list[list[str]] = []
     heads: list[int] = []
     fresh = True                            # the next line opens a new entry
+    pending_blank = False                   # a blank whose pop is not yet decided
     # Open headings, outermost first: (entry, rank, kind). `rank` is the
     # indent for a colon heading or a heading bullet, and the heading LEVEL for
     # an ATX one -- the two never nest against each other by the same measure.
@@ -416,16 +423,32 @@ def _entries(suspects: str) -> list[list[str]]:
             out.append([line])              # blank: its own entry, and ends the paragraph
             heads.append(-1)
             fresh = True
-            # A blank ends a paragraph, and with it the colon headings and
-            # heading bullets that belong to that paragraph -- but NOT a
-            # markdown section heading, which is conventionally separated from
-            # its own list by exactly this blank line.
-            while open_heads and open_heads[-1][2] != "atx":
-                open_heads.pop()
+            # The pop is DEFERRED to the next non-blank line, because whether
+            # this blank ends anything depends on what follows it. A list item
+            # continues across a blank when the paragraph below is indented
+            # inside it --
+            #
+            #     - Winifred is lying.
+            #
+            #       She hid the ledger at the pier.
+            #
+            # -- which is ordinary markdown, and popping here made that second
+            # paragraph independent: the named bullet withheld, the continuation
+            # that has no subject of its own published.
+            pending_blank = True
             continue
+        indent = len(line) - len(line.lstrip())
+        if pending_blank:
+            # Now the indent is known. A blank ends the colon headings and the
+            # bullets it closes -- but NOT a bullet this line is indented inside,
+            # and NOT a markdown section heading, which is conventionally
+            # separated from its own list by exactly this blank line.
+            while open_heads and open_heads[-1][2] != "atx" and not (
+                    open_heads[-1][2] == "item" and indent > open_heads[-1][1]):
+                open_heads.pop()
+            pending_blank = False
         atx = _ATX.match(stripped)
         item = bool(_LIST_MARKER.match(stripped))
-        indent = len(line) - len(line.lstrip())
         # A setext underline retroactively makes the line ABOVE it a heading, so
         # it is handled where that line's entry is still reachable rather than
         # in `_heads_a_list`, which only ever sees one line at a time. A `-----`

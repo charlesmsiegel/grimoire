@@ -1892,3 +1892,39 @@ def test_a_mixed_case_resolved_record_does_not_capture_a_new_commitment(monkeypa
     absorb.apply_edits(cid, edits, sid)
     assert commitments.get(cid, "the-debt")["status"] == "Fulfilled"   # untouched
     assert commitments.get(cid, "the-debt-2")["status"] == "open"
+
+
+def test_a_commitment_edit_writes_where_its_target_says(monkeypatch, tmp_path):
+    """An edit reaches `apply_edits` from a client-supplied PUT body typed as an
+    unrestricted dict, and everything that JUDGED the row read `target`:
+    `conflicts` surveyed it, `target_key` keyed the journal by it, and the
+    reviewer's basis describes it. A payload naming a different record would be
+    written with none of that having looked at it."""
+    from grimoire.store import commitments, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    commitments.set_movement(cid, "the-debt", "The debt", "promise", "open", "",
+                             "Sworn.", "s1")
+    commitments.set_movement(cid, "the-oath", "The oath", "promise", "open", "",
+                             "Also sworn.", "s1")
+
+    # The staged basis has to MATCH the target, or the conflict pass refuses the
+    # row before this branch is reached — which is the other half of the point:
+    # the survey reads `target`, so a payload pointing elsewhere is written with
+    # nothing having judged it.
+    from grimoire.store.absorb import conflicts as absorb_conflicts
+    basis = absorb_conflicts.commitment_line(commitments.get(cid, "the-debt"))
+
+    applied, failures = absorb.apply_edits(cid, [{
+        "id": "commitment:the-debt", "kind": "commitment", "field": "beat",
+        "target": {"kind": "commitments", "id": "the-debt"},
+        "before": basis, "after": "A forged beat.",
+        "payload": {"id": "the-oath", "title": "", "kind": "", "status": "broken",
+                    "due": None, "scene": sid}}], sid)
+
+    # The row was judged against `the-debt`, so `the-debt` is what it touches.
+    assert (applied, failures) == (["commitment:the-debt"], [])
+    assert [b["text"] for b in commitments.get(cid, "the-debt")["beats"]] == \
+        ["Sworn.", "A forged beat."]
+    assert [b["text"] for b in commitments.get(cid, "the-oath")["beats"]] == ["Also sworn."]
+    assert commitments.get(cid, "the-oath")["status"] == "open"      # not broken

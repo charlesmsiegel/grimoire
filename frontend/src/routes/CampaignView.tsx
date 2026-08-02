@@ -846,6 +846,18 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       }
       return next;
     }));
+    // An UNANSWERED conflict carries the same fingerprint, and it is the value
+    // `resolveConflict` copies into `resolve_from` when the reviewer clicks
+    // Replace. The server's own repoint has already moved the stored record onto
+    // the new id, so a stale snapshot here means the retry is refused as changed
+    // again — the reviewer answering a conflict that no longer exists, twice.
+    // It is also what the panel SHOWS them, so leaving it stale would display an
+    // id no scene has.
+    // No kind check needed: `repoint` only rewrites a string ENDING in the
+    // commitment fingerprint's suffix, and a plot conflict's `stored` is a
+    // `plot_line`, which does not carry one.
+    setConflicts((cs) => cs.map(({ row, conflict }) => (
+      { row, conflict: { ...conflict, stored: repoint(conflict.stored) } })));
   }
 
   // A scene's id is its filename, so a rename mints a new one and every piece

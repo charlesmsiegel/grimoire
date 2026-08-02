@@ -193,6 +193,11 @@ def _vanished(sid: str) -> str:
             "or deleted after the run that recorded it; reconcile this key by hand")
 
 
+#: Edit kinds that write more than one thing, so a failure can leave the first
+#: one made. Never replayed -- see `_unapplied`.
+_MULTI_STEP = ("new_character", "new_location", "new_lore")
+
+
 def _unapplied(edits: list[dict], failures: list[dict]) -> list[dict]:
     """The rows a failed apply did not land AND could still land, in batch order.
 
@@ -213,6 +218,19 @@ def _unapplied(edits: list[dict], failures: list[dict]) -> list[dict]:
     silent overwrite the conflict exists to prevent. So it stays in `failures`
     as a standing reason, is carried across retries so a later run cannot report
     the scene `done` without it, and needs a person.
+
+    **A row that CREATES a record is excluded for a different reason**: it may
+    have half landed. `new_character` writes the character and then seats it in
+    the scene; `new_location` writes the entity and may then set it as the
+    scene's setting; each is more than one step inside one edit, and a failure
+    after the first leaves the record made. Replaying that does not retry the
+    step that failed -- `overlay.create_*` uniquifies an occupied slug, so the
+    retry mints a SECOND character or location and seats that one instead. The
+    fix is the same shape as for a conflict: report it, keep it out of
+    `pending`, and let a person look at what exists before anything else is
+    written. (Making these replayable properly means persisting the created id
+    and resuming mid-edit, which is a change to `apply_edits`' contract rather
+    than to this script.)
     """
     outstanding = [f.get("id") for f in failures
                    if isinstance(f, dict) and f.get("kind") != "conflict"]
@@ -220,7 +238,8 @@ def _unapplied(edits: list[dict], failures: list[dict]) -> list[dict]:
     for e in edits:
         if isinstance(e, dict) and e.get("id") in outstanding:
             outstanding.remove(e.get("id"))
-            pending.append(e)
+            if e.get("kind") not in _MULTI_STEP:
+                pending.append(e)
     return pending
 
 
