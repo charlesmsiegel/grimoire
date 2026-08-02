@@ -427,5 +427,114 @@ def test_a_resolved_row_is_no_longer_reported(monkeypatch, tmp_path):
     edit = _lore_edit("Signed at dusk.", "Broken by morning.")
 
     assert len(conflicts.check_conflicts(cid, [edit])) == 1
-    assert conflicts.check_conflicts(cid, [{**edit, "resolve": "replace"}]) == []
-    assert conflicts.check_conflicts(cid, [{**edit, "resolve": "merge"}]) == []
+    for answer in ("replace", "merge"):
+        assert conflicts.check_conflicts(
+            cid, [{**edit, "resolve": answer, "resolve_from": "Moved on."}]) == []
+
+
+# --- answering a conflict is not standing permission --------------------------
+
+def test_a_target_that_moves_again_after_the_answer_is_reported_again(monkeypatch, tmp_path):
+    """`resolve` authorizes overwriting the value the reviewer was SHOWN. If the
+    record moves again between the refusal and the retry, honouring the flag
+    alone would overwrite something nobody ever saw — the lost update this whole
+    module exists to stop, recreated one step later."""
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "lore", "The Pact", body="Witnessed by the watch.")
+    answered = {**_lore_edit("Signed at dusk.", "Broken by morning."),
+                "resolve": "replace", "resolve_from": "Witnessed by the watch."}
+    assert conflicts.check_conflicts(cid, [answered]) == []   # still what they saw
+
+    entities.update_entity(croot, "lore", "the-pact", body="Rewritten by hand.")
+
+    row = conflicts.check_conflicts(cid, [answered])[0]
+    assert row["stored"] == "Rewritten by hand."
+    assert "changed again after you answered" in row["reason"]
+    applied, failures = absorb.apply_edits(cid, [answered])
+    assert applied == [] and [f["kind"] for f in failures] == ["conflict"]
+    assert entities.read_entity(croot, "lore", "the-pact")["body"].strip() == "Rewritten by hand."
+
+
+def test_answering_the_second_conflict_lets_the_save_through(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "lore", "The Pact", body="Rewritten by hand.")
+    answered = {**_lore_edit("Signed at dusk.", "Broken by morning."),
+                "resolve": "replace", "resolve_from": "Rewritten by hand."}
+
+    applied, _ = absorb.apply_edits(cid, [answered])
+
+    assert applied == ["lore:the-pact"]
+    assert entities.read_entity(croot, "lore", "the-pact")["body"].strip() == "Broken by morning."
+
+
+def test_a_resolution_with_no_snapshot_keeps_its_unconditional_meaning(monkeypatch, tmp_path):
+    """Backward compatibility for a client that sends `resolve` alone: the flag
+    still authorizes the write, it just cannot be held to a value it never
+    recorded."""
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "lore", "The Pact", body="Rewritten by hand.")
+
+    applied, _ = absorb.apply_edits(cid, [
+        {**_lore_edit("Signed at dusk.", "Broken by morning."), "resolve": "replace"}])
+
+    assert applied == ["lore:the-pact"]
+
+
+def test_the_merged_draft_of_a_recheck_diffs_from_what_the_reviewer_saw(monkeypatch, tmp_path):
+    """On a recheck the basis is `resolve_from`, so the draft carries only the
+    reviewer's own edit forward — not the text they had already merged in."""
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "lore", "The Pact", body="Rewritten by hand.")
+
+    row = conflicts.check_conflicts(cid, [
+        {**_lore_edit("Signed at dusk.", "Witnessed by the watch.\nBroken by morning."),
+         "resolve": "merge", "resolve_from": "Witnessed by the watch."}])[0]
+
+    assert row["merged"] == "Rewritten by hand.\n\nBroken by morning."
+
+
+# --- malformed client input stays best-effort ---------------------------------
+
+def test_a_malformed_row_never_escapes_as_an_exception(monkeypatch, tmp_path):
+    """`edits` arrives straight off a PUT body that is validated only as "a list
+    of dicts". Every one of these raises rather than returning False/None if the
+    read is not guarded, and one bad row must not 500 the whole save — the
+    best-effort contract `apply_edits` has always had for a broken target."""
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "lore", "The Pact", body="Signed at dusk.")
+    malformed = [
+        {"id": "a", "kind": "lore", "target": "not-a-dict", "before": "x", "after": "y"},
+        {"id": "b", "kind": "lore", "target": ["also", "not"], "before": "x", "after": "y"},
+        {"id": "c", "kind": ["unhashable"], "target": {}, "before": "x", "after": "y"},
+        {"id": "d", "kind": "relationship", "payload": "not-a-dict",
+         "before": "x", "after": "y"},
+        {"id": "e", "kind": "lore", "target": {"kind": "lore", "id": "the-pact"},
+         "before": "x", "after": "y", "resolve": ["unhashable"]},
+        "not a dict at all",
+    ]
+
+    # Only "e" is judged at all: its target reads, and its garbled `resolve`
+    # authorizes nothing, so it is a plain conflict against a moved entry.
+    assert [r["id"] for r in conflicts.check_conflicts(cid, malformed)] == ["e"]
+    applied, failures = absorb.apply_edits(cid, malformed)
+    assert applied == []
+    assert [f["id"] for f in failures] == ["e"]   # the rest: skipped, best-effort
+    assert entities.read_entity(croot, "lore", "the-pact")["body"].strip() == "Signed at dusk."
+
+
+def test_two_rows_sharing_an_edit_id_are_judged_separately(monkeypatch, tmp_path):
+    """`materialize` dedupes only plot threads, so two lore proposals naming one
+    entry really can share an id. The verdicts are positional for that reason."""
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "lore", "The Pact", body="Moved on.")
+    stale = _lore_edit("Signed at dusk.", "Broken by morning.")
+    answered = {**stale, "resolve": "replace", "resolve_from": "Moved on."}
+
+    assert conflicts.batch_verdicts(cid, [answered, stale]) == [
+        None, conflicts.conflict_row(cid, stale)]

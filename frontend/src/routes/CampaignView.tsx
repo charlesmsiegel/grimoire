@@ -647,21 +647,44 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     }
   }
 
-  // Conflicts still waiting on an answer. Unapproving a row IS the keep answer,
-  // so the notice has to count the same rows the badges appear on — otherwise it
-  // keeps reporting conflicts the reviewer has already settled by dropping them.
-  const openConflicts = useMemo(
-    () => conflicts.filter((c) => editRows.some((r) => r.id === c.id && r.approved)),
-    [conflicts, editRows]);
+  // Which ROW each conflict belongs to, by position in `editRows`.
+  //
+  // Not a lookup by `id`: `materialize` dedupes only plot threads, so two lore
+  // or relationship proposals naming one target can share an edit id. Matching
+  // on it alone would badge both rows with one conflict and — worse — let one
+  // click answer for a row the reviewer never looked at. The server judges the
+  // batch positionally and returns its rows in batch order, so walking the
+  // approved rows in that same order and CONSUMING each match pairs them off
+  // exactly, duplicates included.
+  const conflictByRow = useMemo(() => {
+    const unclaimed = [...conflicts];
+    const out = new Map<number, EditConflict>();
+    editRows.forEach((r, i) => {
+      if (!r.approved) return;   // unapproved is the keep answer: no badge
+      const k = unclaimed.findIndex((c) => c.id === r.id);
+      if (k >= 0) out.set(i, unclaimed.splice(k, 1)[0]);
+    });
+    return out;
+  }, [conflicts, editRows]);
 
   // The reviewer's answer to one conflict. **keep** is not here: it unapproves
   // the row, which drops it from the batch entirely -- the stored value wins by
   // the edit never being sent. `replace` keeps the staged text, `merge` swaps in
   // the draft the server prefilled from both sides for the reviewer to trim.
-  function resolveConflict(id: string, resolve: "replace" | "merge", after?: string) {
-    setEditRows((rows) => rows.map((r) =>
-      r.id === id ? { ...r, resolve, ...(after === undefined ? {} : { after }) } : r));
-    setConflicts((cs) => cs.filter((c) => c.id !== id));
+  //
+  // `resolve_from` rides along because the flag alone is not standing
+  // permission: it records WHICH value was on screen when they answered, so a
+  // save that lands after the record has moved again is refused instead of
+  // overwriting something nobody saw.
+  function resolveConflict(i: number, conflict: EditConflict,
+                           resolve: "replace" | "merge", after?: string) {
+    setEditRows((rows) => rows.map((r, j) => (j === i
+      ? { ...r, resolve, resolve_from: conflict.stored,
+          ...(after === undefined ? {} : { after }) }
+      : r)));
+    // By identity, not by id — the duplicate-id case again: the sibling row's
+    // conflict is a different object and stays exactly where it is.
+    setConflicts((cs) => cs.filter((c) => c !== conflict));
   }
 
   // Replaces absorb.mechanics with a fresh audit and swaps in its sheet
@@ -941,11 +964,11 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
                     Never attempted, skipped: {absorb.dossiers.skipped.join(", ")}
                   </p>)}
               </div>)}
-            {openConflicts.length > 0 && (
+            {conflictByRow.size > 0 && (
               <div className="mechanics-notice">
-                <p>{openConflicts.length === 1
+                <p>{conflictByRow.size === 1
                   ? "One proposed change no longer matches what is stored"
-                  : `${openConflicts.length} proposed changes no longer match what is stored`}
+                  : `${conflictByRow.size} proposed changes no longer match what is stored`}
                   {" — nothing was saved. Answer each one below, then save again."}</p>
               </div>)}
             {editRows.length > 0 && (
@@ -953,11 +976,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
                 <h5>Proposed changes</h5>
                 {editRows.map((e, i) => {
                   const isNewRecord = e.kind === "new_character" || e.kind === "new_location" || e.kind === "new_lore";
-                  // Only while the row is still in the batch: unapproving it IS
-                  // the keep choice, so the block goes away by answering it.
-                  const conflict = e.approved
-                    ? conflicts.find((c) => c.id === e.id)
-                    : undefined;
+                  const conflict = conflictByRow.get(i);
                   const setPayload = (patch: Record<string, unknown>) =>
                     setEditRows((rows) => rows.map((r, j) =>
                       j === i ? { ...r, payload: { ...r.payload, ...patch } } : r));
@@ -980,11 +999,12 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
                                       j === i ? { ...r, approved: false } : r))}>
                               Keep stored</button>
                             <button className="subtle" aria-label={`Replace stored ${e.label}`}
-                                    onClick={() => resolveConflict(e.id, "replace")}>
+                                    onClick={() => resolveConflict(i, conflict, "replace")}>
                               Replace</button>
                             {conflict.mergeable && (
                               <button className="subtle" aria-label={`Merge stored ${e.label}`}
-                                      onClick={() => resolveConflict(e.id, "merge", conflict.merged)}>
+                                      onClick={() => resolveConflict(i, conflict, "merge",
+                                                                    conflict.merged)}>
                                 Merge</button>)}
                           </div>
                         </div>)}

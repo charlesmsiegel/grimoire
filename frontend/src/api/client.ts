@@ -358,6 +358,11 @@ export type StagedEdit = {
    *  is still the staged text or one the reviewer merged by hand. Absent means
    *  unanswered, and the save is refused. */
   resolve?: "replace" | "merge";
+  /** The stored value the reviewer was shown when they answered. Sent with
+   *  `resolve` so the server can hold the retry to it: the flag authorizes
+   *  overwriting *that* text, not whatever the record holds by the time the
+   *  save lands. */
+  resolve_from?: string;
 };
 /** A staged edit whose target no longer matches the value it was staged
  *  against (#111). Carries everything the three choices need — what is stored
