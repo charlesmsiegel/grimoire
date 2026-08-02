@@ -269,14 +269,50 @@ def _usable(token: str) -> str:
     return "" if len(word) < 2 or word in _NOT_A_GIVEN_NAME else token.strip(".,")
 
 
+def _second_alias(name: str) -> str:
+    """The token after the head, when the name has one that is not its surname.
+
+    `_short_alias` reads the head as the given name, which is wrong whenever the
+    head is a title `_HONORIFIC` does not list -- `Professor Mara Vance` yields
+    `Professor` and `Vance`, and the ordinary "Mara is hiding the ledger"
+    matches neither and reaches the prompt. Every finite lexicon in this file
+    has been found incomplete by the next review round, and the set of titles a
+    person may carry (`Professor`, `Reverend`, `Sergeant`, a rank or role this
+    world invented) is not one anybody can enumerate — so this does not try.
+
+    The structural fact is that the token after the head is a name either way:
+    the GIVEN name if the head was a title, a MIDDLE name if it wasn't. Which of
+    the two it is cannot be decided without the lexicon, and does not need to
+    be, because both are worth matching. So the second token is taken as a form
+    without deciding, and `_short_alias` keeps the head as well.
+
+    Particles and suffixes are stepped over as everywhere else, and a name whose
+    second token IS its surname yields nothing here -- `_surname_alias` already
+    has that one, and the point of this form is the token neither end reaches.
+
+    The cost is that a middle name becomes matchable, which is an over-hide only
+    if some other line uses it for somebody else. That is a far smaller price
+    than the leak: a title in front of a name is ordinary, and the name behind
+    it is the one prose actually uses.
+    """
+    parts = _name_tokens(name)
+    if len(parts) < 3:
+        return ""                        # the second token is the surname
+    i = 1
+    while i < len(parts) - 1 and (_word(parts[i]) in _PARTICLE
+                                  or _word(parts[i]) in _SUFFIX):
+        i += 1
+    return "" if i >= len(parts) - 1 else _usable(parts[i])
+
+
 def _forms(names: set[str]) -> set[str]:
-    """Every string an actor can be recognized by: each name plus the given name
-    and the surname inside it. Resolved for the OWNER as well as for the others
-    (see `_character_states`), which is what keeps two actors sharing either
-    name from hiding each other's interiority."""
+    """Every string an actor can be recognized by: each name plus the given name,
+    the surname and the token between them. Resolved for the OWNER as well as
+    for the others (see `_character_states`), which is what keeps two actors
+    sharing any of those names from hiding each other's interiority."""
     out: set[str] = set()
     for n in names:
-        out.update({n.strip(), _short_alias(n), _surname_alias(n)})
+        out.update({n.strip(), _short_alias(n), _second_alias(n), _surname_alias(n)})
     return out - {""}
 
 
@@ -285,15 +321,24 @@ def _mentions(text: str, form: str) -> bool:
     supplies the forms (`_forms`), so that "which names count as this actor's"
     is decided once, where the owner's names are also in scope.
 
-    A ONE-WORD form is matched case-sensitively; a multi-word one is not. Plenty
-    of names are also ordinary words — Will, May, Hope, Grace, Art — and a
-    case-insensitive whole-word match reads "Mara will steal the crates" as
-    naming Will and withholds the paragraph. With that actor on stage, most of
-    every other NPC's state disappears; this is the `The`-matches-everything bug
-    again, reached without an epithet. A name is a proper noun and is
-    capitalized wherever it is used as one, so case is the signal already in the
-    text, and no whitelist of ambiguous names has to be right. Multi-word forms
-    keep the looser match: "the woman on the pier" collides with nothing.
+    A ONE-WORD form rejects a LOWER-CASE use of itself; a multi-word one is
+    matched case-insensitively. Plenty of names are also ordinary words — Will,
+    May, Hope, Grace, Art — and a case-insensitive whole-word match reads "Mara
+    will steal the crates" as naming Will and withholds the paragraph. With that
+    actor on stage, most of every other NPC's state disappears; this is the
+    `The`-matches-everything bug again, reached without an epithet. A name is a
+    proper noun and is capitalized wherever it is used as one, so case is the
+    signal already in the text, and no whitelist of ambiguous names has to be
+    right. Multi-word forms keep the looser match: "the woman on the pier"
+    collides with nothing.
+
+    What the rule rejects is only the all-lower-case use, NOT every case that
+    differs from the stored one. Requiring the stored spelling exactly missed
+    `WINIFRED is hiding the ledger` — an ordinary shape in a heading or in
+    imported prose, and one where the writer is plainly naming her. The
+    distinction the ordinary-word guard actually needs is `will` from `Will`,
+    and upper case is on the far side of it. An uncased form is unaffected:
+    `str.islower()` is False for a script with no case, so 李明 still matches.
 
     The word boundary is applied only at an end that is ASCII alphanumeric.
     `\b` is defined between a word character and a non-word character, and in
@@ -308,18 +353,27 @@ def _mentions(text: str, form: str) -> bool:
     ("The Woman on the Pier") is matched only in full, so a suspicion that calls
     her "The Woman" is not recognized and reaches the prompt; a suspicion that
     writes a one-word name in lowercase is missed too; and a boundary-less form
-    can match inside a longer word. The first two leak and the third over-hides,
-    and all three are accepted rather than papered over: a leak costs one line,
-    the over-match cost the feature, and a filter that cannot see a script at
-    all costs everything for the people writing in it.
+    can match inside a longer word. A one-word name that is also an ordinary
+    word over-matches when a sentence starts with it or a heading shouts it, and
+    that is the same trade taken from the other end. The first two leak and the
+    last two over-hide, and all of them are accepted rather than papered over: a
+    leak costs one line, the over-match cost the feature, and a filter that
+    cannot see a script at all costs everything for the people writing in it.
     """
     if not form:
         return False
     edge = r"\b"
     lead = edge if form[0].isascii() and form[0].isalnum() else ""
     tail = edge if form[-1].isascii() and form[-1].isalnum() else ""
-    flags = re.IGNORECASE if " " in form else 0
-    return bool(re.search(rf"{lead}{re.escape(form)}{tail}", text, flags))
+    pattern = rf"{lead}{re.escape(form)}{tail}"
+    if " " in form:
+        return bool(re.search(pattern, text, re.IGNORECASE))
+    # Search case-insensitively and then judge the text that was FOUND, rather
+    # than pinning the pattern to the stored spelling: what disqualifies a hit
+    # is that the writer used the word in lower case, not that they capitalized
+    # it differently from the card.
+    return any(not m.group(0).islower()
+               for m in re.finditer(pattern, text, re.IGNORECASE))
 
 
 #: The player macro, matched exactly as `macros._substitute` matches it —
