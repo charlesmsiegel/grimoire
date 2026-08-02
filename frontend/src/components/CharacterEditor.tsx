@@ -91,6 +91,21 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   useEffect(() => {
     reload();
     setWizardOpen(false); // a scope change can reuse this instance; never carry a wizard across it
+    // ...and never carry an OPEN CHARACTER across it either. `detail.meta.id`
+    // is combined with the CURRENT `scope` on every write, so a character left
+    // open across a scope change addresses the new world or campaign by the old
+    // one's id -- and where that id also exists there, the save lands on the
+    // wrong record. Bumping the anchor token additionally orphans a GET still
+    // in flight for the scope we just left, whose reply would otherwise fill
+    // the textarea with the other scope's anchor.
+    anchorReq.current++;
+    setDetail(null);
+    setCard(null);
+    setMode("grid");
+    setVoiceAnchor("");
+    setAnchorState("loading");
+    setAnchorBusy(false);
+    setAnchorSaving(false);
   }, [reload]);
 
   // re-clicking the Characters tab (resetSignal bumps) returns to the grid
