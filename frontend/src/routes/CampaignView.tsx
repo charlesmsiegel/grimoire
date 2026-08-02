@@ -839,6 +839,13 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     // that awaited a request, and the reader can have moved on since. Adopting
     // the new id for a scene they are no longer looking at moves them to it.
     if (activeIdRef.current === oldId) setActive(newId);
+    // The rail's own metadata, not just the things pointing at it. `pcless` and
+    // the title are read off the row whose id matches `activeId`, so adopting
+    // the id without re-keying the row loses both — an offscreen scene silently
+    // offering the PC composer for sends the backend still handles as director
+    // notes. A relist would fix it, and a relist that FAILS is exactly the
+    // state this has to survive.
+    setScenes((list) => list.map((s) => (s.id === oldId ? { ...s, id: newId } : s)));
     setSeedPrompt((p) => (p && p.sid === oldId ? { ...p, sid: newId } : p));
     reviewSceneRenamed(oldId, newId);
     const parked = parkedPrompts.current.get(oldId);
@@ -1471,8 +1478,19 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       // failed reroll's banner up offers a Retry that regenerates over the take
       // just selected, with the guidance that failed, undoing the choice.
       if (rerollToRetryRef.current?.sid === sid) rerollToRetryRef.current = null;
-      setError(null);
+      // Everything below writes shared view state, so it waits on the scope
+      // check. The destination scene is deliberately usable while this POST is
+      // open — that is the point of the scoped latch — so it can have raised a
+      // banner of its own, and clearing it here would take a failure that has
+      // nothing to do with this swap.
       if (!stillHere()) return;
+      setError(null);
+      // The backend retires the pending decision as part of the swap, so the
+      // chip goes now rather than at the next read: left up it adjudicates
+      // narration no longer on screen, and its 409 surfaces a Retry that
+      // generates. Ordered before the refresh below, whose own proposal read is
+      // issued after this and so puts the chip back if the swap was a no-op.
+      setProposalNow(null);
       try {
         await selectScene(sid);
       } catch (err: any) {
@@ -2369,7 +2387,8 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
           )}
         </div>
         {proposal && activeId && (
-          <RollProposal key={proposal.id} record={proposal} busy={busy} onResolve={resolve} />
+          <RollProposal key={proposal.id} record={proposal} busy={busy || rolling}
+                        onResolve={resolve} />
         )}
         <div className="inputbar">
           <button className="roll-btn"
