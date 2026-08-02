@@ -214,6 +214,16 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   // has — but the guard is now at the one place turns start, so a surface that
   // forgets to report is a narrower miss than one that forgets to lock.
   const [renamesInFlight, setRenamesInFlight] = useState(0);
+  // "A turn can still write to the scene on screen." NOT `busy`, which clears
+  // the instant the socket dies while the shielded abort write lands seconds
+  // later — the whole point of `streamingId`.
+  //
+  // Named and derived once because review has now found four surfaces sitting
+  // on the wrong one of these, one at a time: rename, the two date controls,
+  // End scene, and the dice roll. Every control that mutates *this* scene's
+  // transcript without going through `runStream` reads this, so the next one
+  // is a missing `sceneLocked` rather than a fifth rediscovery of the rule.
+  const sceneLocked = !!activeId && activeId === streamingId;
   const markRenaming = useCallback(
     (active: boolean) => setRenamesInFlight((n) => n + (active ? 1 : -1)), []);
   // Held for the life of one turn so Cancel can reach it. A ref, not state:
@@ -1089,8 +1099,15 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     }
   }
 
+  // `sceneLocked`, not just `busy`: a roll appends a transcript line, and a
+  // reroll cancelled before its first token is at that moment waiting to put
+  // the reply it deleted back. `restore_trailing_assistant_run` steps over
+  // trailing *transitions* only — a roll deliberately blocks it, because the
+  // line has to stay in lockstep with rolls.json — so a roll landing in the
+  // flush window makes the restore refuse and the rerolled reply is gone for
+  // good. The backend cannot rescue that one; only not racing it can (#95).
   async function doRoll() {
-    if (!activeId || busy || rolling || !rollForm) return;
+    if (!activeId || busy || sceneLocked || rolling || !rollForm) return;
     const notation = rollForm.notation.trim();
     if (!notation) return;
     setRolling(true);
@@ -1126,8 +1143,8 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     }
   }
 
-  async function doCheck() {
-    if (!activeId || busy || rolling || !rollForm) return;
+  async function doCheck() {   // same window, same loss — see doRoll
+    if (!activeId || busy || sceneLocked || rolling || !rollForm) return;
     if (!rollForm.checkActor || !rollForm.checkId) return;
     setRolling(true);
     try {
@@ -1445,7 +1462,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
               already marked absorbed. That one does not come back: the review
               is committed against a transcript that no longer matches (#95). */}
           <button className="sub-end" onClick={endScene}
-                  disabled={!activeId || absorbing || busy || activeId === streamingId}>
+                  disabled={!activeId || absorbing || busy || sceneLocked}>
             {absorbing ? "Ending…" : "End scene"}
           </button>
         </div>
@@ -1774,7 +1791,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
             onSceneRenamed={sceneRenamed}
             initialPrompt={seedPrompt?.sid === activeId ? seedPrompt.prompt : undefined}
             pcless={activePcless}
-            sceneLocked={activeId === streamingId}
+            sceneLocked={sceneLocked}
             onRenaming={markRenaming}
           />
         )}
@@ -1901,8 +1918,10 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
           <RollProposal key={proposal.id} record={proposal} busy={busy} onResolve={resolve} />
         )}
         <div className="inputbar">
-          <button className="roll-btn" title="Roll dice" aria-label="Roll dice"
-                  disabled={!activeId || busy || messages.length === 0}
+          <button className="roll-btn"
+                  title={sceneLocked ? LOCKED_WHILE_GENERATING : "Roll dice"}
+                  aria-label="Roll dice"
+                  disabled={!activeId || busy || sceneLocked || messages.length === 0}
                   onClick={toggleRollPop}>
             🎲
           </button>
@@ -2046,7 +2065,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
             <SceneInspector cid={cid} sid={activeId} refreshKey={ctxKey}
                             onSceneChanged={() => selectScene(activeId)}
                             onSceneRenamed={sceneRenamed} pcless={activePcless}
-                            sceneLocked={activeId === streamingId}
+                            sceneLocked={sceneLocked}
                             onRenaming={markRenaming} />
           )}
         </div>
