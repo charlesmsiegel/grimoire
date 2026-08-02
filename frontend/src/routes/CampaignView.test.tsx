@@ -1812,6 +1812,93 @@ test("a rename whose relist fails still re-reads the renamed transcript", async 
   expect((api.getScene as any).mock.calls.at(-1)[1]).toBe("s1-renamed");
 });
 
+test("a stale swap succeeding does not clear the new scene's banner", async () => {
+  // The scoped latch deliberately leaves the destination usable, so it can
+  // raise a failure of its own while the old scene's POST is still open. That
+  // POST landing must not wipe a banner belonging to a scene it never touched.
+  let release: (v: any) => void = () => {};
+  (api.listScenes as any).mockResolvedValue([
+    { id: "s1", title: "One", model: "", created: "", updated: "" },
+    { id: "s2", title: "Two", model: "", created: "", updated: "" },
+  ]);
+  (api.getScene as any).mockImplementation(async (_c: string, s: string) => ({
+    meta: {}, messages: [
+      { role: "user", content: "hi" },
+      { role: "assistant", content: s === "s1" ? "a reply" : "the other scene" }] }));
+  (api.getAlternates as any).mockResolvedValue({
+    active: 1, alternates: [ALT("old"), ALT("a reply")] });
+  (api.pickAlternate as any).mockImplementation(() => new Promise((res) => { release = res; }));
+  renderCampaign();
+  await screen.findByText("2/2");
+  fireEvent.click(screen.getByRole("button", { name: /previous alternate/i }));
+  fireEvent.click(await screen.findByText(/· Two$/));
+  await screen.findByText("the other scene");
+
+  // scene Two raises its own failure while One's swap is still open
+  (api.chat as any).mockRejectedValue({ detail: "two is broken" });
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "and then?" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  await screen.findByText("two is broken");
+
+  release({ ok: true });   // One's swap lands after the move
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+  expect(screen.getByText("two is broken")).toBeInTheDocument();
+});
+
+test("a rename whose relist fails keeps an offscreen scene offscreen", async () => {
+  // `adoptSceneId` re-points `activeId` to the new id, but the rail's metadata
+  // is keyed by the old one. Tolerating a failed relist made that a state the
+  // reader sits in: `pcless` is derived from the row, so it silently became
+  // false — the Offscreen badge gone and the PC composer offered for a scene
+  // the backend still treats as offscreen.
+  const offscreen = [{ id: "s1", title: "Cabal", model: "", created: "", updated: "", pcless: true }];
+  (api.listScenes as any).mockResolvedValueOnce(offscreen)
+    .mockRejectedValue(new Error("relist failed"));
+  (api.renameScene as any).mockResolvedValue({ id: "s1-renamed", title: "New" });
+  renderCampaign();
+  await screen.findByPlaceholderText(/direct the scene/i);
+
+  fireEvent.click(screen.getByRole("button", { name: /rename/i }));
+  const input = screen.getByDisplayValue("Cabal");
+  fireEvent.change(input, { target: { value: "New" } });
+  fireEvent.keyDown(input, { key: "Enter" });
+
+  await screen.findByText(/could not be refreshed/);
+  expect(screen.getByPlaceholderText(/direct the scene/i)).toBeInTheDocument();
+  expect(screen.getAllByText("Offscreen").length).toBeGreaterThan(0);
+});
+
+test("a swap retires the roll proposal it supersedes", async () => {
+  // The backend supersedes the pending decision as part of the swap, so a chip
+  // left enabled adjudicates narration that is no longer on screen — and its
+  // 409 surfaces a Retry that generates instead.
+  let release: (v: any) => void = () => {};
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
+  (api.getAlternates as any).mockResolvedValue({
+    active: 1, alternates: [ALT("old"), ALT("a reply")] });
+  (api.getRollProposal as any).mockResolvedValue({
+    record: { id: "p1", status: "pending", resolution: null,
+              payload: { id: "p1", check: "wits", check_label: "Wits", problems: [] } } });
+  (api.pickAlternate as any).mockImplementation(() => new Promise((res) => { release = res; }));
+  renderCampaign();
+  await screen.findByText("2/2");
+  const rollIt = await screen.findByRole("button", { name: "Roll it" });
+
+  fireEvent.click(screen.getByRole("button", { name: /previous alternate/i }));
+
+  // in flight: the decision cannot be adjudicated against a take being replaced
+  await waitFor(() => expect(rollIt).toBeDisabled());
+
+  // committed: the backend retired it, so the chip goes without waiting for a read
+  (api.getRollProposal as any).mockResolvedValue({ record: null });
+  release({ ok: true });
+  await waitFor(() =>
+    expect(screen.queryByRole("button", { name: "Roll it" })).toBeNull());
+});
+
 test("a failed post-swap read does not retry the reader back onto the old scene", async () => {
   // The retry is a second `selectScene`, and `selectScene` calls `setActive` —
   // so once the reader has moved on it does not merely refresh a scene nobody
