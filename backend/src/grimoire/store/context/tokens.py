@@ -34,4 +34,11 @@ def count_tokens(text: str) -> int:
     try:
         return len(_encoder().encode(text))
     except Exception:  # noqa: BLE001 - token counting must never fail a turn; heuristic instead
-        return len(text) // 4
+        # Round UP, and never to zero. The heuristic is applied per string, and
+        # the packer counts each history message separately -- with floor
+        # division every message under four characters cost nothing at all, so
+        # a scene of short alternating turns ("yes." / "go on.") summed to zero
+        # and the packer saw no history to trim however small the budget. A
+        # non-empty string is at least one token; overestimating slightly is
+        # the safe direction for a ceiling.
+        return -(-len(text) // 4)

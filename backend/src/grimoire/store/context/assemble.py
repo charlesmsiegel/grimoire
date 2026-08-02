@@ -351,24 +351,53 @@ def build_director_messages(cid: str, sid: str, note: str, turn: dict | None = N
     return messages
 
 
-def context_sections(cid: str, sid: str) -> list[dict]:
-    """The token-breakdown view: every section the packer produced, in prompt
-    order, each carrying its `tier` and whether the packer `dropped` it — then
-    the (possibly trimmed) history and the post-history block.
+def context_breakdown(cid: str, sid: str) -> dict:
+    """The inspector's view of a turn: every section the packer produced, in
+    prompt order, each with its `tier`, its `tokens`, and whether the packer
+    `dropped` it — then the (possibly trimmed) history and the post-history
+    block, plus the totals.
 
     Dropped sections stay in the list with their text: the inspector's job is to
     show what was cut, and a drop the user cannot see is the silent truncation
     this replaced. Runs the same render and pack `build_messages` runs.
+
+    `total_tokens` is what the request actually costs, measured the way the
+    packer measures it — the COMPOSED system message, plus each history entry
+    counted as the separate message it is sent as. It is deliberately not the
+    sum of the section rows: those are a per-row breakdown, and token counts do
+    not add up across strings that get joined (the blank lines between sections
+    are real tokens, and the tiktoken-less heuristic rounds each string on its
+    own). Summing the rows instead would let the inspector report a total that
+    disagrees with the request it is describing.
     """
     a = _assemble(cid, sid)
     p = _packed(a, cid, sid)
-    out = [{"label": s["label"], "text": s["text"], "tier": s["tier"], "dropped": s["dropped"]}
-           for s in p["sections"]]
+    rows = [{"label": s["label"], "text": s["text"], "tier": s["tier"],
+             "dropped": s["dropped"], "trimmed": 0,
+             "tokens": tokens.count_tokens(s["text"])}
+            for s in p["sections"]]
+
+    hist_tokens = sum(tokens.count_tokens(m["content"]) for m in p["history"])
     hist = "\n\n".join(m["content"] for m in p["history"])
     if hist:
-        out.append({"label": "Conversation history", "text": hist, "tier": pack.HISTORY,
-                    "dropped": False, "trimmed": p["history_trimmed"]})
+        # Displayed joined (one readable block), accounted per message — which
+        # is how it is charged and how it goes on the wire.
+        rows.append({"label": "Conversation history", "text": hist, "tier": pack.HISTORY,
+                     "dropped": False, "trimmed": p["history_trimmed"],
+                     "tokens": hist_tokens})
     if a["post_history"]:
-        out.append({"label": "Post-history instructions", "text": a["post_history"],
-                    "tier": pack.LOCK_IN, "dropped": False})
-    return out
+        rows.append({"label": "Post-history instructions", "text": a["post_history"],
+                     "tier": pack.LOCK_IN, "dropped": False, "trimmed": 0,
+                     "tokens": tokens.count_tokens(a["post_history"])})
+
+    kept = [s["text"] for s in p["sections"] if not s["dropped"]]
+    total = (tokens.count_tokens(_compose_system(kept)) + hist_tokens
+             + tokens.count_tokens(a["post_history"]))
+    return {"sections": rows, "total_tokens": total,
+            "dropped_tokens": sum(r["tokens"] for r in rows if r["dropped"]),
+            "budget_tokens": pack.budget_tokens()}
+
+
+def context_sections(cid: str, sid: str) -> list[dict]:
+    """Just the rows of `context_breakdown` — see there."""
+    return context_breakdown(cid, sid)["sections"]

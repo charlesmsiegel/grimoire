@@ -1628,3 +1628,71 @@ def test_the_real_prompt_fits_the_budget_it_was_packed_to(monkeypatch, tmp_path)
     for budget in (full - 1, (full + floor) // 2, floor):
         config.write_config(context_budget=str(budget))
         assert _fits(context.build_messages(cid, sid), budget), f"overran a budget of {budget}"
+
+
+# ---- the tiktoken-less path (Android) ----
+
+def _heuristic(monkeypatch):
+    """Force the length-heuristic path: tiktoken is a desktop-only wheel, so
+    Android counts every string as `ceil(len / 4)` and that is where rounding
+    decides whether short turns cost anything at all."""
+    monkeypatch.setattr(context.tokens, "_encoder", lambda: None)
+
+
+def test_a_nonempty_string_never_costs_nothing_on_the_heuristic(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    _heuristic(monkeypatch)
+    assert context.count_tokens("") == 0        # empty really is free
+    assert context.count_tokens("a") >= 1
+    assert context.count_tokens("yes") >= 1     # floor division made this 0
+
+
+def test_short_history_turns_are_still_trimmed_on_the_heuristic(monkeypatch, tmp_path):
+    """The failure this guards: the packer counts each history message on its
+    own, so with floor division a scene of short alternating turns summed to
+    zero and no budget, however small, could make it trim anything."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    _heuristic(monkeypatch)
+    history = [{"role": "user" if n % 2 == 0 else "assistant", "content": "yes"}
+               for n in range(200)]
+    out = context_pack.pack([], history, budget=1)
+    assert len(out["history"]) == context_pack.HISTORY_FLOOR
+    assert out["history_trimmed"] == 200 - context_pack.HISTORY_FLOOR
+
+
+def test_the_breakdown_counts_history_as_the_messages_it_is_sent_as(monkeypatch, tmp_path):
+    """The history row is DISPLAYED joined but must be ACCOUNTED per message —
+    that is how the packer charges it and how it goes on the wire. Recounting
+    the joined display string would let the inspector's total disagree with the
+    request it describes."""
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    _heuristic(monkeypatch)                     # where the two representations differ
+    for n in range(10):
+        scenes.append_message(cid, sid, "user" if n % 2 == 0 else "assistant", "no")
+    body = context.context_breakdown(cid, sid)
+    row = next(r for r in body["sections"] if r["label"] == "Conversation history")
+    per_message = sum(context.count_tokens(m["content"])
+                      for m in context.build_messages(cid, sid) if m["role"] != "system")
+    assert row["tokens"] == per_message
+    # The two really do disagree on this fixture -- which is what makes the
+    # assertion above discriminating rather than a tautology. If a change ever
+    # makes them coincide here, this fails and the fixture wants rechoosing.
+    assert row["tokens"] != context.count_tokens(row["text"])
+
+
+def test_the_breakdown_total_is_the_cost_of_the_real_request(monkeypatch, tmp_path):
+    """Not the sum of the rows: the blank lines joining the sections are real
+    tokens, and per-string counts do not add across a join."""
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    _heuristic(monkeypatch)
+    from grimoire.store import config
+    config.write_config(system_prompt="Never speak for the PC.")
+    for n in range(6):
+        scenes.append_message(cid, sid, "user" if n % 2 == 0 else "assistant",
+                              f"Turn {n} on the Saltmarch road.")
+    body = context.context_breakdown(cid, sid)
+    sent = sum(context.count_tokens(m["content"]) for m in context.build_messages(cid, sid))
+    assert body["total_tokens"] == sent
+    # ...and it is NOT the sum of the rows, which is what it would be if the
+    # total were re-derived from the breakdown. Same vacuity guard as above.
+    assert body["total_tokens"] != sum(r["tokens"] for r in body["sections"] if not r["dropped"])
