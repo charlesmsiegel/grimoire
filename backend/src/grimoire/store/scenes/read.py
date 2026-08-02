@@ -56,6 +56,32 @@ def read_scene(cid: str, sid: str) -> dict:
     return {"meta": {"id": sid, **meta}, "messages": serialize._parse_messages(body, players)}
 
 
+def read_scene_window(cid: str, sid: str, limit: int, before: int | None = None) -> dict:
+    """`read_scene` narrowed to a window of the transcript's TAIL.
+
+    The window is the `limit` messages ending just before index `before`
+    (`None` ⇒ the end of the transcript), which is how a reader pages
+    backwards: ask for the tail, then ask again with the offset the last page
+    reported until `has_older` goes false.
+
+    `offset` is the absolute index of `messages[0]` — the same index
+    `edit_message`/`split_reply` take, so a client that has only page 2 in hand
+    addresses a message exactly as one holding the whole transcript does.
+
+    The file is still parsed whole (a scene is one flat markdown script; there
+    is no on-disk pagination and the write path rebuilds the full message list
+    regardless). What windowing buys is the client's render path, which is
+    where a several-hundred-post scene actually hurts.
+    """
+    scene = read_scene(cid, sid)
+    messages = scene["messages"]
+    total = len(messages)
+    end = total if before is None else max(0, min(before, total))
+    start = max(0, end - max(1, limit))
+    return {"meta": scene["meta"], "messages": messages[start:end],
+            "offset": start, "total": total, "has_older": start > 0}
+
+
 def read_scene_meta(cid: str, sid: str) -> dict:
     """A scene's frontmatter without parsing its transcript. For bulk scans
     (response-preset usage) where the messages are irrelevant and reading them
