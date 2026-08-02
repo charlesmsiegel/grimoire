@@ -6,7 +6,7 @@ import {
 import { CalendarDatePicker } from "./CalendarDatePicker";
 
 export function CastPanel({
-  cid, sid, ready, onSeeded, onSceneRenamed, initialPrompt, pcless,
+  cid, sid, ready, onSeeded, onSceneRenamed, initialPrompt, pcless, sceneLocked,
 }: {
   cid: string;
   sid: string;
@@ -15,6 +15,10 @@ export function CastPanel({
   onSceneRenamed?: (id: string) => void;
   initialPrompt?: string;
   pcless?: boolean;
+  /** A turn is streaming into this scene, so anything that can rename its file
+   *  has to wait: the id is the filename, and moving it mid-turn strands the
+   *  abort write that saves the partial (#95). */
+  sceneLocked?: boolean;
 }) {
   const [cast, setCast] = useState<Actor[]>([]);
   const [chars, setChars] = useState<CharacterSummary[]>([]);
@@ -197,7 +201,11 @@ export function CastPanel({
           <div className="picker">
             <CalendarDatePicker scope={{ kind: "campaign", id: cid }} value={dateInput}
                                 onChange={setDateInput} ariaLabel="Scene date" />
-            <button className="primary" onClick={applyDatetime} disabled={!dateInput}>
+            {/* The first date set renames the scene file, so this is a rename
+                control in disguise — locked for the same reason the rail's is. */}
+            <button className="primary" onClick={applyDatetime}
+                    disabled={!dateInput || sceneLocked}
+                    title={sceneLocked ? "Not while this scene is generating" : undefined}>
               {when?.current ? "Advance to" : "Set date"}
             </button>
           </div>
