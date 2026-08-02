@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -141,14 +142,31 @@ def _timeline_lines(events: list[dict]) -> list[str]:
             for e in events]
 
 
-def _timeline_already_has(cid: str, events: list[dict]) -> bool:
+#: `timeline_before` is absent from this manifest entry -- it was written before
+#: the field existed, or by hand. Distinguished from a stored `None`, which is
+#: the pre-image of a campaign that had NO timeline file yet and is a real
+#: answer. Without the distinction an old entry would read as "the timeline was
+#: empty when this scene started" and re-file a batch that had already landed.
+_NO_PREIMAGE = object()
+
+
+def _timeline_digest(cid: str) -> str | None:
+    """The campaign timeline as one comparable value, or None when there is no
+    file yet. Captured before this scene's append and carried in the manifest;
+    `_timeline_already_has` reads it back."""
+    p = campaigns.campaign_root(cid) / "timeline.md"   # paths-ok: the store's own root
+    if not p.exists():
+        return None
+    return hashlib.sha256(p.read_bytes()).hexdigest()
+
+
+def _timeline_already_has(cid: str, events: list[dict], before=_NO_PREIMAGE) -> bool:
     """Whether this scene's events are ALREADY the tail of the timeline.
 
     A flag written after the append cannot answer this: if the flag's own write
     is what failed, the resume sees no flag and appends a second time -- the
     window just moved. The events themselves are the durable record, so the
-    resume asks the artifact rather than a note about it, and needs no
-    checkpoint at all.
+    resume asks the artifact rather than a note about it.
 
     The whole batch must match as a CONTIGUOUS block at the end. Matching
     anywhere would drop a batch that legitimately repeats an earlier one, and
@@ -159,24 +177,43 @@ def _timeline_already_has(cid: str, events: list[dict]) -> bool:
     consecutive scenes can honestly extract the same date and wording; on a
     FIRST attempt this check would then skip the append and lose that scene's
     events outright, which is worse than the duplicate it exists to prevent.
-    Scene identity decides whether to ask, and the artifact answers.
 
-    Residual: a concurrent web absorb that appends between the crash and the
-    resume moves this block off the tail, and the events are filed twice -- the
-    behaviour before this fix, in a narrower window, rather than a new loss.
+    Scene identity is not enough on its own, though, which is what `before` is
+    for. Inside a resume the same coincidence returns: if the PRECEDING scene
+    filed an identical batch, the tail matches whether or not this scene's own
+    append ever ran, and a crash in the window between the write-ahead and
+    `append_timeline` -- one manifest write wide -- then skipped this scene's
+    events permanently. So the question asked first is not "are these events at
+    the end" but "has this file changed AT ALL since this scene started": the
+    pre-image is captured with the extraction, before the append, and a timeline
+    identical to it cannot contain an append that had not happened when it was
+    taken. Only once something has changed is the tail worth reading.
+
+    A pre-image is scene-specific and durable, and it is still not the flag the
+    top of this docstring rules out: it records what was true BEFORE the step,
+    so failing to write it means the step never runs at all -- where a flag
+    written after the step is unwritable exactly when it is needed.
+
+    Residual, unchanged: a concurrent web absorb that appends between the crash
+    and the resume both moves this block off the tail and changes the digest, so
+    the events are filed twice -- the behaviour before any of this, in a much
+    narrower window, rather than a loss.
     """
     if not events:
         return True
     p = campaigns.campaign_root(cid) / "timeline.md"   # paths-ok: the store's own root
     if not p.exists():
         return False
+    if before is not _NO_PREIMAGE and _timeline_digest(cid) == before:
+        return False                      # untouched since this scene started
     have = p.read_text(encoding="utf-8").rstrip().splitlines()
     want = _timeline_lines(events)
     return have[-len(want):] == want
 
 
 def apply_scene(cid: str, sid: str, parsed: dict, edits: list[dict],
-                resuming: bool = False) -> tuple[list[str], list[dict]]:
+                resuming: bool = False,
+                timeline_before=_NO_PREIMAGE) -> tuple[list[str], list[dict]]:
     """Write the scene's absorb through, returning what landed AND what did not.
 
     `append_timeline` is the one step here that APPENDS, where the chronicle
@@ -217,8 +254,12 @@ def apply_scene(cid: str, sid: str, parsed: dict, edits: list[dict],
         # `resuming` is what makes the check safe: only a run finishing a scene
         # a PREVIOUS run started can have already filed these events. A first
         # attempt always appends, so a scene whose events legitimately repeat
-        # the one before it is not mistaken for a retry of it.
-        if not (resuming and _timeline_already_has(cid, parsed["timeline_events"])):
+        # the one before it is not mistaken for a retry of it. Inside a resume
+        # the pre-image does the same job against the same coincidence: the
+        # tail is only consulted once the file has actually changed since this
+        # scene's extraction was recorded.
+        if not (resuming and _timeline_already_has(
+                cid, parsed["timeline_events"], timeline_before)):
             chronicle.append_timeline(cid, parsed["timeline_events"])
         scenes.mark_absorbed(cid, sid, parsed["one_line"], parsed["summary"])
         return absorb.apply_edits(cid, edits, sid)
@@ -364,6 +405,13 @@ async def ingest_one_scene(cid: str, scene: dict, client: LLMClient, conn: dict)
     # append, so the retry would file the same beat twice while "fixing" the one
     # that was lost.
     pending = entry.get("pending") if entry else None
+    # The timeline PRE-IMAGE this scene started from, carried on every path that
+    # can leave the entry unfinished. It belongs to the attempt that recorded the
+    # extraction and is read back rather than re-taken: taken now it would be the
+    # state AFTER whatever that attempt managed to append, and would answer its
+    # own question. `_NO_PREIMAGE` is an entry written before this field existed,
+    # which falls back to tail equality alone.
+    timeline_before = (entry or {}).get("timeline_before", _NO_PREIMAGE)
     if entry and entry.get("status") == "incomplete" and entry.get("sid"):
         if not (isinstance(pending, list) and pending):
             # Failures with nothing replayable behind them: conflicts, which
@@ -447,14 +495,22 @@ async def ingest_one_scene(cid: str, scene: dict, client: LLMClient, conn: dict)
         else:
             result = await run_absorb(cid, sid, client, conn)
             parsed, edits = result["parsed"], result["edits"]
+            # The timeline's PRE-IMAGE rides with the extraction, recorded in
+            # the same write and for the same reason: a resume has to be able to
+            # tell this scene's append from an identical one filed by the scene
+            # before it, and only a value captured before the append can say so.
+            timeline_before = _timeline_digest(cid)
             manifest[key] = {**(manifest.get(key) or {}), "status": "in_progress",
-                             "sid": sid, "parsed": parsed, "edits": edits}
+                             "sid": sid, "parsed": parsed, "edits": edits,
+                             "timeline_before": timeline_before}
             save_manifest(cid, manifest)
         one_line = parsed["one_line"]
         edits_taken = edits
 
         try:
-            applied, failures = apply_scene(cid, sid, parsed, edits, resuming=resuming)
+            applied, failures = apply_scene(
+                cid, sid, parsed, edits, resuming=resuming,
+                timeline_before=timeline_before)
         except SceneVanished:
             return _record_vanished(cid, manifest, key, sid)
         pending = _unapplied(edits, failures)
@@ -476,6 +532,13 @@ async def ingest_one_scene(cid: str, scene: dict, client: LLMClient, conn: dict)
             manifest[key]["parsed"] = parsed
         if isinstance(edits_taken, list):
             manifest[key]["edits"] = edits_taken
+        # And so does the pre-image, for the fallback that re-runs the whole
+        # scene: dropping it here would leave that run with nothing but tail
+        # equality again, which is the state this round's finding is about. It
+        # is the value from the attempt that recorded the extraction, never a
+        # fresh reading -- taken now it would already include the append.
+        if timeline_before is not _NO_PREIMAGE:
+            manifest[key]["timeline_before"] = timeline_before
         manifest[key]["failures"] = failures
         if pending:   # omitted when nothing is replayable, which is what the resume reads
             manifest[key]["pending"] = pending
