@@ -2807,6 +2807,29 @@ def test_an_oversized_judge_note_is_reported_not_staged(client):
     assert "too long" in body["voice"]["failed"][0]["reason"]
 
 
+def test_a_clean_verdict_clears_the_flag_however_chatty_its_note(client):
+    """The size bound exists because a corrective is charged against every later
+    generation. A clean verdict stores no corrective -- `stage_edit` writes
+    `after=""` for in_voice -- so its note costs nothing, and failing the call
+    over one would leave an obsolete corrective standing for a character the
+    scene just showed back in voice. Punishing a format slip by keeping a stale
+    instruction in front of every turn is the wrong trade."""
+    cid, sid = _voice_scene(client, prior="She hedged.")
+    huge = "She sounded exactly right, at length. " * 200
+    assert len(huge) > store.voice_drift.MAX_NOTE
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
+        [_EXTRACTION, _DOSSIER, json.dumps({"verdict": "in_voice", "note": huge})])
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+
+    assert body["voice"]["failed"] == []
+    edit = next(e for e in body["edits"] if e["kind"] == "voice_drift")
+    assert edit["before"] == "She hedged." and edit["after"] == ""   # the note is discarded
+    client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+               json={"one_line": "o", "summary": "s", "keywords": [],
+                     "timeline_events": [], "edits": body["edits"]})
+    assert store.voice_drift.read(store.campaigns.campaign_root(cid), "aese") == ""
+
+
 def test_an_oversized_voice_drift_row_is_rejected_on_save(client):
     """The judge is not the only way in: a PUT body is client-supplied."""
     cid, sid = _voice_scene(client)

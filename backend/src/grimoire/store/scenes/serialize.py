@@ -115,11 +115,29 @@ def match_name(label: str, names) -> str | None:
     return prefixed[0] if len(prefixed) == 1 else None
 
 
+def _writable_label(name: str) -> bool:
+    """Can `name` ever appear as a transcript label at all?
+
+    Either the serializer writes it verbatim (`label_preserved`), or it IS one
+    of the role labels it falls back to. A name that is neither never reaches
+    the transcript -- its blocks are written as "Grimoire" or "You" -- so it
+    owns no label of its own, and cannot make anyone else's ambiguous. Those
+    two labels are seeded into the roster by every caller, so the fallback is
+    still accounted for."""
+    return name in RESERVED_LABELS or label_preserved(name)
+
+
 def _labels(name: str) -> set[str]:
     """Every transcript label that could be written for `name`: the full name
     and each of its word-boundary prefixes. The model abbreviates -- it writes
     `**Winifred:**` for a character carded as "Winifred Vance" -- so a name owns
-    more labels than itself."""
+    more labels than itself.
+
+    Only ever called on a name that passed `_writable_label`, which bounds it at
+    64 characters. That bound is load-bearing, not incidental: this allocates a
+    prefix per separator, so a card name of a few thousand alternating letters
+    and spaces costs quadratic time and memory -- on the generation hot path,
+    before anything has even checked whether the character has a drift flag."""
     return {label for label in
             {name} | {name[:i] for i in range(1, len(name)) if not name[i].isalnum()}
             if label.strip()}
@@ -163,7 +181,17 @@ def confusable(name: str, names) -> bool:
     (which is handed the transcript) and the voice corrective (which addresses
     the model by name).
     """
-    if not isinstance(name, str) or not name.strip():
+    if not isinstance(name, str) or not label_preserved(name):
+        # A name the transcript cannot hold VERBATIM is not an identity: this
+        # actor's blocks come out under a role label, so nothing downstream can
+        # address them by name. Note the asymmetry with the bystander test
+        # below, which is `_writable_label` -- a character carded "You" fails
+        # here (their lines are written as "Grimoire"), while the reserved label
+        # "You" passes there (it is exactly what the transcript writes for the
+        # player). Target and bystander are different questions.
+        #
+        # Checked BEFORE any expansion, so an oversized name is rejected rather
+        # than expanded (see `_labels`).
         return True
     mine = _labels(name)
     if any(match_name(label, names) != name for label in mine):
@@ -174,7 +202,8 @@ def confusable(name: str, names) -> bool:
     # (two exact matches make `match_name` return None), so letting it fall
     # through here would only re-derive the same answer.
     return any(lowered & {label.strip().lower() for label in _labels(other)}
-               for other in names if isinstance(other, str) and other != name)
+               for other in names
+               if isinstance(other, str) and other != name and _writable_label(other))
 
 
 def _speaker_and_role(m: re.Match, players: frozenset[str]) -> tuple[str | None, str]:

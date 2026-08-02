@@ -1283,3 +1283,38 @@ def test_a_whole_name_that_shadows_a_longer_ones_prefix_is_confusable():
     # and a shared STEM is not a shared label: "Marabel" has no word-boundary
     # prefix "Mara", so that label can only ever have meant Mara
     assert not serialize.confusable("Mara", ["Mara", "Marabel"])
+
+
+def test_a_name_the_transcript_cannot_hold_is_never_expanded():
+    """`_labels` allocates a prefix per separator, so a card name of a few
+    thousand alternating letters and spaces is quadratic -- and it runs on the
+    generation hot path, before anything checks whether the character even has a
+    drift flag. An imported card can carry one, so this is reachable.
+
+    The bound falls out of the meaning rather than being bolted on: a name the
+    serializer cannot write never appears as a transcript label (its blocks read
+    as "Grimoire"), so it owns no label, and `label_preserved` already caps a
+    writable one at 64 characters."""
+    from grimoire.store.scenes import serialize
+
+    monstrous = "A " * 4000
+    expanded = []
+    real = serialize._labels
+    try:
+        serialize._labels = lambda n: (expanded.append(n), real(n))[1]
+        # as the target: unusable as an identity, and rejected before expansion
+        assert serialize.confusable(monstrous, [monstrous, "You", "Grimoire"])
+        # as a BYSTANDER: it cannot own a label, so it makes no one else ambiguous
+        assert not serialize.confusable("Mara", ["Mara", monstrous, "You", "Grimoire"])
+    finally:
+        serialize._labels = real
+    assert monstrous not in expanded
+    # Target and bystander ask different questions, and the reserved labels are
+    # where they come apart. A character CARDED "You" is unusable -- the
+    # serializer writes their lines as "Grimoire" -- while the reserved label
+    # "You" in the roster still owns its label, because that is precisely what
+    # the transcript writes for the player.
+    assert serialize.confusable("You", ["You", "Mara"])
+    assert serialize.confusable("You (Bob)", ["You (Bob)", "Mara"])
+    assert not serialize.confusable("Mara", ["Mara", "You", "Grimoire"])
+    assert serialize.confusable("You Vell", ["You Vell", "You", "Grimoire"])
