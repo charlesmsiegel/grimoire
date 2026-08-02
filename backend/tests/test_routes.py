@@ -2667,6 +2667,123 @@ def test_a_swap_that_cannot_retire_the_decision_puts_the_take_back(client, monke
     assert record["status"] == "pending"
 
 
+def test_a_swap_that_appends_nothing_after_removing_puts_the_take_back(client, monkeypatch):
+    """`promote` is two transcript writes, and the gap between them is a third
+    window: the live run is gone and the chosen one never landed, so the pending
+    decision's narration is not on screen at all."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "old reply"}])
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["new reply."])
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
+    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/alternates").json()
+    showing = body["alternates"][body["active"]]["preview"]
+    vid = next(a["id"] for i, a in enumerate(body["alternates"]) if i != body["active"])
+    store.proposals.new(cid, sid, {"check": "athletics", "actor": None, "problems": []})
+    real = store.scenes.append_reply
+    # only the swap's own append fails; the put-back's is allowed through, which
+    # is the point — a different write failing is not a reason to give up on it
+    fail_once = {"left": 1}
+
+    def boom(*a, **k):
+        if fail_once["left"]:
+            fail_once["left"] -= 1
+            raise OSError(28, "no space left on device")
+        return real(*a, **k)
+
+    monkeypatch.setattr(store.alternates.scenes_write, "append_reply", boom)
+    with pytest.raises(OSError):
+        client.post(f"/api/campaigns/{cid}/scenes/{sid}/alternates/{vid}")
+
+    after = client.get(f"/api/campaigns/{cid}/scenes/{sid}/alternates").json()
+    assert after["alternates"][after["active"]]["preview"] == showing
+    record = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert record["status"] == "pending"
+
+
+def test_a_swap_that_cannot_put_the_take_back_retires_the_decision(client, monkeypatch):
+    """The put-back is the preferred repair, not the only one. When the same
+    disk stops it too the slot stays empty — and a decision whose narration is
+    nowhere in the transcript must not still be acceptable."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "old reply"}])
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["new reply."])
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
+    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/alternates").json()
+    vid = next(a["id"] for i, a in enumerate(body["alternates"]) if i != body["active"])
+    store.proposals.new(cid, sid, {"check": "athletics", "actor": None, "problems": []})
+    refuse = {"on": True}
+    real = store.scenes.append_reply
+
+    def boom(*a, **k):
+        if refuse["on"]:
+            raise OSError(28, "no space left on device")
+        return real(*a, **k)
+
+    monkeypatch.setattr(store.alternates.scenes_write, "append_reply", boom)
+    with pytest.raises(OSError):
+        client.post(f"/api/campaigns/{cid}/scenes/{sid}/alternates/{vid}")
+    refuse["on"] = False
+
+    record = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert record["status"] != "pending"
+
+
+def test_a_resolution_landing_before_the_reroll_takes_the_lock_still_blocks_it(
+        client, monkeypatch):
+    """`heal` is a no-op while a proposal is still `resolving`, so healing
+    outside the lock let the resolution land in the gap: the read saw no roll
+    line, the guards passed, and the roll line only appeared when `supersede`
+    healed it — after the narration that produced it had been removed."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_message(cid, sid, "assistant", "a reply")
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["new reply."])
+
+    # The other tab's resolution needs this same lock to persist, so by the time
+    # the reroll holds it the resolution has landed — whether it landed while
+    # the reroll was waiting or just before it asked.
+    landed = {"yes": False}
+    real_lock = store.locks.campaign_lock
+    real_heal = store.proposals.heal
+
+    @contextlib.contextmanager
+    def observed(c):
+        with real_lock(c):
+            landed["yes"] = True
+            yield
+
+    def heal(c, s):
+        # read the flag BEFORE delegating: the real `heal` takes the lock itself,
+        # which would otherwise set the flag it is being judged against
+        projecting = landed["yes"]
+        real_heal(c, s)
+        if projecting:
+            # what projecting a landed resolution does to the transcript
+            store.scenes.append_message(c, s, "assistant", "\U0001F3B2 2d6 = 7",
+                                        speaker=store.scenes.ROLL_SPEAKER)
+
+    monkeypatch.setattr(store.locks, "campaign_lock", observed)
+    monkeypatch.setattr(store.proposals, "heal", heal)
+    # both patches stay in place for the reads below: `observed` delegates to the
+    # real lock, and `monkeypatch.undo()` would revert the `client` fixture's own
+    # GRIMOIRE_HOME and point them at a different store
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
+
+    assert resp.status_code == 400
+    assert "manual dice roll" in resp.json()["detail"]
+    # the reply the roll was made against is still there
+    msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    assert [m["content"] for m in msgs][:2] == ["hi", "a reply"]
+
+
 def test_a_swap_whose_transcript_write_fails_leaves_the_proposal_alone(client, monkeypatch):
     """The sidecar preflight only proves the SIDECAR is writable. `promote`
     rewrites the transcript too, and that write failing leaves the reader looking

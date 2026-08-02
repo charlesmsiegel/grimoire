@@ -1141,7 +1141,10 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
         // Keep whatever the turn itself reported; say something if it reported
         // nothing, since the view is now showing a transcript it could not
         // confirm (a cancel raises no banner of its own).
-        setError((cur) => cur ?? (err?.detail ?? String(err)));
+        // Built here rather than through `fail`, which overwrites: the rule is
+        // to keep whatever the turn reported. Retryable — this is the failure
+        // path of a *generation*, so generating again is the right recovery.
+        setError((cur) => cur ?? { text: err?.detail ?? String(err), retryable: true });
       }
       // Anything that ended without `done` may have left a partial the backend
       // is still flushing — a cancel, or a body cut short. An error frame is
