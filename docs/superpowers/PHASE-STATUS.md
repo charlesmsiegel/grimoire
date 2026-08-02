@@ -88,7 +88,10 @@ worktree — the editable `backend/.venv` is pinned to this checkout). Progress 
 
 ## Known deferrals / small debts
 
-- PC-persona evolution and `voice_drift` (not modeled).
+- PC-persona evolution (not modeled). `voice_drift` landed with #59: world-level
+  anchors (`store/voice_anchors.py`), a per-anchored-NPC judge at absorb, and a
+  post-history corrective (`store/voice_drift.py`,
+  `templates/scene/voice_correction.j2`).
 - Bond `since_scene` is stored but never populated (schema-ready; wire when useful).
 - Phase-1 Minor: re-absorbing a scene re-appends `timeline.md` lines (no timeline reader
   yet; fix when one lands).

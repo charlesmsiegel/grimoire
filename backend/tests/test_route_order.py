@@ -83,6 +83,16 @@ CROSSING_PAIRS = [
      "/api/worlds/{wid}/{kind}/{eid}/images/{name}"),
     ("/api/worlds/{wid}/{kind}/instantiate/{mid}/{content_id}",
      "/api/worlds/{wid}/characters/{cid}/tagline/generate"),
+    # Same shape, same decision: only a character whose id is literally
+    # "instantiate" could reach the crossing, and instantiate is registered
+    # first, so it keeps winning.
+    ("/api/worlds/{wid}/{kind}/instantiate/{mid}/{content_id}",
+     "/api/worlds/{wid}/characters/{cid}/voice-anchor/generate"),
+    # Same shape as the world-side voice-anchor crossing above: only a character
+    # whose id is literally "instantiate" could reach it, and instantiate is
+    # registered first, so it keeps winning.
+    ("/api/campaigns/{cid}/characters/{char}/voice-anchor/generate",
+     "/api/campaigns/{cid}/{kind}/instantiate/{mid}/{content_id}"),
     ("/api/campaigns/{cid}/scenes/{sid}/cast/batch",
      "/api/campaigns/{cid}/{kind}/instantiate/{mid}/{content_id}"),
     ("/api/campaigns/{cid}/scenes/{sid}/suggestions/dismiss",

@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from .. import (cards, changes, characters, dossiers, entities, groupstate,
-                overlay, playstate, plot, relationships)
+                overlay, playstate, plot, relationships, voice_drift)
 from ..appearances import (paths as appearances_paths,
                            transitions as appearances_transitions,
                            versions as appearances_versions)
@@ -153,6 +153,102 @@ def _apply_one(cid: str, croot, e: dict, sid: str | None,
                 return {"state": "failed", "id": eid, "kind": "conflict",
                         "reason": "this dossier changed since the scene was absorbed"}
             dossiers.write(croot, target["id"], after)
+        elif kind == "voice_drift":
+            # The one kind whose blank `after` is the POINT: it clears the flag
+            # on a character who came back into voice. So there is no "a blank
+            # must not erase" guard here, unlike the dossier above -- an
+            # approved clear that silently did nothing would leave the next
+            # scene still being corrected for a scene that went fine.
+            if target.get("kind") != "characters":
+                return {"state": "skipped"}   # a forged row must not conjure a phantom
+            payload = e.get("payload") or {}
+            # The row's INTENT comes from the staged `op`, never from whether
+            # `after` happens to be blank. The reviewer can edit the note, and a
+            # raise edited down to empty text would otherwise reclassify itself
+            # as a clear and unlink the standing corrective -- a deletion nobody
+            # asked for. A raise whose text was blanked is unusable (the note IS
+            # the corrective), so it is reported.
+            op = payload.get("op") or ("clear" if not after.strip() else "raise")
+            if op == "raise" and not after.strip():
+                return {"state": "failed", "id": eid, "kind": "error",
+                        "reason": "a voice-drift note cannot be blank — uncheck the row "
+                                  "to skip it, or leave the corrective in place"}
+            # The guards below key on what this row WRITES, not on how it is
+            # labelled. `op` catches a raise whose text the reviewer emptied
+            # (above); it must not also decide whether the write is checked,
+            # because a reviewer can type INTO a clear row -- leaving
+            # `op == "clear"` on a row that now stores a flag, which would slip
+            # past both checks and write one unverified.
+            #
+            # Nonblank text is a raise whatever the row calls itself: it ADDS
+            # text to future prompts, so it needs a real target and a current
+            # anchor. A blank write only removes text, needs neither, and
+            # refusing it would block exactly the cleanup these checks argue for.
+            if after.strip():
+                # A row naming a character that does not exist must not conjure
+                # one. `voice_drift.write` creates its parent dir, and every
+                # remaining guard passes for an invented id (an absent flag
+                # reads as "", matching a forged `before` of ""), so without
+                # this a PUT body could litter characters/ with flag-only
+                # phantoms.
+                try:
+                    characters.read_character(
+                        overlay.char_root(cid, target["id"]), target["id"])
+                except characters.CharacterNotFound:
+                    return {"state": "failed", "id": eid, "kind": "error",
+                            "reason": "that character no longer exists in this campaign"}
+                # A raise is judged against a specific anchor, and the anchor is
+                # editable while the review sits open. Writing a note reasoned
+                # from the old reference would inject it alongside the new one
+                # on the very next turn -- and since an anchor removed and later
+                # restored reactivates whatever flag it left behind, the stale
+                # note can come back long after the standard it cites is gone.
+                #
+                # Provenance is REQUIRED, not optional. A row is client-supplied,
+                # and an absent fingerprint is stored as "" -- which
+                # `_voice_notes` reads as "predates the field" and therefore
+                # always-valid, so the note would go on being injected past
+                # every later anchor change. A flag written NOW must not be able
+                # to masquerade as legacy data.
+                judged = payload.get("anchor")
+                record = overlay.voice_anchor_record(cid, target["id"])
+                if not judged:
+                    return {"state": "failed", "id": eid, "kind": "error",
+                            "reason": "this voice-drift finding does not record which "
+                                      "anchor it was judged against"}
+                current = voice_drift.anchor_fingerprint(
+                    record["text"], record["id"])
+                if judged != current:
+                    return {"state": "failed", "id": eid, "kind": "conflict",
+                            "reason": "the voice anchor changed since the scene was "
+                                      "absorbed — re-absorb to judge against it"}
+            # Same conflict discipline as the dossier: the staged `before` dates
+            # the proposal, so a mismatch means a newer verdict already landed
+            # and this one is stale.
+            #
+            # The PROVENANCE is part of that comparison, not just the note. A
+            # provenance-only refresh leaves the text identical, so an older
+            # clear staged against the previous anchor would still match
+            # `before` and delete a flag another review just revalidated.
+            # Compared only when the row recorded what it expected.
+            #
+            # Both compare-and-swaps read the SAME snapshot: taken separately
+            # they could straddle a concurrent save and pass a pairing of note
+            # and provenance that never existed on disk (voice_drift.read_record).
+            current = voice_drift.read_record(croot, target["id"])
+            if current["note"] != e.get("before", ""):
+                return {"state": "failed", "id": eid, "kind": "conflict",
+                        "reason": "this voice-drift finding changed since the scene "
+                                  "was absorbed"}
+            expected_fp = payload.get("before_anchor")
+            if expected_fp is not None and current["anchor"] != expected_fp:
+                return {"state": "failed", "id": eid, "kind": "conflict",
+                        "reason": "this voice-drift finding was re-confirmed against a "
+                                  "different anchor since the scene was absorbed"}
+            # The judged fingerprint rides into the file so the corrective can be
+            # suppressed if the anchor moves after this commit -- the guard above
+            # only covers up to it.
+            voice_drift.write(croot, target["id"], after, payload.get("anchor") or "")
         elif kind == "lore":
             overlay.update_entity(cid, target["kind"], target["id"], body=after)
         elif kind == "authored":

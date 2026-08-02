@@ -315,6 +315,13 @@ class TaglineSave(BaseModel):
     tagline: str = ""
 
 
+class VoiceAnchorSave(BaseModel):
+    # No default, deliberately: a blank anchor DELETES, so `{}` from an
+    # incomplete or mismatched client would be a destructive request nobody
+    # made. An explicit {"voice_anchor": ""} is still the supported opt-out.
+    voice_anchor: str
+
+
 class GroupStateSave(BaseModel):
     goals: str = ""
     resources: str = ""

@@ -60,11 +60,19 @@ def _actor_name(aroot: Path, kind: str, actor_id: str, vid: str | None) -> str |
     """Display name from the campaign copy at the locked version; None if unreadable.
 
     `aroot` is a `locked_actor_root`: every actor reaching here comes from the
-    appearance record, so the campaign-side copy exists."""
+    appearance record, so the campaign-side copy exists.
+
+    A card whose `data` is missing or is not an object falls back to the actor
+    id rather than raising. Cards are stored as arbitrary dicts in a store the
+    user owns and hand-edits, and this runs over WHOLE ROSTERS -- so indexing
+    `data` here let one malformed card several scenes ago take out the caller
+    for every actor at once, which is never the right blast radius for "this
+    one card has no name in it"."""
     try:
         if kind == "pcs":
             return pcs.read_persona(aroot, actor_id, vid).get("name") or actor_id
-        return characters.read_card(aroot, actor_id, vid)["data"].get("name") or actor_id
+        data = characters.read_card(aroot, actor_id, vid).get("data")
+        return (data.get("name") if isinstance(data, dict) else None) or actor_id
     except (pcs.PCNotFound, pcs.PCVersionNotFound,
             characters.CharacterNotFound, characters.VersionNotFound):
         return None

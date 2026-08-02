@@ -87,8 +87,15 @@ ROOT_FUNCS = ("campaign_root", "croot_of", "_campaign_root_or_404")
 #: (`backend/src/grimoire/store/lorebook.py:74`), so on a thin campaign it would
 #: miss inherited entries and create a campaign-side record shadowing them.
 #: Every call site today passes a world root; the entry is preventive.
+#: `voice_anchors` is here for `taglines`' exact reason: the anchor is a
+#: world-level sidecar that overlays per file (`overlay.voice_anchor`), so
+#: reading one off a bare campaign root sees only a campaign that has diverged
+#: and silently judges every other character against no anchor at all -- which
+#: reads as "this character is opted out", the quiet wrong answer. Its
+#: campaign-local counterpart `voice_drift` is deliberately NOT here: that flag
+#: never inherits, exactly like `dossiers`.
 RESOLVER_MODULES = ("entities", "characters", "pcs", "greetings", "assets", "taglines",
-                    "appearances", "image_subjects", "lorebook")
+                    "voice_anchors", "appearances", "image_subjects", "lorebook")
 
 #: Resolver functions that *only* write, named exactly. A pure write belongs on
 #: the campaign root: that is how a record materializes.

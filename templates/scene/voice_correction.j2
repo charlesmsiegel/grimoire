@@ -1,0 +1,21 @@
+{#- The voice counterweight, appended to the post-history system message — the
+    last message before generation, and so the closest available push-back
+    against a cast that has started sounding like each other.
+
+    Says "still outstanding" rather than "in the last scene": a flag survives a
+    later not_enough verdict, and survives the character being off-cast for
+    several scenes, so naming the last scene as the source would inject false
+    chronology into the prompt.
+
+    Renders only for present NPCs carrying an UNRESOLVED drift flag
+    (store/voice_drift.py); a campaign whose cast is in voice renders nothing
+    and costs nothing. Vars: voice_notes (list of {name, note}, non-empty). -#}
+{%- if voice_notes | length == 1 -%}
+{%- set n = voice_notes[0] -%}
+{{ n.name }} has drifted out of voice, and the correction is still outstanding. {{ n.note }} Bring {{ n.name }} back to how they actually speak before anything else in this reply.
+{%- else -%}
+Some of the cast have drifted out of voice, with corrections still outstanding. Bring each of them back to how they actually speak before anything else in this reply.
+{% for n in voice_notes %}
+- {{ n.name }}: {{ n.note }}
+{%- endfor %}
+{%- endif -%}

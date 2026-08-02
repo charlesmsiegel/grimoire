@@ -373,7 +373,7 @@ export type CastDetail = { kind: "characters" | "pcs"; id: string; name: string;
 export type TimelineEvent = { date: string; text: string };
 export type StagedEdit = {
   id: string; kind: "character_state" | "lore" | "authored" | "relationship" | "bond" | "plot"
-    | "new_character" | "new_location" | "new_lore" | "sheet" | "dossier";
+    | "new_character" | "new_location" | "new_lore" | "sheet" | "dossier" | "voice_drift";
   target: { kind: string; id: string }; label: string; field: string;
   before: string; after: string; authored: boolean;
   payload?: Record<string, unknown>;
@@ -420,12 +420,28 @@ export type Dossiers = PhaseAttempt & {
   /** NPCs the absorb budget ran out before reaching — never attempted (#243). */
   skipped: string[];
 };
+export type VoiceCheck = PhaseAttempt & {
+  status: "ok" | "degraded" | "failed" | "skipped"; reason: string | null;
+  /** NPCs whose dialogue was judged against their anchor — only ones that HAVE
+   *  an anchor are judged at all, which is what keeps the extra calls opt-in. */
+  checked: string[];
+  /** The subset of `checked` that came back out of voice (#59). */
+  flagged: string[];
+  /** The subset of `checked` that said too little to judge. Named separately
+   *  because `checked` minus `flagged` would otherwise read as "confirmed in
+   *  voice" for a character nobody actually heard — and silence never clears a
+   *  standing corrective. */
+  unjudged: string[];
+  failed: DossierFailure[];
+  /** Anchored NPCs the absorb budget ran out before reaching — never attempted. */
+  skipped: string[];
+};
 /** One row per LLM-backed step of a single absorb, in run order. A projection of
- *  `mechanics`/`dossiers` (never a second source of truth) that also covers the
- *  extraction, so a run cut short by the time budget is legible as one instead of
- *  looking like a model with nothing to suggest. */
+ *  `mechanics`/`dossiers`/`voice` (never a second source of truth) that also covers
+ *  the extraction, so a run cut short by the time budget is legible as one instead
+ *  of looking like a model with nothing to suggest. */
 export type AbsorbPhase = PhaseAttempt & {
-  name: "extraction" | "dossiers" | "audit";
+  name: "extraction" | "dossiers" | "voice" | "audit";
   status: "ok" | "degraded" | "failed" | "skipped"; reason: string | null;
 };
 export type SceneAbsorb = {
@@ -437,6 +453,7 @@ export type SceneAbsorb = {
    *  returns the first result instead of committing twice. */
   commit_token: string;
   dossiers: Dossiers;
+  voice: VoiceCheck;
   phases: AbsorbPhase[];
 };
 export type SceneSuggestion = {
@@ -738,6 +755,17 @@ export const api = {
     request<{ ok: boolean }>("PUT", `/api/worlds/${wid}/characters/${cid}/tagline`, { tagline }),
   generateCharacterTagline: (wid: string, cid: string) =>
     request<{ tagline: string }>("POST", `/api/worlds/${wid}/characters/${cid}/tagline/generate`),
+  /** Scope-aware: a campaign-local character (an absorb `new_character`, say) has
+   *  no world counterpart, so the campaign route is the only way it can ever be
+   *  given an anchor. Campaign scope reads through the overlay and writes
+   *  campaign-side. */
+  getCharacterVoiceAnchor: (scope: EntityScope, cid: string) =>
+    request<{ voice_anchor: string }>("GET", `${entityBase(scope)}/characters/${cid}/voice-anchor`),
+  /** A blank anchor REMOVES it, opting the character back out of drift detection. */
+  setCharacterVoiceAnchor: (scope: EntityScope, cid: string, voice_anchor: string) =>
+    request<{ ok: boolean }>("PUT", `${entityBase(scope)}/characters/${cid}/voice-anchor`, { voice_anchor }),
+  generateCharacterVoiceAnchor: (scope: EntityScope, cid: string) =>
+    request<{ voice_anchor: string }>("POST", `${entityBase(scope)}/characters/${cid}/voice-anchor/generate`),
   createVersion: (scope: EntityScope, cid: string, body: { name: string; card: Card }) =>
     request<{ version: string }>("POST", `${entityBase(scope)}/characters/${cid}/versions`, body),
   updateVersion: (scope: EntityScope, cid: string, vid: string, card: Card) =>

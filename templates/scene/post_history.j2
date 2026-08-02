@@ -1,10 +1,14 @@
 {#- The trailing system message: the NPC cards' post-history instructions and
-    the adaptive length corrective, blank-line separated. Sent last, right
-    before generation; omitted entirely when both are empty.
-    Vars: npc_cards, length_correction (str, possibly empty). -#}
+    the adaptive correctives, blank-line separated. Sent last, right before
+    generation; omitted entirely when all are empty.
+    Vars: npc_cards, voice_correction, length_correction (both str, possibly
+    empty). The voice corrective goes FIRST of the two: length is a matter of
+    trimming what was written, voice is a matter of who is writing it, so the
+    identity correction has to land before the instruction to be brief. -#}
 {%- set blocks = [] -%}
 {%- for d in npc_cards -%}
 {%- if d.get("post_history_instructions", "").strip() -%}{%- set _ = blocks.append(d.get("post_history_instructions", "").strip()) -%}{%- endif -%}
 {%- endfor -%}
+{%- if voice_correction.strip() -%}{%- set _ = blocks.append(voice_correction.strip()) -%}{%- endif -%}
 {%- if length_correction.strip() -%}{%- set _ = blocks.append(length_correction.strip()) -%}{%- endif -%}
 {{ blocks | join("\n\n") }}
