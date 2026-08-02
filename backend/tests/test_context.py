@@ -1671,12 +1671,14 @@ def test_the_breakdown_counts_history_as_the_messages_it_is_sent_as(monkeypatch,
         scenes.append_message(cid, sid, "user" if n % 2 == 0 else "assistant", "no")
     body = context.context_breakdown(cid, sid)
     row = next(r for r in body["sections"] if r["label"] == "Conversation history")
-    per_message = sum(context.count_tokens(m["content"])
-                      for m in context.build_messages(cid, sid) if m["role"] != "system")
-    assert row["tokens"] == per_message
-    # The two really do disagree on this fixture -- which is what makes the
-    # assertion above discriminating rather than a tautology. If a change ever
-    # makes them coincide here, this fails and the fixture wants rechoosing.
+    turns = [m for m in context.build_messages(cid, sid) if m["role"] != "system"]
+    assert row["tokens"] == sum(context_pack.message_cost(m["content"]) for m in turns)
+    # Discriminating against both wrong answers: the joined display string, and
+    # the bare content sum with no per-message framing. The first two really do
+    # disagree on this fixture -- if a change ever makes them coincide here,
+    # this fails and the fixture wants rechoosing rather than passing blind.
+    assert context.count_tokens(row["text"]) != sum(context.count_tokens(m["content"])
+                                                    for m in turns)
     assert row["tokens"] != context.count_tokens(row["text"])
 
 
@@ -1691,8 +1693,86 @@ def test_the_breakdown_total_is_the_cost_of_the_real_request(monkeypatch, tmp_pa
         scenes.append_message(cid, sid, "user" if n % 2 == 0 else "assistant",
                               f"Turn {n} on the Saltmarch road.")
     body = context.context_breakdown(cid, sid)
-    sent = sum(context.count_tokens(m["content"]) for m in context.build_messages(cid, sid))
-    assert body["total_tokens"] == sent
+    messages = context.build_messages(cid, sid)
+    wire = sum(context.count_tokens(m["content"]) for m in messages)
+    turns = [m for m in messages if m["role"] != "system"]
+    # The content that ships is the floor; the difference is exactly the
+    # per-message framing allowance, charged once per history message.
+    assert body["total_tokens"] == wire + context_pack.MESSAGE_OVERHEAD * len(turns)
+    assert body["total_tokens"] > wire
     # ...and it is NOT the sum of the rows, which is what it would be if the
     # total were re-derived from the breakdown. Same vacuity guard as above.
     assert body["total_tokens"] != sum(r["tokens"] for r in body["sections"] if not r["dropped"])
+
+
+def test_archive_ignores_a_string_keywords_field(monkeypatch, tmp_path):
+    """A model that answers the absorb prompt with a bare string instead of an
+    array gets persisted as one entry per CHARACTER, and a key of "a" whole-word
+    matches ordinary prose — recalling unrelated scenes at random."""
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    from grimoire.store import config
+    config.write_config(recap_depth="0")
+    chronicle.absorb(cid, {"id": "000--a--letters", "one_line": "Nonsense.",
+                           "summary": "Should never be recalled.",
+                           "keywords": "saltmarch"})          # a string, not a list
+    chronicle.absorb(cid, {"id": "000--b--proper", "one_line": "Fine.",
+                           "summary": "The crossing went badly.",
+                           "keywords": ["saltmarch"]})        # a real list
+    scenes.append_message(cid, sid, "user", "A message with a and s and m in it.")
+    text = _archive(cid, sid)
+    assert text is None or "Should never be recalled." not in text
+    # control: the well-formed record still retrieves on a real keyword
+    scenes.append_message(cid, sid, "assistant", "They spoke of Saltmarch.")
+    text = _archive(cid, sid)
+    assert "The crossing went badly." in text
+    assert "Should never be recalled." not in text
+
+
+def test_history_is_charged_for_the_framing_a_provider_adds(monkeypatch, tmp_path):
+    """No provider sends bare content — and `claude_agent._flatten` serialises
+    the whole conversation into one string with `[role]` prefixes. Charging
+    content alone leaves that uncounted."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    assert context_pack.message_cost("hello") == context.count_tokens("hello") + \
+        context_pack.MESSAGE_OVERHEAD
+    # and the packer uses it: a history of empty-ish turns still costs something
+    history = [{"role": "user", "content": "hi"} for _ in range(50)]
+    out = context_pack.pack([], history, budget=10)
+    assert len(out["history"]) == context_pack.HISTORY_FLOOR
+
+
+def test_trimmed_history_counts_toward_the_dropped_total(monkeypatch, tmp_path):
+    """A pack that fits by trimming history alone drops no SECTION, so a
+    dropped-token total taken from the section rows would be zero and the
+    inspector would say nothing about the cut it just made."""
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    from grimoire.store import config
+    config.write_config(recap_depth="0")
+    for n in range(10):
+        scenes.append_message(cid, sid, "user" if n % 2 == 0 else "assistant",
+                              f"Turn {n} on the Saltmarch road. " * 20)
+    full = context.context_breakdown(cid, sid)["total_tokens"]
+    config.write_config(context_budget=str(full * 3 // 4))
+
+    body = context.context_breakdown(cid, sid)
+    row = next(r for r in body["sections"] if r["label"] == "Conversation history")
+    assert row["trimmed"] > 0
+    assert not any(r["dropped"] for r in body["sections"]), "this fixture must trim, not drop"
+    assert body["dropped_tokens"] > 0            # the trim is reported, not silent
+
+
+def test_a_director_note_seeds_archive_retrieval(monkeypatch, tmp_path):
+    """The note is this turn's input and is never persisted, so if it does not
+    seed the scan window, naming an old scene in a director note cannot recall
+    it — the opener already seeds retrieval with its ephemeral prompt."""
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    from grimoire.store import config
+    config.write_config(recap_depth="0")
+    _absorbed(cid, "000--a--older", ["saltmarch"], summary="The Saltmarch crossing went badly.")
+    scenes.append_message(cid, sid, "user", "Nothing relevant here.")
+
+    plain = context.build_messages(cid, sid)[0]["content"]
+    assert "Saltmarch crossing went badly" not in plain     # nothing said the word yet
+
+    directed = context.build_director_messages(cid, sid, "Have them recall Saltmarch.")
+    assert "Saltmarch crossing went badly" in directed[0]["content"]

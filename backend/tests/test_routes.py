@@ -1049,6 +1049,16 @@ def test_scene_location_unknown_404(client):
                       json={"location": "nope"}).status_code == 404
 
 
+def _request_cost(cid, sid):
+    """What the built request costs, the way the packer counts it: each
+    message's content plus the per-message framing allowance for the turns
+    (system messages are not turns and carry no per-message framing)."""
+    messages = store.context.build_messages(cid, sid)
+    turns = [m for m in messages if m["role"] != "system"]
+    return (sum(store.context.count_tokens(m["content"]) for m in messages)
+            + store.context.MESSAGE_OVERHEAD * len(turns))
+
+
 def test_scene_context_breakdown(client):
     wid, cid = _campaign(client)
     sera = {"spec": "chara_card_v3", "spec_version": "3.0",
@@ -1063,9 +1073,9 @@ def test_scene_context_breakdown(client):
     assert all(s["tokens"] > 0 for s in body["sections"])
     # The total is the cost of the REQUEST, not the sum of the rows: the blank
     # lines joining the sections are real tokens and per-string counts do not
-    # add up across a join. Checked against the messages that actually ship.
-    assert body["total_tokens"] == sum(store.context.count_tokens(m["content"])
-                                       for m in store.context.build_messages(cid, sid))
+    # add up across a join. Checked against the messages that actually ship,
+    # plus the per-message framing allowance the packer charges for each turn.
+    assert body["total_tokens"] == _request_cost(cid, sid)
     # no budget configured -> nothing is dropped and the packer is inert
     assert body["budget_tokens"] == 0
     assert body["dropped_tokens"] == 0
@@ -1093,11 +1103,14 @@ def test_scene_context_reports_what_the_budget_dropped(client):
     trimmed = [s for s in body["sections"] if s["trimmed"]]
     assert dropped or trimmed, "a halved budget dropped nothing"
     assert all(s["text"] for s in dropped)                       # still inspectable
-    assert body["dropped_tokens"] == sum(s["tokens"] for s in dropped)
+    # Dropped sections AND trimmed history both count: this fixture fits by
+    # trimming, so a total taken from the section rows alone would be 0 and the
+    # inspector would report nothing cut.
+    assert body["dropped_tokens"] >= sum(s["tokens"] for s in dropped)
+    assert body["dropped_tokens"] > 0
     assert body["total_tokens"] < before["total_tokens"]
     # still the cost of the real request, now that the packer has cut it down
-    assert body["total_tokens"] == sum(store.context.count_tokens(m["content"])
-                                       for m in store.context.build_messages(cid, sid))
+    assert body["total_tokens"] == _request_cost(cid, sid)
 
 
 def test_edit_message_route(client):

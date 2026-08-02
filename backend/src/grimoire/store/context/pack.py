@@ -67,6 +67,17 @@ DROP_ORDER = (ARCHIVE, BACKGROUND, SPOTLIGHT)
 #: exchange — below that the model is answering a turn it cannot see.
 HISTORY_FLOOR = 2
 
+#: Tokens charged per history message on top of its own content, for the
+#: framing a provider wraps around a turn. No provider sends bare content: the
+#: chat APIs bill role tokens per message, and the Claude agent path is heavier
+#: still — `claude_agent._flatten` serialises the WHOLE conversation into one
+#: prompt string, prefixing every turn with `[role]\n` and joining with blank
+#: lines, so on that provider the per-message sum is not even the right shape.
+#: An exact figure would mean teaching this module each provider's wire format;
+#: a small fixed allowance, erring high, is the safe direction for a ceiling —
+#: the same reasoning as rounding the token heuristic up.
+MESSAGE_OVERHEAD = 5
+
 def budget_tokens() -> int:
     """The configured context budget in tokens; 0 = unbounded. A hand-edited
     config.md holding nonsense falls back to unbounded rather than raising: a
@@ -82,6 +93,16 @@ def budget_tokens() -> int:
 #: `compose`; the real callers pass the template render itself, so what the
 #: packer measures is the string that gets sent.
 SEPARATOR = "\n\n"
+
+
+def message_cost(content: str) -> int:
+    """What one history message costs: its content plus `MESSAGE_OVERHEAD`.
+
+    Shared with `context_breakdown` so the inspector reports history the way
+    the packer charges it — the two disagreeing about the same messages is the
+    bug this whole seam keeps producing.
+    """
+    return tokens.count_tokens(content) + MESSAGE_OVERHEAD
 
 
 def pack(sections: list[dict], history: list[dict], reserved: int = 0,
@@ -114,7 +135,8 @@ def pack(sections: list[dict], history: list[dict], reserved: int = 0,
     if budget is None:
         budget = budget_tokens()
     if budget <= 0:  # unbounded: skip counting entirely, it is not free
-        return {"sections": packed, "history": list(history), "history_trimmed": 0}
+        return {"sections": packed, "history": list(history), "history_trimmed": 0,
+                "history_trimmed_tokens": 0}
     if compose is None:
         compose = SEPARATOR.join
 
@@ -131,13 +153,15 @@ def pack(sections: list[dict], history: list[dict], reserved: int = 0,
         return tokens.count_tokens(compose([s["text"] for s in packed if not s["dropped"]]))
 
     hist = list(history)
-    # History messages ARE sent separately, so summing their counts is right --
-    # nothing joins them into one string.
-    hist_costs = [tokens.count_tokens(m["content"]) for m in hist]
+    # History messages are sent as separate entries, so summing them is the
+    # right shape (unlike the joined system message) -- plus the per-message
+    # framing the provider adds around each one.
+    hist_costs = [message_cost(m["content"]) for m in hist]
     hist_total = sum(hist_costs)
     sys_cost = system_cost()
     total = reserved + sys_cost + hist_total
     trimmed = 0
+    trimmed_tokens = 0
 
     for tier in DROP_ORDER:
         if total <= budget:
@@ -152,9 +176,12 @@ def pack(sections: list[dict], history: list[dict], reserved: int = 0,
             total = reserved + sys_cost + hist_total
         if tier == ARCHIVE:
             while total > budget and len(hist) > HISTORY_FLOOR:
-                hist_total -= hist_costs.pop(0)
+                cost = hist_costs.pop(0)
+                hist_total -= cost
+                trimmed_tokens += cost
                 hist.pop(0)
                 trimmed += 1
                 total = reserved + sys_cost + hist_total
 
-    return {"sections": packed, "history": hist, "history_trimmed": trimmed}
+    return {"sections": packed, "history": hist, "history_trimmed": trimmed,
+            "history_trimmed_tokens": trimmed_tokens}

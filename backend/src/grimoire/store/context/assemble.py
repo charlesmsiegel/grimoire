@@ -335,7 +335,11 @@ def build_director_messages(cid: str, sid: str, note: str, turn: dict | None = N
     """One offscreen director turn: full system + history, then the note as the
     final user message. The note rides only this call — never persisted. `turn`
     is the same one-shot response-preset override as build_messages."""
-    a = _assemble(cid, sid, turn=turn)
+    # The note is this turn's actual input, and it is never persisted -- so it
+    # seeds retrieval the same way the opener's prompt does, or naming an old
+    # scene in a director note could not recall it (nothing else in the scan
+    # window has said the word yet).
+    a = _assemble(cid, sid, wi_seed=note, turn=turn)
     # expanded up front so the note's tokens are reserved before packing: it is
     # a mandatory message, so the budget has to know about it
     note_text = macros.expand_macros(note, a["subs"], cid, sid)
@@ -377,11 +381,11 @@ def context_breakdown(cid: str, sid: str) -> dict:
              "tokens": tokens.count_tokens(s["text"])}
             for s in p["sections"]]
 
-    hist_tokens = sum(tokens.count_tokens(m["content"]) for m in p["history"])
+    hist_tokens = sum(pack.message_cost(m["content"]) for m in p["history"])
     hist = "\n\n".join(m["content"] for m in p["history"])
     if hist:
-        # Displayed joined (one readable block), accounted per message — which
-        # is how it is charged and how it goes on the wire.
+        # Displayed joined (one readable block), accounted per message with the
+        # same per-message framing allowance the packer charges.
         rows.append({"label": "Conversation history", "text": hist, "tier": pack.HISTORY,
                      "dropped": False, "trimmed": p["history_trimmed"],
                      "tokens": hist_tokens})
@@ -393,8 +397,13 @@ def context_breakdown(cid: str, sid: str) -> dict:
     kept = [s["text"] for s in p["sections"] if not s["dropped"]]
     total = (tokens.count_tokens(_compose_system(kept)) + hist_tokens
              + tokens.count_tokens(a["post_history"]))
+    # Trimmed history messages are gone from `rows` entirely -- they are not a
+    # section that can be shown struck through -- so their cost has to be added
+    # here, or a pack that fit by trimming history alone reports nothing
+    # dropped and the inspector stays silent about the cut it just made.
     return {"sections": rows, "total_tokens": total,
-            "dropped_tokens": sum(r["tokens"] for r in rows if r["dropped"]),
+            "dropped_tokens": (sum(r["tokens"] for r in rows if r["dropped"])
+                               + p["history_trimmed_tokens"]),
             "budget_tokens": pack.budget_tokens()}
 
 
