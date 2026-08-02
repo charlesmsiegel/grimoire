@@ -1161,3 +1161,325 @@ def test_drift_roster_is_not_built_for_a_scene_with_nothing_to_measure(monkeypat
     scenes.append_reply(cid, sid, [{"speaker": None, "content": "A reply."}])
     context.build_messages(cid, sid)
     assert len(calls) == 1
+
+
+# ---- archive retrieval (#127) ----
+
+def _absorbed(cid, sid_, keywords, summary="", one_line="", date=""):
+    chronicle.absorb(cid, {"id": sid_, "one_line": one_line or "A thing happened.",
+                           "summary": summary or "A longer account of the thing.",
+                           "keywords": list(keywords), "cast": [], "location": "", "date": date})
+
+
+def _archive(cid, sid):
+    return next((s["text"] for s in context.context_sections(cid, sid)
+                 if s["label"] == "Earlier scenes"), None)
+
+
+def test_archive_recalls_an_old_scene_by_keyword(monkeypatch, tmp_path):
+    """The scene has fallen out of the recap window, so nothing else in the
+    prompt can reach it — a keyword in the scan window is the only way back."""
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    from grimoire.store import config
+    config.write_config(recap_depth="1")
+    _absorbed(cid, "2026-07-01-newer", ["clinic"], summary="They met at the clinic.")
+    _absorbed(cid, "2026-06-20-older", ["saltmarch"],
+              summary="The Saltmarch crossing went badly.", date="2026-06-20")
+    scenes.append_message(cid, sid, "user", "What happened at Saltmarch?")
+    text = _archive(cid, sid)
+    assert text is not None
+    assert "The Saltmarch crossing went badly." in text
+    assert "2026-06-20" in text                       # the date rides along
+    assert "already happened" in text                 # labelled as past, not current
+    assert "They met at the clinic." not in text      # no keyword hit
+
+
+def test_archive_stays_silent_without_a_keyword_hit(monkeypatch, tmp_path):
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    from grimoire.store import config
+    config.write_config(recap_depth="0")  # nothing in the recap window at all
+    _absorbed(cid, "2026-06-20-older", ["saltmarch"], summary="The crossing went badly.")
+    scenes.append_message(cid, sid, "user", "Nothing relevant here.")
+    assert _archive(cid, sid) is None
+
+
+def test_archive_never_duplicates_the_recap_window(monkeypatch, tmp_path):
+    """A scene the recap already shows must not come back a second time under
+    a heading that calls it a recalled memory."""
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    from grimoire.store import config
+    config.write_config(recap_depth="5")
+    _absorbed(cid, "2026-06-20-older", ["saltmarch"], one_line="Saltmarch went badly.",
+              summary="The Saltmarch crossing went badly.")
+    scenes.append_message(cid, sid, "user", "What happened at Saltmarch?")
+    sections = {s["label"]: s["text"] for s in context.context_sections(cid, sid)}
+    assert "Saltmarch went badly." in sections["Story so far"]   # the recap has it
+    assert "Earlier scenes" not in sections                      # so the archive does not
+
+
+def test_archive_excludes_the_scene_being_played(monkeypatch, tmp_path):
+    """An absorbed scene that is then continued still has a chronicle record;
+    recalling it while its own transcript is in the history would narrate the
+    present as a past event."""
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    from grimoire.store import config
+    config.write_config(recap_depth="0")
+    _absorbed(cid, sid, ["saltmarch"], summary="The Saltmarch crossing went badly.")
+    scenes.append_message(cid, sid, "user", "What happened at Saltmarch?")
+    assert _archive(cid, sid) is None
+
+
+def test_archive_keyless_record_is_never_always_on(monkeypatch, tmp_path):
+    """Unlike a keyless lore entry: every absorbed scene would qualify and the
+    section would grow without bound as the campaign runs."""
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    from grimoire.store import config
+    config.write_config(recap_depth="0")
+    _absorbed(cid, "2026-06-20-older", [], summary="Something happened once.")
+    scenes.append_message(cid, sid, "user", "Anything at all.")
+    assert _archive(cid, sid) is None
+
+
+def test_archive_matches_whole_words_only(monkeypatch, tmp_path):
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    from grimoire.store import config
+    config.write_config(recap_depth="0")
+    _absorbed(cid, "2026-06-20-older", ["pac"], summary="The Pac accord.")
+    scenes.append_message(cid, sid, "user", "They spoke of the pact.")
+    assert _archive(cid, sid) is None
+
+
+def test_archive_caps_at_archive_depth_newest_first(monkeypatch, tmp_path):
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    from grimoire.store import config
+    config.write_config(recap_depth="0", archive_depth="2")
+    for n in (1, 2, 3, 4):
+        _absorbed(cid, f"2026-0{n}-01-scene", ["saltmarch"], summary=f"Crossing number {n}.")
+    scenes.append_message(cid, sid, "user", "Tell me about Saltmarch.")
+    text = _archive(cid, sid)
+    assert "Crossing number 4." in text and "Crossing number 3." in text
+    assert "Crossing number 2." not in text and "Crossing number 1." not in text
+    assert text.index("Crossing number 4.") < text.index("Crossing number 3.")  # newest first
+
+
+def test_archive_depth_zero_disables_retrieval(monkeypatch, tmp_path):
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    from grimoire.store import config
+    config.write_config(recap_depth="0", archive_depth="0")
+    _absorbed(cid, "2026-06-20-older", ["saltmarch"], summary="The crossing went badly.")
+    scenes.append_message(cid, sid, "user", "What happened at Saltmarch?")
+    assert _archive(cid, sid) is None
+
+
+def test_archive_tolerates_a_garbled_chronicle(monkeypatch, tmp_path):
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    scenes.append_message(cid, sid, "user", "hello")
+    (campaigns.campaign_root(cid) / "chronicle.json").write_text("{ not valid json", encoding="utf-8")
+    assert _archive(cid, sid) is None   # must not raise
+    context.build_messages(cid, sid)    # nor may the real consumer
+
+
+def test_archive_falls_back_to_one_line_without_a_summary(monkeypatch, tmp_path):
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    from grimoire.store import config
+    config.write_config(recap_depth="0")
+    chronicle.absorb(cid, {"id": "2026-06-20-older", "one_line": "The crossing went badly.",
+                           "summary": "", "keywords": ["saltmarch"]})
+    scenes.append_message(cid, sid, "user", "What happened at Saltmarch?")
+    assert "The crossing went badly." in _archive(cid, sid)
+
+
+# ---- tiered budget packing (#126) ----
+
+from grimoire.store.context import pack as context_pack  # noqa: E402
+
+
+def _sec(label, tier, text):
+    return {"label": label, "text": text, "tier": tier}
+
+
+def _packed_labels(result):
+    return [s["label"] for s in result["sections"] if not s["dropped"]]
+
+
+def test_pack_without_a_budget_drops_nothing(monkeypatch, tmp_path):
+    """0 is the default and every pre-existing install: the packed prompt must
+    be the unpacked one, not merely a close approximation of it."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    sections = [_sec("A", context_pack.ARCHIVE, "x " * 500), _sec("B", context_pack.LOCK_IN, "y")]
+    out = context_pack.pack(sections, [{"role": "user", "content": "z " * 500}], budget=0)
+    assert _packed_labels(out) == ["A", "B"]
+    assert out["history_trimmed"] == 0
+
+
+def test_pack_drops_archive_before_background_before_spotlight(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    sections = [_sec("keep", context_pack.LOCK_IN, "lock "),
+                _sec("spot", context_pack.SPOTLIGHT, "spot " * 20),
+                _sec("back", context_pack.BACKGROUND, "back " * 20),
+                _sec("arch", context_pack.ARCHIVE, "arch " * 20)]
+    total = sum(context.count_tokens(s["text"]) for s in sections)
+    one = context.count_tokens("arch " * 20)
+
+    # room for everything but one section -> the archive is the one that goes
+    out = context_pack.pack(sections, [], budget=total - 1)
+    assert _packed_labels(out) == ["keep", "spot", "back"]
+    # room for two fewer -> background follows it
+    out = context_pack.pack(sections, [], budget=total - one - 1)
+    assert _packed_labels(out) == ["keep", "spot"]
+    # room for one section only -> spotlight goes too
+    out = context_pack.pack(sections, [], budget=context.count_tokens("lock "))
+    assert _packed_labels(out) == ["keep"]
+
+
+def test_pack_never_drops_lock_in_even_when_it_cannot_fit(monkeypatch, tmp_path):
+    """The floor of the whole design: a full answer in the wrong shape is worse
+    than a smaller one, so an impossible budget ships over-budget rather than
+    dropping the brief."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    sections = [_sec("brief", context_pack.LOCK_IN, "lock " * 50),
+                _sec("arch", context_pack.ARCHIVE, "arch " * 50)]
+    out = context_pack.pack(sections, [], budget=1)
+    assert _packed_labels(out) == ["brief"]
+
+
+def test_pack_trims_history_after_the_archive_and_before_the_frame(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    sections = [_sec("back", context_pack.BACKGROUND, "back " * 20),
+                _sec("arch", context_pack.ARCHIVE, "arch " * 20)]
+    history = [{"role": "user", "content": f"line {n} " * 10} for n in range(6)]
+    hist_total = sum(context.count_tokens(m["content"]) for m in history)
+    back = context.count_tokens("back " * 20)
+    # a budget that fits the background section plus roughly half the history
+    out = context_pack.pack(sections, history, budget=back + hist_total // 2)
+    assert _packed_labels(out) == ["back"]        # archive went first
+    assert out["history_trimmed"] > 0             # then history gave way
+    assert len(out["history"]) == len(history) - out["history_trimmed"]
+    assert out["history"][-1] == history[-1]      # trimmed from the front
+
+
+def test_pack_keeps_a_history_floor(monkeypatch, tmp_path):
+    """Below the floor the model is answering a turn it cannot see."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    history = [{"role": "user", "content": f"line {n} " * 20} for n in range(8)]
+    out = context_pack.pack([], history, budget=1)
+    assert len(out["history"]) == context_pack.HISTORY_FLOOR
+    assert out["history"] == history[-context_pack.HISTORY_FLOOR:]
+
+
+def test_pack_drops_the_largest_section_in_a_tier_first(monkeypatch, tmp_path):
+    """Fewest drops that reach the ceiling."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    sections = [_sec("small", context_pack.BACKGROUND, "s " * 5),
+                _sec("large", context_pack.BACKGROUND, "l " * 60)]
+    total = sum(context.count_tokens(s["text"]) for s in sections)
+    out = context_pack.pack(sections, [], budget=total - 1)
+    assert _packed_labels(out) == ["small"]
+
+
+def test_pack_charges_the_reserved_post_history_without_dropping_it(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    sections = [_sec("arch", context_pack.ARCHIVE, "arch " * 20)]
+    fits = context.count_tokens("arch " * 20)
+    assert _packed_labels(context_pack.pack(sections, [], reserved=0, budget=fits)) == ["arch"]
+    # the same budget, now partly spent on the post-history block
+    assert _packed_labels(context_pack.pack(sections, [], reserved=fits, budget=fits)) == []
+
+
+def test_pack_reports_dropped_sections_rather_than_deleting_them(monkeypatch, tmp_path):
+    """A drop the user cannot see is the silent truncation this replaced."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    sections = [_sec("arch", context_pack.ARCHIVE, "arch " * 20)]
+    out = context_pack.pack(sections, [], budget=1)
+    assert [s["label"] for s in out["sections"]] == ["arch"]
+    assert out["sections"][0]["dropped"] is True
+    assert out["sections"][0]["text"] == "arch " * 20     # text survives, for the inspector
+
+
+def test_budget_tokens_reads_config_and_tolerates_nonsense(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    from grimoire.store import config
+    assert context.budget_tokens() == 0                  # default: unbounded
+    config.write_config(context_budget="4000")
+    assert context.budget_tokens() == 4000
+    config.write_config(context_budget="-5")
+    assert context.budget_tokens() == 0
+    config.write_config(context_budget="not a number")   # hand-edited config.md
+    assert context.budget_tokens() == 0
+
+
+def test_a_budget_actually_shrinks_the_prompt(monkeypatch, tmp_path):
+    """End to end through build_messages: the same scene, with and without a
+    budget, and the budgeted prompt is the smaller one."""
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    from grimoire.store import config
+    config.write_config(recap_depth="0", system_prompt="Never speak for the PC.")
+    characters.create_character(campaigns.campaign_root(cid), "Seraphine", "default",
+                                _npc_card("Seraphine", description="A keeper of the Saltmarch road."))
+    ap.appear(cid, sid, "characters", "seraphine", "default", "npc")
+    _absorbed(cid, "2026-06-20-older", ["saltmarch"], summary="The Saltmarch crossing went badly.")
+    for n in range(8):
+        scenes.append_message(cid, sid, "user", f"Turn {n} on the Saltmarch road. " * 10)
+
+    unbounded = context.build_messages(cid, sid)
+    size = sum(context.count_tokens(m["content"]) for m in unbounded)
+    assert "Saltmarch crossing went badly" in unbounded[0]["content"]  # archive was recalled
+
+    config.write_config(context_budget=str(size // 2))
+    bounded = context.build_messages(cid, sid)
+    assert sum(context.count_tokens(m["content"]) for m in bounded) < size
+    assert "Saltmarch crossing went badly" not in bounded[0]["content"]  # archive dropped first
+    assert "Never speak for the PC." in bounded[0]["content"]            # lock-in survived
+
+
+def test_context_sections_reports_tiers_and_drops(monkeypatch, tmp_path):
+    """The inspector's view and the prompt come off one render + one pack, so a
+    section shown as kept is a section that was sent."""
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    from grimoire.store import config
+    config.write_config(recap_depth="0")
+    _absorbed(cid, "2026-06-20-older", ["saltmarch"], summary="The Saltmarch crossing went badly.")
+    scenes.append_message(cid, sid, "user", "The Saltmarch road again. " * 40)
+
+    secs = {s["label"]: s for s in context.context_sections(cid, sid)}
+    assert secs["Earlier scenes"]["tier"] == context_pack.ARCHIVE
+    assert secs["Earlier scenes"]["dropped"] is False
+    assert secs["Response format"]["tier"] == context_pack.LOCK_IN
+    assert secs["Conversation history"]["tier"] == context_pack.HISTORY
+
+    sent = context.build_messages(cid, sid)[0]["content"]
+    config.write_config(context_budget=str(context.count_tokens(sent) // 2))
+    secs = {s["label"]: s for s in context.context_sections(cid, sid)}
+    assert secs["Earlier scenes"]["dropped"] is True
+    assert secs["Earlier scenes"]["text"]                       # still inspectable
+    assert secs["Response format"]["dropped"] is False
+    # and what it reports as kept is exactly what build_messages sent
+    kept = context.build_messages(cid, sid)[0]["content"]
+    assert secs["Earlier scenes"]["text"] not in kept
+    assert secs["Response format"]["text"] in kept
+
+
+def test_a_budget_trims_the_history_but_keeps_the_latest_turns(monkeypatch, tmp_path):
+    """History is the pressure valve after the archive. Roles alternate because
+    _project_history merges consecutive same-role turns, and it is the merged
+    list build_messages sends."""
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    from grimoire.store import config
+    config.write_config(recap_depth="0")
+    for n in range(8):
+        scenes.append_message(cid, sid, "user" if n % 2 == 0 else "assistant",
+                              f"Turn {n} on the Saltmarch road. " * 20)
+
+    unbounded = context.build_messages(cid, sid)
+    size = sum(context.count_tokens(m["content"]) for m in unbounded)
+    config.write_config(context_budget=str(size // 3))
+    bounded = context.build_messages(cid, sid)
+
+    assert len(bounded) < len(unbounded)                 # turns were trimmed
+    assert bounded[-1] == unbounded[-1]                  # the newest end is intact
+    assert "Turn 7" in "".join(m["content"] for m in bounded)
+    assert "Turn 0" not in "".join(m["content"] for m in bounded)
+    # never below the floor, whatever the budget
+    config.write_config(context_budget="1")
+    starved = context.build_messages(cid, sid)
+    assert len([m for m in starved if m["role"] != "system"]) >= context_pack.HISTORY_FLOOR

@@ -22,6 +22,8 @@ class ConfigUpdate(BaseModel):
     active_connection_id: str | None = None
     llm_timeout: str | None = None
     absorb_budget: str | None = None
+    context_budget: str | None = None
+    archive_depth: str | None = None
 
 
 class ConnectionCreate(BaseModel):

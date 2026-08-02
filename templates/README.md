@@ -88,13 +88,23 @@ Message assembly (code-side, mirrored from `context/assemble.py`):
 6. Opener only: `scene/opener_shape.j2` as the final system message (always
    sent — last, right before generation, so it outranks the system prompt).
 
-`system.j2` selectors: `opener` (prepend
+`system.j2` takes one var, `sections` — the already-rendered section texts, in
+order, which it joins with blank lines. It used to `include` every section
+itself; that made it a second render path over the same data, disagreeing with
+the inspector's breakdown as soon as anything could be dropped. The order and
+the selectors now live in `context.assemble._SECTIONS`, and
+`_render_sections` renders it: `opener` (prepend
 `opener_instruction/{standard|offscreen}.j2`), `pcless` (offscreen sections +
 opener variant), `story_full` (`sections/story_so_far/{full|compact}.j2`;
 the opener uses `full` with the last 5 scenes, chat uses `compact` with the
 configured `recap_depth`).
 
-`system.j2` data vars, in section order — all already `{{user}}`/`{{char}}`
+Each `_SECTIONS` entry also carries a packer tier — `lock-in`, `spotlight`,
+`background` or `archive`. Over the configured `context_budget`, whole sections
+are dropped lowest tier first and the history is trimmed; lock-in never is. See
+`context/pack.py`.
+
+The section data vars, in section order — all already `{{user}}`/`{{char}}`
 substituted by code:
 - `global_system_prompt` — config `system_prompt`
 - `prose_style_name`, `prose_style_body` — the resolved style guide; both
@@ -124,6 +134,10 @@ substituted by code:
   shapes as above), the offscreen reference cast
 - `story_entries` — chronicle recap strings, oldest first (compact:
   `one_line or summary`; full: `summary or one_line`)
+- `archive_entries` — `[{id, date, text}]`, newest first: absorbed scenes
+  OUTSIDE the recap window whose `keywords` the scan window mentions, capped
+  at `archive_depth` (`context.archive`). `sections/archive.j2` labels them as
+  already concluded, or the model plays an old scene as the current one
 - `plot_lines` — `plot.render_open(cid, with_id=False)` lines
 - `today` — `calendars.today_facts()` fields + `cast`
   (`context.cast_datetime_facts()`), or None when the scene has no date

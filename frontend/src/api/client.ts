@@ -70,6 +70,8 @@ export type Config = {
   llm_timeout: string;
   /** Seconds one absorb's whole LLM sequence may take; "0" disables. */
   absorb_budget: string;
+  context_budget: string;
+  archive_depth: string;
 };
 export type DataDirInfo = {
   data_dir: string;
@@ -352,8 +354,21 @@ export type ClimateSeason = {
   temperature: ClimateEntry[]; conditions: ClimateEntry[]; wind: ClimateEntry[];
 };
 export type Climate = { id: string; name: string; persistence: number; seasons: ClimateSeason[] };
-export type ContextSection = { label: string; text: string; tokens: number };
-export type SceneContext = { model: string; total_tokens: number; sections: ContextSection[] };
+/** `dropped` sections were rendered but left out of the prompt by the budget
+ *  packer; they still carry their text so the inspector can show what was cut.
+ *  `trimmed` is how many history messages the packer dropped from the front —
+ *  0 on every section except Conversation history. */
+export type ContextSection = {
+  label: string; text: string; tokens: number;
+  tier: "lock-in" | "spotlight" | "background" | "archive" | "history";
+  dropped: boolean; trimmed: number;
+};
+/** `total_tokens` counts kept sections only — what was actually sent.
+ *  `budget_tokens` is 0 when no budget is configured (nothing is dropped). */
+export type SceneContext = {
+  model: string; total_tokens: number; dropped_tokens: number;
+  budget_tokens: number; sections: ContextSection[];
+};
 export type CastDetail = { kind: "characters" | "pcs"; id: string; name: string; version: string; body: string };
 export type TimelineEvent = { date: string; text: string };
 export type StagedEdit = {
@@ -589,7 +604,7 @@ export const api = {
     }
     return configCache;
   },
-  putConfig: (body: Partial<{ theme: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string; active_connection_id: string; llm_timeout: string; absorb_budget: string }>) =>
+  putConfig: (body: Partial<{ theme: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string; active_connection_id: string; llm_timeout: string; absorb_budget: string; context_budget: string; archive_depth: string }>) =>
     request<Config>("PUT", "/api/config", body).then((cfg) => {
       configCache = Promise.resolve(cfg); // the write's response is the fresh config
       return cfg;

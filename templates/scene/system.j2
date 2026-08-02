@@ -1,109 +1,20 @@
 {#- The full system message for a scene turn — chat, retry, regenerate,
-    director note, and (with opener=true) the scene opener. Assembles the
-    labeled sections in order, drops empty ones, and joins with blank lines.
+    director note, and (with the opener instruction leading) the scene opener.
 
-    Selectors:
-      opener (bool)     — prepend the opener instruction
-                          (scene/opener_instruction/{standard|offscreen}.j2)
-      pcless (bool)     — offscreen scene: picks the offscreen opener variant
-                          and adds the "Offscreen scene" / "Absent player
-                          characters" sections
-      story_full (bool) — story-so-far variant
-                          (scene/sections/story_so_far/{full|compact}.j2)
+    This template used to `include` all two dozen section templates itself and
+    drop the empty ones, which made it a second render path over the same data:
+    the prompt came from here, the inspector's token breakdown came from
+    `context._SECTIONS`, and nothing held the two in step. A packer that drops
+    a section under budget pressure turns that gap into a lie about what was
+    sent, so the sections are now rendered once in code
+    (`context.assemble._render_sections`), packed (`context.pack`), and joined
+    here.
 
-    Data vars (see README.md for how each is gathered):
-      global_system_prompt, prose_style_name, prose_style_body, npc_cards,
-      states, relationship_lines, players, ref_names, refs, story_entries,
-      plot_lines, today, current_setting, world_info_bodies, group_states,
-      offscene_active, offscene_known, player_names, mechanics_rules,
-      mechanics_sheets, mechanics_checks
+    Vars:
+      sections ([str]) — the rendered, non-empty, packed section texts in
+                         prompt order. The opener instruction, when there is
+                         one, is simply the first of them.
 
     Note: {{user}}/{{char}} token substitution is applied by code to the card
     and history data, not here. -#}
-{%- set sections = [] -%}
-
-{%- set s -%}{%- include "scene/sections/global_system_prompt.j2" -%}{%- endset -%}
-{%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
-
-{%- set s -%}{%- include "scene/sections/prose_style.j2" -%}{%- endset -%}
-{%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
-
-{%- set s -%}{%- include "scene/sections/natural_prose.j2" -%}{%- endset -%}
-{%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
-
-{%- set s -%}{%- include "scene/sections/card_system_prompts.j2" -%}{%- endset -%}
-{%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
-
-{%- set s -%}{%- include "scene/sections/character_descriptions.j2" -%}{%- endset -%}
-{%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
-
-{%- set s -%}{%- include "scene/sections/character_state.j2" -%}{%- endset -%}
-{%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
-
-{%- set s -%}{%- include "scene/sections/relationships.j2" -%}{%- endset -%}
-{%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
-
-{%- set s -%}{%- include "scene/sections/player_personas.j2" -%}{%- endset -%}
-{%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
-
-{%- if pcless -%}
-{%- set s -%}{%- include "scene/sections/offscreen_scene.j2" -%}{%- endset -%}
-{%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
-{%- set s -%}{%- include "scene/sections/absent_players.j2" -%}{%- endset -%}
-{%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
-{%- endif -%}
-
-{%- set s -%}{%- include "scene/sections/message_examples.j2" -%}{%- endset -%}
-{%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
-
-{%- set s -%}{%- include "scene/sections/story_so_far/" ~ ("full" if story_full else "compact") ~ ".j2" -%}{%- endset -%}
-{%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
-
-{%- set s -%}{%- include "scene/sections/plot_threads.j2" -%}{%- endset -%}
-{%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
-
-{%- set s -%}{%- include "scene/sections/today.j2" -%}{%- endset -%}
-{%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
-
-{%- set s -%}{%- include "scene/sections/weather.j2" -%}{%- endset -%}
-{%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
-
-{%- set s -%}{%- include "scene/sections/current_setting.j2" -%}{%- endset -%}
-{%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
-
-{%- set s -%}{%- include "scene/sections/world_info.j2" -%}{%- endset -%}
-{%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
-
-{%- set s -%}{%- include "scene/sections/group_state.j2" -%}{%- endset -%}
-{%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
-
-{%- set s -%}{%- include "scene/sections/mechanics_rules.j2" -%}{%- endset -%}
-{%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
-
-{%- set s -%}{%- include "scene/sections/mechanics_sheets.j2" -%}{%- endset -%}
-{%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
-
-{%- set s -%}{%- include "scene/sections/off_scene_cast.j2" -%}{%- endset -%}
-{%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
-
-{%- set s -%}{%- include "scene/sections/mechanics_response_format.j2" -%}{%- endset -%}
-{%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
-
-{%- set s -%}{%- include "scene/sections/response_format.j2" -%}{%- endset -%}
-{%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
-
-{%- set s -%}{%- include "scene/sections/response_budget.j2" -%}{%- endset -%}
-{%- if s.strip() -%}{%- set _ = sections.append(s.strip()) -%}{%- endif -%}
-
-{%- if opener -%}
-{%- set instruction -%}{%- include "scene/opener_instruction/" ~ ("offscreen" if pcless else "standard") ~ ".j2" -%}{%- endset -%}
-{%- if sections -%}
-{{ instruction }}
-
 {{ sections | join("\n\n") }}
-{%- else -%}
-{{ instruction }}
-{%- endif -%}
-{%- else -%}
-{{ sections | join("\n\n") }}
-{%- endif -%}

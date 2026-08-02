@@ -166,7 +166,10 @@ from grimoire.store import (audit, calendars, campaigns, characters, checks, con
                             playstate, plot, response_presets, scenes, sheets, styles,
                             taglines as tstore, weather as wstore, worlds)
 
-config.write_config(system_prompt="Global GM rules: be vivid, be fair.")
+# recap_depth=1 narrows the recap window to the newest absorbed scene, which is
+# what leaves an older one outside it for archive retrieval (#127) to recall —
+# the archive section is empty by construction while every record is in recap.
+config.write_config(system_prompt="Global GM rules: be vivid, be fair.", recap_depth="1")
 
 # a bound mechanics module (#162 Task 6): one sheet type, one check, one
 # always-on rules doc -- so mechanics_rules/mechanics_sheets/mechanics_checks
@@ -249,6 +252,14 @@ chronicle.absorb(cid, {"id": sid0, "one_line": "Hero met Kessler.",
                        "summary": "Hero met Doc Kessler in his clinic and traded a favor for gossip.",
                        "keywords": ["clinic"], "cast": [f"characters/{kessler}"],
                        "location": "", "date": "2026-07-01"})
+# Older than the recap window and keyed on a word the live scene says out loud,
+# so this one — and only this one — comes back through the archive section.
+# `chronicle.recent` orders by id and scene ids carry an ordinal prefix, so the
+# id has to sort below the real scenes' (`001--…`, `002--…`) to be "older".
+chronicle.absorb(cid, {"id": "000--2026-06-20--harbor-run",
+                       "one_line": "The warehouse changed hands.",
+                       "summary": "The bonded warehouse changed hands after a bad night on the pier.",
+                       "keywords": ["warehouse"], "cast": [], "location": "", "date": "2026-06-20"})
 
 
 def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) -> dict:
@@ -317,6 +328,24 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
     recent_text = "\n".join(m["content"] for m in scene["messages"][-scan:]) if scan else ""
     if wi_seed:
         recent_text = (recent_text + "\n" + wi_seed).strip()
+
+    # Archive retrieval (#127): absorbed scenes OUTSIDE the recap window whose
+    # keywords the scan window says, newest id first, capped at archive_depth.
+    # The recap window and the scene being played are excluded so no scene can
+    # arrive twice.
+    seen = {r.get("id", "") for r in records} | {scene_id}
+    archive_entries = []
+    for r in chronicle.read_chronicle(cid).values():
+        rid = r.get("id", "")
+        keys = [str(k).strip() for k in (r.get("keywords") or []) if str(k).strip()]
+        text = (r.get("summary") or r.get("one_line") or "").strip()
+        if not rid or rid in seen or not keys or not text:
+            continue
+        if any(re.search(rf"\b{re.escape(k)}\b", recent_text, re.IGNORECASE) for k in keys):
+            archive_entries.append({"id": rid, "date": (r.get("date") or "").strip(), "text": text})
+    archive_entries.sort(key=lambda h: h["id"], reverse=True)
+    archive_entries = archive_entries[:max(int(cfg.get("archive_depth", "3")), 0)]
+
     entries = []
     for kind in ("lore", "locations", "items", "groups", "creatures"):
         for meta in entities.list_entities(croot, kind):
@@ -459,6 +488,7 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
             "npc_cards": npc_cards,
             "states": states, "relationship_lines": relationship_lines, "players": players,
             "ref_names": ref_names, "refs": refs, "story_entries": story_entries,
+            "archive_entries": archive_entries,
             "plot_lines": plot.render_open(cid, with_id=False), "today": today,
             "weather": weather_now,
             "current_setting": current_setting, "world_info_bodies": world_info_bodies,
@@ -470,10 +500,52 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
             "mechanics_checks": mechanics_checks}
 
 
+def rendered_system(data: dict, opener: bool = False) -> str:
+    """Mirror of context.assemble._render_sections + scene/system.j2: render
+    each section, drop the empty ones, join with blank lines.
+
+    The order is spelled out here rather than read off `context._SECTIONS`,
+    which is the point — the prompt's section order is now a single list in
+    code, and this is the independent copy that makes reordering it a
+    deliberate two-sided change instead of a silent one.
+    """
+    names = []
+    if opener:
+        names.append("scene/opener_instruction/"
+                     + ("offscreen" if data["pcless"] else "standard") + ".j2")
+    names += ["scene/sections/global_system_prompt.j2",
+              "scene/sections/prose_style.j2",
+              "scene/sections/natural_prose.j2",
+              "scene/sections/card_system_prompts.j2",
+              "scene/sections/character_descriptions.j2",
+              "scene/sections/character_state.j2",
+              "scene/sections/relationships.j2",
+              "scene/sections/player_personas.j2"]
+    if data["pcless"]:
+        names += ["scene/sections/offscreen_scene.j2", "scene/sections/absent_players.j2"]
+    names += ["scene/sections/message_examples.j2",
+              "scene/sections/story_so_far/" + ("full" if data["story_full"] else "compact") + ".j2",
+              "scene/sections/archive.j2",
+              "scene/sections/plot_threads.j2",
+              "scene/sections/today.j2",
+              "scene/sections/weather.j2",
+              "scene/sections/current_setting.j2",
+              "scene/sections/world_info.j2",
+              "scene/sections/group_state.j2",
+              "scene/sections/mechanics_rules.j2",
+              "scene/sections/mechanics_sheets.j2",
+              "scene/sections/off_scene_cast.j2",
+              "scene/sections/mechanics_response_format.j2",
+              "scene/sections/response_format.j2",
+              "scene/sections/response_budget.j2"]
+    sections = [s for s in (render(n, **data).strip() for n in names) if s]
+    return render("scene/system.j2", sections=sections).strip()
+
+
 def rendered_messages(scene_id: str, data: dict, note: str | None = None,
                       opener_prompt: str | None = None) -> list[dict]:
     out = []
-    system = render("scene/system.j2", **data)
+    system = rendered_system(data, opener=opener_prompt is not None)
     if system:
         out.append({"role": "system", "content": system})
     if opener_prompt is None:
@@ -510,6 +582,10 @@ def rendered_messages(scene_id: str, data: dict, note: str | None = None,
 # --------------------------------------------------- context builder checks
 
 data = gather(sid, pcless=False)
+# A byte-for-byte check over an empty section proves nothing, and the archive
+# section is empty unless the fixture keeps a keyed record outside the recap
+# window — so say so here rather than let the check quietly go vacuous.
+assert data["archive_entries"], "fixture no longer exercises the archive section"
 check_messages("chat", context.build_messages(cid, sid), rendered_messages(sid, data))
 note = render("scene/director_note.j2")
 check_messages("director", context.build_director_messages(cid, sid, note),

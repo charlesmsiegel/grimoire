@@ -1,0 +1,15 @@
+{#- Older absorbed scenes recalled by keyword match. Selection happens in code
+    (context.archive._archive_entries); this template receives the matches.
+
+    The "already happened" framing is load-bearing, not decoration: an
+    unlabelled summary of an old scene reads as the current situation, and the
+    model will play it as one. Vars: archive_entries ([{id, date, text}],
+    newest first). -#}
+{%- set lines = [] -%}
+{%- for e in archive_entries -%}
+{%- set _ = lines.append("- " ~ (("**" ~ e.date ~ "** — ") if e.date else "") ~ e.text) -%}
+{%- endfor -%}
+{%- if lines %}# Earlier scenes
+Recalled because this conversation touched on them. These scenes have already happened — they are history, not the current moment.
+
+{{ lines | join("\n") }}{% endif -%}
