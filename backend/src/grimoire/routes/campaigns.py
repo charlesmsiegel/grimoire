@@ -9,16 +9,20 @@ Scenes, weather, mechanics and greetings have their own modules; the generic
 from __future__ import annotations
 
 
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 
 from .. import store
-from .common import (_campaign_root_or_404, _content_fields, _dump, _response_body,
+from ..llm import LLMClient
+from ..llm_errors import LLMError
+from .common import (_campaign_root_or_404, _content_fields, _dump, _require_connection,
+                     _response_body, get_llm,
                      _serve_image, _write_response)
 from .models import (AvatarFocus, CalendarConfig, CampaignClimate, CopyFromGreeting,
                      DefaultVersion, GroupStateSave, NameBody, NewCampaign, PCCreate,
                      PCUpdate, PersonaVersionCreate, PersonaVersionUpdate, PickBody,
-                     RefList, ResponseSettings, VersionCreate, VersionUpdate)
+                     RefList, ResponseSettings, VersionCreate, VersionUpdate,
+                     VoiceAnchorSave)
 
 router = APIRouter()
 
@@ -433,6 +437,65 @@ def get_campaign_character(cid: str, char: str):
         return store.overlay.read_character(cid, char)
     except store.characters.CharacterNotFound:
         raise HTTPException(status_code=404, detail="character not found")
+
+
+@router.get("/campaigns/{cid}/characters/{char}/voice-anchor")
+def get_campaign_voice_anchor(cid: str, char: str):
+    """The anchor as this campaign sees it — its own copy if it has one, else
+    the world's (`overlay.voice_anchor_record`).
+
+    A campaign-local character has no world counterpart at all: an NPC accepted
+    from an absorb `new_character` proposal exists only here. Without these
+    routes such a character could never be given an anchor, so absorb would skip
+    its voice check forever -- the one class of character the feature most
+    obviously wants to cover (#59/#61)."""
+    _campaign_root_or_404(cid)
+    try:
+        store.characters.read_character(store.overlay.char_root(cid, char), char)
+    except store.characters.CharacterNotFound:
+        raise HTTPException(status_code=404, detail="character not found")
+    return {"voice_anchor": store.overlay.voice_anchor_record(cid, char)["text"]}
+
+
+@router.put("/campaigns/{cid}/characters/{char}/voice-anchor")
+def put_campaign_voice_anchor(cid: str, char: str, body: VoiceAnchorSave):
+    """Write the anchor campaign-side, which is how the per-file overlay records
+    a divergence — the same shape as any other campaign edit to an inherited
+    record. A blank body opts the character out of voice checks in this campaign
+    WITHOUT touching the world's anchor: see `overlay.set_voice_anchor` for why
+    that cannot simply delete the local copy."""
+    _campaign_root_or_404(cid)
+    try:
+        store.characters.read_character(store.overlay.char_root(cid, char), char)
+    except store.characters.CharacterNotFound:
+        raise HTTPException(status_code=404, detail="character not found")
+    store.overlay.set_voice_anchor(cid, char, body.voice_anchor)
+    return {"ok": True}
+
+
+@router.post("/campaigns/{cid}/characters/{char}/voice-anchor/generate")
+async def post_campaign_voice_anchor_generate(cid: str, char: str,
+                                              client: LLMClient = Depends(get_llm)):
+    """Draft an anchor from the character's card, resolved through the overlay so
+    a campaign-local character (which has no world copy) can use it too. Preview
+    only — the caller persists with PUT."""
+    _campaign_root_or_404(cid)
+    conn = _require_connection()
+    root = store.overlay.char_root(cid, char)
+    try:
+        ch = store.characters.read_character(root, char)
+        card = store.characters.read_card(root, char, ch["meta"]["default_version"])
+    except (store.characters.CharacterNotFound, store.characters.VersionNotFound):
+        raise HTTPException(status_code=404, detail="character not found")
+    try:
+        # See the world-side route: `{}` and `{"data": ["speech"]}` are both
+        # supported card state, and the template renders "(none)" per field.
+        data = card.get("data")
+        text = await client.complete(
+            store.voice_anchors.build_prompt(data if isinstance(data, dict) else {}), conn)
+    except LLMError as exc:
+        raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
+    return {"voice_anchor": store.voice_anchors.parse_output(text)}
 
 
 @router.put("/campaigns/{cid}/characters/{char}")

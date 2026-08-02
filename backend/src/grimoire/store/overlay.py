@@ -9,8 +9,8 @@ the world live. Rules:
   campaign file wins; else a tombstone means absent; else the world file.
 - Actors (characters/pcs): whole-dir, keyed on character.md / pc.md existing in
   the campaign — a materialized actor is authoritative for meta + versions, so
-  lock-purged versions stay purged. Sidecars (tagline.md) and assets still
-  overlay per file.
+  lock-purged versions stay purged. Sidecars (tagline.md, voice_anchor.md) and
+  assets still overlay per file.
 - sync.md holds base hashes for materialized records only. Tombstones live in
   <campaign>/deleted.json (a sorted JSON list of refs); a tombstoned id counts
   as taken for uniquify, so nothing ever resurrects under a reused id.
@@ -24,8 +24,9 @@ read directly: campaign.md, sync.md, deleted.json, appearances.json,
 calendar.json, changes.json, chronicle.json, timeline.md, sheet_baselines.json,
 the climate default (store/campaign_climate.py owns that filename), scenes/,
 sheets/, proposals/, and the per-actor sidecars filed inside an actor dir
-(dossier.md, state.md). tagline.md is the exception among sidecars -- it
-overlays per file, via `tagline()` below.
+(dossier.md, state.md, voice_drift.md). tagline.md and voice_anchor.md are the
+exceptions among sidecars -- both are world-level identity, so both overlay per
+file, via `tagline()` / `voice_anchor()` below.
 """
 
 from __future__ import annotations
@@ -35,7 +36,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from . import (assets, atomic, cards, characters, entities, failsoft, greetings,
-               groupstate, pcs, taglines)
+               groupstate, pcs, taglines, voice_anchors)
 from .campaigns import paths as campaigns_paths, read as campaigns_read
 from .paths import natural_key
 
@@ -556,3 +557,89 @@ def read_character(cid: str, char_id: str) -> dict:
 
 def tagline(cid: str, char_id: str) -> str:
     return taglines.read(croot_of(cid), char_id) or taglines.read(wroot_of(cid), char_id)
+
+
+def set_voice_anchor(cid: str, char_id: str, text: str) -> None:
+    """Write the campaign's own anchor for `char_id`; blank opts the character
+    out of voice checks in this campaign.
+
+    Campaign-side by definition: this IS the per-file divergence, the same shape
+    as any other campaign edit to an inherited record, and it lives here rather
+    than at the call site so nothing outside this module hands `voice_anchors` a
+    raw campaign root.
+
+    Blank is the one place the anchor overlay does NOT behave like tagline's.
+    Deleting the campaign copy would let the world's anchor show through again,
+    so a user who cleared the field would still be judged -- against the very
+    text they just erased -- while the editor told them clearing skips the
+    checks. Blankness is this feature's opt-out switch, so it has to survive
+    resolution: a blank save writes a TOMBSTONE.
+
+    The one exception is a blank that erased nothing -- no world anchor, no
+    campaign anchor, no tombstone already. There is no decision in that save to
+    record, and a tombstone would turn it into a standing promise to ignore an
+    anchor the world might add later. Anything else -- an inherited anchor, the
+    campaign's own, or an opt-out already made -- is a decision, and once made
+    only the user typing an anchor back in may end it. Not the world removing
+    its anchor, and not a later save that changed nothing.
+
+    The nonce `voice_anchors.write` preserves is read from the CAMPAIGN copy, so
+    a campaign that overrides the world's anchor mints its own identity. That is
+    correct rather than incidental: an override is a different standard, and
+    findings judged against the world's should stop applying here.
+    """
+    croot = croot_of(cid)
+    inherited = voice_anchors.read(wroot_of(cid), char_id)
+    mine = voice_anchors.read_record(croot, char_id)
+    if not text.strip():
+        # Tombstone unless this blank erased nothing at all. Each of the three
+        # is an opt-out the resolver would otherwise undo:
+        #   inherited        -- the world's anchor would show through again
+        #   mine["text"]     -- clearing an override IS the opt-out; deleting it
+        #                       re-exposes the world's, or lets a world anchor
+        #                       created later start judging a character whose
+        #                       owner just erased one
+        #   mine["disabled"] -- an opt-out already made, which must outlive the
+        #                       world anchor being removed and restored
+        if inherited or mine["text"] or mine["disabled"]:
+            voice_anchors.disable(croot, char_id)
+            return
+        voice_anchors.write(croot, char_id, text)   # nothing to erase: just delete
+        return
+    if not mine["text"] and not mine["disabled"] and text.strip() == inherited.strip():
+        # Still inheriting, and the submitted text IS the inherited text: the
+        # editor shows the resolved anchor, so re-saving an untouched form
+        # lands here. Materializing a copy would mint a new nonce -- silently
+        # suppressing every committed flag fingerprinted against the identical
+        # world anchor -- and detach the campaign from later world edits, all
+        # for a save that changed nothing. Only a real divergence diverges.
+        #
+        # Deliberately not extended to a standing TOMBSTONE: re-entering the
+        # world's words there is a decision to be judged again, and it gets a
+        # fresh identity like any other opt-back-in.
+        return
+    voice_anchors.write(croot, char_id, text)
+
+
+def voice_anchor_record(cid: str, char_id: str) -> dict:
+    """The winning anchor's {"text", "id"} — same per-file overlay as
+    `voice_anchor`, but carrying the nonce a fingerprint needs. Resolved as one
+    record so text and identity always come from the SAME file: reading the
+    text campaign-side and the nonce world-side would fingerprint an anchor that
+    exists nowhere."""
+    mine = voice_anchors.read_record(croot_of(cid), char_id)
+    if mine["disabled"]:
+        return mine   # explicit campaign opt-out: the world's must not show through
+    return mine if mine["text"] else voice_anchors.read_record(wroot_of(cid), char_id)
+
+
+def voice_anchor(cid: str, char_id: str) -> str:
+    """The character's voice anchor as this campaign sees it.
+
+    Same per-file overlay as tagline, with one difference tagline has no need
+    for: a campaign can hold a TOMBSTONE saying it wants no anchor here, and
+    that beats the world's rather than falling back to it (see
+    `set_voice_anchor`). The anchor is world-level (a voice is a library
+    property), but a campaign that has materialized its own copy of the
+    character is entitled to its own reference text -- or to none."""
+    return voice_anchor_record(cid, char_id)["text"]

@@ -188,7 +188,12 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
                                         budget={k: budget[k] for k in lengths.KNOBS})
                          if drift else "")
 
+    voice_notes = cast_data._voice_notes(cid, croot, cast)
+    voice_correction = (prompts.render("scene/voice_correction.j2", voice_notes=voice_notes)
+                        if voice_notes else "")
+
     post_history = prompts.render("scene/post_history.j2", npc_cards=npc_cards,
+                                  voice_correction=voice_correction,
                                   length_correction=length_correction)
     post_history = macros.expand_macros(post_history, subs, cid, sid) if post_history else ""
 

@@ -2125,6 +2125,89 @@ def test_post_tagline_generate_requires_key(client):
     assert r.status_code == 409
 
 
+# ---- voice anchors (#59) ----
+def test_get_voice_anchor_absent_is_empty(client):
+    wid, cid = _world_char(client)
+    assert client.get(f"/api/worlds/{wid}/characters/{cid}/voice-anchor").json() == {
+        "voice_anchor": ""}
+
+
+def test_put_voice_anchor_saves(client):
+    wid, cid = _world_char(client)
+    anchor = "Clipped. Never uses contractions."
+    assert client.put(f"/api/worlds/{wid}/characters/{cid}/voice-anchor",
+                      json={"voice_anchor": anchor}).json() == {"ok": True}
+    assert client.get(f"/api/worlds/{wid}/characters/{cid}/voice-anchor").json() == {
+        "voice_anchor": anchor}
+
+
+def test_put_blank_voice_anchor_opts_the_character_back_out(client):
+    """Clearing the text is the only way to stop drift detection for a
+    character, so a blank PUT has to REMOVE the anchor rather than store ""."""
+    wid, cid = _world_char(client)
+    client.put(f"/api/worlds/{wid}/characters/{cid}/voice-anchor", json={"voice_anchor": "Clipped."})
+    assert client.put(f"/api/worlds/{wid}/characters/{cid}/voice-anchor",
+                      json={"voice_anchor": ""}).status_code == 200
+    root = store.worlds.world_root(wid)
+    assert not store.voice_anchors.anchor_path(root, cid).exists()
+
+
+def test_voice_anchor_routes_404_on_an_unknown_character(client):
+    wid = _world(client)
+    assert client.get(f"/api/worlds/{wid}/characters/nope/voice-anchor").status_code == 404
+    assert client.put(f"/api/worlds/{wid}/characters/nope/voice-anchor",
+                      json={"voice_anchor": "x"}).status_code == 404
+
+
+def test_post_voice_anchor_generate_is_preview_only(client):
+    wid, cid = _world_char(client)
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: FakeOpenRouterComplete("  Clipped.\nNever uses contractions.  ")
+    r = client.post(f"/api/worlds/{wid}/characters/{cid}/voice-anchor/generate")
+    assert r.status_code == 200
+    assert r.json() == {"voice_anchor": "Clipped.\nNever uses contractions."}
+    # nothing written until the caller saves via PUT (#59: never write without review)
+    assert client.get(f"/api/worlds/{wid}/characters/{cid}/voice-anchor").json() == {
+        "voice_anchor": ""}
+
+
+def test_voice_anchor_generate_survives_a_card_with_no_data(client):
+    """Version PUT accepts any dict as a card and writes it unchanged, so a
+    stored `{}` is supported state — indexing `card["data"]` 500s on it before
+    the request ever reaches the LLM. The prompt template already renders
+    "(none)" for every missing field, which is the better answer."""
+    wid, char = _world_char(client)
+    root = store.worlds.world_root(wid)
+    version = store.characters.read_character(root, char)["meta"]["default_version"]
+    store.characters.update_version(root, char, version, {})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: FakeOpenRouterComplete("Clipped.")
+    r = client.post(f"/api/worlds/{wid}/characters/{char}/voice-anchor/generate")
+    assert r.status_code == 200 and r.json() == {"voice_anchor": "Clipped."}
+
+
+
+def test_campaign_voice_anchor_generate_survives_a_card_with_no_data(client):
+    """The campaign-scoped route shares the indexing assumption."""
+    wid, cid = _campaign(client)
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara", "version_name": "main"})
+    store.characters.update_version(store.worlds.world_root(wid), "mara", "main", {})
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: FakeOpenRouterComplete("Clipped.")
+    r = client.post(f"/api/campaigns/{cid}/characters/mara/voice-anchor/generate")
+    assert r.status_code == 200 and r.json() == {"voice_anchor": "Clipped."}
+
+
+
+def test_post_voice_anchor_generate_requires_key(client):
+    wid, cid = _world_char(client)
+    assert client.post(
+        f"/api/worlds/{wid}/characters/{cid}/voice-anchor/generate").status_code == 409
+
+
 # ---- scene calendar ----
 def test_campaign_create_writes_calendar_with_region(client):
     from grimoire.store import campaigns, calendars
@@ -2329,6 +2412,565 @@ def test_dossier_edit_is_written_on_save(client):
                          "timeline_events": [], "edits": edits})
     assert r.status_code == 200 and "dossier:aese" in r.json()["applied"]
     assert store.dossiers.read(store.campaigns.campaign_root(cid), "aese") == "Aese now trusts the owner."
+
+
+# ---- voice drift at absorb (#59) ----
+def _voice_scene(client, anchor: str = "Clipped. Never uses contractions.", prior: str = ""):
+    """A dossier scene whose NPC also carries a voice anchor -- the shape every
+    drift-staging test needs. `anchor=""` leaves the character anchorless."""
+    cid, sid = _dossier_scene(client)
+    wid = store.campaigns.read_campaign(cid)["meta"]["world"]
+    if anchor:
+        store.voice_anchors.write(store.worlds.world_root(wid), "aese", anchor)
+    if prior:
+        store.voice_drift.write(store.campaigns.campaign_root(cid), "aese", prior)
+    return cid, sid
+
+
+#: The three absorb calls a one-NPC anchored scene makes, in order: extraction,
+#: the dossier refresh, the voice check. (There is no audit call -- these
+#: campaigns bind no mechanics module.)
+_EXTRACTION = ('{"one_line": "o", "summary": "s", "keywords": [], "timeline_events": []}')
+_DOSSIER = "Aese now trusts the owner."
+
+
+def test_absorb_stages_voice_drift_without_writing_it(client):
+    """The judge runs, but absorb writes NOTHING: the finding comes back as an
+    approvable edit, on the same commit boundary as every other one (#235)."""
+    cid, sid = _voice_scene(client)
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
+        [_EXTRACTION, _DOSSIER,
+         '{"verdict": "drift", "note": "She used contractions twice; Aese never does."}'])
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    edit = next(e for e in body["edits"] if e["kind"] == "voice_drift")
+    assert edit["id"] == "voice_drift:aese"
+    assert edit["target"] == {"kind": "characters", "id": "aese"}
+    assert edit["before"] == "" and "never does" in edit["after"]
+    assert body["voice"] == {"status": "ok", "reason": None, "checked": ["aese"],
+                             "flagged": ["aese"], "unjudged": [], "failed": [],
+                             "skipped": [], "attempted": True, "budget_exhausted": False}
+    assert store.voice_drift.read(store.campaigns.campaign_root(cid), "aese") == ""
+
+
+def test_an_anchorless_npc_is_never_judged(client):
+    """The cost control for the whole feature: no anchor, no LLM call. A library
+    that has never set one must absorb exactly as it did before."""
+    cid, sid = _voice_scene(client, anchor="")
+    fake = FakeOpenRouterComplete([_EXTRACTION, _DOSSIER])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    assert fake.calls == 2                       # extraction + dossier, and nothing else
+    assert not [e for e in body["edits"] if e["kind"] == "voice_drift"]
+    assert body["voice"]["status"] == "skipped"
+    assert body["voice"]["reason"] == "no anchored npcs present"
+
+
+def test_voice_drift_edit_is_written_on_save(client):
+    cid, sid = _voice_scene(client)
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
+        [_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": "She hedged."}'])
+    edits = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["edits"]
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                   json={"one_line": "o", "summary": "s", "keywords": [],
+                         "timeline_events": [], "edits": edits})
+    assert r.status_code == 200 and "voice_drift:aese" in r.json()["applied"]
+    assert store.voice_drift.read(store.campaigns.campaign_root(cid), "aese") == "She hedged."
+
+
+def test_the_saved_flag_records_the_anchor_it_was_judged_against(client):
+    """End to end: the fingerprint has to reach the file, or the corrective
+    cannot be suppressed when the anchor moves after the commit."""
+    cid, sid = _voice_scene(client)
+    wid = store.campaigns.read_campaign(cid)["meta"]["world"]
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
+        [_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": "She hedged."}'])
+    edits = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["edits"]
+    client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+               json={"one_line": "o", "summary": "s", "keywords": [],
+                     "timeline_events": [], "edits": edits})
+    croot = store.campaigns.campaign_root(cid)
+    rec = store.voice_anchors.read_record(store.worlds.world_root(wid), "aese")
+    assert store.voice_drift.judged_anchor(croot, "aese") == \
+        store.voice_drift.anchor_fingerprint(rec["text"], rec["id"])
+
+
+def test_an_in_voice_scene_stages_a_clear_for_a_standing_flag(client):
+    """The second half of the loop: a character who corrected course stops being
+    corrected. Without this the flag is permanent and the corrective never
+    stops firing."""
+    cid, sid = _voice_scene(client, prior="She hedged.")
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
+        [_EXTRACTION, _DOSSIER, '{"verdict": "in_voice", "note": ""}'])
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    edit = next(e for e in body["edits"] if e["kind"] == "voice_drift")
+    assert edit["before"] == "She hedged." and edit["after"] == ""
+    assert body["voice"]["flagged"] == [] and body["voice"]["checked"] == ["aese"]
+    client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+               json={"one_line": "o", "summary": "s", "keywords": [],
+                     "timeline_events": [], "edits": body["edits"]})
+    assert store.voice_drift.read(store.campaigns.campaign_root(cid), "aese") == ""
+
+
+def test_an_in_voice_scene_with_no_flag_stages_nothing(client):
+    cid, sid = _voice_scene(client)
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
+        [_EXTRACTION, _DOSSIER, '{"verdict": "in_voice", "note": ""}'])
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    assert not [e for e in body["edits"] if e["kind"] == "voice_drift"]
+    assert body["voice"]["status"] == "ok" and body["voice"]["checked"] == ["aese"]
+
+
+def test_a_drift_verdict_with_no_note_is_reported_not_staged(client):
+    """The note IS the corrective. A verdict without one must not be quietly
+    downgraded to "in voice", nor staged as a blank instruction."""
+    cid, sid = _voice_scene(client)
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
+        [_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": ""}'])
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    assert not [e for e in body["edits"] if e["kind"] == "voice_drift"]
+    assert body["voice"]["status"] == "failed"
+    assert body["voice"]["failed"] == [{"id": "aese", "reason": "drift reported with no corrective"}]
+
+
+def test_an_unreadable_verdict_never_clears_a_standing_flag(client):
+    """A garbled reply is not evidence that anyone sounded fine. Staged edits
+    arrive default-approved, so treating it as in-voice would retire a real
+    corrective the moment the user hits Save."""
+    cid, sid = _voice_scene(client, prior="She hedged.")
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
+        [_EXTRACTION, _DOSSIER, "I'm sorry, I can't help with that."])
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    assert not [e for e in body["edits"] if e["kind"] == "voice_drift"]
+    assert body["voice"]["status"] == "failed"
+    assert body["voice"]["failed"] == [{"id": "aese",
+                                        "reason": "unreadable verdict from the voice judge"}]
+    # the corrective survives untouched
+    assert store.voice_drift.read(store.campaigns.campaign_root(cid), "aese") == "She hedged."
+
+
+def test_a_silent_character_never_clears_a_standing_flag(client):
+    """The judge reports `not_enough` for a character who barely spoke. Saying
+    nothing is not proof of sounding right, so the flag holds until a scene
+    actually shows the voice again."""
+    cid, sid = _voice_scene(client, prior="She hedged.")
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
+        [_EXTRACTION, _DOSSIER, '{"verdict": "not_enough", "note": ""}'])
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    assert not [e for e in body["edits"] if e["kind"] == "voice_drift"]
+    # a real judgment, so the phase is ok -- but named apart from "in voice",
+    # or `checked` minus `flagged` would read as "confirmed fine"
+    assert body["voice"]["status"] == "ok"
+    assert body["voice"]["checked"] == ["aese"] and body["voice"]["flagged"] == []
+    assert body["voice"]["unjudged"] == ["aese"]
+    assert store.voice_drift.read(store.campaigns.campaign_root(cid), "aese") == "She hedged."
+
+
+def test_a_finding_judged_against_a_replaced_anchor_is_rejected_on_save(client):
+    """The anchor is editable while the review sits open. A note reasoned from
+    the old reference would be injected alongside the new one on the very next
+    turn, so the save reports a conflict instead."""
+    cid, sid = _voice_scene(client)
+    wid = store.campaigns.read_campaign(cid)["meta"]["world"]
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
+        [_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": "She hedged."}'])
+    edits = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["edits"]
+    store.voice_anchors.write(store.worlds.world_root(wid), "aese", "Warm and rambling now.")
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                   json={"one_line": "o", "summary": "s", "keywords": [],
+                         "timeline_events": [], "edits": edits})
+    assert r.status_code == 200
+    failure = next(f for f in r.json()["failures"] if f["id"] == "voice_drift:aese")
+    assert failure["kind"] == "conflict" and "voice anchor changed" in failure["reason"]
+    assert store.voice_drift.read(store.campaigns.campaign_root(cid), "aese") == ""
+
+
+def test_reformatting_the_anchor_still_lets_a_finding_land(client):
+    """Whitespace is not a changed standard; invalidating on it would throw away
+    real findings for an innocuous edit."""
+    cid, sid = _voice_scene(client, anchor="Clipped. Never uses contractions.")
+    wid = store.campaigns.read_campaign(cid)["meta"]["world"]
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
+        [_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": "She hedged."}'])
+    edits = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["edits"]
+    store.voice_anchors.write(store.worlds.world_root(wid),
+                              "aese", "  Clipped. Never uses contractions.\n\n")
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                   json={"one_line": "o", "summary": "s", "keywords": [],
+                         "timeline_events": [], "edits": edits})
+    assert "voice_drift:aese" in r.json()["applied"]
+    assert store.voice_drift.read(store.campaigns.campaign_root(cid), "aese") == "She hedged."
+
+
+def test_a_clear_lands_even_when_the_anchor_moved(client):
+    """The asymmetry: a clear removes text from future prompts rather than
+    adding it. Refusing one would strand the very corrective the anchor change
+    made obsolete."""
+    cid, sid = _voice_scene(client, prior="She hedged.")
+    wid = store.campaigns.read_campaign(cid)["meta"]["world"]
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
+        [_EXTRACTION, _DOSSIER, '{"verdict": "in_voice", "note": ""}'])
+    edits = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["edits"]
+    store.voice_anchors.write(store.worlds.world_root(wid), "aese", "A different standard.")
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                   json={"one_line": "o", "summary": "s", "keywords": [],
+                         "timeline_events": [], "edits": edits})
+    assert "voice_drift:aese" in r.json()["applied"]
+    assert store.voice_drift.read(store.campaigns.campaign_root(cid), "aese") == ""
+
+
+def test_the_judge_is_told_the_locked_card_name(client):
+    """The transcript labels lines with the locked version's CARD name, so
+    naming the judge the container's meta name points it at a character the
+    transcript never mentions."""
+    cid, sid = _voice_scene(client)
+    aroot = store.appearances.locked_actor_root(cid)
+    card = store.characters.read_card(aroot, "aese", "main")
+    card["data"]["name"] = "Aese Vane"           # card name diverges from meta "Aese"
+    store.characters.update_version(aroot, "aese", "main", card)
+    fake = FakeOpenRouterComplete(
+        [_EXTRACTION, _DOSSIER, '{"verdict": "in_voice", "note": ""}'])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    seen = []
+    real = store.voice_drift.build_prompt
+    store.voice_drift.build_prompt = lambda name, anchor, transcript: (
+        seen.append(name) or real(name, anchor, transcript))
+    try:
+        client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+    finally:
+        store.voice_drift.build_prompt = real
+    assert seen == ["Aese Vane"]
+
+
+def test_two_npcs_sharing_a_transcript_name_are_reported_not_judged(client):
+    """The transcript identifies speakers by card name and nothing else, so two
+    present NPCs wearing the same one cannot be judged apart: each judge reads
+    the other's lines as its own subject's and could persist a corrective for
+    dialogue that character never spoke. Report the clash instead."""
+    cid, sid = _voice_scene(client)
+    wid = store.campaigns.read_campaign(cid)["meta"]["world"]
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara", "version_name": "main"})
+    store.voice_anchors.write(store.worlds.world_root(wid), "mara", "Warm and rambling.")
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                json={"kind": "characters", "id": "mara", "version": "main", "role": "npc"})
+    aroot = store.appearances.locked_actor_root(cid)
+    card = store.characters.read_card(aroot, "mara", "main")
+    card["data"]["name"] = "Aese"                # now indistinguishable from the other NPC
+    store.characters.update_version(aroot, "mara", "main", card)
+
+    fake = FakeOpenRouterComplete([_EXTRACTION, _DOSSIER, _DOSSIER])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+
+    assert fake.calls == 3       # extraction + two dossiers, and NO voice call
+    assert not [e for e in body["edits"] if e["kind"] == "voice_drift"]
+    assert body["voice"]["status"] == "failed"
+    assert sorted(f["id"] for f in body["voice"]["failed"]) == ["aese", "mara"]
+    assert all("also be labelled 'Aese'" in f["reason"] for f in body["voice"]["failed"])
+
+
+def test_a_prefix_ambiguous_name_is_reported_not_judged(client):
+    """Whole-name comparison is not the rule `match_name` uses. "Aese Vane" and
+    "Aese Vale" are distinct strings, but a block labelled "Aese" is a
+    word-boundary prefix of both and belongs to neither."""
+    cid, sid = _voice_scene(client)
+    wid = store.campaigns.read_campaign(cid)["meta"]["world"]
+    aroot = store.appearances.locked_actor_root(cid)
+    card = store.characters.read_card(aroot, "aese", "main")
+    card["data"]["name"] = "Aese Vane"
+    store.characters.update_version(aroot, "aese", "main", card)
+
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara", "version_name": "main"})
+    wroot = store.worlds.world_root(wid)
+    mcard = store.characters.read_card(wroot, "mara", "main")
+    mcard["data"]["name"] = "Aese Vale"          # shares the "Aese" label
+    store.characters.update_version(wroot, "mara", "main", mcard)
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                json={"kind": "characters", "id": "mara", "version": "main", "role": "npc"})
+
+    fake = FakeOpenRouterComplete([_EXTRACTION, _DOSSIER, _DOSSIER])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+
+    assert fake.calls == 3                       # extraction + two dossiers, no voice call
+    assert not [e for e in body["edits"] if e["kind"] == "voice_drift"]
+    assert [f["id"] for f in body["voice"]["failed"]] == ["aese"]
+
+
+def test_a_clash_with_an_unanchored_npc_still_disqualifies(client):
+    """The collision set is the whole cast, not just the anchored NPCs. The
+    transcript labels every speaker by card name alone, so sharing a label with
+    an UNANCHORED character is exactly as unjudgeable — only now just one of the
+    two is being judged, and its corrective would be persisted."""
+    cid, sid = _voice_scene(client)
+    wid = store.campaigns.read_campaign(cid)["meta"]["world"]
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara", "version_name": "main"})
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                json={"kind": "characters", "id": "mara", "version": "main", "role": "npc"})
+    aroot = store.appearances.locked_actor_root(cid)
+    card = store.characters.read_card(aroot, "mara", "main")
+    card["data"]["name"] = "Aese"        # same label, but mara has NO anchor
+    store.characters.update_version(aroot, "mara", "main", card)
+
+    fake = FakeOpenRouterComplete([_EXTRACTION, _DOSSIER, _DOSSIER])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+
+    assert fake.calls == 3                 # extraction + two dossiers, no voice call
+    assert not [e for e in body["edits"] if e["kind"] == "voice_drift"]
+    assert [f["id"] for f in body["voice"]["failed"]] == ["aese"]
+    assert "also be labelled 'Aese'" in body["voice"]["failed"][0]["reason"]
+
+
+def test_a_clash_with_a_player_character_still_disqualifies(client):
+    """A PC's own voice is never judged, but its lines still carry its label."""
+    cid, sid = _voice_scene(client)
+    wid = store.campaigns.read_campaign(cid)["meta"]["world"]
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara", "version_name": "main"})
+    wroot = store.worlds.world_root(wid)
+    card = store.characters.read_card(wroot, "mara", "main")
+    card["data"]["name"] = "Aese"       # renamed before seating, so the lock carries it
+    store.characters.update_version(wroot, "mara", "main", card)
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                json={"kind": "characters", "id": "mara", "version": "main", "role": "pc"})
+
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
+        [_EXTRACTION, _DOSSIER, _DOSSIER])
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    assert [f["id"] for f in body["voice"]["failed"]] == ["aese"]
+
+
+def test_one_malformed_roster_card_does_not_fail_the_whole_voice_phase(client):
+    """The clash count scans the CAMPAIGN roster, so it reaches actors from
+    other scenes entirely. A single card with no `data` — supported state in a
+    store the user hand-edits — must not take voice checks down for everyone."""
+    cid, sid = _voice_scene(client)
+    wid = store.campaigns.read_campaign(cid)["meta"]["world"]
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara", "version_name": "main"})
+    # seated in this campaign, then removed: still in the roster, not in the cast
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                json={"kind": "characters", "id": "mara", "version": "main", "role": "npc"})
+    client.delete(f"/api/campaigns/{cid}/scenes/{sid}/cast/characters/mara")
+    store.characters._card_path(
+        store.appearances.locked_actor_root(cid), "mara", "main").write_text(
+        "{}", encoding="utf-8")
+
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
+        [_EXTRACTION, _DOSSIER,
+         '{"verdict": "drift", "note": "She used contractions; Aese never does."}'])
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+
+    assert body["voice"]["status"] == "ok"          # not "failed"
+    assert body["voice"]["checked"] == ["aese"]
+    assert [e["id"] for e in body["edits"] if e["kind"] == "voice_drift"] \
+        == ["voice_drift:aese"]
+
+
+def test_a_departed_speaker_sharing_the_label_still_disqualifies(client):
+    """`scene_cast` drops an actor the moment it leaves, but the transcript keeps
+    every line it spoke, still wearing its name — so the judge is handed both
+    characters' dialogue under one label while only the present one is judged."""
+    cid, sid = _voice_scene(client)
+    wid = store.campaigns.read_campaign(cid)["meta"]["world"]
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara", "version_name": "main"})
+    wroot = store.worlds.world_root(wid)
+    card = store.characters.read_card(wroot, "mara", "main")
+    card["data"]["name"] = "Aese"
+    store.characters.update_version(wroot, "mara", "main", card)
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                json={"kind": "characters", "id": "mara", "version": "main", "role": "npc"})
+    # ...and then leaves: out of the cast, still in the campaign roster
+    client.delete(f"/api/campaigns/{cid}/scenes/{sid}/cast/characters/mara")
+    assert "mara" not in [a["id"] for a in store.appearances.scene_cast(cid, sid)]
+
+    fake = FakeOpenRouterComplete([_EXTRACTION, _DOSSIER, _DOSSIER])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+
+    assert not [e for e in body["edits"] if e["kind"] == "voice_drift"]
+    assert [f["id"] for f in body["voice"]["failed"]] == ["aese"]
+
+
+def test_an_unusable_card_name_fails_that_actor_not_the_absorb(client):
+    """Cards are stored as arbitrary dicts, so `data.name` can be a number or an
+    object — import and version PUT both accept them. Everything downstream
+    treats it as text, and `_stage_voice_drift` promises never to fail absorb,
+    so one bad card must cost that actor its voice check and nothing more."""
+    cid, sid = _voice_scene(client)
+    aroot = store.appearances.locked_actor_root(cid)
+    card = store.characters.read_card(aroot, "aese", "main")
+    card["data"]["name"] = {"first": "Aese"}          # not a string
+    store.characters.update_version(aroot, "aese", "main", card)
+
+    fake = FakeOpenRouterComplete([_EXTRACTION, _DOSSIER])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+
+    assert r.status_code == 200                       # not a 500
+    assert fake.calls == 2                            # extraction + dossier, no voice call
+    assert r.json()["voice"]["status"] == "failed"
+    assert [f["id"] for f in r.json()["voice"]["failed"]] == ["aese"]
+    assert "no usable name" in r.json()["voice"]["failed"][0]["reason"]
+
+
+def test_a_unique_name_is_still_judged_alongside_a_clashing_pair(client):
+    """The clash disqualifies only the characters that share a label."""
+    cid, sid = _voice_scene(client)
+    wid = store.campaigns.read_campaign(cid)["meta"]["world"]
+    for name in ("Mara", "Winifred"):
+        client.post(f"/api/worlds/{wid}/characters",
+                    json={"name": name, "version_name": "main"})
+        store.voice_anchors.write(store.worlds.world_root(wid), name.lower(), "Warm.")
+        client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                    json={"kind": "characters", "id": name.lower(),
+                          "version": "main", "role": "npc"})
+    aroot = store.appearances.locked_actor_root(cid)
+    card = store.characters.read_card(aroot, "mara", "main")
+    card["data"]["name"] = "Aese"                # mara + aese clash; winifred is unique
+    store.characters.update_version(aroot, "mara", "main", card)
+
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
+        [_EXTRACTION, _DOSSIER, _DOSSIER, _DOSSIER,
+         '{"verdict": "drift", "note": "Winifred rambled; she is normally curt."}'])
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+
+    assert body["voice"]["checked"] == ["winifred"]
+    assert sorted(f["id"] for f in body["voice"]["failed"]) == ["aese", "mara"]
+    assert body["voice"]["status"] == "degraded"
+    assert [e["id"] for e in body["edits"] if e["kind"] == "voice_drift"] \
+        == ["voice_drift:winifred"]
+
+
+def test_a_failing_voice_check_does_not_fail_absorb(client):
+    from grimoire.llm_errors import LLMError
+
+    cid, sid = _voice_scene(client)
+
+    class Failing(FakeOpenRouterComplete):
+        async def complete(self, messages, cfg):
+            if self.calls >= 2:                  # the voice call, after extraction + dossier
+                self.calls += 1
+                raise LLMError("upstream", "the model exploded")
+            return self._next()
+
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: Failing([_EXTRACTION, _DOSSIER])
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+    assert body["one_line"] == "o"               # the absorb itself survived
+    assert body["voice"]["status"] == "failed"
+    assert body["voice"]["failed"][0]["id"] == "aese"
+    assert "the model exploded" in body["voice"]["failed"][0]["reason"]
+
+
+def test_a_stale_voice_finding_is_reported_as_a_conflict(client):
+    """Same discipline as the dossier: the staged `before` dates the proposal, so
+    a newer verdict already on disk must not be silently overwritten."""
+    cid, sid = _voice_scene(client)
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
+        [_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": "She hedged."}'])
+    edits = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["edits"]
+    store.voice_drift.write(store.campaigns.campaign_root(cid), "aese", "a newer finding")
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                   json={"one_line": "o", "summary": "s", "keywords": [],
+                         "timeline_events": [], "edits": edits})
+    assert r.status_code == 200
+    failure = next(f for f in r.json()["failures"] if f["id"] == "voice_drift:aese")
+    assert failure["kind"] == "conflict"
+    assert store.voice_drift.read(store.campaigns.campaign_root(cid), "aese") == "a newer finding"
+
+
+def test_a_voice_drift_raise_without_recorded_provenance_is_rejected(client):
+    """An absent fingerprint is stored as "", which `_voice_notes` reads as
+    "predates the field" and therefore always-valid — so a client-supplied row
+    that simply omits it writes a flag no later anchor change can ever
+    invalidate. Only flags actually on disk from before the field existed get
+    that exemption; one written now must not masquerade as legacy data."""
+    cid, sid = _voice_scene(client)
+    croot = store.campaigns.campaign_root(cid)
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                   json={"one_line": "o", "summary": "s", "keywords": [], "timeline_events": [],
+                         "edits": [{"id": "voice_drift:aese", "kind": "voice_drift",
+                                    "target": {"kind": "characters", "id": "aese"},
+                                    "label": "l", "field": "voice_drift",
+                                    "before": "", "after": "She used contractions.",
+                                    "authored": False}]})   # no payload at all
+    assert r.status_code == 200 and r.json()["applied"] == []
+    assert "does not record which anchor" in r.json()["failures"][0]["reason"]
+    assert store.voice_drift.read(croot, "aese") == ""
+
+    # ...and a blank fingerprint is the same omission, spelled out
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                   json={"one_line": "o", "summary": "s", "keywords": [], "timeline_events": [],
+                         "edits": [{"id": "voice_drift:aese", "kind": "voice_drift",
+                                    "target": {"kind": "characters", "id": "aese"},
+                                    "label": "l", "field": "voice_drift",
+                                    "before": "", "after": "She used contractions.",
+                                    "authored": False, "payload": {"op": "raise", "anchor": ""}}]})
+    assert r.json()["applied"] == []
+    assert store.voice_drift.read(croot, "aese") == ""
+
+
+def test_a_forged_voice_drift_row_cannot_conjure_a_phantom_character(client):
+    """PUT /chronicle rows are client-supplied. voice_drift.write creates the
+    parent dir, so a row naming a non-character target must not land."""
+    cid, sid = _voice_scene(client)
+    croot = store.campaigns.campaign_root(cid)
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                   json={"one_line": "o", "summary": "s", "keywords": [], "timeline_events": [],
+                         "edits": [{"id": "voice_drift:x", "kind": "voice_drift",
+                                    "target": {"kind": "lore", "id": "x"},
+                                    "label": "l", "field": "voice_drift",
+                                    "before": "", "after": "owned", "authored": False}]})
+    assert r.status_code == 200 and r.json()["applied"] == []
+    assert not (croot / "lore" / "x" / "voice_drift.md").exists()
+    assert not (croot / "characters" / "x").exists()
+
+
+def test_a_voice_drift_row_naming_an_unknown_character_is_rejected(client):
+    """Every other guard passes for an invented id -- an absent flag reads as ""
+    and matches a forged `before` of "" -- so without an existence check a PUT
+    body could litter characters/ with flag-only phantoms."""
+    cid, sid = _voice_scene(client)
+    croot = store.campaigns.campaign_root(cid)
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                   json={"one_line": "o", "summary": "s", "keywords": [], "timeline_events": [],
+                         "edits": [{"id": "voice_drift:ghost", "kind": "voice_drift",
+                                    "target": {"kind": "characters", "id": "never-existed"},
+                                    "label": "l", "field": "voice_drift",
+                                    "before": "", "after": "owned", "authored": False}]})
+    assert r.status_code == 200 and r.json()["applied"] == []
+    failure = next(f for f in r.json()["failures"] if f["id"] == "voice_drift:ghost")
+    assert failure["kind"] == "error" and "no longer exists" in failure["reason"]
+    assert not (croot / "characters" / "never-existed").exists()
+
+
+def test_clearing_a_flag_on_a_deleted_character_still_works(client):
+    """The asymmetry again: a clear writes nothing and creates no directory, so
+    refusing it would block exactly the cleanup the existence check argues for."""
+    cid, sid = _voice_scene(client)
+    croot = store.campaigns.campaign_root(cid)
+    store.voice_drift.write(croot, "aese", "She hedged.")
+    client.delete(f"/api/campaigns/{cid}/characters/aese")
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                   json={"one_line": "o", "summary": "s", "keywords": [], "timeline_events": [],
+                         "edits": [{"id": "voice_drift:aese", "kind": "voice_drift",
+                                    "target": {"kind": "characters", "id": "aese"},
+                                    "label": "l", "field": "voice_drift",
+                                    "before": "She hedged.", "after": "", "authored": False}]})
+    assert r.status_code == 200 and "voice_drift:aese" in r.json()["applied"]
+    assert store.voice_drift.read(croot, "aese") == ""
+
+
+def test_a_voice_drift_row_with_an_escaping_id_is_reported_not_written(client):
+    cid, sid = _voice_scene(client)
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                   json={"one_line": "o", "summary": "s", "keywords": [], "timeline_events": [],
+                         "edits": [{"id": "voice_drift:bad", "kind": "voice_drift",
+                                    "target": {"kind": "characters", "id": "../../pwned"},
+                                    "label": "l", "field": "voice_drift",
+                                    "before": "", "after": "owned", "authored": False}]})
+    assert r.status_code == 200 and r.json()["applied"] == []
+    failure = next(f for f in r.json()["failures"] if f["id"] == "voice_drift:bad")
+    assert failure["kind"] == "error"
 
 
 def test_put_chronicle_serializes_the_whole_commit(client):
@@ -3019,6 +3661,7 @@ def test_absorb_returns_edits_without_persisting(client):
 
 ABSORB_JSON = '{"one_line": "o", "summary": "s", "keywords": [], "timeline_events": []}'
 AUDIT_OK = '{"warnings": ["Mara claimed a hit with no roll"], "sheet_deltas": []}'
+VOICE_OK = '{"verdict": "in_voice", "note": ""}'
 
 
 @pytest.fixture
@@ -3142,13 +3785,17 @@ def test_audit_retry_endpoint_400_without_module(client, plain_scene):
 
 @pytest.fixture
 def npc_module_scene(client):
-    """A pool-basic campaign whose one present cast member is a *sheeted NPC* —
-    so a single absorb exercises all three LLM steps (extraction, one dossier,
-    audit), unlike module_scene, whose player-role cast makes zero dossier
-    calls."""
+    """A pool-basic campaign whose one present cast member is a *sheeted,
+    voice-anchored NPC* — so a single absorb exercises all four LLM steps
+    (extraction, one dossier, one voice check, audit), unlike module_scene,
+    whose player-role cast makes zero dossier calls. The anchor is what opts
+    the NPC into the voice step (#59); without it that phase is honestly
+    reported as never attempted."""
     wid, cid = _campaign(client)
     client.put(f"/api/campaigns/{cid}/module", json={"module": "pool-basic"})
     client.post(f"/api/worlds/{wid}/characters", json={"name": "Aese", "version_name": "main"})
+    store.voice_anchors.write(store.worlds.world_root(wid), "aese",
+                              "Clipped. Never uses contractions.")
     store.sheets.write(cid, "characters", "aese", "medium", {"health": 3}, expected=None)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
@@ -3236,12 +3883,13 @@ def test_absorb_within_budget_runs_every_step(client, npc_module_scene, monkeypa
     client.put("/api/config", json={"absorb_budget": "60"})
     clock = [0.0]
     monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
-    fake = ClockEatingFake(clock, 1.0, [ABSORB_JSON, "Aese is steady.", AUDIT_OK])
+    fake = ClockEatingFake(clock, 1.0, [ABSORB_JSON, "Aese is steady.", VOICE_OK, AUDIT_OK])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
 
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
 
-    assert fake.calls == 3
+    # four steps now the fixture's NPC is anchored: extraction, dossier, voice, audit
+    assert fake.calls == 4
     # staged, not written (#235): the dossier rides back in `edits` and lands
     # only when the review is saved
     assert [e["after"] for e in body["edits"] if e["kind"] == "dossier"] == ["Aese is steady."]
@@ -3255,12 +3903,12 @@ def test_absorb_budget_of_zero_is_unbounded(client, npc_module_scene, monkeypatc
     client.put("/api/config", json={"absorb_budget": "0"})
     clock = [0.0]
     monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
-    fake = ClockEatingFake(clock, 10_000.0, [ABSORB_JSON, "Aese is steady.", AUDIT_OK])
+    fake = ClockEatingFake(clock, 10_000.0, [ABSORB_JSON, "Aese is steady.", VOICE_OK, AUDIT_OK])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
 
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
 
-    assert fake.calls == 3 and body["mechanics"]["status"] == "ok"
+    assert fake.calls == 4 and body["mechanics"]["status"] == "ok"
 
 
 def test_absorb_extraction_overrunning_the_budget_is_502(client, npc_module_scene):
@@ -3303,18 +3951,20 @@ def _phase(body, name):
     return next(p for p in body["phases"] if p["name"] == name)
 
 
-def test_absorb_reports_all_three_phases_attempted(client, npc_module_scene, monkeypatch):
+def test_absorb_reports_every_phase_attempted(client, npc_module_scene, monkeypatch):
     """The whole point of `phases`: a reviewer can tell an absorb that ran every
-    step from one that only looks like it did."""
+    step from one that only looks like it did. The voice check is one of them
+    (#59) -- omitting it would make a run that skipped it look complete."""
     cid, sid = npc_module_scene
     clock = [0.0]
     monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
     client.app.dependency_overrides[routes.get_llm] = \
-        lambda: ClockEatingFake(clock, 1.0, [ABSORB_JSON, "Aese is steady.", AUDIT_OK])
+        lambda: ClockEatingFake(clock, 1.0, [ABSORB_JSON, "Aese is steady.",
+                                            VOICE_OK, AUDIT_OK])
 
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
 
-    assert [p["name"] for p in body["phases"]] == ["extraction", "dossiers", "audit"]
+    assert [p["name"] for p in body["phases"]] == ["extraction", "dossiers", "voice", "audit"]
     assert all(p["attempted"] for p in body["phases"])
     assert all(p["status"] == "ok" for p in body["phases"])
     assert not any(p["budget_exhausted"] for p in body["phases"])
@@ -3522,13 +4172,15 @@ def test_an_upstream_timeout_is_not_mistaken_for_the_budget(
 
     class StallsOnAudit(ClockEatingFake):
         async def complete(self, m, cfg):
-            if self.calls == 2:                       # the audit, budget untouched
+            # call 3 is the audit: extraction, dossier, voice, audit (#59 added
+            # the third — the fixture's NPC is anchored). Budget untouched.
+            if self.calls == 3:
                 self.calls += 1
                 raise LLMError("timeout", "no data for 90s")
             return await super().complete(m, cfg)
 
     client.app.dependency_overrides[routes.get_llm] = \
-        lambda: StallsOnAudit(clock, 1.0, [ABSORB_JSON, "Aese is steady."])
+        lambda: StallsOnAudit(clock, 1.0, [ABSORB_JSON, "Aese is steady.", VOICE_OK])
 
     body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
 
@@ -6990,3 +7642,241 @@ def test_a_caller_minted_token_is_fenced_from_newer_saves_too(client):
     r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle", json=save)
     assert r.status_code == 409 and r.json()["kind"] == "commit_incomplete"
     assert store.chronicle.read_chronicle(cid)[sid]["one_line"] == "the newer review"
+
+def test_put_voice_anchor_requires_the_field(client):
+    """A blank anchor DELETES, so `{}` from an incomplete or mismatched client
+    would be a destructive request nobody made. The explicit empty string is
+    still the supported opt-out."""
+    wid, cid = _world_char(client)
+    client.put(f"/api/worlds/{wid}/characters/{cid}/voice-anchor",
+               json={"voice_anchor": "Clipped."})
+    assert client.put(f"/api/worlds/{wid}/characters/{cid}/voice-anchor",
+                      json={}).status_code == 422
+    root = store.worlds.world_root(wid)
+    assert store.voice_anchors.read(root, cid) == "Clipped."   # untouched
+    assert client.put(f"/api/worlds/{wid}/characters/{cid}/voice-anchor",
+                      json={"voice_anchor": ""}).status_code == 200
+    assert not store.voice_anchors.anchor_path(root, cid).exists()
+
+
+def test_a_raise_edited_down_to_blank_is_refused_not_treated_as_a_clear(client):
+    """The reviewer can edit a proposed note. Blanking one must not silently
+    reclassify the raise as a clear and unlink the standing corrective — the
+    row's intent comes from the staged `op`, not from whether the text is
+    empty."""
+    cid, sid = _voice_scene(client, prior="She hedged.")
+    croot = store.campaigns.campaign_root(cid)
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
+        [_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": "A newer corrective."}'])
+    edits = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["edits"]
+    for e in edits:                      # the reviewer empties the textarea
+        if e["kind"] == "voice_drift":
+            e["after"] = "   "
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                   json={"one_line": "o", "summary": "s", "keywords": [],
+                         "timeline_events": [], "edits": edits})
+    failure = next(f for f in r.json()["failures"] if f["id"] == "voice_drift:aese")
+    assert failure["kind"] == "error" and "cannot be blank" in failure["reason"]
+    assert store.voice_drift.read(croot, "aese") == "She hedged."   # survives
+
+
+def test_a_stale_clear_cannot_delete_a_re_confirmed_flag(client):
+    """A provenance-only refresh leaves the note identical, so a clear staged
+    under the previous anchor still matches `before`. Without comparing the
+    provenance too, saving that older review would delete a flag another review
+    had just revalidated against the current anchor."""
+    cid, sid = _voice_scene(client, prior="She hedged.")
+    croot = store.campaigns.campaign_root(cid)
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
+        [_EXTRACTION, _DOSSIER, '{"verdict": "in_voice", "note": ""}'])
+    edits = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["edits"]
+    # meanwhile another review re-confirms the same note against a new anchor
+    store.voice_drift.write(croot, "aese", "She hedged.", "a-newer-fingerprint")
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                   json={"one_line": "o", "summary": "s", "keywords": [],
+                         "timeline_events": [], "edits": edits})
+    failure = next(f for f in r.json()["failures"] if f["id"] == "voice_drift:aese")
+    assert failure["kind"] == "conflict" and "different anchor" in failure["reason"]
+    assert store.voice_drift.read(croot, "aese") == "She hedged."   # not deleted
+
+
+def test_a_clear_row_typed_into_is_checked_like_the_raise_it_became(client):
+    """`op` says what the row was staged as; it must not decide whether the
+    write is verified. A reviewer typing into a clear row leaves op="clear" on a
+    row that now stores a flag — which would otherwise skip the existence and
+    anchor checks and write one unverified."""
+    cid, sid = _voice_scene(client, prior="She hedged.")
+    croot = store.campaigns.campaign_root(cid)
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
+        [_EXTRACTION, _DOSSIER, '{"verdict": "in_voice", "note": ""}'])
+    edits = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()["edits"]
+    for e in edits:                    # the reviewer types a note into the clear row
+        if e["kind"] == "voice_drift":
+            assert e["payload"]["op"] == "clear"
+            e["after"] = "Actually, she is still hedging."
+    # ...and the anchor moves before they save
+    wid = store.campaigns.read_campaign(cid)["meta"]["world"]
+    store.voice_anchors.write(store.worlds.world_root(wid), "aese", "A different standard.")
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                   json={"one_line": "o", "summary": "s", "keywords": [],
+                         "timeline_events": [], "edits": edits})
+    failure = next(f for f in r.json()["failures"] if f["id"] == "voice_drift:aese")
+    assert failure["kind"] == "conflict" and "voice anchor changed" in failure["reason"]
+    assert store.voice_drift.read(croot, "aese") == "She hedged."   # unchanged
+
+
+def test_a_campaign_local_character_can_be_given_a_voice_anchor(client):
+    """An NPC accepted from an absorb `new_character` proposal exists only
+    campaign-side. Without a campaign route it could never be given an anchor,
+    so absorb would skip its voice check forever — the class of character the
+    feature most obviously wants to cover."""
+    wid, cid = _campaign(client)
+    store.overlay.create_character(cid, "Winifred", "default",
+                                   store.characters.blank_card("Winifred"))
+    # no world counterpart at all
+    assert client.get(f"/api/worlds/{wid}/characters/winifred").status_code == 404
+
+    assert client.get(f"/api/campaigns/{cid}/characters/winifred/voice-anchor").json() == {
+        "voice_anchor": ""}
+    assert client.put(f"/api/campaigns/{cid}/characters/winifred/voice-anchor",
+                      json={"voice_anchor": "Clipped."}).json() == {"ok": True}
+    assert client.get(f"/api/campaigns/{cid}/characters/winifred/voice-anchor").json() == {
+        "voice_anchor": "Clipped."}
+    # and absorb can now see it, which is the point
+    assert store.overlay.voice_anchor_record(cid, "winifred")["text"] == "Clipped."
+
+
+def test_a_campaign_anchor_overrides_the_world_one(client):
+    """Writing campaign-side is how the per-file overlay records a divergence."""
+    wid, cid = _campaign(client)
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara", "version_name": "main"})
+    store.voice_anchors.write(store.worlds.world_root(wid), "mara", "The world standard.")
+    assert client.get(f"/api/campaigns/{cid}/characters/mara/voice-anchor").json() == {
+        "voice_anchor": "The world standard."}
+
+    client.put(f"/api/campaigns/{cid}/characters/mara/voice-anchor",
+               json={"voice_anchor": "Warmer here."})
+    assert store.overlay.voice_anchor_record(cid, "mara")["text"] == "Warmer here."
+    assert store.voice_anchors.read(store.worlds.world_root(wid), "mara") == "The world standard."
+
+
+def test_clearing_a_campaign_anchor_opts_out_rather_than_reinheriting(client):
+    """The editor promises that clearing the field stops the voice checks. If a
+    blank campaign save merely deleted the local copy, the world's anchor would
+    resolve again and the character would go on being judged -- against the very
+    text the user just erased. A blank records a tombstone instead."""
+    wid, cid = _campaign(client)
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara", "version_name": "main"})
+    store.voice_anchors.write(store.worlds.world_root(wid), "mara", "The world standard.")
+
+    client.put(f"/api/campaigns/{cid}/characters/mara/voice-anchor", json={"voice_anchor": ""})
+    assert store.overlay.voice_anchor_record(cid, "mara")["text"] == ""
+    assert store.overlay.voice_anchor(cid, "mara") == ""
+    assert client.get(f"/api/campaigns/{cid}/characters/mara/voice-anchor").json() == {
+        "voice_anchor": ""}
+    # the world's own anchor is untouched -- other campaigns still judge by it
+    assert store.voice_anchors.read(store.worlds.world_root(wid), "mara") == "The world standard."
+
+    # and opting back in works, with a NEW identity: the cleared anchor was
+    # retired, so findings judged against it must not spring back to life
+    client.put(f"/api/campaigns/{cid}/characters/mara/voice-anchor",
+               json={"voice_anchor": "The world standard."})
+    rec = store.overlay.voice_anchor_record(cid, "mara")
+    assert rec["text"] == "The world standard."
+    assert rec["id"] and rec["id"] != store.voice_anchors.read_record(
+        store.worlds.world_root(wid), "mara")["id"]
+
+
+def test_resaving_an_inherited_anchor_unchanged_keeps_inheriting(client):
+    """The editor shows the RESOLVED anchor, so re-saving an untouched form
+    submits the inherited text back. Materializing a campaign copy for that
+    would mint a new nonce — silently suppressing every committed flag
+    fingerprinted against the identical world anchor — and detach the campaign
+    from later world edits, all for a save that changed nothing."""
+    wid, cid = _campaign(client)
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara", "version_name": "main"})
+    wroot = store.worlds.world_root(wid)
+    store.voice_anchors.write(wroot, "mara", "The world standard.")
+    world_id = store.voice_anchors.read_record(wroot, "mara")["id"]
+
+    client.put(f"/api/campaigns/{cid}/characters/mara/voice-anchor",
+               json={"voice_anchor": "The world standard."})
+    assert not store.voice_anchors.anchor_path(
+        store.campaigns.campaign_root(cid), "mara").exists()
+    # still the WORLD's anchor, identity and all, so committed flags stay live
+    assert store.overlay.voice_anchor_record(cid, "mara")["id"] == world_id
+
+    # and a later world edit still reaches this campaign
+    store.voice_anchors.write(wroot, "mara", "Warmer, on reflection.")
+    assert store.overlay.voice_anchor(cid, "mara") == "Warmer, on reflection."
+
+
+def test_restoring_the_world_text_over_a_tombstone_is_a_real_divergence(client):
+    """The no-op above is only for a campaign that never diverged. Typing the
+    world's words back over an explicit opt-out is a decision to be judged
+    again, and it gets a fresh identity like any other opt-back-in."""
+    wid, cid = _campaign(client)
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara", "version_name": "main"})
+    wroot = store.worlds.world_root(wid)
+    store.voice_anchors.write(wroot, "mara", "The world standard.")
+
+    client.put(f"/api/campaigns/{cid}/characters/mara/voice-anchor", json={"voice_anchor": ""})
+    client.put(f"/api/campaigns/{cid}/characters/mara/voice-anchor",
+               json={"voice_anchor": "The world standard."})
+    rec = store.overlay.voice_anchor_record(cid, "mara")
+    assert rec["text"] == "The world standard."
+    assert rec["id"] != store.voice_anchors.read_record(wroot, "mara")["id"]
+
+
+def test_clearing_an_uninherited_campaign_anchor_leaves_no_tombstone(client):
+    """With no world anchor there is nothing to suppress, and a tombstone would
+    be a standing promise to ignore one the world might add later -- which is
+    not what clearing an already-empty field says."""
+    wid, cid = _campaign(client)
+    store.overlay.create_character(cid, "Winifred", "default",
+                                   store.characters.blank_card("Winifred"))
+    client.put(f"/api/campaigns/{cid}/characters/winifred/voice-anchor",
+               json={"voice_anchor": ""})
+    assert not store.voice_anchors.read_record(
+        store.campaigns.campaign_root(cid), "winifred")["disabled"]
+
+    store.voice_anchors.write(store.worlds.world_root(wid), "winifred", "Added later.")
+    assert store.overlay.voice_anchor(cid, "winifred") == "Added later."
+
+
+def test_a_standing_tombstone_survives_the_world_anchor_going_away(client):
+    """An opt-out is a decision, so only the user typing an anchor back in may
+    end it. If a blank save deleted the tombstone whenever the world had nothing
+    to suppress, removing and restoring the world anchor would silently re-enrol
+    a character whose owner had opted it out."""
+    wid, cid = _campaign(client)
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara", "version_name": "main"})
+    wroot = store.worlds.world_root(wid)
+    store.voice_anchors.write(wroot, "mara", "The world standard.")
+    client.put(f"/api/campaigns/{cid}/characters/mara/voice-anchor", json={"voice_anchor": ""})
+    assert store.voice_anchors.read_record(
+        store.campaigns.campaign_root(cid), "mara")["disabled"]
+
+    store.voice_anchors.write(wroot, "mara", "")            # world anchor removed
+    client.put(f"/api/campaigns/{cid}/characters/mara/voice-anchor", json={"voice_anchor": ""})
+    store.voice_anchors.write(wroot, "mara", "Back again.")  # ...and restored
+
+    assert store.overlay.voice_anchor(cid, "mara") == ""     # still opted out
+
+
+def test_clearing_a_campaign_override_opts_out_even_with_no_world_anchor(client):
+    """Clearing a nonblank override IS the opt-out, whatever the world holds at
+    that moment. Deleting it would let a world anchor created later start
+    judging a character whose owner had just erased one."""
+    wid, cid = _campaign(client)
+    client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara", "version_name": "main"})
+    client.put(f"/api/campaigns/{cid}/characters/mara/voice-anchor",
+               json={"voice_anchor": "Warmer here."})       # campaign-only; world has none
+    assert store.overlay.voice_anchor(cid, "mara") == "Warmer here."
+
+    client.put(f"/api/campaigns/{cid}/characters/mara/voice-anchor", json={"voice_anchor": ""})
+    assert store.voice_anchors.read_record(
+        store.campaigns.campaign_root(cid), "mara")["disabled"]
+
+    store.voice_anchors.write(store.worlds.world_root(wid), "mara", "Added later.")
+    assert store.overlay.voice_anchor(cid, "mara") == ""    # still opted out

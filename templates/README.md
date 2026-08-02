@@ -37,6 +37,33 @@ Mirrors `store/dossiers.py:build_prompt` (one call per present NPC).
 `user.j2` vars: `name`, `prior` (existing dossier, may be ""),
 `transcript` (render `snippets/transcript.j2` over the scene's messages).
 
+### `voice_anchor/` — POST /worlds/{wid}/characters/{cid}/voice-anchor/generate
+Mirrors `store/voice_anchors.py:build_prompt`. Messages: system, user.
+`user.j2` vars: `card` (the resolved card's `data` dict — reads the
+speech-bearing fields only: `name`, `personality`, `mes_example`,
+`system_prompt`). Preview only; the caller persists via PUT.
+
+### `voice_drift/` — the per-NPC voice check inside POST …/absorb
+Mirrors `store/voice_drift.py:build_prompt` (one call per present NPC **that
+has a voice anchor** — an anchorless character is never judged, which is what
+keeps the extra calls opt-in).
+`user.j2` vars: `name`, `anchor` (never ""), `transcript` (render
+`snippets/transcript.j2` over the scene's messages).
+The reply is one JSON object, `{"verdict": str, "note": str}`, parsed by
+`voice_drift.parse_output` through `absorb.extract_object`. `note` becomes the
+corrective `scene/voice_correction.j2` renders on the next turn.
+
+`verdict` is an enum, **not** a boolean, and the reason is that clearing a
+standing flag is a write: only an explicit `in_voice` justifies one.
+- `drift` — spoke, sounded wrong; `note` carries the corrective.
+- `in_voice` — spoke enough to judge, sounded right → stages a clear.
+- `not_enough` — silent or too few lines to tell. A real answer, not a
+  fallback: silence is not evidence of sounding right, so a standing flag
+  survives it.
+- anything unparseable maps to `voice_drift.UNKNOWN`, which the absorb route
+  reports as a failed check. Collapsing it into `in_voice` would let a garbled
+  reply retire a real corrective on a default-approved review.
+
 ### `scene_suggestions/` — POST /campaigns/{cid}/scene-suggestions
 Mirrors `store/suggest.py:build_prompt`. Messages: system, user.
 Vars (both files take the same set):
@@ -80,11 +107,15 @@ Message assembly (code-side, mirrored from `context/assemble.py`):
 4. Regenerate with guidance only: `scene/regenerate_guidance.j2` as an extra
    system message before the post-history.
 5. `scene/post_history.j2` as a system message, if non-empty. Vars:
-   `npc_cards` and `length_correction` — the latter rendered from
-   `scene/length_correction.j2` (vars: `drift`, `budget`) when
-   `length_drift.measure()` finds the last 3 turns over budget, else `""`.
-   This is the closest slot to generation, which is why the drift
-   counterweight rides here rather than in the system prompt.
+   `npc_cards`, `voice_correction` and `length_correction`. The last is
+   rendered from `scene/length_correction.j2` (vars: `drift`, `budget`) when
+   `length_drift.measure()` finds the last 3 turns over budget, else `""`;
+   `voice_correction` is rendered from `scene/voice_correction.j2` (var:
+   `voice_notes`, a list of `{name, note}`) for the present NPCs carrying an
+   unresolved `store/voice_drift.py` flag, else `""`. Voice rides ahead of
+   length: length is about trimming what was written, voice is about who is
+   writing it. This is the closest slot to generation, which is why both
+   counterweights ride here rather than in the system prompt.
 6. Opener only: `scene/opener_shape.j2` as the final system message (always
    sent — last, right before generation, so it outranks the system prompt).
 

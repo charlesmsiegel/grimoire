@@ -52,6 +52,7 @@ const NEAR_BOTTOM_PX = 80;
 const PHASE_LABELS: Record<AbsorbPhase["name"], string> = {
   extraction: "the scene summary",
   dossiers: "NPC dossiers",
+  voice: "voice checks",
   audit: "mechanics audit",
 };
 
@@ -1091,6 +1092,25 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
                 {absorb.dossiers.skipped.length > 0 && (
                   <p className="field-hint">
                     Never attempted, skipped: {absorb.dossiers.skipped.join(", ")}
+                  </p>)}
+              </div>)}
+            {(absorb.voice.status === "failed" || absorb.voice.status === "degraded") && (
+              <div className="mechanics-notice">
+                {/* A voice check that did not run is worth saying out loud: silence
+                    would read as "everyone stayed in voice" (#59). */}
+                {/* Status first, then failures: a phase that only ran out of
+                    budget is degraded with an empty `failed`, and calling that
+                    "failed" would overstate it. */}
+                <p>{absorb.voice.status === "degraded"
+                    ? "Some voice checks could not be run"
+                    : absorb.voice.failed.length > 0
+                      ? "No voice check could be run"
+                      : `Voice check failed: ${absorb.voice.reason}`}</p>
+                {absorb.voice.failed.map((d, i) => (
+                  <p className="field-hint" key={i}>{d.id}: {d.reason}</p>))}
+                {absorb.voice.skipped.length > 0 && (
+                  <p className="field-hint">
+                    Never attempted, skipped: {absorb.voice.skipped.join(", ")}
                   </p>)}
               </div>)}
             {conflictByRow.size > 0 && (

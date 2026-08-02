@@ -20,7 +20,7 @@ from .serialize import (  # noqa: F401
     _MARKER, _SAFE_LABEL, RESERVED_LABELS, ROLE_TO_LABEL, ROLL_SPEAKER,
     SYNTHETIC_SPEAKERS, TRANSITION_SPEAKER, _append_block, _block, _label,
     _markers, _numbering, _parse_messages, _serialize_messages,
-    _speaker_and_role, match_name,
+    _speaker_and_role, confusable, match_name,
 )
 from .read import (  # noqa: F401
     get_dismissed, get_location_history, get_suggested_date, get_time_history,

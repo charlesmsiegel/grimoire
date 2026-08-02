@@ -18,7 +18,7 @@ vi.mock("../api/client", () => ({
     listEntities: vi.fn(),
     listGreetings: vi.fn(),
     readCharacter: vi.fn(),
-    getCharacterTagline: vi.fn(),
+    getCharacterTagline: vi.fn(), getCharacterVoiceAnchor: vi.fn(),
     listImageAppearances: vi.fn(),
     readGreeting: vi.fn(),
     getGreetingSubjects: vi.fn(),
@@ -63,6 +63,7 @@ beforeEach(() => {
                          data: { name: "Mira", description: "", alternate_greetings: [], extensions: {} } } }],
   });
   (api.getCharacterTagline as any).mockResolvedValue({ tagline: "" });
+  (api.getCharacterVoiceAnchor as any).mockResolvedValue({ voice_anchor: "" });
   (api.listImageAppearances as any).mockResolvedValue([]);
   (api.readGreeting as any).mockResolvedValue({
     meta: { id: "sol-2", name: "SoL 2", character: "other", version: "main", present: ["mira"], requires_tags: [], predecessor_join: "all" },

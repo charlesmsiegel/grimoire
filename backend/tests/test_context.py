@@ -1776,3 +1776,312 @@ def test_a_director_note_seeds_archive_retrieval(monkeypatch, tmp_path):
 
     directed = context.build_director_messages(cid, sid, "Have them recall Saltmarch.")
     assert "Saltmarch crossing went badly" in directed[0]["content"]
+
+# ------------------------------------------------------- voice drift (#59)
+
+from grimoire.store import voice_anchors, voice_drift  # noqa: E402
+
+def _voice_scene(monkeypatch, tmp_path):
+    """A scene with one present, anchored NPC (Winifred), ready to have a drift
+    flag raised on them."""
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    characters.create_character(wroot, "Winifred", "default", _npc_card("Winifred", description="d"))
+    voice_anchors.write(wroot, "winifred", "Clipped. Never uses contractions.")
+    ap.appear(cid, sid, "characters", "winifred", "default", "npc")
+    scenes.append_message(cid, sid, "user", "hi")
+    return wid, cid, sid
+
+
+def test_no_flag_renders_no_voice_corrective(monkeypatch, tmp_path):
+    """The cost of the feature on a campaign that is in voice must be nothing —
+    including no stray post-history system message."""
+    _wid, cid, sid = _voice_scene(monkeypatch, tmp_path)
+    sys_msgs = [m for m in context.build_messages(cid, sid) if m["role"] == "system"]
+    assert len(sys_msgs) == 1                      # the system prompt only
+    assert "drifted out of voice" not in sys_msgs[0]["content"]
+
+
+def test_an_unresolved_flag_rides_the_post_history_message(monkeypatch, tmp_path):
+    """The corrective goes in the LAST message before generation, not the system
+    prompt — the same slot, and the same reasoning, as the length corrective."""
+    _wid, cid, sid = _voice_scene(monkeypatch, tmp_path)
+    voice_drift.write(campaigns.campaign_root(cid), "winifred", "She hedged; Winifred never hedges.")
+    msgs = context.build_messages(cid, sid)
+    assert msgs[-1]["role"] == "system"
+    last = msgs[-1]["content"]
+    assert "Winifred has drifted out of voice" in last and "never hedges" in last
+    assert "drifted out of voice" not in msgs[0]["content"]
+
+
+def test_the_corrective_names_the_character_not_the_id(monkeypatch, tmp_path):
+    _wid, cid, sid = _voice_scene(monkeypatch, tmp_path)
+    voice_drift.write(campaigns.campaign_root(cid), "winifred", "note")
+    last = context.build_messages(cid, sid)[-1]["content"]
+    assert "Winifred has drifted" in last and "winifred has drifted" not in last
+
+
+def test_clearing_the_flag_removes_the_corrective(monkeypatch, tmp_path):
+    _wid, cid, sid = _voice_scene(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    voice_drift.write(croot, "winifred", "She hedged.")
+    assert "drifted out of voice" in context.build_messages(cid, sid)[-1]["content"]
+    voice_drift.write(croot, "winifred", "")
+    assert "drifted out of voice" not in context.build_messages(cid, sid)[-1]["content"]
+
+
+def test_a_flag_on_an_absent_character_is_not_rendered(monkeypatch, tmp_path):
+    """A corrective is an instruction about the voice the model is about to
+    write, so a flag on someone who is not in this scene has nothing to
+    correct."""
+    wid, cid, sid = _voice_scene(monkeypatch, tmp_path)
+    characters.create_character(worlds.world_root(wid), "Mara", "default", _npc_card("Mara"))
+    voice_anchors.write(worlds.world_root(wid), "mara", "Dry.")
+    voice_drift.write(campaigns.campaign_root(cid), "mara", "Mara went flat.")
+    assert "Mara" not in context.build_messages(cid, sid)[-1]["content"]
+
+
+def test_a_flag_on_a_player_character_is_not_rendered(monkeypatch, tmp_path):
+    """A player character's voice is the user's to drift."""
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    characters.create_character(worlds.world_root(wid), "Mara", "default", _npc_card("Mara"))
+    voice_anchors.write(worlds.world_root(wid), "mara", "Dry.")
+    ap.appear(cid, sid, "characters", "mara", "default", "player")
+    scenes.append_message(cid, sid, "user", "hi")
+    voice_drift.write(campaigns.campaign_root(cid), "mara", "Mara went flat.")
+    assert "drifted out of voice" not in context.build_messages(cid, sid)[-1]["content"]
+
+
+def test_two_flagged_npcs_render_one_listed_corrective(monkeypatch, tmp_path):
+    wid, cid, sid = _voice_scene(monkeypatch, tmp_path)
+    characters.create_character(worlds.world_root(wid), "Mara", "default", _npc_card("Mara"))
+    voice_anchors.write(worlds.world_root(wid), "mara", "Dry.")
+    ap.appear(cid, sid, "characters", "mara", "default", "npc")
+    croot = campaigns.campaign_root(cid)
+    voice_drift.write(croot, "winifred", "She hedged.")
+    voice_drift.write(croot, "mara", "She went flat.")
+    last = context.build_messages(cid, sid)[-1]["content"]
+    assert "Some of the cast have drifted out of voice" in last
+    assert "- Winifred: She hedged." in last and "- Mara: She went flat." in last
+
+
+def test_voice_corrective_precedes_the_length_corrective(monkeypatch, tmp_path):
+    """Length is about trimming what was written; voice is about who is writing
+    it. The identity correction has to land before the instruction to be brief."""
+    from grimoire.store import lengths, response_presets  # noqa: F401
+    _wid, cid, sid = _voice_scene(monkeypatch, tmp_path)
+    voice_drift.write(campaigns.campaign_root(cid), "winifred", "She hedged.")
+    # Three turns far over any budget -> the length corrective renders too.
+    for _ in range(3):
+        scenes.append_reply(cid, sid, [{"speaker": None, "content": "word " * 4000}])
+    last = context.build_messages(cid, sid)[-1]["content"]
+    assert "have run long" in last, "expected the length corrective to render too"
+    assert last.index("drifted out of voice") < last.index("have run long")
+
+
+def test_post_history_instructions_still_come_first(monkeypatch, tmp_path):
+    """The card's own post-history instructions keep their slot; the corrective
+    is appended after them, blank-line separated."""
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    characters.create_character(worlds.world_root(wid), "Winifred", "default",
+                                _npc_card("Winifred", description="d",
+                                          post_history_instructions="STAY IN CHARACTER"))
+    voice_anchors.write(worlds.world_root(wid), "winifred", "Clipped.")
+    ap.appear(cid, sid, "characters", "winifred", "default", "npc")
+    scenes.append_message(cid, sid, "user", "hi")
+    voice_drift.write(campaigns.campaign_root(cid), "winifred", "She hedged.")
+    last = context.build_messages(cid, sid)[-1]["content"]
+    assert last.startswith("STAY IN CHARACTER\n\n")
+    assert "Winifred has drifted out of voice" in last
+
+
+def test_removing_the_anchor_silences_a_standing_flag(monkeypatch, tmp_path):
+    """Removing the anchor is the documented opt-out, and absorb stops judging
+    an anchorless character the moment it goes — so a flag raised before the
+    removal has no path back to cleared. Honouring it forever would correct
+    every remaining turn of the campaign."""
+    wid, cid, sid = _voice_scene(monkeypatch, tmp_path)
+    voice_drift.write(campaigns.campaign_root(cid), "winifred", "She hedged.")
+    assert "drifted out of voice" in context.build_messages(cid, sid)[-1]["content"]
+    voice_anchors.write(worlds.world_root(wid), "winifred", "")
+    assert "drifted out of voice" not in context.build_messages(cid, sid)[-1]["content"]
+
+
+def test_a_campaign_side_anchor_keeps_the_flag_live(monkeypatch, tmp_path):
+    """The gate reads through the overlay, so a campaign that has diverged is
+    judged against — and corrected by — its own anchor."""
+    wid, cid, sid = _voice_scene(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    voice_drift.write(croot, "winifred", "She hedged.")
+    voice_anchors.write(worlds.world_root(wid), "winifred", "")   # world anchor gone
+    voice_anchors.write(croot, "winifred", "Clipped, in this campaign.")
+    assert "drifted out of voice" in context.build_messages(cid, sid)[-1]["content"]
+
+
+def test_the_corrective_uses_the_locked_card_name(monkeypatch, tmp_path):
+    """The same model holds the NPC cards and the transcript, and both identify
+    the character by the LOCKED VERSION's card name. A corrective addressed to
+    the container's name is one the model can ignore — or, in a multi-NPC scene,
+    apply to the wrong character."""
+    wid, cid, sid = _voice_scene(monkeypatch, tmp_path)
+    aroot = ap.locked_actor_root(cid)
+    card = characters.read_card(aroot, "winifred", "default")
+    card["data"]["name"] = "Winifred Vance"          # diverges from the container's "Winifred"
+    characters.update_version(aroot, "winifred", "default", card)
+    voice_drift.write(campaigns.campaign_root(cid), "winifred", "She hedged.")
+    last = context.build_messages(cid, sid)[-1]["content"]
+    assert "Winifred Vance has drifted out of voice" in last
+
+
+def test_a_committed_flag_goes_quiet_when_its_anchor_is_replaced(monkeypatch, tmp_path):
+    """absorb's apply-time fingerprint only guards the pending-review window. A
+    saved flag outlives it, so without this check the note would keep citing a
+    standard the user has since replaced."""
+    wid, cid, sid = _voice_scene(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    rec = voice_anchors.read_record(worlds.world_root(wid), "winifred")
+    voice_drift.write(croot, "winifred", "She hedged.",
+                      voice_drift.anchor_fingerprint(rec["text"], rec["id"]))
+    assert "drifted out of voice" in context.build_messages(cid, sid)[-1]["content"]
+
+    voice_anchors.write(worlds.world_root(wid), "winifred", "Warm and rambling now.")
+    assert "drifted out of voice" not in context.build_messages(cid, sid)[-1]["content"]
+
+
+def test_removing_and_restoring_an_anchor_does_not_resurrect_a_flag(monkeypatch, tmp_path):
+    """The restored anchor is a new standard; the old note was never judged
+    against it."""
+    wid, cid, sid = _voice_scene(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    croot = campaigns.campaign_root(cid)
+    _r = voice_anchors.read_record(wroot, "winifred")
+    voice_drift.write(croot, "winifred", "She hedged.",
+                      voice_drift.anchor_fingerprint(_r["text"], _r["id"]))
+    voice_anchors.write(wroot, "winifred", "")                 # opt out
+    voice_anchors.write(wroot, "winifred", "A different standard.")   # opt back in
+    assert "drifted out of voice" not in context.build_messages(cid, sid)[-1]["content"]
+
+
+def test_reformatting_the_anchor_keeps_a_committed_flag_live(monkeypatch, tmp_path):
+    wid, cid, sid = _voice_scene(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    _r = voice_anchors.read_record(wroot, "winifred")
+    voice_drift.write(campaigns.campaign_root(cid), "winifred", "She hedged.",
+                      voice_drift.anchor_fingerprint(_r["text"], _r["id"]))
+    voice_anchors.write(wroot, "winifred", "  Clipped. Never uses contractions.\n\n")
+    assert "drifted out of voice" in context.build_messages(cid, sid)[-1]["content"]
+
+
+def test_a_flag_with_no_recorded_provenance_still_renders(monkeypatch, tmp_path):
+    """Flags written before the field existed must keep working -- treating an
+    unrecorded provenance as stale would retire real user data on upgrade."""
+    _wid, cid, sid = _voice_scene(monkeypatch, tmp_path)
+    voice_drift.write(campaigns.campaign_root(cid), "winifred", "She hedged.")   # no fingerprint
+    assert "drifted out of voice" in context.build_messages(cid, sid)[-1]["content"]
+
+
+def test_restoring_an_identical_anchor_does_not_resurrect_a_flag(monkeypatch, tmp_path):
+    """Clearing an anchor is the opt-out, so a flag it silenced must stay
+    silenced — even if the user later types the exact same sentence again. A
+    content-only digest cannot express that; the anchor's nonce can."""
+    wid, cid, sid = _voice_scene(monkeypatch, tmp_path)
+    wroot, croot = worlds.world_root(wid), campaigns.campaign_root(cid)
+    rec = voice_anchors.read_record(wroot, "winifred")
+    voice_drift.write(croot, "winifred", "She hedged.",
+                      voice_drift.anchor_fingerprint(rec["text"], rec["id"]))
+    assert "drifted out of voice" in context.build_messages(cid, sid)[-1]["content"]
+
+    voice_anchors.write(wroot, "winifred", "")                  # opt out
+    voice_anchors.write(wroot, "winifred", rec["text"])          # restore, character for character
+    assert "drifted out of voice" not in context.build_messages(cid, sid)[-1]["content"]
+
+
+def test_the_note_and_its_provenance_come_from_one_read(monkeypatch, tmp_path):
+    """The flag is replaced atomically, so reading the note and its fingerprint
+    separately can straddle a chronicle save and validate a stale note against
+    the fresh provenance — injecting a retired correction into the next
+    generation. Pin the single snapshot by counting the reads."""
+    wid, cid, sid = _voice_scene(monkeypatch, tmp_path)
+    rec = voice_anchors.read_record(worlds.world_root(wid), "winifred")
+    voice_drift.write(campaigns.campaign_root(cid), "winifred", "She hedged.",
+                      voice_drift.anchor_fingerprint(rec["text"], rec["id"]))
+    reads = []
+    real = voice_drift._read_file
+    monkeypatch.setattr(voice_drift, "_read_file",
+                        lambda croot, char_id: (reads.append(char_id), real(croot, char_id))[1])
+    assert "drifted out of voice" in context.build_messages(cid, sid)[-1]["content"]
+    assert reads == ["winifred"]
+
+
+def test_read_record_agrees_with_the_single_field_readers():
+    """`read`/`judged_anchor` stay as the one-field convenience calls, so the
+    snapshot must not drift away from what they return."""
+    import tempfile
+    from pathlib import Path
+    with tempfile.TemporaryDirectory() as d:
+        croot = Path(d)
+        voice_drift.write(croot, "winifred", "She hedged.", "abc123")
+        assert voice_drift.read_record(croot, "winifred") == {
+            "note": voice_drift.read(croot, "winifred"),
+            "anchor": voice_drift.judged_anchor(croot, "winifred")}
+        assert voice_drift.read_record(croot, "mara") == {"note": "", "anchor": ""}
+
+
+def test_a_corrective_is_suppressed_when_the_name_is_not_unique(monkeypatch, tmp_path):
+    """A corrective addresses the model BY NAME, so an ambiguous name makes it an
+    instruction the model can apply to the wrong character. absorb's clash guard
+    cannot cover this: a flag committed while the name was unique is consumed by
+    every later generation, and a same-named actor can join with no absorb in
+    between to re-examine it."""
+    wid, cid, sid = _voice_scene(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    voice_drift.write(croot, "winifred", "She hedged.")
+    assert "drifted out of voice" in context.build_messages(cid, sid)[-1]["content"]
+
+    # a second NPC joins, wearing the same locked card name
+    wroot = worlds.world_root(wid)
+    characters.create_character(wroot, "Mara", "default", characters.blank_card("Mara"))
+    card = characters.read_card(wroot, "mara", "default")
+    card["data"]["name"] = "Winifred"
+    characters.update_version(wroot, "mara", "default", card)
+    ap.appear(cid, sid, "characters", "mara", "default", "npc")
+
+    assert "drifted out of voice" not in context.build_messages(cid, sid)[-1]["content"]
+
+
+def test_a_corrective_for_a_reserved_label_is_suppressed(monkeypatch, tmp_path):
+    """"You" and "Grimoire" are what the transcript calls the user's lines and
+    unstamped narration. A rename AFTER the flag was committed never passes
+    absorb's guard again, so the same reserved labels are seeded here."""
+    _wid, cid, sid = _voice_scene(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    voice_drift.write(croot, "winifred", "She hedged.")
+    assert "drifted out of voice" in context.build_messages(cid, sid)[-1]["content"]
+
+    aroot = ap.locked_actor_root(cid)
+    card = characters.read_card(aroot, "winifred", "default")
+    card["data"]["name"] = "You"
+    characters.update_version(aroot, "winifred", "default", card)
+    assert "drifted out of voice" not in context.build_messages(cid, sid)[-1]["content"]
+
+
+def test_a_corrective_for_a_prefix_ambiguous_name_is_suppressed(monkeypatch, tmp_path):
+    """Whole-name comparison is not the rule. "Winifred Vance" and "Winifred
+    Vale" are distinct strings, but neither owns the label "Winifred" — and
+    `scenes.match_name` already treats that prefix as ambiguous."""
+    wid, cid, sid = _voice_scene(monkeypatch, tmp_path)
+    croot, aroot = campaigns.campaign_root(cid), ap.locked_actor_root(cid)
+    card = characters.read_card(aroot, "winifred", "default")
+    card["data"]["name"] = "Winifred Vance"
+    characters.update_version(aroot, "winifred", "default", card)
+    voice_drift.write(croot, "winifred", "She hedged.")
+    assert "Winifred Vance has drifted" in context.build_messages(cid, sid)[-1]["content"]
+
+    wroot = worlds.world_root(wid)
+    characters.create_character(wroot, "Mara", "default", characters.blank_card("Mara"))
+    mcard = characters.read_card(wroot, "mara", "default")
+    mcard["data"]["name"] = "Winifred Vale"        # shares the "Winifred" label
+    characters.update_version(wroot, "mara", "default", mcard)
+    ap.appear(cid, sid, "characters", "mara", "default", "npc")
+
+    assert "drifted out of voice" not in context.build_messages(cid, sid)[-1]["content"]

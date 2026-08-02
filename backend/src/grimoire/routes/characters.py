@@ -1,5 +1,5 @@
-"""World characters: versions, taglines, Chub links, card import/export,
-localization and per-version images."""
+"""World characters: versions, taglines, voice anchors, Chub links, card
+import/export, localization and per-version images."""
 
 from __future__ import annotations
 
@@ -13,7 +13,8 @@ from ..llm import LLMClient
 from ..llm_errors import LLMError
 from .common import _require_connection, _serve_image, _world_root_or_404, get_llm
 from .models import (AvatarFocus, CharacterBirthdate, CharacterCreate, ChubImportBody,
-                     ChubSourceBody, DefaultVersion, TaglineSave, VersionCreate, VersionUpdate)
+                     ChubSourceBody, DefaultVersion, TaglineSave, VersionCreate, VersionUpdate,
+                     VoiceAnchorSave)
 
 router = APIRouter()
 
@@ -204,6 +205,59 @@ async def post_character_tagline_generate(wid: str, cid: str,
     # Preview only — the caller persists via PUT on Save, so Generate-then-cancel
     # (e.g. the import popup's Skip) leaves nothing written.
     return {"tagline": store.taglines.parse_output(text)}
+
+
+@router.get("/worlds/{wid}/characters/{cid}/voice-anchor")
+def get_character_voice_anchor(wid: str, cid: str):
+    root = _world_root_or_404(wid)
+    try:
+        store.characters.read_character(root, cid)
+    except store.characters.CharacterNotFound:
+        raise HTTPException(status_code=404, detail="character not found")
+    return {"voice_anchor": store.voice_anchors.read(root, cid)}
+
+
+@router.put("/worlds/{wid}/characters/{cid}/voice-anchor")
+def put_character_voice_anchor(wid: str, cid: str, body: VoiceAnchorSave):
+    """Set (or, with a blank body, remove) the anchor absorb judges drift against.
+
+    Removing it is a real operation, not a no-op: an anchorless character is not
+    judged at all, so clearing the text is how a user opts a character back out
+    of drift detection."""
+    root = _world_root_or_404(wid)
+    try:
+        store.characters.read_character(root, cid)
+    except store.characters.CharacterNotFound:
+        raise HTTPException(status_code=404, detail="character not found")
+    store.voice_anchors.write(root, cid, body.voice_anchor)
+    return {"ok": True}
+
+
+@router.post("/worlds/{wid}/characters/{cid}/voice-anchor/generate")
+async def post_character_voice_anchor_generate(wid: str, cid: str,
+                                               client: LLMClient = Depends(get_llm)):
+    root = _world_root_or_404(wid)
+    conn = _require_connection()
+    try:
+        ch = store.characters.read_character(root, cid)
+    except store.characters.CharacterNotFound:
+        raise HTTPException(status_code=404, detail="character not found")
+    card = store.characters.read_card(root, cid, ch["meta"]["default_version"])
+    # Version PUT accepts ANY dict as a card and writes it unchanged, so `{}`
+    # and `{"data": ["speech"]}` are both supported state. `.get` alone is not
+    # enough -- a truthy non-object reaches the template, where `card.get(...)`
+    # raises and 500s the request before the LLM is ever called. The template
+    # already renders "(none)" for every missing field, which is a far better
+    # answer -- the draft is a starting point the user edits anyway.
+    data = card.get("data")
+    messages = store.voice_anchors.build_prompt(data if isinstance(data, dict) else {})
+    try:
+        text = await client.complete(messages, conn)
+    except LLMError as exc:
+        raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
+    # Preview only, like tagline/generate — the caller persists via PUT on Save,
+    # so an anchor is never written without review (#59).
+    return {"voice_anchor": store.voice_anchors.parse_output(text)}
 
 
 _EXPORT_MEDIA = {"json": "application/json", "png": "image/png", "charx": "application/zip"}
