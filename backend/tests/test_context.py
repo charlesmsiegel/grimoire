@@ -2170,6 +2170,39 @@ def test_a_paragraph_after_the_blank_is_not_governed(monkeypatch, tmp_path):
     assert "The crates moved again last night." in section
 
 
+def test_a_quoted_nickname_is_matched_without_its_quotes(monkeypatch, tmp_path):
+    """A nickname is written set off by quotes or brackets, and `_second_alias`
+    lands on exactly that token — so keeping the marks made the form `"Red"` and
+    `_mentions` then required the suspicion to quote her too. The name is what
+    is inside the marks."""
+    from grimoire.store import appearances, campaigns, characters, playstate, scenes, worlds
+    from grimoire.store.context import world_state
+    assert world_state._forms({'Mara "Red" Vance'}) == {
+        'Mara "Red" Vance', "Mara", "Red", "Vance"}
+    assert world_state._forms({"Mara (Red) Vance"}) == {
+        "Mara (Red) Vance", "Mara", "Red", "Vance"}
+    # Interior punctuation is untouched, which is what keeps the elided particle
+    # whole while the quotes around a nickname come off.
+    assert world_state._surname_alias("Jean d'Ormesson") == "d'Ormesson"
+
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = campaigns.create_campaign("Run", worlds.create_world("W"))
+    croot = campaigns.campaign_root(cid)
+    nicknamed = 'Mara "Red" Vance'
+    watcher = characters.create_character(croot, "Seraphine", "main",
+                                          characters.blank_card("Seraphine"))[0]
+    named = characters.create_character(croot, nicknamed, "main",
+                                        characters.blank_card(nicknamed))[0]
+    sid = scenes.create_scene(cid, "Now")
+    appearances.appear(cid, sid, "characters", watcher, "main", "npc")
+    appearances.appear(cid, sid, "characters", named, "main", "npc")
+    playstate.write_state(croot, watcher, playstate.compose_body(
+        "Wary.", "", "Red is hiding the ledger.\n\nThe Guild watches the pier."))
+    section = _state_section(cid, sid)
+    assert "hiding the ledger" not in section
+    assert "The Guild watches the pier." in section
+
+
 def test_a_stacked_title_does_not_consume_the_given_name_slot(monkeypatch, tmp_path):
     """`_name_tokens` strips only a leading token it RECOGNIZES as a title, so
     with titles stacked the interior one is still a title — and stopping on it
