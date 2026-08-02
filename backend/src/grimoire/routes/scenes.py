@@ -208,13 +208,15 @@ def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
                 status_code=400,
                 detail="this scene's recorded turn boundaries no longer match its "
                        "transcript — delete the last reply manually to regenerate")
-    messages = store.context.build_messages(cid, sid, turn=_turn_override(body))
     guidance = (body.guidance or "").strip() if body else ""
-    if guidance:
-        messages.append({
-            "role": "system",
-            "content": prompts.render("scene/regenerate_guidance.j2", guidance=guidance),
-        })
+    # rendered before the context build so its tokens can be reserved against
+    # the context budget -- it is appended unconditionally, so the packer must
+    # not fit the prompt to a ceiling this then pushes it over
+    block = prompts.render("scene/regenerate_guidance.j2", guidance=guidance) if guidance else ""
+    messages = store.context.build_messages(cid, sid, turn=_turn_override(body),
+                                            reserve=(block,) if block else ())
+    if block:
+        messages.append({"role": "system", "content": block})
     return _chat_stream(cid, sid, messages, conn, client)
 
 

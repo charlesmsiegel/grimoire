@@ -68,17 +68,21 @@ def _continuation_rule_bodies(cid: str, resolution: dict) -> tuple[list[str], li
 
 
 def _continuation_messages(cid: str, sid: str, resolution: dict) -> list[dict]:
-    messages = store.context.build_messages(cid, sid)
+    # The roll block is rendered first and reserved: a check can drag in several
+    # on-roll rule documents, which is exactly the kind of mandatory bulk that
+    # would otherwise be packed around and then appended anyway.
     on_roll_docs, check_docs = _continuation_rule_bodies(cid, resolution)
-    messages.append({"role": "system", "content": prompts.render(
-        "scene/roll_result.j2", resolution=resolution,
-        on_roll_docs=on_roll_docs, check_docs=check_docs)})
+    block = prompts.render("scene/roll_result.j2", resolution=resolution,
+                           on_roll_docs=on_roll_docs, check_docs=check_docs)
+    messages = store.context.build_messages(cid, sid, reserve=(block,))
+    messages.append({"role": "system", "content": block})
     return messages
 
 
 def _declined_continuation_messages(cid: str, sid: str) -> list[dict]:
-    messages = store.context.build_messages(cid, sid)
-    messages.append({"role": "system", "content": prompts.render("scene/roll_declined.j2")})
+    block = prompts.render("scene/roll_declined.j2")
+    messages = store.context.build_messages(cid, sid, reserve=(block,))
+    messages.append({"role": "system", "content": block})
     return messages
 
 

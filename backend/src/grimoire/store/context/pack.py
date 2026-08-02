@@ -83,9 +83,13 @@ def pack(sections: list[dict], history: list[dict], reserved: int = 0,
     """Fit `sections` + `history` into `budget` tokens.
 
     `sections` are the rendered sections in prompt order, each ``{"label",
-    "text", "tier"}``. `reserved` is what the caller sends regardless — the
-    post-history block — counted against the budget but never droppable.
-    `budget` defaults to the configured one.
+    "text", "tier"}``. `reserved` is every token the caller will send that this
+    packer cannot drop — the post-history block, plus any message appended
+    after the system one (a director note, regenerate guidance, a roll-result
+    block, the opener's prompt and shape rules). Counting them here is what
+    keeps the packed prompt and the sent request the same size; anything left
+    out is budget the request overspends silently. `budget` defaults to the
+    configured one.
 
     Returns ``{"sections", "history", "history_trimmed"}``: the same sections
     in the same order with a ``dropped`` flag added (dropped ones stay in the

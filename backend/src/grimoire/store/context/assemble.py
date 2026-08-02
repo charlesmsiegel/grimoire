@@ -40,14 +40,17 @@ def build_opener_messages(cid: str, sid: str, prompt: str) -> list[dict]:
     scene has no history. No conversation history is included — the opener is for a scene
     with no messages. Ephemeral: the caller does not persist the result."""
     a = _assemble(cid, sid, wi_seed=prompt, full_recap=OPENER_RECAP_DEPTH)
-    p = _packed(a, cid, sid, opener=True)
+    # Both trailing messages are rendered before packing so their tokens can be
+    # reserved: neither is droppable, so neither may go uncounted.
+    user_text = macros.expand_macros(prompt, macros.scene_substitutions(cid, sid), cid, sid)
+    shape = prompts.render("scene/opener_shape.j2", npc_names=a["npc_names"])
+    p = _packed(a, cid, sid, opener=True, reserve=(user_text, shape))
     messages = [{"role": "system", "content": _system_text(p["sections"])},
-                {"role": "user", "content": macros.expand_macros(prompt, macros.scene_substitutions(cid, sid), cid, sid)}]
+                {"role": "user", "content": user_text}]
     if a["post_history"]:  # mirrors build_messages
         messages.append({"role": "system", "content": a["post_history"]})
     # the shape rules go last, right before generation, so they outrank everything above
-    messages.append({"role": "system",
-                     "content": prompts.render("scene/opener_shape.j2", npc_names=a["npc_names"])})
+    messages.append({"role": "system", "content": shape})
     return messages
 
 
@@ -272,14 +275,22 @@ def _render_sections(a: dict, cid: str, sid: str, opener: bool = False) -> list[
     return out
 
 
-def _packed(a: dict, cid: str, sid: str, opener: bool = False) -> dict:
+def _packed(a: dict, cid: str, sid: str, opener: bool = False,
+            reserve: tuple[str, ...] = ()) -> dict:
     """Render the sections and fit them, with the history, under the configured
-    budget. The opener carries no history, so it packs against an empty one."""
+    budget. The opener carries no history, so it packs against an empty one.
+
+    `reserve` is every message the caller appends AFTER the system message --
+    a director note, regenerate guidance, a roll-result block, the opener's
+    prompt and shape rules. The packer cannot drop any of them, so leaving them
+    uncounted would pack to a ceiling the real request then sails straight past,
+    which is the provider-side truncation this exists to prevent. post_history
+    is always reserved; callers name the rest.
+    """
     budget = pack.budget_tokens()
-    # post_history ships regardless (it is the last word before generation), so
-    # it is charged to the budget without being droppable. Counting it is only
-    # worth the tokeniser call when there is a budget to charge it against.
-    reserved = tokens.count_tokens(a["post_history"]) if budget > 0 else 0
+    # Only worth the tokeniser calls when there is a budget to charge against.
+    reserved = (tokens.count_tokens(a["post_history"])
+                + sum(tokens.count_tokens(t) for t in reserve)) if budget > 0 else 0
     return pack.pack(_render_sections(a, cid, sid, opener=opener),
                      [] if opener else a["history"], reserved, budget)
 
@@ -290,14 +301,19 @@ def _system_text(packed_sections: list[dict]) -> str:
                           sections=[s["text"] for s in packed_sections if not s["dropped"]]).strip()
 
 
-def build_messages(cid: str, sid: str, turn: dict | None = None) -> list[dict]:
+def build_messages(cid: str, sid: str, turn: dict | None = None,
+                   reserve: tuple[str, ...] = ()) -> list[dict]:
     """`turn` is a one-shot, unpersisted response-preset override (a pending
     per-turn length chip) that beats the scene/campaign/global cascade for this
     call only -- see response_presets.resolve. Callers that need it to survive a
     failed generation (retry, regenerate) must re-pass it themselves; nothing
-    here remembers it."""
+    here remembers it.
+
+    `reserve` is any message the CALLER will append to the returned list
+    (regenerate guidance, a roll-result block). Pass it, or the budget is
+    charged for less than the request actually sends -- see _packed."""
     a = _assemble(cid, sid, turn=turn)
-    p = _packed(a, cid, sid)
+    p = _packed(a, cid, sid, reserve=reserve)
     messages: list[dict] = []
     system_text = _system_text(p["sections"])
     if system_text:
@@ -313,13 +329,16 @@ def build_director_messages(cid: str, sid: str, note: str, turn: dict | None = N
     final user message. The note rides only this call — never persisted. `turn`
     is the same one-shot response-preset override as build_messages."""
     a = _assemble(cid, sid, turn=turn)
-    p = _packed(a, cid, sid)
+    # expanded up front so the note's tokens are reserved before packing: it is
+    # a mandatory message, so the budget has to know about it
+    note_text = macros.expand_macros(note, a["subs"], cid, sid)
+    p = _packed(a, cid, sid, reserve=(note_text,))
     messages: list[dict] = []
     system_text = _system_text(p["sections"])
     if system_text:
         messages.append({"role": "system", "content": system_text})
     messages += p["history"]
-    messages.append({"role": "user", "content": macros.expand_macros(note, a["subs"], cid, sid)})
+    messages.append({"role": "user", "content": note_text})
     if a["post_history"]:
         messages.append({"role": "system", "content": a["post_history"]})
     return messages
