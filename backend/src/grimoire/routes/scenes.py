@@ -422,6 +422,11 @@ def post_scene_alternate(cid: str, sid: str, vid: str):
             # request that changed nothing — and a delayed click for a variant
             # another tab has since promoted would cancel that tab's proposal.
             return {"ok": True}
+        # What is on screen right now, addressed by content rather than by
+        # position — the same rule the request itself follows, and what the
+        # rollback below promotes if the retirement cannot be written.
+        showing = (store.alternates.variant_id(state["runs"][state["active"]])
+                   if state["active"] is not None else None)
         # Heal now, retire after. Healing is what can append a 🎲 line, and
         # `promote` has to reconcile against the transcript that leaves behind —
         # but a swap that fails must not take the decision with it. The sidecar
@@ -448,7 +453,36 @@ def post_scene_alternate(cid: str, sid: str, vid: str):
         # old narration produced is retired — and only now that it really is.
         # Accepting a proposal whose text is no longer on screen would continue
         # a mechanical decision nothing there asked for.
-        store.proposals.supersede(cid, sid)
+        #
+        # Which is exactly why a failure HERE cannot simply be reported: the
+        # swap has landed, so the reader would be shown new narration beside a
+        # still-actionable decision the old narration produced. The transcript
+        # and proposals.json cannot be written as one, so whichever goes second
+        # leaves a window; this is the one that is worse to leave open, and the
+        # only one with a compensating action available.
+        try:
+            store.proposals.supersede(cid, sid)
+        except BaseException:
+            # Put the take that was showing back. A different file failed
+            # (proposals.json), so the write that just succeeded is likely to
+            # succeed again — unlike the reroll restore, where the same disk
+            # stopped both. Best-effort all the same: reporting the original
+            # failure matters more than a rollback that cannot be guaranteed.
+            #
+            # Nothing to roll back to when the slot was EMPTY: `promote` can
+            # fill a slot but not empty one, and a decision derived from a reply
+            # that a dead reroll already removed is not on screen either way.
+            if showing is not None:
+                try:
+                    back = store.alternates.state(cid, sid)
+                    at = next((i for i, r in enumerate(back["runs"])
+                               if store.alternates.variant_id(r) == showing), None)
+                    if at is not None:
+                        store.alternates.promote(cid, sid, at)
+                except (OSError, store.scenes.TurnSizesDesynced,
+                        store.alternates.AlternateNotFound):
+                    pass    # the original failure is the one worth reporting
+            raise
     return {"ok": True}
 
 
