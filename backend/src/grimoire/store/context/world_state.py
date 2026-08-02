@@ -651,8 +651,18 @@ def _entries(suspects: str) -> list[list[str]]:
         # so withheld -- the text that came after the quote ended. Entering one
         # pops nothing: a quoted list under an unquoted subject line is governed
         # by it, which is the shape the round before this one fixed.
+        #
+        # And entering one does not BREAK THE PARAGRAPH either, which is the
+        # other half of the same asymmetry. `> Winifred is lying.` / `>> At
+        # midnight, she steals the ledger.` is one thought written at two quote
+        # depths; treating the deeper line as a fresh entry gave the continuation
+        # its own verdict, and since it names nobody it survived -- the entry
+        # naming her withheld, the subjectless private half published. That is
+        # the multiline leak again, reached through the quote marker instead of
+        # the line break. Only a DECREASE ends anything: it closes a container,
+        # and what follows is outside it.
         was, depth = depth, quote.group(0).count(">") if quote else 0
-        if depth != was:
+        if depth < was:
             while open_heads and open_heads[-1][3] > depth:
                 open_heads.pop()
             fresh = True

@@ -2214,6 +2214,28 @@ def test_leaving_a_blockquote_ends_what_was_inside_it(monkeypatch, tmp_path):
         assert "Mara watches the pier." in section, body
 
 
+def test_entering_a_deeper_quote_does_not_break_the_paragraph(monkeypatch, tmp_path):
+    """The other half of the asymmetry. Leaving a quote ends a container, so it
+    ends the entry; ENTERING one does not, and treating a deeper line as a fresh
+    entry gave the subjectless continuation its own verdict — it names nobody, so
+    it survived while the line naming her was withheld. The multiline leak again,
+    reached through the quote marker instead of the line break."""
+    from grimoire.store import playstate
+    cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
+    for body in (
+        "> Winifred is lying.\n"
+        ">> At midnight, she steals the ledger.",
+
+        "Winifred is lying.\n"
+        "> At midnight, she steals the ledger.",
+    ):
+        playstate.write_state(croot, ids["Seraphine Vale"],
+                              playstate.compose_body("Wary.", "", body))
+        section = _state_section(cid, sid)
+        assert "Winifred is lying" not in section
+        assert "steals the ledger" not in section, body
+
+
 def test_an_indented_heading_stays_under_its_list_item(monkeypatch, tmp_path):
     """A heading indented inside a list item is part of that item. Popping every
     non-ATX governor regardless of indent severed the named parent, so the
