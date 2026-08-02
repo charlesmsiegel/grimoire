@@ -35,13 +35,18 @@ export function EditableRow({
 
   function save() {
     setEditing(false);
+    // The lock can arrive while the editor is already open — a turn started
+    // after the player clicked ✎ — and disabling the buttons does nothing about
+    // an input that is already mounted. Review caught Enter still renaming the
+    // scene mid-stream through exactly that gap (#95).
+    if (locked) return;
     const next = draft.trim();
     if (next && next !== label) onRename(next);
   }
 
   return (
     <div className={"row" + (active ? " active" : "")}>
-      {editing ? (
+      {editing && !locked ? (
         <input
           className="row-rename"
           autoFocus

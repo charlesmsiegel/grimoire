@@ -57,6 +57,22 @@ test("locked disables rename and delete but still selects", () => {
   expect(onSelect).toHaveBeenCalled();
 });
 
+test("locking a row with its rename editor already open cannot rename", () => {
+  // The lock can arrive after the player clicked ✎ — a turn started in between
+  // — and disabling the buttons does nothing about an input already mounted.
+  const onRename = vi.fn();
+  const { rerender } = render(
+    <EditableRow label="Old" onRename={onRename} onDelete={() => {}} />);
+  fireEvent.click(screen.getByRole("button", { name: /rename/i }));
+  const input = screen.getByDisplayValue("Old");
+  fireEvent.change(input, { target: { value: "Renamed" } });
+  rerender(<EditableRow label="Old" locked onRename={onRename} onDelete={() => {}} />);
+  // the editor is gone, and even a keypress that raced the re-render is refused
+  expect(screen.queryByDisplayValue("Renamed")).toBeNull();
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(onRename).not.toHaveBeenCalled();
+});
+
 test("delete calls onDelete", () => {
   const onDelete = vi.fn();
   render(<EditableRow label="Doomed" onRename={() => {}} onDelete={onDelete} />);

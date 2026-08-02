@@ -279,8 +279,16 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
     # unchanged; the length catches everything that is not a turn at all, like a
     # manual roll or a transition line. Read here, while the caller is still
     # synchronous and nothing else can be mid-write.
-    turn_token = _claim_turn(cid, sid)
-    owned_tail = len(store.scenes.read_scene(cid, sid)["messages"])
+    #
+    # Both under the campaign lock, which review caught the claim being outside
+    # of: `_claim_turn` is a plain dict write, so a newer turn could take the
+    # token in the gap between the abort hook's `_owns_turn` check and its tail
+    # read — the hook would pass a check that was true when it ran and then act
+    # on a scene that had since changed hands. The lock the hook holds only
+    # makes its own steps indivisible if the writer it races takes it too.
+    with store.locks.campaign_lock(cid):
+        turn_token = _claim_turn(cid, sid)
+        owned_tail = len(store.scenes.read_scene(cid, sid)["messages"])
 
     def finalize(watcher) -> list[str]:
         frames: list[str] = []
@@ -374,8 +382,23 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
         with store.locks.campaign_lock(cid):
             if not _owns_turn(cid, sid, turn_token):
                 return []
-            if len(store.scenes.read_scene(cid, sid)["messages"]) != owned_tail:
-                return []
+            # The restore is attempted BEFORE the length check, and review caught
+            # why that ordering matters: the raw-length refusal exists to stop
+            # this turn *adding* text to a transcript that moved on, but putting
+            # back a reply this turn deleted is not adding anything — and the
+            # things that move the length without claiming a turn are exactly
+            # the ones the restore is built to tolerate. A location move or a
+            # cast change appends a transition line, and
+            # `restore_trailing_assistant_run` steps over trailing transitions
+            # by design. Behind the coarse check, a reroll stopped after any of
+            # those lost its reply for good.
+            #
+            # Safe to run first because it is not the unguarded version of the
+            # same test: the helper compares the transcript *below* the trailing
+            # transitions against what the removal recorded (`keep !=
+            # token["kept"]` -> refuse), which is the narrow question the coarse
+            # length check was standing in for.
+            #
             # A cancel keeps the player's own post, because they still have it
             # and will likely retry from there. A reply this turn *deleted* to
             # make room for itself is the opposite: nothing else holds it, so a
@@ -393,6 +416,8 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
             # half nothing else holds; the proposal is one more reroll away.
             if restore_removed is not None and not watcher.narration.strip():
                 restore_removed()
+                return []
+            if len(store.scenes.read_scene(cid, sid)["messages"]) != owned_tail:
                 return []
             return finalize(watcher)
 
