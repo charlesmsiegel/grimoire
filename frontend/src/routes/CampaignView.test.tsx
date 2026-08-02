@@ -814,6 +814,13 @@ test("the scene being generated into cannot be renamed mid-turn", async () => {
     { id: "s1", title: "Old", model: "", created: "", updated: "" },
     { id: "s2", title: "Later", model: "", created: "", updated: "" },
   ]);
+  // The lock outlives the turn's `busy`, so the flush has to land for it to be
+  // released — see the sibling test below.
+  let flushed = false;
+  (api.getScene as any).mockImplementation(async () => ({
+    meta: {}, total: flushed ? 1 : 0,
+    messages: flushed ? [{ role: "assistant", content: "The tide turns." }] : [],
+  }));
   (api.chat as any).mockImplementation(hangingChat(["The tide "]));
   renderCampaign();
   const ta = await screen.findByRole("textbox");
@@ -825,8 +832,29 @@ test("the scene being generated into cannot be renamed mid-turn", async () => {
   expect(otherRename).not.toBeDisabled();   // only the scene being written to
   fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
   await screen.findByRole("button", { name: /continue ▶/i });
+  flushed = true;                            // the shielded write lands
   await waitFor(() => expect(
     screen.getAllByRole("button", { name: /rename/i })[0]).not.toBeDisabled());
+});
+
+test("the scene stays locked while the cancelled turn's flush is still coming", async () => {
+  // `busy` clears as soon as the socket dies, but `on_abort` writes seconds
+  // later — that gap is exactly what the flush poll waits out. Releasing the
+  // lock with `busy` re-enabled rename and delete for the whole of it, so the
+  // file could move out from under the very write being waited for.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, total: 0, messages: [] });
+  (api.chat as any).mockImplementation(hangingChat(["The tide "]));
+  renderCampaign();
+  const ta = await screen.findByRole("textbox");
+  fireEvent.change(ta, { target: { value: "and then?" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
+  // Send is back — the turn is over as far as the composer is concerned —
+  // but the write it is waiting for has not landed, so the scene stays locked.
+  await screen.findByRole("button", { name: /continue ▶/i });
+  await new Promise((r) => setTimeout(r, 400));   // past the first two poll ticks
+  expect(screen.getByRole("button", { name: /rename/i })).toBeDisabled();
 });
 
 test("a lost error frame still gives the rolled-back prompt back", async () => {
@@ -954,6 +982,54 @@ test("Retry after a failed reroll rerolls again, with its guidance", async () =>
   await waitFor(() => expect(api.regenerate).toHaveBeenCalledTimes(2));
   expect(api.retry).not.toHaveBeenCalled();
   expect((api.regenerate as any).mock.calls[1][3]).toBe("darker this time");
+});
+
+test("a remembered reroll does not follow the player to another scene", async () => {
+  // The remembered operation had no scene identity, and Retry acts on whatever
+  // scene is open — so a reroll that failed in one scene, retried after
+  // switching, would replace a reply in the *other* scene with guidance written
+  // for the first. Switching also clears the banner now; the scene check is
+  // what makes that airtight rather than merely likely.
+  (api.listScenes as any).mockResolvedValue([
+    { id: "s1", title: "Old", model: "", created: "", updated: "" },
+    { id: "s2", title: "Later", model: "", created: "", updated: "" },
+  ]);
+  (api.getScene as any).mockResolvedValue({
+    meta: {}, total: 2, messages: [
+      { role: "user", content: "and then?" },
+      { role: "assistant", content: "The tide turns." }],
+  });
+  (api.regenerate as any).mockImplementation(
+    async (_c: string, _s: string, onEvent: any) => {
+      onEvent({ error: { detail: "OpenRouter API key is not set", kind: "missing_key" } });
+    });
+  renderCampaign();
+  await screen.findByText("The tide turns.");
+  fireEvent.click(screen.getAllByRole("button", { name: /reroll/i })[0]);
+  fireEvent.change(screen.getByPlaceholderText(/reroll/i),
+                   { target: { value: "darker this time" } });
+  fireEvent.click(screen.getByRole("button", { name: /reroll ▸/i }));
+  await screen.findByText(/OpenRouter API key is not set/);
+
+  fireEvent.click(screen.getByText(/· Later/));       // leave the failed scene
+  // the banner belonged to the scene being left, so it goes with it
+  await waitFor(() => expect(screen.queryByText(/OpenRouter API key is not set/)).toBeNull());
+
+  // Now fail something in the new scene, so a banner — and a Retry — exist here
+  // on their own account. The remembered reroll is still in the ref, and this
+  // is where a Retry with no scene identity would have rerolled the wrong scene.
+  (api.chat as any).mockImplementation(
+    async (_c: string, _s: string, _t: string, onEvent: any) => {
+      onEvent({ error: { detail: "connection reset", kind: "network" } });
+    });
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "onward" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  await screen.findByText(/connection reset/);
+  fireEvent.click(screen.getByRole("button", { name: /^retry$/i }));
+
+  await waitFor(() => expect(api.retry).toHaveBeenCalled());
+  expect((api.retry as any).mock.calls[0][1]).toBe("s2");   // this scene
+  expect(api.regenerate).toHaveBeenCalledTimes(1);          // not s1's reroll again
 });
 
 test("a poll fetch already in flight cannot clear a new turn's preview", async () => {

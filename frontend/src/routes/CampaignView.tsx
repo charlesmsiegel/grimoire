@@ -196,6 +196,10 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   // lock follows the stream rather than the view (review, #95). State, not a
   // ref, because the rail renders it.
   const [streamingId, setStreamingId] = useState<string | null>(null);
+  // Which turn owns `streamingId`. The lock outlives `busy` — it is held across
+  // the post-cancel flush poll — so a newer turn can claim it while an older
+  // one is still unwinding, and only the current owner may release it.
+  const streamTokenRef = useRef(0);
   // Held for the life of one turn so Cancel can reach it. A ref, not state:
   // the controller is not rendered, and rebuilding the component tree on every
   // send just to store it would remount the transcript mid-stream.
@@ -487,6 +491,11 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       // the scene they picked it on — switching scenes must not carry it
       // silently onto an unrelated scene's next reply.
       setPendingResponse(null);
+      // Same reasoning for the error banner: it reports what happened to a turn
+      // in the scene being left, and its Retry acts on whatever scene is open.
+      // Leaving it up invites the player to re-run one scene's failure against
+      // another (review, #95).
+      setError(null);
       // a new scene opens at its most recent page, at the bottom
       windowSizeRef.current = PAGE_SIZE;
       atBottomRef.current = true;
@@ -696,6 +705,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   ) {
     const controller = new AbortController();
     abortRef.current = controller;
+    const streamToken = ++streamTokenRef.current;
     setBusy(true);
     setStreamingId(id);
     setError(null);
@@ -796,9 +806,12 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       abortRef.current = null;
       setStreaming("");
       setBusy(false);
-      // Released here, with `busy`: past this point nothing else writes to the
-      // scene through this turn, so its file is free to move again.
-      setStreamingId(null);
+      // NOT released with `busy`. Review caught that clearing it here unlocks
+      // the scene while `on_abort` may still be writing to it: the poll below
+      // exists precisely because the backend's shielded flush lands seconds
+      // after the socket died, and a rename in that gap moves the file out from
+      // under the very write the poll is waiting for. The lock is released at
+      // the bottom of this block instead, once there is nothing left to land.
       // the reply is persisted as per-speaker posts — re-fetch to show them
       // (selectScene also bumps ctxKey and refreshes the player name)
       //
@@ -898,6 +911,12 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       if (!finished && !errored && !refused && !(unreached && nothingLanded)) {
         await awaitFlushedPartial(id, refreshed ? seen : (totalBefore ?? -1));
       }
+      // Now nothing else can write to this scene through this turn, so its file
+      // is free to move again — unless a newer turn has claimed the lock in the
+      // meantime. `busy` was cleared before the poll, so that is a real race and
+      // clearing unconditionally would unlock the scene the *new* turn is
+      // streaming into. Same token idiom as `windowTokenRef`.
+      if (streamTokenRef.current === streamToken) setStreamingId(null);
     }
     // Landed means the backend said so, not that the promise resolved.
     return finished && !errored;
@@ -979,12 +998,20 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   //
   // Reset on every turn that lands, so Retry only ever repeats the operation
   // that actually failed.
-  const rerollToRetryRef = useRef<string | null>(null);
+  //
+  // Carries the scene it belongs to, because the error banner does not: a
+  // reroll that fails in one scene leaves both the banner and this ref standing
+  // while the player moves to another, and Retry there would have rerolled the
+  // *new* scene — replacing a reply nobody asked to replace, with guidance
+  // written for a different scene (review, #95). A switch also clears the
+  // banner now, so the button is usually gone; the scene check is what makes
+  // that airtight rather than merely likely.
+  const rerollToRetryRef = useRef<{ sid: string; guidance: string } | null>(null);
 
   async function retry() {
     if (!activeId || busy || rolling) return;
     const again = rerollToRetryRef.current;
-    if (again !== null) return void await reroll(again);
+    if (again && again.sid === activeId) return void await reroll(again.guidance);
     const landed = await runStream(activeId, (onEvent, signal) => pendingResponse
       ? api.retry(cid, activeId, onEvent, pendingResponse, signal)
       : api.retry(cid, activeId, onEvent, undefined, signal));
@@ -995,7 +1022,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     if (!activeId || busy || rolling) return;
     const guidance = repeatGuidance ?? (rerollPrompt ?? "").trim();
     setRerollPrompt(null);
-    rerollToRetryRef.current = guidance;
+    rerollToRetryRef.current = { sid: activeId, guidance };
     // one turn is a run of assistant posts — drop the whole trailing run, but
     // keep any trailing transition lines, which the backend also preserves
     setMessages((m) => {
