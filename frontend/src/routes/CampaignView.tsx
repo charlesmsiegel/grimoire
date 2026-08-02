@@ -1151,6 +1151,13 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   // plumbing here; clearing eagerly avoids a stale chip lingering mid-stream.
   async function resolve(body: ResolveBody) {
     if (!activeId) return;
+    // Before the eager clear, not after. `runStream` refuses while a rename is
+    // in flight, and review caught that this cleared the chip first — so the
+    // resolution was never sent and the roll became unreachable, since a rename
+    // on another rail row only re-lists scenes and never refreshes this one.
+    // Bailing here leaves the chip exactly as it was, which is the honest state:
+    // the decision is still pending (#95).
+    if (renamesInFlight) return;
     setProposalNow(null);
     await runStream(activeId, (onEvent, signal) =>
       api.resolveProposal(cid, activeId!, body, onEvent, signal));
