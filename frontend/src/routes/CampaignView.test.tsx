@@ -3451,3 +3451,108 @@ test("a recovered prompt is never shown against the scene the player moved to", 
   await waitFor(() =>
     expect(screen.getByRole("textbox")).toHaveValue("I draw my blade."));
 });
+
+test("renaming a scene carries its parked prompt to the new id", async () => {
+  // A scene's id is its filename, so a rename mints a new one. A recovered
+  // prompt parked under the old id is then looked up under the new one, found
+  // missing, and lost when the view unmounts — and it is the only copy of what
+  // the player wrote.
+  //
+  // Built on the retired-read scenario rather than an error frame, because that
+  // is the one that provably leaves the player on the other scene: the error
+  // frame path has `runStream`'s finally pull them back to the turn's scene,
+  // which hands the prompt over before a rename can strand it. A first attempt
+  // written that way passed against the unfixed code.
+  (api.listScenes as any).mockResolvedValue([
+    { id: "s1", title: "Old", model: "", created: "", updated: "" },
+    { id: "s2", title: "Later", model: "", created: "", updated: "" },
+  ]);
+  let releaseVerify: (() => void) | null = null;
+  let loaded = false;
+  (api.getScene as any).mockImplementation(async (_c: string, sid: string) => {
+    if (sid === "s1" && loaded) await new Promise<void>((r) => { releaseVerify = r; });
+    loaded = true;
+    return { meta: {}, total: 0, messages: [] };
+  });
+  (api.chat as any).mockImplementation(async () => {
+    const err: Error & { beforeResponse?: boolean } = new Error("Failed to fetch");
+    err.beforeResponse = true;
+    throw err;
+  });
+  (api.renameScene as any).mockResolvedValue({ id: "s1-renamed" });
+  renderCampaign();
+  const ta = await screen.findByRole("textbox");
+  fireEvent.change(ta, { target: { value: "I draw my blade." } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  await waitFor(() => expect(releaseVerify).not.toBeNull());
+  fireEvent.click(screen.getByText(/. Later/));
+  releaseVerify!();
+  await new Promise((r) => setTimeout(r, 60));
+  expect(screen.getByRole("textbox")).toHaveValue("");   // parked under s1
+
+  // Rename the scene it is parked under, while sitting on another one.
+  (api.listScenes as any).mockResolvedValue([
+    { id: "s1-renamed", title: "Renamed", model: "", created: "", updated: "" },
+    { id: "s2", title: "Later", model: "", created: "", updated: "" },
+  ]);
+  // By row, not by index — and only once the scene lock has let go. s1 is still
+  // `streamingId` while the flush is outstanding, so its Rename is disabled;
+  // that is the lock doing its job, and the rename this test needs comes after.
+  const oldRename = () => Array.from(document.querySelectorAll(".row"))
+    .find((r) => /Old/.test(r.textContent ?? ""))!
+    .querySelector('button[aria-label="Rename"]') as HTMLButtonElement;
+  await waitFor(() => expect(oldRename()).not.toBeDisabled(), { timeout: 15000 });
+  fireEvent.click(oldRename());
+  const nameInput = screen.getByDisplayValue("Old");
+  fireEvent.change(nameInput, { target: { value: "Renamed" } });
+  fireEvent.keyDown(nameInput, { key: "Enter" });
+  await waitFor(() => expect(screen.getByText(/. Renamed/)).toBeInTheDocument());
+
+  // Re-opening it under its new id still hands the prompt back.
+  fireEvent.click(screen.getByText(/. Renamed/));
+  await waitFor(() =>
+    expect(screen.getByRole("textbox")).toHaveValue("I draw my blade."));
+});
+
+test("renaming the scene keeps a failed reroll's Retry a reroll", async () => {
+  // The remembered reroll carries the scene it belongs to so Retry cannot act
+  // on a different one. A rename mints a new id, and leaving the ref on the old
+  // one makes that same check misfire in the other direction: Retry decides
+  // this is not the reroll's scene, falls back to `/retry`, and continues from
+  // the restored old reply — dropping the guidance the player wrote.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({
+    meta: {}, total: 2, messages: [
+      { role: "user", content: "and then?" },
+      { role: "assistant", content: "The tide turns." }],
+  });
+  (api.renameScene as any).mockResolvedValue({ id: "s1-renamed" });
+  (api.regenerate as any).mockImplementation(
+    async (_c: string, _s: string, onEvent: any) => {
+      onEvent({ error: { detail: "OpenRouter API key is not set", kind: "missing_key" } });
+    });
+  renderCampaign();
+  await screen.findByText("The tide turns.");
+  fireEvent.click(screen.getByRole("button", { name: /reroll/i }));
+  fireEvent.change(screen.getByPlaceholderText(/reroll/i),
+                   { target: { value: "darker this time" } });
+  fireEvent.click(screen.getByRole("button", { name: /reroll ▸/i }));
+  await screen.findByText(/OpenRouter API key is not set/);
+
+  // Rename the active scene. The banner stays up, so Retry is still offered.
+  (api.listScenes as any).mockResolvedValue(
+    [{ id: "s1-renamed", title: "Renamed", model: "", created: "", updated: "" }]);
+  const rename = () => document.querySelector('button[aria-label="Rename"]') as HTMLButtonElement;
+  await waitFor(() => expect(rename()).not.toBeDisabled(), { timeout: 15000 });
+  fireEvent.click(rename());
+  const nameInput = screen.getByDisplayValue("Old");
+  fireEvent.change(nameInput, { target: { value: "Renamed" } });
+  fireEvent.keyDown(nameInput, { key: "Enter" });
+  await waitFor(() => expect(api.renameScene).toHaveBeenCalled());
+
+  fireEvent.click(screen.getByRole("button", { name: /^retry$/i }));
+  await waitFor(() => expect(api.regenerate).toHaveBeenCalledTimes(2));
+  expect(api.retry).not.toHaveBeenCalled();
+  expect((api.regenerate as any).mock.calls[1][1]).toBe("s1-renamed");
+  expect((api.regenerate as any).mock.calls[1][3]).toBe("darker this time");
+});
