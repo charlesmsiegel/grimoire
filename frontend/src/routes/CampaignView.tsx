@@ -592,8 +592,12 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   // clears a chip that does exist, and the poll has already stopped looking:
   // a roll the player has to answer, invisible until something else refreshes.
   // One awaited read, after growth, settles it (review, #95).
+  // `fresh`, and that argument is the whole point: `request` shares identical
+  // in-flight GETs, so without it this is handed the very promise `selectScene`
+  // started before the flush — the stale answer this exists to overrule. Review
+  // caught that after the first version of this shipped (#95).
   async function settleProposal(id: string, owns: () => boolean) {
-    const r = await api.getRollProposal(cid, id).catch(() => null);
+    const r = await api.getRollProposal(cid, id, true).catch(() => null);
     if (r && owns()) setProposal(liveProposal(r.record));
   }
 
