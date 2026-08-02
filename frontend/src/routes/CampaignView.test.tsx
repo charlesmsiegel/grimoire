@@ -2082,6 +2082,58 @@ test("a failed swap re-reads the scene, in case it emptied the slot", async () =
     expect((api.getScene as any).mock.calls.length).toBeGreaterThan(before));
 });
 
+test("a swap whose read-back fails is not reported as a failed swap", async () => {
+  // The POST committed: the take really did change. Saying the swap failed is
+  // wrong twice — it denies a change that happened, and the recovery it implies
+  // is to do it again. What is actually wrong is the transcript on screen, so
+  // the set that indexes it stops being offered.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
+  (api.getAlternates as any).mockResolvedValue({
+    active: 1, alternates: [ALT("old"), ALT("a reply")] });
+  renderCampaign();
+  await screen.findByText("2/2");
+  // every read from here on fails, including the retry of the read-back
+  (api.getScene as any).mockRejectedValue(
+    Object.assign(new Error("boom"), { detail: "scene read failed" }));
+
+  fireEvent.click(screen.getByRole("button", { name: /previous alternate/i }));
+
+  const banner = await screen.findByText(/scene read failed/);
+  expect(banner.textContent).toMatch(/swapped/i);      // the take DID change
+  // and the counter is withheld, so nothing acts on the stale transcript
+  await waitFor(() => expect(screen.queryByText("2/2")).toBeNull());
+});
+
+test("picking an alternate stops Retry from repeating the failed reroll", async () => {
+  // The swap IS the recovery the user chose. Leaving the failed reroll's banner
+  // up offers a Retry that regenerates over the take they just picked, with the
+  // guidance that failed — undoing the recovery.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
+  (api.getAlternates as any).mockResolvedValue({
+    active: 1, alternates: [ALT("old"), ALT("a reply")] });
+  // an error FRAME, not a rejection: the backend ran its handler before sending
+  // it, so there is no flush to wait out and the swap is available immediately
+  (api.regenerate as any).mockImplementation(async (...args: unknown[]) => {
+    (args.find((a) => typeof a === "function") as ((e: any) => void))(
+      { error: { detail: "upstream is down" } });
+  });
+  renderCampaign();
+  await screen.findByText("2/2");
+  fireEvent.click(screen.getByTitle("Reroll"));
+  fireEvent.click(await screen.findByRole("button", { name: /reroll ▸/i }));
+  await screen.findByText("upstream is down");
+
+  fireEvent.click(await screen.findByRole("button", { name: /previous alternate/i }));
+
+  await waitFor(() => expect(api.pickAlternate).toHaveBeenCalled());
+  await waitFor(() => expect(screen.queryByText("upstream is down")).toBeNull());
+  expect(screen.queryByRole("button", { name: /^Retry$/ })).toBeNull();
+});
+
 test("a reroll that streams nothing still offers Retry", async () => {
   // the backend archived and removed the old reply, so the slot is EMPTY and
   // the transcript ends on the player's post — no gutter ↻ to fall back on.
