@@ -2173,6 +2173,47 @@ def test_a_blockquoted_list_is_still_a_list(monkeypatch, tmp_path):
     assert "Mara sold the manifest." in section    # an absent character is untouched
 
 
+def test_a_quote_nested_in_a_list_stays_under_its_parent(monkeypatch, tmp_path):
+    """The whitespace BEFORE the marker is what places a quote under its parent
+    bullet. Measuring the indent only inside the quote put the child at column
+    zero, where the same-indent pop took the parent out — the named bullet
+    withheld and the subjectless one under it published."""
+    from grimoire.store import playstate
+    cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
+    playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
+        "Wary.", "",
+        "- Winifred:\n"
+        "  > - is hiding the ledger\n"
+        "\n"
+        "Mara sold the manifest."))
+    section = _state_section(cid, sid)
+    assert "hiding the ledger" not in section
+    assert "Mara sold the manifest." in section
+
+
+def test_leaving_a_blockquote_ends_what_was_inside_it(monkeypatch, tmp_path):
+    """A change of quote nesting is a container boundary, and the one a blank
+    line does not mark. Without it the outer text read as a continuation of the
+    quoted paragraph, or stayed governed by a heading opened inside the quote —
+    either way an unrelated statement was withheld with the entry naming her."""
+    from grimoire.store import playstate
+    cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
+    for body in (
+        "> Winifred is lying.\n"
+        "Mara watches the pier.",
+
+        "> Winifred:\n"
+        "> - hid the ledger\n"
+        "Mara watches the pier.",
+    ):
+        playstate.write_state(croot, ids["Seraphine Vale"],
+                              playstate.compose_body("Wary.", "", body))
+        section = _state_section(cid, sid)
+        assert "Winifred is lying" not in section
+        assert "hid the ledger" not in section
+        assert "Mara watches the pier." in section, body
+
+
 def test_a_paragraph_after_the_blank_is_not_governed(monkeypatch, tmp_path):
     """Only a LIST keeps a colon heading open across the blank. An ordinary
     paragraph below one is a new statement, which is the case the pop was
