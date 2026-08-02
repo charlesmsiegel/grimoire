@@ -179,13 +179,21 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
             if on_error is not None:
                 try:
                     await run_in_threadpool(on_error, watcher)
-                except store.locks.StoreBusy:
-                    # on_error persists the partial reply, which now takes a
-                    # cross-process lock and can therefore raise (#234). The
-                    # response has already started, so the global 409 handler
-                    # cannot convert it -- letting it escape would truncate the
-                    # stream with no error frame at all. The partial reply is
-                    # lost; the frame below still tells the user why.
+                except (store.locks.StoreBusy, store.scenes.SceneNotFound):
+                    # on_error writes to the scene -- it persists the partial
+                    # reply, and now may also take the user post back off (#95)
+                    # -- so it can fail two ways. StoreBusy: the cross-process
+                    # lock is contended (#234). SceneNotFound: the scene was
+                    # renamed mid-turn, which mints a new id and moves the file
+                    # out from under both calls (review caught this on the
+                    # rollback; the persist has always had it).
+                    #
+                    # Neither may escape. The response has already started, so
+                    # the global 409 handler cannot convert it, and an exception
+                    # here would end the generator with no frame at all --
+                    # truncating the stream instead of reporting the upstream
+                    # failure that brought us here. The write is lost; the frame
+                    # below still tells the user why.
                     pass
             yield _sse({"error": {"detail": exc.detail, "kind": exc.kind}})
             return
