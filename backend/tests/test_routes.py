@@ -2630,6 +2630,43 @@ def test_a_reroll_that_cannot_archive_leaves_the_pending_proposal_alone(client, 
     assert record["status"] == "pending"
 
 
+def test_a_swap_that_cannot_retire_the_decision_puts_the_take_back(client, monkeypatch):
+    """The transcript and proposals.json cannot be written as one, so whichever
+    goes second leaves a window. This is the worse one to leave open: the reader
+    would see the swapped narration beside a still-actionable decision the
+    *previous* narration produced."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "old reply"}])
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["new reply."])
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
+    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/alternates").json()
+    showing = body["alternates"][body["active"]]["preview"]
+    vid = next(a["id"] for i, a in enumerate(body["alternates"]) if i != body["active"])
+    store.proposals.new(cid, sid, {"check": "athletics", "actor": None, "problems": []})
+    refuse = {"on": True}
+    real = store.proposals.supersede
+
+    def boom(*a, **k):
+        if refuse["on"]:
+            raise PermissionError(13, "read-only")
+        return real(*a, **k)
+
+    monkeypatch.setattr(store.proposals, "supersede", boom)
+    with pytest.raises(PermissionError):
+        client.post(f"/api/campaigns/{cid}/scenes/{sid}/alternates/{vid}")
+    refuse["on"] = False
+
+    # the take the reader was looking at is back, so the pending decision still
+    # belongs to the narration on screen
+    after = client.get(f"/api/campaigns/{cid}/scenes/{sid}/alternates").json()
+    assert after["alternates"][after["active"]]["preview"] == showing
+    record = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert record["status"] == "pending"
+
+
 def test_a_swap_whose_transcript_write_fails_leaves_the_proposal_alone(client, monkeypatch):
     """The sidecar preflight only proves the SIDECAR is writable. `promote`
     rewrites the transcript too, and that write failing leaves the reader looking
