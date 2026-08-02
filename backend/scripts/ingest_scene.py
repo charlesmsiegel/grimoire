@@ -150,14 +150,35 @@ def _timeline_lines(events: list[dict]) -> list[str]:
 _NO_PREIMAGE = object()
 
 
-def _timeline_digest(cid: str) -> str | None:
-    """The campaign timeline as one comparable value, or None when there is no
-    file yet. Captured before this scene's append and carried in the manifest;
-    `_timeline_already_has` reads it back."""
+#: What `chronicle.append_timeline` seeds a missing timeline with. Duplicated
+#: here for the same reason `_timeline_lines` duplicates the line format, and
+#: pinned by the same test: the pre-image has to describe the file the store
+#: will actually append to, including the one it is about to create.
+_TIMELINE_HEADER = "# Timeline\n"
+
+
+def _timeline_head(cid: str) -> str:
+    """Exactly the text `append_timeline` will keep in front of its new lines.
+
+    It writes `existing.rstrip() + "\\n" + lines + "\\n"`, so this is that
+    rstripped prefix -- the offset our own append starts at, if it runs.
+    """
     p = campaigns.campaign_root(cid) / "timeline.md"   # paths-ok: the store's own root
-    if not p.exists():
-        return None
-    return hashlib.sha256(p.read_bytes()).hexdigest()
+    return (p.read_text(encoding="utf-8") if p.exists() else _TIMELINE_HEADER).rstrip()
+
+
+def _timeline_preimage(cid: str) -> dict:
+    """The timeline as a POSITION plus a fingerprint of everything before it.
+
+    Not a whole-file digest, which was the round-thirty-six version and which
+    only answered "has anything changed". The size is what makes the check
+    scene-specific: our append, if it ran, starts at exactly this offset, so a
+    batch that belongs to some other scene is on the far side of it and can no
+    longer be mistaken for ours by matching the tail.
+    """
+    head = _timeline_head(cid)
+    return {"size": len(head),
+            "digest": hashlib.sha256(head.encode("utf-8")).hexdigest()}
 
 
 def _timeline_already_has(cid: str, events: list[dict], before=_NO_PREIMAGE) -> bool:
@@ -178,42 +199,58 @@ def _timeline_already_has(cid: str, events: list[dict], before=_NO_PREIMAGE) -> 
     FIRST attempt this check would then skip the append and lose that scene's
     events outright, which is worse than the duplicate it exists to prevent.
 
-    Scene identity is not enough on its own, though, which is what `before` is
-    for. Inside a resume the same coincidence returns: if the PRECEDING scene
-    filed an identical batch, the tail matches whether or not this scene's own
-    append ever ran, and a crash in the window between the write-ahead and
-    `append_timeline` -- one manifest write wide -- then skipped this scene's
-    events permanently. So the question asked first is not "are these events at
-    the end" but "has this file changed AT ALL since this scene started": the
-    pre-image is captured with the extraction, before the append, and a timeline
-    identical to it cannot contain an append that had not happened when it was
-    taken. Only once something has changed is the tail worth reading.
+    Scene identity is not enough on its own, and neither is the tail. Inside a
+    resume the same coincidence returns: if the PRECEDING scene filed an
+    identical batch, the tail matches whether or not this scene's own append ever
+    ran. The pre-image is what makes the question scene-specific -- but only if
+    it is a POSITION, not just a fingerprint of the whole file. "Has anything
+    changed since this scene started" is still answered yes by somebody else's
+    append, and the tail read after it is still not ours.
 
-    A pre-image is scene-specific and durable, and it is still not the flag the
-    top of this docstring rules out: it records what was true BEFORE the step,
-    so failing to write it means the step never runs at all -- where a flag
-    written after the step is unwritable exactly when it is needed.
+    So the check is positional. `append_timeline` writes `head + "\\n" + lines +
+    "\\n"`, where `head` is the rstripped prior content; the pre-image records
+    that head's length and digest, so this asks whether the file still begins
+    with what we started from and whether OUR lines are what follows at exactly
+    that offset. A batch belonging to another scene lies before the offset and is
+    no longer reachable by this question at all.
 
-    Residual, unchanged: a concurrent web absorb that appends between the crash
-    and the resume both moves this block off the tail and changes the digest, so
-    the events are filed twice -- the behaviour before any of this, in a much
-    narrower window, rather than a loss.
+    `startswith` rather than equality on the remainder, so an append that landed
+    and was then followed by somebody else's is still recognized as landed.
+    Anything else -- a head that no longer matches, or a remainder that is not
+    ours -- returns False and the batch is filed. That is the deliberate
+    direction: a duplicate is visible and repairable, a dropped scene is neither.
+
+    A pre-image is durable and is still not the flag the top of this docstring
+    rules out: it records what was true BEFORE the step, so failing to write it
+    means the step never runs at all -- where a flag written after the step is
+    unwritable exactly when it is needed.
+
+    Residual, and it is the one thing content cannot answer: if this scene's
+    append never ran and a concurrent web absorb then wrote a BYTE-IDENTICAL
+    batch at the same offset, nothing here can tell that apart from our own
+    append having landed. Closing it needs an idempotency key on
+    `chronicle.append_timeline` itself -- an identity carried with the write
+    rather than inferred from what the write produced.
     """
     if not events:
         return True
-    p = campaigns.campaign_root(cid) / "timeline.md"   # paths-ok: the store's own root
-    if not p.exists():
+    if not isinstance(before, dict) or not isinstance(before.get("size"), int):
+        # An entry written before the pre-image existed, or by hand. Nothing to
+        # anchor on, so the events are filed: this path can duplicate, and the
+        # alternative -- guessing from the tail alone -- can lose a scene.
         return False
-    if before is not _NO_PREIMAGE and _timeline_digest(cid) == before:
-        return False                      # untouched since this scene started
-    have = p.read_text(encoding="utf-8").rstrip().splitlines()
-    want = _timeline_lines(events)
-    return have[-len(want):] == want
+    cur = _timeline_head(cid)
+    size = before["size"]
+    if len(cur) < size or hashlib.sha256(
+            cur[:size].encode("utf-8")).hexdigest() != before.get("digest"):
+        return False                      # not the file this scene started from
+    want = "\n" + "\n".join(_timeline_lines(events))
+    return cur[size:].startswith(want)
 
 
 def apply_scene(cid: str, sid: str, parsed: dict, edits: list[dict],
-                resuming: bool = False,
-                timeline_before=_NO_PREIMAGE) -> tuple[list[str], list[dict]]:
+                resuming: bool = False, timeline_before=_NO_PREIMAGE,
+                record_preimage=None) -> tuple[list[str], list[dict]]:
     """Write the scene's absorb through, returning what landed AND what did not.
 
     `append_timeline` is the one step here that APPENDS, where the chronicle
@@ -260,6 +297,19 @@ def apply_scene(cid: str, sid: str, parsed: dict, edits: list[dict],
         # scene's extraction was recorded.
         if not (resuming and _timeline_already_has(
                 cid, parsed["timeline_events"], timeline_before)):
+            # The pre-image is RE-TAKEN here, inside the lock, if the timeline
+            # has moved since the write-ahead recorded one. The write-ahead runs
+            # before this lock is acquired, and `put_chronicle` appends while
+            # holding it -- so a live absorb can land in between, and the
+            # pre-image the resume would compare against describes a file that
+            # no longer exists. Re-taking it under the lock makes the capture and
+            # the append one span nothing else can enter, which is the window
+            # this round's finding is about. Persisted BEFORE the append, so a
+            # failure to write it means the append does not happen.
+            if record_preimage is not None:
+                now = _timeline_preimage(cid)
+                if now != timeline_before:
+                    record_preimage(now)
             chronicle.append_timeline(cid, parsed["timeline_events"])
         scenes.mark_absorbed(cid, sid, parsed["one_line"], parsed["summary"])
         return absorb.apply_edits(cid, edits, sid)
@@ -499,7 +549,7 @@ async def ingest_one_scene(cid: str, scene: dict, client: LLMClient, conn: dict)
             # the same write and for the same reason: a resume has to be able to
             # tell this scene's append from an identical one filed by the scene
             # before it, and only a value captured before the append can say so.
-            timeline_before = _timeline_digest(cid)
+            timeline_before = _timeline_preimage(cid)
             manifest[key] = {**(manifest.get(key) or {}), "status": "in_progress",
                              "sid": sid, "parsed": parsed, "edits": edits,
                              "timeline_before": timeline_before}
@@ -507,10 +557,18 @@ async def ingest_one_scene(cid: str, scene: dict, client: LLMClient, conn: dict)
         one_line = parsed["one_line"]
         edits_taken = edits
 
+        def _record_preimage(pre: dict) -> None:
+            """Persist a pre-image re-taken inside the campaign lock, and adopt
+            it here so the entry written at the end of this run carries it."""
+            nonlocal timeline_before
+            timeline_before = pre
+            manifest[key] = {**(manifest.get(key) or {}), "timeline_before": pre}
+            save_manifest(cid, manifest)
+
         try:
             applied, failures = apply_scene(
                 cid, sid, parsed, edits, resuming=resuming,
-                timeline_before=timeline_before)
+                timeline_before=timeline_before, record_preimage=_record_preimage)
         except SceneVanished:
             return _record_vanished(cid, manifest, key, sid)
         pending = _unapplied(edits, failures)

@@ -119,8 +119,12 @@ call while reading — this skill does not delegate that to another LLM call.
       sequence that appends rather than being keyed by scene id: the extraction is recorded
       before anything is written, along with the timeline as it stood at that moment, so a
       resume can tell whether its own events were filed even when the scene before it filed an
-      identical batch. What it cannot tell is a *concurrent* web absorb that appended in the
-      meantime — so avoid absorbing scenes in the app while a batch ingest is running.
+      identical batch. That record is a *position* — the offset its own append would start at —
+      so a batch belonging to any other scene lies outside the question. The one case it cannot
+      answer is a concurrent web absorb that files a byte-identical batch at that same offset
+      while the ingest is down, which no comparison of the file's contents can distinguish from
+      the ingest's own append. So avoid absorbing scenes in the app while a batch ingest is
+      running.
 
 3. **Parallelize the rewriting with subagents — don't do it all yourself.** Segmentation and
    rewriting is real work (reading + judgment + producing verbatim prose), but only the final
