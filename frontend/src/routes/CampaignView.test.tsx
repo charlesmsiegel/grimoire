@@ -447,7 +447,7 @@ test("a chooser pick refreshes the rail, selects the scene, and seeds the prompt
   await screen.findByText(/Run One/);
   fireEvent.click(screen.getByRole("button", { name: /\+ new scene/i }));
   fireEvent.click(await screen.findByText("stub-pick"));
-  await waitFor(() => expect(api.getScene).toHaveBeenCalledWith("run", "s9"));
+  await waitFor(() => expect(api.getScene).toHaveBeenCalledWith("run", "s9", { limit: 60 }));
   expect(screen.queryByTestId("scene-chooser")).toBeNull();
   // the premise reaches the empty scene's CastPanel
   expect(await screen.findByText("A premise")).toBeInTheDocument();
@@ -464,7 +464,7 @@ test("a seeded premise survives the rename from the first date set", async () =>
   fireEvent.click(await screen.findByText("stub-pick"));
   await screen.findByText("A premise");
   fireEvent.click(screen.getByText("stub-datestamp"));   // first date set renames s9 -> s10
-  await waitFor(() => expect(api.getScene).toHaveBeenCalledWith("run", "s10"));
+  await waitFor(() => expect(api.getScene).toHaveBeenCalledWith("run", "s10", { limit: 60 }));
   expect(screen.getByTestId("cast-panel")).toHaveTextContent("A premise");
 });
 
@@ -742,7 +742,7 @@ test("a review saves to the scene it was absorbed from, not the selected one", a
   fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
   await screen.findByLabelText("Scene summary");
   fireEvent.click(screen.getByText(/Two/));                        // switch scenes
-  await waitFor(() => expect(api.getScene).toHaveBeenCalledWith("run", "s2"));
+  await waitFor(() => expect(api.getScene).toHaveBeenCalledWith("run", "s2", { limit: 60 }));
   fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
   await waitFor(() => expect(api.saveChronicle).toHaveBeenCalled());
   expect((api.saveChronicle as any).mock.calls[0][1]).toBe("s1");
@@ -1525,7 +1525,7 @@ test("Retry validation audits the review's scene, not whichever is on screen", a
   await screen.findByText("Review scene summary");
 
   fireEvent.click(screen.getByText(/Two/));                        // switch scenes
-  await waitFor(() => expect(api.getScene).toHaveBeenCalledWith("run", "s2"));
+  await waitFor(() => expect(api.getScene).toHaveBeenCalledWith("run", "s2", { limit: 60 }));
   fireEvent.click(screen.getByRole("button", { name: /Retry validation/ }));
 
   await waitFor(() => expect(api.retryAudit).toHaveBeenCalled());
@@ -2187,4 +2187,129 @@ test("Reroll is offered past a trailing scene transition and keeps it", async ()
   expect(screen.queryByText("a reply")).toBeNull();
   expect(screen.getByText(/Time passes/)).toBeInTheDocument();
   await waitFor(() => expect(api.regenerate).toHaveBeenCalled());
+});
+
+// ---- paginated scene history (#94) ----
+
+// jsdom has no layout: scrollTop is a no-op setter and every metric reads 0.
+// These stubs give the stream just enough geometry for the scroll handler and
+// the restore to be exercised for real. scrollHeight grows with the number of
+// rendered posts, which is what makes the prepend's height change observable.
+function stubStreamGeometry(el: HTMLElement, clientHeight = 300, pxPerPost = 500) {
+  let top = 0;
+  Object.defineProperty(el, "scrollTop", {
+    configurable: true, get: () => top, set: (v: number) => { top = v; },
+  });
+  Object.defineProperty(el, "clientHeight", { configurable: true, get: () => clientHeight });
+  Object.defineProperty(el, "scrollHeight", {
+    configurable: true, get: () => el.querySelectorAll(".msg").length * pxPerPost,
+  });
+}
+
+test("a scene opens at its most recent page, not its whole history", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "assistant", content: "recent" }], offset: 40, total: 41, has_older: true });
+  renderCampaign();
+  await screen.findByText("recent");
+  expect(api.getScene).toHaveBeenCalledWith("run", "s1", { limit: 60 });
+});
+
+test("a windowed post is edited by its absolute index, not its position on the page", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "page two" }], offset: 40, total: 41, has_older: true });
+  renderCampaign();
+  await screen.findByText("page two");
+  fireEvent.click(screen.getAllByTitle("Edit message")[0]);
+  fireEvent.change(await screen.findByLabelText(/edit message/i), { target: { value: "fixed" } });
+  fireEvent.click(screen.getByRole("button", { name: /save/i }));
+  await waitFor(() => expect(api.editMessage).toHaveBeenCalledWith("run", "s1", 40, "fixed"));
+});
+
+test("scrolling to the top of the stream prepends the previous page", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockImplementation((_c: string, _s: string, w?: any) =>
+    Promise.resolve(w?.before === 2
+      ? { meta: {}, messages: [{ role: "user", content: "older post" }], offset: 1, total: 3, has_older: true }
+      : { meta: {}, messages: [{ role: "user", content: "newer post" }], offset: 2, total: 3, has_older: true }));
+  const { container } = renderCampaign();
+  await screen.findByText("newer post");
+  fireEvent.scroll(container.querySelector(".stream")!);
+  await screen.findByText("older post");
+  expect(api.getScene).toHaveBeenCalledWith("run", "s1", { limit: 60, before: 2 });
+  // prepended, so the older post reads first
+  const posts = [...container.querySelectorAll(".msg-body")].map((n) => n.textContent);
+  expect(posts).toEqual(["older post", "newer post"]);
+});
+
+test("loading older posts holds the viewport instead of jumping to the bottom", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockImplementation((_c: string, _s: string, w?: any) =>
+    Promise.resolve(w?.before === 2
+      ? { meta: {}, messages: [{ role: "user", content: "older post" }], offset: 0, total: 3, has_older: false }
+      : { meta: {}, messages: [{ role: "user", content: "newer post" }, { role: "assistant", content: "a reply" }],
+          offset: 2, total: 4, has_older: true }));
+  const { container } = renderCampaign();
+  await screen.findByText("newer post");
+  const stream = container.querySelector(".stream") as HTMLElement;
+  stubStreamGeometry(stream);
+  const scrollTo = vi.fn();
+  stream.scrollTo = scrollTo as any;
+
+  fireEvent.scroll(stream); // scrollTop 0 with two posts on screen: at the top
+  await screen.findByText("older post");
+  // two posts (1000px) with the viewport at the top means 1000px sat below the
+  // fold; after the prepend (1500px) the same 1000px must still sit below it
+  expect(stream.scrollTop).toBe(500);
+  expect(scrollTo).not.toHaveBeenCalled();
+});
+
+test("the older-history button loads the previous page and disappears at the top", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockImplementation((_c: string, _s: string, w?: any) =>
+    Promise.resolve(w?.before === 1
+      ? { meta: {}, messages: [{ role: "user", content: "the opener" }], offset: 0, total: 2, has_older: false }
+      : { meta: {}, messages: [{ role: "assistant", content: "newer post" }], offset: 1, total: 2, has_older: true }));
+  renderCampaign();
+  await screen.findByText("newer post");
+  fireEvent.click(screen.getByRole("button", { name: /load 1 older post/i }));
+  await screen.findByText("the opener");
+  expect(screen.queryByRole("button", { name: /older posts/i })).toBeNull();
+});
+
+test("no older-history button when the whole transcript is loaded", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "assistant", content: "only post" }], offset: 0, total: 1, has_older: false });
+  renderCampaign();
+  await screen.findByText("only post");
+  expect(screen.queryByRole("button", { name: /older posts/i })).toBeNull();
+});
+
+test("Reroll survives the opening user post being off-window", async () => {
+  // the run's own user turn is older than the loaded page — unloaded, not
+  // absent, so this is still a reply to something and still rerollable
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "assistant", content: "a reply" }], offset: 12, total: 13, has_older: true });
+  renderCampaign();
+  await screen.findByText("a reply");
+  expect(screen.getByTitle("Reroll")).toBeInTheDocument();
+});
+
+test("a refresh of the open scene re-reads everything already on screen", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockImplementation((_c: string, _s: string, w?: any) =>
+    Promise.resolve(w?.before === 60
+      ? { meta: {}, messages: [{ role: "user", content: "older post" }], offset: 59, total: 61, has_older: true }
+      : { meta: {}, messages: [{ role: "assistant", content: "newer post" }], offset: 60, total: 61, has_older: true }));
+  renderCampaign();
+  await screen.findByText("newer post");
+  fireEvent.click(screen.getByRole("button", { name: /load .* older posts/i }));
+  await screen.findByText("older post");
+  // editing forces a re-select; it must not collapse the reader back to one page
+  fireEvent.click(screen.getAllByTitle("Edit message")[0]);
+  // exact label: the OTHER post's gutter button is "Edit message <n>"
+  fireEvent.change(await screen.findByLabelText("Edit message"), { target: { value: "fixed" } });
+  fireEvent.click(screen.getByRole("button", { name: /save/i }));
+  await waitFor(() => expect(api.getScene).toHaveBeenLastCalledWith("run", "s1", { limit: 61 }));
 });

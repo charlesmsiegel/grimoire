@@ -1079,3 +1079,81 @@ def test_an_edit_racing_an_append_keeps_the_appended_message(monkeypatch, tmp_pa
 
     contents = [m["content"] for m in scenes.read_scene(cid, sid)["messages"]]
     assert sorted(contents) == ["appended", "edited"]
+
+
+# ---- windowed reads (#94) ----
+
+
+def _scene_of(monkeypatch, tmp_path, n):
+    """A scene whose transcript is `n` messages, alternating user/assistant,
+    each naming its own index so a window can be checked positionally."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Long Scene")
+    for i in range(n):
+        scenes.append_message(cid, sid, "user" if i % 2 == 0 else "assistant", f"post {i}")
+    return cid, sid
+
+
+def _contents(page):
+    return [m["content"] for m in page["messages"]]
+
+
+def test_window_defaults_to_the_tail(monkeypatch, tmp_path):
+    cid, sid = _scene_of(monkeypatch, tmp_path, 10)
+    page = scenes.read_scene_window(cid, sid, 3)
+    assert _contents(page) == ["post 7", "post 8", "post 9"]
+    assert (page["offset"], page["total"], page["has_older"]) == (7, 10, True)
+    assert page["meta"]["id"] == sid
+
+
+def test_window_walks_backwards_by_its_own_offset(monkeypatch, tmp_path):
+    """The cursor a page returns is what the next-older page is asked for, so
+    walking it must reach the top exactly once with no gap and no repeat."""
+    cid, sid = _scene_of(monkeypatch, tmp_path, 10)
+    seen, before = [], None
+    while True:
+        page = scenes.read_scene_window(cid, sid, 4, before)
+        seen = _contents(page) + seen
+        if not page["has_older"]:
+            break
+        before = page["offset"]
+    assert seen == [f"post {i}" for i in range(10)]
+
+
+def test_window_offsets_are_the_indices_edit_message_takes(monkeypatch, tmp_path):
+    """A windowed client addresses a message by the same index an unwindowed
+    one does — otherwise an edit made from page 2 lands on the wrong post."""
+    cid, sid = _scene_of(monkeypatch, tmp_path, 8)
+    page = scenes.read_scene_window(cid, sid, 3, before=5)
+    assert _contents(page) == ["post 2", "post 3", "post 4"]
+    scenes.edit_message(cid, sid, page["offset"], "rewritten")
+    assert scenes.read_scene(cid, sid)["messages"][2]["content"] == "rewritten"
+
+
+def test_window_larger_than_the_transcript_is_the_whole_transcript(monkeypatch, tmp_path):
+    cid, sid = _scene_of(monkeypatch, tmp_path, 3)
+    page = scenes.read_scene_window(cid, sid, 50)
+    assert _contents(page) == ["post 0", "post 1", "post 2"]
+    assert (page["offset"], page["total"], page["has_older"]) == (0, 3, False)
+
+
+def test_window_of_an_empty_scene(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Empty")
+    page = scenes.read_scene_window(cid, sid, 20)
+    assert page["messages"] == []
+    assert (page["offset"], page["total"], page["has_older"]) == (0, 0, False)
+
+
+def test_window_clamps_a_cursor_past_either_end(monkeypatch, tmp_path):
+    cid, sid = _scene_of(monkeypatch, tmp_path, 5)
+    assert _contents(scenes.read_scene_window(cid, sid, 2, before=99)) == ["post 3", "post 4"]
+    top = scenes.read_scene_window(cid, sid, 2, before=0)
+    assert top["messages"] == [] and top["has_older"] is False
+    assert scenes.read_scene_window(cid, sid, 2, before=-3)["messages"] == []
+
+
+def test_window_of_an_unknown_scene_raises(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    with pytest.raises(scenes.SceneNotFound):
+        scenes.read_scene_window(cid, "nope", 10)

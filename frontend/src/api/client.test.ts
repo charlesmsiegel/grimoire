@@ -380,3 +380,30 @@ test("addCastBatch POSTs every ref to the batch endpoint", async () => {
     }),
   );
 });
+
+test("getScene without a window GETs the scene bare", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ meta: {}, messages: [] }));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  await api.getScene("run", "s1");
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/campaigns/run/scenes/s1",
+    expect.objectContaining({ method: "GET" }),
+  );
+});
+
+test("getScene passes the window as limit/before query params", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ meta: {}, messages: [], offset: 0, total: 0, has_older: false }));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  await api.getScene("run", "s1", { limit: 40 });
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/campaigns/run/scenes/s1?limit=40",
+    expect.objectContaining({ method: "GET" }),
+  );
+  // a distinct page is a distinct path, so the in-flight GET dedupe can't
+  // serve page 2 the tail it already has in flight
+  await api.getScene("run", "s1", { limit: 40, before: 80 });
+  expect(fetchMock).toHaveBeenLastCalledWith(
+    "/api/campaigns/run/scenes/s1?limit=40&before=80",
+    expect.objectContaining({ method: "GET" }),
+  );
+});
