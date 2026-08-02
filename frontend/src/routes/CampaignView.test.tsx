@@ -1079,6 +1079,41 @@ test("a scene rename in flight holds off the next turn", async () => {
     expect(screen.getByRole("button", { name: /send ▸/i })).not.toBeDisabled());
 });
 
+test("a verification read retired by a scene switch still gives the prompt back", async () => {
+  // `selectScene` returns -1 when a newer owner takes the view: it read nothing
+  // and applied nothing. The await did not throw, though, so `refreshed` was
+  // true and the turn counted as verified — with no growth to point at, an
+  // undelivered prompt went unrestored. "It did not look" is unverifiable.
+  (api.listScenes as any).mockResolvedValue([
+    { id: "s1", title: "Old", model: "", created: "", updated: "" },
+    { id: "s2", title: "Later", model: "", created: "", updated: "" },
+  ]);
+  let releaseVerify: (() => void) | null = null;
+  let loaded = false;
+  (api.getScene as any).mockImplementation(async (_c: string, sid: string) => {
+    // the verification read for s1 hangs until the player has moved to s2
+    if (sid === "s1" && loaded) {
+      await new Promise<void>((r) => { releaseVerify = r; });
+    }
+    loaded = true;
+    return { meta: {}, total: 0, messages: [] };
+  });
+  (api.chat as any).mockImplementation(async () => {
+    const err: Error & { beforeResponse?: boolean } = new Error("Failed to fetch");
+    err.beforeResponse = true;      // nothing reached the server
+    throw err;
+  });
+  renderCampaign();
+  const ta = await screen.findByRole("textbox");
+  fireEvent.change(ta, { target: { value: "I draw my blade." } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  await waitFor(() => expect(releaseVerify).not.toBeNull());
+  fireEvent.click(screen.getByText(/· Later/));   // retires the pending read
+  releaseVerify!();
+  await waitFor(() =>
+    expect(screen.getByRole("textbox")).toHaveValue("I draw my blade."));
+});
+
 test("a poll fetch already in flight cannot clear a new turn's preview", async () => {
   // The check-then-await window: the poll verifies it owns the view, then
   // awaits getScene, and a turn starting during that await would otherwise have

@@ -485,7 +485,8 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   // `stillWanted`, when given, is re-asked immediately before any state is
   // applied. Only background refreshes need it — the post-cancel flush poll,
   // which can be running while the player starts a new turn or opens another
-  // scene. Returns the fetched message count, or -1 if it bowed out.
+  // scene. Returns the transcript's total length, or -1 if it bowed out — to
+  // this predicate or to a later select retiring its page.
   async function selectScene(id: string, stillWanted?: () => boolean) {
     if (stillWanted && !stillWanted()) return -1;
     // selectScene also runs to *refresh* the current scene (runStream's
@@ -531,7 +532,10 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     if (windowTokenRef.current !== token) return -1; // a later select already landed
     // Asked again here, not only on entry: this fetch is an await, and a turn
     // starting during it would otherwise have the stale response clear the new
-    // stream's live preview (`setStreaming`) below.
+    // stream's live preview (`setStreaming`) below. Distinct from the window
+    // token above, which retires a page superseded by a *later select on this
+    // same view*; this one retires a refresh whose whole reason for existing
+    // has expired.
     if (stillWanted && !stillWanted()) return -1;
     setMessages(scene.messages);
     // an unwindowed reply (no `offset`) is the whole transcript, which starts at 0
@@ -891,8 +895,16 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       // so they share the answer: the request that never arrived, and the one
       // the server refused. `nothingLanded` is the transcript saying it, out
       // loud — not merely the absence of evidence that it did.
-      const unverifiable = !refreshed || totalBefore === null;
-      const nothingLanded = !unverifiable && seen >= 0 && seen <= totalBefore;
+      //
+      // `seen < 0` belongs in `unverifiable`, and review caught that it was not
+      // there. It is `selectScene` retiring its own read because a newer owner
+      // took the view — the comment above already calls that "it did not look,
+      // so it cannot say", which is the definition of unverifiable, but the code
+      // said otherwise: the await did not throw, so `refreshed` was true, and a
+      // prompt that genuinely never landed went unrestored because the read that
+      // would have proved it was thrown away.
+      const unverifiable = !refreshed || totalBefore === null || seen < 0;
+      const nothingLanded = !unverifiable && seen <= totalBefore;
       // A stream that started and then stopped without either frame is the
       // third way to end up with no post, and review caught it as the one the
       // client had no answer for: the backend rolls the post back *before* it
@@ -929,7 +941,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       // makes the first successful read count as growth — the poll refreshes
       // once and stops, which is what an unmeasurable scene can honestly do.
       if (!finished && !errored && !refused && !(unreached && nothingLanded)) {
-        await awaitFlushedPartial(id, refreshed ? seen : (totalBefore ?? -1));
+        await awaitFlushedPartial(id, seen >= 0 ? seen : (totalBefore ?? -1));
       }
       // Now nothing else can write to this scene through this turn, so its file
       // is free to move again — unless a newer turn has claimed the lock in the
