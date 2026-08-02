@@ -204,10 +204,14 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   const modelLen = useMemo(
     () => models.find((m) => m.id === ctx?.model)?.context ?? 0,
     [models, ctx]);
-  // Percentages measure against whatever actually bounds the prompt: the
-  // configured packer budget when there is one (that is the ceiling sections
-  // get dropped to fit), otherwise the model's own window.
-  const ctxLen = ctx?.budget_tokens ? ctx.budget_tokens : modelLen;
+  // Percentages measure against whatever actually bounds the prompt. With both
+  // a packer budget and a model window known, that is the SMALLER of the two:
+  // a 32k budget left over from a 32k model would otherwise report a full 8k
+  // window as a quarter used, hiding the overflow this panel exists to show.
+  // Either may be absent (no budget configured; an unknown model), so fall back
+  // to whichever is present.
+  const limits = [ctx?.budget_tokens ?? 0, modelLen].filter((n) => n > 0);
+  const ctxLen = limits.length ? Math.min(...limits) : 0;
 
   const pct = (t: number) => (ctxLen > 0 ? ` · ${Math.round((t / ctxLen) * 100)}%` : "");
   const pctNumber = (t: number) => (ctxLen > 0 ? Math.round((t / ctxLen) * 100) : 0);

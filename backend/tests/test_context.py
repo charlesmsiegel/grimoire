@@ -1164,6 +1164,13 @@ def test_drift_roster_is_not_built_for_a_scene_with_nothing_to_measure(monkeypat
 
 
 # ---- archive retrieval (#127) ----
+#
+# Record ids sort against the SCENE id (`before`), and real scene ids carry an
+# ordinal prefix -- so an "older" scene has to be `000--…`, below the fixture
+# scene's `001--…`. A bare date id like `2026-06-20` sorts ABOVE it and reads as
+# a future scene, which silently empties the archive and makes every
+# absence-assertion below prove nothing. Hence the prefix, and hence the
+# positive control in each negative test.
 
 def _absorbed(cid, sid_, keywords, summary="", one_line="", date=""):
     chronicle.absorb(cid, {"id": sid_, "one_line": one_line or "A thing happened.",
@@ -1178,12 +1185,12 @@ def _archive(cid, sid):
 
 def test_archive_recalls_an_old_scene_by_keyword(monkeypatch, tmp_path):
     """The scene has fallen out of the recap window, so nothing else in the
-    prompt can reach it — a keyword in the scan window is the only way back."""
+    prompt can reach it -- a keyword in the scan window is the only way back."""
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     from grimoire.store import config
     config.write_config(recap_depth="1")
-    _absorbed(cid, "2026-07-01-newer", ["clinic"], summary="They met at the clinic.")
-    _absorbed(cid, "2026-06-20-older", ["saltmarch"],
+    _absorbed(cid, "000--b--newer", ["clinic"], summary="They met at the clinic.")
+    _absorbed(cid, "000--a--older", ["saltmarch"],
               summary="The Saltmarch crossing went badly.", date="2026-06-20")
     scenes.append_message(cid, sid, "user", "What happened at Saltmarch?")
     text = _archive(cid, sid)
@@ -1198,9 +1205,13 @@ def test_archive_stays_silent_without_a_keyword_hit(monkeypatch, tmp_path):
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     from grimoire.store import config
     config.write_config(recap_depth="0")  # nothing in the recap window at all
-    _absorbed(cid, "2026-06-20-older", ["saltmarch"], summary="The crossing went badly.")
+    _absorbed(cid, "000--a--older", ["saltmarch"], summary="The crossing went badly.")
     scenes.append_message(cid, sid, "user", "Nothing relevant here.")
     assert _archive(cid, sid) is None
+    # control: the same fixture DOES retrieve once the word is said, so the
+    # silence above was the missing keyword and not a dead fixture
+    scenes.append_message(cid, sid, "assistant", "But then: Saltmarch.")
+    assert _archive(cid, sid) is not None
 
 
 def test_archive_never_duplicates_the_recap_window(monkeypatch, tmp_path):
@@ -1209,7 +1220,7 @@ def test_archive_never_duplicates_the_recap_window(monkeypatch, tmp_path):
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     from grimoire.store import config
     config.write_config(recap_depth="5")
-    _absorbed(cid, "2026-06-20-older", ["saltmarch"], one_line="Saltmarch went badly.",
+    _absorbed(cid, "000--a--older", ["saltmarch"], one_line="Saltmarch went badly.",
               summary="The Saltmarch crossing went badly.")
     scenes.append_message(cid, sid, "user", "What happened at Saltmarch?")
     sections = {s["label"]: s["text"] for s in context.context_sections(cid, sid)}
@@ -1224,9 +1235,34 @@ def test_archive_excludes_the_scene_being_played(monkeypatch, tmp_path):
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     from grimoire.store import config
     config.write_config(recap_depth="0")
-    _absorbed(cid, sid, ["saltmarch"], summary="The Saltmarch crossing went badly.")
+    _absorbed(cid, sid, ["saltmarch"], summary="This very scene, as history.")
+    _absorbed(cid, "000--a--older", ["saltmarch"], summary="A genuinely earlier scene.")
     scenes.append_message(cid, sid, "user", "What happened at Saltmarch?")
-    assert _archive(cid, sid) is None
+    text = _archive(cid, sid)
+    assert "A genuinely earlier scene." in text        # control: retrieval is live
+    assert "This very scene, as history." not in text
+
+
+def test_archive_never_recalls_a_scene_later_than_the_one_being_played(monkeypatch, tmp_path):
+    """Continuing an older scene leaves later absorbed scenes outside the recap
+    window; recalling one under a heading that swears it already happened would
+    narrate the future as history."""
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)   # sid sorts first (ordinal prefix)
+    later = scenes.create_scene(cid, "Later")
+    latest = scenes.create_scene(cid, "Latest")
+    from grimoire.store import config
+    config.write_config(recap_depth="1")                # only `latest` is in the recap
+    _absorbed(cid, later, ["saltmarch"], summary="The Saltmarch crossing is still ahead.")
+    _absorbed(cid, latest, ["saltmarch"], summary="Long after the crossing.")
+    scenes.append_message(cid, sid, "user", "What of Saltmarch?")
+
+    assert sid < later < latest                          # the ordering the fix relies on
+    assert _archive(cid, sid) is None                    # neither future scene leaks
+
+    # ...and the bound is directional: from the latest scene, the earlier one
+    # IS legitimately archive material
+    scenes.append_message(cid, latest, "user", "What of Saltmarch?")
+    assert "The Saltmarch crossing is still ahead." in _archive(cid, latest)
 
 
 def test_archive_keyless_record_is_never_always_on(monkeypatch, tmp_path):
@@ -1235,18 +1271,24 @@ def test_archive_keyless_record_is_never_always_on(monkeypatch, tmp_path):
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     from grimoire.store import config
     config.write_config(recap_depth="0")
-    _absorbed(cid, "2026-06-20-older", [], summary="Something happened once.")
-    scenes.append_message(cid, sid, "user", "Anything at all.")
-    assert _archive(cid, sid) is None
+    _absorbed(cid, "000--a--keyless", [], summary="Something happened once.")
+    _absorbed(cid, "000--b--keyed", ["saltmarch"], summary="The crossing went badly.")
+    scenes.append_message(cid, sid, "user", "What happened at Saltmarch?")
+    text = _archive(cid, sid)
+    assert "The crossing went badly." in text          # control: retrieval is live
+    assert "Something happened once." not in text
 
 
 def test_archive_matches_whole_words_only(monkeypatch, tmp_path):
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     from grimoire.store import config
     config.write_config(recap_depth="0")
-    _absorbed(cid, "2026-06-20-older", ["pac"], summary="The Pac accord.")
+    _absorbed(cid, "000--a--pac", ["pac"], summary="The Pac accord.")
+    _absorbed(cid, "000--b--pact", ["pact"], summary="The Pact itself.")
     scenes.append_message(cid, sid, "user", "They spoke of the pact.")
-    assert _archive(cid, sid) is None
+    text = _archive(cid, sid)
+    assert "The Pact itself." in text                  # control: retrieval is live
+    assert "The Pac accord." not in text               # 'pact' must not trigger 'pac'
 
 
 def test_archive_caps_at_archive_depth_newest_first(monkeypatch, tmp_path):
@@ -1254,7 +1296,7 @@ def test_archive_caps_at_archive_depth_newest_first(monkeypatch, tmp_path):
     from grimoire.store import config
     config.write_config(recap_depth="0", archive_depth="2")
     for n in (1, 2, 3, 4):
-        _absorbed(cid, f"2026-0{n}-01-scene", ["saltmarch"], summary=f"Crossing number {n}.")
+        _absorbed(cid, f"000--0{n}--scene", ["saltmarch"], summary=f"Crossing number {n}.")
     scenes.append_message(cid, sid, "user", "Tell me about Saltmarch.")
     text = _archive(cid, sid)
     assert "Crossing number 4." in text and "Crossing number 3." in text
@@ -1266,9 +1308,12 @@ def test_archive_depth_zero_disables_retrieval(monkeypatch, tmp_path):
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     from grimoire.store import config
     config.write_config(recap_depth="0", archive_depth="0")
-    _absorbed(cid, "2026-06-20-older", ["saltmarch"], summary="The crossing went badly.")
+    _absorbed(cid, "000--a--older", ["saltmarch"], summary="The crossing went badly.")
     scenes.append_message(cid, sid, "user", "What happened at Saltmarch?")
     assert _archive(cid, sid) is None
+    # control: the same fixture retrieves with a depth, so 0 was the reason
+    config.write_config(archive_depth="3")
+    assert _archive(cid, sid) is not None
 
 
 def test_archive_tolerates_a_garbled_chronicle(monkeypatch, tmp_path):
@@ -1283,7 +1328,7 @@ def test_archive_falls_back_to_one_line_without_a_summary(monkeypatch, tmp_path)
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     from grimoire.store import config
     config.write_config(recap_depth="0")
-    chronicle.absorb(cid, {"id": "2026-06-20-older", "one_line": "The crossing went badly.",
+    chronicle.absorb(cid, {"id": "000--a--older", "one_line": "The crossing went badly.",
                            "summary": "", "keywords": ["saltmarch"]})
     scenes.append_message(cid, sid, "user", "What happened at Saltmarch?")
     assert "The crossing went badly." in _archive(cid, sid)
@@ -1417,7 +1462,7 @@ def test_a_budget_actually_shrinks_the_prompt(monkeypatch, tmp_path):
     characters.create_character(campaigns.campaign_root(cid), "Seraphine", "default",
                                 _npc_card("Seraphine", description="A keeper of the Saltmarch road."))
     ap.appear(cid, sid, "characters", "seraphine", "default", "npc")
-    _absorbed(cid, "2026-06-20-older", ["saltmarch"], summary="The Saltmarch crossing went badly.")
+    _absorbed(cid, "000--a--older", ["saltmarch"], summary="The Saltmarch crossing went badly.")
     for n in range(8):
         scenes.append_message(cid, sid, "user", f"Turn {n} on the Saltmarch road. " * 10)
 
@@ -1438,7 +1483,7 @@ def test_context_sections_reports_tiers_and_drops(monkeypatch, tmp_path):
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     from grimoire.store import config
     config.write_config(recap_depth="0")
-    _absorbed(cid, "2026-06-20-older", ["saltmarch"], summary="The Saltmarch crossing went badly.")
+    _absorbed(cid, "000--a--older", ["saltmarch"], summary="The Saltmarch crossing went badly.")
     scenes.append_message(cid, sid, "user", "The Saltmarch road again. " * 40)
 
     secs = {s["label"]: s for s in context.context_sections(cid, sid)}
@@ -1498,7 +1543,7 @@ def test_every_appended_message_is_charged_to_the_budget(monkeypatch, tmp_path):
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     from grimoire.store import config
     config.write_config(recap_depth="0")
-    _absorbed(cid, "2026-06-20-older", ["saltmarch"], summary="The Saltmarch crossing went badly. " * 20)
+    _absorbed(cid, "000--a--older", ["saltmarch"], summary="The Saltmarch crossing went badly. " * 20)
     for n in range(6):
         scenes.append_message(cid, sid, "user" if n % 2 == 0 else "assistant",
                               f"Turn {n} on the Saltmarch road. " * 20)
@@ -1529,7 +1574,7 @@ def test_an_unreserved_append_is_what_overruns(monkeypatch, tmp_path):
     _wid, cid, sid = _campaign(monkeypatch, tmp_path)
     from grimoire.store import config
     config.write_config(recap_depth="0")
-    _absorbed(cid, "2026-06-20-older", ["saltmarch"], summary="The Saltmarch crossing went badly. " * 20)
+    _absorbed(cid, "000--a--older", ["saltmarch"], summary="The Saltmarch crossing went badly. " * 20)
     for n in range(6):
         scenes.append_message(cid, sid, "user" if n % 2 == 0 else "assistant",
                               f"Turn {n} on the Saltmarch road. " * 20)
@@ -1541,3 +1586,45 @@ def test_an_unreserved_append_is_what_overruns(monkeypatch, tmp_path):
     assert not _fits(unreserved, budget)
     assert _fits(context.build_messages(cid, sid, reserve=(note,))
                  + [{"role": "system", "content": note}], budget)
+
+
+def test_pack_measures_the_composed_message_not_the_sum(monkeypatch, tmp_path):
+    """Token counts are not additive: a sum leaves the separators between
+    sections uncharged, and on the tiktoken-less Android path each section's
+    `len // 4` discards its own remainder too. A sum can therefore clear a
+    ceiling the composed message misses -- the one error this must not make."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    sections = [_sec(f"s{n}", context_pack.BACKGROUND, "word " * 5) for n in range(6)]
+    summed = sum(context.count_tokens(s["text"]) for s in sections)
+
+    def costly_join(texts):  # an exaggerated separator, to make the gap visible
+        return ("\n\n" + "PAD " * 20).join(texts)
+
+    assert context.count_tokens(costly_join([s["text"] for s in sections])) > summed
+    out = context_pack.pack(sections, [], budget=summed, compose=costly_join)
+    kept = [s["text"] for s in out["sections"] if not s["dropped"]]
+    assert len(kept) < len(sections)                              # the join forced a drop
+    assert context.count_tokens(costly_join(kept)) <= summed      # and it is genuinely under
+
+
+def test_the_real_prompt_fits_the_budget_it_was_packed_to(monkeypatch, tmp_path):
+    """The invariant the packer exists for, measured on the messages that ship
+    rather than on the packer's own arithmetic."""
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    from grimoire.store import config
+    config.write_config(recap_depth="0")
+    _absorbed(cid, "000--older", ["saltmarch"], summary="The Saltmarch crossing went badly. " * 20)
+    for n in range(8):
+        scenes.append_message(cid, sid, "user" if n % 2 == 0 else "assistant",
+                              f"Turn {n} on the Saltmarch road. " * 20)
+    full = sum(context.count_tokens(m["content"]) for m in context.build_messages(cid, sid))
+    # The irreducible floor: lock-in plus the history floor, which the packer
+    # will not go under. Below it an overrun is the documented, deliberate
+    # outcome (see test_pack_never_drops_lock_in_even_when_it_cannot_fit), so
+    # the invariant is only meaningful at or above it.
+    config.write_config(context_budget="1")
+    floor = sum(context.count_tokens(m["content"]) for m in context.build_messages(cid, sid))
+    assert floor < full, "the fixture has nothing droppable, so this proves nothing"
+    for budget in (full - 1, (full + floor) // 2, floor):
+        config.write_config(context_budget=str(budget))
+        assert _fits(context.build_messages(cid, sid), budget), f"overran a budget of {budget}"
