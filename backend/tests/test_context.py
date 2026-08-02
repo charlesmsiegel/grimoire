@@ -2015,6 +2015,60 @@ def test_a_name_suffix_is_stepped_over_when_choosing_the_surname():
     assert world_state._surname_alias("Mara de") == ""
 
 
+def test_an_all_upper_case_mention_is_recognized(monkeypatch, tmp_path):
+    """Pinning a one-word form to the stored spelling missed `WINIFRED is hiding
+    the ledger` — a shape headings and imported prose produce, and one where the
+    writer is plainly naming her. The guard the ordinary-word rule needs is
+    `will` from `Will`; upper case is on the far side of it."""
+    from grimoire.store import playstate
+    from grimoire.store.context import world_state
+    cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
+    playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
+        "Wary.", "",
+        "WINIFRED is hiding the ledger.\n\nMara sold the manifest."))
+    section = _state_section(cid, sid)
+    assert "hiding the ledger" not in section
+    assert "Mara sold the manifest." in section   # an absent character is untouched
+    # The lower-case guard is intact in both directions, and an uncased form —
+    # which `islower()` also answers False for — is unaffected.
+    assert world_state._mentions("Mara will steal the crates.", "Will") is False
+    assert world_state._mentions("WILL HAS THE LEDGER", "Will") is True
+    assert world_state._mentions("李明藏着账本", "李明") is True
+
+
+def test_a_given_name_behind_an_unlisted_title_is_a_form(monkeypatch, tmp_path):
+    """`_HONORIFIC` cannot enumerate every title a person carries, and reading
+    the head as the given name made `Professor` the alias of `Professor Mara
+    Vance` while `Mara` — the name prose uses — matched nothing. The token after
+    the head is a name either way, so it is taken without deciding which."""
+    from grimoire.store import appearances, campaigns, characters, playstate, scenes, worlds
+    from grimoire.store.context import world_state
+    assert world_state._forms({"Professor Mara Vance"}) == {
+        "Professor Mara Vance", "Professor", "Mara", "Vance"}
+    # A two-token name has nothing between its ends, and a name whose second
+    # token is only a particle yields no form of its own.
+    assert world_state._second_alias("Mara Vance") == ""
+    assert world_state._second_alias("Mara de Vance") == ""
+    assert world_state._second_alias("The Woman on the Pier") == ""
+
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = campaigns.create_campaign("Run", worlds.create_world("W"))
+    croot = campaigns.campaign_root(cid)
+    titled = "Professor Mara Vance"
+    watcher = characters.create_character(croot, "Seraphine", "main",
+                                          characters.blank_card("Seraphine"))[0]
+    named = characters.create_character(croot, titled, "main",
+                                        characters.blank_card(titled))[0]
+    sid = scenes.create_scene(cid, "Now")
+    appearances.appear(cid, sid, "characters", watcher, "main", "npc")
+    appearances.appear(cid, sid, "characters", named, "main", "npc")
+    playstate.write_state(croot, watcher, playstate.compose_body(
+        "Wary.", "", "Mara is hiding the ledger.\n\nThe Guild watches the pier."))
+    section = _state_section(cid, sid)
+    assert "hiding the ledger" not in section
+    assert "The Guild watches the pier." in section
+
+
 def test_a_suspicion_naming_a_player_s_container_name_is_withheld(monkeypatch, tmp_path):
     """A PC's container name and its locked persona name can differ. Taking only
     the persona left a suspicion written against the canonical PC name unmatched
