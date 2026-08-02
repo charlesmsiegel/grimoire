@@ -128,20 +128,56 @@ class SceneVanished(Exception):
     """
 
 
-def apply_scene(cid: str, sid: str, parsed: dict, edits: list[dict],
-                timeline_done: bool = False,
-                checkpoint=None) -> tuple[list[str], list[dict]]:
+def _timeline_lines(events: list[dict]) -> list[str]:
+    """The lines `chronicle.append_timeline` will write for these events.
+
+    A deliberate duplicate of the store's rendering, and the one place this
+    script knows that format. `test_the_timeline_check_agrees_with_the_store`
+    pins the agreement, so a change to either side fails there rather than
+    silently making the check below stop matching -- which would bring the
+    duplicate events back.
+    """
+    return [f"- **{e.get('date', '')}** {e.get('text', '').strip()}".rstrip()
+            for e in events]
+
+
+def _timeline_already_has(cid: str, events: list[dict]) -> bool:
+    """Whether this scene's events are ALREADY the tail of the timeline.
+
+    A flag written after the append cannot answer this: if the flag's own write
+    is what failed, the resume sees no flag and appends a second time -- the
+    window just moved. The events themselves are the durable record, so the
+    resume asks the artifact rather than a note about it, and needs no
+    checkpoint at all.
+
+    The whole batch must match as a CONTIGUOUS block at the end. Matching
+    anywhere would drop a batch that legitimately repeats an earlier one, and
+    matching per line would drop the half of a batch that happens to recur.
+    Residual: a concurrent web absorb that appends between the crash and the
+    resume moves this block off the tail, and the events are filed twice -- the
+    behaviour before this fix, in a narrower window, rather than a new loss.
+    """
+    if not events:
+        return True
+    p = campaigns.campaign_root(cid) / "timeline.md"   # paths-ok: the store's own root
+    if not p.exists():
+        return False
+    have = p.read_text(encoding="utf-8").rstrip().splitlines()
+    want = _timeline_lines(events)
+    return have[-len(want):] == want
+
+
+def apply_scene(cid: str, sid: str, parsed: dict,
+                edits: list[dict]) -> tuple[list[str], list[dict]]:
     """Write the scene's absorb through, returning what landed AND what did not.
 
-    `append_timeline` is the one step here that is NOT idempotent: it appends,
-    where the chronicle record is keyed by scene id and `mark_absorbed` sets
-    fields. So a failure AFTER it -- an unwritable scene file, a full disk --
-    left the manifest `in_progress` and the next run replayed the whole
-    sequence, filing the same events a second time, permanently. `checkpoint`
-    is called immediately after the append, INSIDE the lock, to record that it
-    happened; `timeline_done` is that record coming back on the resume, and
-    skips the step rather than the scene. Every other step is safe to repeat,
-    which is why only this one is remembered.
+    `append_timeline` is the one step here that APPENDS, where the chronicle
+    record is keyed by scene id and `mark_absorbed` sets fields. So a failure
+    after it left the manifest `in_progress` and the next run replayed the whole
+    sequence, filing the same events a second time, permanently. The resume
+    checks the timeline itself for them rather than trusting a flag it may not
+    have managed to write. Every other step is safe to repeat, which is why only
+    this one is checked.
 
     The failures used to be dropped here, on the grounds that this pipeline
     predates sheets and surfaces nothing about them. That was survivable while
@@ -170,10 +206,8 @@ def apply_scene(cid: str, sid: str, parsed: dict, edits: list[dict],
         chronicle.absorb(cid, {"id": sid, "one_line": parsed["one_line"],
                                "summary": parsed["summary"],
                                "keywords": parsed["keywords"], **facts})
-        if not timeline_done:
+        if not _timeline_already_has(cid, parsed["timeline_events"]):
             chronicle.append_timeline(cid, parsed["timeline_events"])
-            if checkpoint is not None:
-                checkpoint()
         scenes.mark_absorbed(cid, sid, parsed["one_line"], parsed["summary"])
         return absorb.apply_edits(cid, edits, sid)
 
@@ -329,6 +363,9 @@ async def ingest_one_scene(cid: str, scene: dict, client: LLMClient, conn: dict)
             return {"key": key, **entry, "status": "incomplete"}
         sid = entry["sid"]
         one_line = entry.get("one_line", "")
+        # Carried, not re-derived: a retry that leaves the scene incomplete
+        # again must keep the extraction its timeline was written from.
+        parsed = entry.get("parsed")
         try:
             applied, failures = retry_edits(cid, sid, pending)
         except SceneVanished:
@@ -368,23 +405,31 @@ async def ingest_one_scene(cid: str, scene: dict, client: LLMClient, conn: dict)
             manifest[key] = {"status": "in_progress", "sid": sid}
             save_manifest(cid, manifest)
 
-        result = await run_absorb(cid, sid, client, conn)
-        one_line = result["parsed"]["one_line"]
-
-        def _timeline_written() -> None:
-            """Record the one step of the sequence that cannot be repeated."""
+        # The extraction is PERSISTED and resumed, not re-run. A retry after a
+        # failure partway through the sequence would otherwise pair extraction
+        # B's chronicle record and edits with extraction A's timeline events --
+        # the model is nondeterministic, so B can name events A never had and
+        # omit ones already filed, and nothing downstream would ever reconcile
+        # the two. Resuming the saved one also means the retry costs no tokens.
+        # `materialize` is re-run against the CURRENT store, so a record that
+        # moved in between is judged fresh.
+        stored = (entry or {}).get("parsed")
+        if isinstance(stored, dict):
+            parsed = stored
+            edits = absorb.materialize(cid, sid, parsed)
+        else:
+            result = await run_absorb(cid, sid, client, conn)
+            parsed, edits = result["parsed"], result["edits"]
             manifest[key] = {**(manifest.get(key) or {}), "status": "in_progress",
-                             "sid": sid, "timeline_done": True}
+                             "sid": sid, "parsed": parsed}
             save_manifest(cid, manifest)
+        one_line = parsed["one_line"]
 
         try:
-            applied, failures = apply_scene(
-                cid, sid, result["parsed"], result["edits"],
-                timeline_done=bool(entry and entry.get("timeline_done")),
-                checkpoint=_timeline_written)
+            applied, failures = apply_scene(cid, sid, parsed, edits)
         except SceneVanished:
             return _record_vanished(cid, manifest, key, sid)
-        pending = _unapplied(result["edits"], failures)
+        pending = _unapplied(edits, failures)
 
     # A scene whose edits did not all land is NOT done. Marking it done would
     # make the loss permanent: `ingest_one_scene` skips a done key outright, so
@@ -395,11 +440,12 @@ async def ingest_one_scene(cid: str, scene: dict, client: LLMClient, conn: dict)
     status = "done" if not failures else "incomplete"
     manifest[key] = {"status": status, "sid": sid, "one_line": one_line, "applied": applied}
     if failures:
-        # The timeline flag rides along on anything not `done`, because an
-        # `incomplete` entry with nothing replayable falls back to a full
-        # re-run: without it that fallback would file this scene's events a
-        # second time to recover rows a rerun cannot land anyway.
-        manifest[key]["timeline_done"] = True
+        # The extraction rides along on anything not `done`: an `incomplete`
+        # entry with nothing replayable falls back to a full re-run, and that
+        # fallback must resume this scene's extraction rather than buy a second
+        # one that disagrees with what already landed.
+        if isinstance(parsed, dict):
+            manifest[key]["parsed"] = parsed
         manifest[key]["failures"] = failures
         if pending:   # omitted when nothing is replayable, which is what the resume reads
             manifest[key]["pending"] = pending

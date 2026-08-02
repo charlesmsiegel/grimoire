@@ -1650,6 +1650,22 @@ def test_an_explicit_id_reserves_itself_against_a_later_new_title(monkeypatch, t
     assert [e["payload"]["title"] for e in edits] == ["A debt of blood", "The debt"]
 
 
+def test_an_explicit_id_reserves_the_stored_title_when_the_row_omits_one(monkeypatch, tmp_path):
+    """`{"id": "the-debt", "beat": ...}` is a valid movement, and reserving it
+    under "" made the reservation disagree with the record it names — so the
+    same commitment named by TITLE later in the batch missed the merge and
+    staged `the-debt-2`, which approving would turn into a duplicate."""
+    from grimoire.store import commitments, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    commitments.set_movement(cid, "the-debt", "The debt", "promise", "open",
+                             "", "Sworn.", "s1")
+    edits = absorb.materialize(cid, sid, {"commitment_movements": [
+        {"id": "the-debt", "title": "", "kind": "", "status": "", "beat": "Named by id."},
+        {"id": "", "title": "The debt", "kind": "", "status": "", "beat": "And by title."}]})
+    assert [e["id"] for e in edits] == ["commitment:the-debt"]
+
+
 def test_an_explicit_id_and_a_matching_title_are_still_one_edit(monkeypatch, tmp_path):
     """The reservation must not break the dedup it sits beside: the same title,
     once by id and once without, is one commitment moving once."""

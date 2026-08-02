@@ -356,7 +356,18 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
             # never reaching the reviewer. Reserved under this row's title, so
             # the same title still merges (that is what the dedup is for) and a
             # different one gets a suffix.
-            staged_titles.setdefault(mid, title.strip().casefold())
+            #
+            # Under the STORED title when the row omits one, which it may:
+            # `{"id": "the-debt", "beat": ...}` is a valid movement, and
+            # reserving it under "" made the reservation disagree with the
+            # record it names -- so the same commitment named by TITLE later in
+            # the batch missed the merge and staged `the-debt-2`, which the
+            # reviewer would then approve into a duplicate. The reservation must
+            # say what the id means, not what this row happened to repeat.
+            stored = owed.get(mid)
+            staged_titles.setdefault(
+                mid, (title or (_text(stored.get("title")) if isinstance(stored, dict)
+                                else "")).strip().casefold())
         elif any(c.isalnum() for c in title):
             # New commitment — needs a title with real content, and an id that
             # does not land on somebody else's record.

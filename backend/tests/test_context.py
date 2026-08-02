@@ -2241,6 +2241,31 @@ def test_an_indented_heading_stays_under_its_list_item(monkeypatch, tmp_path):
     assert "The Guild watches the pier." in section
 
 
+def test_a_top_level_heading_with_leading_spaces_is_not_nested(monkeypatch, tmp_path):
+    """Markdown allows a top-level heading up to three leading spaces. Closing
+    one because a later column-zero bullet is "less indented" withheld the line
+    that names her and published the subjectless bullet under it — what makes a
+    heading nested is the open LIST it sits inside, not its column."""
+    from grimoire.store import playstate
+    cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
+    playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
+        "Wary.", "",
+        # NOT the first line of the block: `playstate` strips that one's indent,
+        # so the reviewer's own example cannot reach `_entries` with its spaces
+        # intact. A heading anywhere else keeps them, which is the same defect
+        # by a shape the store can actually hold.
+        "Notes:\n"
+        "\n"
+        "  ### Winifred\n"
+        "- is hiding the ledger\n"
+        "\n"
+        "## Elsewhere\n"
+        "- Mara sold the manifest."))
+    section = _state_section(cid, sid)
+    assert "hiding the ledger" not in section
+    assert "Mara sold the manifest." in section     # the next section is its own
+
+
 def test_a_paragraph_after_the_blank_is_not_governed(monkeypatch, tmp_path):
     """Only a LIST keeps a colon heading open across the blank. An ordinary
     paragraph below one is a new statement, which is the case the pop was
