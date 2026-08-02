@@ -1179,3 +1179,39 @@ def test_window_of_an_unknown_scene_raises(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     with pytest.raises(scenes.SceneNotFound):
         scenes.read_scene_window(cid, "nope", 10)
+
+
+# ---- label_preserved is a promise about the ROUND TRIP (#59 review) ----
+
+def _round_trip(name):
+    """The speaker a stored block parses back to, via the same two functions
+    the real reader uses."""
+    from grimoire.store.scenes import serialize
+    block = serialize._block("assistant", name, "Some dialogue.")
+    markers = serialize._markers(block)
+    assert len(markers) == 1, f"{name!r} produced {len(markers)} markers"
+    return serialize._speaker_and_role(markers[0], frozenset())
+
+
+def test_label_preserved_means_the_speaker_survives_a_round_trip():
+    """The predicate exists so callers can reason about a character by their
+    transcript label, so "preserved" has to mean the speaker comes back — not
+    merely that a regex liked it. `$` used to match before a trailing newline,
+    so "Aese\\n" passed and `_label` emitted a marker split across two lines
+    that nothing could parse: the message folded into the previous speaker."""
+    from grimoire.store.scenes import serialize
+
+    for name in ["Aese", "Aese Vane", "Winifred (the elder)", "Zoë-Ann", "A" * 64]:
+        assert serialize.label_preserved(name), name
+        assert _round_trip(name) == (name, "assistant")
+
+    for name in ["Aese\n", "Aese\r\n", "Aese\r", "Aese\nVane", "A" * 65,
+                 "Aese *the Grey*", "", None, "You", "Grimoire"]:
+        assert not serialize.label_preserved(name), repr(name)
+
+
+def test_a_name_that_is_not_preserved_falls_back_to_the_role_label():
+    """...and the fallback is what keeps the transcript parseable at all. The
+    line reads as unstamped assistant prose, which is wrong-but-legible; the
+    unfixed alternative was a block no marker matched."""
+    assert _round_trip("Aese\n") == (None, "assistant")

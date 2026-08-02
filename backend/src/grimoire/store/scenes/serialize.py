@@ -45,7 +45,13 @@ TRANSITION_SPEAKER = "⁣Scene"
 # transition is stepped over and preserved.
 SYNTHETIC_SPEAKERS = (ROLL_SPEAKER, TRANSITION_SPEAKER)
 _MARKER = re.compile(r"^\*\*([^*\n]{1,64}?)(?: \(([^)\n]+)\))?:\*\*[ ]?", re.MULTILINE)
-_SAFE_LABEL = re.compile(r"^[^*\n]{1,64}$")
+# `\Z`, not `$`: `$` also matches just before a trailing newline, so "Aese\n"
+# satisfied this and `_label` emitted `**Aese\n:**` -- a marker split across two
+# lines that `_MARKER` cannot match at all, folding the message into the
+# previous speaker's content. `\r` is excluded for the same reason one step
+# later: it survives the write, and universal-newline decoding turns it into
+# "\n" on the way back in, breaking the marker only once it is already on disk.
+_SAFE_LABEL = re.compile(r"^[^*\r\n]{1,64}\Z")
 
 
 def label_preserved(speaker: str | None) -> bool:
