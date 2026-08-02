@@ -932,7 +932,19 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       // In a `finally` for the same reason `renameScene` uses one: the relist is
       // the rail's business, the re-read is the transcript's, and a failure in
       // the first must not decide whether the second happens.
-      if (initiator && activeIdRef.current === id) selectScene(id, undefined, true);
+      //
+      // Awaited and caught, also like `renameScene`. This is a callback the
+      // inspector fires and drops, so an unawaited rejection here goes nowhere:
+      // no banner, and the pre-rename posts left on screen under the new id,
+      // editable against indices that may have shifted.
+      if (initiator && activeIdRef.current === id) {
+        try {
+          await selectScene(id, undefined, true);
+        } catch (err: any) {
+          setError({ text: `Renamed, but the scene could not be re-read: `
+                           + (err?.detail ?? String(err)), retryable: false });
+        }
+      }
     }
   }
 

@@ -2844,6 +2844,37 @@ def test_reading_alternates_for_a_scene_that_vanishes_mid_read_is_a_404(client, 
     assert resp.status_code == 404
 
 
+def test_a_reroll_whose_context_cannot_be_built_keeps_the_decision(client, monkeypatch):
+    """The setup after the removal can refuse too — `build_messages` reads the
+    whole store and the guidance block compiles a template. Nothing reaches the
+    model, the reply comes back, and the decision it was derived from has to
+    come back with it."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "old reply"}])
+    store.proposals.new(cid, sid, {"check": "athletics", "actor": None, "problems": []})
+    refuse = {"on": True}
+    real = store.context.build_messages
+
+    def boom(*a, **k):
+        if refuse["on"]:
+            raise RuntimeError("context build failed")
+        return real(*a, **k)
+
+    monkeypatch.setattr(store.context, "build_messages", boom)
+    with pytest.raises(RuntimeError):
+        client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
+    refuse["on"] = False
+
+    # the reply is back, and so is the decision it produced
+    msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    assert [m["content"] for m in msgs] == ["hi", "old reply"]
+    record = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert record["status"] == "pending"
+
+
 def test_a_pick_that_cannot_refill_an_empty_slot_keeps_the_decision(client, monkeypatch):
     """Filling an empty slot only APPENDS — nothing is removed — so a failed
     append leaves the transcript exactly as it was. The decision's narration
