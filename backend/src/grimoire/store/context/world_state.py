@@ -129,6 +129,16 @@ _SUFFIX = frozenset({"jr", "sr", "ii", "iii", "iv", "phd", "md", "esq"})
 #: whose head is one of these yields no alias directly -- see `_short_alias`.
 _NOT_A_GIVEN_NAME = _HONORIFIC | _ARTICLE
 
+#: An ELIDED particle, which attaches to the name instead of standing beside it
+#: -- `d'Ormesson`, `dell'Acqua`, `O'Brien`. `_PARTICLE` cannot cover these:
+#: they are one token, and the set is matched whole, so `d'Ormesson` was a
+#: lower-case token belonging to no set and rejected the WHOLE name -- neither
+#: `Jean` nor `Ormesson` was derived and the suspicion went to the prompt. The
+#: apostrophe is the signal and needs no lexicon: a short prefix, an apostrophe
+#: (straight or typographic), then the name. The captured group is that name,
+#: which prose uses on its own as readily as with the particle attached.
+_ELIDED = re.compile(r"\w{1,4}['’](\w.*)$")
+
 
 def _word(token: str) -> str:
     """One token, lower-cased and stripped of the punctuation names carry --
@@ -156,7 +166,8 @@ def _name_tokens(name: str) -> list[str]:
     # all. That is the `\b` failure again: not a missed edge, an entire class of
     # campaign for which this filter did nothing. What actually marks an epithet
     # is a token that is explicitly LOWER case, and an uncased token is neither.
-    if not all(not p[:1].islower() or _word(p) in _PARTICLE for p in parts[1:]):
+    if not all(not p[:1].islower() or _word(p) in _PARTICLE or _ELIDED.match(p)
+               for p in parts[1:]):
         return []                        # "The Woman on the Pier" -- an epithet
     if parts[0][:1].islower():
         return []                        # a particle is never the head
@@ -313,14 +324,30 @@ def _second_alias(name: str) -> str:
     return "" if i >= len(parts) - 1 else _usable(parts[i])
 
 
+def _elided_stem(alias: str) -> str:
+    """The name inside an elided particle -- `d'Ormesson` -> `Ormesson`, or "".
+
+    A form of its own, because prose drops the particle as readily as it keeps
+    it, and the two spellings share no substring the matcher would find: with
+    only `d'Ormesson` in the set, "Ormesson is hiding the ledger" reaches the
+    prompt. `O'Brien` -> `Brien` falls out of the same rule; matching a stem
+    prose rarely uses on its own costs an over-hide only if another line means
+    somebody else by it.
+    """
+    m = _ELIDED.match(alias)
+    return _usable(m.group(1)) if m else ""
+
+
 def _forms(names: set[str]) -> set[str]:
     """Every string an actor can be recognized by: each name plus the given name,
-    the surname and the token between them. Resolved for the OWNER as well as
-    for the others (see `_character_states`), which is what keeps two actors
-    sharing any of those names from hiding each other's interiority."""
+    the surname and the token between them -- each of those also without an
+    elided particle. Resolved for the OWNER as well as for the others (see
+    `_character_states`), which is what keeps two actors sharing any of those
+    names from hiding each other's interiority."""
     out: set[str] = set()
     for n in names:
-        out.update({n.strip(), _short_alias(n), _second_alias(n), _surname_alias(n)})
+        aliases = {_short_alias(n), _second_alias(n), _surname_alias(n)}
+        out |= {n.strip()} | aliases | {_elided_stem(a) for a in aliases}
     return out - {""}
 
 
@@ -513,17 +540,30 @@ def _entries(suspects: str) -> list[list[str]]:
             pending_blank = True
             continue
         indent = len(line) - len(line.lstrip())
-        if pending_blank:
-            # Now the indent is known. A blank ends the colon headings and the
-            # bullets it closes -- but NOT a bullet this line is indented inside,
-            # and NOT a markdown section heading, which is conventionally
-            # separated from its own list by exactly this blank line.
-            while open_heads and open_heads[-1][2] != "atx" and not (
-                    open_heads[-1][2] == "item" and indent > open_heads[-1][1]):
-                open_heads.pop()
-            pending_blank = False
         atx = _ATX.match(stripped)
         item = bool(_LIST_MARKER.match(stripped))
+        if pending_blank:
+            # Now the line after the blank is known, which is what decides
+            # whether the blank ended anything. A blank ends the colon headings
+            # and the bullets it closes -- but NOT:
+            #
+            #   * a markdown section heading, conventionally SEPARATED from its
+            #     own list by exactly this blank line;
+            #   * a bullet this line is indented inside, which is an ordinary
+            #     multi-paragraph list item;
+            #   * a colon heading whose LIST is what follows. `Winifred:` /
+            #     blank / `- is hiding the ledger` is as ordinary as writing it
+            #     tight, and popping here withheld the heading that names her
+            #     while publishing the subjectless bullet under it -- the same
+            #     leak the governor rule exists to close, reached through the
+            #     blank line instead of the syntax. Only a LIST keeps it open:
+            #     an ordinary paragraph after the blank is a new statement, and
+            #     that is the case the pop was written for.
+            while open_heads and open_heads[-1][2] != "atx" and not (
+                    open_heads[-1][2] == "item" and indent > open_heads[-1][1]) and not (
+                    open_heads[-1][2] == "colon" and item and indent >= open_heads[-1][1]):
+                open_heads.pop()
+            pending_blank = False
         # A setext underline retroactively makes the line ABOVE it a heading, so
         # it is handled where that line's entry is still reachable rather than
         # in `_heads_a_list`, which only ever sees one line at a time. A `-----`
