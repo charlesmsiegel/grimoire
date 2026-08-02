@@ -1259,3 +1259,27 @@ def test_a_prefix_boundary_is_checked_in_the_lowercased_name():
     # ASCII behaviour is unchanged
     assert serialize.match_name("Winifred", ["Winifred Vance"]) == "Winifred Vance"
     assert serialize.match_name("Winifred", ["Winifred Vance", "Winifred Vale"]) is None
+
+
+def test_a_whole_name_that_shadows_a_longer_ones_prefix_is_confusable():
+    """`match_name` breaks a tie by exact match, so the label "Mara" resolves to
+    the cast member literally named "Mara" even with "Mara Vell" beside her --
+    cleanly, and wrongly, because the model writing `**Mara:**` may have been
+    shortening the longer name. Asking only "where does this label land?" cannot
+    see that; the question is also "who else could have written it?"."""
+    from grimoire.store.scenes import serialize
+
+    roster = ["Mara", "Mara Vell"]
+    # the resolver is unchanged -- exact match still wins, as every other caller
+    # (role assignment, drift canonicalization) needs it to
+    assert serialize.match_name("Mara", roster) == "Mara"
+    # ...but neither actor owns a label unambiguously, so neither is usable as an
+    # identity: "Mara" has none at all, and "Mara Vell" only if the model never
+    # abbreviates, which is exactly what it does
+    assert serialize.confusable("Mara", roster)
+    assert serialize.confusable("Mara Vell", roster)
+    # alone, the long name is fine -- its own prefix resolves to it
+    assert not serialize.confusable("Mara Vell", ["Mara Vell", "You", "Grimoire"])
+    # and a shared STEM is not a shared label: "Marabel" has no word-boundary
+    # prefix "Mara", so that label can only ever have meant Mara
+    assert not serialize.confusable("Mara", ["Mara", "Marabel"])
