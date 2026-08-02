@@ -1743,6 +1743,33 @@ test("the swipe control renders on a windowed page, where indices are absolute",
   expect(await screen.findByText("2/2")).toBeInTheDocument();
 });
 
+test("a swap that fails after the user moved on does not banner the new scene", async () => {
+  // Switching scenes clears the banner on purpose — one scene's failure must
+  // not offer its Retry against another. A swap rejecting afterwards put it
+  // straight back, under a scene it has nothing to do with.
+  let reject: (v: any) => void = () => {};
+  (api.listScenes as any).mockResolvedValue([
+    { id: "s1", title: "One", model: "", created: "", updated: "" },
+    { id: "s2", title: "Two", model: "", created: "", updated: "" },
+  ]);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
+  (api.getAlternates as any).mockResolvedValue({
+    active: 1, alternates: [ALT("old"), ALT("a reply")] });
+  (api.pickAlternate as any).mockImplementation(() => new Promise((_r, rej) => { reject = rej; }));
+  renderCampaign();
+  await screen.findByText("2/2");
+  fireEvent.click(screen.getByRole("button", { name: /previous alternate/i }));
+  fireEvent.click(await screen.findByText(/· Two$/));
+  await waitFor(() => expect(screen.getByText(/· Two$/).closest(".row"))
+    .toHaveClass("active"));
+
+  reject({ detail: "no space left on device" });   // s1's swap fails after the move
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+  expect(screen.queryByText("no space left on device")).toBeNull();
+});
+
 test("switching scenes while a swap is in flight does not yank the user back", async () => {
   let release: (v: any) => void = () => {};
   (api.listScenes as any).mockResolvedValue([
