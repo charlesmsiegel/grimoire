@@ -623,13 +623,13 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   // clears a chip that does exist, and the poll has already stopped looking:
   // a roll the player has to answer, invisible until something else refreshes.
   // One awaited read, after growth, settles it (review, #95).
-  // `fresh`, and that argument is the whole point: `request` shares identical
-  // in-flight GETs, so without it this is handed the very promise `selectScene`
-  // started before the flush — the stale answer this exists to overrule. Review
-  // caught that after the first version of this shipped (#95).
+  // Reaching the server is load-bearing here and is now the endpoint's own
+  // guarantee: `getRollProposal` never coalesces, so this cannot be handed the
+  // promise `selectScene` started before the flush — the stale answer it exists
+  // to overrule — and its claim, being newer, genuinely describes a newer read.
   async function settleProposal(id: string, owns: () => boolean) {
     const claim = claimProposalRead();   // issued after selectScene's, so it wins
-    const r = await api.getRollProposal(cid, id, true).catch(() => null);
+    const r = await api.getRollProposal(cid, id).catch(() => null);
     if (r && owns()) applyProposalRead(claim, r.record);
   }
 
@@ -647,6 +647,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     let acc = "";
     let landed = true;
     let cancelled = false;
+    let finished = false;   // a `done` frame arrived; the turn is persisted
     try {
       await start((e) => {
         if (e.delta) {
@@ -658,15 +659,25 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
         } else if (e.proposal) {
           // Live from the stream, so it outranks any read still in flight.
           setProposalNow({ id: e.proposal.id, status: "pending", payload: e.proposal, resolution: null });
+        } else if (e.done) {
+          // The backend sends this only after finalize has persisted, so from
+          // here on the turn has landed whatever the connection does next.
+          finished = true;
         }
       }, controller.signal);
     } catch (err: any) {
       // A cancel is the user getting what they asked for, so it raises no
       // error banner — but it is still not a landed turn, so a one-shot
       // response override survives for the retry that usually follows.
-      cancelled = isAbortError(err);
-      if (!cancelled) setError(err.detail ?? String(err));
-      landed = false;
+      //
+      // Unless the turn had already finished. `done` is parsed off the stream
+      // before the body reports EOF, and Stop stays live until it does, so a
+      // press in that gap aborts a turn that is already written. Calling that a
+      // cancellation would hand the player back a one-shot response length the
+      // reply had in fact consumed, and spend it again on the next turn (#95).
+      cancelled = isAbortError(err) && !finished;
+      if (!isAbortError(err)) setError(err.detail ?? String(err));
+      landed = landed && finished;   // an error frame already ruled it out
     } finally {
       abortRef.current = null;
       setStreaming("");

@@ -691,13 +691,22 @@ test("a slow pre-flush proposal read cannot undo the settling read", async () =>
   // later, so it must win regardless of which lands first.
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   let flushed = false;
+  let sceneSawGrowth = false;
   let releaseStale: (() => void) | null = null;
-  (api.getScene as any).mockImplementation(async () => ({
-    meta: {}, total: flushed ? 1 : 0,
-    messages: flushed ? [{ role: "assistant", content: "She lunges" }] : [],
-  }));
-  (api.getRollProposal as any).mockImplementation(async (_c: string, _s: string, fresh?: boolean) => {
-    if (fresh) {
+  (api.getScene as any).mockImplementation(async () => {
+    if (flushed) sceneSawGrowth = true;
+    return {
+      meta: {}, total: flushed ? 1 : 0,
+      messages: flushed ? [{ role: "assistant", content: "She lunges" }] : [],
+    };
+  });
+  // The two reads are told apart by when they are *made*, not by an argument:
+  // selectScene fires its one before awaiting getScene, so it still sees the
+  // pre-growth world; settleProposal's comes after. That is the real ordering,
+  // and it is the only thing left distinguishing them now the endpoint opts out
+  // of coalescing for every caller.
+  (api.getRollProposal as any).mockImplementation(async () => {
+    if (sceneSawGrowth) {
       return { record: { id: "pr-1", status: "pending", payload: PROPOSAL_PAYLOAD, resolution: null } };
     }
     // the unawaited read: parked, so it lands *after* the settling one
@@ -746,6 +755,38 @@ test("the refresh right after a cancel cannot wipe the next turn's preview", asy
   (holdRefresh as unknown as () => void)();     // the stale refresh finally lands
   await new Promise((r) => setTimeout(r, 50));
   expect(screen.getByText("second fragment")).toBeInTheDocument();
+});
+
+test("Stop after the done frame is a finished turn, not a cancellation", async () => {
+  // `done` is parsed off the stream before the body reports EOF, and Stop stays
+  // live until it does. A press in that gap used to be classed as a cancel,
+  // which handed back a one-shot response length the reply had already
+  // consumed — and spent it again on the next turn.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.listResponsePresets as any).mockResolvedValue(RESPONSE_PRESETS);
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, total: 0, messages: [] });
+  (api.chat as any).mockImplementation(
+    async (_c: string, _s: string, _t: string, onEvent: any, _r: unknown, signal: AbortSignal) => {
+      onEvent({ delta: "All told." });
+      onEvent({ done: true });          // persisted server-side from here on
+      await new Promise<void>((_res, reject) => {   // body still open
+        signal.addEventListener("abort", () => {
+          const err = new Error("The operation was aborted.");
+          err.name = "AbortError";
+          reject(err);
+        });
+      });
+    });
+  renderCampaign();
+  const chip = await screen.findByRole("button", { name: /Response length/ });
+  fireEvent.click(chip);
+  fireEvent.click(screen.getByRole("option", { name: "Terse" }));
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "and then?" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
+  await screen.findByRole("button", { name: /continue ▶/i });
+  // spent by the reply that did land, so it must not ride the next turn
+  await waitFor(() => expect(chip).not.toHaveTextContent("Terse"));
 });
 
 test("the post-cancel poll stops once a new turn owns the view", async () => {

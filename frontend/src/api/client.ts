@@ -699,12 +699,17 @@ export const api = {
       "POST", `/api/campaigns/${cid}/scenes/${sid}/roll`,
       { notation, ...(label ? { label } : {}) }),
   listRolls: (cid: string) => request<RollEntry[]>("GET", `/api/campaigns/${cid}/rolls`),
-  // `fresh` for the post-cancel settling read only: it is checking whether the
-  // abort flush wrote a proposal, so a shared in-flight GET started before that
-  // write would answer for the wrong moment.
-  getRollProposal: (cid: string, sid: string, fresh = false) =>
+  // Never coalesced, for every caller. `CampaignView` orders proposal writes by
+  // the order their reads were *issued*, and a shared read is as old as the
+  // request it joined rather than as new as the claim it was handed — so a
+  // newer claim could be attached to an older answer and outrank a fresher one
+  // (#95). Opting the endpoint out restores the invariant that ordering assumes
+  // instead of guarding each place the mismatch shows up. It costs nothing:
+  // sharing exists for lookups several components fire at once, and this one
+  // has a single caller.
+  getRollProposal: (cid: string, sid: string) =>
     request<{ record: ProposalRecord | null }>(
-      "GET", `/api/campaigns/${cid}/scenes/${sid}/roll-proposal`, undefined, { fresh }),
+      "GET", `/api/campaigns/${cid}/scenes/${sid}/roll-proposal`, undefined, { fresh: true }),
   resolveProposal: (cid: string, sid: string,
                     body: { proposal: string; action: "accept" | "decline";
                             check?: string; actor?: string;
