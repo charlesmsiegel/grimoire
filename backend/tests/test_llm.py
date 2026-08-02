@@ -13,6 +13,7 @@ def test_llm_error_detail_defaults_to_kind():
     assert LLMError("network").detail == "network"
 
 
+from grimoire import llm  # noqa: E402 - deliberate late import; see the lines above
 from grimoire.llm import LLMClient  # noqa: E402 - deliberate late import; see the lines above
 
 
@@ -285,6 +286,50 @@ async def test_a_gap_between_heartbeats_still_times_out():
     with pytest.raises(LLMError) as exc:
         [c async for c in client.stream([], _conn("openrouter"))]
     assert exc.value.kind == "timeout"
+
+
+class SilentThenAnswers:
+    """Says nothing at all for `quiet` seconds — not even a keep-alive — then
+    answers. The model that is connecting, or thinking without streaming its
+    reasoning: healthy, and indistinguishable from wedged without a tick."""
+
+    def __init__(self, quiet, answer):
+        self.quiet = quiet
+        self.answer = answer
+
+    async def stream(self, messages, *args, **kwargs):
+        await asyncio.sleep(self.quiet)
+        yield self.answer
+
+
+async def test_the_facade_ticks_while_it_waits(monkeypatch):
+    """A silent provider still tells the caller the stream is alive (#95).
+    Empty strings, then the text: three ticks over a ~0.1s wait at a 0.03s
+    interval, and no tick once the answer starts flowing."""
+    monkeypatch.setattr(llm, "HEARTBEAT_INTERVAL", 0.03)
+    client = _timeout_client(SilentThenAnswers(0.1, "the answer"), 0)  # no idle bound
+    chunks = [c async for c in client.stream([], _conn("openrouter"))]
+    assert chunks[-1] == "the answer"
+    assert chunks[:-1] and set(chunks[:-1]) == {""}
+
+
+async def test_ticking_does_not_extend_the_idle_bound(monkeypatch):
+    """The bound counts provider activity, and a tick is not that. A heartbeat
+    interval shorter than the timeout must not turn the timeout off."""
+    monkeypatch.setattr(llm, "HEARTBEAT_INTERVAL", 0.01)
+    client = _timeout_client(StallingProvider(), 0.05)
+    with pytest.raises(LLMError) as exc:
+        [c async for c in client.stream([], _conn("openrouter"))]
+    assert exc.value.kind == "timeout"
+
+
+async def test_a_provider_heartbeat_is_still_not_a_facade_tick(monkeypatch):
+    """The two empties are different signals and only one is on a schedule the
+    caller chose. A provider frame resets the bound and stops at the facade; if
+    it were forwarded instead, this stream would emit eight of them."""
+    monkeypatch.setattr(llm, "HEARTBEAT_INTERVAL", 0)  # ticking off
+    client = _timeout_client(ReasoningProvider(8), 0.05)
+    assert [c async for c in client.stream([], _conn("openrouter"))] == ["the answer"]
 
 
 async def test_healthy_stream_is_untouched_by_the_guard():

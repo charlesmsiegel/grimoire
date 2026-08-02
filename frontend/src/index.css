@@ -275,6 +275,9 @@ button.plate-avatar, button.plate-name { cursor: pointer; }
   font-family: var(--fm); font-weight: 700; font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase;
 }
 .inputbar .send:disabled { color: var(--chrome-muted); cursor: default; }
+/* Stop takes Send's slot for the length of a turn, so it has to read as a
+   different action at a glance rather than as Send having changed its label. */
+.inputbar .send.cancel-turn { background: var(--page); color: var(--accent); }
 
 /* ---- response-length chip + dropdown (anchored to the input bar) ---- */
 .response-length-chip { position: relative; flex: none; display: flex; align-items: center;

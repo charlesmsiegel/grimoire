@@ -198,6 +198,47 @@ def remove_trailing_assistant_run(cid: str, sid: str) -> None:
 
 
 @locking._serialized
+def remove_trailing_user_post(cid: str, sid: str, content: str) -> bool:
+    """Take back the trailing user message, if it is still the one described.
+
+    The undo half of a transactional turn (#95): a chat turn appends the
+    player's post before streaming, and a generation that fails having produced
+    nothing would otherwise leave that post sitting unanswered, indistinguishable
+    from one the model chose to skip.
+
+    Conditional on purpose, and returning whether it fired. The post is only
+    removed while it is genuinely the last message AND still carries the content
+    the caller wrote — anything appended behind it (a manual dice roll, a scene
+    transition, a reply from a concurrent turn) means the transcript has moved
+    on, and deleting from under that is worse than leaving one orphan. Content
+    is the discriminator rather than an index because indices go stale the
+    moment anything else writes, and this runs after an LLM call, not before.
+
+    `turn_sizes` is untouched deliberately: it counts model blocks
+    (`turns._model_blocks`), and a user post has never been one of them.
+
+    Role comes from `read_scene`, which resolves a speaker marker against the
+    scene's PCs — so a post whose speaker has since left the cast reads back as
+    model output and is left alone. That is the safe direction: an orphan
+    survives, which a player can delete, where the alternative is this deleting
+    a reply it misread.
+    """
+    p = paths._scene_path(cid, sid)
+    if not safe_id(sid) or not p.exists():
+        raise paths.SceneNotFound(sid)
+    messages = read.read_scene(cid, sid)["messages"]
+    if not messages:
+        return False
+    last = messages[-1]
+    if last["role"] != "user" or last["content"].strip() != content.strip():
+        return False
+    meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
+    meta["updated"] = now_iso()
+    atomic.write_text(p, dump_frontmatter(meta, serialize._serialize_messages(messages[:-1])))
+    return True
+
+
+@locking._serialized
 def trim_continuation(cid: str, sid: str, from_index: int) -> None:
     """Roll a scene back to `from_index`, discarding a crashed or
     superseded continuation attempt (proposals.commit_narration's crash

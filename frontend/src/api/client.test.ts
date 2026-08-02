@@ -109,6 +109,24 @@ test("chat posts to the scene chat endpoint and forwards SSE events", async () =
   expect(events).toEqual([{ delta: "hi" }, { done: true }]);
 });
 
+test("chat hands its abort signal to fetch, and ignores heartbeat comments", async () => {
+  // The signal is the whole cancel mechanism (#95) — there is no cancel
+  // endpoint, so a signal that never reaches fetch is a Stop button that does
+  // nothing. The heartbeat frames ride the same stream and must stay invisible.
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValue(sseResponse([": heartbeat\n\n", 'data: {"delta":"hi"}\n\n']));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const controller = new AbortController();
+  const events: unknown[] = [];
+  await api.chat("run", "s1", "hello", (e) => events.push(e), undefined, controller.signal);
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/campaigns/run/scenes/s1/chat",
+    expect.objectContaining({ signal: controller.signal }),
+  );
+  expect(events).toEqual([{ delta: "hi" }]);
+});
+
 test("localizeImages posts to the localize endpoint and forwards SSE events", async () => {
   const fetchMock = vi.fn().mockResolvedValue(
     sseResponse([
