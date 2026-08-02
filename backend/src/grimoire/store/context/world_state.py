@@ -436,6 +436,16 @@ _USER_MACRO = re.compile(r"\{\{user\}\}", re.IGNORECASE)
 
 _LIST_MARKER = re.compile(r"[-*•+]\s|\d+[.)]\s")
 
+#: Blockquote markers, taken off the front before a line is classified. A quote
+#: is a wrapper, not a syntax of its own: `> - is hiding the ledger` is a list
+#: item, and every rule below -- list marker, ATX heading, colon heading, setext
+#: underline -- asks about the markdown INSIDE it. Reading the raw line saw `>`
+#: where the bullet is, called it an ordinary paragraph, and popped the heading
+#: that named her, publishing the subjectless detail underneath. One space per
+#: marker is consumed, the markdown convention, so indentation deeper than that
+#: survives and a quoted list still nests.
+_QUOTE = re.compile(r"(>[ \t]?)+")
+
 #: Markdown emphasis, stripped from the END of a line before asking whether it
 #: is a heading. These blocks are authored prose and `**Winifred:**` is how a
 #: subject line is conventionally written; a bare `endswith(":")` saw the
@@ -537,7 +547,20 @@ def _entries(suspects: str) -> list[list[str]]:
     # an ATX one -- the two never nest against each other by the same measure.
     open_heads: list[tuple[int, int, str]] = []
     for line in suspects.splitlines():
+        # A blockquote is a wrapper, not a syntax of its own, so every rule
+        # below asks about the markdown INSIDE it: `stripped` is the line's own
+        # content and `indent` is measured from where that content starts, so a
+        # quoted list nests exactly as an unquoted one does. A line that is
+        # nothing but quote markers IS the blank line of its quote, and is
+        # treated as one.
         stripped = line.strip()
+        quote = _QUOTE.match(stripped)
+        if quote:
+            inner = stripped[quote.end():]
+            indent = len(inner) - len(inner.lstrip())
+            stripped = inner.strip()
+        else:
+            indent = len(line) - len(line.lstrip())
         if not stripped:
             out.append([line])              # blank: its own entry, and ends the paragraph
             heads.append(-1)
@@ -556,7 +579,6 @@ def _entries(suspects: str) -> list[list[str]]:
             # that has no subject of its own published.
             pending_blank = True
             continue
-        indent = len(line) - len(line.lstrip())
         atx = _ATX.match(stripped)
         item = bool(_LIST_MARKER.match(stripped))
         if pending_blank:
