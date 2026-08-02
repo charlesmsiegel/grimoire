@@ -1115,6 +1115,35 @@ test("a verification read retired by a scene switch still gives the prompt back"
     expect(screen.getByRole("textbox")).toHaveValue("I draw my blade."));
 });
 
+test("a pending rename also blocks a proposal continuation", async () => {
+  // Resolving a roll streams a continuation through `runStream` without passing
+  // `send`/`retry`/`reroll`, so the per-call-site rename checks all missed it.
+  // The guard belongs where every stream enters.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getRollProposal as any).mockResolvedValue({
+    record: { id: "p1", status: "pending", resolution: null,
+              payload: { id: "p1", check: "wits", check_label: "Wits", problems: [] } },
+  });
+  let finishRename: ((v: any) => void) | null = null;
+  (api.renameScene as any).mockImplementation(
+    () => new Promise((res) => { finishRename = res; }));
+  renderCampaign();
+  await screen.findByText(/01 · Old/);
+  fireEvent.click(screen.getByRole("button", { name: /rename/i }));
+  const input = screen.getByDisplayValue("Old");
+  fireEvent.change(input, { target: { value: "Renamed" } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  await waitFor(() => expect(api.renameScene).toHaveBeenCalled());
+
+  const decline = await screen.findByRole("button", { name: /decline/i });
+  fireEvent.click(decline);
+  await new Promise((r) => setTimeout(r, 50));
+  expect(api.resolveProposal).not.toHaveBeenCalled();   // the file may be moving
+
+  finishRename!({ id: "s1", title: "Renamed" });
+  await waitFor(() => expect(screen.queryByDisplayValue("Renamed")).toBeNull());
+});
+
 test("a poll fetch already in flight cannot clear a new turn's preview", async () => {
   // The check-then-await window: the poll verifies it owns the view, then
   // awaits getScene, and a turn starting during that await would otherwise have
