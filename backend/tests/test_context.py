@@ -2001,6 +2001,20 @@ def test_an_indented_continuation_stays_under_its_bullet(monkeypatch, tmp_path):
     assert "Mara sold the manifest." in section     # an UNindented paragraph does not
 
 
+def test_a_name_suffix_is_stepped_over_when_choosing_the_surname():
+    """Taking the last token blindly made `Jr` the alias and left `Vance` — the
+    name prose actually uses — matching nothing. The family name is the last
+    token that IS one."""
+    from grimoire.store.context import world_state
+    assert world_state._surname_alias("Mara Vance Jr.") == "Vance"
+    assert world_state._surname_alias("Dr. Mara Vance III") == "Vance"
+    assert world_state._forms({"Mara Vance Jr."}) == {"Mara Vance Jr.", "Mara", "Vance"}
+    # A name that is nothing but suffixes after its head yields none, the same
+    # as one that ends in a particle.
+    assert world_state._surname_alias("Mara Jr.") == ""
+    assert world_state._surname_alias("Mara de") == ""
+
+
 def test_a_suspicion_naming_a_player_s_container_name_is_withheld(monkeypatch, tmp_path):
     """A PC's container name and its locked persona name can differ. Taking only
     the persona left a suspicion written against the canonical PC name unmatched
