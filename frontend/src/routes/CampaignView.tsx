@@ -673,7 +673,20 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       setBusy(false);
       // the reply is persisted as per-speaker posts — re-fetch to show them
       // (selectScene also bumps ctxKey and refreshes the player name)
-      const seen = await selectScene(id);
+      //
+      // Guarded, because `setBusy(false)` above already re-enabled Send and this
+      // fetch is an await: the player can start the next turn while it is in
+      // flight, and the stale response would then apply `setMessages` over that
+      // turn's optimistic post and `setStreaming("")` over its live preview.
+      // Review caught this one on the immediate refresh after it had already
+      // been fixed on the polling ones — the mechanism was sitting right here.
+      //
+      // Only `abortRef`, unlike the poll's predicate. A scene switch is already
+      // covered for this call: switching runs `selectScene`, which bumps
+      // `windowTokenRef` and so retires the page this one has in flight. The
+      // poll needs the scene check too because it *issues* fresh selects, which
+      // bump that token themselves and cannot be retired by it.
+      const seen = await selectScene(id, () => !abortRef.current);
       // Every cancel, not only the ones that showed text. Gating on `acc` was
       // wrong and review caught it: what reached the client is not what the
       // backend has to flush. `FenceWatcher.feed` returns "" for the whole of a

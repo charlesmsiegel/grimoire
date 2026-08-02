@@ -717,6 +717,37 @@ test("a slow pre-flush proposal read cannot undo the settling read", async () =>
   expect(screen.getByRole("button", { name: "Roll it" })).toBeInTheDocument();
 });
 
+test("the refresh right after a cancel cannot wipe the next turn's preview", async () => {
+  // Stop clears `busy` before the immediate refresh resolves, so the next turn
+  // can begin while that fetch is in flight — and its response would otherwise
+  // run setMessages/setStreaming("") straight over the new turn's state.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  let holdRefresh: (() => void) | null = null;
+  (api.getScene as any).mockImplementation(async () => {
+    if (holdRefresh) await new Promise<void>((r) => { holdRefresh = r; });
+    return { meta: {}, total: 0, messages: [] };
+  });
+  (api.chat as any)
+    .mockImplementationOnce(hangingChat(["first fragment"]))
+    .mockImplementation(hangingChat(["second fragment"]));
+  renderCampaign();
+  const ta = await screen.findByRole("textbox");
+  fireEvent.change(ta, { target: { value: "and then?" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+
+  holdRefresh = () => {};                       // the post-cancel refresh parks
+  fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
+  await waitFor(() => expect(holdRefresh).not.toBe(null));
+  await screen.findByRole("button", { name: /continue ▶/i });   // Send is live again
+
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "again" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  await screen.findByText("second fragment");
+  (holdRefresh as unknown as () => void)();     // the stale refresh finally lands
+  await new Promise((r) => setTimeout(r, 50));
+  expect(screen.getByText("second fragment")).toBeInTheDocument();
+});
+
 test("the post-cancel poll stops once a new turn owns the view", async () => {
   // Stop clears `busy` before the poll finishes, so the player can send again
   // while it is still running. Left alone it would keep calling selectScene,
