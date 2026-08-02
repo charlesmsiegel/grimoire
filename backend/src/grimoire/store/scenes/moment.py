@@ -97,7 +97,7 @@ def _stamp_start_date(cid: str, sid: str, canonical: str) -> str:
         return sid
     base = scene_ids.format_sid(parsed["number"], parsed["width"],
                                 scene_ids.date_slug_of(canonical), parsed["title_slug"])
-    new_sid = uniquify(base, lambda c: c != sid and paths._scene_path(cid, c).exists())
+    new_sid = uniquify(base, lambda c: c != sid and paths._sid_taken(cid, c))
     paths._scene_path(cid, sid).rename(paths._scene_path(cid, new_sid))
     scene_refs.repoint(cid, {sid: new_sid})
     return new_sid

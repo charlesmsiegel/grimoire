@@ -112,6 +112,15 @@ export type CampaignMeta = {
 export type SceneMeta = { id: string; title: string; model: string; created: string; updated: string; date: string; pcless?: boolean };
 export type Message = { role: "user" | "assistant"; content: string; speaker?: string };
 export type Scene = { meta: { id: string; title: string; response_preset?: string }; messages: Message[] };
+// One stored variant of the generation a reroll replaces. `posts` is how many
+// transcript posts it becomes (one reply can split per speaker), `preview` is
+// clipped server-side, and `guidance` is the reroll hint that produced it.
+// `id` is derived from the variant's content, not its position: retention drops
+// the oldest take when a full set grows, and every index below it shifts.
+export type SceneAlternate = {
+  id: string; created: string; guidance: string; posts: number; preview: string;
+};
+export type SceneAlternates = { active: number | null; alternates: SceneAlternate[] };
 // A windowed read (`getScene` with a `limit`) carries the tail of the
 // transcript plus the cursor to walk backwards from. `offset` is the absolute
 // index of `messages[0]` — the index `editMessage` takes — so a client holding
@@ -719,6 +728,15 @@ export const api = {
                  ? { ...(guidance ? { guidance } : {}), ...(response ? { response } : {}) }
                  : undefined,
                onEvent, signal),
+
+  // Reroll alternates: every variant of the generation a reroll would replace,
+  // `active` being the one the transcript is showing (null once a reroll's
+  // stream died and left the slot empty). Previews only — picking one is what
+  // brings its full text back, as transcript.
+  getAlternates: (cid: string, sid: string) =>
+    request<SceneAlternates>("GET", `/api/campaigns/${cid}/scenes/${sid}/alternates`),
+  pickAlternate: (cid: string, sid: string, id: string) =>
+    request<{ ok: boolean }>("POST", `/api/campaigns/${cid}/scenes/${sid}/alternates/${id}`),
 
   // dice rolls
   roll: (cid: string, sid: string, notation: string, label?: string) =>

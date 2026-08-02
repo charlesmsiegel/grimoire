@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import grimoire.store as store
+from grimoire.store import atomic
 from grimoire import routes
 from grimoire.llm_errors import LLMError
 from grimoire.main import create_app
@@ -2255,6 +2256,399 @@ def test_regenerate_with_desynced_turn_boundaries_returns_400(client):
     resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
     assert resp.status_code == 400
     assert len(client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]) == 2
+    # a refused regenerate archives nothing either
+    assert client.get(
+        f"/api/campaigns/{cid}/scenes/{sid}/alternates").json()["alternates"] == []
+
+
+def test_rerolling_an_empty_slot_does_not_eat_the_generation_below_it(client):
+    """Generations can sit back to back (an empty send persists no player
+    message). After a failed reroll of the second, the FIRST is what the
+    transcript exposes — and a second reroll attempt must stream into the empty
+    slot rather than delete a reply nobody asked to reroll."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "first reply"}])
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "second reply"}])
+    store.alternates.archive(cid, sid, "")              # reroll the second...
+    store.scenes.remove_trailing_assistant_run(cid, sid)   # ...and the stream dies
+
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate").status_code == 200
+
+    msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    assert [m["content"] for m in msgs] == ["hi", "first reply", "Hello"]
+    # and the reply parked by the failed attempt is still an alternate
+    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/alternates").json()
+    assert [a["preview"] for a in body["alternates"]] == ["second reply", "Hello"]
+    assert body["active"] == 1
+
+
+def test_a_scene_that_was_never_rerolled_reports_no_alternates(client):
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "a reply"}])
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/alternates").json() == {
+        "active": None, "alternates": []}
+
+
+def test_regenerate_keeps_the_replaced_reply_as_an_alternate(client):
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "old reply"}])
+
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
+                       json={"guidance": "warmer"}).status_code == 200
+
+    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/alternates").json()
+    assert [a["preview"] for a in body["alternates"]] == ["old reply", "Hello"]
+    assert body["active"] == 1
+    assert body["alternates"][1]["guidance"] == "warmer"   # the hint that produced it
+    assert body["alternates"][1]["posts"] == 1
+
+
+def test_editing_a_rerolled_reply_parks_it_rather_than_erasing_it(client):
+    """The generated reply exists only in the transcript until the stream's
+    persist path reconciles the set, and an edit rewrites exactly that text.
+    Without the reconcile the swipe set silently loses the take being edited."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "old reply"}])
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate").status_code == 200
+
+    assert client.put(f"/api/campaigns/{cid}/scenes/{sid}/messages/1",
+                      json={"content": "Hello, and a bell."}).status_code == 200
+
+    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/alternates").json()
+    assert [a["preview"] for a in body["alternates"]] == [
+        "old reply", "Hello", "Hello, and a bell."]
+    assert body["active"] == 2
+
+
+def _alt_id(client, cid, sid, index):
+    """The id of the variant currently at `index` — what the client would send,
+    since the wire addresses variants by content rather than by position."""
+    return client.get(
+        f"/api/campaigns/{cid}/scenes/{sid}/alternates").json()["alternates"][index]["id"]
+
+
+def test_picking_an_alternate_swaps_it_into_the_transcript(client):
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "old reply"}])
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
+
+    vid = _alt_id(client, cid, sid, 0)
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/alternates/{vid}").json() == {"ok": True}
+
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"] == [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "old reply"}]
+    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/alternates").json()
+    assert body["active"] == 0 and len(body["alternates"]) == 2
+
+
+def test_picking_an_alternate_that_does_not_exist_returns_404(client):
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "a reply"}])
+    assert client.post(
+        f"/api/campaigns/{cid}/scenes/{sid}/alternates/00000000deadbeef").status_code == 404
+
+
+def test_rerolling_an_empty_slot_re_aims_the_guidance(client):
+    """The first reroll's stream died, so the transcript ends on the user line
+    and there is no run to archive. The second reroll's hint still has to reach
+    the variant that lands, or it is filed under the first attempt's."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "old reply"}])
+    store.alternates.archive(cid, sid, "colder")            # the stream then died
+    store.scenes.remove_trailing_assistant_run(cid, sid)
+
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate", json={"guidance": "warmer"})
+
+    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/alternates").json()
+    assert body["alternates"][1]["guidance"] == "warmer"
+
+
+def test_a_sidecar_that_cannot_be_written_does_not_fail_the_landed_reply(client, monkeypatch):
+    """The reply is in the transcript by the time the set is reconciled. A full
+    disk must not turn that into a reported failure — the client would offer a
+    retry that appends a *second* generation over a reply already on disk."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "old reply"}])
+    monkeypatch.setattr(store.alternates, "reconcile",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("no space left on device")))
+
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
+
+    assert resp.status_code == 200 and '"done": true' in resp.text
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"] == [
+        {"role": "user", "content": "hi"}, {"role": "assistant", "content": "Hello"}]
+
+
+def test_a_second_edit_does_not_erase_the_first(client):
+    """An edit parks the pre-edit text as a variant, but that variant lives only
+    in the transcript until the set is reconciled — so a second edit would
+    overwrite the sole copy of the first and drop it silently."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "old reply"}])
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
+
+    for text in ("Hello, and a bell.", "Hello, and two bells."):
+        assert client.put(f"/api/campaigns/{cid}/scenes/{sid}/messages/1",
+                          json={"content": text}).status_code == 200
+
+    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/alternates").json()
+    assert [a["preview"] for a in body["alternates"]] == [
+        "old reply", "Hello", "Hello, and a bell.", "Hello, and two bells."]
+    assert body["active"] == 3
+
+
+def test_an_empty_send_into_a_dead_slot_drops_the_rerolls_guidance(client):
+    """An empty send streams a director turn into the slot without persisting a
+    player message, so — like Retry — it fills the slot without having sent the
+    hint a failed guided reroll parked there."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "old reply"}])
+    store.alternates.archive(cid, sid, "warmer")             # the stream then died
+    store.scenes.remove_trailing_assistant_run(cid, sid)
+
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat",
+                       json={"content": "   "}).status_code == 200
+
+    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/alternates").json()
+    assert [a["preview"] for a in body["alternates"]] == ["old reply", "Hello"]
+    assert body["alternates"][1]["guidance"] == ""           # nothing steered it
+
+
+def test_retrying_into_an_empty_slot_drops_the_dead_rerolls_guidance(client):
+    """A guided reroll whose stream died leaves its hint parked for whatever
+    lands next. Retry never sends it, so labelling the take it produces with
+    that hint claims an instruction the model was never given."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "old reply"}])
+    store.alternates.archive(cid, sid, "warmer")             # the stream then died
+    store.scenes.remove_trailing_assistant_run(cid, sid)
+
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/retry").status_code == 200
+
+    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/alternates").json()
+    assert [a["preview"] for a in body["alternates"]] == ["old reply", "Hello"]
+    assert body["alternates"][1]["guidance"] == ""           # nothing steered it
+
+
+def test_picking_an_alternate_retires_the_pending_roll_proposal(client):
+    """The swap replaces the narration a pending fence was derived from, so
+    accepting that decision afterwards would continue text nothing on screen
+    asked for. Regenerate supersedes for this reason; so must the swap."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "old reply"}])
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
+    store.proposals.new(cid, sid, {"check": "athletics", "actor": None, "problems": []})
+    assert client.get(
+        f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]["status"] == "pending"
+
+    vid = _alt_id(client, cid, sid, 0)
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/alternates/{vid}").status_code == 200
+
+    record = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert record["status"] == "superseded"
+
+
+def test_a_snapshot_taken_before_retention_trimmed_the_set_cannot_swap(client):
+    """Retention drops the oldest take when a full set gains one, shifting every
+    index below it. A snapshot from before that drop still names an in-range
+    *index*, so an index-addressed pick would promote text nobody previewed;
+    naming the variant by content makes the same click 404."""
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "take 0"}])
+    for n in range(1, store.alternates.MAX_ALTERNATES):
+        store.alternates.archive(cid, sid, "")
+        store.scenes.remove_trailing_assistant_run(cid, sid)
+        store.scenes.append_reply(cid, sid, [{"speaker": None, "content": f"take {n}"}])
+        store.alternates.reconcile(cid, sid)
+    snapshot = client.get(f"/api/campaigns/{cid}/scenes/{sid}/alternates").json()["alternates"]
+    assert [a["preview"] for a in snapshot] == [f"take {n}" for n in range(8)]
+
+    # another tab rerolls: the set is full, so "take 0" is dropped and every
+    # remaining index shifts down by one
+    store.alternates.archive(cid, sid, "")
+    store.scenes.remove_trailing_assistant_run(cid, sid)
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "take 8"}])
+    store.alternates.reconcile(cid, sid)
+    after = client.get(f"/api/campaigns/{cid}/scenes/{sid}/alternates").json()["alternates"]
+    assert [a["preview"] for a in after] == [f"take {n}" for n in range(1, 9)]
+
+    resp = client.post(
+        f"/api/campaigns/{cid}/scenes/{sid}/alternates/{snapshot[0]['id']}")
+    assert resp.status_code == 404
+    # index 0 now holds "take 1"; the transcript is untouched rather than swapped
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"][-1] == {
+        "role": "assistant", "content": "take 8"}
+    # and a snapshot id that survived the shift still names its own take
+    assert client.post(
+        f"/api/campaigns/{cid}/scenes/{sid}/alternates/{snapshot[1]['id']}").status_code == 200
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"][-1] == {
+        "role": "assistant", "content": "take 1"}
+
+
+def test_a_stale_alternate_id_leaves_the_pending_proposal_alone(client):
+    """The id comes from a client snapshot another tab may have moved on from.
+    A request that 404s does not get to retire a decision belonging to a turn it
+    never swaps past."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "a reply"}])
+    store.proposals.new(cid, sid, {"check": "athletics", "actor": None, "problems": []})
+
+    assert client.post(
+        f"/api/campaigns/{cid}/scenes/{sid}/alternates/00000000deadbeef").status_code == 404
+
+    record = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert record["status"] == "pending"
+
+
+def test_picking_the_variant_already_showing_has_no_side_effects(client):
+    """A delayed click for a variant another tab has since promoted changes
+    nothing — so it must not retire that tab's pending decision on the way."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "old reply"}])
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
+    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/alternates").json()
+    vid = body["alternates"][body["active"]]["id"]
+    store.proposals.new(cid, sid, {"check": "athletics", "actor": None, "problems": []})
+
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/alternates/{vid}").status_code == 200
+
+    record = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert record["status"] == "pending"
+
+
+def test_a_reroll_that_cannot_archive_leaves_the_pending_proposal_alone(client, monkeypatch):
+    """Superseding before the archive retired a decision for a reroll that never
+    happened — the narration it was derived from is still exactly what the
+    reader sees."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "a reply"}])
+    store.proposals.new(cid, sid, {"check": "athletics", "actor": None, "problems": []})
+    refuse = {"on": True}
+
+    def unwritable(path, text):
+        if refuse["on"] and path == store.scenes.paths._alts_path(cid, sid):
+            raise PermissionError(13, "read-only")
+        return atomic.write_text(path, text)
+
+    monkeypatch.setattr(store.alternates.atomic, "write_text", unwritable)
+    with pytest.raises(PermissionError):
+        client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
+    refuse["on"] = False
+
+    record = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert record["status"] == "pending"
+
+
+def test_a_swap_that_cannot_persist_leaves_the_pending_proposal_alone(client, monkeypatch):
+    """Retiring the decision before the sidecar is known to be writable retired
+    it for a swap that never happened — and the narration it was derived from is
+    still exactly what the reader sees."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "old reply"}])
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
+    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/alternates").json()
+    vid = next(a["id"] for i, a in enumerate(body["alternates"]) if i != body["active"])
+    store.proposals.new(cid, sid, {"check": "athletics", "actor": None, "problems": []})
+
+    # a flag rather than `monkeypatch.undo()`, which would also revert the
+    # `client` fixture's own GRIMOIRE_HOME and point the reads below elsewhere
+    refuse = {"on": True}
+
+    def unwritable(path, text):
+        if refuse["on"] and path == store.scenes.paths._alts_path(cid, sid):
+            raise PermissionError(13, "read-only")
+        return atomic.write_text(path, text)
+
+    monkeypatch.setattr(store.alternates.atomic, "write_text", unwritable)
+    with pytest.raises(PermissionError):
+        client.post(f"/api/campaigns/{cid}/scenes/{sid}/alternates/{vid}")
+    refuse["on"] = False
+
+    record = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert record["status"] == "pending"                 # and the decision survived
+
+
+def test_a_reroll_whose_removal_fails_does_not_credit_the_live_reply(client, monkeypatch):
+    """`archive` records the hint before the removal. If the removal then fails,
+    the reply it was meant to replace is still live, and leaving the hint there
+    files that unchanged reply under an instruction it never received."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "a reply"}])
+
+    real = store.scenes.remove_trailing_assistant_run
+    refuse = {"on": True}
+
+    def boom(*a, **k):
+        if refuse["on"]:
+            raise OSError(28, "no space left on device")
+        return real(*a, **k)
+
+    monkeypatch.setattr(store.scenes, "remove_trailing_assistant_run", boom)
+    with pytest.raises(OSError):
+        client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
+                    json={"guidance": "colder"})
+    refuse["on"] = False
+
+    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/alternates").json()
+    assert body["alternates"][body["active"]]["guidance"] == ""   # not "colder"
+
+
+def test_alternates_of_an_unknown_scene_are_404(client):
+    _wid, cid = _campaign(client)
+    assert client.get(f"/api/campaigns/{cid}/scenes/nope/alternates").status_code == 404
+    assert client.post(f"/api/campaigns/{cid}/scenes/nope/alternates/0").status_code == 404
 
 
 def test_regenerate_missing_key_returns_409(client):
@@ -7462,16 +7856,23 @@ def test_retiring_a_pending_or_declined_record_projects_nothing(client):
     assert _roll_lines(client, cid, sid) == []
 
 
-@pytest.mark.parametrize("path,body,status", [
-    ("chat", {"content": "go on"}, 200),
-    ("retry", None, 200),
+@pytest.mark.parametrize("path,body,status,retired", [
+    ("chat", {"content": "go on"}, 200, True),
+    ("retry", None, 200, True),
     # Regenerate refuses once the heal's 🎲 line is the scene's trailing
     # message — rerolling must never delete a logged roll's transcript entry.
-    # It judges that on a transcript re-read AFTER the retire, so the guard
-    # returns a clean 400 rather than letting the removal blow up (500).
-    ("regenerate", None, 400),
+    # It judges that on a transcript read AFTER the heal, so the guard returns a
+    # clean 400 rather than letting the removal blow up (500).
+    #
+    # `retired` False, and deliberately so. The projection still lands — that is
+    # what #242 asks of every retirement path, and the explicit heal is what
+    # delivers it — but a request that refuses with a 400 has changed nothing,
+    # and the narration the decision was derived from is still on screen.
+    # Retiring it there was a side effect of superseding before doing the work,
+    # the same shape the alternate-swap route avoids by resolving first.
+    ("regenerate", None, 400, False),
 ])
-def test_every_route_retirement_path_projects(client, path, body, status):
+def test_every_route_retirement_path_projects(client, path, body, status, retired):
     # Issue #242 suggestion 3: drive each retirement endpoint with an
     # unprojected resolved record present and assert the projection landed.
     cid, sid, _ = _mech_scene(client)
@@ -7483,7 +7884,8 @@ def test_every_route_retirement_path_projects(client, path, body, status):
     assert len([e for e in client.get(f"/api/campaigns/{cid}/rolls").json()
                 if e.get("proposal") == pid]) == 1
     assert len(_roll_lines(client, cid, sid)) == 1
-    assert store.proposals.get(cid, sid)["status"] == "superseded"
+    assert store.proposals.get(cid, sid)["status"] == (
+        "superseded" if retired else "resolved")
 
 
 def _resolve_with_crashed_line(client, cid, sid, monkeypatch):
