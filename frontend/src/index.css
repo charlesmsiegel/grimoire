@@ -822,6 +822,15 @@ button.primary { background: var(--accent); color: var(--on-accent); border: var
 .absorb-diff .absorb-after { color: var(--ink); }
 .absorb-diff .absorb-before { margin-right: 6px; }
 
+/* A row whose target moved between absorb and save (#111). The stored text is
+   NOT struck through like `.absorb-before`: that strike means "about to be
+   replaced", and here the stored value is one of the outcomes the reviewer is
+   choosing between. */
+.absorb-conflict { margin: 4px 0; padding: 6px 8px; border-left: 2px solid var(--accent); background: var(--surface); }
+.absorb-conflict .form-actions { margin-top: 6px; gap: 6px; }
+.absorb-conflict-badge { margin-left: auto; }
+.absorb-stored { color: var(--ink); font-size: 13px; margin: 2px 0; white-space: pre-wrap; }
+
 .mechanics-warnings { margin: 4px 0 8px; padding-left: 16px; font-size: 13px; color: var(--ink); }
 .mechanics-notice { margin: 8px 0; padding: 8px 12px; border: var(--rw2) solid var(--rule); background: var(--surface); color: var(--ink); }
 .mechanics-notice p { margin: 4px 0; }

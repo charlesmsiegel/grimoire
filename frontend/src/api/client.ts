@@ -2,7 +2,12 @@ import { parseSSEChunk, type ChatEvent, type LocalizeEvent, type ChubGalleryEven
 import type { Model } from "./models";
 
 export class ApiError extends Error {
-  constructor(public status: number, public detail: string, public kind?: string) {
+  /** `body` is the whole decoded error payload. Most callers only need
+   *  `detail`/`kind`, but a route can attach structured data a retry has to act
+   *  on rather than merely display — the chronicle save's conflict rows (#111)
+   *  are the first — and flattening the response to two strings would drop it. */
+  constructor(public status: number, public detail: string, public kind?: string,
+              public body?: Record<string, unknown>) {
     super(detail);
   }
 }
@@ -15,7 +20,7 @@ async function requestRaw<T>(method: string, path: string, body?: unknown): Prom
   });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
-    throw new ApiError(res.status, data.detail ?? res.statusText, data.kind);
+    throw new ApiError(res.status, data.detail ?? res.statusText, data.kind, data);
   }
   return res.json() as Promise<T>;
 }
@@ -347,6 +352,21 @@ export type StagedEdit = {
   target: { kind: string; id: string }; label: string; field: string;
   before: string; after: string; authored: boolean;
   payload?: Record<string, unknown>;
+  /** Set once the reviewer has answered a conflict on this row (#111): the
+   *  reviewer's authorization to write over a target that moved since the
+   *  scene was absorbed. Both values authorize; they differ in whether `after`
+   *  is still the staged text or one the reviewer merged by hand. Absent means
+   *  unanswered, and the save is refused. */
+  resolve?: "replace" | "merge";
+};
+/** A staged edit whose target no longer matches the value it was staged
+ *  against (#111). Carries everything the three choices need — what is stored
+ *  now, and a merged draft where merging into the field makes sense — so
+ *  answering one costs no extra round-trip. */
+export type EditConflict = {
+  id: string; label: string; kind: string; field: string;
+  before: string; after: string; stored: string; reason: string;
+  mergeable: boolean; merged: string;
 };
 export type MechanicsDrop = { id: string; field?: string; reason: string };
 /** The two facts a bare status cannot carry, on every phase that makes an LLM

@@ -3,8 +3,8 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
-  api, type Actor, type AbsorbPhase, type Dossiers, type SceneMeta, type Message,
-  type RosterEntry, type SceneAbsorb,
+  api, type Actor, type AbsorbPhase, type Dossiers, type EditConflict, type SceneMeta,
+  type Message, type RosterEntry, type SceneAbsorb,
   type SceneDatetime, type StagedEdit, type ProposalRecord, type SceneCheckActor,
   type ResponsePresetSummary, type ResponseOverride, type ResponseBundle,
 } from "../api/client";
@@ -162,6 +162,11 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   const [editRows, setEditRows] = useState<(StagedEdit & { approved: boolean })[]>([]);
   const [editFailures, setEditFailures] = useState<
     { id: string; reason: string; kind: "conflict" | "error"; label: string }[]>([]);
+  // Rows the server refused because their target moved since the scene was
+  // absorbed (#111). The save is rejected whole and before anything is written,
+  // so this is a state the review sits IN rather than a report of what landed:
+  // it clears a row at a time as the reviewer keeps, replaces or merges.
+  const [conflicts, setConflicts] = useState<EditConflict[]>([]);
   // A failed SAVE gets its own surface, not the shared `error` banner: that
   // banner's Retry is wired to chat generation, so pointing a save failure at
   // it invites the user to generate another reply with the review still open.
@@ -576,6 +581,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     setAbsorbing(true);
     setError(null);
     setEditFailures([]);
+    setConflicts([]);
     try {
       let a;
       try {
@@ -622,12 +628,40 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       setAbsorb(null);
       setAbsorbSid(null);
       setEditRows([]);
+      setConflicts([]);
       setCtxKey((n) => n + 1);
     } catch (err: any) {
+      // A contradiction is not a failed save (#111): the server refused the
+      // batch before writing anything, so the review stands exactly as it was
+      // and the same commit token is still good. Show the rows, let the
+      // reviewer answer each one, and save again -- no `saveError`, whose
+      // "Try saving again" would just re-post the batch that was refused.
+      if (err?.kind === "edit_conflicts") {
+        setConflicts((err.body?.conflicts ?? []) as EditConflict[]);
+        setSaveError(null);
+        return;
+      }
       setSaveError(err.detail ?? String(err));
     } finally {
       setSaving(false);
     }
+  }
+
+  // Conflicts still waiting on an answer. Unapproving a row IS the keep answer,
+  // so the notice has to count the same rows the badges appear on — otherwise it
+  // keeps reporting conflicts the reviewer has already settled by dropping them.
+  const openConflicts = useMemo(
+    () => conflicts.filter((c) => editRows.some((r) => r.id === c.id && r.approved)),
+    [conflicts, editRows]);
+
+  // The reviewer's answer to one conflict. **keep** is not here: it unapproves
+  // the row, which drops it from the batch entirely -- the stored value wins by
+  // the edit never being sent. `replace` keeps the staged text, `merge` swaps in
+  // the draft the server prefilled from both sides for the reviewer to trim.
+  function resolveConflict(id: string, resolve: "replace" | "merge", after?: string) {
+    setEditRows((rows) => rows.map((r) =>
+      r.id === id ? { ...r, resolve, ...(after === undefined ? {} : { after }) } : r));
+    setConflicts((cs) => cs.filter((c) => c.id !== id));
   }
 
   // Replaces absorb.mechanics with a fresh audit and swaps in its sheet
@@ -907,11 +941,23 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
                     Never attempted, skipped: {absorb.dossiers.skipped.join(", ")}
                   </p>)}
               </div>)}
+            {openConflicts.length > 0 && (
+              <div className="mechanics-notice">
+                <p>{openConflicts.length === 1
+                  ? "One proposed change no longer matches what is stored"
+                  : `${openConflicts.length} proposed changes no longer match what is stored`}
+                  {" — nothing was saved. Answer each one below, then save again."}</p>
+              </div>)}
             {editRows.length > 0 && (
               <div className="absorb-edits">
                 <h5>Proposed changes</h5>
                 {editRows.map((e, i) => {
                   const isNewRecord = e.kind === "new_character" || e.kind === "new_location" || e.kind === "new_lore";
+                  // Only while the row is still in the batch: unapproving it IS
+                  // the keep choice, so the block goes away by answering it.
+                  const conflict = e.approved
+                    ? conflicts.find((c) => c.id === e.id)
+                    : undefined;
                   const setPayload = (patch: Record<string, unknown>) =>
                     setEditRows((rows) => rows.map((r, j) =>
                       j === i ? { ...r, payload: { ...r.payload, ...patch } } : r));
@@ -922,7 +968,26 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
                                onChange={() => setEditRows((rows) => rows.map((r, j) =>
                                  j === i ? { ...r, approved: !r.approved } : r))} />
                         {e.label}{e.authored ? " · card edit" : ""}
+                        {conflict && <span className="chip on absorb-conflict-badge">Changed</span>}
                       </label>
+                      {conflict && (
+                        <div className="absorb-conflict">
+                          <p className="field-hint">{conflict.reason} — it now reads:</p>
+                          <div className="absorb-stored">{conflict.stored}</div>
+                          <div className="form-actions">
+                            <button className="subtle" aria-label={`Keep stored ${e.label}`}
+                                    onClick={() => setEditRows((rows) => rows.map((r, j) =>
+                                      j === i ? { ...r, approved: false } : r))}>
+                              Keep stored</button>
+                            <button className="subtle" aria-label={`Replace stored ${e.label}`}
+                                    onClick={() => resolveConflict(e.id, "replace")}>
+                              Replace</button>
+                            {conflict.mergeable && (
+                              <button className="subtle" aria-label={`Merge stored ${e.label}`}
+                                      onClick={() => resolveConflict(e.id, "merge", conflict.merged)}>
+                                Merge</button>)}
+                          </div>
+                        </div>)}
                       {isNewRecord && (
                         <input aria-label={`Name ${e.label}`} value={(e.payload?.name as string) ?? ""}
                                onChange={(ev) => setPayload({ name: ev.target.value })} />
@@ -1004,7 +1069,8 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
             <div className="form-actions">
               <button className="subtle" disabled={saving}
                       onClick={() => { setAbsorb(null); setAbsorbSid(null); setEditRows([]);
-                                       setEditFailures([]); setSaveError(null); }}>Cancel</button>
+                                       setEditFailures([]); setSaveError(null);
+                                       setConflicts([]); }}>Cancel</button>
               <button className="primary" onClick={saveAbsorb} disabled={saving}>
                 {saving ? "Saving…" : "Save summary"}</button>
             </div>

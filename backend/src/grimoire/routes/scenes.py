@@ -622,6 +622,22 @@ def put_chronicle(cid: str, sid: str, body: ChronicleSave):
                 detail={"detail": "an earlier save of this review started and did not "
                                   "finish — reload the campaign to see what landed",
                         "kind": "commit_incomplete"})
+        # Contradiction check (#111), before the first write and after the replay
+        # branches above -- a replay of a save that already landed must return its
+        # result, not be told the records it wrote now contradict it.
+        #
+        # Inside the lock, so the verdict cannot go stale between the check and
+        # the apply that trusts it; and ahead of every write, so a 409 here leaves
+        # the chronicle untouched and this commit token unspent. The reviewer
+        # resolves each row (keep / replace / merge) and saves the same review
+        # again.
+        drifted = store.absorb.check_conflicts(cid, body.edits)
+        if drifted:
+            raise HTTPException(
+                status_code=409,
+                detail={"detail": "some proposed changes no longer match what is "
+                                  "stored — review them and save again",
+                        "kind": "edit_conflicts", "conflicts": drifted})
         record = store.chronicle.absorb(cid, {
             "id": sid, "one_line": body.one_line, "summary": body.summary,
             "keywords": body.keywords, **facts})
