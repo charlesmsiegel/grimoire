@@ -485,10 +485,19 @@ def _entries(suspects: str) -> list[list[str]]:
             fresh = False
         else:
             out[-1].append(line)
-        if _heads_a_list(stripped):
-            # Heading-ness belongs to the line just read, whichever entry it
-            # landed in -- a `:` line arriving as a continuation still heads the
-            # bullets below it.
+        if item or _heads_a_list(stripped):
+            # EVERY list item is pushed, not only a colon-terminated one: a
+            # nested list is written `- Winifred` / `  - is hiding the ledger`
+            # just as readily as with a colon, and requiring one left the
+            # subjectless child ungoverned. A bullet governs what is indented
+            # under it because that is what indenting under it means; the colon
+            # only ever mattered for a line that is NOT a list item. Siblings
+            # still do not govern each other -- the pop above runs first and
+            # takes any item at this indent or deeper with it.
+            #
+            # For a non-item, heading-ness belongs to the line just read,
+            # whichever entry it landed in: a `:` line arriving as a
+            # continuation still heads the bullets below it.
             open_heads.append((len(out) - 1, len(atx.group(1)) if atx else indent,
                                "atx" if atx else ("item" if item else "colon")))
     return list(zip(out, heads))
@@ -592,13 +601,20 @@ def _actor_aliases(aroot, cid: str, actor: dict) -> set[str]:
     whole block.
     """
     kind, aid = actor["kind"], actor["id"]
-    names: set[str] = set()
+    # A LIST, not a set, and the filtering happens once at the end. A card is
+    # hand-editable and importable, so `data.name` can arrive as a list or an
+    # object -- and `set.add` of an unhashable value raises TypeError, which
+    # escaped this function into `_character_states`' outer catch and emptied
+    # the state block for EVERY actor in the scene. This function's failure
+    # policy is per actor (below); collecting first and validating after is what
+    # makes that true for a malformed name as well as for an unreadable card.
+    names: list = []
     vid = appearances_versions.locked_version(cid, kind, aid)
     if kind == "characters":
-        names.add(_npc_name(aroot, aid))
+        names.append(_npc_name(aroot, aid))
         if vid:
             try:
-                names.add(characters.read_card(aroot, aid, vid)["data"].get("name", ""))
+                names.append(characters.read_card(aroot, aid, vid)["data"].get("name", ""))
             except (characters.CharacterNotFound, characters.VersionNotFound):
                 pass
     elif kind == "pcs":
@@ -608,12 +624,12 @@ def _actor_aliases(aroot, cid: str, actor: dict) -> set[str]:
         # canonical PC name unmatched. The asymmetry was an oversight, not a
         # judgement about PCs.
         try:
-            names.add(pcs.read_pc(aroot, aid)["meta"].get("name", ""))
+            names.append(pcs.read_pc(aroot, aid)["meta"].get("name", ""))
         except pcs.PCNotFound:
             pass
         if vid:
             try:
-                names.add(pcs.read_persona(aroot, aid, vid).get("name", ""))
+                names.append(pcs.read_persona(aroot, aid, vid).get("name", ""))
             except (pcs.PCNotFound, pcs.PCVersionNotFound):
                 pass
     return {n.strip() for n in names if isinstance(n, str) and n.strip()}

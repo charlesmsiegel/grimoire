@@ -1923,6 +1923,45 @@ def test_a_horizontal_rule_is_not_read_as_a_heading(monkeypatch, tmp_path):
     assert "Mara sold the manifest" in section
 
 
+def test_a_nested_bullet_goes_with_its_parent_without_a_colon(monkeypatch, tmp_path):
+    """A nested list is written `- Winifred` / `  - is hiding the ledger` as
+    readily as with a colon. Requiring one left the subjectless child ungoverned
+    — a bullet governs what is indented under it because that is what indenting
+    under it means."""
+    from grimoire.store import playstate
+    cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
+    playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
+        "Wary.", "",
+        "- Winifred\n"
+        "  - is hiding the ledger\n"
+        "  - plans to sell it\n"
+        "- Mara\n"
+        "  - sold the manifest"))
+    section = _state_section(cid, sid)
+    assert "hiding the ledger" not in section
+    assert "plans to sell it" not in section
+    assert "sold the manifest" in section       # a sibling bullet governs nothing
+
+
+def test_a_malformed_card_name_costs_only_its_own_actor(monkeypatch, tmp_path):
+    """A card is hand-editable and importable, so `data.name` can arrive as a
+    list — and adding that to a set raises TypeError, which escaped into
+    `_character_states`' outer catch and emptied the state block for EVERY actor
+    in the scene. The failure policy here is per actor."""
+    from grimoire.store import characters, playstate
+    cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
+    card = characters.read_card(croot, ids["Winifred"], "main")
+    card["data"]["name"] = ["Winifred", "The Harbourmaster's Daughter"]   # not a string
+    characters.update_version(croot, ids["Winifred"], "main", card)
+    playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
+        "Wary and precise.", "The ledger is real.", "Mara sold the manifest."))
+
+    section = _state_section(cid, sid)
+    assert "Wary and precise." in section          # the other actor survives intact
+    assert "The ledger is real." in section
+    assert "Mara sold the manifest." in section
+
+
 def test_a_suspicion_naming_a_player_s_container_name_is_withheld(monkeypatch, tmp_path):
     """A PC's container name and its locked persona name can differ. Taking only
     the persona left a suspicion written against the canonical PC name unmatched
