@@ -3,6 +3,8 @@ import json as json_module
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import ingest_scene
 from grimoire.store import campaigns, worlds
@@ -654,6 +656,39 @@ def test_the_cli_reports_a_resume_whose_scene_vanished(monkeypatch, tmp_path, ca
 
     assert ingest_scene.main() == 1
     assert "no longer exists" in capsys.readouterr().err
+
+
+def test_a_failure_after_the_timeline_does_not_file_it_twice(monkeypatch, tmp_path):
+    """`append_timeline` is the one step of the sequence that APPENDS. A failure
+    after it left the manifest `in_progress`, and the next run replayed the
+    whole sequence and filed the same events a second time — permanently, since
+    nothing downstream reconciles a timeline."""
+    from grimoire.store import campaigns as campaigns_store, scenes, worlds as worlds_store
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    ingest_scene.ensure_character(cid, {"name": "Marisol"})
+    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+    timeline = campaigns_store.campaign_root(cid) / "timeline.md"
+
+    real_mark = ingest_scene.scenes.mark_absorbed
+
+    def _fails_once(*a, **kw):
+        monkeypatch.setattr(ingest_scene.scenes, "mark_absorbed", real_mark)
+        raise OSError("scene file temporarily unwritable")
+
+    monkeypatch.setattr(ingest_scene.scenes, "mark_absorbed", _fails_once)
+    with pytest.raises(OSError):
+        asyncio.run(ingest_scene.ingest_one_scene(
+            cid, _PARTIAL_SCENE, FakeClient(_PARTIAL_OUTPUT), conn))
+    assert timeline.read_text(encoding="utf-8").count("swore on the stair") == 1
+    # The step that cannot be repeated is recorded where the resume will read it.
+    assert ingest_scene.load_manifest(cid)[_PARTIAL_SCENE["key"]]["timeline_done"] is True
+
+    again = asyncio.run(ingest_scene.ingest_one_scene(
+        cid, _PARTIAL_SCENE, FakeClient(_PARTIAL_OUTPUT), conn))
+    assert again["status"] == "done"
+    assert timeline.read_text(encoding="utf-8").count("swore on the stair") == 1
+    assert len(scenes.list_scenes(cid)) == 1          # and still no duplicate scene
 
 
 def test_a_vanished_scene_is_persisted_so_it_can_be_resolved(monkeypatch, tmp_path):

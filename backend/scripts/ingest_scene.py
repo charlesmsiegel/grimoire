@@ -128,9 +128,20 @@ class SceneVanished(Exception):
     """
 
 
-def apply_scene(cid: str, sid: str, parsed: dict,
-                edits: list[dict]) -> tuple[list[str], list[dict]]:
+def apply_scene(cid: str, sid: str, parsed: dict, edits: list[dict],
+                timeline_done: bool = False,
+                checkpoint=None) -> tuple[list[str], list[dict]]:
     """Write the scene's absorb through, returning what landed AND what did not.
+
+    `append_timeline` is the one step here that is NOT idempotent: it appends,
+    where the chronicle record is keyed by scene id and `mark_absorbed` sets
+    fields. So a failure AFTER it -- an unwritable scene file, a full disk --
+    left the manifest `in_progress` and the next run replayed the whole
+    sequence, filing the same events a second time, permanently. `checkpoint`
+    is called immediately after the append, INSIDE the lock, to record that it
+    happened; `timeline_done` is that record coming back on the resume, and
+    skips the step rather than the scene. Every other step is safe to repeat,
+    which is why only this one is remembered.
 
     The failures used to be dropped here, on the grounds that this pipeline
     predates sheets and surfaces nothing about them. That was survivable while
@@ -159,7 +170,10 @@ def apply_scene(cid: str, sid: str, parsed: dict,
         chronicle.absorb(cid, {"id": sid, "one_line": parsed["one_line"],
                                "summary": parsed["summary"],
                                "keywords": parsed["keywords"], **facts})
-        chronicle.append_timeline(cid, parsed["timeline_events"])
+        if not timeline_done:
+            chronicle.append_timeline(cid, parsed["timeline_events"])
+            if checkpoint is not None:
+                checkpoint()
         scenes.mark_absorbed(cid, sid, parsed["one_line"], parsed["summary"])
         return absorb.apply_edits(cid, edits, sid)
 
@@ -356,8 +370,18 @@ async def ingest_one_scene(cid: str, scene: dict, client: LLMClient, conn: dict)
 
         result = await run_absorb(cid, sid, client, conn)
         one_line = result["parsed"]["one_line"]
+
+        def _timeline_written() -> None:
+            """Record the one step of the sequence that cannot be repeated."""
+            manifest[key] = {**(manifest.get(key) or {}), "status": "in_progress",
+                             "sid": sid, "timeline_done": True}
+            save_manifest(cid, manifest)
+
         try:
-            applied, failures = apply_scene(cid, sid, result["parsed"], result["edits"])
+            applied, failures = apply_scene(
+                cid, sid, result["parsed"], result["edits"],
+                timeline_done=bool(entry and entry.get("timeline_done")),
+                checkpoint=_timeline_written)
         except SceneVanished:
             return _record_vanished(cid, manifest, key, sid)
         pending = _unapplied(result["edits"], failures)
@@ -371,6 +395,11 @@ async def ingest_one_scene(cid: str, scene: dict, client: LLMClient, conn: dict)
     status = "done" if not failures else "incomplete"
     manifest[key] = {"status": status, "sid": sid, "one_line": one_line, "applied": applied}
     if failures:
+        # The timeline flag rides along on anything not `done`, because an
+        # `incomplete` entry with nothing replayable falls back to a full
+        # re-run: without it that fallback would file this scene's events a
+        # second time to recover rows a rerun cannot land anyway.
+        manifest[key]["timeline_done"] = True
         manifest[key]["failures"] = failures
         if pending:   # omitted when nothing is replayable, which is what the resume reads
             manifest[key]["pending"] = pending

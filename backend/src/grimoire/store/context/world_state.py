@@ -481,6 +481,20 @@ def _heads_a_list(stripped: str) -> bool:
     return bool(_ATX.match(stripped)) or stripped.rstrip(_EMPHASIS_TAIL).endswith(":")
 
 
+def _outdented(top: tuple, indent: int) -> bool:
+    """Whether an open ATX heading is closed by a line at `indent`.
+
+    A section normally ends only at the next heading of its level or shallower,
+    which is why a blank line does not close one. But a heading written INSIDE a
+    list item belongs to that item, and the item ends where the indentation
+    does: without this, `- Winifred` / `  ### Plans` left `Plans` governing
+    every later line in the block, so unrelated statements outside the list were
+    withheld along with it. Only an indented heading can be closed this way; one
+    at column zero is a section of the document.
+    """
+    return top[2] == "atx" and top[4] > indent
+
+
 def _entries(suspects: str) -> list[list[str]]:
     """`suspects` grouped into entries — the unit the filter withholds.
 
@@ -542,12 +556,13 @@ def _entries(suspects: str) -> list[list[str]]:
     heads: list[int] = []
     fresh = True                            # the next line opens a new entry
     pending_blank = False                   # a blank whose pop is not yet decided
-    # Open headings, outermost first: (entry, rank, kind, depth). `rank` is the
-    # indent for a colon heading or a heading bullet, and the heading LEVEL for
-    # an ATX one -- the two never nest against each other by the same measure.
-    # `depth` is the blockquote nesting the heading was opened at, so leaving
-    # the quote closes it.
-    open_heads: list[tuple[int, int, str, int]] = []
+    # Open headings, outermost first: (entry, rank, kind, depth, indent).
+    # `rank` is the indent for a colon heading or a heading bullet, and the
+    # heading LEVEL for an ATX one -- the two never nest against each other by
+    # the same measure. `depth` is the blockquote nesting the heading was opened
+    # at, so leaving the quote closes it, and `indent` is where the line sat, so
+    # leaving the LIST ITEM a heading was written inside closes it too.
+    open_heads: list[tuple[int, int, str, int, int]] = []
     depth = 0                               # blockquote nesting of the last line
     for line in suspects.splitlines():
         # A blockquote is a wrapper, not a syntax of its own, so every rule
@@ -623,9 +638,11 @@ def _entries(suspects: str) -> list[list[str]]:
             #     blank line instead of the syntax. Only a LIST keeps it open:
             #     an ordinary paragraph after the blank is a new statement, and
             #     that is the case the pop was written for.
-            while open_heads and open_heads[-1][2] != "atx" and not (
-                    open_heads[-1][2] == "item" and indent > open_heads[-1][1]) and not (
-                    open_heads[-1][2] == "colon" and item and indent >= open_heads[-1][1]):
+            while open_heads and (
+                    _outdented(open_heads[-1], indent)
+                    or (open_heads[-1][2] == "item" and indent <= open_heads[-1][1])
+                    or (open_heads[-1][2] == "colon"
+                        and not (item and indent >= open_heads[-1][1]))):
                 open_heads.pop()
             pending_blank = False
         # A setext underline retroactively makes the line ABOVE it a heading, so
@@ -638,7 +655,12 @@ def _entries(suspects: str) -> list[list[str]]:
         # a heading would govern the list below it by an entry that names nobody.
         if not item and out and out[-1][-1].strip() and _SETEXT.fullmatch(stripped):
             level = 1 if stripped[0] == "=" else 2
-            while open_heads and (open_heads[-1][2] != "atx" or open_heads[-1][1] >= level):
+            # Same rule as the ATX branch below: a setext heading indented
+            # inside a list item does not end that item.
+            while open_heads and (
+                    _outdented(open_heads[-1], indent)
+                    or (open_heads[-1][2] == "atx" and open_heads[-1][1] >= level)
+                    or (open_heads[-1][2] != "atx" and open_heads[-1][1] >= indent)):
                 open_heads.pop()
             # The title's OWN governor is re-decided here, because it was
             # assigned one line too early: when it was read it looked like an
@@ -647,12 +669,22 @@ def _entries(suspects: str) -> list[list[str]]:
             # the second `Winifred` / `-------` block in a file would be
             # withheld along with the first.
             heads[len(out) - 1] = open_heads[-1][0] if open_heads else -1
-            open_heads.append((len(out) - 1, level, "atx", depth))
+            open_heads.append((len(out) - 1, level, "atx", depth, indent))
         if atx:
             # A section ends at the next heading of its own level or shallower,
-            # and takes every colon heading and bullet inside it along.
+            # and takes every colon heading and bullet inside it along -- but
+            # only the ones it is not itself INSIDE. A heading indented within a
+            # list item (`- Winifred` / `  ### Plans`) is part of that item, and
+            # popping the item because it is not an ATX heading severed the
+            # named parent: the bullets under `Plans` were then governed by a
+            # heading that names nobody, and the private detail published. A
+            # bullet or colon heading shallower than this line survives, and the
+            # stack is outermost-first, so everything below it does too.
             level = len(atx.group(1))
-            while open_heads and (open_heads[-1][2] != "atx" or open_heads[-1][1] >= level):
+            while open_heads and (
+                    _outdented(open_heads[-1], indent)
+                    or (open_heads[-1][2] == "atx" and open_heads[-1][1] >= level)
+                    or (open_heads[-1][2] != "atx" and open_heads[-1][1] >= indent)):
                 open_heads.pop()
         elif item:
             # Returning to an outer level POPS the headings it has left, and
@@ -677,7 +709,8 @@ def _entries(suspects: str) -> list[list[str]]:
             # outer-level bullet that came after it -- withholding an unrelated
             # suspicion rather than leaking one, but wrong in the same way.
             while open_heads and (
-                    (open_heads[-1][2] == "item" and open_heads[-1][1] >= indent)
+                    _outdented(open_heads[-1], indent)
+                    or (open_heads[-1][2] == "item" and open_heads[-1][1] >= indent)
                     or (open_heads[-1][2] == "colon" and open_heads[-1][1] > indent)):
                 open_heads.pop()
         governor = open_heads[-1][0] if open_heads else -1
@@ -701,7 +734,8 @@ def _entries(suspects: str) -> list[list[str]]:
             # whichever entry it landed in: a `:` line arriving as a
             # continuation still heads the bullets below it.
             open_heads.append((len(out) - 1, len(atx.group(1)) if atx else indent,
-                               "atx" if atx else ("item" if item else "colon"), depth))
+                               "atx" if atx else ("item" if item else "colon"),
+                               depth, indent))
     return list(zip(out, heads))
 
 
