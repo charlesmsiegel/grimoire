@@ -152,8 +152,8 @@ def _voice_notes(cid: str, croot, cast: list[dict]) -> list[dict]:
         # "" is "provenance not recorded" (a flag predating the field), which
         # counts as valid -- invalidating on it would retire real user data on
         # upgrade.
-        current = voice_drift.anchor_fingerprint(record["text"], record["id"])
-        if flag["anchor"] and flag["anchor"] != current:
+        if flag["anchor"] and not voice_drift.fingerprint_matches(
+                flag["anchor"], record["text"], record["id"]):
             continue
         out.append({"name": name, "note": flag["note"]})
     return out

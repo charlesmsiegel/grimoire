@@ -143,10 +143,17 @@ def anchor_fingerprint(anchor: str, anchor_id: str = "") -> str:
     """A digest of the anchor a verdict was judged against.
 
     Carried on the staged edit so the apply-time guard can tell whether the
-    reference moved between the judgment and the save. Whitespace-normalized,
-    because a reformatted anchor is the same standard and must not invalidate a
-    finding; "" (no anchor) fingerprints to "" so the absent case stays
-    obviously distinct rather than hashing to some opaque constant.
+    reference moved between the judgment and the save. "" (no anchor)
+    fingerprints to "" so the absent case stays obviously distinct rather than
+    hashing to some opaque constant.
+
+    Whitespace is normalized THROUGHOUT, not just at the ends: rewrapping a
+    line or closing up a blank one is presentation, not a new standard, and the
+    anchor's own text is what reaches the judge regardless. Stripping alone
+    made those edits retire every committed flag, silently -- the reader just
+    stops finding a match and the corrective vanishes from later prompts.
+    Compare through `fingerprint_matches` rather than `==`, so a flag digested
+    under the older spelling still matches.
 
     `anchor_id` is `voice_anchors.read_record`'s nonce, folded in so that an
     anchor deleted and recreated with the SAME words is a different anchor.
@@ -158,11 +165,35 @@ def anchor_fingerprint(anchor: str, anchor_id: str = "") -> str:
     hashing "" into it, so every flag written before the field existed still
     matches its anchor instead of being retired wholesale on upgrade.
     """
-    text = anchor.strip()
+    return _digest(" ".join(anchor.split()), anchor_id)
+
+
+def _digest(text: str, anchor_id: str) -> str:
     if not text:
         return ""
     payload = f"{anchor_id}\n{text}" if anchor_id else text
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def fingerprint_matches(stored: str, anchor: str, anchor_id: str = "") -> bool:
+    """True when `stored` is a fingerprint of THIS anchor.
+
+    Not `stored == anchor_fingerprint(...)`, because the formula has changed
+    once: it used to strip only the ends, so a flag committed before that
+    normalization landed carries a digest of the un-normalized text. Comparing
+    on equality alone would retire every one of those on upgrade -- the same
+    harm the legacy no-nonce formula exists to avoid, arriving by a different
+    route. So the older spelling still counts as naming the same anchor.
+
+    Callers keep their own policy for a BLANK `stored`; it means "provenance not
+    recorded", which `context` treats as valid (a flag predating the field) and
+    `absorb.apply_edits` refuses on a raise (a client-supplied row must not
+    claim that status). Both are about who wrote it, not about which anchor it
+    names, so neither belongs here.
+    """
+    if stored == anchor_fingerprint(anchor, anchor_id):
+        return True
+    return bool(stored) and stored == _digest(anchor.strip(), anchor_id)
 
 
 def build_prompt(name: str, anchor: str, transcript: str) -> list[dict]:

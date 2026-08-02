@@ -216,9 +216,8 @@ def _apply_one(cid: str, croot, e: dict, sid: str | None,
                     return {"state": "failed", "id": eid, "kind": "error",
                             "reason": "this voice-drift finding does not record which "
                                       "anchor it was judged against"}
-                current = voice_drift.anchor_fingerprint(
-                    record["text"], record["id"])
-                if judged != current:
+                if not voice_drift.fingerprint_matches(
+                        judged, record["text"], record["id"]):
                     return {"state": "failed", "id": eid, "kind": "conflict",
                             "reason": "the voice anchor changed since the scene was "
                                       "absorbed — re-absorb to judge against it"}

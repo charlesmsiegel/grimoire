@@ -265,3 +265,34 @@ def test_drift_ids_use_the_shared_safe_id_rules(tmp_path):
     for bad in ("winifred.", "winifred ", "C:evil", "a:b"):
         with pytest.raises(voice_drift.BadDriftId):
             voice_drift.flag_path(tmp_path, bad)
+
+
+def test_reformatting_an_anchor_keeps_the_same_fingerprint():
+    """Rewrapping a line or closing up a blank one is presentation, not a new
+    standard -- and the anchor's own text reaches the judge either way. Under
+    `strip()` alone these all differed, which silently retired every flag
+    judged against them."""
+    same = ["Clipped. Never uses contractions.",
+            "  Clipped. Never uses contractions.  ",
+            "Clipped.\nNever uses contractions.",
+            "Clipped.\n\n   Never uses contractions.",
+            "Clipped.\tNever  uses   contractions."]
+    fps = {voice_drift.anchor_fingerprint(a, "nonce1") for a in same}
+    assert len(fps) == 1
+    # ...but different WORDS are still a different anchor
+    assert voice_drift.anchor_fingerprint("Warm and rambling.", "nonce1") not in fps
+
+
+def test_a_flag_digested_under_the_old_formula_still_matches():
+    """The formula changed once. Comparing on equality alone would retire every
+    flag committed before it, which is the same harm the legacy no-nonce
+    formula exists to avoid, arriving by a different route."""
+    anchor, nonce = "Clipped.\nNever uses contractions.", "nonce1"
+    legacy = voice_drift._digest(anchor.strip(), nonce)      # pre-normalization spelling
+    assert legacy != voice_drift.anchor_fingerprint(anchor, nonce)
+    assert voice_drift.fingerprint_matches(legacy, anchor, nonce)
+    assert voice_drift.fingerprint_matches(
+        voice_drift.anchor_fingerprint(anchor, nonce), anchor, nonce)
+    # a fingerprint of a genuinely different anchor still does not match
+    assert not voice_drift.fingerprint_matches(
+        voice_drift.anchor_fingerprint("Warm and rambling.", nonce), anchor, nonce)
