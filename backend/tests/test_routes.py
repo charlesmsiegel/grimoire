@@ -1888,6 +1888,43 @@ def test_a_turn_claims_its_scene_under_the_campaign_lock(monkeypatch, tmp_path):
     assert held_at_claim == [1], "the claim must happen while holding the campaign lock"
 
 
+async def test_a_failed_turns_rollback_runs_under_the_campaign_lock(monkeypatch, tmp_path):
+    """`on_error` checked ownership and then rolled back outside any lock, so a
+    turn claiming the scene in between would have had its post deleted by the
+    failed turn's undo — the interleaving the check exists to prevent, moved a
+    few lines later. Structural for the same reason as the claim test: the race
+    is not reproducible on demand."""
+    cid, sid, at = _scene_with_a_pending_post(tmp_path, monkeypatch)
+
+    depth = [0]
+    real_lock = store.locks.campaign_lock
+
+    @contextlib.contextmanager
+    def counting_lock(c):
+        with real_lock(c):
+            depth[0] += 1
+            try:
+                yield
+            finally:
+                depth[0] -= 1
+
+    held_at_undo = []
+    monkeypatch.setattr(store.locks, "campaign_lock", counting_lock)
+
+    def undo():
+        held_at_undo.append(depth[0])
+        return store.scenes.remove_trailing_user_post(cid, sid, at, "and then?")
+
+    resp = routes.streaming._chat_stream(
+        cid, sid, [{"role": "user", "content": "and then?"}],
+        {"kind": "openrouter", "model": "m"}, FailingOpenRouter(),
+        undo_user_post=undo)
+    frames = [f async for f in resp.body_iterator]
+
+    assert '"kind": "network"' in "".join(frames)
+    assert held_at_undo == [1], "the rollback must run while holding the campaign lock"
+
+
 async def test_a_cancelled_reroll_restores_past_an_unrelated_transition(monkeypatch, tmp_path):
     """The abort's raw-length check exists to stop a stale turn *adding* text to
     a transcript that moved on. Putting back a reply this turn deleted is not
