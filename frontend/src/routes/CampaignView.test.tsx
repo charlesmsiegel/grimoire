@@ -1033,6 +1033,53 @@ test("a remembered reroll does not follow the player to another scene", async ()
   expect(api.regenerate).toHaveBeenCalledTimes(1);          // not s1's reroll again
 });
 
+test("End scene stays disabled while the cancelled turn's flush is still coming", async () => {
+  // Absorption reads the transcript and commits a chronicle against it. `busy`
+  // clears when the socket dies, but the backend's shielded write lands seconds
+  // later — absorb inside that window and the summary describes a transcript
+  // the partial has not reached, then the partial lands under a scene already
+  // marked absorbed. Unlike the other flush races, that one does not heal.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, total: 0, messages: [] });
+  (api.chat as any).mockImplementation(hangingChat(["The tide "]));
+  renderCampaign();
+  const ta = await screen.findByRole("textbox");
+  fireEvent.change(ta, { target: { value: "and then?" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
+  await screen.findByRole("button", { name: /continue ▶/i });   // busy is clear
+  await new Promise((r) => setTimeout(r, 400));                 // still flushing
+  expect(screen.getByRole("button", { name: /end scene/i })).toBeDisabled();
+});
+
+test("a scene rename in flight holds off the next turn", async () => {
+  // Renaming is a PUT that moves the scene file. Until it answers, which id is
+  // current is genuinely unknown — so a turn started inside that window can be
+  // handed the old one and have its reply written to a path that no longer
+  // exists. The lock covers rename-during-a-turn; this is the other direction.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  let finishRename: ((v: any) => void) | null = null;
+  (api.renameScene as any).mockImplementation(
+    () => new Promise((res) => { finishRename = res; }));
+  renderCampaign();
+  await screen.findByText(/01 · Old/);
+  fireEvent.click(screen.getByRole("button", { name: /rename/i }));
+  const input = screen.getByDisplayValue("Old");
+  fireEvent.change(input, { target: { value: "Renamed" } });
+  fireEvent.keyDown(input, { key: "Enter" });
+
+  const ta = await screen.findByRole("textbox");
+  fireEvent.change(ta, { target: { value: "and then?" } });
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: /send ▸/i })).toBeDisabled());
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  expect(api.chat).not.toHaveBeenCalled();
+
+  finishRename!({ id: "s1", title: "Renamed" });     // the PUT answers
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: /send ▸/i })).not.toBeDisabled());
+});
+
 test("a poll fetch already in flight cannot clear a new turn's preview", async () => {
   // The check-then-await window: the poll verifies it owns the view, then
   // awaits getScene, and a turn starting during that await would otherwise have

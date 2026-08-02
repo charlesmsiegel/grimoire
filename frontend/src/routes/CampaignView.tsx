@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -202,6 +202,20 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   // the post-cancel flush poll — so a newer turn can claim it while an older
   // one is still unwinding, and only the current owner may release it.
   const streamTokenRef = useRef(0);
+  // How many scene-renaming requests are in flight. A rename is a PUT that
+  // moves the scene file, and until it answers nobody knows which id is
+  // current — so a turn started inside that window can be handed the old one
+  // and have its write land nowhere. `streamingId` closes the other direction
+  // (rename blocked during a turn); this closes turn-blocked-during-a-rename
+  // (review, #95). A counter, not a flag: the rail and the two date controls
+  // can overlap, and the last one to finish must not unblock the others.
+  //
+  // Still a list of surfaces, which is the same shape of fragility the lock
+  // has — but the guard is now at the one place turns start, so a surface that
+  // forgets to report is a narrower miss than one that forgets to lock.
+  const [renamesInFlight, setRenamesInFlight] = useState(0);
+  const markRenaming = useCallback(
+    (active: boolean) => setRenamesInFlight((n) => n + (active ? 1 : -1)), []);
   // Held for the life of one turn so Cancel can reach it. A ref, not state:
   // the controller is not rendered, and rebuilding the component tree on every
   // send just to store it would remount the transcript mid-stream.
@@ -594,11 +608,16 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   }
 
   async function renameScene(id: string, title: string) {
-    const { id: newId } = await api.renameScene(cid, id, title);
-    if (activeId === id) setActiveId(newId);
-    setSeedPrompt((p) => (p && p.sid === id ? { ...p, sid: newId } : p));
-    reviewSceneRenamed(id, newId);
-    setScenes(await api.listScenes(cid));
+    markRenaming(true);
+    try {
+      const { id: newId } = await api.renameScene(cid, id, title);
+      if (activeId === id) setActiveId(newId);
+      setSeedPrompt((p) => (p && p.sid === id ? { ...p, sid: newId } : p));
+      reviewSceneRenamed(id, newId);
+      setScenes(await api.listScenes(cid));
+    } finally {
+      markRenaming(false);
+    }
   }
 
   // the first date set renames the scene file — re-list and adopt the new id
@@ -925,7 +944,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   }
 
   async function send() {
-    if (busy || rolling) return;
+    if (busy || rolling || renamesInFlight) return;
     // A new prompt supersedes a failed reroll: whatever Retry would have
     // repeated, the player has moved on from it.
     rerollToRetryRef.current = null;
@@ -1011,7 +1030,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   const rerollToRetryRef = useRef<{ sid: string; guidance: string } | null>(null);
 
   async function retry() {
-    if (!activeId || busy || rolling) return;
+    if (!activeId || busy || rolling || renamesInFlight) return;
     const again = rerollToRetryRef.current;
     if (again && again.sid === activeId) return void await reroll(again.guidance);
     const landed = await runStream(activeId, (onEvent, signal) => pendingResponse
@@ -1021,7 +1040,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   }
 
   async function reroll(repeatGuidance?: string) {
-    if (!activeId || busy || rolling) return;
+    if (!activeId || busy || rolling || renamesInFlight) return;
     const guidance = repeatGuidance ?? (rerollPrompt ?? "").trim();
     setRerollPrompt(null);
     rerollToRetryRef.current = { sid: activeId, guidance };
@@ -1391,8 +1410,15 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
           <button className="sub-mechanics" onClick={() => setShowMechanics((v) => !v)}>
             {showMechanics ? "Close" : "Mechanics"}
           </button>
+          {/* `busy` is not the whole of "a turn can still write here": it clears
+              when the socket dies, and the backend's shielded abort write lands
+              seconds later — which is the window `streamingId` covers. Absorb
+              inside it and the chronicle summarises a transcript the partial
+              has not reached yet, then the partial lands underneath a scene
+              already marked absorbed. That one does not come back: the review
+              is committed against a transcript that no longer matches (#95). */}
           <button className="sub-end" onClick={endScene}
-                  disabled={!activeId || absorbing || busy}>
+                  disabled={!activeId || absorbing || busy || activeId === streamingId}>
             {absorbing ? "Ending…" : "End scene"}
           </button>
         </div>
@@ -1722,6 +1748,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
             initialPrompt={seedPrompt?.sid === activeId ? seedPrompt.prompt : undefined}
             pcless={activePcless}
             sceneLocked={activeId === streamingId}
+            onRenaming={markRenaming}
           />
         )}
         {activeId && (
@@ -1977,7 +2004,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
           {busy ? (
             <button className="send cancel-turn" onClick={cancelTurn}>Stop ■</button>
           ) : (
-            <button className="send" onClick={send} disabled={rolling}>
+            <button className="send" onClick={send} disabled={rolling || renamesInFlight > 0}>
               {!input.trim() ? "Continue ▶" : "Send ▸"}
             </button>
           )}
@@ -1992,7 +2019,8 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
             <SceneInspector cid={cid} sid={activeId} refreshKey={ctxKey}
                             onSceneChanged={() => selectScene(activeId)}
                             onSceneRenamed={sceneRenamed} pcless={activePcless}
-                            sceneLocked={activeId === streamingId} />
+                            sceneLocked={activeId === streamingId}
+                            onRenaming={markRenaming} />
           )}
         </div>
       )}
