@@ -2214,6 +2214,33 @@ def test_leaving_a_blockquote_ends_what_was_inside_it(monkeypatch, tmp_path):
         assert "Mara watches the pier." in section, body
 
 
+def test_an_indented_heading_stays_under_its_list_item(monkeypatch, tmp_path):
+    """A heading indented inside a list item is part of that item. Popping every
+    non-ATX governor regardless of indent severed the named parent, so the
+    bullets under `Plans` were governed only by a heading that names nobody."""
+    from grimoire.store import playstate
+    cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
+    playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
+        "Wary.", "",
+        "- Winifred\n"
+        "  ### Plans\n"
+        "  - is hiding the ledger\n"
+        "\n"
+        "Mara sold the manifest."))
+    section = _state_section(cid, sid)
+    assert "hiding the ledger" not in section
+    assert "Mara sold the manifest." in section
+    # An UNindented heading still ends the list it follows — that is what the
+    # pop was written for, and this fix must not cost it.
+    playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
+        "Wary.", "",
+        "- Winifred\n"
+        "## Elsewhere\n"
+        "- The Guild watches the pier."))
+    section = _state_section(cid, sid)
+    assert "The Guild watches the pier." in section
+
+
 def test_a_paragraph_after_the_blank_is_not_governed(monkeypatch, tmp_path):
     """Only a LIST keeps a colon heading open across the blank. An ordinary
     paragraph below one is a new statement, which is the case the pop was

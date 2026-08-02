@@ -348,6 +348,15 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
         due = _text(e["due"]) if "due" in e else None
         if given:
             mid = given
+            # An explicit id is RESERVED too, not just remembered as seen. The
+            # allocator consults `owed` and this map; an explicit id naming a
+            # commitment that does not exist yet is in neither, so a later new
+            # row whose title slugs to it was handed the same id -- and then
+            # dropped outright by the one-edit-per-commitment check below,
+            # never reaching the reviewer. Reserved under this row's title, so
+            # the same title still merges (that is what the dedup is for) and a
+            # different one gets a suffix.
+            staged_titles.setdefault(mid, title.strip().casefold())
         elif any(c.isalnum() for c in title):
             # New commitment — needs a title with real content, and an id that
             # does not land on somebody else's record.
