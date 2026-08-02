@@ -241,3 +241,34 @@ def test_a_record_that_is_not_a_dict_is_skipped(client):
         encoding="utf-8")
     rows = client.get(f"/api/campaigns/{cid}/ledger").json()["commitments"]
     assert [r["id"] for r in rows] == ["good"]
+
+
+def test_the_three_sections_are_read_under_one_campaign_lock(client, monkeypatch):
+    """A save writes these files one after another: `put_chronicle` holds the
+    campaign lock while it records the chronicle and then applies the absorb's
+    plot and commitment edits. Reading without that lock can catch the sequence
+    half done — a new fact beside the still-open commitment the same save
+    fulfilled — and the panel keeps the contradiction until something bumps its
+    revision."""
+    cid = _campaign(client)
+    store.commitments.set_movement(cid, "x", "A promise", "promise", "open",
+                                   "", "Sworn.", "s1")
+    held = {}
+
+    def _watch(name, real):
+        def wrapper(*a, **kw):
+            held[name] = store.locks.campaign_lock(cid)._is_owned()
+            return real(*a, **kw)
+        return wrapper
+
+    monkeypatch.setattr(store.scenes, "list_scenes",
+                        _watch("scenes", store.scenes.list_scenes))
+    monkeypatch.setattr(store.chronicle, "read_chronicle",
+                        _watch("chronicle", store.chronicle.read_chronicle))
+    monkeypatch.setattr(store.plot, "open_threads",
+                        _watch("plot", store.plot.open_threads))
+    monkeypatch.setattr(store.commitments, "open_commitments",
+                        _watch("commitments", store.commitments.open_commitments))
+    assert client.get(f"/api/campaigns/{cid}/ledger").status_code == 200
+    assert held == {"scenes": True, "chronicle": True,
+                    "plot": True, "commitments": True}

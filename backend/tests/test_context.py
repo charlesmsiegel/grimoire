@@ -1560,6 +1560,31 @@ def test_two_actors_sharing_a_given_name_keep_their_own_interiority(monkeypatch,
     assert "Mara Vance is lying" not in section      # the other actor, in full
 
 
+def test_a_shared_alias_collides_across_capitalization(monkeypatch, tmp_path):
+    """The subtraction has to make the same comparison `_mentions` does. A
+    one-word form matches any spelling that is not all lower case, so `MARA` and
+    `Mara` are one form to the matcher — and subtracting exact strings left the
+    other actor's `Mara` in `others`, withholding the owner's own line for
+    exactly the pair the exception exists for."""
+    from grimoire.store import appearances, campaigns, characters, playstate, scenes, worlds
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = campaigns.create_campaign("Run", worlds.create_world("W"))
+    croot = campaigns.campaign_root(cid)
+    chen = characters.create_character(croot, "MARA CHEN", "main",
+                                       characters.blank_card("MARA CHEN"))[0]
+    vance = characters.create_character(croot, "Mara Vance", "main",
+                                        characters.blank_card("Mara Vance"))[0]
+    sid = scenes.create_scene(cid, "Now")
+    appearances.appear(cid, sid, "characters", chen, "main", "npc")
+    appearances.appear(cid, sid, "characters", vance, "main", "npc")
+    playstate.write_state(croot, chen, playstate.compose_body(
+        "Uneasy.", "",
+        "Mara made a mistake.\n\nMara Vance is lying about the tally."))
+    section = _state_section(cid, sid)
+    assert "made a mistake" in section               # her own interiority
+    assert "Mara Vance is lying" not in section      # the other actor, in full
+
+
 def test_a_suspicion_naming_an_honorific_card_by_given_name_is_withheld(monkeypatch, tmp_path):
     """`Dr Mara Vance` used to yield no short alias at all, because the head was
     an honorific — so the card was matched only in full and prose naming her the

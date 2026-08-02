@@ -775,9 +775,19 @@ def _character_states(aroot, cid: str, cast, pcless: bool) -> list[dict]:
                 # actor and was withheld, which is precisely the exception this
                 # subtraction exists to make. `Mara Vance` in full still
                 # withholds, because only the ambiguous form is dropped.
-                own_forms = _forms(own)
-                others = set().union(*(_forms(names) for other, names in aliases
-                                       if other is not actor), set()) - own_forms
+                #
+                # Case-FOLDED, because that is the comparison `_mentions` makes:
+                # a multi-word form matches under IGNORECASE and a one-word form
+                # matches any spelling that is not all lower case, so `MARA` and
+                # `Mara` are one form to the matcher and have to be one form
+                # here too. Subtracting exact strings left the other actor's
+                # `Mara` in `others` for an owner written `MARA CHEN`, and the
+                # protection silently did not apply to the pair it exists for.
+                own_forms = {f.casefold() for f in _forms(own)}
+                others = {f for f in set().union(*(_forms(names)
+                                                   for other, names in aliases
+                                                   if other is not actor), set())
+                          if f.casefold() not in own_forms}
                 st = {**st, "suspects": _visible_suspects(st["suspects"], others)}
             if st["current_state"] or st["knows"] or st["suspects"]:
                 out.append({"name": name, **st})
