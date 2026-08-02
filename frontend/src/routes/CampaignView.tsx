@@ -728,6 +728,14 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     start: (onEvent: (e: ChatEvent) => void, signal: AbortSignal) => Promise<void>,
     onPromptUnstored?: () => void,
   ) {
+    // The authoritative rename guard, not the ones in `send`/`retry`/`reroll`.
+    // Those stop the optimistic UI work before it happens, but they are a list
+    // of call sites — and review found the one that was missing: resolving a
+    // roll proposal streams a continuation through here without going past any
+    // of them. Every stream enters by this function, so this is where the
+    // question belongs; the callers keep their checks so they can bail before
+    // clearing a composer, not because they are the guarantee (#95).
+    if (renamesInFlight) return false;
     const controller = new AbortController();
     abortRef.current = controller;
     const streamToken = ++streamTokenRef.current;

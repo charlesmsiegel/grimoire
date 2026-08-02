@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import importlib
 import io
 import json
@@ -1844,6 +1845,79 @@ def test_a_reroll_that_dies_before_its_stream_puts_the_reply_back(client, monkey
         f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]] == [
         "and then?", "The tide turns."]
     assert store.scenes.get_turn_sizes(cid, sid) == before
+
+
+def test_a_turn_claims_its_scene_under_the_campaign_lock(monkeypatch, tmp_path):
+    """The abort hook takes the campaign lock so its ownership check and its
+    tail read cannot be split — but that only holds if the writer it races takes
+    the lock too. `_claim_turn` is a plain dict write, so a newer turn could
+    claim in the gap between those two steps and the hook would act on a scene
+    that had changed hands.
+
+    Asserted structurally rather than by racing threads: the interleaving is not
+    reproducible on demand, and a test that cannot fail on purpose is worse than
+    none (this PR has already found eight that passed for the wrong reason)."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    importlib.reload(store)
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Run", wid)
+    sid = store.scenes.create_scene(cid, "Saltmarch")
+
+    depth = [0]
+    real_lock = store.locks.campaign_lock
+
+    @contextlib.contextmanager
+    def counting_lock(c):
+        with real_lock(c):
+            depth[0] += 1
+            try:
+                yield
+            finally:
+                depth[0] -= 1
+
+    held_at_claim = []
+    real_claim = routes.streaming._claim_turn
+    monkeypatch.setattr(store.locks, "campaign_lock", counting_lock)
+    monkeypatch.setattr(routes.streaming, "_claim_turn",
+                        lambda c, s: (held_at_claim.append(depth[0]), real_claim(c, s))[1])
+
+    routes.streaming._chat_stream(
+        cid, sid, [{"role": "user", "content": "and then?"}],
+        {"kind": "openrouter", "model": "m"}, StallingOpenRouter())
+
+    assert held_at_claim == [1], "the claim must happen while holding the campaign lock"
+
+
+async def test_a_cancelled_reroll_restores_past_an_unrelated_transition(monkeypatch, tmp_path):
+    """The abort's raw-length check exists to stop a stale turn *adding* text to
+    a transcript that moved on. Putting back a reply this turn deleted is not
+    adding anything — and the writers that move the length without claiming a
+    turn (a location move, a cast change) append exactly the trailing transition
+    lines `restore_trailing_assistant_run` is built to step over. Behind the
+    coarse check, a reroll stopped after one of those lost its reply for good."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    importlib.reload(store)
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Run", wid)
+    sid = store.scenes.create_scene(cid, "Saltmarch")
+    store.scenes.append_message(cid, sid, "user", "and then?")
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "The tide turns."}])
+    removed = store.scenes.remove_trailing_assistant_run(cid, sid)   # as regenerate does
+
+    resp = routes.streaming._chat_stream(
+        cid, sid, [{"role": "user", "content": "and then?"}], {"kind": "openrouter", "model": "m"},
+        StallingOpenRouter([""]),
+        restore_removed=lambda: store.scenes.restore_trailing_assistant_run(cid, sid, removed))
+    frames = resp.body_iterator
+    assert await frames.__anext__() == ": heartbeat\n\n"
+    # the player moves the scene somewhere mid-turn: a transition line, which
+    # changes the length without claiming the turn
+    store.scenes.append_reply(
+        cid, sid, [{"speaker": store.scenes.TRANSITION_SPEAKER, "content": "They ride north."}])
+    await frames.aclose()
+
+    assert [m["content"] for m in store.scenes.read_scene(cid, sid)["messages"]] == [
+        "and then?", "The tide turns.", "They ride north."]
 
 
 async def test_a_cancelled_reroll_restores_instead_of_minting_a_proposal(monkeypatch, tmp_path):
