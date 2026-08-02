@@ -805,6 +805,7 @@ const PACT_CONFLICT = {
   stored: "Witnessed by the watch.",
   reason: "this entry changed since the scene was absorbed",
   mergeable: true, merged: "Witnessed by the watch.\n\nBroken by morning.",
+  index: 0,
 };
 
 /** Absorb the scene, hit Save, and have the server refuse the batch. */
@@ -858,7 +859,7 @@ test("answering one row leaves its duplicate-id sibling unanswered", async () =>
     ...LORE_REVIEW, edits: [LORE_REVIEW.edits[0], twin] });
   (api.saveChronicle as any).mockRejectedValueOnce(new ApiError(
     409, "some proposed changes no longer match what is stored", "edit_conflicts",
-    { conflicts: [PACT_CONFLICT, { ...PACT_CONFLICT, after: twin.after }] }));
+    { conflicts: [PACT_CONFLICT, { ...PACT_CONFLICT, after: twin.after, index: 1 }] }));
   renderCampaign();
   await screen.findByText("hi");
   fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
@@ -874,6 +875,40 @@ test("answering one row leaves its duplicate-id sibling unanswered", async () =>
   await waitFor(() => expect(api.saveChronicle).toHaveBeenCalledTimes(2));
   const sent = (api.saveChronicle as any).mock.calls[1][2].edits;
   expect(sent.map((e: any) => e.resolve)).toEqual(["replace", undefined]);
+});
+
+test("a conflict on the later of two same-id rows lands on that row", async () => {
+  // The server drops the rows that were fine, so the conflict list is not
+  // positionally aligned with the edits. Matching on id alone put the second
+  // row's verdict on the first — answering a proposal nobody looked at while
+  // the drifted one stayed unanswered.
+  const { ApiError } = await vi.importActual<typeof import("../api/client")>("../api/client");
+  const twin = { ...LORE_REVIEW.edits[0], after: "Signed at dusk.\n\nSealed at noon." };
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  (api.absorbScene as any).mockResolvedValue({
+    ...LORE_REVIEW, edits: [LORE_REVIEW.edits[0], twin] });
+  (api.saveChronicle as any).mockRejectedValueOnce(new ApiError(
+    409, "some proposed changes no longer match what is stored", "edit_conflicts",
+    // only the SECOND row conflicts; the first was fine and is not in the list
+    { conflicts: [{ ...PACT_CONFLICT, after: twin.after, index: 1,
+                    merged: "Witnessed by the watch.\n\nSealed at noon." }] }));
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /Save summary/ }));
+  await screen.findByText(/One proposed change no longer matches/);
+
+  fireEvent.click(screen.getByRole("button", { name: /Merge stored The Pact/ }));
+
+  // the merged draft went into the SECOND row's box, not the first's
+  const boxes = screen.getAllByLabelText("After The Pact — lore");
+  expect((boxes[0] as HTMLTextAreaElement).value).toBe("Signed at dusk.\n\nBroken by morning.");
+  expect((boxes[1] as HTMLTextAreaElement).value).toBe("Witnessed by the watch.\n\nSealed at noon.");
+  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  await waitFor(() => expect(api.saveChronicle).toHaveBeenCalledTimes(2));
+  expect((api.saveChronicle as any).mock.calls[1][2].edits.map((e: any) => e.resolve))
+    .toEqual([undefined, "merge"]);
 });
 
 test("a row that moves again after being answered comes back for a second answer", async () => {

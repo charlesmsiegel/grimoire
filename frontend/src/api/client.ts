@@ -372,6 +372,11 @@ export type EditConflict = {
   id: string; label: string; kind: string; field: string;
   before: string; after: string; stored: string; reason: string;
   mergeable: boolean; merged: string;
+  /** Position in the submitted `edits` array. The only reliable way back to
+   *  the row: `id` is not unique (only plot threads are deduped), and the
+   *  response omits the rows that were fine, so ordinal position among the
+   *  conflicts does not line up with ordinal position among the edits. */
+  index: number;
 };
 export type MechanicsDrop = { id: string; field?: string; reason: string };
 /** The two facts a bare status cannot carry, on every phase that makes an LLM

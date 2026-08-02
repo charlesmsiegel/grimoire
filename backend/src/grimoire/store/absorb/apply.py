@@ -151,7 +151,17 @@ def apply_edits(cid: str, edits: list[dict],
                 relationships.set_bond(cid, p["a"], p["b"], p["type"])
             elif kind == "plot":
                 p = e["payload"]
-                plot.set_movement(cid, p["id"], p["title"], p["status"], after, p["scene"])
+                # An absorb never renames an existing thread: `materialize`
+                # stages the STORED title for one that already exists
+                # (`cur.get("title") or title or pid`), so the staged title
+                # carries no intent to rename and writing it back is a no-op --
+                # except when somebody renamed the thread between staging and
+                # saving, where `set_movement` overwrites any non-blank title
+                # and silently reverts them. A blank title leaves the stored one
+                # alone and still falls back to the id for a brand-new thread,
+                # so the rename is not a conflict to resolve; it simply stands.
+                title = "" if plot.get(cid, p["id"]) else p["title"]
+                plot.set_movement(cid, p["id"], title, p["status"], after, p["scene"])
             elif kind == "new_character":
                 p = e["payload"]
                 card = characters.blank_card(p["name"])
@@ -197,8 +207,13 @@ def apply_edits(cid: str, edits: list[dict],
             if sid and kind in _BROWSABLE_KINDS:
                 ref = f"{target['kind']}/{target['id']}"
                 recorded.setdefault(ref, []).append(
+                    # `replaced_value`, not the staged `before`: on a row the
+                    # reviewer answered over a conflict, the text this write
+                    # actually replaced is the one they were shown. Logging the
+                    # staged `before` instead would render everything that had
+                    # landed in between as part of what this edit added.
                     {"field": e.get("field", ""), "label": e.get("label", ""),
-                     "before": e.get("before", ""), "after": after})
+                     "before": conflicts.replaced_value(e), "after": after})
                 recorded[ref].extend(extra_fields)
         except Exception:  # noqa: BLE001 — best-effort per edit
             continue
