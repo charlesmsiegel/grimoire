@@ -594,6 +594,61 @@ test("a cancelled turn's partial appears even when the backend flush lands late"
     expect(screen.getByText("the whole persisted partial")).toBeInTheDocument());
 });
 
+test("a cancel that streamed nothing still waits for the backend's flush", async () => {
+  // What reached the client is not what the backend has to persist:
+  // FenceWatcher emits nothing for a reply that opens with a roll fence, yet
+  // the server still writes a proposal (and can write narration held back
+  // behind a possible opener). Gating the poll on "did we see a delta" left
+  // that invisible.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  let flushed = false;
+  (api.getScene as any).mockImplementation(async () => ({
+    meta: {},
+    messages: flushed ? [{ role: "assistant", content: "held back all along" }] : [],
+  }));
+  (api.chat as any).mockImplementation(hangingChat());   // not one delta
+  renderCampaign();
+  const ta = await screen.findByRole("textbox");
+  fireEvent.change(ta, { target: { value: "and then?" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
+  setTimeout(() => { flushed = true; }, 100);
+  await waitFor(() =>
+    expect(screen.getByText("held back all along")).toBeInTheDocument());
+});
+
+test("a poll fetch already in flight cannot clear a new turn's preview", async () => {
+  // The check-then-await window: the poll verifies it owns the view, then
+  // awaits getScene, and a turn starting during that await would otherwise have
+  // the stale response run setStreaming("") over the new stream's text.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  let releaseFetch: (() => void) | null = null;
+  (api.getScene as any).mockImplementation(async () => {
+    if (releaseFetch) await new Promise<void>((r) => { releaseFetch = r; });
+    return { meta: {}, messages: [] };
+  });
+  (api.chat as any)
+    .mockImplementationOnce(hangingChat(["first fragment"]))
+    .mockImplementation(hangingChat(["second fragment"]));
+  renderCampaign();
+  const ta = await screen.findByRole("textbox");
+  fireEvent.change(ta, { target: { value: "and then?" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
+  await screen.findByRole("button", { name: /continue ▶/i });
+
+  releaseFetch = () => {};                       // the next getScene blocks
+  const before = (api.getScene as any).mock.calls.length;
+  await waitFor(() => expect((api.getScene as any).mock.calls.length).toBeGreaterThan(before));
+
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "again" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  await screen.findByText("second fragment");
+  (releaseFetch as () => void)();                // the stale poll's fetch lands
+  await new Promise((r) => setTimeout(r, 50));
+  expect(screen.getByText("second fragment")).toBeInTheDocument();
+});
+
 test("the post-cancel poll stops once a new turn owns the view", async () => {
   // Stop clears `busy` before the poll finishes, so the player can send again
   // while it is still running. Left alone it would keep calling selectScene,

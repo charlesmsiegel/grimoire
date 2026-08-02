@@ -32,6 +32,7 @@ is *looked up*, not necessarily where it is defined. Patching
 
 from __future__ import annotations
 
+import itertools
 import json
 
 import anyio
@@ -48,6 +49,35 @@ from ..llm_errors import LLMError
 # reports it is still waiting on the model (#95) -- before the first token, a
 # generation is otherwise indistinguishable from a dead connection.
 _HEARTBEAT = ": heartbeat\n\n"
+
+# Which turn each scene currently belongs to, newest claim wins. A cancelled
+# turn's flush runs after its socket has closed, so it has to be able to ask
+# whether it is still the turn the scene belongs to before writing anything.
+#
+# Transcript length cannot answer that, which review caught after it was first
+# used for exactly this: three of the four `_chat_stream` callers -- retry,
+# regenerate, and the director-note/empty send -- append nothing of their own,
+# so two overlapping ones capture an identical length and the older one's abort
+# would sail through the check and persist into the newer turn.
+#
+# In-process only, and that is the right scope: it distinguishes two turns
+# racing inside one backend, which is what a player generates. Two *processes*
+# on one scene is the case `store/locks.py` already documents as beyond what
+# this app can serialize. Entries are overwritten per turn and never removed --
+# one small entry per scene ever streamed, which is not worth reaping.
+_turn_tokens: dict[tuple[str, str], int] = {}
+_turn_seq = itertools.count(1)
+
+
+def _claim_turn(cid: str, sid: str) -> int:
+    """Make this the scene's current turn and return the token proving it."""
+    token = next(_turn_seq)   # atomic under the GIL; claims come from request threads
+    _turn_tokens[(cid, sid)] = token
+    return token
+
+
+def _owns_turn(cid: str, sid: str, token: int) -> bool:
+    return _turn_tokens.get((cid, sid)) == token
 
 
 async def _flush_on_abort(hook, watcher) -> None:
@@ -225,9 +255,14 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
     turn keeps its post too, since the player asked to stop and will likely
     retry from exactly there.
     """
-    # How long the transcript was when this turn began, so the abort path can
-    # tell whether it still owns the tail (see `on_abort`). Read once, here,
-    # while the caller is still synchronous and nothing else can be mid-write.
+    # What the abort path checks before writing (see `on_abort`): this turn's
+    # claim on the scene, and how long the transcript was when it began. Both,
+    # because they catch different intruders — the token catches another turn,
+    # including the three kinds that append nothing and so leave the length
+    # unchanged; the length catches everything that is not a turn at all, like a
+    # manual roll or a transition line. Read here, while the caller is still
+    # synchronous and nothing else can be mid-write.
+    turn_token = _claim_turn(cid, sid)
     owned_tail = len(store.scenes.read_scene(cid, sid)["messages"])
 
     def finalize(watcher) -> list[str]:
@@ -262,21 +297,27 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
         written: the check silently lost, and proposal-before-narration broken
         from the one direction the StoreBusy path takes such care to avoid.
 
-        The tail check is the second half of the same review. Stop-then-send is
-        a natural sequence, and this teardown runs after the socket closes — so
-        the new turn can have appended its user post, and possibly a reply,
-        before this fires. Persisting then would file the cancelled turn's
-        narration under the new turn's post, and a closed fence would mint a
-        proposal that displaces the live one. Anything at all having been
-        written since means this turn no longer owns what it is about to append
-        (a transition line from the inspector counts, and dropping there is the
-        conservative direction), so it drops the partial instead — the same
-        trade `_continuation_stream` makes, for the same reason.
+        The ownership checks are the second half of the same review, in two
+        rounds. Stop-then-send is a natural sequence, and this teardown runs
+        after the socket closes — so the new turn can already be streaming, and
+        may have appended its user post. Persisting then would file the
+        cancelled turn's narration under a question it never answered, and a
+        closed fence would mint a proposal displacing the live one.
 
-        Under the campaign lock so the check and the writes cannot be split. The
-        lock is reentrant, so `finalize` re-taking it is free.
+        So: this turn must still hold the scene's claim (`_turn_tokens`), and
+        the transcript must still be the length it was when this turn began. The
+        token is what catches an overlapping retry or director note, neither of
+        which moves the length; the length is what catches a writer that is not
+        a turn at all, like a manual roll or a transition line from the
+        inspector. Failing either, the partial is dropped — the same trade
+        `_continuation_stream` makes, for the same reason.
+
+        Under the campaign lock so the checks and the writes cannot be split.
+        The lock is reentrant, so `finalize` re-taking it is free.
         """
         with store.locks.campaign_lock(cid):
+            if not _owns_turn(cid, sid, turn_token):
+                return []
             if len(store.scenes.read_scene(cid, sid)["messages"]) != owned_tail:
                 return []
             return finalize(watcher)
