@@ -1773,6 +1773,55 @@ async def test_a_cancelled_reroll_puts_the_old_reply_back(monkeypatch, tmp_path)
         "and then?", "The tide turns."]
 
 
+def test_a_reroll_that_completes_empty_puts_the_reply_back(client):
+    """The third terminal path, and the one that looks like success: the
+    provider answers, produces no text and no fence, and the stream ends
+    normally through `finalize` — not `on_error`, not `on_abort`. Both of those
+    restore; this one used to send `done` over a scene whose reply it had
+    deleted and never replaced."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "and then?")
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "The tide turns."}])
+    before = store.scenes.get_turn_sizes(cid, sid)
+
+    class EmptyThenDone:
+        async def stream(self, messages, cfg):
+            return
+            yield  # pragma: no cover - never reached, makes this a generator
+
+    client.app.dependency_overrides[routes.get_llm] = lambda: EmptyThenDone()
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
+    assert resp.status_code == 200 and '"done": true' in resp.text
+
+    assert [m["content"] for m in client.get(
+        f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]] == [
+        "and then?", "The tide turns."]
+    assert store.scenes.get_turn_sizes(cid, sid) == before
+
+
+def test_a_chat_that_completes_empty_keeps_the_players_post(client):
+    """The other side of that gate. An empty *successful* turn is not a failed
+    one: the model ran and said nothing, and the player's post is still in the
+    transcript in front of them. Only the reroll's deleted reply is
+    unrecoverable, so only that comes back."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+
+    class EmptyThenDone:
+        async def stream(self, messages, cfg):
+            return
+            yield  # pragma: no cover - never reached, makes this a generator
+
+    client.app.dependency_overrides[routes.get_llm] = lambda: EmptyThenDone()
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "and then?"})
+    assert resp.status_code == 200
+    assert [m["content"] for m in client.get(
+        f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]] == ["and then?"]
+
+
 def test_a_reroll_that_dies_before_its_stream_puts_the_reply_back(client, monkeypatch):
     """The deletion happens in the route, but every way back lives inside the
     stream's generator — so anything that raises between the two destroys a
