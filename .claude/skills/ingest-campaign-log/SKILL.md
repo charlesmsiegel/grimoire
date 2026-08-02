@@ -109,7 +109,9 @@ call while reading — this skill does not delegate that to another LLM call.
       duplicating the scene, its timeline events and every beat that already landed. Likewise, **do not rename or delete a scene with an
       unfinished manifest entry** — a rename changes the scene's id, the manifest is not one of
       the stores `scene_refs.repoint` follows, and the new id is not recoverable, so `ingest`
-      refuses to resume that key rather than write beats against an id no scene has.
+      refuses to resume that key rather than write beats against an id no scene has. It
+      records that refusal on the entry — `incomplete` with a `detail` naming the missing id —
+      so the key can be closed with `resolve` once you have reconciled it; it is not stuck.
       Residual risk: if the process dies *inside* the apply
       sequence, or between it finishing and the manifest being written, a retry re-absorbs and
       re-applies that one scene — rare, and duplicated beats under one scene id are the

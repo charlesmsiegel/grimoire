@@ -656,6 +656,38 @@ def test_the_cli_reports_a_resume_whose_scene_vanished(monkeypatch, tmp_path, ca
     assert "no longer exists" in capsys.readouterr().err
 
 
+def test_a_vanished_scene_is_persisted_so_it_can_be_resolved(monkeypatch, tmp_path):
+    """Detecting the race and not recording it left the key stuck. The entry
+    stayed `in_progress` on disk, so `status` kept reporting it that way and
+    `resolve` — the only way out of a state no rerun can clear, and the reason
+    the "delete the key" instruction was removed — refuses anything not
+    persisted as `incomplete`. No rerun could finish it (the scene is gone) and
+    no person could close it either."""
+    from grimoire.store import worlds as worlds_store
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    ingest_scene.ensure_character(cid, {"name": "Marisol"})
+    key = _PARTIAL_SCENE["key"]
+    sid = ingest_scene.build_scene(cid, _PARTIAL_SCENE)
+    ingest_scene.save_manifest(cid, {key: {"status": "in_progress", "sid": sid + "-gone",
+                                           "applied": ["plot:the-siege"]}})
+
+    client = FakeClient(_PARTIAL_OUTPUT)
+    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+    got = asyncio.run(ingest_scene.ingest_one_scene(cid, _PARTIAL_SCENE, client, conn))
+    assert got["status"] == "incomplete"
+    assert client.calls == []                       # still no re-extraction
+
+    saved = ingest_scene.load_manifest(cid)[key]
+    assert saved["status"] == "incomplete"          # ON DISK, not only in the return
+    assert "no longer exists" in saved["detail"]
+    assert saved["sid"] == sid + "-gone"            # the missing id is kept, to name it
+    assert saved["applied"] == ["plot:the-siege"]   # and what did land before it went
+
+    ok, closed = ingest_scene.resolve_key(cid, key)
+    assert ok and closed["status"] == "done"        # a person can now close it
+
+
 def test_resolve_closes_a_conflicted_scene_without_rebuilding_it(monkeypatch, tmp_path):
     """The recovery this replaces was worse than the problem it recovered from.
     A standing conflict cannot be replayed, so the only way out of `incomplete`

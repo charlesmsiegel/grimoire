@@ -140,10 +140,20 @@ _NOT_A_GIVEN_NAME = _HONORIFIC | _ARTICLE
 _ELIDED = re.compile(r"\w{1,4}['’](\w.*)$")
 
 
+#: Punctuation a name token carries at its EDGES and that no form should keep:
+#: the abbreviating dot (`Dr.`, `J.`), the list comma, and the marks a nickname
+#: is set off by -- `Mara "Red" Vance`, `Mara (Red) Vance`. The quotes were the
+#: leak: the alias came back as `"Red"`, and `_mentions` then wanted the quotes
+#: in the suspicion too, so the ordinary `Red is hiding the ledger` matched
+#: nothing. Interior punctuation is untouched, which is what keeps `d'Ormesson`
+#: whole while stripping the quotes around `"Red"`.
+_EDGE_PUNCT = ".,\"'()[]“”‘’«»"
+
+
 def _word(token: str) -> str:
     """One token, lower-cased and stripped of the punctuation names carry --
-    so `Dr.` is read as `dr` and `J.` as `j`."""
-    return token.strip(".,").lower()
+    so `Dr.` is read as `dr`, `J.` as `j` and `"Red"` as `red`."""
+    return token.strip(_EDGE_PUNCT).lower()
 
 
 def _name_tokens(name: str) -> list[str]:
@@ -275,9 +285,16 @@ def _usable(token: str) -> str:
     the whole point: `J.` is two characters and one letter, so checking the raw
     token let the conventional `J. Smith` through as the alias `J.` -- the
     initial guard, defeated by the punctuation that marks it as an initial.
+
+    The RETURNED form is stripped the same way, and by the same set. A nickname
+    is written set off by quotes or brackets -- `Mara "Red" Vance` -- and
+    `_second_alias` lands on exactly that token, so keeping the marks made the
+    form `"Red"` and `_mentions` then required the suspicion to quote her too.
+    A name is what is inside the marks; the marks are how the writer said it is
+    a nickname.
     """
     word = _word(token)
-    return "" if len(word) < 2 or word in _NOT_A_GIVEN_NAME else token.strip(".,")
+    return "" if len(word) < 2 or word in _NOT_A_GIVEN_NAME else token.strip(_EDGE_PUNCT)
 
 
 def _second_alias(name: str) -> str:
