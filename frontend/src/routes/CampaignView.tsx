@@ -876,6 +876,16 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   // (`sceneLocked`), so it cannot go stale this way, and re-pointing it here
   // would quietly legitimise the rename the lock exists to prevent.
   function adoptSceneId(oldId: string, newId: string) {
+    // The ledger bump happens BEFORE the same-id guard, because it is the one
+    // thing here that is not about the id. Every thread and commitment the
+    // route returns carries the TITLE of the scene that last moved it, and a
+    // rename that keeps the slug — a capitalisation or punctuation edit —
+    // changes that title while returning the id unchanged. Guarded with
+    // everything else, an open ledger kept showing the old title until an
+    // unrelated refresh. The rename paths touch none of the panel's other
+    // dependencies (same campaign, no absorb saved), so this is the only thing
+    // that tells it to re-read.
+    setCtxKey((k) => k + 1);
     if (oldId === newId) return;
     // `activeIdRef`, not the render-captured `activeId`: this runs from handlers
     // that awaited a request, and the reader can have moved on since. Adopting
@@ -898,14 +908,6 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     }
     const again = rerollToRetryRef.current;
     if (again && again.sid === oldId) rerollToRetryRef.current = { ...again, sid: newId };
-    // A rename changes data the ledger route returns — every thread and
-    // commitment carries the TITLE of the scene that last moved it — and the
-    // rename paths touch none of the panel's other dependencies: same campaign,
-    // no absorb saved. Bumped HERE for the same reason everything else id-keyed
-    // moved here: `sceneRenamed` reaches it through `selectScene`, renaming
-    // from the scene list does not select anything, and a sixth caller would be
-    // a sixth chance to forget.
-    setCtxKey((k) => k + 1);
   }
 
   // Reports rather than throws. `EditableRow` calls this from an event handler
