@@ -461,6 +461,57 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   const [directorNote, setDirectorNote] = useState<string | null>(null);
 
   useEffect(() => { activeIdRef.current = activeId; }, [activeId]);
+
+  // Prompts recovered from a turn that stored nothing, held under the scene
+  // they were written for until that scene is on screen.
+  //
+  // The composer is one shared box that survives a scene switch, so writing a
+  // recovered prompt into it straight away puts scene A's words in front of a
+  // player looking at scene B — and the next Send posts them to B. Review
+  // caught the same shape once before, in the reroll Retry that followed the
+  // player to another scene; this is the other half of it, and the one that
+  // moves text rather than an action.
+  //
+  // Parked rather than dropped, because dropping is the whole thing this
+  // machinery exists to prevent: the prompt is nowhere else. A map, not one
+  // slot, so a second scene failing does not evict the first — both are the
+  // player's and neither can be retyped from anywhere.
+  const parkedPrompts = useRef<Map<string, string>>(new Map());
+  const [parkedTick, setParkedTick] = useState(0);
+
+  // Appending, not replacing: the composer stays editable while a turn runs,
+  // so the player may already be typing the next thing. Failed prompt first,
+  // since it was typed first, joined visibly so it reads as two things to edit
+  // rather than one. Shared by both delivery paths so they cannot drift.
+  const giveBackPrompt = useCallback((text: string) => {
+    setInput((cur) => (cur.trim() ? `${text}\n\n${cur}` : text));
+  }, []);
+
+  // Hand back anything parked for the scene now on screen. Runs on selection
+  // as well as on a fresh park, so a prompt recovered while the player was
+  // elsewhere arrives the moment they come back rather than on the next
+  // failure.
+  useEffect(() => {
+    if (!activeId) return;
+    const held = parkedPrompts.current.get(activeId);
+    if (held === undefined) return;
+    parkedPrompts.current.delete(activeId);
+    giveBackPrompt(held);
+  }, [activeId, parkedTick, giveBackPrompt]);
+
+  // Where a recovered prompt goes: the composer if the player is still on the
+  // scene it belongs to, the parking map otherwise. `activeIdRef`, not
+  // `activeId` — this runs from a callback that outlives the render it started
+  // in, and a captured `activeId` would be the scene the turn began on, which
+  // is exactly the stale answer this exists to avoid.
+  const recoverPrompt = useCallback((sid: string, text: string) => {
+    if (activeIdRef.current === sid) {
+      giveBackPrompt(text);
+      return;
+    }
+    parkedPrompts.current.set(sid, text);
+    setParkedTick((n) => n + 1);
+  }, [giveBackPrompt]);
   // Set on the way in as well as cleared on the way out. StrictMode runs the
   // setup/cleanup/setup cycle on mount in development, so a cleanup-only effect
   // leaves the flag false for the whole life of the view — and `owns()` below
@@ -1018,17 +1069,15 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     // From the callback rather than after the await: `runStream` does not
     // return until its flush poll has finished, and the player should not have
     // to wait that out to get their own words back.
-    // Appended above a newer draft rather than dropped or overwritten. The
-    // composer stays editable while a turn runs, so by the time a turn fails
-    // the player may already be typing the next thing — and review caught that
-    // `cur || content` then threw the failed prompt away, in exactly the case
-    // it exists to protect. Both texts are the player's, neither is anywhere
-    // else, so both come back: the failed one first, since it was typed first,
-    // and joined visibly so it reads as two things to edit rather than one.
+    // Through `recoverPrompt`, which decides *where* the words go: the composer
+    // if the player is still on this scene, parked under `id` if they have
+    // moved on. The appending rule that used to live here moved with it — see
+    // `giveBackPrompt`. `id`, captured here, is the scene this prompt was
+    // written for, and it stays right however long the recovery takes.
     const landed = await runStream(id, (onEvent, signal) => pendingResponse
       ? api.chat(cid, id!, content, onEvent, pendingResponse, signal)
       : api.chat(cid, id!, content, onEvent, undefined, signal),
-      () => setInput((cur) => (cur.trim() ? `${content}\n\n${cur}` : content)));
+      () => recoverPrompt(id!, content));
     if (landed) setPendingResponse(null);
   }
 
