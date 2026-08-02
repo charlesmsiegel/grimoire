@@ -733,8 +733,15 @@ export const api = {
   // `active` being the one the transcript is showing (null once a reroll's
   // stream died and left the slot empty). Previews only — picking one is what
   // brings its full text back, as transcript.
+  // Never coalesced, for the same reason `getRollProposal` is not. `fetchAlternates`
+  // stamps the answer with the window token current when it *issued* the read —
+  // that is the whole readiness gate — and a shared read is as old as the request
+  // it joined. A reroll or swap firing while an earlier GET is still open would
+  // otherwise attach that older set to the newer transcript: the counter names
+  // the wrong active take, and an arrow promotes a still-valid but wrong id.
   getAlternates: (cid: string, sid: string) =>
-    request<SceneAlternates>("GET", `/api/campaigns/${cid}/scenes/${sid}/alternates`),
+    request<SceneAlternates>(
+      "GET", `/api/campaigns/${cid}/scenes/${sid}/alternates`, undefined, { fresh: true }),
   pickAlternate: (cid: string, sid: string, id: string) =>
     request<{ ok: boolean }>("POST", `/api/campaigns/${cid}/scenes/${sid}/alternates/${id}`),
 

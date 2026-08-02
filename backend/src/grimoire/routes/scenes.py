@@ -422,21 +422,14 @@ def post_scene_alternate(cid: str, sid: str, vid: str):
             # request that changed nothing — and a delayed click for a variant
             # another tab has since promoted would cancel that tab's proposal.
             return {"ok": True}
-        # A swap replaces the narration a pending roll fence was derived from,
-        # so the decision hanging off it has to be retired too — exactly why
-        # regenerate supersedes. Accepting a proposal whose text is no longer in
-        # the transcript would continue a mechanical decision nothing on screen
-        # asked for. Before the swap, not after: superseding heals the record it
-        # retires, which can append a 🎲 line, and `promote` has to reconcile
-        # against the transcript that leaves behind.
-        # Persist the reconciliation BEFORE retiring anything. It is the same
-        # write `promote` does first, and it is where an unwritable sidecar
-        # fails — so a swap that cannot happen is refused with the proposal
-        # still pending, rather than retiring a decision whose narration is
-        # still exactly what the reader sees. Idempotent, and safe to repeat
-        # inside `promote`.
-        store.alternates.reconcile(cid, sid)
-        store.proposals.supersede(cid, sid)
+        # Heal now, retire after. Healing is what can append a 🎲 line, and
+        # `promote` has to reconcile against the transcript that leaves behind —
+        # but a swap that fails must not take the decision with it. The sidecar
+        # preflight is not enough on its own: `promote` writes the TRANSCRIPT
+        # too, and that write can fail after the sidecar's has succeeded,
+        # leaving the reader looking at the exact narration the proposal was
+        # derived from with no way to resolve it. Same split as regenerate.
+        store.proposals.heal(cid, sid)
         try:
             store.alternates.promote(cid, sid, index)
         except store.alternates.AlternateNotFound:
@@ -451,6 +444,11 @@ def post_scene_alternate(cid: str, sid: str, vid: str):
                 status_code=400,
                 detail="this scene's recorded turn boundaries no longer match its "
                        "transcript — delete the last reply manually to swap alternates")
+        # The transcript is now showing a different take, so the decision the
+        # old narration produced is retired — and only now that it really is.
+        # Accepting a proposal whose text is no longer on screen would continue
+        # a mechanical decision nothing there asked for.
+        store.proposals.supersede(cid, sid)
     return {"ok": True}
 
 
