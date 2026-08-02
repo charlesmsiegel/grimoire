@@ -110,14 +110,23 @@ async def _guard(agen, timeout: float, tick: float | None = None) -> AsyncIterat
     Deltas already received are yielded before the timeout raises, so a partial
     reply stays recoverable by the fence watcher's on_error path.
 
-    Every `tick` seconds spent waiting, an empty string is yielded: the facade's
-    own liveness signal (#95), for callers that have to keep a connection of
-    their own visibly alive. It is emitted from *this* wait, not forwarded from
-    the provider — a provider's own empty frame still resets the bound and stops
-    here, because the two carry different information and only this one is
-    guaranteed to arrive on a schedule the caller picked. So `""` reaching a
+    Every `tick` seconds without caller-visible text, an empty string is yielded:
+    the facade's own liveness signal (#95), for callers that have to keep a
+    connection of their own visibly alive. A provider's empty frame does NOT
+    satisfy it and is still not forwarded — the two carry different information,
+    and only this one is on a schedule the caller picked. So `""` reaching a
     caller means "no text yet, still connected", and never anything else;
     `complete()` joins it away for callers that only want the finished string.
+
+    The two clocks are deliberately different, and conflating them was a bug
+    caught in review. The idle bound measures *provider* activity, so every
+    frame resets it, empty ones included. The tick measures what the *caller*
+    has seen, so it spans pulls and only text resets it. Reset per pull instead
+    and the adapters defeat it completely: they yield "" for every upstream SSE
+    line (see `openrouter.stream`), so a model streaming reasoning fires frames
+    far faster than the interval, restarts the clock each time, and the caller's
+    connection stays silent for exactly as long as it would have without a
+    heartbeat at all.
     """
     # Read at call time, not bound as a default: the constant is the knob tests
     # and any future config path turn, and a default argument would freeze
@@ -125,33 +134,43 @@ async def _guard(agen, timeout: float, tick: float | None = None) -> AsyncIterat
     tick = HEARTBEAT_INTERVAL if tick is None else tick
     it = agen.__aiter__()
     pull: asyncio.Task | None = None
+    next_tick = (time.monotonic() + tick) if tick > 0 else None
     try:
         while True:
             pull = asyncio.ensure_future(it.__anext__())
-            # Both bounds run off one wait: `tick` paces the liveness signal,
-            # `deadline` is the idle bound, and whichever is nearer sets the
-            # next sleep. Re-derived each pass because a tick consumes part of
-            # the timeout's budget and must not extend it -- ticking forever is
-            # exactly the "never times out" failure the bound exists to prevent.
+            # The idle bound restarts here, on each new pull. The tick does not.
             deadline = None if timeout <= 0 else time.monotonic() + timeout
             while True:
-                wait = tick if tick > 0 else None
-                if deadline is not None:
-                    left = deadline - time.monotonic()
-                    wait = left if wait is None else min(wait, left)
+                # Whichever clock is nearer sets the sleep; a tick therefore
+                # consumes part of the timeout's budget rather than extending it
+                # -- ticking forever is exactly the "never times out" failure the
+                # bound exists to prevent.
+                due = [t for t in (deadline, next_tick) if t is not None]
+                wait = max(0.0, min(due) - time.monotonic()) if due else None
                 done, _ = await asyncio.wait({pull}, timeout=wait)
                 if done:
                     break
-                if deadline is not None and time.monotonic() >= deadline:
+                now = time.monotonic()
+                if deadline is not None and now >= deadline:
                     raise LLMError(
                         "timeout", f"the model sent nothing for {timeout:g}s — giving up")
-                yield ""  # still waiting on the provider; tell the caller so
+                if next_tick is not None and now >= next_tick:
+                    next_tick = now + tick
+                    yield ""  # still waiting on the provider; tell the caller so
             try:
                 chunk = pull.result()  # re-raises the provider's own LLMError
             except StopAsyncIteration:
                 return
-            if chunk:  # "" was a provider heartbeat: it reset the wait, nothing more
+            if chunk:
+                next_tick = (time.monotonic() + tick) if tick > 0 else None
                 yield chunk
+            elif next_tick is not None and time.monotonic() >= next_tick:
+                # A provider frame that carries no text, arriving on a stream so
+                # chatty that the wait above never expires. The pull loop is the
+                # only other place the clock can be read, so an overdue tick has
+                # to fire from here or a busy-but-silent model never produces one.
+                next_tick = time.monotonic() + tick
+                yield ""
     finally:
         # Every exit settles the outstanding pull and closes the provider: on a
         # timeout the pull is cancelled here, and on a caller-side close (an SSE

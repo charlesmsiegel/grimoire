@@ -323,6 +323,28 @@ async def test_ticking_does_not_extend_the_idle_bound(monkeypatch):
     assert exc.value.kind == "timeout"
 
 
+async def test_a_chatty_silent_provider_cannot_suppress_the_tick(monkeypatch):
+    """The regression review caught. Both adapters yield "" for every upstream
+    SSE line, so a model streaming reasoning delivers frames far faster than the
+    interval. A tick clock reset per pull never expires, and the caller's
+    connection stays silent for the whole reasoning phase — the exact case the
+    heartbeat exists for. The clock spans pulls and only text resets it, so
+    ~0.16s of dense empty frames at a 0.03s interval has to produce ticks."""
+    monkeypatch.setattr(llm, "HEARTBEAT_INTERVAL", 0.03)
+    client = _timeout_client(ReasoningProvider(8), 0)  # frames every 0.02s
+    chunks = [c async for c in client.stream([], _conn("openrouter"))]
+    assert chunks[-1] == "the answer"
+    assert chunks.count("") >= 2
+
+
+async def test_text_resets_the_tick_clock(monkeypatch):
+    """A stream that is actually producing prose needs no liveness signal —
+    the prose is the signal."""
+    monkeypatch.setattr(llm, "HEARTBEAT_INTERVAL", 0.05)
+    client = _timeout_client(FakeProvider("or"), 0)
+    assert [c async for c in client.stream([], _conn("openrouter"))] == ["or"]
+
+
 async def test_a_provider_heartbeat_is_still_not_a_facade_tick(monkeypatch):
     """The two empties are different signals and only one is on a schedule the
     caller chose. A provider frame resets the bound and stops at the facade; if

@@ -565,6 +565,35 @@ test("a turn in flight offers Stop in place of Send", async () => {
   expect(api.getScene).toHaveBeenCalled();
 });
 
+test("a cancelled turn's partial appears even when the backend flush lands late", async () => {
+  // The abort rejects the fetch as soon as the socket is torn down client-side;
+  // the backend only then notices the disconnect and runs its shielded flush.
+  // The refresh that follows Stop can therefore read a transcript the partial
+  // has not reached yet, and without the poll the text sits on disk while the
+  // screen denies it exists. Here the flush lands 100ms after the abort — after
+  // the immediate refresh, before the first retry.
+  //
+  // The streamed text and the persisted message are deliberately different
+  // strings. They are the same in life, but asserting on the streamed one here
+  // proves nothing: the live preview renders it too, so the assertion would
+  // pass against a node the refresh is about to tear down.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  let flushed = false;
+  (api.getScene as any).mockImplementation(async () => ({
+    meta: {},
+    messages: flushed ? [{ role: "assistant", content: "the whole persisted partial" }] : [],
+  }));
+  (api.chat as any).mockImplementation(hangingChat(["a streamed fragment"]));
+  renderCampaign();
+  const ta = await screen.findByRole("textbox");
+  fireEvent.change(ta, { target: { value: "and then?" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
+  setTimeout(() => { flushed = true; }, 100);   // lands after the immediate refresh
+  await waitFor(() =>
+    expect(screen.getByText("the whole persisted partial")).toBeInTheDocument());
+});
+
 test("cancelling keeps a one-shot response override for the retry", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.listResponsePresets as any).mockResolvedValue(RESPONSE_PRESETS);
@@ -2044,6 +2073,24 @@ test("resolving a roll-proposal chip calls api.resolveProposal and clears the ch
     { proposal: "pr-1", action: "accept", check: "brawl", actor: "characters:mara", difficulty: 6, modifier: 0 },
     expect.any(Function), expect.any(AbortSignal)));
   await waitFor(() => expect(screen.queryByRole("button", { name: "Roll it" })).toBeNull());
+});
+
+test("a declined roll whose narration never landed stays retryable", async () => {
+  // Stopping (or an upstream failure on) a declined record's continuation
+  // leaves it `declined` with nothing persisted. The backend re-streams that
+  // continuation on request, but the chip used to be filtered out of the scene
+  // load, so the decline narration had no way back.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "assistant", content: "a reply" }] });
+  (api.getRollProposal as any).mockResolvedValue({
+    record: { id: "pr-1", status: "declined", payload: PROPOSAL_PAYLOAD, resolution: null } });
+  renderCampaign();
+  await screen.findByText(/Roll declined, narration pending/);
+  fireEvent.click(screen.getByRole("button", { name: "Continue narration" }));
+  await waitFor(() => expect(api.resolveProposal).toHaveBeenCalledWith(
+    "run", "s1", { proposal: "pr-1", action: "decline" },
+    expect.any(Function), expect.any(AbortSignal)));
 });
 
 test("selecting a scene re-hydrates a pending roll-proposal record", async () => {

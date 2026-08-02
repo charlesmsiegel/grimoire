@@ -418,13 +418,21 @@ def test_remove_trailing_assistant_run(monkeypatch, tmp_path):
         scenes.remove_trailing_assistant_run(cid, sid)
 
 
+def test_append_message_reports_where_it_landed(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    assert scenes.append_message(cid, sid, "user", "hi") == 0
+    assert scenes.append_message(cid, sid, "assistant", "hello") == 1
+    assert scenes.append_message(cid, sid, "user", "and then?") == 2
+
+
 def test_remove_trailing_user_post_takes_back_the_orphan(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
     scenes.append_message(cid, sid, "user", "hi")
     scenes.append_message(cid, sid, "assistant", "hello")
-    scenes.append_message(cid, sid, "user", "and then?")
-    assert scenes.remove_trailing_user_post(cid, sid, "and then?") is True
+    at = scenes.append_message(cid, sid, "user", "and then?")
+    assert scenes.remove_trailing_user_post(cid, sid, at, "and then?") is True
     assert scenes.read_scene(cid, sid)["messages"] == [
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": "hello"},
@@ -437,11 +445,29 @@ def test_remove_trailing_user_post_leaves_a_transcript_that_moved_on(monkeypatch
     an undo that deleted anyway would take back an answered post."""
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
-    scenes.append_message(cid, sid, "user", "and then?")
-    assert scenes.remove_trailing_user_post(cid, sid, "something else") is False
+    at = scenes.append_message(cid, sid, "user", "and then?")
+    assert scenes.remove_trailing_user_post(cid, sid, at, "something else") is False
     scenes.append_message(cid, sid, "assistant", "the door opens")
-    assert scenes.remove_trailing_user_post(cid, sid, "and then?") is False
+    assert scenes.remove_trailing_user_post(cid, sid, at, "and then?") is False
     assert len(scenes.read_scene(cid, sid)["messages"]) == 2
+
+
+def test_remove_trailing_user_post_will_not_take_a_twins_post(monkeypatch, tmp_path):
+    """Two overlapping turns can carry identical text — nothing holds a lock
+    across the LLM call between append and undo. Matching on content alone, the
+    first turn's undo would delete the second turn's post while its generation
+    was still running. The index makes it a refusal."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    first = scenes.append_message(cid, sid, "user", "and then?")   # turn A
+    second = scenes.append_message(cid, sid, "user", "and then?")  # turn B, still streaming
+    assert scenes.remove_trailing_user_post(cid, sid, first, "and then?") is False
+    assert len(scenes.read_scene(cid, sid)["messages"]) == 2
+    # B finishes badly too; now IT is the tail, and its own undo is the one that
+    # fires. A's post is then last again and A's undo would fire on a re-run.
+    assert scenes.remove_trailing_user_post(cid, sid, second, "and then?") is True
+    assert scenes.remove_trailing_user_post(cid, sid, first, "and then?") is True
+    assert scenes.read_scene(cid, sid)["messages"] == []
 
 
 def test_remove_trailing_user_post_keeps_turn_boundaries(monkeypatch, tmp_path):
@@ -451,17 +477,17 @@ def test_remove_trailing_user_post_keeps_turn_boundaries(monkeypatch, tmp_path):
     sid = scenes.create_scene(cid, "S")
     scenes.append_reply(cid, sid, [{"speaker": None, "content": "one"},
                                    {"speaker": None, "content": "two"}])
-    scenes.append_message(cid, sid, "user", "orphan")
-    assert scenes.remove_trailing_user_post(cid, sid, "orphan") is True
+    at = scenes.append_message(cid, sid, "user", "orphan")
+    assert scenes.remove_trailing_user_post(cid, sid, at, "orphan") is True
     assert scenes.get_turn_sizes(cid, sid) == [2]
 
 
 def test_remove_trailing_user_post_on_an_empty_or_missing_scene(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
-    assert scenes.remove_trailing_user_post(cid, sid, "anything") is False
+    assert scenes.remove_trailing_user_post(cid, sid, 0, "anything") is False
     with pytest.raises(scenes.SceneNotFound):
-        scenes.remove_trailing_user_post(cid, "nope", "anything")
+        scenes.remove_trailing_user_post(cid, "nope", 0, "anything")
 
 
 def test_roll_speaker_does_not_collide_with_a_character_actually_named_roll(monkeypatch, tmp_path):
