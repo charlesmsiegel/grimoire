@@ -1928,3 +1928,38 @@ def test_a_commitment_edit_writes_where_its_target_says(monkeypatch, tmp_path):
         ["Sworn.", "A forged beat."]
     assert [b["text"] for b in commitments.get(cid, "the-oath")["beats"]] == ["Also sworn."]
     assert commitments.get(cid, "the-oath")["status"] == "open"      # not broken
+
+
+def test_replacing_a_new_commitment_does_not_merge_it_into_another(monkeypatch, tmp_path):
+    """Two reviews open at once can both propose a NEW commitment whose title
+    slugs alike — `Pay Mara` and `Pay, Mara`. The second conflicts once the first
+    saves, and if its reviewer answers Replace, writing to the taken id would
+    append their beat, kind, status and deadline onto somebody else's promise:
+    two unrelated commitments merged under whichever title landed first."""
+    from grimoire.store import commitments, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    # the first review's save, already landed
+    commitments.set_movement(cid, "pay-mara", "Pay Mara", "promise", "open", "",
+                             "She swore it on the stair.", sid)
+
+    # the second, staged as NEW (empty `before`) against the same slug, answered
+    # with Replace over the value the panel showed them
+    from grimoire.store.absorb import conflicts as absorb_conflicts
+    shown = absorb_conflicts.commitment_line(commitments.get(cid, "pay-mara"))
+    applied, failures = absorb.apply_edits(cid, [{
+        "id": "commitment:pay-mara", "kind": "commitment", "field": "beat",
+        "target": {"kind": "commitments", "id": "pay-mara"},
+        "before": "", "after": "A different debt entirely.",
+        "resolve": "replace", "resolve_from": shown,
+        "payload": {"id": "pay-mara", "title": "Pay, Mara", "kind": "threat",
+                    "status": "open", "due": "by the thaw", "scene": sid}}], sid)
+
+    assert failures == [] and applied == ["commitment:pay-mara"]
+    first = commitments.get(cid, "pay-mara")
+    assert first["title"] == "Pay Mara" and first["kind"] == "promise"
+    assert [b["text"] for b in first["beats"]] == ["She swore it on the stair."]
+    second = commitments.get(cid, "pay-mara-2")            # its own record
+    assert second["title"] == "Pay, Mara" and second["kind"] == "threat"
+    assert second["due"] == "by the thaw"
+    assert [b["text"] for b in second["beats"]] == ["A different debt entirely."]
