@@ -79,6 +79,10 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   const [anchorSaving, setAnchorSaving] = useState(false);
   const [anchorState, setAnchorState] = useState<"loading" | "ready" | "error">("loading");
   const anchorReq = useRef(0);
+  // What the anchor textarea held when it was last in sync with the server --
+  // set on a successful load and on a successful save. `voiceAnchor` differing
+  // from it is an UNSAVED DRAFT, which `select()` must not silently discard.
+  const anchorLoaded = useRef("");
   const [urlPromptOpen, setUrlPromptOpen] = useState(false);
   const [cropOpen, setCropOpen] = useState(false);
   const [bulkUrl, setBulkUrl] = useState<{ current: number; total: number; name: string; step: string } | null>(null);
@@ -253,7 +257,16 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     setDetail(d);
     setBirthdate(d.meta.birthdate ?? "");
     loadVersion(d, d.meta.default_version);
-    loadVoiceAnchor(cid);   // campaign-local characters need one too (#59)
+    // `select()` is the refresh EVERY other save runs (card version, avatar,
+    // lock, import...), and none of them touch the anchor -- so reloading it
+    // unconditionally discarded an anchor draft whenever the user edited the
+    // card and the anchor in one sitting and saved the card first. Reload only
+    // when there is nothing to lose: a different character, or no unsaved edit.
+    // `focusCharacter` still reloads unconditionally -- that is navigation TO a
+    // character, not a refresh of the one already open.
+    const keepDraft = detail?.meta.id === cid && anchorState === "ready"
+      && voiceAnchor !== anchorLoaded.current;
+    if (!keepDraft) loadVoiceAnchor(cid);   // campaign-local characters need one too (#59)
     if (worldScope) loadTagline(cid);
     else await loadLockState(cid);
     return d;
@@ -327,6 +340,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       .then((r) => {
         if (anchorReq.current !== req) return;
         setVoiceAnchor(r.voice_anchor);
+        anchorLoaded.current = r.voice_anchor;
         setAnchorState("ready");
       })
       .catch(() => { if (anchorReq.current === req) setAnchorState("error"); });
@@ -344,6 +358,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       // character opts back out of voice-drift detection. Only reachable once
       // the load succeeded, so the blank is the user's, not a placeholder.
       await api.setCharacterVoiceAnchor(scope, detail.meta.id, voiceAnchor.trim());
+      anchorLoaded.current = voiceAnchor;   // in sync again: no longer a draft
     } catch (err: any) {
       setError(err.detail ?? String(err));
     } finally {
@@ -352,7 +367,10 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   }
 
   async function regenerateVoiceAnchor() {
-    if (!detail) return;
+    // `anchorSaving` too: a generation landing around an open PUT swaps the
+    // textarea for a fresh draft while Save returns to its idle label, so the
+    // control says "saved" over a value that never was.
+    if (!detail || anchorSaving) return;
     // Tokened like the GET: generation is slow, and without this a draft for
     // character A lands in character B's textarea if the user navigates while
     // it is in flight -- and Save writes it under B, since it reads the CURRENT
@@ -1269,7 +1287,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
                   "loading" — every control disabled, no error shown, and no way
                   out but reopening the character. */}
               <button className="subtle" type="button"
-                      disabled={anchorBusy || anchorState === "loading"}
+                      disabled={anchorBusy || anchorSaving || anchorState === "loading"}
                       onClick={regenerateVoiceAnchor}>
                 {anchorBusy ? "Generating…" : "Generate"}
               </button>

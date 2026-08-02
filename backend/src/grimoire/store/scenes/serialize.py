@@ -62,9 +62,20 @@ def label_preserved(speaker: str | None) -> bool:
     write as a marker -- one holding `*` or a newline, longer than 64
     characters, or colliding with a reserved label. Anything that later reasons
     about a character BY their transcript label has to know that, or it ends up
-    hunting for a name the transcript cannot contain (see the voice judge)."""
-    return bool(speaker) and bool(_SAFE_LABEL.match(speaker)) \
-        and speaker not in RESERVED_LABELS
+    hunting for a name the transcript cannot contain (see the voice judge).
+
+    A reserved label is rejected in its SUB-SPEAKER form too. `_MARKER` splits a
+    trailing " (...)" off as the sub-speaker, and `_speaker_and_role` hands a
+    reserved base's message to the sub -- so "Grimoire (Alice)" is stored and
+    read back as plain "Alice", and "You (Bob)" comes back as "Bob" with the
+    USER role, filing an NPC's dialogue under the player. The base is split off
+    greedily, matching `_MARKER`'s backtracking: in "A (B) (C)" the LAST
+    parenthetical is the sub."""
+    if not speaker or not _SAFE_LABEL.match(speaker):
+        return False
+    m = re.fullmatch(r"(.*) \(([^)\n]+)\)", speaker)
+    base = m.group(1) if m else speaker
+    return speaker not in RESERVED_LABELS and base not in RESERVED_LABELS
 
 
 def _label(role: str, speaker: str | None) -> str:
@@ -90,8 +101,17 @@ def match_name(label: str, names) -> str | None:
     exact = [n for n in names if n.lower() == low]
     if exact:
         return exact[0] if len(exact) == 1 else None
-    prefixed = [n for n in names
-                if n.lower().startswith(low) and not n[len(low)].isalnum()]
+    # The boundary is checked in the LOWERCASED name, not the original. Casing
+    # is not length-preserving -- "İ".lower() is two code points -- so indexing
+    # the original by the normalized prefix's length lands past the boundary and
+    # tests the wrong character. "İpek" then failed to name "İpek Yılmaz", which
+    # reads as ambiguity and (via `confusable`) skips that character's voice
+    # checks entirely, with no competing speaker anywhere.
+    prefixed = []
+    for n in names:
+        nl = n.lower()
+        if nl.startswith(low) and not nl[len(low)].isalnum():
+            prefixed.append(n)
     return prefixed[0] if len(prefixed) == 1 else None
 
 

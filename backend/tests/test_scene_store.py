@@ -1206,8 +1206,35 @@ def test_label_preserved_means_the_speaker_survives_a_round_trip():
         assert _round_trip(name) == (name, "assistant")
 
     for name in ["Aese\n", "Aese\r\n", "Aese\r", "Aese\nVane", "A" * 65,
-                 "Aese *the Grey*", "", None, "You", "Grimoire"]:
+                 "Aese *the Grey*", "", None, "You", "Grimoire",
+                 # RESERVED IN SUB-SPEAKER FORM. `_MARKER` splits a trailing
+                 # " (...)" off as the sub, and `_speaker_and_role` hands a
+                 # reserved base's message to that sub -- so these come back as
+                 # "Alice"/"Bob", and the "You" one comes back as the PLAYER,
+                 # filing an NPC's dialogue under the user.
+                 "Grimoire (Alice)", "You (Bob)"]:
         assert not serialize.label_preserved(name), repr(name)
+
+
+def test_no_name_is_preserved_unless_it_actually_round_trips():
+    """The guard against this whole class: rather than trust the enumeration
+    above, take names that probe each rule and assert the invariant directly --
+    `label_preserved` is TRUE only where serialize-then-parse gives the name
+    back. Both defects found here (a trailing newline, a reserved sub-speaker)
+    were cases where the predicate said yes and the round trip disagreed."""
+    from grimoire.store.scenes import serialize
+
+    probes = ["Aese", "Aese Vane", "Winifred (the elder)", "A (B) (C)", "Zoë-Ann",
+              "A" * 64, "A" * 65, "Aese\n", "Aese\r\n", "Aese\r", "Aese\nVane",
+              "Aese *the Grey*", "You", "Grimoire", "You (Bob)", "Grimoire (Alice)",
+              "(Alice)", "Aese (", "Aese )", ""]
+    for name in probes:
+        block = serialize._block("assistant", name, "Some dialogue.")
+        markers = serialize._markers(block)
+        got = (serialize._speaker_and_role(markers[0], frozenset())
+               if len(markers) == 1 else None)
+        assert serialize.label_preserved(name) == (got == (name, "assistant")), \
+            f"{name!r}: preserved={serialize.label_preserved(name)} but round trip gave {got}"
 
 
 def test_a_name_that_is_not_preserved_falls_back_to_the_role_label():
@@ -1215,3 +1242,20 @@ def test_a_name_that_is_not_preserved_falls_back_to_the_role_label():
     line reads as unstamped assistant prose, which is wrong-but-legible; the
     unfixed alternative was a block no marker matched."""
     assert _round_trip("Aese\n") == (None, "assistant")
+
+
+def test_a_prefix_boundary_is_checked_in_the_lowercased_name():
+    """Casing is not length-preserving -- "İ".lower() is two code points -- so
+    indexing the ORIGINAL name by the normalized prefix's length lands past the
+    boundary. "İpek" then failed to name "İpek Yılmaz", which reads as ambiguity
+    and skips that character's voice checks with no competing speaker at all."""
+    from grimoire.store.scenes import serialize
+
+    assert serialize.match_name("İpek", ["İpek Yılmaz"]) == "İpek Yılmaz"
+    assert not serialize.confusable("İpek Yılmaz", ["İpek Yılmaz", "You", "Grimoire"])
+    # ...and a real collision in the same alphabet is still ambiguous
+    assert serialize.match_name("İpek", ["İpek Yılmaz", "İpek Demir"]) is None
+    assert serialize.confusable("İpek Yılmaz", ["İpek Yılmaz", "İpek Demir"])
+    # ASCII behaviour is unchanged
+    assert serialize.match_name("Winifred", ["Winifred Vance"]) == "Winifred Vance"
+    assert serialize.match_name("Winifred", ["Winifred Vance", "Winifred Vale"]) is None

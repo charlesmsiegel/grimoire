@@ -2099,3 +2099,21 @@ def test_reformatting_the_anchor_body_keeps_a_committed_flag_live(monkeypatch, t
 
     voice_anchors.write(wroot, "winifred", rec["text"].replace(". ", ".\n\n"))
     assert "drifted out of voice" in context.build_messages(cid, sid)[-1]["content"]
+
+
+def test_a_corrective_is_suppressed_when_the_card_has_no_name(monkeypatch, tmp_path):
+    """`scene_cast` substitutes the actor id for a card carrying no usable name,
+    and a slug is not something the model can match: the NPC card in front of it
+    has no `name` at all, so a corrective addressed to the slug is an
+    instruction about nobody."""
+    _wid, cid, sid = _voice_scene(monkeypatch, tmp_path)
+    voice_drift.write(campaigns.campaign_root(cid), "winifred", "She hedged.")
+    assert "drifted out of voice" in context.build_messages(cid, sid)[-1]["content"]
+
+    aroot = ap.locked_actor_root(cid)
+    card = characters.read_card(aroot, "winifred", "default")
+    card["data"].pop("name", None)
+    characters.update_version(aroot, "winifred", "default", card)
+    assert [a["name"] for a in ap.scene_cast(cid, sid) if a["id"] == "winifred"] == ["winifred"]
+
+    assert "drifted out of voice" not in context.build_messages(cid, sid)[-1]["content"]
