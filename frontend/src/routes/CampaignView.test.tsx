@@ -1,6 +1,7 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import CampaignView from "./CampaignView";
+import type { ChatEvent } from "../api/stream";
 
 // CastPanel, NewSceneChooser, and CalendarConfig have their own tests + make their own
 // API calls; stub them here.
@@ -106,11 +107,19 @@ beforeEach(() => {
   (api.createScene as any).mockResolvedValue({ id: "s1" });
   (api.renameScene as any).mockResolvedValue({ id: "s1", title: "New" });
   (api.deleteScene as any).mockResolvedValue({ ok: true });
-  (api.chat as any).mockResolvedValue(undefined);
-  (api.retry as any).mockResolvedValue(undefined);
-  (api.regenerate as any).mockResolvedValue(undefined);
+  // Every streaming route ends a successful turn with a `done` frame — that is
+  // how the client knows the backend finalized and persisted, rather than the
+  // body merely reaching EOF. A default that resolved silently modelled a
+  // truncated stream, so these mocks now send it.
+  const streamsDone = async (...args: unknown[]) => {
+    (args.find((a) => typeof a === "function") as ((e: ChatEvent) => void) | undefined)?.(
+      { done: true });
+  };
+  (api.chat as any).mockImplementation(streamsDone);
+  (api.retry as any).mockImplementation(streamsDone);
+  (api.regenerate as any).mockImplementation(streamsDone);
   (api.getRollProposal as any).mockResolvedValue({ record: null });
-  (api.resolveProposal as any).mockResolvedValue(undefined);
+  (api.resolveProposal as any).mockImplementation(streamsDone);
   (api.getSceneChecks as any).mockResolvedValue({ actors: [] });
   (api.rollCheck as any).mockResolvedValue({ ok: true, resolution: {}, message: "" });
   (api.getConfig as any).mockResolvedValue({ theme: "codex", system_prompt: "", quote_color: "off", user_label: "You", assistant_label: "Grimoire", active_connection_id: "openrouter", active_connection: { id: "openrouter", kind: "openrouter", name: "OpenRouter" }, ready: true });
@@ -787,6 +796,75 @@ test("Stop after the done frame is a finished turn, not a cancellation", async (
   await screen.findByRole("button", { name: /continue ▶/i });
   // spent by the reply that did land, so it must not ride the next turn
   await waitFor(() => expect(chip).not.toHaveTextContent("Terse"));
+});
+
+test("a failed send that was rolled back gives the player their words back", async () => {
+  // The backend removes the post when a turn fails having produced nothing, so
+  // without this the text exists nowhere: the composer was cleared on send and
+  // the refresh drops the optimistic copy. Retry cannot recover it either — it
+  // calls /retry, which has no prompt of its own.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.chat as any).mockImplementation(
+    async (_c: string, _s: string, _t: string, onEvent: any) => {
+      onEvent({ error: { detail: "OpenRouter API key is not set", kind: "missing_key",
+                         post_returned: true } });
+    });
+  renderCampaign();
+  const ta = await screen.findByRole("textbox");
+  fireEvent.change(ta, { target: { value: "I draw my blade." } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  await screen.findByText(/OpenRouter API key is not set/);
+  await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("I draw my blade."));
+});
+
+test("a failure the backend did not roll back leaves the composer alone", async () => {
+  // The post is still in the transcript, so restoring it would have the player
+  // send the same line twice. Only the backend knows which happened.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.chat as any).mockImplementation(
+    async (_c: string, _s: string, _t: string, onEvent: any) => {
+      onEvent({ delta: "The tide " });
+      onEvent({ error: { detail: "connection reset", kind: "network" } });
+    });
+  renderCampaign();
+  const ta = await screen.findByRole("textbox");
+  fireEvent.change(ta, { target: { value: "I draw my blade." } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  await screen.findByText(/connection reset/);
+  expect(screen.getByRole("textbox")).toHaveValue("");
+});
+
+test("a body that ends before the done frame is an interrupted turn", async () => {
+  // `reader.read()` reporting EOF resolves streamPost normally, so a proxy
+  // cutting the body short used to look identical to a completed turn — the
+  // one-shot override was spent and the flush never waited for.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.listResponsePresets as any).mockResolvedValue(RESPONSE_PRESETS);
+  // The truncated turn is treated as interrupted, so the flush poll runs; let
+  // the partial land so it exits on its first tick rather than sitting out the
+  // whole budget — `runStream` awaits it before the override is settled either
+  // way, and a `waitFor` that ran before that would pass on any implementation.
+  let flushed = false;
+  (api.getScene as any).mockImplementation(async () => ({
+    meta: { id: "s1", title: "Old" },
+    total: flushed ? 1 : 0,
+    messages: flushed ? [{ role: "assistant", content: "The tide" }] : [],
+  }));
+  (api.chat as any).mockImplementation(
+    async (_c: string, _s: string, _t: string, onEvent: any) => {
+      onEvent({ delta: "The tide " });   // ...and then the body just ends
+    });
+  renderCampaign();
+  const chip = await screen.findByRole("button", { name: /Response length/ });
+  fireEvent.click(chip);
+  fireEvent.click(screen.getByRole("option", { name: "Terse" }));
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "and then?" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  setTimeout(() => { flushed = true; }, 100);
+  await screen.findByText("The tide");          // poll caught the flush and ended
+  await new Promise((r) => setTimeout(r, 600)); // let the poll exit and send() settle
+  // unspent: the reply never confirmed, so the override rides the retry
+  expect(chip).toHaveTextContent("Terse");
 });
 
 test("the post-cancel poll stops once a new turn owns the view", async () => {
