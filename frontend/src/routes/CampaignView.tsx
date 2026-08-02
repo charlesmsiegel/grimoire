@@ -96,6 +96,18 @@ function responseScopeLabel(scope: string | undefined): string {
 
 type SceneSort = "updated" | "date" | "order";
 
+// A superseded or narrated proposal is finished. `declined` is NOT, and used to
+// be filtered out with them: the backend keeps re-streaming a declined record's
+// continuation on request (mechanics.post_roll_proposal), so a decline whose
+// narration never landed is recoverable — but only if something renders it.
+// Dropping it stranded the record with no way back, which Stop made easy to
+// reach and an upstream failure could always reach; RollProposal now offers it
+// the same Continue narration it offers a stopped accept.
+function liveProposal(record: ProposalRecord | null): ProposalRecord | null {
+  return record && record.status !== "superseded" && record.status !== "narrated"
+    ? record : null;
+}
+
 // All three sorts put the most-recent thing first, matching "updated" (the
 // API's own order, most-recently-edited first — the existing default):
 // "date" is latest in-story date first, "order" is the highest scene number
@@ -409,18 +421,8 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     api.getSceneDatetime(cid, id).then(setDt).catch(() => setDt(null));
     api.getCast(cid, id).then(setCast).catch(() => setCast([]));
     api.listAppearances(cid).then(setRoster).catch(() => setRoster([]));
-    // A superseded or narrated proposal is finished. `declined` is NOT, and
-    // used to be filtered out with them: the backend keeps re-streaming a
-    // declined record's continuation on request (mechanics.post_roll_proposal),
-    // so a decline whose narration never landed is recoverable — but only if
-    // something renders it. Dropping it here stranded the record with no way
-    // back, which Stop made easy to reach and an upstream failure could always
-    // reach; RollProposal now offers the same Continue narration it offers a
-    // stopped accept.
-    api.getRollProposal(cid, id).then((r) => setProposal(
-      r.record && r.record.status !== "superseded" && r.record.status !== "narrated"
-        ? r.record : null,
-    )).catch(() => setProposal(null));
+    api.getRollProposal(cid, id).then((r) => setProposal(liveProposal(r.record)))
+      .catch(() => setProposal(null));
     // Re-read on every selectScene, refresh included: the inspector's picker
     // calls onSceneChanged after a save, so this is what keeps the chip from
     // showing a preset the scene no longer has.
@@ -575,8 +577,24 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       wait = Math.min(wait * 2, FLUSH_POLL_MAX_MS);
       if (!owns()) return;
       const n = await selectScene(id, owns);
-      if (!owns() || n > seen) return;
+      if (!owns()) return;
+      if (n > seen) return void await settleProposal(id, owns);
     }
+  }
+
+  // The last word on the proposal, once the transcript proves the flush is done.
+  //
+  // `selectScene` fires its proposal fetch and awaits only `getScene`, so on the
+  // tick that catches the flush the two requests raced it independently — and
+  // `finalize` writes the proposal *before* the narration, so the read that saw
+  // the transcript grow is the one guaranteed to be after both writes, while the
+  // proposal read beside it may have landed before either. Its late `null` then
+  // clears a chip that does exist, and the poll has already stopped looking:
+  // a roll the player has to answer, invisible until something else refreshes.
+  // One awaited read, after growth, settles it (review, #95).
+  async function settleProposal(id: string, owns: () => boolean) {
+    const r = await api.getRollProposal(cid, id).catch(() => null);
+    if (r && owns()) setProposal(liveProposal(r.record));
   }
 
   // Returns whether the turn actually landed (no thrown error and no e.error

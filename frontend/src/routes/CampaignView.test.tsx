@@ -648,6 +648,42 @@ test("a poll fetch already in flight cannot clear a new turn's preview", async (
   expect(screen.getByText("second fragment")).toBeInTheDocument();
 });
 
+test("a cancelled fence's proposal survives a stale proposal read", async () => {
+  // selectScene fires getRollProposal and awaits only getScene, so on the tick
+  // that catches the flush the two race it independently. finalize writes the
+  // proposal before the narration, so the scene read that saw growth is after
+  // both writes while the proposal read beside it can be before either — and
+  // its late null would clear a chip that does exist, with the poll already
+  // stopped. Here the first proposal read returns null and the second (awaited,
+  // after growth) returns the record.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  let flushed = false;
+  let sceneSawGrowth = false;
+  (api.getScene as any).mockImplementation(async () => {
+    if (flushed) sceneSawGrowth = true;
+    return {
+      meta: {}, total: flushed ? 1 : 0,
+      messages: flushed ? [{ role: "assistant", content: "She lunges" }] : [],
+    };
+  });
+  // Evaluated when the call is made, not when it resolves — so the read
+  // selectScene fires before awaiting getScene still sees the pre-flush world,
+  // which is precisely the stale answer that used to win.
+  (api.getRollProposal as any).mockImplementation(async () => ({
+    record: sceneSawGrowth
+      ? { id: "pr-1", status: "pending", payload: PROPOSAL_PAYLOAD, resolution: null }
+      : null,
+  }));
+  (api.chat as any).mockImplementation(hangingChat(["She lunges"]));
+  renderCampaign();
+  const ta = await screen.findByRole("textbox");
+  fireEvent.change(ta, { target: { value: "I punch him" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
+  setTimeout(() => { flushed = true; }, 100);
+  expect(await screen.findByRole("button", { name: "Roll it" })).toBeInTheDocument();
+});
+
 test("the post-cancel poll stops once a new turn owns the view", async () => {
   // Stop clears `busy` before the poll finishes, so the player can send again
   // while it is still running. Left alone it would keep calling selectScene,
