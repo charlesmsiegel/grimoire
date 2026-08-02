@@ -255,7 +255,7 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
 
 
 def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: LLMClient,
-                 undo_user_post=None):
+                 undo_user_post=None, restore_removed=None):
     """A normal persisted turn. A ```roll fence cuts the stream: the pending
     proposal record is written *before* the pre-fence narration persists, so a
     transcript that ends at a mechanical decision point always has a
@@ -313,9 +313,13 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
         """
         if watcher.narration.strip():  # a normal turn keeps its partial reply
             _persist_reply(cid, sid, watcher.narration)
-        elif undo_user_post is not None and _owns_turn(cid, sid, turn_token):
-            if undo_user_post():
-                return {"post_returned": True}
+            return {}
+        if not _owns_turn(cid, sid, turn_token):
+            return {}
+        if restore_removed is not None:
+            restore_removed()
+        if undo_user_post is not None and undo_user_post():
+            return {"post_returned": True}
         return {}
 
     def on_abort(watcher) -> list[str]:
@@ -354,6 +358,13 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
                 return []
             if len(store.scenes.read_scene(cid, sid)["messages"]) != owned_tail:
                 return []
+            # A cancel keeps the player's own post, because they still have it
+            # and will likely retry from there. A reply this turn *deleted* to
+            # make room for itself is the opposite: nothing else holds it, so a
+            # reroll stopped before its first token has to put it back or the
+            # player loses a reply they never asked to lose (#95).
+            if not watcher.narration.strip() and restore_removed is not None:
+                restore_removed()
             return finalize(watcher)
 
     return _fence_stream(cid, sid, messages, conn, client, finalize, on_error, on_abort)

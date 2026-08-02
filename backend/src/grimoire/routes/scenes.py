@@ -197,6 +197,7 @@ def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
     # the last generation BENEATH them, and every check below has to look at
     # that generation rather than at the transition line sitting on top of it.
     core = msgs[:len(msgs) - store.scenes.trailing_transitions(msgs)]
+    removed: dict | None = None   # set only when there is actually a reply to drop
     if core and core[-1]["role"] == "assistant":
         if all(m["role"] == "assistant" for m in core):
             raise HTTPException(status_code=400, detail="cannot regenerate the opening post")
@@ -208,7 +209,7 @@ def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
             # the bare IndexError (500) that refusal would otherwise surface.
             raise HTTPException(status_code=400, detail="cannot regenerate past a manual dice roll")
         try:
-            store.scenes.remove_trailing_assistant_run(cid, sid)
+            removed = store.scenes.remove_trailing_assistant_run(cid, sid)
         except store.scenes.TurnSizesDesynced:
             # Refusing beats guessing: the recorded turn boundaries don't fit
             # the transcript, so any deletion could take blocks from an earlier
@@ -226,7 +227,16 @@ def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
                                             reserve=(block,) if block else ())
     if block:
         messages.append({"role": "system", "content": block})
-    return _chat_stream(cid, sid, messages, conn, client)
+    # The old reply had to go before the context was built — the builders read
+    # the transcript, so the model cannot be asked to replace something it can
+    # still see. That leaves a window where the scene is one reply short and the
+    # replacement does not exist yet, and a generation producing nothing would
+    # end it there: a reply destroyed by a reroll the player stopped or that
+    # never started (#95). Hand the stream the way back.
+    return _chat_stream(cid, sid, messages, conn, client,
+                        restore_removed=(
+                            lambda: store.scenes.restore_trailing_assistant_run(cid, sid, removed)
+                        ) if removed else None)
 
 
 @router.get("/campaigns/{cid}/chronicle")
