@@ -288,7 +288,7 @@ def _usable(token: str) -> str:
 
     The RETURNED form is stripped the same way, and by the same set. A nickname
     is written set off by quotes or brackets -- `Mara "Red" Vance` -- and
-    `_second_alias` lands on exactly that token, so keeping the marks made the
+    `_interior_aliases` lands on exactly that token, so keeping the marks made the
     form `"Red"` and `_mentions` then required the suspicion to quote her too.
     A name is what is inside the marks; the marks are how the writer said it is
     a nickname.
@@ -297,8 +297,8 @@ def _usable(token: str) -> str:
     return "" if len(word) < 2 or word in _NOT_A_GIVEN_NAME else token.strip(_EDGE_PUNCT)
 
 
-def _second_alias(name: str) -> str:
-    """The token after the head, when the name has one that is not its surname.
+def _interior_aliases(name: str) -> set[str]:
+    """EVERY name-shaped token between the head and the surname.
 
     `_short_alias` reads the head as the given name, which is wrong whenever the
     head is a title `_HONORIFIC` does not list -- `Professor Mara Vance` yields
@@ -306,39 +306,32 @@ def _second_alias(name: str) -> str:
     matches neither and reaches the prompt. Every finite lexicon in this file
     has been found incomplete by the next review round, and the set of titles a
     person may carry (`Professor`, `Reverend`, `Sergeant`, a rank or role this
-    world invented) is not one anybody can enumerate — so this does not try.
+    world invented) is not one anybody can enumerate -- so this does not try.
 
-    The structural fact is that the token after the head is a name either way:
-    the GIVEN name if the head was a title, a MIDDLE name if it wasn't. Which of
-    the two it is cannot be decided without the lexicon, and does not need to
-    be, because both are worth matching. So the second token is taken as a form
-    without deciding, and `_short_alias` keeps the head as well.
+    The structural fact is that an interior token is a name either way: the
+    GIVEN name if what precedes it was a title, a MIDDLE name if it wasn't.
+    Which cannot be decided without the lexicon and does not need to be, because
+    both are worth matching.
 
-    Everything that is not a name in its own right is stepped over, not just
-    particles and suffixes: a token `_usable` rejects is skipped too, so a
-    STACKED title (`Professor Dr. Mara Vance`) lands on `Mara` rather than
-    stopping on `Dr.` and yielding nothing, and an initial in that position
-    (`Professor J. Mara Vance`) does not consume the slot either.
-    `_name_tokens` strips only a leading token it RECOGNIZES as a title, which
-    is exactly the case this form exists for -- so the walk has to keep going
-    rather than trust the first interior token. A name whose second token IS its
-    surname yields nothing here: `_surname_alias` already has that one, and the
-    point of this form is the token neither end reaches.
+    ALL of them, not the first. Taking one and stepping over only the tokens
+    `_usable` rejects meant a second UNRECOGNIZED title stopped the walk --
+    `Professor Reverend Mara Vance` yielded `Reverend` and lost `Mara`, which is
+    the same lexicon dependency one token further along. Titles stack, and how
+    many is not knowable either; the walk stops depending on the answer.
 
-    The cost is that a middle name becomes matchable, which is an over-hide only
-    if some other line uses it for somebody else. That is a far smaller price
-    than the leak: a title in front of a name is ordinary, and the name behind
-    it is the one prose actually uses.
+    The cost is that middle names and unrecognized titles become matchable,
+    which is an over-hide only if some other line uses one of them for somebody
+    else. That is a far smaller price than the leak: a title in front of a name
+    is ordinary, and the name behind it is the one prose actually uses.
     """
     parts = _name_tokens(name)
     if len(parts) < 3:
-        return ""                        # the second token is the surname
-    i = 1
-    while i < len(parts) - 1 and (_word(parts[i]) in _PARTICLE
-                                  or _word(parts[i]) in _SUFFIX
-                                  or not _usable(parts[i])):
-        i += 1
-    return "" if i >= len(parts) - 1 else _usable(parts[i])
+        return set()                     # the second token is the surname
+    # Particles and suffixes are stepped over here as everywhere else: `Mara de
+    # Vance` is not a person called `de`, and `_usable` alone would let it
+    # through -- two characters, in none of the rejected sets.
+    return {f for f in (_usable(p) for p in parts[1:-1]
+                        if _word(p) not in _PARTICLE and _word(p) not in _SUFFIX) if f}
 
 
 def _elided_stem(alias: str) -> str:
@@ -357,13 +350,13 @@ def _elided_stem(alias: str) -> str:
 
 def _forms(names: set[str]) -> set[str]:
     """Every string an actor can be recognized by: each name plus the given name,
-    the surname and the token between them -- each of those also without an
-    elided particle. Resolved for the OWNER as well as for the others (see
+    the surname and every name-shaped token between them -- each of those also
+    without an elided particle. Resolved for the OWNER as well as for the others (see
     `_character_states`), which is what keeps two actors sharing any of those
     names from hiding each other's interiority."""
     out: set[str] = set()
     for n in names:
-        aliases = {_short_alias(n), _second_alias(n), _surname_alias(n)}
+        aliases = {_short_alias(n), _surname_alias(n)} | _interior_aliases(n)
         out |= {n.strip()} | aliases | {_elided_stem(a) for a in aliases}
     return out - {""}
 
@@ -481,15 +474,39 @@ def _heads_a_list(stripped: str) -> bool:
     return bool(_ATX.match(stripped)) or stripped.rstrip(_EMPHASIS_TAIL).endswith(":")
 
 
+def _in_a_list(open_heads: list, indent: int) -> bool:
+    """Whether a heading at `indent` is written INSIDE an open list item.
+
+    A bullet or colon heading SHALLOWER than it is what "written under it"
+    means. Asked at push time because the enclosing governors are in scope
+    exactly then.
+    """
+    return any(h[2] != "atx" and h[1] < indent for h in open_heads)
+
+
 def _nested(open_heads: list, indent: int) -> int:
     """The indent an ATX heading is nested at, or -1 when it is not in a list.
 
-    A heading is inside a list item when a bullet or colon heading SHALLOWER
-    than it is open -- that is what "written under it" means. Recorded at push
-    time because the enclosing governors are in scope exactly then; `_outdented`
-    reads it back.
+    `_outdented` reads it back. -1 because markdown allows a top-level heading
+    up to three leading spaces, so the column alone cannot say.
     """
-    return indent if any(h[2] != "atx" and h[1] < indent for h in open_heads) else -1
+    return indent if _in_a_list(open_heads, indent) else -1
+
+
+def _governor_rank(open_heads: list, indent: int) -> int:
+    """The indent a COLON heading nests at: its own, or 0 at the top level.
+
+    Markdown lets a top-level line carry one to three cosmetic leading spaces,
+    and `  Winifred:` over a column-zero `- is hiding the ledger` is that line.
+    Ranking the heading by its raw indent made the bullet look like a return to
+    an outer level, popping the heading that names her and leaving the
+    subjectless bullet ungoverned. A heading not inside a list is at the top
+    level whatever its column, so it ranks there and nothing shallower exists to
+    pop it. Inside a list the indent is real nesting and is kept -- that is the
+    round-twenty case, an indented `Nested:` that must not govern the outer
+    bullet after it.
+    """
+    return indent if _in_a_list(open_heads, indent) else 0
 
 
 def _outdented(top: tuple, indent: int) -> bool:
@@ -751,9 +768,14 @@ def _entries(suspects: str) -> list[list[str]]:
             # For a non-item, heading-ness belongs to the line just read,
             # whichever entry it landed in: a `:` line arriving as a
             # continuation still heads the bullets below it.
-            open_heads.append((len(out) - 1, len(atx.group(1)) if atx else indent,
-                               "atx" if atx else ("item" if item else "colon"),
-                               depth, _nested(open_heads, indent) if atx else indent))
+            if atx:
+                rank, kind = len(atx.group(1)), "atx"
+            elif item:
+                rank, kind = indent, "item"
+            else:
+                rank, kind = _governor_rank(open_heads, indent), "colon"
+            open_heads.append((len(out) - 1, rank, kind, depth,
+                               _nested(open_heads, indent) if atx else indent))
     return list(zip(out, heads))
 
 
