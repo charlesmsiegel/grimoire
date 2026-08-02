@@ -236,6 +236,43 @@ test("a dateless scene with a suggestion pre-fills the date input", async () => 
   await waitFor(() => expect(api.setSceneDatetime).toHaveBeenCalledWith("c", "s", "2026-07-06"));
 });
 
+test("the date actions are locked while a turn streams into this scene", async () => {
+  // Setting a date for the first time re-slugs the scene file, and a scene's id
+  // is its filename — so this is a rename control, and moving the file mid-turn
+  // strands `finalize`, `_persist_reply` and the abort write on the old id.
+  // Review caught the rail and the cast panel being locked while this one, the
+  // always-mounted surface, was not (#95).
+  (api.getSceneDatetime as any).mockResolvedValue(
+    { current: null, history: [], suggested: "2026-07-06" });
+  render(<SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} sceneLocked />);
+  const button = await screen.findByRole("button", { name: /set date/i });
+  await waitFor(() => expect(screen.getByLabelText("Scene date year")).toHaveValue(2026));
+  expect(button).toBeDisabled();          // even with a date filled in
+  expect(button).toHaveAttribute("title", "Not while this scene is generating");
+  fireEvent.click(button);
+  expect(api.setSceneDatetime).not.toHaveBeenCalled();
+});
+
+test("Advance to is locked for the same reason", async () => {
+  // The dated branch renders a different button through the same handler.
+  (api.getSceneDatetime as any).mockResolvedValue({
+    current: { friendly: "6 July 2026", weekday: "Monday", holidays_today: [] },
+    history: [], suggested: "2026-07-07",
+  });
+  const { rerender } = render(
+    <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} sceneLocked />);
+  const button = await screen.findByRole("button", { name: /advance to/i });
+  expect(button).toBeDisabled();
+  // On the title, not on `disabled` alone: a dated scene does not prefill the
+  // picker, so this button is disabled for want of a date either way and
+  // `toBeDisabled` would pass without the lock existing. The title is set only
+  // when locked, so it is the one assertion that distinguishes the two.
+  expect(button).toHaveAttribute("title", "Not while this scene is generating");
+  rerender(<SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+  await waitFor(() => expect(
+    screen.getByRole("button", { name: /advance to/i })).not.toHaveAttribute("title"));
+});
+
 test("offscreen scene shows the offscreen side-section", async () => {
   render(<SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} pcless />);
   await screen.findByText("Offscreen scene");
