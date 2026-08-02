@@ -505,6 +505,24 @@ def promote(cid: str, sid: str, index: int) -> None:
             cid, sid, _unforged(rec["runs"][index]["segments"], _players(cid, sid)))
 
 
+def clear_destinations(cid: str, sids) -> None:
+    """Drop the sidecars sitting on ids that are about to change hands.
+
+    `repoint_scenes` does this too, at the end — but it runs after the caller
+    has already renamed the transcripts, so a destination that will not unlink
+    raises with the campaign half-moved. `repad` renames *every* scene, which
+    makes that window the whole campaign, so it clears the destinations first
+    and finds out before anything has moved.
+
+    Only orphans are ever here: a destination id is by definition one no live
+    scene holds (the allocating paths skip taken ids and `repad` uniquifies its
+    targets), so what this removes is a sidecar whose own transcript is gone.
+    """
+    with locks.campaign_lock(cid):
+        for sid in sids:
+            _clear(cid, sid)
+
+
 def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
     """Follow renamed scene ids: carry each sidecar to its scene's new id.
 

@@ -2559,6 +2559,51 @@ def test_picking_the_variant_already_showing_has_no_side_effects(client):
     assert record["status"] == "pending"
 
 
+def test_a_restored_reroll_does_not_keep_the_hint_that_produced_nothing(client, monkeypatch):
+    """A guided reroll whose stream lands nothing has its reply restored — and
+    with the original run live again, a hint left in the sidecar would be
+    credited to text it did not produce."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "a reply"}])
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter([""])
+
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate", json={"guidance": "colder"})
+
+    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/alternates").json()
+    live = [a for i, a in enumerate(body["alternates"]) if i == body["active"]]
+    assert live and live[0]["guidance"] == ""        # not "colder"
+
+
+def test_a_reroll_whose_retirement_fails_puts_the_reply_back(client, monkeypatch):
+    """`supersede` writes proposals.json and can fail. It now runs after the
+    removal, so without a restore built first the reply would be gone with the
+    decision it was derived from still pending — and still acceptable."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "a reply"}])
+    store.proposals.new(cid, sid, {"check": "athletics", "actor": None, "problems": []})
+    refuse = {"on": True}
+    real = store.proposals.supersede
+
+    def boom(*a, **k):
+        if refuse["on"]:
+            raise PermissionError(13, "read-only")
+        return real(*a, **k)
+
+    monkeypatch.setattr(store.proposals, "supersede", boom)
+    with pytest.raises(PermissionError):
+        client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
+    refuse["on"] = False
+
+    texts = [m["content"] for m in store.scenes.read_scene(cid, sid)["messages"]]
+    assert "a reply" in texts                        # the reply came back
+
+
 def test_a_reroll_that_cannot_archive_leaves_the_pending_proposal_alone(client, monkeypatch):
     """Superseding before the archive retired a decision for a reroll that never
     happened — the narration it was derived from is still exactly what the

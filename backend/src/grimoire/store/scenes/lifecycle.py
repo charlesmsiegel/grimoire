@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import errno
 
-from .. import atomic, calendars, commits, scene_ids, scene_refs
+from .. import alternates, atomic, calendars, commits, scene_ids, scene_refs
 from ..audit import baselines
 from ..campaigns import paths as campaigns_paths
 from ..frontmatter import dump_frontmatter, parse_frontmatter
@@ -55,6 +55,12 @@ def repad(cid: str, width: int) -> None:
                                or paths._scene_path(cid, c).exists())
             claimed.add(new_sid.casefold())
             mapping[p.stem] = new_sid
+    # Before a single transcript moves. The destinations are orphaned sidecars
+    # on ids about to change hands, and clearing one can fail — a read-only
+    # file, a sharing violation. Left to `scene_refs.repoint` at the end, that
+    # failure lands with every scene already renamed and the other stores still
+    # pointing at the old ids; here it costs nothing but the request.
+    alternates.clear_destinations(cid, set(mapping.values()))
     for old, new in mapping.items():
         paths._scene_path(cid, old).rename(paths._scene_path(cid, new))
     scene_refs.repoint(cid, mapping)
