@@ -114,7 +114,14 @@ def _new_commitment_id(owed: dict, staged: dict, slug: str, title: str) -> str:
         cur = owed.get(candidate)
         if not isinstance(cur, dict):
             return True
-        if _text(cur.get("status")) in commitments.RESOLVED:
+        # `.lower()` for the reason `commitments.open_commitments` folds too, and
+        # it has to be repeated because this is a SECOND reader of the same
+        # field: a hand-edited `"Fulfilled"` is hidden from the snapshot by that
+        # fix, and if this allocator still read it as unresolved the model's new
+        # commitment of the same title would land on the record it was never
+        # shown -- reopening it, which is exactly what the resolved check exists
+        # to prevent.
+        if _text(cur.get("status")).lower() in commitments.RESOLVED:
             return False
         return _text(cur.get("title")).casefold() == want
 

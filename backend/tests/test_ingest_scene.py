@@ -779,3 +779,40 @@ def test_the_resume_revalidates_the_scene_inside_the_lock(monkeypatch, tmp_path)
     assert second["status"] == "incomplete"          # not done, and nothing written
     assert first["sid"] in second["detail"]
     assert commitments.read(cid) == {}               # no beat against the ghost id
+
+
+def test_the_cli_prints_each_unreplayable_reason(monkeypatch, tmp_path, capsys):
+    """A `changes` failure — the write-back delta the Changes panel reads — is
+    reported by `apply_edits` with an id that matches no staged row, so it is
+    correctly not replayed (replaying would re-apply the edits that DID land).
+    What it must not do is arrive under a message that says every unreplayable
+    failure is a conflict: the reasons are printed, so the operator can tell a
+    lost delta from a record that moved."""
+    from grimoire.store import worlds as worlds_store
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    ingest_scene.ensure_character(cid, {"name": "Marisol"})
+
+    scene_file = tmp_path / "scene.json"
+    scene_file.write_text(json_module.dumps(_PARTIAL_SCENE), encoding="utf-8")
+    monkeypatch.setattr(ingest_scene.llm_connections, "get_active",
+                        lambda: {"kind": "openrouter", "model": "m", "api_key": "k"})
+    monkeypatch.setattr(ingest_scene, "LLMClient", lambda: FakeClient(_PARTIAL_OUTPUT))
+    monkeypatch.setattr(sys, "argv",
+                        ["ingest_scene.py", "ingest", "--campaign", cid,
+                         "--input", str(scene_file)])
+
+    real_apply = ingest_scene.absorb.apply_edits
+
+    def _apply_then_lose_the_delta(cid_, edits, sid_):
+        applied, failures = real_apply(cid_, edits, sid_)
+        return applied, [*failures, {"id": "changes", "kind": "error",
+                                     "reason": "the changes panel could not be updated"}]
+
+    monkeypatch.setattr(ingest_scene.absorb, "apply_edits", _apply_then_lose_the_delta)
+    assert ingest_scene.main() == 1
+    err = capsys.readouterr().err
+    assert "changes: the changes panel could not be updated" in err
+    assert "none of them can be replayed" in err
+    assert "conflict with records" not in err          # it is not a conflict
+    assert "resolve --campaign" in err
