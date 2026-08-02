@@ -65,7 +65,17 @@ def _archive_entries(cid: str, recent_text: str, exclude: frozenset[str] = froze
                 continue
             if before and rid >= before:
                 continue  # a later scene is not "earlier" -- never frame it as history
-            keys = [str(k).strip() for k in (record.get("keywords") or []) if str(k).strip()]
+            # A list, or nothing. `absorb.parse` builds this field by iterating
+            # whatever the model returned, so a model that answers with a bare
+            # string instead of an array persists one character per "keyword" --
+            # and a key of "a" whole-word-matches ordinary prose, recalling
+            # unrelated scenes at random. The store is also hand-editable and
+            # may live in a synced folder, so the shape is checked here rather
+            # than assumed from upstream.
+            raw = record.get("keywords")
+            if not isinstance(raw, (list, tuple)):
+                continue
+            keys = [str(k).strip() for k in raw if str(k).strip()]
             if not keys or not world_state.keyword_hit(keys, recent_text):
                 continue
             # summary first: the archive's whole point is the detail the
