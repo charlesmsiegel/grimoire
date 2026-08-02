@@ -745,6 +745,105 @@ def test_a_new_scene_repeating_the_previous_events_still_files_them(monkeypatch,
     assert timeline.read_text(encoding="utf-8").count("swore on the stair") == 2
 
 
+def test_a_resumed_scene_repeating_the_previous_events_still_files_them(monkeypatch, tmp_path):
+    """Scene identity alone does not close the window: INSIDE a resume, tail
+    equality still cannot tell this scene's append from an identical batch filed
+    by the scene before it. A crash between the write-ahead and `append_timeline`
+    then skipped this scene's events permanently. The pre-image recorded with the
+    extraction answers it — a timeline byte-identical to the one this scene
+    started from cannot already contain this scene's append."""
+    from grimoire.store import campaigns as campaigns_store, worlds as worlds_store
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    ingest_scene.ensure_character(cid, {"name": "Marisol"})
+    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+    timeline = campaigns_store.campaign_root(cid) / "timeline.md"
+
+    # The preceding scene files the batch this one will honestly repeat.
+    asyncio.run(ingest_scene.ingest_one_scene(
+        cid, _PARTIAL_SCENE, FakeClient(_PARTIAL_OUTPUT), conn))
+    assert timeline.read_text(encoding="utf-8").count("swore on the stair") == 1
+
+    # The second scene dies inside `apply_scene` BEFORE its own append — the
+    # window one manifest write wide, after the extraction has been recorded.
+    second = {**_PARTIAL_SCENE, "key": "file1-scene02", "title": "The Reckoning, Again"}
+    real_absorb = ingest_scene.chronicle.absorb
+
+    def _fails_once(*a, **kw):
+        monkeypatch.setattr(ingest_scene.chronicle, "absorb", real_absorb)
+        raise OSError("chronicle temporarily unwritable")
+
+    monkeypatch.setattr(ingest_scene.chronicle, "absorb", _fails_once)
+    with pytest.raises(OSError):
+        asyncio.run(ingest_scene.ingest_one_scene(
+            cid, second, FakeClient(_PARTIAL_OUTPUT), conn))
+    # Nothing of the second scene reached the timeline, and the entry resumes.
+    assert timeline.read_text(encoding="utf-8").count("swore on the stair") == 1
+    stalled = ingest_scene.load_manifest(cid)["file1-scene02"]
+    assert stalled["status"] == "in_progress"
+
+    asyncio.run(ingest_scene.ingest_one_scene(
+        cid, second, FakeClient(_PARTIAL_OUTPUT), conn))
+    # Both scenes happened; the resume filed its own events rather than reading
+    # the previous scene's identical block as proof that it already had. This is
+    # the assertion that fails without the fix — the field check below is the
+    # mechanism, and asserting it first would hide the behaviour behind it.
+    assert timeline.read_text(encoding="utf-8").count("swore on the stair") == 2
+    assert "timeline_before" in stalled          # written ahead, with the extraction
+
+
+def test_a_resume_after_its_own_append_does_not_file_the_events_twice(monkeypatch, tmp_path):
+    """The converse, and the property the pre-image must not cost: once the
+    append HAS landed, the file differs from the pre-image, the tail is read, and
+    the batch is recognized. Pinned beside the test above because a fix for one
+    direction that breaks the other is the shape this file keeps producing."""
+    from grimoire.store import campaigns as campaigns_store, worlds as worlds_store
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    ingest_scene.ensure_character(cid, {"name": "Marisol"})
+    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+    timeline = campaigns_store.campaign_root(cid) / "timeline.md"
+
+    real_mark = ingest_scene.scenes.mark_absorbed
+
+    def _fails_once(*a, **kw):                     # dies AFTER the append
+        monkeypatch.setattr(ingest_scene.scenes, "mark_absorbed", real_mark)
+        raise OSError("scene file temporarily unwritable")
+
+    monkeypatch.setattr(ingest_scene.scenes, "mark_absorbed", _fails_once)
+    with pytest.raises(OSError):
+        asyncio.run(ingest_scene.ingest_one_scene(
+            cid, _PARTIAL_SCENE, FakeClient(_PARTIAL_OUTPUT), conn))
+    assert timeline.read_text(encoding="utf-8").count("swore on the stair") == 1
+
+    asyncio.run(ingest_scene.ingest_one_scene(
+        cid, _PARTIAL_SCENE, FakeClient(_PARTIAL_OUTPUT), conn))
+    assert timeline.read_text(encoding="utf-8").count("swore on the stair") == 1
+
+
+def test_a_manifest_entry_without_a_pre_image_falls_back_to_the_tail(monkeypatch, tmp_path):
+    """An entry written before this field existed, or by hand. `_NO_PREIMAGE` is
+    not the same value as a stored `None`, which is the real pre-image of a
+    campaign with no timeline file yet — reading the two alike would make an old
+    entry claim its timeline was empty when it started and re-file a landed
+    batch."""
+    from grimoire.store import chronicle, worlds as worlds_store
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    events = [{"date": "Firstmonth 3", "text": "Marisol swore on the stair."}]
+
+    assert ingest_scene._timeline_already_has(cid, events) is False   # nothing written
+    chronicle.append_timeline(cid, events)
+    # No pre-image: the tail alone decides, which is what the old entries got.
+    assert ingest_scene._timeline_already_has(cid, events) is True
+    # A stored `None` means "there was no timeline file when this scene started",
+    # so a timeline that now exists has changed and the tail is read.
+    assert ingest_scene._timeline_already_has(cid, events, None) is True
+    # And the pre-image taken now says the append cannot have happened since.
+    digest = ingest_scene._timeline_digest(cid)
+    assert ingest_scene._timeline_already_has(cid, events, digest) is False
+
+
 def test_a_resume_keeps_the_conflict_basis_it_was_staged_against(monkeypatch, tmp_path):
     """`before` records what the reviewer's proposal actually saw. Re-running
     `materialize` on resume takes each record's CURRENT value instead, so a
