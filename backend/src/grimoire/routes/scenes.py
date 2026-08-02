@@ -8,6 +8,7 @@ import asyncio
 import time
 
 from fastapi import APIRouter, Depends, HTTPException
+from starlette.concurrency import run_in_threadpool
 
 from .. import prompts, store
 from ..llm import LLMClient
@@ -516,6 +517,18 @@ def _already_absorbed(scene: dict) -> bool:
     return str(scene.get("meta", {}).get("done", "")).lower() == "true"
 
 
+def _absorb_snapshot(cid: str, sid: str) -> tuple[int, dict]:
+    """The scene and its commit epoch as of one instant, under one lock hold.
+
+    Split out of `post_absorb` so it can be handed to a worker thread: the
+    acquire blocks, and `post_absorb` runs on the event loop. Raises
+    `_require_scene`'s 404 like any other handler code -- run_in_threadpool
+    propagates it.
+    """
+    with store.locks.campaign_lock(cid):
+        return store.commits.scene_epoch(cid, sid), _require_scene(cid, sid)
+
+
 @router.post("/campaigns/{cid}/scenes/{sid}/absorb")
 async def post_absorb(cid: str, sid: str, force: bool = False,
                       client: LLMClient = Depends(get_llm)):
@@ -539,10 +552,13 @@ async def post_absorb(cid: str, sid: str, force: bool = False,
     # supersession check, so a second absorption of the same transcript could
     # save. The hold is two reads long and the commit holds the same lock for
     # its whole sequence, so this snapshot falls wholly before or wholly after.
+    # Off the event loop, because this handler is async and the acquire is a
+    # blocking one: a save holding the campaign lock would otherwise stall the
+    # whole process for up to `locks.LOCK_TIMEOUT`, freezing every unrelated
+    # request and open stream rather than just this campaign's absorb. Same
+    # treatment `streaming.py` gives its blocking finalizers.
     _campaign_root_or_404(cid)
-    with store.locks.campaign_lock(cid):
-        epoch = store.commits.scene_epoch(cid, sid)
-        scene = _require_scene(cid, sid)
+    epoch, scene = await run_in_threadpool(_absorb_snapshot, cid, sid)
     conn = _require_connection()
     if not scene["messages"]:
         raise HTTPException(status_code=400, detail="nothing to absorb")
