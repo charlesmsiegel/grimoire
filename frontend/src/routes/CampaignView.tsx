@@ -399,11 +399,17 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     api.getSceneDatetime(cid, id).then(setDt).catch(() => setDt(null));
     api.getCast(cid, id).then(setCast).catch(() => setCast([]));
     api.listAppearances(cid).then(setRoster).catch(() => setRoster([]));
-    // a proposal already superseded/narrated/declined is no longer live —
-    // RollProposal only knows how to render pending or resolved records.
+    // A superseded or narrated proposal is finished. `declined` is NOT, and
+    // used to be filtered out with them: the backend keeps re-streaming a
+    // declined record's continuation on request (mechanics.post_roll_proposal),
+    // so a decline whose narration never landed is recoverable — but only if
+    // something renders it. Dropping it here stranded the record with no way
+    // back, which Stop made easy to reach and an upstream failure could always
+    // reach; RollProposal now offers the same Continue narration it offers a
+    // stopped accept.
     api.getRollProposal(cid, id).then((r) => setProposal(
       r.record && r.record.status !== "superseded" && r.record.status !== "narrated"
-        && r.record.status !== "declined" ? r.record : null,
+        ? r.record : null,
     )).catch(() => setProposal(null));
     // Re-read on every selectScene, refresh included: the inspector's picker
     // calls onSceneChanged after a save, so this is what keeps the chip from
@@ -420,6 +426,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     setSceneResponsePreset(scene.meta.response_preset ?? "");
     setStreaming("");
     setCtxKey((n) => n + 1);
+    return scene.messages.length;
   }
 
   // Prepend the page of posts just above the window. Called by the scroll
@@ -512,6 +519,24 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     }
   }
 
+  // How long to keep looking for a cancelled turn's partial. Aborting rejects
+  // the fetch the instant the socket is torn down here, but the backend only
+  // then notices the disconnect and runs its shielded flush — so the refresh
+  // that follows a Stop can legitimately read a transcript the partial has not
+  // reached yet, and the text would sit on disk while the screen denied it
+  // existed until some later refresh. Bounded rather than indefinite: past this
+  // the write is contending on the store lock, which no amount of polling here
+  // will shorten, and the player's next action refreshes anyway.
+  const FLUSH_POLL_TRIES = 6;
+  const FLUSH_POLL_MS = 250;
+
+  async function awaitFlushedPartial(id: string, seen: number) {
+    for (let i = 0; i < FLUSH_POLL_TRIES; i++) {
+      await new Promise((r) => setTimeout(r, FLUSH_POLL_MS));
+      if ((await selectScene(id)) > seen) return;
+    }
+  }
+
   // Returns whether the turn actually landed (no thrown error and no e.error
   // event) — callers use this to decide whether a pending one-shot response
   // override was honoured and can be cleared, or must survive for retry/reroll.
@@ -525,6 +550,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     setError(null);
     let acc = "";
     let landed = true;
+    let cancelled = false;
     try {
       await start((e) => {
         if (e.delta) {
@@ -540,10 +566,9 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     } catch (err: any) {
       // A cancel is the user getting what they asked for, so it raises no
       // error banner — but it is still not a landed turn, so a one-shot
-      // response override survives for the retry that usually follows. The
-      // partial the backend persisted on the disconnect shows up in the
-      // re-fetch below, same as any other reply.
-      if (!isAbortError(err)) setError(err.detail ?? String(err));
+      // response override survives for the retry that usually follows.
+      cancelled = isAbortError(err);
+      if (!cancelled) setError(err.detail ?? String(err));
       landed = false;
     } finally {
       abortRef.current = null;
@@ -551,7 +576,11 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       setBusy(false);
       // the reply is persisted as per-speaker posts — re-fetch to show them
       // (selectScene also bumps ctxKey and refreshes the player name)
-      await selectScene(id);
+      const seen = await selectScene(id);
+      // Only when a cancel interrupted text that was already on its way: with
+      // nothing streamed there is no partial for the backend to flush, and
+      // polling for one would just be six wasted round trips per empty Stop.
+      if (cancelled && acc) await awaitFlushedPartial(id, seen);
     }
     return landed;
   }

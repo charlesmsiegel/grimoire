@@ -6259,6 +6259,31 @@ def test_chat_fence_cuts_and_persists_proposal(client):
     assert not any("`" in m["content"] for m in msgs)
 
 
+async def test_a_disconnect_on_a_closed_fence_still_writes_the_proposal(client):
+    """A fence can close in the same chunk that carries the pre-fence text, so
+    `watcher.complete` is already true at the delta yield the disconnect lands
+    on. Persisting only the narration there would end the transcript at a
+    mechanical decision whose proposal record was never written — the check
+    silently lost, and proposal-before-narration broken from the one direction
+    the StoreBusy path takes such care to avoid."""
+    cid, sid, _ = _mech_scene(client)
+    one_chunk = ('She lunges—\n```roll\n'
+                 '{"check": "brawl", "actor": "characters:mara"}\n```')
+    resp = routes.streaming._chat_stream(
+        cid, sid, [{"role": "user", "content": "go"}], {"kind": "openrouter", "model": "m"},
+        FakeOpenRouter([one_chunk]))
+    frames = resp.body_iterator
+    assert "She lunges" in await frames.__anext__()   # suspended on the delta yield
+    await frames.aclose()
+
+    rec = store.proposals.get(cid, sid)
+    assert rec is not None and rec["status"] == "pending"
+    assert rec["payload"]["check"] == "brawl" and rec["payload"]["actor"] == "characters:mara"
+    msgs = store.scenes.read_scene(cid, sid)["messages"]
+    assert msgs[-1]["content"].startswith("She lunges")
+    assert not any("`" in m["content"] for m in msgs)
+
+
 def test_proposal_accept_walk_and_idempotency(client):
     cid, sid, _ = _mech_scene(client)
     _emit_fence(client, cid, sid,

@@ -71,14 +71,29 @@ def set_response(cid: str, sid: str, fields: dict) -> None:
 
 
 @locking._serialized
-def append_message(cid: str, sid: str, role: str, content: str, speaker: str | None = None) -> None:
+def append_message(cid: str, sid: str, role: str, content: str,
+                   speaker: str | None = None) -> int:
+    """Append one message; returns the index it landed at.
+
+    The index is read under the same lock as the write, which is what makes it
+    usable as an identity later (`remove_trailing_user_post`). Counted from the
+    body being appended to rather than by re-reading afterwards: a second read
+    would be a second chance for another writer to get in first, which is
+    precisely the race the index exists to detect.
+    """
     p = paths._scene_path(cid, sid)
     if not safe_id(sid) or not p.exists():
         raise paths.SceneNotFound(sid)
     meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
+    # Markers, not parsed messages: `_parse_messages` counts exactly these and
+    # differs only in resolving each one's role against the cast, which cannot
+    # change how many there are. Counting them directly keeps the index free of
+    # any dependence on who is currently in the scene.
+    index = len(serialize._markers(body))
     body = serialize._append_block(body, serialize._block(role, speaker, content))
     meta["updated"] = now_iso()
     atomic.write_text(p, dump_frontmatter(meta, body))
+    return index
 
 
 @locking._serialized
@@ -198,36 +213,46 @@ def remove_trailing_assistant_run(cid: str, sid: str) -> None:
 
 
 @locking._serialized
-def remove_trailing_user_post(cid: str, sid: str, content: str) -> bool:
-    """Take back the trailing user message, if it is still the one described.
+def remove_trailing_user_post(cid: str, sid: str, index: int, content: str) -> bool:
+    """Take back the user message `append_message` put at `index`, if it is
+    still the last one and still says what was written there.
 
     The undo half of a transactional turn (#95): a chat turn appends the
     player's post before streaming, and a generation that fails having produced
     nothing would otherwise leave that post sitting unanswered, indistinguishable
     from one the model chose to skip.
 
-    Conditional on purpose, and returning whether it fired. The post is only
-    removed while it is genuinely the last message AND still carries the content
-    the caller wrote — anything appended behind it (a manual dice roll, a scene
-    transition, a reply from a concurrent turn) means the transcript has moved
-    on, and deleting from under that is worse than leaving one orphan. Content
-    is the discriminator rather than an index because indices go stale the
-    moment anything else writes, and this runs after an LLM call, not before.
+    Conditional on purpose, and returning whether it fired. Anything appended
+    behind the post (a manual dice roll, a scene transition, a reply from a
+    concurrent turn) means the transcript has moved on, and deleting from under
+    that is worse than leaving one orphan.
+
+    The index is load-bearing, not belt-and-braces — review caught the version
+    that matched on content alone. The campaign lock serializes each append and
+    each removal, but emphatically NOT the LLM call between them, so two
+    overlapping turns can both append. If they carry the same text (a retried
+    send, a second tab, a replay), the earlier turn's undo would find the
+    *later* turn's post at the tail, match it on content, and delete a post
+    whose generation is still running — destroying live work while leaving the
+    orphan it was aiming at. Requiring the post to still sit at the index its
+    own append reported makes that case a refusal instead: the second append
+    moved the tail, so the first turn's undo declines and the orphan survives,
+    which is the direction this function is allowed to be wrong in.
 
     `turn_sizes` is untouched deliberately: it counts model blocks
     (`turns._model_blocks`), and a user post has never been one of them.
 
     Role comes from `read_scene`, which resolves a speaker marker against the
     scene's PCs — so a post whose speaker has since left the cast reads back as
-    model output and is left alone. That is the safe direction: an orphan
-    survives, which a player can delete, where the alternative is this deleting
-    a reply it misread.
+    model output and is left alone. Same safe direction: an orphan survives,
+    which a player can delete, where the alternative is this deleting a reply it
+    misread.
     """
     p = paths._scene_path(cid, sid)
     if not safe_id(sid) or not p.exists():
         raise paths.SceneNotFound(sid)
     messages = read.read_scene(cid, sid)["messages"]
-    if not messages:
+    if len(messages) != index + 1:
         return False
     last = messages[-1]
     if last["role"] != "user" or last["content"].strip() != content.strip():
