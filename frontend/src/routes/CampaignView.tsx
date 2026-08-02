@@ -1427,12 +1427,19 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       try {
         await selectScene(sid);
       } catch (err: any) {
+        // Asked again, not only before the first read. `selectScene` calls
+        // `setActive`, so a retry issued after the reader moved on does not
+        // merely refresh the wrong scene — it navigates them back to it, or in
+        // a campaign switch installs the old campaign's scene id in the new
+        // view. The banner below is scoped for the same reason.
+        if (!stillHere()) return;
         // One more attempt before giving up — the read that failed is the only
         // thing between the reader and a transcript that is already correct on
         // disk.
         try {
           await selectScene(sid);
         } catch {
+          if (!stillHere()) return;
           // Still stale. Drop the readiness the counter and the ‹/› control
           // depend on, so nothing acts on a transcript the set no longer
           // indexes, and say what actually happened.

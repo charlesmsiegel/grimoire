@@ -2879,6 +2879,42 @@ def test_a_pick_that_cannot_refill_an_empty_slot_keeps_the_decision(client, monk
     assert record["status"] == "pending"
 
 
+def test_a_refill_that_cannot_retire_the_decision_empties_the_slot_again(client, monkeypatch):
+    """Putting back an EMPTY slot means emptying it again. There is no take to
+    promote, so the rollback that restores a swap does nothing here — and the
+    reader is left with the archived take beside a decision produced while the
+    slot was empty."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "old reply"}])
+    store.alternates.archive(cid, sid, "")
+    store.scenes.remove_trailing_assistant_run(cid, sid)
+    store.proposals.new(cid, sid, {"check": "athletics", "actor": None, "problems": []})
+    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/alternates").json()
+    assert body["active"] is None
+    vid = body["alternates"][0]["id"]
+    refuse = {"on": True}
+    real = store.proposals.supersede
+
+    def boom(*a, **k):
+        if refuse["on"]:
+            raise PermissionError(13, "read-only")
+        return real(*a, **k)
+
+    monkeypatch.setattr(store.proposals, "supersede", boom)
+    with pytest.raises(PermissionError):
+        client.post(f"/api/campaigns/{cid}/scenes/{sid}/alternates/{vid}")
+    refuse["on"] = False
+
+    after = client.get(f"/api/campaigns/{cid}/scenes/{sid}/alternates").json()
+    assert after["active"] is None                       # the slot is empty again
+    assert len(after["alternates"]) == 1                 # and the take is still parked
+    record = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert record["status"] == "pending"
+
+
 def test_an_ephemeral_send_that_cannot_write_the_sidecar_keeps_the_decision(
         client, monkeypatch):
     """Retiring the decision before the sidecar is known to be writable retired
