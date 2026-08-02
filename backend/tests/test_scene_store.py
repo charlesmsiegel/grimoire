@@ -1153,6 +1153,28 @@ def test_window_clamps_a_cursor_past_either_end(monkeypatch, tmp_path):
     assert scenes.read_scene_window(cid, sid, 2, before=-3)["messages"] == []
 
 
+def test_window_reports_a_user_turn_outside_it(monkeypatch, tmp_path):
+    """Reroll eligibility rides on this: the window holds only assistant posts,
+    but the transcript opened with a player turn, so the run below IS an answer
+    to something and regenerate will accept it."""
+    cid, sid = _scene_of(monkeypatch, tmp_path, 6)
+    page = scenes.read_scene_window(cid, sid, 1)
+    assert [m["role"] for m in page["messages"]] == ["assistant"]
+    assert page["has_user_message"] is True
+
+
+def test_window_of_an_all_assistant_transcript_reports_no_user_turn(monkeypatch, tmp_path):
+    """An offscreen scene never stores a player turn however long it runs, so
+    "there is history above the window" must not be read as one existing."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Offscreen", pcless=True)
+    for i in range(4):
+        scenes.append_message(cid, sid, "assistant", f"narration {i}")
+    page = scenes.read_scene_window(cid, sid, 2)
+    assert page["has_older"] is True
+    assert page["has_user_message"] is False
+
+
 def test_window_of_an_unknown_scene_raises(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     with pytest.raises(scenes.SceneNotFound):
