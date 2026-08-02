@@ -542,10 +542,13 @@ def _entries(suspects: str) -> list[list[str]]:
     heads: list[int] = []
     fresh = True                            # the next line opens a new entry
     pending_blank = False                   # a blank whose pop is not yet decided
-    # Open headings, outermost first: (entry, rank, kind). `rank` is the
+    # Open headings, outermost first: (entry, rank, kind, depth). `rank` is the
     # indent for a colon heading or a heading bullet, and the heading LEVEL for
     # an ATX one -- the two never nest against each other by the same measure.
-    open_heads: list[tuple[int, int, str]] = []
+    # `depth` is the blockquote nesting the heading was opened at, so leaving
+    # the quote closes it.
+    open_heads: list[tuple[int, int, str, int]] = []
+    depth = 0                               # blockquote nesting of the last line
     for line in suspects.splitlines():
         # A blockquote is a wrapper, not a syntax of its own, so every rule
         # below asks about the markdown INSIDE it: `stripped` is the line's own
@@ -553,14 +556,22 @@ def _entries(suspects: str) -> list[list[str]]:
         # quoted list nests exactly as an unquoted one does. A line that is
         # nothing but quote markers IS the blank line of its quote, and is
         # treated as one.
+        outer = len(line) - len(line.lstrip())
         stripped = line.strip()
         quote = _QUOTE.match(stripped)
         if quote:
             inner = stripped[quote.end():]
-            indent = len(inner) - len(inner.lstrip())
+            # The indent is measured from column zero, THROUGH the markers: a
+            # quote nested inside a list item is written `- Winifred:` /
+            # `  > - is hiding the ledger`, and measuring only inside the quote
+            # put that child at indent 0, where the same-indent pop took its
+            # parent out -- the named bullet withheld and the subjectless one
+            # under it published. The whitespace before the marker is what
+            # places the quote under its parent, so it counts.
+            indent = outer + len(inner) - len(inner.lstrip())
             stripped = inner.strip()
         else:
-            indent = len(line) - len(line.lstrip())
+            indent = outer
         if not stripped:
             out.append([line])              # blank: its own entry, and ends the paragraph
             heads.append(-1)
@@ -581,6 +592,20 @@ def _entries(suspects: str) -> list[list[str]]:
             continue
         atx = _ATX.match(stripped)
         item = bool(_LIST_MARKER.match(stripped))
+        # A CHANGE of blockquote nesting is a container boundary, and the one a
+        # blank line does not mark: `> Winifred is lying.` / `Mara watches the
+        # pier.` leaves the quote with no blank between, and reading the second
+        # line as a continuation of the first withheld an unrelated outer
+        # statement along with the entry that names her. Leaving a quote also
+        # closes the headings opened inside it, which otherwise governed -- and
+        # so withheld -- the text that came after the quote ended. Entering one
+        # pops nothing: a quoted list under an unquoted subject line is governed
+        # by it, which is the shape the round before this one fixed.
+        was, depth = depth, quote.group(0).count(">") if quote else 0
+        if depth != was:
+            while open_heads and open_heads[-1][3] > depth:
+                open_heads.pop()
+            fresh = True
         if pending_blank:
             # Now the line after the blank is known, which is what decides
             # whether the blank ended anything. A blank ends the colon headings
@@ -622,7 +647,7 @@ def _entries(suspects: str) -> list[list[str]]:
             # the second `Winifred` / `-------` block in a file would be
             # withheld along with the first.
             heads[len(out) - 1] = open_heads[-1][0] if open_heads else -1
-            open_heads.append((len(out) - 1, level, "atx"))
+            open_heads.append((len(out) - 1, level, "atx", depth))
         if atx:
             # A section ends at the next heading of its own level or shallower,
             # and takes every colon heading and bullet inside it along.
@@ -676,7 +701,7 @@ def _entries(suspects: str) -> list[list[str]]:
             # whichever entry it landed in: a `:` line arriving as a
             # continuation still heads the bullets below it.
             open_heads.append((len(out) - 1, len(atx.group(1)) if atx else indent,
-                               "atx" if atx else ("item" if item else "colon")))
+                               "atx" if atx else ("item" if item else "colon"), depth))
     return list(zip(out, heads))
 
 
