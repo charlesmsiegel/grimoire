@@ -1870,3 +1870,25 @@ def test_a_plot_beat_falls_back_to_the_payload_when_there_is_no_scene(monkeypatc
                               "payload": {"id": "the-map", "title": "The map",
                                           "status": "advanced", "scene": "001--the-crypt"}}])
     assert plot.read(cid)["the-map"]["last_scene"] == "001--the-crypt"
+
+def test_a_mixed_case_resolved_record_does_not_capture_a_new_commitment(monkeypatch, tmp_path):
+    """The allocator is a SECOND reader of `status`, so folding it in
+    `open_commitments` alone was half a fix: a hand-edited `"Fulfilled"` is
+    hidden from the snapshot by that one, and this one would still have read it
+    as unresolved — landing the model's new commitment on the record it was
+    never shown, and reopening it."""
+    from grimoire.store import commitments, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    (campaigns.campaign_root(cid) / "commitments.json").write_text(
+        '{"the-debt": {"title": "The debt", "kind": "promise", "status": "Fulfilled",'
+        ' "due": "", "beats": [], "last_scene": "s1"}}', encoding="utf-8")
+
+    edits = absorb.materialize(cid, sid, {"commitment_movements": [
+        {"id": "", "title": "The debt", "kind": "promise", "status": "open",
+         "beat": "Sworn again, by someone else."}]})
+    assert [e["id"] for e in edits] == ["commitment:the-debt-2"]   # a fresh record
+
+    absorb.apply_edits(cid, edits, sid)
+    assert commitments.get(cid, "the-debt")["status"] == "Fulfilled"   # untouched
+    assert commitments.get(cid, "the-debt-2")["status"] == "open"

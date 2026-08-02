@@ -416,11 +416,22 @@ def main() -> int:
             return 1
         print(f"error: {len(result.get('failures') or [])} approved edit(s) did not land — "
               f"this scene is NOT finished", file=sys.stderr)
+        for f in result.get("failures") or []:
+            if isinstance(f, dict):
+                print(f"       - {f.get('id', '')}: {f.get('reason', '')}", file=sys.stderr)
         if result.get("pending"):
             print("       re-run this same command to replay them", file=sys.stderr)
         else:
-            print("       none can be replayed: they conflict with records that have since "
-                  "moved. Reconcile them by hand, then close the key with:", file=sys.stderr)
+            # NOT "they conflict": the reasons are listed above and this branch
+            # covers every kind of unreplayable failure, of which a conflict is
+            # only one. `apply_edits` also reports a `changes` row -- the
+            # write-back delta the Changes panel reads, which is a log of what
+            # the edits did rather than one of the edits. Replaying it would
+            # mean re-running the whole batch to rebuild a delta nothing else
+            # depends on, so it is reported and left to the operator like the
+            # rest, and the campaign state it describes is already complete.
+            print("       none of them can be replayed. Deal with them by hand (the reasons "
+                  "are above), then close the key with:", file=sys.stderr)
             print(f"         ingest_scene.py resolve --campaign {args.campaign} "
                   f"--key {scene.get('key', '<key>')}", file=sys.stderr)
             print("       (do NOT delete the key — that makes the next run rebuild and "
