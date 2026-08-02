@@ -342,11 +342,33 @@ def get_ledger(cid: str):
     and `last_scene` this already returns.
     """
     _campaign_root_or_404(cid)
-    scenes_by_id = {s["id"]: s for s in store.scenes.list_scenes(cid)}
-    try:
-        chron = store.chronicle.read_chronicle(cid)
-    except Exception:  # noqa: BLE001 — garbled chronicle.json: labels degrade, no 500
-        chron = {}
+
+    def _tolerant(read):
+        try:
+            return read()
+        except Exception:  # noqa: BLE001 — a garbled file empties its section, not the view
+            return []
+
+    # All four sources are read under ONE campaign lock, because they are four
+    # files and a save writes them one after another: `put_chronicle` holds this
+    # same lock while it records the chronicle and then applies the absorb's
+    # plot and commitment edits. Reading without it can catch that sequence half
+    # done and return a new fact beside the still-open commitment the very same
+    # save fulfilled -- and the panel keeps that contradictory snapshot until
+    # something else bumps its revision. A continuity view that contradicts
+    # itself is worse than one that is a moment stale, which is the whole reason
+    # the writer takes the lock across the sequence rather than per file.
+    #
+    # It is a read, so it holds the lock only for the reads: the projections
+    # below work on data already in hand.
+    with store.locks.campaign_lock(cid):
+        scenes_by_id = {s["id"]: s for s in store.scenes.list_scenes(cid)}
+        try:
+            chron = store.chronicle.read_chronicle(cid)
+        except Exception:  # noqa: BLE001 — garbled chronicle.json: labels degrade, no 500
+            chron = {}
+        open_threads = _tolerant(lambda: store.plot.open_threads(cid))
+        owed = _tolerant(lambda: store.commitments.open_commitments(cid))
     # Unparseable is not the only way that file can be wrong. `read_chronicle`
     # is a bare `json.loads`, so a chronicle.json holding `[]` -- valid JSON of
     # the wrong shape -- returns a list and raises nothing, and the `.get` below
@@ -386,19 +408,11 @@ def get_ledger(cid: str):
         c = c if isinstance(c, dict) else {}   # a per-scene entry can be wrong too
         return {"id": sid, "title": _txt(s.get("title"), sid), "date": _txt(c.get("date"))}
 
-    def _tolerant(read):
-        try:
-            return read()
-        except Exception:  # noqa: BLE001 — a garbled file empties its section, not the view
-            return []
-
     threads = [{**t, "id": _txt(t.get("id")), "title": _txt(t.get("title"), _txt(t.get("id"))),
                 "status": _txt(t.get("status"), "open"),
                 "last_scene": _txt(t.get("last_scene")),
                 "latest_beat": _txt(t.get("latest_beat"))}
-               for t in _tolerant(lambda: store.plot.open_threads(cid))
-               if isinstance(t, dict)]
-    owed = _tolerant(lambda: store.commitments.open_commitments(cid))
+               for t in open_threads if isinstance(t, dict)]
     # Derived from `chron` rather than `chronicle.recent`, which sorts on the raw
     # `id` of every record: one list-valued id makes that comparison raise and
     # `_tolerant` empties the entire recent-facts section, losing every good fact
