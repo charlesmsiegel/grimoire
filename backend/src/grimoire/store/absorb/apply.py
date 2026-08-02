@@ -321,7 +321,16 @@ def _apply_one(cid: str, croot, e: dict, sid: str | None,
             # unjudgeable, so the read here is where it surfaces -- and since
             # #271 the generic handler below reports it, which is why this branch
             # no longer carries a bespoke one of its own.
-            cur = commitments.get(cid, p["id"])
+            # The TARGET id, not the payload's. They are the same record for
+            # anything `materialize` built, but an edit reaches here from a
+            # client-supplied PUT body typed as an unrestricted dict -- and
+            # everything that judged this row read `target`: `conflicts`
+            # surveyed it, `target_key` keyed the journal by it, and the
+            # reviewer's basis describes it. A payload naming a different record
+            # would be written without any of that having looked at it, so the
+            # write goes where the checks went.
+            mid = target["id"]
+            cur = commitments.get(cid, mid)
             stored_title = cur.get("title") if isinstance(cur, dict) else None
             title = "" if isinstance(stored_title, str) and stored_title.strip() \
                 else p["title"]
@@ -329,7 +338,7 @@ def _apply_one(cid: str, croot, e: dict, sid: str | None,
             # branch above gives at length: a retry after a rename must stamp the
             # beat with the id the scene has now, since `commitments.repoint_scenes`
             # has already moved every stored reference onto it.
-            commitments.set_movement(cid, p["id"], title, p.get("kind", ""),
+            commitments.set_movement(cid, mid, title, p.get("kind", ""),
                                      p.get("status", ""), p.get("due"),
                                      after, sid or p["scene"])
         elif kind == "new_character":

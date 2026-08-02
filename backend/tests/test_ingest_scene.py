@@ -816,3 +816,49 @@ def test_the_cli_prints_each_unreplayable_reason(monkeypatch, tmp_path, capsys):
     assert "none of them can be replayed" in err
     assert "conflict with records" not in err          # it is not a conflict
     assert "resolve --campaign" in err
+
+
+def test_a_record_creating_row_is_not_replayed(monkeypatch, tmp_path):
+    """`new_character` writes the character and THEN seats it in the scene, so a
+    failure after the first step leaves the record made. Replaying does not retry
+    the step that failed — `overlay.create_*` uniquifies an occupied slug, so the
+    retry mints a second character and seats that one. Reported, kept out of
+    `pending`, and left to a person."""
+    edits = [{"id": "new_character:cassian", "kind": "new_character"},
+             {"id": "new_location:the-pier", "kind": "new_location"},
+             {"id": "new_lore:the-pact", "kind": "new_lore"},
+             {"id": "commitment:the-debt", "kind": "commitment"}]
+    failures = [{"id": e["id"], "kind": "error", "reason": "disk full"} for e in edits]
+    # only the row that writes exactly one thing is replayable
+    assert [e["id"] for e in ingest_scene._unapplied(edits, failures)] == ["commitment:the-debt"]
+
+
+def test_a_scene_whose_only_failure_created_a_record_stops_for_a_person(monkeypatch, tmp_path):
+    """End to end: no `pending`, so the run reports incomplete and the next one
+    does nothing rather than minting a duplicate."""
+    from grimoire.store import worlds as worlds_store
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    ingest_scene.ensure_character(cid, {"name": "Marisol"})
+    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+    text = json_module.dumps({
+        "one_line": "a", "summary": "s", "keywords": [], "timeline_events": [],
+        "character_state_edits": [], "lore_edits": [], "authored_edits": [],
+        "relationship_deltas": [], "bond_changes": [], "plot_movements": [],
+        "new_lore": [{"name": "The Pact", "body": "Sworn at the pier."}],
+    })
+    real_apply = ingest_scene.absorb.apply_edits
+
+    def _fail_the_create(cid_, edits, sid_):
+        applied, failures = real_apply(cid_, edits, sid_)
+        return [], [*failures, *({"id": e["id"], "kind": "error", "reason": "disk full"}
+                                 for e in edits if e["kind"] == "new_lore")]
+
+    monkeypatch.setattr(ingest_scene.absorb, "apply_edits", _fail_the_create)
+    first = asyncio.run(ingest_scene.ingest_one_scene(cid, _PARTIAL_SCENE, FakeClient(text), conn))
+    assert first["status"] == "incomplete"
+    assert "pending" not in first                    # nothing safe to replay
+
+    client = FakeClient(text)
+    second = asyncio.run(ingest_scene.ingest_one_scene(cid, _PARTIAL_SCENE, client, conn))
+    assert second["status"] == "incomplete" and client.calls == []
