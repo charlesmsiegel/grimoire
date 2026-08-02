@@ -65,7 +65,8 @@ def check_messages(label: str, expected: list[dict], actual: list[dict]) -> None
 
 # ---------------------------------------------------------------- pure checks
 
-from grimoire.store import absorb, chronicle, context, dossiers, relationships, suggest, taglines  # noqa: E402
+from grimoire.store import (absorb, chronicle, context, dossiers, relationships,  # noqa: E402
+                            suggest, taglines, voice_anchors, voice_drift)
 
 card = {"name": "Seraphine Vale", "description": "Tall, sharp-eyed smuggler.",
         "personality": "Wry and wary.", "scenario": "Runs the night dock."}
@@ -82,6 +83,22 @@ for prior in ("", "She ran the dock and owed the Guild."):
     check(f"dossier system (prior={bool(prior)})", exp[0]["content"], render("dossier/system.j2"))
     check(f"dossier user (prior={bool(prior)})", exp[1]["content"],
           render("dossier/user.j2", name="Seraphine Vale", prior=prior, transcript=transcript))
+
+voice_card = {**card, "mes_example": "<START>\n**Seraphine Vale:** Try me.",
+              "system_prompt": "Voice Seraphine with dry wit."}
+exp = voice_anchors.build_prompt(voice_card)
+check("voice anchor system", exp[0]["content"], render("voice_anchor/system.j2"))
+check("voice anchor user", exp[1]["content"], render("voice_anchor/user.j2", card=voice_card))
+# The sparse card exercises the "(none)" fallbacks — a card with no example
+# dialogue is the common case for a character that has never been played.
+exp = voice_anchors.build_prompt(sparse)
+check("voice anchor user (sparse)", exp[1]["content"], render("voice_anchor/user.j2", card=sparse))
+
+anchor = "Clipped. Never uses contractions.\nAnswers questions with questions."
+exp = voice_drift.build_prompt("Seraphine Vale", anchor, transcript)
+check("voice drift system", exp[0]["content"], render("voice_drift/system.j2"))
+check("voice drift user", exp[1]["content"],
+      render("voice_drift/user.j2", name="Seraphine Vale", anchor=anchor, transcript=transcript))
 
 EMPTY_SNAP = {"now": "", "friendly": "", "holidays_today": [], "upcoming": None,
               "birthdays": [], "story_so_far": [], "open_threads": [], "cast": [],
@@ -164,7 +181,8 @@ from grimoire.store import appearances as ap  # noqa: E402
 from grimoire.store import (audit, calendars, campaigns, characters, checks, config,  # noqa: E402
                             dossiers as dstore, entities, groupstate, length_drift, lengths, modules, pcs,
                             playstate, plot, response_presets, scenes, sheets, styles,
-                            taglines as tstore, weather as wstore, worlds)
+                            taglines as tstore, voice_anchors as vastore,
+                            voice_drift as vdstore, weather as wstore, worlds)
 
 # recap_depth=1 narrows the recap window to the newest absorbed scene, which is
 # what leaves an older one outside it for archive retrieval (#127) to recall —
@@ -219,6 +237,14 @@ kessler, _ = characters.create_character(croot, "Doc Kessler", "default", kcard)
 sid0 = scenes.create_scene(cid, "S0")
 ap.appear(cid, sid0, "characters", kessler, "default", "npc")
 dstore.write(croot, kessler, "Kessler patches up smugglers and quietly owes the Guild.")
+
+# An anchored, PRESENT NPC carrying an unresolved voice-drift flag, so
+# post_history.j2 renders the voice corrective in every scene comparison below
+# rather than the empty string. BOTH halves are required: context._assemble
+# honours a flag only while the character still has an anchor, so dropping the
+# anchor here would silently reduce the comparison to "" == "".
+vastore.write(croot, sera, "Clipped. Never uses contractions. Answers a question with a question.")
+vdstore.write(croot, sera, "She used contractions and hedged twice; Seraphine never softens a refusal.")
 
 mcard = characters.blank_card("Mora")
 mora, _ = characters.create_character(croot, "Mora", "default", mcard)
@@ -568,8 +594,16 @@ def rendered_messages(scene_id: str, data: dict, note: str | None = None,
                                  data["budget"])
     correction = (render("scene/length_correction.j2", drift=drift, budget=data["budget"])
                   if drift else "")
+    # Same mirroring for the voice corrective: read off the scene's own cast and
+    # flag files, not injected, so a change to either half shows up here.
+    voice_notes = [{"name": characters.read_character(croot, a["id"])["meta"]["name"],
+                    "note": vdstore.read(croot, a["id"])}
+                   for a in ap.scene_cast(cid, scene_id)
+                   if a["kind"] == "characters" and a["role"] == "npc"
+                   and vdstore.read(croot, a["id"]) and vastore.read(croot, a["id"])]
+    voice = render("scene/voice_correction.j2", voice_notes=voice_notes) if voice_notes else ""
     post = render("scene/post_history.j2", npc_cards=data["npc_cards"],
-                  length_correction=correction)
+                  voice_correction=voice, length_correction=correction)
     if post:
         out.append({"role": "system", "content": post})
     if opener_prompt is not None:  # the shape rules always ride last on openers
@@ -587,6 +621,12 @@ data = gather(sid, pcless=False)
 # window — so say so here rather than let the check quietly go vacuous.
 assert data["archive_entries"], "fixture no longer exercises the archive section"
 check_messages("chat", context.build_messages(cid, sid), rendered_messages(sid, data))
+# The fixture's present NPC is both anchored and flagged, so the voice corrective
+# really is inside the post-history the comparison above covers. Asserted rather
+# than assumed: without an anchor the corrective renders "", and comparing "" to
+# "" passes while proving nothing about scene/voice_correction.j2.
+assert any("drifted out of voice" in m["content"] for m in context.build_messages(cid, sid)), \
+    "the voice corrective is missing from the assembled prompt -- check the fixture (#59)"
 note = render("scene/director_note.j2")
 check_messages("director", context.build_director_messages(cid, sid, note),
                rendered_messages(sid, data, note=note))

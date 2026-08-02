@@ -246,7 +246,8 @@ class _Budget:
     """A wall-clock ceiling on one absorb's whole LLM sequence (#243).
 
     Absorb awaits an extraction call, then one dossier call per present NPC,
-    then an audit call, all inside a single HTTP request — the per-call idle
+    then one voice-drift call per present NPC that has a voice anchor, then an
+    audit call, all inside a single HTTP request — the per-call idle
     timeout in `llm` bounds each *stall*, but nothing bounds the total. This
     does, and it is deliberately absorb's policy rather than the LLM facade's:
     only the caller knows which of its steps are droppable.
@@ -317,7 +318,7 @@ def _budget_overrun(exc: BaseException) -> bool:
     return isinstance(exc, LLMError) and exc.detail == BUDGET_EXHAUSTED
 
 
-def _phase_report(dossiers: dict, mechanics: dict) -> list[dict]:
+def _phase_report(dossiers: dict, voice: dict, mechanics: dict) -> list[dict]:
     """One row per LLM-backed step of this absorb, in run order: was it
     attempted, how did it end, and was the shared time budget what stopped it
     (#243/#236 follow-up).
@@ -340,7 +341,8 @@ def _phase_report(dossiers: dict, mechanics: dict) -> list[dict]:
     return [{"name": "extraction", "status": "ok", "reason": None,
              "attempted": True, "budget_exhausted": False}] + \
            [{"name": name, **{k: block[k] for k in keys}}
-            for name, block in (("dossiers", dossiers), ("audit", mechanics))]
+            for name, block in (("dossiers", dossiers), ("voice", voice),
+                                ("audit", mechanics))]
 
 
 async def _run_audit(cid: str, sid: str, client: LLMClient, conn: dict,
@@ -505,6 +507,181 @@ async def _stage_dossiers(cid: str, sid: str, transcript: str, client: LLMClient
     return edits, {**out, "status": "ok"}
 
 
+async def _stage_voice_drift(cid: str, sid: str, transcript: str, client: LLMClient,
+                             conn: dict, budget: _Budget) -> tuple[list[dict], dict]:
+    """Judge every present NPC's dialogue in this scene against their voice
+    anchor, proposing a drift flag (or a clear) for each.
+
+    Runs ONLY for NPCs that actually have an anchor (#59). That is the cost
+    control for the whole feature: a library with no anchors makes no extra LLM
+    calls, and adding one is how a user opts a character in.
+
+    The LLM call happens here; the WRITE does not, for _stage_dossiers' reason
+    (#235) -- a flag that landed before the reviewer saved would survive a
+    Cancel and go on correcting the model for a scene the chronicle never
+    recorded.
+
+    Never raises -- voice drift must not fail absorb -- but it is not silent
+    either: failures and budget skips come back as a status the inspector
+    renders, mirroring _stage_dossiers' shape -- including `attempted` and
+    `budget_exhausted`, the two flags a phase row is built from."""
+    out: dict = {"status": "skipped", "reason": None, "checked": [], "flagged": [],
+                 "unjudged": [], "failed": [], "skipped": [],
+                 "attempted": False, "budget_exhausted": False}
+    edits: list[dict] = []
+    try:
+        cast = store.appearances.scene_cast(cid, sid)
+        croot = store.appearances.locked_actor_root(cid)   # cast actors are locked, so campaign-side
+        speakers = store.appearances.roster_names(cid)
+    except Exception as exc:  # noqa: BLE001 -- an unreadable cast is a failed phase, not a 500
+        return [], {**out, "status": "failed", "reason": f"could not read the scene cast: {exc}"}
+    # The speaker labels this scene's transcript can carry. transcript.j2 labels
+    # each line with the speaker's card name and nothing else, so an anchored NPC
+    # sharing a label with ANY other speaker is unjudgeable -- the judge cannot
+    # tell whose lines belong to its subject, and answers confidently regardless.
+    #
+    # Counted over the CAMPAIGN roster, not the present cast, because the present
+    # cast is not the set of speakers: `scene_cast` drops an actor the moment it
+    # leaves, while the transcript keeps every line it spoke, still wearing its
+    # name. `_drift_roster` reaches for the same list against the same problem.
+    # Nothing records which scene a departed actor spoke in, so this over-counts
+    # a same-named actor who was never here -- the safe direction, since the
+    # alternative is a corrective persisted against the wrong character.
+    # Plus the role fallbacks transcript.j2 uses for a line carrying no speaker
+    # stamp -- those are labels too. Whether this scene has any such line is not
+    # recoverable from the rendered transcript, and an ambiguous judgment must
+    # never be persisted, so a character wearing one of these names is
+    # disqualified unconditionally rather than on a guess.
+    speakers = [n for n in speakers if isinstance(n, str) and n.strip()]
+    speakers += ["You", "Grimoire"]
+
+    # Resolved up front so the budget check below covers only the actors that
+    # will really cost a call: an anchorless NPC must not be reported as
+    # "skipped for time" when it was never going to be judged at all.
+    todo = []
+    for a in cast:
+        if a["kind"] != "characters" or a["role"] != "npc":
+            continue   # a player character's voice is the user's to drift
+        try:
+            record = store.overlay.voice_anchor_record(cid, a["id"])
+        except Exception as exc:  # noqa: BLE001 -- unreadable anchor: skip this actor, keep the phase
+            out["failed"].append({"id": a["id"], "reason": f"{type(exc).__name__}: {exc}"})
+            continue
+        if record["text"]:
+            # `a["name"]` is the LOCKED VERSION's card name, which is what the
+            # transcript labels this character's lines with. The container's
+            # meta name can differ from it, and naming the judge a character the
+            # transcript never mentions is how a multi-NPC scene gets judged
+            # against the wrong lines (or comes back `not_enough`).
+            #
+            # Cards are stored as arbitrary dicts, so `data.name` can be a
+            # number or an object -- import and version PUT both accept them.
+            # Checked HERE, inside the per-actor boundary: everything below
+            # treats the name as text, and one bad card must cost that actor its
+            # voice check rather than 500 the whole absorb.
+            name = a.get("name")
+            if not isinstance(name, str) or not name.strip():
+                out["failed"].append({
+                    "id": a["id"],
+                    "reason": "the locked card has no usable name, so the judge cannot be "
+                              "pointed at this character's lines"})
+                continue
+            # Report the clash instead of judging through it -- naming it is
+            # actionable (rename a card), whereas judging is a coin flip
+            # presented as a finding, and a wrong one persists a corrective
+            # that nags a character for dialogue someone else spoke.
+            # `scenes.confusable`, not a whole-name comparison: `match_name` is
+            # what decided which cast member a written label meant when the
+            # reply was stored, so it is what decides whether a label is
+            # ambiguous. "Winifred Vance" and "Winifred Vale" are distinct
+            # strings, but a block labelled "Winifred" belongs to neither.
+            if store.scenes.confusable(name, speakers):
+                out["failed"].append({
+                    "id": a["id"],
+                    "reason": f"another speaker in this scene can also be labelled {name!r}, "
+                              "so their lines cannot be told apart in the transcript"})
+                continue
+            todo.append((a["id"], name, record))
+
+    def drop_tail(i: int) -> None:
+        """Record the anchored NPC at `i` and everyone after it as never
+        reached -- named, not silently dropped, for _stage_dossiers' reason."""
+        out["skipped"] = [b for b, _, _ in todo[i:]]
+        out["budget_exhausted"] = True
+
+    for i, (aid, name, record) in enumerate(todo):
+        if budget.spent():
+            drop_tail(i)
+            break
+        try:
+            # Read ONCE, before the await -- dossiers' rule: re-reading after it
+            # would record a flag another review wrote while this call was in
+            # flight, and the conflict guard would then pass on stale output.
+            # One snapshot, so the note and the provenance staged as `before`
+            # always describe the same committed flag (voice_drift.read_record).
+            flag = store.voice_drift.read_record(croot, aid)
+            prior, prior_fp = flag["note"], flag["anchor"]
+            msgs = store.voice_drift.build_prompt(name, record["text"], transcript)
+            # The loop's own check is stale by now, so the attempt is recorded
+            # by `run`, which alone can decide it atomically with the deadline.
+            text = await budget.run(client.complete(msgs, conn),
+                                    lambda: out.__setitem__("attempted", True))
+            finding = store.voice_drift.parse_output(text)
+            # An unreadable verdict is a FAILED call, not a quiet pass. Left
+            # conflated with "in voice" it would stage a default-approved clear
+            # of a standing flag on the strength of a garbled reply -- and a
+            # model that answers nonsense for every NPC would report `ok` while
+            # retiring the campaign's correctives one by one.
+            if finding["verdict"] == store.voice_drift.UNKNOWN:
+                out["failed"].append({"id": aid, "reason": "unreadable verdict from the voice judge"})
+                continue
+            # A drift verdict with no note is unusable: the note IS the
+            # corrective the next turn gets. Report it rather than staging a
+            # flag that would say nothing, or silently downgrading it to "fine".
+            if finding["verdict"] == store.voice_drift.DRIFT and not finding["note"]:
+                out["failed"].append({"id": aid, "reason": "drift reported with no corrective"})
+                continue
+            edit = store.voice_drift.stage_edit(aid, name, prior, finding,
+                                                record["text"], record["id"], prior_fp)
+        except BudgetRefused:
+            # Refused, not failed: nothing was sent, so this NPC is one more the
+            # clock never reached — and so is everyone after them.
+            drop_tail(i)
+            break
+        except Exception as exc:  # noqa: BLE001 -- LLMError, store errors, anything
+            detail = str(exc).strip()
+            out["budget_exhausted"] = out["budget_exhausted"] or _budget_overrun(exc)
+            out["failed"].append({
+                "id": aid,
+                "reason": f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__})
+        else:
+            out["checked"].append(aid)
+            if finding["verdict"] == store.voice_drift.DRIFT:
+                out["flagged"].append(aid)
+            elif finding["verdict"] == store.voice_drift.NOT_ENOUGH:
+                # A real judgment that produces no edit -- like a dossier that
+                # came back unchanged. Named so "checked, not flagged" does not
+                # read as "confirmed in voice" when nobody actually heard them.
+                out["unjudged"].append(aid)
+            if edit:
+                edits.append(edit)
+    if not out["checked"] and not out["failed"] and not out["skipped"]:
+        return edits, {**out, "reason": "no anchored npcs present"}
+    if not out["checked"]:
+        return edits, {**out, "status": "failed",
+                       "reason": "no voice check could be run" if out["failed"] else
+                                 "the absorb time budget ran out before any voice check "
+                                 "could be run"}
+    if out["failed"]:  # the more specific story when both happened; `skipped` still lists the rest
+        return edits, {**out, "status": "degraded",
+                       "reason": "some voice checks could not be run"}
+    if out["skipped"]:
+        return edits, {**out, "status": "degraded",
+                       "reason": "the absorb time budget ran out before the rest "
+                                 "could be checked"}
+    return edits, {**out, "status": "ok"}
+
+
 def _already_absorbed(scene: dict) -> bool:
     """Whether THIS scene was absorbed, read from its own frontmatter.
 
@@ -588,16 +765,20 @@ async def post_absorb(cid: str, sid: str, force: bool = False,
     # written (never raises -- see _stage_dossiers' own failure boundary).
     dossier_edits, dossiers = await _stage_dossiers(cid, sid, transcript, client, conn, budget)
     edits += dossier_edits
+    # #59: judge each anchored NPC's dialogue against its voice anchor -- staged,
+    # not written (never raises -- see _stage_voice_drift's own failure boundary).
+    voice_edits, voice = await _stage_voice_drift(cid, sid, transcript, client, conn, budget)
+    edits += voice_edits
     # Phase 5: audit the scene's mechanics against the sheeted cast (never
     # raises -- see _run_audit's own failure boundary).
     audit_edits, mechanics = await _run_audit(cid, sid, client, conn, budget)
     return {"one_line": parsed["one_line"], "summary": parsed["summary"],
             "keywords": parsed["keywords"], "timeline_events": parsed["timeline_events"],
             **facts, "edits": edits + audit_edits, "mechanics": mechanics,
-            "dossiers": dossiers,
+            "dossiers": dossiers, "voice": voice,
             # One uniform row per step so a short absorb is legible as one
             # (see _phase_report) rather than as a model with nothing to say.
-            "phases": _phase_report(dossiers, mechanics),
+            "phases": _phase_report(dossiers, voice, mechanics),
             # Idempotency key for the save this review will become (#235): the
             # commit appends in six places, so a replay whose first response was
             # lost must return that result rather than apply it again. It also

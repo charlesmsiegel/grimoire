@@ -74,6 +74,10 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   const [taglineBusy, setTaglineBusy] = useState(false);
   const taglineReq = useRef(0);
   const [taglineQueue, setTaglineQueue] = useState<{ cid: string; name: string }[]>([]);
+  const [voiceAnchor, setVoiceAnchor] = useState("");
+  const [anchorBusy, setAnchorBusy] = useState(false);
+  const [anchorState, setAnchorState] = useState<"loading" | "ready" | "error">("loading");
+  const anchorReq = useRef(0);
   const [urlPromptOpen, setUrlPromptOpen] = useState(false);
   const [cropOpen, setCropOpen] = useState(false);
   const [bulkUrl, setBulkUrl] = useState<{ current: number; total: number; name: string; step: string } | null>(null);
@@ -233,6 +237,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     setDetail(d);
     setBirthdate(d.meta.birthdate ?? "");
     loadVersion(d, d.meta.default_version);
+    loadVoiceAnchor(cid);   // campaign-local characters need one too (#59)
     if (worldScope) loadTagline(cid);
     else await loadLockState(cid);
     return d;
@@ -284,6 +289,73 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       .catch(() => { if (taglineReq.current === req) setTagline(""); });
   }
 
+  // Same request-token discipline as the tagline, and its own counter: the two
+  // GETs race independently, so sharing one token would let the slower of a
+  // single selection cancel the faster.
+  //
+  // Unlike the tagline this also tracks load STATE, because a blank anchor is
+  // destructive: PUT "" deletes it. "" is the placeholder shown while the GET
+  // is in flight and what a failed GET leaves behind, so saving from either
+  // state would silently remove a stored anchor the user never saw. Save is
+  // disabled until a load actually succeeds.
+  function loadVoiceAnchor(cid: string) {
+    const req = ++anchorReq.current;
+    setVoiceAnchor("");
+    setAnchorState("loading");
+    // Bumping the token above just orphaned any in-flight generation, and an
+    // orphan's `finally` no longer matches, so it will never clear this itself.
+    // Without this line one abandoned Generate disables the button for every
+    // character selected afterwards, until the editor remounts.
+    setAnchorBusy(false);
+    api.getCharacterVoiceAnchor(scope, cid)
+      .then((r) => {
+        if (anchorReq.current !== req) return;
+        setVoiceAnchor(r.voice_anchor);
+        setAnchorState("ready");
+      })
+      .catch(() => { if (anchorReq.current === req) setAnchorState("error"); });
+  }
+
+  async function saveVoiceAnchor() {
+    if (!detail || anchorState !== "ready") return;
+    try {
+      // Trimmed to blank on purpose: a blank anchor removes it, which is how a
+      // character opts back out of voice-drift detection. Only reachable once
+      // the load succeeded, so the blank is the user's, not a placeholder.
+      await api.setCharacterVoiceAnchor(scope, detail.meta.id, voiceAnchor.trim());
+    } catch (err: any) {
+      setError(err.detail ?? String(err));
+    }
+  }
+
+  async function regenerateVoiceAnchor() {
+    if (!detail) return;
+    // Tokened like the GET: generation is slow, and without this a draft for
+    // character A lands in character B's textarea if the user navigates while
+    // it is in flight -- and Save writes it under B, since it reads the CURRENT
+    // detail id.
+    const req = ++anchorReq.current;
+    setAnchorBusy(true);
+    try {
+      const r = await api.generateCharacterVoiceAnchor(scope, detail.meta.id);
+      if (anchorReq.current !== req) return;
+      // An empty completion is a failed generation, not a draft. Installing it
+      // would arm the destructive save with a blank the user never wrote, and
+      // one click would delete a stored anchor that generation failed to
+      // replace. Keep the loaded value and state untouched.
+      if (!r.voice_anchor.trim()) {
+        setError("The model returned an empty voice anchor — nothing was changed.");
+        return;
+      }
+      setVoiceAnchor(r.voice_anchor);
+      setAnchorState("ready");
+    } catch (err: any) {
+      if (anchorReq.current === req) setError(err.detail ?? String(err));
+    } finally {
+      if (anchorReq.current === req) setAnchorBusy(false);
+    }
+  }
+
   async function saveTagline() {
     if (!detail) return;
     try {
@@ -330,6 +402,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     setDetail(d);
     setBirthdate(d.meta.birthdate ?? "");
     loadVersion(d, d.versions.some((v) => v.id === vid) ? vid : d.meta.default_version);
+    loadVoiceAnchor(cid);   // campaign-local characters need one too (#59)
     if (worldScope) loadTagline(cid);
     else await loadLockState(cid);
     setMode("detail");
@@ -768,6 +841,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
             <button className="subtle" onClick={() => setUrlPromptOpen(true)}>Download from URL</button>
             <button className="subtle" onClick={checkChubLinks}>Check chub.ai links</button>
           </>}
+
           {bulkLocalize && (
             <span className="field-hint">Localizing card {bulkLocalize.current}/{bulkLocalize.cards}…</span>
           )}
@@ -1152,6 +1226,39 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
               <button className="subtle" type="button" onClick={saveTagline}>Save tagline</button>
             </div>
           </>}
+            <Field label="Voice anchor"
+                   hint="how they SOUND — absorb checks each scene against this and flags drift; clear it to skip the check">
+              {/* Disabled while BUSY as well as while loading: a generation in
+                  flight will overwrite this box when it lands, so edits made
+                  meanwhile would be silently discarded. */}
+              <textarea aria-label="Voice anchor" value={voiceAnchor} rows={5}
+                        disabled={anchorState === "loading" || anchorBusy}
+                        onChange={(e) => setVoiceAnchor(e.target.value)} />
+            </Field>
+            {anchorState === "error" && (
+              <p className="field-hint">Could not load the voice anchor — reopen this
+                character to try again. Saving is disabled so a failed read cannot
+                overwrite the stored anchor with a blank.</p>)}
+            <div className="form-actions">
+              {/* Also disabled while the initial GET is in flight: generating
+                  bumps the request token and invalidates that load, so a
+                  generation that then fails would strand `anchorState` in
+                  "loading" — every control disabled, no error shown, and no way
+                  out but reopening the character. */}
+              <button className="subtle" type="button"
+                      disabled={anchorBusy || anchorState === "loading"}
+                      onClick={regenerateVoiceAnchor}>
+                {anchorBusy ? "Generating…" : "Generate"}
+              </button>
+              {/* Disabled while generating too, not just while loading. A save
+                  that lands mid-generation persists the OLD text, and the
+                  completion then replaces the textarea with a fresh draft — so
+                  the save the user just watched succeed covers a value that is
+                  no longer on screen, and the draft they can see is unsaved. */}
+              <button className="subtle" type="button"
+                      disabled={anchorState !== "ready" || anchorBusy}
+                      onClick={saveVoiceAnchor}>Save voice anchor</button>
+            </div>
           <Field label="Tags" hint="comma-separated">
             <input
               type="text"

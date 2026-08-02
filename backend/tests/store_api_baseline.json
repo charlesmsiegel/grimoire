@@ -79,6 +79,8 @@
     "sync",
     "tags",
     "uniquify",
+    "voice_anchors",
+    "voice_drift",
     "worlds",
     "write_config"
   ],
@@ -182,6 +184,8 @@
     "tags",
     "thumbs",
     "uniquify",
+    "voice_anchors",
+    "voice_drift",
     "weather",
     "worlds",
     "write_config"

@@ -78,6 +78,33 @@ def match_name(label: str, names) -> str | None:
     return prefixed[0] if len(prefixed) == 1 else None
 
 
+def confusable(name: str, names) -> bool:
+    """True when some transcript label that could mean `name` could also mean
+    something else in `names`.
+
+    `match_name` is the resolver that decides which cast member a written label
+    refers to, so it also defines when a label is ambiguous -- and comparing
+    whole names does NOT capture that. "Winifred Vance" and "Winifred Vale" are
+    distinct strings, but a block labelled "Winifred" is a word-boundary prefix
+    of both and belongs to neither in particular.
+
+    So the test is applied to every label that could name this actor -- the full
+    name and each of its word-boundary prefixes -- and the actor is confusable
+    unless all of them resolve back to it. Deliberately conservative: a name
+    reachable by an ambiguous label is rejected even when its own full-name
+    label would have been fine, because nothing downstream can tell which label
+    a given block was written with.
+
+    Used wherever a name has to identify exactly one actor: the voice judge
+    (which is handed the transcript) and the voice corrective (which addresses
+    the model by name).
+    """
+    if not isinstance(name, str) or not name.strip():
+        return True
+    labels = {name} | {name[:i] for i in range(1, len(name)) if not name[i].isalnum()}
+    return any(match_name(label, names) != name for label in labels if label.strip())
+
+
 def _speaker_and_role(m: re.Match, players: frozenset[str]) -> tuple[str | None, str]:
     base, sub = m.group(1), m.group(2)
     if base in RESERVED_LABELS:

@@ -27,7 +27,7 @@ from . import (cast, macros, world_state, mechanics, story, archive, pack,  # no
                tokens, assemble)
 from .cast import (  # noqa: F401
     _campaign_player_refs, _cast_directory_data, _char_name, _drift_roster,
-    cast_datetime_facts,
+    _voice_notes, cast_datetime_facts,
 )
 from .macros import (  # noqa: F401
     _LITERAL_MACROS, _MACRO_TOKEN, _RANDOM_MACRO, _ROLL_MACRO, _datetime_subs,

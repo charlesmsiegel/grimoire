@@ -10,10 +10,11 @@ appearance record of its own.
 
 from __future__ import annotations
 
-from .. import calendars, characters, dossiers, overlay, pcs
+from .. import calendars, characters, dossiers, overlay, pcs, voice_drift
 from ..appearances import (cast as appearances_cast, paths as appearances_paths,
                            versions as appearances_versions)
 from ..campaigns import paths as campaigns_paths
+from ..scenes import serialize as scenes_serialize
 
 
 def _campaign_player_refs(cid: str, aroot) -> tuple[list[dict], list[str]]:
@@ -77,6 +78,85 @@ def _cast_directory_data(croot, cid: str, sid: str) -> tuple[list[dict], list[di
         known.append({"name": _char_name(overlay.char_root(cid, char_id), char_id),
                      "tagline": tag, "versions": versions})
     return active, known
+
+
+def _voice_notes(cid: str, croot, cast: list[dict]) -> list[dict]:
+    """Unresolved voice-drift correctives for the NPCs actually on screen (#59).
+
+    Present-cast only, and NPC-only: the corrective is an instruction about the
+    voice the model is about to write, so a flag on a character who is not in
+    this scene has nothing to correct, and a player character's voice is the
+    user's to drift.
+
+    A flag is honoured only while the anchor that produced it is STILL THE
+    CURRENT ONE. Two things follow from that, and they are the same rule:
+
+    - No anchor at all -> silence. Removing the anchor is the documented way to
+      opt a character out, and absorb stops judging them the moment it goes, so
+      the flag would otherwise have no path back to cleared.
+    - A DIFFERENT anchor -> silence. absorb's apply-time fingerprint only covers
+      the pending-review window; a committed flag outlives it, so without this
+      a note would go on citing a standard the user has since replaced (and a
+      removed-then-restored anchor would resurrect it) until some later absorb
+      happened to clear it.
+
+    Both are read second, and only for a flagged character, so the common case
+    (no flag) costs nothing on the generation hot path.
+
+    Ordered by the cast, not by the flag store, so the note list reads in the
+    same order as the cards above it.
+
+    Named by `scene_cast`'s `name` -- the LOCKED VERSION's card name -- and not
+    by the character container's, which can differ. This corrective is read by
+    the same model that is holding the NPC cards and the transcript, and both of
+    those identify the character by the card name. Addressing it to any other
+    string invites the model to ignore it, or in a multi-NPC scene to apply it
+    to the wrong character.
+    """
+    # A corrective addresses the model by NAME, so it needs that name to identify
+    # exactly one actor on screen. The absorb-time clash guard cannot cover this:
+    # a flag committed while the name was unique is consumed by every later
+    # generation, and a same-named actor joining afterwards (or a locked card
+    # renamed into a collision) makes the standing note ambiguous with no absorb
+    # in between to re-examine it. Suppress rather than guess -- an instruction
+    # the model applies to the wrong character is worse than none.
+    #
+    # Plus the reserved labels absorb seeds: these are what the transcript calls
+    # the user's lines and unstamped narration, so a corrective addressed to a
+    # character wearing one can be applied to the player instead. Seeded here
+    # too because a rename AFTER the flag was committed never passes through
+    # absorb's guard again.
+    present = [a["name"] for a in cast if isinstance(a.get("name"), str) and a["name"].strip()]
+    present += ["You", "Grimoire"]
+
+    out: list[dict] = []
+    for a in cast:
+        if a["kind"] != "characters" or a["role"] != "npc":
+            continue
+        # `scenes.confusable` rather than a whole-name comparison, for the same
+        # reason absorb uses it: "Winifred Vance" and "Winifred Vale" are
+        # distinct strings, but neither owns the label "Winifred" -- and the
+        # model reading this corrective is holding both their cards.
+        name = a.get("name")
+        if scenes_serialize.confusable(name, present):
+            continue
+        # ONE read for note and provenance: the flag is replaced atomically, so
+        # reading them separately can straddle a chronicle save and validate a
+        # stale note against the fresh fingerprint (see voice_drift.read_record).
+        flag = voice_drift.read_record(croot, a["id"])
+        if not flag["note"]:
+            continue
+        record = overlay.voice_anchor_record(cid, a["id"])
+        if not record["text"]:
+            continue
+        # "" is "provenance not recorded" (a flag predating the field), which
+        # counts as valid -- invalidating on it would retire real user data on
+        # upgrade.
+        current = voice_drift.anchor_fingerprint(record["text"], record["id"])
+        if flag["anchor"] and flag["anchor"] != current:
+            continue
+        out.append({"name": name, "note": flag["note"]})
+    return out
 
 
 def _drift_roster(cid: str, npc_names: list[str], player_names: list[str]) -> list[str]:

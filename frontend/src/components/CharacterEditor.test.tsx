@@ -19,6 +19,8 @@ vi.mock("../api/client", async () => {
       downloadCharacterChubGallery: vi.fn(), downloadCharacterChubLorebooks: vi.fn(),
       findChubUnlinked: vi.fn(),
       getCharacterTagline: vi.fn(), setCharacterTagline: vi.fn(), generateCharacterTagline: vi.fn(),
+      getCharacterVoiceAnchor: vi.fn(), setCharacterVoiceAnchor: vi.fn(),
+      generateCharacterVoiceAnchor: vi.fn(),
       listImageAppearances: vi.fn(), copyGreetingImage: vi.fn(), listGreetings: vi.fn(),
       imageUrl: (w: string, c: string, v: string, n: string) => `/img/${w}/${c}/${v}/${n}`,
       putSheetCreation: vi.fn(),
@@ -73,6 +75,7 @@ beforeEach(() => {
   (api.importCharacterBook as any).mockResolvedValue({ created: [{ kind: "lore", id: "pact" }] });
   (api.setCharacterBirthdate as any).mockResolvedValue({ ok: true });
   (api.getCharacterTagline as any).mockResolvedValue({ tagline: "" });
+  (api.getCharacterVoiceAnchor as any).mockResolvedValue({ voice_anchor: "" });
   (api.listImageAppearances as any).mockResolvedValue([]);
   (api.copyGreetingImage as any).mockResolvedValue({ name: "avatar", ext: "png" });
   (api.listGreetings as any).mockResolvedValue([]);
@@ -1049,4 +1052,195 @@ it("a wizard opened at world scope closes (not just its trigger) when the same i
   rerender(<CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w1" module={module} />);
   await waitFor(() => expect(screen.queryByText("New character (with sheet)")).toBeNull()); // wizard closed
   expect(screen.getByText("No characters yet. Create one or import a card.")).toBeInTheDocument(); // plain view instead
+});
+
+test("edit view loads and saves a voice anchor via PUT (#59)", async () => {
+  (api.getCharacterVoiceAnchor as any).mockResolvedValue({ voice_anchor: "Clipped." });
+  (api.setCharacterVoiceAnchor as any).mockResolvedValue({ ok: true });
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await openEditForm();
+  const box = await screen.findByLabelText("Voice anchor");
+  await waitFor(() => expect((box as HTMLTextAreaElement).value).toBe("Clipped."));
+  fireEvent.change(box, { target: { value: "Never uses contractions." } });
+  fireEvent.click(screen.getByText("Save voice anchor"));
+  await waitFor(() => expect(api.setCharacterVoiceAnchor)
+    .toHaveBeenCalledWith({ kind: "world", id: "w" }, "seraphine", "Never uses contractions."));
+});
+
+test("clearing the voice anchor opts the character out of drift detection (#59)", async () => {
+  // A blank PUT is the documented way to remove the anchor, and removing it is
+  // what stops absorb from judging this character at all.
+  (api.getCharacterVoiceAnchor as any).mockResolvedValue({ voice_anchor: "Clipped." });
+  (api.setCharacterVoiceAnchor as any).mockResolvedValue({ ok: true });
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await openEditForm();
+  const box = await screen.findByLabelText("Voice anchor");
+  fireEvent.change(box, { target: { value: "   " } });
+  fireEvent.click(screen.getByText("Save voice anchor"));
+  await waitFor(() => expect(api.setCharacterVoiceAnchor).toHaveBeenCalledWith({ kind: "world", id: "w" }, "seraphine", ""));
+});
+
+test("Generate previews a voice anchor without persisting it (#59)", async () => {
+  (api.generateCharacterVoiceAnchor as any)
+    .mockResolvedValue({ voice_anchor: "Clipped. Never uses contractions." });
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await openEditForm();
+  await screen.findByLabelText("Voice anchor");
+  const actions = screen.getByText("Save voice anchor").closest(".form-actions") as HTMLElement;
+  fireEvent.click(within(actions).getByText("Generate"));
+  await waitFor(() => expect((screen.getByLabelText("Voice anchor") as HTMLTextAreaElement).value)
+    .toBe("Clipped. Never uses contractions."));
+  expect(api.setCharacterVoiceAnchor).not.toHaveBeenCalled();
+});
+
+test("a pending anchor load cannot be saved as a blank opt-out (#59)", async () => {
+  // A blank anchor PUT DELETES it. "" is also the placeholder shown while the
+  // GET is in flight, so an enabled Save button would let a fast click wipe a
+  // stored anchor the user never saw.
+  let release!: (v: { voice_anchor: string }) => void;
+  (api.getCharacterVoiceAnchor as any).mockReturnValue(
+    new Promise((res) => { release = res; }));
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await openEditForm();
+  const save = await screen.findByText("Save voice anchor");
+  expect((save as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(save);
+  expect(api.setCharacterVoiceAnchor).not.toHaveBeenCalled();
+  await act(async () => { release({ voice_anchor: "Clipped." }); });
+  await waitFor(() => expect((save as HTMLButtonElement).disabled).toBe(false));
+});
+
+test("a failed anchor load disables saving instead of offering a blank (#59)", async () => {
+  (api.getCharacterVoiceAnchor as any).mockRejectedValue({ detail: "boom" });
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await openEditForm();
+  const save = await screen.findByText("Save voice anchor");
+  await waitFor(() => expect((save as HTMLButtonElement).disabled).toBe(true));
+  expect(screen.getByText(/Could not load the voice anchor/)).toBeTruthy();
+  fireEvent.click(save);
+  expect(api.setCharacterVoiceAnchor).not.toHaveBeenCalled();
+});
+
+test("Save is disabled while an anchor generation is in flight (#59)", async () => {
+  // A save that lands mid-generation persists the OLD text, and the completion
+  // then swaps the textarea for a fresh draft -- so the save the user watched
+  // succeed covers a value that is no longer on screen.
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "seraphine", name: "Seraphine", default_version: "default", has_avatar: false, versions: [] },
+  ]);
+  (api.getCharacterVoiceAnchor as any).mockResolvedValue({ voice_anchor: "The loaded one." });
+  let release!: (v: { voice_anchor: string }) => void;
+  (api.generateCharacterVoiceAnchor as any).mockReturnValue(
+    new Promise((res) => { release = res; }));
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+
+  fireEvent.click((await screen.findAllByRole("button", { name: /^edit$/i }))[0]);
+  await screen.findByLabelText("Voice anchor");
+  const save = screen.getByText("Save voice anchor") as HTMLButtonElement;
+  expect(save.disabled).toBe(false);
+
+  const actions = save.closest(".form-actions") as HTMLElement;
+  fireEvent.click(within(actions).getByText("Generate"));
+  await waitFor(() => expect(save.disabled).toBe(true));
+  fireEvent.click(save);
+  expect(api.setCharacterVoiceAnchor).not.toHaveBeenCalled();
+
+  await act(async () => { release({ voice_anchor: "The fresh draft." }); });
+  await waitFor(() => expect(save.disabled).toBe(false));
+});
+
+test("a generated anchor for a character you navigated away from is dropped (#59)", async () => {
+  // Otherwise A's draft lands in B's textarea, and Save writes it under B --
+  // saving reads the CURRENT detail id, not the one generation started on.
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "seraphine", name: "Seraphine", default_version: "default", has_avatar: false, versions: [] },
+    { id: "mara", name: "Mara", default_version: "default", has_avatar: false, versions: [] },
+  ]);
+  (api.getCharacterVoiceAnchor as any).mockResolvedValue({ voice_anchor: "The loaded one." });
+  let release!: (v: { voice_anchor: string }) => void;
+  (api.generateCharacterVoiceAnchor as any).mockReturnValue(
+    new Promise((res) => { release = res; }));
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+
+  // open Seraphine's edit form and start a generation
+  fireEvent.click((await screen.findAllByRole("button", { name: /^edit$/i }))[0]);
+  await screen.findByLabelText("Voice anchor");
+  const actions = screen.getByText("Save voice anchor").closest(".form-actions") as HTMLElement;
+  fireEvent.click(within(actions).getByText("Generate"));
+
+  // navigate away while the draft is still in flight
+  (api.readCharacter as any).mockResolvedValue({
+    meta: { id: "mara", name: "Mara", default_version: "default" },
+    versions: [{ id: "default", name: "default", card: CARD, images: [] }],
+  });
+  fireEvent.click(screen.getByText("‹ All characters"));
+  fireEvent.click((await screen.findAllByRole("button", { name: /^edit$/i }))[1]);
+  await screen.findByLabelText("Voice anchor");
+
+  await act(async () => { release({ voice_anchor: "The stale draft." }); });
+  const box = await screen.findByLabelText("Voice anchor");
+  expect((box as HTMLTextAreaElement).value).toBe("The loaded one.");
+});
+
+test("an abandoned generation does not wedge Generate for later characters (#59)", async () => {
+  // The orphaned call's `finally` no longer matches the token, so it can never
+  // clear the busy flag itself — the new load has to.
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "seraphine", name: "Seraphine", default_version: "default", has_avatar: false, versions: [] },
+    { id: "mara", name: "Mara", default_version: "default", has_avatar: false, versions: [] },
+  ]);
+  (api.getCharacterVoiceAnchor as any).mockResolvedValue({ voice_anchor: "Clipped." });
+  (api.generateCharacterVoiceAnchor as any).mockReturnValue(new Promise(() => {}));  // never settles
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+
+  fireEvent.click((await screen.findAllByRole("button", { name: /^edit$/i }))[0]);
+  await screen.findByLabelText("Voice anchor");
+  const actions = screen.getByText("Save voice anchor").closest(".form-actions") as HTMLElement;
+  fireEvent.click(within(actions).getByText("Generate"));
+  await waitFor(() => expect(screen.getByText("Generating…")).toBeTruthy());
+
+  (api.readCharacter as any).mockResolvedValue({
+    meta: { id: "mara", name: "Mara", default_version: "default" },
+    versions: [{ id: "default", name: "default", card: CARD, images: [] }],
+  });
+  fireEvent.click(screen.getByText("‹ All characters"));
+  fireEvent.click((await screen.findAllByRole("button", { name: /^edit$/i }))[1]);
+  await screen.findByLabelText("Voice anchor");
+
+  const next = screen.getByText("Save voice anchor").closest(".form-actions") as HTMLElement;
+  const gen = within(next).getByText("Generate") as HTMLButtonElement;
+  await waitFor(() => expect(gen.disabled).toBe(false));
+});
+
+test("an empty generated anchor is a failure, not a draft (#59)", async () => {
+  // Installing "" would arm the destructive save with a blank the user never
+  // wrote — one click would then delete the anchor generation failed to replace.
+  (api.getCharacterVoiceAnchor as any).mockResolvedValue({ voice_anchor: "Clipped." });
+  (api.generateCharacterVoiceAnchor as any).mockResolvedValue({ voice_anchor: "   " });
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await openEditForm();
+  const box = await screen.findByLabelText("Voice anchor");
+  await waitFor(() => expect((box as HTMLTextAreaElement).value).toBe("Clipped."));
+  const actions = screen.getByText("Save voice anchor").closest(".form-actions") as HTMLElement;
+  fireEvent.click(within(actions).getByText("Generate"));
+  await screen.findByText(/returned an empty voice anchor/);
+  expect((screen.getByLabelText("Voice anchor") as HTMLTextAreaElement).value).toBe("Clipped.");
+});
+
+test("a campaign-local character gets the anchor controls too (#59)", async () => {
+  // An NPC accepted from an absorb `new_character` proposal exists only
+  // campaign-side, so world-only controls would leave it unable to ever have an
+  // anchor — and absorb would skip its voice check forever.
+  (api.getCharacterVoiceAnchor as any).mockResolvedValue({ voice_anchor: "Clipped." });
+  (api.setCharacterVoiceAnchor as any).mockResolvedValue({ ok: true });
+  (api.listAppearances as any).mockResolvedValue([]);
+  render(<CharacterEditor scope={{ kind: "campaign", id: "run" }} wid="w" />);
+  await openEditForm();
+  const box = await screen.findByLabelText("Voice anchor");
+  await waitFor(() => expect((box as HTMLTextAreaElement).value).toBe("Clipped."));
+  expect(api.getCharacterVoiceAnchor).toHaveBeenCalledWith({ kind: "campaign", id: "run" }, "seraphine");
+  fireEvent.change(box, { target: { value: "Campaign-local voice." } });
+  fireEvent.click(screen.getByText("Save voice anchor"));
+  await waitFor(() => expect(api.setCharacterVoiceAnchor).toHaveBeenCalledWith(
+    { kind: "campaign", id: "run" }, "seraphine", "Campaign-local voice."));
 });
