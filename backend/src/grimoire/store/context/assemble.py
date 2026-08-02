@@ -159,12 +159,12 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         "relationship_lines": story._relationship_lines(cid, cast),
         "players": players, "ref_names": ref_names, "refs": refs,
         "story_entries": story._story_entries(cid, depth=full_recap or None, full=bool(full_recap)),
-        # The archive excludes what the recap already shows, and the scene being
-        # played: a scene absorbed earlier still has a chronicle record, and
-        # recalling its summary while its own transcript is in the history would
-        # narrate the present as a past event.
+        # The archive excludes what the recap already shows, and (via `before`)
+        # this scene and any scene after it: a scene absorbed earlier still has
+        # a chronicle record, so without that bound, continuing an old scene
+        # could recall the present -- or the future -- as a past event.
         "archive_entries": archive._archive_entries(
-            cid, recent_text, story._recap_ids(cid, full_recap or None) | {sid}),
+            cid, recent_text, story._recap_ids(cid, full_recap or None), before=sid),
         "plot_lines": plot.render_open(cid, with_id=False),
         "today": world_state._today_data(cid, sid, croot),
         "weather": world_state._weather_data(cid, sid),
@@ -291,14 +291,21 @@ def _packed(a: dict, cid: str, sid: str, opener: bool = False,
     # Only worth the tokeniser calls when there is a budget to charge against.
     reserved = (tokens.count_tokens(a["post_history"])
                 + sum(tokens.count_tokens(t) for t in reserve)) if budget > 0 else 0
+    # `compose` is the real renderer, so the string the packer measures is the
+    # string `_system_text` then produces -- not an estimate of it.
     return pack.pack(_render_sections(a, cid, sid, opener=opener),
-                     [] if opener else a["history"], reserved, budget)
+                     [] if opener else a["history"], reserved, budget,
+                     compose=_compose_system)
+
+
+def _compose_system(texts: list[str]) -> str:
+    """The system message as it will be sent, from section texts."""
+    return prompts.render("scene/system.j2", sections=texts).strip()
 
 
 def _system_text(packed_sections: list[dict]) -> str:
     """Join the sections that survived packing into the system message."""
-    return prompts.render("scene/system.j2",
-                          sections=[s["text"] for s in packed_sections if not s["dropped"]]).strip()
+    return _compose_system([s["text"] for s in packed_sections if not s["dropped"]])
 
 
 def build_messages(cid: str, sid: str, turn: dict | None = None,

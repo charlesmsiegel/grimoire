@@ -394,3 +394,18 @@ test("a trimmed history says how many turns went", async () => {
   renderInspector();
   await screen.findByText("3 trimmed");
 });
+
+test("percentages use the smaller of the budget and the model window", async () => {
+  // A 32k budget left over from a bigger model would otherwise report a full
+  // 8k window as a quarter used — hiding the overflow this panel exists to show.
+  (getModels as any).mockResolvedValue([
+    { id: "m", name: "M", context: 200, prompt: "0", completion: "0" }]);
+  (api.getSceneContext as any).mockResolvedValue({
+    model: "m", total_tokens: 100, dropped_tokens: 0, budget_tokens: 1000,
+    sections: [{ label: "World info", text: "lore text", tokens: 100,
+                 tier: "spotlight", dropped: false, trimmed: 0 }],
+  });
+  renderInspector();
+  await screen.findByText("50%");              // 100 of the model's 200, not of 1000
+  await screen.findByText(/100 \/ 200 tok/);
+});
