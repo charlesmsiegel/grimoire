@@ -288,11 +288,6 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
     return out
 
 
-class _DossierTargetGone(Exception):
-    """A dossier edit whose character disappeared between staging and saving.
-    Distinguished from an I/O failure so the reviewer is told which happened."""
-
-
 def _new_character_provenance(after: str, payload: dict) -> str:
     lines = []
     evidence = (payload.get("evidence", "") or "").strip()
