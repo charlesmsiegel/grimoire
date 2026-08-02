@@ -851,6 +851,10 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     if (again && again.sid === oldId) rerollToRetryRef.current = { ...again, sid: newId };
   }
 
+  // Reports rather than throws. `EditableRow` calls this from an event handler
+  // and drops the promise, so anything escaping here is an unhandled rejection
+  // the player never sees — and one half of it (a relist that fails after the
+  // rename landed) is not even a failed rename.
   async function renameScene(id: string, title: string) {
     markRenaming(true);
     try {
@@ -859,6 +863,11 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       adoptSceneId(id, newId);
       try {
         setScenes(await api.listScenes(cid));
+      } catch (err: any) {
+        // The rename LANDED; only the rail is stale. Not retryable — the
+        // banner's Retry generates, and there is nothing here to generate.
+        setError({ text: `Renamed, but the scene list could not be refreshed: `
+                         + (err?.detail ?? String(err)), retryable: false });
       } finally {
         // Re-read the transcript, not only the ids that point at it. A swap in
         // flight against the OLD id finds `activeIdRef` already moved on and
@@ -878,6 +887,8 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
         // turn state of the one they left.
         if (stillReading) await selectScene(newId, undefined, true);
       }
+    } catch (err: any) {
+      fail(err, false);   // the rename itself; generating is not its recovery
     } finally {
       markRenaming(false);
     }
@@ -891,6 +902,9 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     if (initiator) adoptSceneId(initiator, id);
     try {
       setScenes(await api.listScenes(cid));
+    } catch (err: any) {
+      setError({ text: `Renamed, but the scene list could not be refreshed: `
+                       + (err?.detail ?? String(err)), retryable: false });
     } finally {
       // Only pull the renamed scene onto the screen if it is still the one being
       // read. A slow first-date request can land after the reader has moved to
