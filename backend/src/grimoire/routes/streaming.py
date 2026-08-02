@@ -363,8 +363,19 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
             # make room for itself is the opposite: nothing else holds it, so a
             # reroll stopped before its first token has to put it back or the
             # player loses a reply they never asked to lose (#95).
-            if not watcher.narration.strip() and restore_removed is not None:
+            #
+            # Restoring means rolling the whole turn back, `finalize` included:
+            # a reply can be produced with no narration at all — an opener the
+            # model leads with makes `narration` empty while the fence closes
+            # (or, cut short here, truncates) — and finalizing that would mint a
+            # proposal from context the restored reply was absent from. Review
+            # caught the version that did both: accepting the roll would append
+            # its continuation after an answer it never saw. So the two are
+            # exclusive, and this is the side to take, because the reply is the
+            # half nothing else holds; the proposal is one more reroll away.
+            if restore_removed is not None and not watcher.narration.strip():
                 restore_removed()
+                return []
             return finalize(watcher)
 
     return _fence_stream(cid, sid, messages, conn, client, finalize, on_error, on_abort)

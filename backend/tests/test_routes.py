@@ -1773,6 +1773,37 @@ async def test_a_cancelled_reroll_puts_the_old_reply_back(monkeypatch, tmp_path)
         "and then?", "The tide turns."]
 
 
+async def test_a_cancelled_reroll_restores_instead_of_minting_a_proposal(monkeypatch, tmp_path):
+    """A reply can be all roll fence and no narration, so "produced nothing the
+    player can see" and "produced a proposal" overlap. Doing both would file a
+    roll request under context the restored reply was absent from: accepting it
+    appends the continuation after an answer it never saw. The restore wins —
+    the reply is the half nothing else holds."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    importlib.reload(store)
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Run", wid)
+    sid = store.scenes.create_scene(cid, "Saltmarch")
+    store.scenes.append_message(cid, sid, "user", "and then?")
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "The tide turns."}])
+    removed = store.scenes.remove_trailing_assistant_run(cid, sid)   # as regenerate does
+
+    # The fence opens on the first delta and never closes; the empty one behind
+    # it parks the generator on a heartbeat *after* the opener, which is where
+    # a cancel has an open fence and no narration to weigh against each other.
+    resp = routes.streaming._chat_stream(
+        cid, sid, [{"role": "user", "content": "and then?"}], {"kind": "openrouter", "model": "m"},
+        StallingOpenRouter(['```roll\n{"check": "wits"}\n', ""]),
+        restore_removed=lambda: store.scenes.restore_trailing_assistant_run(cid, sid, removed))
+    frames = resp.body_iterator
+    assert await frames.__anext__() == ": heartbeat\n\n"   # the fence emitted nothing
+    await frames.aclose()
+
+    assert [m["content"] for m in store.scenes.read_scene(cid, sid)["messages"]] == [
+        "and then?", "The tide turns."]
+    assert store.proposals.get(cid, sid) is None   # and no roll against the old reply
+
+
 def test_a_turn_that_fails_part_way_keeps_both_halves(client):
     """A partial reply means the post WAS answered, just not fully — rolling it
     back would delete a question its own answer refers to."""
