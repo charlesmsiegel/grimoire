@@ -68,6 +68,12 @@ def read_scene_window(cid: str, sid: str, limit: int, before: int | None = None)
     `edit_message`/`split_reply` take, so a client that has only page 2 in hand
     addresses a message exactly as one holding the whole transcript does.
 
+    `has_user_message` answers a question no window can answer for itself:
+    whether the transcript contains a player turn ANYWHERE. It is what reroll
+    eligibility turns on — the regenerate route refuses an all-assistant
+    transcript as an opening post — and an offscreen scene is all-assistant no
+    matter how long it grows, so "there are older pages" is not a substitute.
+
     The file is still parsed whole (a scene is one flat markdown script; there
     is no on-disk pagination and the write path rebuilds the full message list
     regardless). What windowing buys is the client's render path, which is
@@ -79,7 +85,8 @@ def read_scene_window(cid: str, sid: str, limit: int, before: int | None = None)
     end = total if before is None else max(0, min(before, total))
     start = max(0, end - max(1, limit))
     return {"meta": scene["meta"], "messages": messages[start:end],
-            "offset": start, "total": total, "has_older": start > 0}
+            "offset": start, "total": total, "has_older": start > 0,
+            "has_user_message": any(m["role"] == "user" for m in messages)}
 
 
 def read_scene_meta(cid: str, sid: str) -> dict:
