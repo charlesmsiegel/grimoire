@@ -1633,6 +1633,36 @@ def test_two_titles_that_slug_alike_in_one_absorb_do_not_merge(monkeypatch, tmp_
     assert [e["payload"]["title"] for e in edits] == ["Долг", "Промолчать"]
 
 
+def test_an_explicit_id_reserves_itself_against_a_later_new_title(monkeypatch, tmp_path):
+    """An explicit id naming a commitment that does not exist YET is in neither
+    the store nor the staged map, so the allocator handed the same id to a later
+    new row whose title slugs to it — and the one-edit-per-commitment dedup then
+    dropped that row outright, before the reviewer ever saw it."""
+    from grimoire.store import scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    edits = absorb.materialize(cid, sid, {"commitment_movements": [
+        {"id": "the-debt", "title": "A debt of blood", "kind": "promise", "status": "open",
+         "beat": "Sworn on the stair."},
+        {"id": "", "title": "The debt", "kind": "threat", "status": "open",
+         "beat": "A different promise entirely."}]})
+    assert [e["id"] for e in edits] == ["commitment:the-debt", "commitment:the-debt-2"]
+    assert [e["payload"]["title"] for e in edits] == ["A debt of blood", "The debt"]
+
+
+def test_an_explicit_id_and_a_matching_title_are_still_one_edit(monkeypatch, tmp_path):
+    """The reservation must not break the dedup it sits beside: the same title,
+    once by id and once without, is one commitment moving once."""
+    from grimoire.store import scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    edits = absorb.materialize(cid, sid, {"commitment_movements": [
+        {"id": "the-debt", "title": "The debt", "kind": "promise", "status": "open",
+         "beat": "One."},
+        {"id": "", "title": "the debt", "kind": "", "status": "", "beat": "Two."}]})
+    assert [e["id"] for e in edits] == ["commitment:the-debt"]
+
+
 def test_one_commitment_named_twice_in_a_batch_is_still_one_edit(monkeypatch, tmp_path):
     """And the dedup this must not break: the SAME title twice is one commitment
     moving twice in one scene, which stays a single staged row."""
