@@ -45,7 +45,7 @@ from .archive import _archive_entries, archive_depth  # noqa: F401
 # `context.pack.LOCK_IN` an AttributeError.
 from .pack import (  # noqa: F401
     ARCHIVE, BACKGROUND, DROP_ORDER, HISTORY, HISTORY_FLOOR, LOCK_IN,
-    SPOTLIGHT, budget_tokens,
+    MESSAGE_OVERHEAD, SEPARATOR, SPOTLIGHT, budget_tokens, message_cost,
 )
 from .mechanics import (  # noqa: F401
     _mechanics, _rule_keys_match, _sheet_summary_lines, _sheet_type_label,
