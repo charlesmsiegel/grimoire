@@ -647,7 +647,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   async function runStream(
     id: string,
     start: (onEvent: (e: ChatEvent) => void, signal: AbortSignal) => Promise<void>,
-    onPostReturned?: () => void,
+    onPromptUnstored?: () => void,
   ) {
     const controller = new AbortController();
     abortRef.current = controller;
@@ -662,6 +662,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     // to count as a landed turn while the reply was still in the flush.
     let finished = false;
     let errored = false;
+    let unreached = false;  // the request never reached the server
     try {
       await start((e) => {
         if (e.delta) {
@@ -674,7 +675,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
           // the player their words back. Otherwise a failed send destroys what
           // they typed and Retry cannot help — it calls /retry, which has no
           // prompt of its own and 400s on a scene with nothing else in it (#95).
-          if (e.error.post_returned) onPostReturned?.();
+          if (e.error.post_returned) onPromptUnstored?.();
         } else if (e.proposal) {
           // Live from the stream, so it outranks any read still in flight.
           setProposalNow({ id: e.proposal.id, status: "pending", payload: e.proposal, resolution: null });
@@ -689,6 +690,13 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       // written — `finished` below is what keeps that from being refunded as a
       // cancellation and spending its response override twice (#95).
       if (!isAbortError(err)) setError(err.detail ?? String(err));
+      // Nothing reached the server, so nothing was stored — the same position
+      // the player is in after a rollback, and the same remedy. Review caught
+      // that Stop pressed during connection setup, or a server that is simply
+      // down, lost the prompt exactly as the rollback did: the composer was
+      // cleared, and the refresh below finds no post to restore it from. The
+      // response is the line, because `post_chat` appends before returning one.
+      if (err?.beforeResponse) { unreached = true; onPromptUnstored?.(); }
     } finally {
       abortRef.current = null;
       setStreaming("");
@@ -720,7 +728,9 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       // withholds anything that might yet become one, so a reply that opens with
       // a fence streams nothing at all while the server still persists a
       // proposal — invisible until some later refresh under the old gate.
-      if (!finished && !errored) await awaitFlushedPartial(id, seen);
+      // Nothing to wait for when the request never arrived: there is no turn
+      // on the server to have produced a partial.
+      if (!finished && !errored && !unreached) await awaitFlushedPartial(id, seen);
     }
     // Landed means the backend said so, not that the promise resolved.
     return finished && !errored;
@@ -759,17 +769,20 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       return;
     }
     setMessages((m) => [...m, { role: "user", content }]);
-    let returned = false;
+    // The prompt is not in the transcript — either the backend took it back, or
+    // the request never got there — so this text now exists nowhere: the
+    // composer was cleared on send and the refresh dropped the optimistic copy.
+    // Put it back rather than lose what the player wrote, but never over
+    // something they have started typing since.
+    //
+    // From the callback rather than after the await: `runStream` does not
+    // return until its flush poll has finished, and the player should not have
+    // to wait that out to get their own words back.
     const landed = await runStream(id, (onEvent, signal) => pendingResponse
       ? api.chat(cid, id!, content, onEvent, pendingResponse, signal)
       : api.chat(cid, id!, content, onEvent, undefined, signal),
-      () => { returned = true; });
+      () => setInput((cur) => cur || content));
     if (landed) setPendingResponse(null);
-    // The turn failed and the backend took the post back, so this text now
-    // exists nowhere: the composer was cleared on send and the refresh dropped
-    // the optimistic copy. Put it back rather than lose what the player wrote —
-    // but never over something they have started typing since.
-    if (returned) setInput((cur) => cur || content);
   }
 
   async function saveEdit() {

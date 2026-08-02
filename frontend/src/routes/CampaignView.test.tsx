@@ -818,6 +818,38 @@ test("a failed send that was rolled back gives the player their words back", asy
   await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("I draw my blade."));
 });
 
+test("a Stop before the request lands gives the prompt back too", async () => {
+  // The abort beats the request to the server, so there is no post to roll back
+  // and no error frame to carry `post_returned` — but the player is in exactly
+  // the same position, with the composer cleared and nothing durable anywhere.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.chat as any).mockImplementation(async () => {
+    const err: Error & { beforeResponse?: boolean } = new Error("The operation was aborted.");
+    err.name = "AbortError";
+    err.beforeResponse = true;   // set by streamPost when fetch never resolved
+    throw err;
+  });
+  renderCampaign();
+  const ta = await screen.findByRole("textbox");
+  fireEvent.change(ta, { target: { value: "I draw my blade." } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("I draw my blade."));
+});
+
+test("a cancel after the request landed leaves the composer alone", async () => {
+  // The post is durably stored by then — a cancel keeps it — so restoring would
+  // have the player send the same line twice.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.chat as any).mockImplementation(hangingChat(["The tide "]));
+  renderCampaign();
+  const ta = await screen.findByRole("textbox");
+  fireEvent.change(ta, { target: { value: "I draw my blade." } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
+  await screen.findByRole("button", { name: /continue ▶/i });
+  expect(screen.getByRole("textbox")).toHaveValue("");
+});
+
 test("a failure the backend did not roll back leaves the composer alone", async () => {
   // The post is still in the transcript, so restoring it would have the player
   // send the same line twice. Only the backend knows which happened.
