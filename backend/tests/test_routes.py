@@ -2790,6 +2790,32 @@ def test_a_departed_speaker_sharing_the_label_still_disqualifies(client):
     assert [f["id"] for f in body["voice"]["failed"]] == ["aese"]
 
 
+def test_a_card_with_no_name_is_not_judged_against_its_slug(client):
+    """`_actor_name` substitutes the actor id for a card carrying no usable
+    name. That id is a display convenience, not something the transcript is
+    known to label anyone with, so judging against it is judging against a name
+    nobody agreed on."""
+    for bad in ({}, {"name": ""}, {"name": 0}):
+        cid, sid = _voice_scene(client)
+        aroot = store.appearances.locked_actor_root(cid)
+        card = store.characters.read_card(aroot, "aese", "main")
+        card["data"] = {**card["data"], **bad} if bad else {}
+        if bad == {}:
+            card["data"].pop("name", None)
+        store.characters.update_version(aroot, "aese", "main", card)
+        # the display fallback is the slug, which used to be accepted
+        assert [a["name"] for a in store.appearances.scene_cast(cid, sid)
+                if a["id"] == "aese"] == ["aese"]
+
+        fake = FakeOpenRouterComplete([_EXTRACTION, _DOSSIER])
+        client.app.dependency_overrides[routes.get_llm] = lambda: fake
+        r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
+
+        assert r.status_code == 200
+        assert fake.calls == 2                    # extraction + dossier, no voice call
+        assert [f["id"] for f in r.json()["voice"]["failed"]] == ["aese"]
+
+
 def test_a_name_the_transcript_cannot_carry_fails_that_actor(client):
     """`scenes.serialize._label` silently writes the generic role label for a
     name it cannot form a marker from, so those lines land in the transcript as
@@ -2809,7 +2835,7 @@ def test_a_name_the_transcript_cannot_carry_fails_that_actor(client):
         assert r.status_code == 200
         assert fake.calls == 2                    # extraction + dossier, no voice call
         assert [f["id"] for f in r.json()["voice"]["failed"]] == ["aese"]
-        assert "cannot appear as a transcript label" in r.json()["voice"]["failed"][0]["reason"]
+        assert "can appear as a transcript" in r.json()["voice"]["failed"][0]["reason"]
 
 
 def test_an_unusable_card_name_fails_that_actor_not_the_absorb(client):
@@ -2831,7 +2857,7 @@ def test_an_unusable_card_name_fails_that_actor_not_the_absorb(client):
     assert fake.calls == 2                            # extraction + dossier, no voice call
     assert r.json()["voice"]["status"] == "failed"
     assert [f["id"] for f in r.json()["voice"]["failed"]] == ["aese"]
-    assert "cannot appear as a transcript label" in r.json()["voice"]["failed"][0]["reason"]
+    assert "can appear as a transcript" in r.json()["voice"]["failed"][0]["reason"]
 
 
 def test_a_unique_name_is_still_judged_alongside_a_clashing_pair(client):

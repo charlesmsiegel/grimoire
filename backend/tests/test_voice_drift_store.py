@@ -296,3 +296,20 @@ def test_a_flag_digested_under_the_old_formula_still_matches():
     # a fingerprint of a genuinely different anchor still does not match
     assert not voice_drift.fingerprint_matches(
         voice_drift.anchor_fingerprint("Warm and rambling.", nonce), anchor, nonce)
+
+
+def test_a_concurrently_cleared_flag_reads_as_absent(monkeypatch, tmp_path):
+    """Same race as voice_anchors.read_record, same hot path: a clear committed
+    by another request unlinks the file out from under this read."""
+    voice_drift.write(tmp_path, "winifred", "She hedged.")
+    assert voice_drift.read(tmp_path, "winifred") == "She hedged."   # positive control
+
+    target = voice_drift.flag_path(tmp_path, "winifred")
+    real = type(target).read_text
+    def vanished(self, *a, **kw):
+        if self == target:
+            raise FileNotFoundError(2, "No such file or directory", str(self))
+        return real(self, *a, **kw)
+    monkeypatch.setattr(type(target), "read_text", vanished)
+
+    assert voice_drift.read_record(tmp_path, "winifred") == {"note": "", "anchor": ""}

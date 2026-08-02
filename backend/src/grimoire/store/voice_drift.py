@@ -75,9 +75,14 @@ def _read_file(croot: Path, char_id: str) -> tuple[dict, str]:
         p = flag_path(croot, char_id)
     except BadDriftId:
         return {}, ""          # nothing can live there: read like a missing file
-    if not p.exists():
+    try:
+        raw = p.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        # Same race as voice_anchors.read_record, same hot path: a clear
+        # committed by another request unlinks this file, and an exists-then-read
+        # pair straddling that raises rather than reading it as resolved.
         return {}, ""
-    meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
+    meta, body = parse_frontmatter(raw)
     return meta, body.strip()
 
 

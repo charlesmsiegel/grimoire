@@ -579,6 +579,18 @@ async def _stage_voice_drift(cid: str, sid: str, transcript: str, client: LLMCli
             # Checked HERE, inside the per-actor boundary: everything below
             # treats the name as text, and one bad card must cost that actor its
             # voice check rather than 500 the whole absorb.
+            # The RAW card name, not `a["name"]`: `_actor_name` substitutes the
+            # actor id for a card that carries no usable one, and that id is a
+            # display convenience, not something the transcript is known to
+            # label anyone with. Judging against it means judging against a
+            # name nobody agreed on.
+            try:
+                vid = store.appearances.locked_version(cid, "characters", a["id"])
+                data = store.characters.read_card(croot, a["id"], vid).get("data")
+            except Exception as exc:  # noqa: BLE001 -- unreadable card: skip this actor
+                out["failed"].append({"id": a["id"], "reason": f"{type(exc).__name__}: {exc}"})
+                continue
+            name = data.get("name") if isinstance(data, dict) else None
             # `label_preserved`, not merely "is a nonblank string": the
             # serializer silently writes the generic role label instead of a
             # name it cannot form a marker from (one holding `*` or a newline,
@@ -586,12 +598,11 @@ async def _stage_voice_drift(cid: str, sid: str, transcript: str, client: LLMCli
             # "Grimoire", so pointing the judge at the card name hunts for a
             # speaker that cannot appear -- and risks charging generic
             # assistant prose to this character instead.
-            name = a.get("name")
             if not isinstance(name, str) or not store.scenes.label_preserved(name):
                 out["failed"].append({
                     "id": a["id"],
-                    "reason": "the locked card's name cannot appear as a transcript label, "
-                              "so the judge cannot be pointed at this character's lines"})
+                    "reason": "the locked card has no name that can appear as a transcript "
+                              "label, so the judge cannot be pointed at its lines"})
                 continue
             # Report the clash instead of judging through it -- naming it is
             # actionable (rename a card), whereas judging is a coin flip
