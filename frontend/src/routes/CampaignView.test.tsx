@@ -785,6 +785,87 @@ test("a failed save keeps the review open and shows the error", async () => {
   expect(screen.getByLabelText("Scene summary")).toBeTruthy();  // review survives to retry
 });
 
+// The default absorb mock stages one lore edit, so these drive #111's whole
+// review loop: a save refused because the target moved, then keep / replace /
+// merge on the row that moved.
+const LORE_REVIEW = {
+  one_line: "They met.", summary: "A met B.", keywords: [], timeline_events: [],
+  cast: [], location: "", date: "",
+  mechanics: { status: "ok", reason: null, warnings: [], dropped: [] },
+  commit_token: "tok",
+  dossiers: { status: "skipped", reason: null, proposed: [], failed: [], skipped: [] },
+  phases: PHASES_NONE_CUT,
+  edits: [{ id: "lore:the-pact", kind: "lore", target: { kind: "lore", id: "the-pact" },
+    label: "The Pact — lore", field: "body", authored: false,
+    before: "Signed at dusk.", after: "Signed at dusk.\n\nBroken by morning." }],
+};
+const PACT_CONFLICT = {
+  id: "lore:the-pact", label: "The Pact — lore", kind: "lore", field: "body",
+  before: "Signed at dusk.", after: "Signed at dusk.\n\nBroken by morning.",
+  stored: "Witnessed by the watch.",
+  reason: "this entry changed since the scene was absorbed",
+  mergeable: true, merged: "Witnessed by the watch.\n\nBroken by morning.",
+};
+
+/** Absorb the scene, hit Save, and have the server refuse the batch. */
+async function reviewIntoConflict() {
+  const { ApiError } = await vi.importActual<typeof import("../api/client")>("../api/client");
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  (api.absorbScene as any).mockResolvedValue(LORE_REVIEW);
+  (api.saveChronicle as any).mockRejectedValueOnce(new ApiError(
+    409, "some proposed changes no longer match what is stored", "edit_conflicts",
+    { conflicts: [PACT_CONFLICT] }));
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /Save summary/ }));
+  await screen.findByText(/no longer match/);
+}
+
+test("a refused save keeps the review open and shows what the record now says", async () => {
+  await reviewIntoConflict();
+  expect(screen.getByText("Witnessed by the watch.")).toBeTruthy();
+  expect(screen.getByText(/this entry changed since the scene was absorbed/)).toBeTruthy();
+  // The review survives untouched -- nothing was written, so it is savable again.
+  expect(screen.getByLabelText("Scene summary")).toBeTruthy();
+  expect(screen.getByRole("button", { name: /Keep stored The Pact/ })).toBeTruthy();
+  expect(screen.getByRole("button", { name: /Replace stored The Pact/ })).toBeTruthy();
+  expect(screen.getByRole("button", { name: /Merge stored The Pact/ })).toBeTruthy();
+});
+
+test("Replace authorizes the staged text and the next save carries it", async () => {
+  await reviewIntoConflict();
+  fireEvent.click(screen.getByRole("button", { name: /Replace stored The Pact/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  await waitFor(() => expect(api.saveChronicle).toHaveBeenCalledTimes(2));
+  expect((api.saveChronicle as any).mock.calls[1][2].edits).toEqual([
+    expect.objectContaining({ id: "lore:the-pact", resolve: "replace",
+                              after: "Signed at dusk.\n\nBroken by morning." })]);
+});
+
+test("Merge prefills the editable text with the server's draft", async () => {
+  await reviewIntoConflict();
+  fireEvent.click(screen.getByRole("button", { name: /Merge stored The Pact/ }));
+  expect(screen.getByLabelText("After The Pact — lore")).toHaveValue(
+    "Witnessed by the watch.\n\nBroken by morning.");
+  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  await waitFor(() => expect(api.saveChronicle).toHaveBeenCalledTimes(2));
+  expect((api.saveChronicle as any).mock.calls[1][2].edits).toEqual([
+    expect.objectContaining({ id: "lore:the-pact", resolve: "merge",
+                              after: "Witnessed by the watch.\n\nBroken by morning." })]);
+});
+
+test("Keep stored drops the row from the batch entirely", async () => {
+  await reviewIntoConflict();
+  fireEvent.click(screen.getByRole("button", { name: /Keep stored The Pact/ }));
+  expect(screen.queryByText("Witnessed by the watch.")).toBeNull();       // answered
+  expect(screen.queryByText(/no longer match/)).toBeNull();               // and counted as such
+  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  await waitFor(() => expect(api.saveChronicle).toHaveBeenCalledTimes(2));
+  expect((api.saveChronicle as any).mock.calls[1][2].edits).toEqual([]);
+});
+
 test("a staged dossier is editable and sent with the save", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });

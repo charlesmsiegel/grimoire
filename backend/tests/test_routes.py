@@ -3386,6 +3386,81 @@ def test_put_chronicle_reports_edit_failures(client):
         {"id": edits[0]["id"], "kind": "conflict", "reason": body2["failures"][0]["reason"]}]
 
 
+def _drifted_lore_save(client, cid, **extra):
+    """A chronicle save whose lore edit was staged against a body that has since
+    moved — the #111 case: staging happens at POST /absorb, applying at PUT
+    /chronicle, and the record can change in between."""
+    croot = store.campaigns.campaign_root(cid)
+    store.entities.create_entity(croot, "lore", "The Pact", body="Signed at dusk.")
+    store.entities.update_entity(croot, "lore", "the-pact", body="Witnessed by the watch.")
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    edit = {"id": "lore:the-pact", "kind": "lore",
+            "target": {"kind": "lore", "id": "the-pact"}, "label": "The Pact — lore",
+            "field": "body", "before": "Signed at dusk.",
+            "after": "Signed at dusk.\n\nBroken by morning.", "authored": False, **extra}
+    return sid, edit
+
+
+def test_put_chronicle_refuses_a_batch_that_contradicts_the_store(client):
+    _, cid = _campaign(client)
+    sid, edit = _drifted_lore_save(client, cid)
+
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle", json={
+        "one_line": "o", "summary": "s", "keywords": [], "timeline_events": [],
+        "edits": [edit]})
+
+    assert r.status_code == 409
+    body = r.json()
+    assert body["kind"] == "edit_conflicts"
+    row = body["conflicts"][0]
+    assert row["id"] == "lore:the-pact" and row["stored"] == "Witnessed by the watch."
+    assert row["mergeable"] is True
+    assert row["merged"] == "Witnessed by the watch.\n\nBroken by morning."
+    # Refused BEFORE the first write, so the review is still savable as-is.
+    croot = store.campaigns.campaign_root(cid)
+    assert store.entities.read_entity(croot, "lore", "the-pact")["body"].strip() == (
+        "Witnessed by the watch.")
+    assert store.chronicle.read_chronicle(cid) == {}
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["meta"].get("done") in (None, "")
+
+
+def test_put_chronicle_saves_once_the_reviewer_resolves_the_conflict(client):
+    _, cid = _campaign(client)
+    sid, edit = _drifted_lore_save(
+        client, cid, resolve="merge", after="Witnessed by the watch.\n\nBroken by morning.")
+
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle", json={
+        "one_line": "o", "summary": "s", "keywords": [], "timeline_events": [],
+        "edits": [edit]})
+
+    assert r.status_code == 200 and r.json()["applied"] == ["lore:the-pact"]
+    croot = store.campaigns.campaign_root(cid)
+    assert store.entities.read_entity(croot, "lore", "the-pact")["body"].strip() == (
+        "Witnessed by the watch.\n\nBroken by morning.")
+
+
+def test_replaying_a_committed_save_is_not_mistaken_for_a_contradiction(client):
+    """The commit-token replay branch has to win: the records a save wrote now
+    differ from every `before` it carried, so a conflict check running first
+    would 409 the retry the token exists to make safe."""
+    _, cid = _campaign(client)
+    croot = store.campaigns.campaign_root(cid)
+    store.entities.create_entity(croot, "lore", "The Pact", body="Signed at dusk.")
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    save = {"one_line": "o", "summary": "s", "keywords": [], "timeline_events": [],
+            "commit_token": "tok-111",
+            "edits": [{"id": "lore:the-pact", "kind": "lore",
+                       "target": {"kind": "lore", "id": "the-pact"}, "label": "The Pact — lore",
+                       "field": "body", "before": "Signed at dusk.",
+                       "after": "Signed at dusk.\n\nBroken by morning.", "authored": False}]}
+
+    first = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle", json=save)
+    replay = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle", json=save)
+
+    assert first.status_code == 200 and first.json()["applied"] == ["lore:the-pact"]
+    assert replay.status_code == 200 and replay.json() == first.json()
+
+
 def _apply_lore_change(client, cid):
     croot = store.campaigns.campaign_root(cid)
     store.entities.create_entity(croot, "lore", "Pact", body="old body")

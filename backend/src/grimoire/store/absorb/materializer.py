@@ -13,7 +13,7 @@ from .. import (characters, entities, groupstate, overlay, pcs, playstate,
 from ..appearances import paths as appearances_paths, versions as appearances_versions
 from ..campaigns import paths as campaigns_paths
 from ..paths import slugify
-from . import parse, weather
+from . import conflicts, parse, weather
 
 _CARD_FIELDS = ("description", "personality", "scenario")
 
@@ -214,9 +214,10 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
         seen_pids.add(pid)
         cur = threads.get(pid)
         if isinstance(cur, dict):  # existing thread (by id, or a new title that collides)
-            beats = cur.get("beats") or []
-            before = (f"{cur.get('status', 'open')} — {beats[-1]['text']}"
-                      if beats else cur.get("status", "open"))
+            # Rendered by `conflicts`, not here: the staleness check recomputes
+            # this same line at save time, and two copies of the format would
+            # let a harmless reformat read as a contradiction (#111).
+            before = conflicts.plot_line(cur)
             disp_title = cur.get("title") or title or pid  # keep the stored title
         else:
             before, disp_title = "", title or pid
