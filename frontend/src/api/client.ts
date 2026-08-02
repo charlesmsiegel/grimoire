@@ -30,8 +30,18 @@ async function requestRaw<T>(method: string, path: string, body?: unknown): Prom
 // The map only holds in-flight promises, so nothing is ever served stale.
 const inflightGets = new Map<string, Promise<unknown>>();
 
-function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  if (method !== "GET") return requestRaw<T>(method, path, body);
+// `fresh` opts out of the sharing above, for the rare caller whose whole reason
+// for asking is that it needs a read issued *now*. Sharing is normally free
+// because the answer cannot be stale — the map only holds in-flight promises —
+// but that reasoning assumes the caller does not care when the read happened.
+// A read verifying that a write has landed does care: handed a promise started
+// before that write, it gets a pre-write answer and concludes the write never
+// happened (#95, `CampaignView.settleProposal`). It deliberately neither reads
+// nor writes the map, so it cannot be served the shared promise and cannot
+// retire it out from under the callers already waiting on it.
+function request<T>(method: string, path: string, body?: unknown,
+                    opts?: { fresh?: boolean }): Promise<T> {
+  if (method !== "GET" || opts?.fresh) return requestRaw<T>(method, path, body);
   const pending = inflightGets.get(path);
   if (pending) return pending as Promise<T>;
   const p = requestRaw<T>(method, path, body).finally(() => inflightGets.delete(path));
@@ -706,8 +716,12 @@ export const api = {
       "POST", `/api/campaigns/${cid}/scenes/${sid}/roll`,
       { notation, ...(label ? { label } : {}) }),
   listRolls: (cid: string) => request<RollEntry[]>("GET", `/api/campaigns/${cid}/rolls`),
-  getRollProposal: (cid: string, sid: string) =>
-    request<{ record: ProposalRecord | null }>("GET", `/api/campaigns/${cid}/scenes/${sid}/roll-proposal`),
+  // `fresh` for the post-cancel settling read only: it is checking whether the
+  // abort flush wrote a proposal, so a shared in-flight GET started before that
+  // write would answer for the wrong moment.
+  getRollProposal: (cid: string, sid: string, fresh = false) =>
+    request<{ record: ProposalRecord | null }>(
+      "GET", `/api/campaigns/${cid}/scenes/${sid}/roll-proposal`, undefined, { fresh }),
   resolveProposal: (cid: string, sid: string,
                     body: { proposal: string; action: "accept" | "decline";
                             check?: string; actor?: string;
