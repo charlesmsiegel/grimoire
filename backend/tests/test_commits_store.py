@@ -265,6 +265,23 @@ def test_repointing_never_lowers_an_epoch(monkeypatch, tmp_path):
     assert commits.scene_epoch(cid, "001--landing") == 3
 
 
+def test_a_rename_onto_a_retired_id_keeps_the_tombstone_epoch(monkeypatch, tmp_path):
+    """Deleting a scene leaves its id fenced by a raised epoch, and a scene
+    renamed onto that freed id inherits the fence. Deliberate, and the right way
+    round: the dead scene's leftover entries match a scene by id and nothing
+    else, so taking the arriving scene's lower epoch would let one of them resume
+    into it. The review open across the rename is refused and re-absorbed, which
+    is recoverable; that write would not be."""
+    cid = _campaign(monkeypatch, tmp_path)
+    commits.reserve(cid, "wedged", "fp", "001--landing", {"timeline": "pending"})
+    commits.retire_scene(cid, "001--landing")           # the scene is deleted
+    commits.reserve(cid, "open", "fp", "002--saltmarch", {})   # a review on another
+    scene_refs.repoint(cid, {"002--saltmarch": "001--landing"})
+    assert commits.scene_epoch(cid, "001--landing") == 2
+    assert commits.lookup(cid, "wedged")["claimed"] == 1   # the dead scene stays fenced
+    assert commits.lookup(cid, "open")["claimed"] == 1     # at the arrival's expense
+
+
 def test_a_legacy_token_named_like_the_new_schema_is_still_found(monkeypatch, tmp_path):
     """A token is a caller-chosen string, so a pre-#271 ledger can hold one keyed
     literally `tokens`. Reading that entry as the nested map would hide every

@@ -716,3 +716,61 @@ def test_a_resume_keeps_the_verdicts_the_first_attempt_computed(monkeypatch, tmp
     # would call that a conflict. The kept verdict applies it.
     assert applied == ["lore:the-pact", "lore:the-pact"]
     assert [(f["id"], f["kind"]) for f in failures] == [("lore:the-ledger", "error")]
+
+
+def test_a_resume_rejudges_a_row_an_outside_write_moved(monkeypatch, tmp_path):
+    """The other half of keeping the first attempt's verdicts: they speak for
+    this commit's own writes and for nothing else.
+
+    A direct entity route, or another device writing into the same synced store,
+    can move a target the commit has not reached yet. Replaying "no conflict"
+    over that is the silent lost update this module exists to stop -- and a
+    fresh save would have caught it, so a resume must not be the weaker path.
+    """
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "lore", "The Pact", body="Signed at dusk.")
+    entities.create_entity(croot, "lore", "The Ledger", body="Kept dry.")
+    entities.create_entity(croot, "lore", "The Charter", body="Sealed in wax.")
+    ledger = {"id": "lore:the-ledger", "kind": "lore", "field": "body",
+              "target": {"kind": "lore", "id": "the-ledger"},
+              "before": "Kept dry.", "after": "Kept dry.\n\nSoaked."}
+    charter = {"id": "lore:the-charter", "kind": "lore", "field": "body",
+               "target": {"kind": "lore", "id": "the-charter"},
+               "before": "Sealed in wax.", "after": "Sealed in wax.\n\nAnd countersigned."}
+    edits = [_lore_edit("Signed at dusk.", "Signed at dusk.\n\nBroken by morning."),
+             ledger,
+             charter]
+
+    live: dict = {}
+    persisted: list[dict] = []
+    real_update = overlay.update_entity
+
+    def crash_on_the_ledger(cid_, kind, eid, **kw):
+        if eid == "the-ledger":
+            raise KeyboardInterrupt("killed mid-write")
+        return real_update(cid_, kind, eid, **kw)
+
+    monkeypatch.setattr(overlay, "update_entity", crash_on_the_ledger)
+    try:
+        absorb.apply_edits(cid, edits, progress=live,
+                           checkpoint=lambda: persisted.append(copy.deepcopy(live)))
+    except KeyboardInterrupt:
+        pass
+    monkeypatch.setattr(overlay, "update_entity", real_update)
+
+    journal = persisted[-1]
+    assert journal["verdicts"][2] is None                  # nothing had moved yet
+    assert journal["readings"][2] == "Sealed in wax."      # and this is what it read
+    assert "2" not in journal["edits"]                     # never judged, never run
+
+    # somebody else edits the charter while the commit is down
+    overlay.update_entity(cid, "lore", "the-charter", body="Sealed in wax.\n\nThen burnt.")
+
+    applied, failures = absorb.apply_edits(cid, edits, progress=journal)
+    assert applied == ["lore:the-pact"]
+    assert [(f["id"], f["kind"]) for f in failures] == [("lore:the-ledger", "error"),
+                                                        ("lore:the-charter", "conflict")]
+    # and the outside write still stands
+    assert overlay.read_entity(cid, "lore", "the-charter")["body"].strip() == (
+        "Sealed in wax.\n\nThen burnt.")
