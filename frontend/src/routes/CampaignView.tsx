@@ -672,23 +672,52 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
         ? { ...r, payload: { ...r.payload, scene: newId } } : r)));
   }
 
+  // A scene's id is its filename, so a rename mints a new one and every piece
+  // of client state keyed by the old id has to follow it here — in ONE place.
+  //
+  // This used to be a list spelled out at each rename site, and review found
+  // two things missing from it, one of them holding the only copy of text the
+  // player had written: a recovered prompt parked under the old id is looked up
+  // under the new one, found missing, and lost for good when the view unmounts.
+  // The other sent Retry down the `/retry` path after a failed reroll, dropping
+  // the player's guidance and continuing from the reply they asked to replace.
+  //
+  // So a sixth piece of id-keyed state is a missing line in this function
+  // rather than a sixth rediscovery of the rule. `streamingId` is deliberately
+  // absent: renaming the scene a turn is writing to is blocked outright
+  // (`sceneLocked`), so it cannot go stale this way, and re-pointing it here
+  // would quietly legitimise the rename the lock exists to prevent.
+  function adoptSceneId(oldId: string, newId: string) {
+    if (oldId === newId) return;
+    if (activeId === oldId) setActiveId(newId);
+    setSeedPrompt((p) => (p && p.sid === oldId ? { ...p, sid: newId } : p));
+    reviewSceneRenamed(oldId, newId);
+    const parked = parkedPrompts.current.get(oldId);
+    if (parked !== undefined) {
+      parkedPrompts.current.delete(oldId);
+      parkedPrompts.current.set(newId, parked);
+      setParkedTick((n) => n + 1);   // it may now be the scene on screen
+    }
+    const again = rerollToRetryRef.current;
+    if (again && again.sid === oldId) rerollToRetryRef.current = { ...again, sid: newId };
+  }
+
   async function renameScene(id: string, title: string) {
     markRenaming(true);
     try {
       const { id: newId } = await api.renameScene(cid, id, title);
-      if (activeId === id) setActiveId(newId);
-      setSeedPrompt((p) => (p && p.sid === id ? { ...p, sid: newId } : p));
-      reviewSceneRenamed(id, newId);
+      adoptSceneId(id, newId);
       setScenes(await api.listScenes(cid));
     } finally {
       markRenaming(false);
     }
   }
 
-  // the first date set renames the scene file — re-list and adopt the new id
+  // the first date set renames the scene file — re-list and adopt the new id.
+  // Only ever the active scene: the date controls live in the panels for the
+  // scene on screen.
   async function sceneRenamed(id: string) {
-    setSeedPrompt((p) => (p && p.sid === activeId ? { ...p, sid: id } : p));
-    if (activeId) reviewSceneRenamed(activeId, id);
+    if (activeId) adoptSceneId(activeId, id);
     setScenes(await api.listScenes(cid));
     selectScene(id);
   }
