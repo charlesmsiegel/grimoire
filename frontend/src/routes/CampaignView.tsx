@@ -188,6 +188,12 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   // post-cancel flush poll, which must not keep refreshing a scene the player
   // has since navigated away from.
   const activeIdRef = useRef<string | null>(null);
+  // The flush poll can outlive the view by up to its whole budget, and it calls
+  // setState on every tick. Nothing else here needs an unmount guard — a stream
+  // deliberately runs to completion after a navigation, and its refresh is a
+  // React warning at worst — but a loop that keeps refetching a scene nobody is
+  // looking at is waste with no upside.
+  const mountedRef = useRef(true);
   // Orders writes to the chip, because the proposal is read from two places
   // that can answer out of order. `selectScene` fires a read and does not await
   // it; the post-cancel `settleProposal` fires a later one deliberately. Making
@@ -399,6 +405,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   const [directorNote, setDirectorNote] = useState<string | null>(null);
 
   useEffect(() => { activeIdRef.current = activeId; }, [activeId]);
+  useEffect(() => () => { mountedRef.current = false; }, []);
 
   // A write the caller knows the answer to — a live SSE proposal, or a clear
   // the player's own action implies. Retires every read still in flight, since
@@ -600,7 +607,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     // here leaves a window review caught: the check passes, then `getScene` is
     // awaited, and a turn starting during that await still gets its preview
     // cleared by the response.
-    const owns = () => !abortRef.current && activeIdRef.current === id;
+    const owns = () => mountedRef.current && !abortRef.current && activeIdRef.current === id;
     let wait = FLUSH_POLL_MS;
     let waited = 0;
     while (waited < FLUSH_POLL_BUDGET_MS) {
@@ -640,15 +647,21 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   async function runStream(
     id: string,
     start: (onEvent: (e: ChatEvent) => void, signal: AbortSignal) => Promise<void>,
+    onPostReturned?: () => void,
   ) {
     const controller = new AbortController();
     abortRef.current = controller;
     setBusy(true);
     setError(null);
     let acc = "";
-    let landed = true;
-    let cancelled = false;
-    let finished = false;   // a `done` frame arrived; the turn is persisted
+    // Three separate questions, and none of them is "did the promise resolve".
+    // `finished`: a `done` frame arrived, which the backend sends only after
+    // finalize has persisted. `errored`: an error frame arrived, so the backend
+    // ran its own handler before sending it. Review caught that a proxy closing
+    // the body cleanly before `done` resolves `streamPost` normally, which used
+    // to count as a landed turn while the reply was still in the flush.
+    let finished = false;
+    let errored = false;
     try {
       await start((e) => {
         if (e.delta) {
@@ -656,29 +669,26 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
           setStreaming(acc);
         } else if (e.error) {
           setError(e.error.detail);
-          landed = false;
+          errored = true;
+          // The post is gone from the transcript, so the composer has to give
+          // the player their words back. Otherwise a failed send destroys what
+          // they typed and Retry cannot help — it calls /retry, which has no
+          // prompt of its own and 400s on a scene with nothing else in it (#95).
+          if (e.error.post_returned) onPostReturned?.();
         } else if (e.proposal) {
           // Live from the stream, so it outranks any read still in flight.
           setProposalNow({ id: e.proposal.id, status: "pending", payload: e.proposal, resolution: null });
         } else if (e.done) {
-          // The backend sends this only after finalize has persisted, so from
-          // here on the turn has landed whatever the connection does next.
           finished = true;
         }
       }, controller.signal);
     } catch (err: any) {
-      // A cancel is the user getting what they asked for, so it raises no
-      // error banner — but it is still not a landed turn, so a one-shot
-      // response override survives for the retry that usually follows.
-      //
-      // Unless the turn had already finished. `done` is parsed off the stream
-      // before the body reports EOF, and Stop stays live until it does, so a
-      // press in that gap aborts a turn that is already written. Calling that a
-      // cancellation would hand the player back a one-shot response length the
-      // reply had in fact consumed, and spend it again on the next turn (#95).
-      cancelled = isAbortError(err) && !finished;
+      // A cancel is the user getting what they asked for, so it raises no error
+      // banner. `done` is parsed before the body reports EOF and Stop stays live
+      // until it does, so a press in that gap aborts a turn that is already
+      // written — `finished` below is what keeps that from being refunded as a
+      // cancellation and spending its response override twice (#95).
       if (!isAbortError(err)) setError(err.detail ?? String(err));
-      landed = landed && finished;   // an error frame already ruled it out
     } finally {
       abortRef.current = null;
       setStreaming("");
@@ -699,18 +709,21 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       // poll needs the scene check too because it *issues* fresh selects, which
       // bump that token themselves and cannot be retired by it.
       const seen = await selectScene(id, () => !abortRef.current);
-      // Every cancel, not only the ones that showed text. Gating on `acc` was
-      // wrong and review caught it: what reached the client is not what the
-      // backend has to flush. `FenceWatcher.feed` returns "" for the whole of a
-      // roll fence and withholds anything that might yet become one, so a reply
-      // that opens with a fence streams nothing at all while the server still
-      // persists a proposal — invisible until some later refresh under the old
-      // gate. The cost of being wrong the other way is a few polls after a Stop
-      // that truly produced nothing, and they stop early the moment the player
-      // does anything else.
-      if (cancelled) await awaitFlushedPartial(id, seen);
+      // Anything that ended without `done` may have left a partial the backend
+      // is still flushing — a cancel, or a body cut short. An error frame is
+      // NOT one of those: the backend ran its handler before sending it, so the
+      // refresh above already sees whatever it wrote.
+      //
+      // Not gated on having seen text, either. Gating on `acc` was wrong and
+      // review caught it: what reached the client is not what the backend has to
+      // flush. `FenceWatcher.feed` returns "" for the whole of a roll fence and
+      // withholds anything that might yet become one, so a reply that opens with
+      // a fence streams nothing at all while the server still persists a
+      // proposal — invisible until some later refresh under the old gate.
+      if (!finished && !errored) await awaitFlushedPartial(id, seen);
     }
-    return landed;
+    // Landed means the backend said so, not that the promise resolved.
+    return finished && !errored;
   }
 
   async function send() {
@@ -746,10 +759,17 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       return;
     }
     setMessages((m) => [...m, { role: "user", content }]);
+    let returned = false;
     const landed = await runStream(id, (onEvent, signal) => pendingResponse
       ? api.chat(cid, id!, content, onEvent, pendingResponse, signal)
-      : api.chat(cid, id!, content, onEvent, undefined, signal));
+      : api.chat(cid, id!, content, onEvent, undefined, signal),
+      () => { returned = true; });
     if (landed) setPendingResponse(null);
+    // The turn failed and the backend took the post back, so this text now
+    // exists nowhere: the composer was cleared on send and the refresh dropped
+    // the optimistic copy. Put it back rather than lose what the player wrote —
+    // but never over something they have started typing since.
+    if (returned) setInput((cur) => cur || content);
   }
 
   async function saveEdit() {
