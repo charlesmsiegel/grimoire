@@ -127,13 +127,29 @@ test("chat hands its abort signal to fetch, and ignores heartbeat comments", asy
   expect(events).toEqual([{ delta: "hi" }]);
 });
 
-test("identical in-flight GETs are shared, but a fresh read is not", async () => {
-  // The sharing is deliberate and normally free. It is not free for a read
-  // whose job is to verify a write landed: handed a promise started before that
-  // write, it gets a pre-write answer and concludes the write never happened.
-  // That is exactly the post-cancel proposal check (#95), so it opts out — and
-  // this has to be tested here rather than in CampaignView, where `api.*` is
-  // mocked and the coalescing layer is never reached at all.
+test("identical in-flight GETs are shared", async () => {
+  // The general rule, pinned so the exception below reads as an exception.
+  let release: (v: unknown) => void = () => {};
+  const fetchMock = vi.fn().mockImplementation(() => new Promise((r) => { release = r; }));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const a = api.getSceneDatetime("run", "s1");
+  const b = api.getSceneDatetime("run", "s1");
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  release(jsonOk({ current: null, history: [] }));
+  expect(await a).toEqual({ current: null, history: [] });
+  expect(await b).toEqual({ current: null, history: [] });
+});
+
+test("proposal reads never coalesce, so claim order is request order", async () => {
+  // CampaignView orders proposal writes by the order their reads were *issued*.
+  // A shared read breaks that: it is as old as the request it joined, not as
+  // new as the claim it was handed, so a newer claim can carry an older answer
+  // and outrank a fresher one. The endpoint opts out for every caller, which
+  // removes the mismatch rather than guarding each place it surfaces (#95).
+  //
+  // Tested here and not in CampaignView, whose suite mocks `api.*` wholesale
+  // and so never executes the coalescing layer at all — the reason the first
+  // version of this fix looked verified while doing nothing.
   let releaseFirst: (v: unknown) => void = () => {};
   const fetchMock = vi
     .fn()
@@ -141,15 +157,13 @@ test("identical in-flight GETs are shared, but a fresh read is not", async () =>
     .mockResolvedValue(jsonOk({ record: { id: "pr-1" } }));
   globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-  const first = api.getRollProposal("run", "s1");           // in flight, unresolved
-  const shared = api.getRollProposal("run", "s1");          // coalesced onto it
-  const fresh = api.getRollProposal("run", "s1", true);     // must issue its own
-  expect(fetchMock).toHaveBeenCalledTimes(2);               // not 3, and not 1
+  const older = api.getRollProposal("run", "s1");   // in flight, unresolved
+  const newer = api.getRollProposal("run", "s1");   // issues its own, not shared
+  expect(fetchMock).toHaveBeenCalledTimes(2);
 
-  expect(await fresh).toEqual({ record: { id: "pr-1" } });  // the post-flush answer
+  expect(await newer).toEqual({ record: { id: "pr-1" } });
   releaseFirst(jsonOk({ record: null }));
-  expect(await first).toEqual({ record: null });            // the stale one, still shared
-  expect(await shared).toEqual({ record: null });
+  expect(await older).toEqual({ record: null });    // its own answer, not the newer one
 });
 
 test("localizeImages posts to the localize endpoint and forwards SSE events", async () => {
