@@ -1630,6 +1630,28 @@ async def test_a_cancelled_turn_drops_its_partial_once_a_newer_turn_owns_the_tai
         "and then?", "actually, something else"]   # no narration wedged in behind it
 
 
+async def test_a_cancelled_turn_drops_its_partial_when_a_newer_turn_appended_nothing(
+        monkeypatch, tmp_path):
+    """Retry, regenerate and the director-note send all stream without appending
+    anything of their own, so two overlapping ones sit at an identical
+    transcript length — the tail check alone cannot tell them apart, and the
+    older one's abort would persist into the newer turn. The scene's turn claim
+    is what distinguishes them."""
+    cid, sid, _at = _scene_with_a_pending_post(tmp_path, monkeypatch)
+    msgs = [{"role": "user", "content": "and then?"}]
+    conn = {"kind": "openrouter", "model": "m"}
+    older = routes.streaming._chat_stream(       # a retry, appending nothing
+        cid, sid, msgs, conn, StallingOpenRouter(["The tide ", "turns."]))
+    frames = older.body_iterator
+    await frames.__anext__()
+    await frames.__anext__()
+    routes.streaming._chat_stream(               # a second retry claims the scene
+        cid, sid, msgs, conn, StallingOpenRouter(["Something else."]))
+    await frames.aclose()
+    assert [m["content"] for m in store.scenes.read_scene(cid, sid)["messages"]] == [
+        "and then?"]   # the older turn's text is not filed under the newer one
+
+
 async def test_a_cancelled_turn_still_persists_while_it_owns_the_tail(monkeypatch, tmp_path):
     """The ownership check must not become a reason to drop every partial: with
     nothing written behind it, the cancelled turn is still the tail and its text
