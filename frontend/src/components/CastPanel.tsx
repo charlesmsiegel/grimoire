@@ -4,6 +4,7 @@ import {
   type PCSummary, type RosterEntry, type SceneLocation, type SceneDatetime,
 } from "../api/client";
 import { CalendarDatePicker } from "./CalendarDatePicker";
+import { LOCKED_WHILE_GENERATING } from "./sceneLock";
 
 export function CastPanel({
   cid, sid, ready, onSeeded, onSceneRenamed, initialPrompt, pcless, sceneLocked,
@@ -205,7 +206,7 @@ export function CastPanel({
                 control in disguise — locked for the same reason the rail's is. */}
             <button className="primary" onClick={applyDatetime}
                     disabled={!dateInput || sceneLocked}
-                    title={sceneLocked ? "Not while this scene is generating" : undefined}>
+                    title={sceneLocked ? LOCKED_WHILE_GENERATING : undefined}>
               {when?.current ? "Advance to" : "Set date"}
             </button>
           </div>

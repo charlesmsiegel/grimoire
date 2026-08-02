@@ -10,6 +10,7 @@ import {
 } from "../api/client";
 import { isAbortError, type ChatEvent } from "../api/stream";
 import { EditableRow } from "../components/EditableRow";
+import { LOCKED_WHILE_GENERATING } from "../components/sceneLock";
 import { CastPanel } from "../components/CastPanel";
 import { NewSceneChooser } from "../components/NewSceneChooser";
 import { ChangesPanel } from "../components/ChangesPanel";
@@ -1431,7 +1432,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
               // followed the view would unlock the very row that is still being
               // written to — and lock an unrelated one.
               locked={s.id === streamingId}
-              lockedReason="Not while this scene is generating"
+              lockedReason={LOCKED_WHILE_GENERATING}
               onSelect={() => selectScene(s.id)}
               onRename={(title) => renameScene(s.id, title)}
               onDelete={() => deleteScene(s)}
@@ -1970,7 +1971,8 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
           {activeId && (
             <SceneInspector cid={cid} sid={activeId} refreshKey={ctxKey}
                             onSceneChanged={() => selectScene(activeId)}
-                            onSceneRenamed={sceneRenamed} pcless={activePcless} />
+                            onSceneRenamed={sceneRenamed} pcless={activePcless}
+                            sceneLocked={activeId === streamingId} />
           )}
         </div>
       )}
