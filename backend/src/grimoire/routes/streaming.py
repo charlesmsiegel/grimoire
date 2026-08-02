@@ -292,6 +292,24 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
             frames.append(_sse({"proposal": {**payload, "id": rec["id"]}}))
         elif watcher.narration.strip():
             _persist_reply(cid, sid, watcher.narration)
+        elif restore_removed is not None:
+            # A turn that *succeeded* and produced nothing — a clean EOF with no
+            # text and no fence, which a provider does return (an empty safety
+            # response, a model that just stops). Review caught this as the one
+            # terminal path the reroll's way back did not cover: `on_error` and
+            # `on_abort` both restore, but this is neither, so `finalize` sent
+            # `done` over a scene whose reply had been deleted and not replaced.
+            # The success path is the one where losing it is least excusable,
+            # because nothing looked wrong.
+            #
+            # Gated on still owning the turn, like the other two: restoring
+            # appends, so a newer turn's tail must not have the old reply pushed
+            # onto it. The user post is deliberately NOT taken back here — a
+            # turn that ran and chose to say nothing is not a failed turn, and
+            # the player can still see and reuse what they wrote (#95).
+            with store.locks.campaign_lock(cid):
+                if _owns_turn(cid, sid, turn_token):
+                    restore_removed()
         frames.append(_sse({"done": True}))
         return frames
 

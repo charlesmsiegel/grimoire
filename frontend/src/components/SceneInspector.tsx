@@ -41,14 +41,18 @@ function SideSection({ id, title, collapsed, onToggle, extra, children }: {
 }
 
 export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRenamed, pcless,
-                                 sceneLocked }:
+                                 sceneLocked, onRenaming }:
   { cid: string; sid: string; refreshKey: number; onSceneChanged: () => void;
     onSceneRenamed?: (id: string) => void; pcless?: boolean;
     /** A turn is streaming into this scene, so anything that can rename its
      *  file has to wait: the id is the filename, and moving it mid-turn strands
      *  `finalize`, `_persist_reply` and the abort write alike (#95). The first
      *  date set re-slugs, so both date actions below are rename surfaces. */
-    sceneLocked?: boolean }) {
+    sceneLocked?: boolean;
+    /** Reports a scene-renaming request in and out of flight. The parent blocks
+     *  new turns while one is pending: until the PUT answers, the scene's id is
+     *  in doubt, and a turn handed the old one writes nowhere (#95). */
+    onRenaming?: (active: boolean) => void }) {
   const [cast, setCast] = useState<Actor[]>([]);
   const [roster, setRoster] = useState<RosterEntry[]>([]);
   const [names, setNames] = useState<Record<string, string>>({});
@@ -192,6 +196,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   async function applyDatetime() {
     if (!dateInput) return;
     setError(null);
+    onRenaming?.(true);      // the first date set re-slugs the file
     try {
       const res = await api.setSceneDatetime(cid, sid, dateInput);
       setDateInput("");
@@ -205,6 +210,8 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
       onSceneChanged();  // surface the "Time passes…" transition line in the stream
     } catch (err: any) {
       setError(err.detail ?? String(err));
+    } finally {
+      onRenaming?.(false);
     }
   }
 

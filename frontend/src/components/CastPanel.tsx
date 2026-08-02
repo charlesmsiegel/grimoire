@@ -8,6 +8,7 @@ import { LOCKED_WHILE_GENERATING } from "./sceneLock";
 
 export function CastPanel({
   cid, sid, ready, onSeeded, onSceneRenamed, initialPrompt, pcless, sceneLocked,
+  onRenaming,
 }: {
   cid: string;
   sid: string;
@@ -20,6 +21,10 @@ export function CastPanel({
    *  has to wait: the id is the filename, and moving it mid-turn strands the
    *  abort write that saves the partial (#95). */
   sceneLocked?: boolean;
+  /** Reports a scene-renaming request in and out of flight. The parent blocks
+   *  new turns while one is pending: until the PUT answers, the scene's id is
+   *  in doubt, and a turn handed the old one writes nowhere (#95). */
+  onRenaming?: (active: boolean) => void;
 }) {
   const [cast, setCast] = useState<Actor[]>([]);
   const [chars, setChars] = useState<CharacterSummary[]>([]);
@@ -105,6 +110,7 @@ export function CastPanel({
   async function applyDatetime() {
     if (!dateInput) return;
     setError(null);
+    onRenaming?.(true);      // the first date set re-slugs the file
     try {
       const res = await api.setSceneDatetime(cid, sid, dateInput);
       setDateInput("");
@@ -118,6 +124,8 @@ export function CastPanel({
       onSeeded(); // surface the transition line in the stream
     } catch (err: any) {
       setError(err.detail ?? String(err));
+    } finally {
+      onRenaming?.(false);
     }
   }
 
