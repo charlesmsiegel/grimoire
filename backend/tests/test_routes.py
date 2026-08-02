@@ -2821,6 +2821,64 @@ def test_a_swap_whose_scene_vanishes_before_the_lock_is_a_404(client, monkeypatc
     assert resp.status_code == 404
 
 
+def test_reading_alternates_for_a_scene_that_vanishes_mid_read_is_a_404(client, monkeypatch):
+    """The GET makes several separate reads too, and its existence check guards
+    only the first. Same stranded-sidecar state as the POST above: the record is
+    there, the transcript `_slot` needs is not."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "old reply"}])
+    store.alternates.archive(cid, sid, "")
+    real_state = store.alternates.state
+
+    def vanishing(c, s):
+        # exactly the window the check does not cover: after `_require_scene`,
+        # before the reads that resolve the set
+        store.scenes.paths._scene_path(c, s).unlink(missing_ok=True)
+        return real_state(c, s)
+
+    monkeypatch.setattr(store.alternates, "state", vanishing)
+    resp = client.get(f"/api/campaigns/{cid}/scenes/{sid}/alternates")
+    assert resp.status_code == 404
+
+
+def test_a_pick_that_cannot_refill_an_empty_slot_keeps_the_decision(client, monkeypatch):
+    """Filling an empty slot only APPENDS — nothing is removed — so a failed
+    append leaves the transcript exactly as it was. The decision's narration
+    never moved, and retiring it because the put-back reported nothing to put
+    back would cancel a still-valid roll for a swap that did not happen."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "old reply"}])
+    # a reroll that emitted a roll fence and no narration: empty slot, set kept,
+    # decision deliberately still recoverable
+    store.alternates.archive(cid, sid, "")
+    store.scenes.remove_trailing_assistant_run(cid, sid)
+    store.proposals.new(cid, sid, {"check": "athletics", "actor": None, "problems": []})
+    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/alternates").json()
+    assert body["active"] is None
+    vid = body["alternates"][0]["id"]
+    refuse = {"on": True}
+    real = store.scenes.append_reply
+
+    def boom(*a, **k):
+        if refuse["on"]:
+            raise OSError(28, "no space left on device")
+        return real(*a, **k)
+
+    monkeypatch.setattr(store.alternates.scenes_write, "append_reply", boom)
+    with pytest.raises(OSError):
+        client.post(f"/api/campaigns/{cid}/scenes/{sid}/alternates/{vid}")
+    refuse["on"] = False
+
+    record = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert record["status"] == "pending"
+
+
 def test_an_ephemeral_send_that_cannot_write_the_sidecar_keeps_the_decision(
         client, monkeypatch):
     """Retiring the decision before the sidecar is known to be writable retired

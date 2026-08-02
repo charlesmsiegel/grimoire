@@ -442,7 +442,15 @@ def get_scene_alternates(cid: str, sid: str):
     one in the transcript, and null means the slot is empty — what a reroll
     whose stream died leaves behind."""
     _require_scene(cid, sid)
-    state = store.alternates.state(cid, sid)
+    try:
+        # The check above guards only itself. Resolving the set makes several
+        # more reads, and the scene can go between them — see the swap below for
+        # what actually reaches this, which is the sidecar outliving its
+        # transcript rather than an ordinary rename or delete. A read for a
+        # scene that is not there is a 404 however late it finds out.
+        state = store.alternates.state(cid, sid)
+    except (store.scenes.SceneNotFound, store.campaigns.CampaignNotFound):
+        raise HTTPException(status_code=404, detail="scene not found")
     return {"active": state["active"],
             "alternates": [_alternate(r) for r in state["runs"]]}
 
@@ -520,7 +528,15 @@ def post_scene_alternate(cid: str, sid: str, vid: str):
             # all, and neither refusal above applies because a write really did
             # land. Both repairs are correct here; they just differ in what the
             # reader ends up looking at.
-            if not _put_back(cid, sid, showing):
+            #
+            # Only when there was a live run to lose, though. Filling an EMPTY
+            # slot appends and removes nothing, so a failed append leaves the
+            # transcript exactly as it was: the decision's narration never
+            # moved, and there is nothing to repair. Retiring it there would
+            # cancel a still-valid roll for a swap that did not happen — which
+            # is the state a reroll that emitted a fence and no narration
+            # deliberately leaves recoverable.
+            if showing is not None and not _put_back(cid, sid, showing):
                 # The put-back is preferred: it restores the state the request
                 # started from, decision and narration together. Failing that,
                 # the decision has to go, because what it was derived from is
