@@ -10,6 +10,7 @@ import { RecordDrawer, type DrawerTarget } from "./RecordDrawer";
 import { CalendarDatePicker } from "./CalendarDatePicker";
 import { WeatherWidget } from "./WeatherWidget";
 import { ResponsePresetPicker } from "./ResponsePresetPicker";
+import { LOCKED_WHILE_GENERATING } from "./sceneLock";
 
 const SECTIONS_KEY = "grimoire.inspector.sections";
 
@@ -39,9 +40,15 @@ function SideSection({ id, title, collapsed, onToggle, extra, children }: {
   );
 }
 
-export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRenamed, pcless }:
+export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRenamed, pcless,
+                                 sceneLocked }:
   { cid: string; sid: string; refreshKey: number; onSceneChanged: () => void;
-    onSceneRenamed?: (id: string) => void; pcless?: boolean }) {
+    onSceneRenamed?: (id: string) => void; pcless?: boolean;
+    /** A turn is streaming into this scene, so anything that can rename its
+     *  file has to wait: the id is the filename, and moving it mid-turn strands
+     *  `finalize`, `_persist_reply` and the abort write alike (#95). The first
+     *  date set re-slugs, so both date actions below are rename surfaces. */
+    sceneLocked?: boolean }) {
   const [cast, setCast] = useState<Actor[]>([]);
   const [roster, setRoster] = useState<RosterEntry[]>([]);
   const [names, setNames] = useState<Record<string, string>>({});
@@ -317,7 +324,9 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
             <div className="picker">
               <CalendarDatePicker scope={{ kind: "campaign", id: cid }} value={dateInput}
                                   onChange={setDateInput} ariaLabel="Scene date" />
-              <button className="primary" onClick={applyDatetime} disabled={!dateInput}>Advance to</button>
+              <button className="primary" onClick={applyDatetime}
+                      disabled={!dateInput || sceneLocked}
+                      title={sceneLocked ? LOCKED_WHILE_GENERATING : undefined}>Advance to</button>
             </div>
           </>
         ) : cfg && !cfg.confirmed ? (
@@ -336,7 +345,9 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
             <div className="picker">
               <CalendarDatePicker scope={{ kind: "campaign", id: cid }} value={dateInput}
                                   onChange={setDateInput} ariaLabel="Scene date" />
-              <button className="primary" onClick={applyDatetime} disabled={!dateInput}>Set date</button>
+              <button className="primary" onClick={applyDatetime}
+                      disabled={!dateInput || sceneLocked}
+                      title={sceneLocked ? LOCKED_WHILE_GENERATING : undefined}>Set date</button>
             </div>
           </>
         )}
