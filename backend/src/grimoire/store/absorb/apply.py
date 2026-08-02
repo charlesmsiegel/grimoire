@@ -16,7 +16,7 @@ from ..audit import apply as audit_apply
 from ..campaigns import paths as campaigns_paths
 from ..scenes import moment as scenes_moment, read as scenes_read
 from ..sheets import paths as sheets_paths
-from . import materializer, weather
+from . import conflicts, materializer, weather
 
 _BROWSABLE_KINDS = ("character_state", "dossier", "lore", "authored", "new_character",
                     "new_location", "new_lore")
@@ -29,7 +29,14 @@ def apply_edits(cid: str, edits: list[dict],
     have an error contract and are never silently skipped: each failure is
     {"id", "reason", "kind": "conflict"|"error"}. Sheet edits report through it, and so
     does a dossier whose stored text moved since it was staged -- the reviewer approved
-    that paragraph and must not be told the save succeeded while it was dropped. When
+    that paragraph and must not be told the save succeeded while it was dropped.
+
+    Every other kind whose write REPLACES a stored value is held to the same rule by
+    `conflicts` (#111): an edit whose target no longer matches its staged `before` is
+    reported as a conflict rather than applied, unless the row carries the reviewer's
+    `resolve` (replace/merge). Callers that want the reviewer to choose before anything
+    lands should run `conflicts.check_conflicts` first -- by the time a conflict is a
+    failure here, the chronicle around it has already been written. When
     `sid` is given, the before/after
     of each applied *browsable* edit (characters/lore/locations) is captured into
     changes.json (the latest write-back delta per record); sheet edits are never
@@ -38,9 +45,20 @@ def apply_edits(cid: str, edits: list[dict],
     applied: list[str] = []
     failures: list[dict] = []
     recorded: dict[str, list[dict]] = {}
-    for e in edits:
+    # One pass over the whole batch before the first write (#111). Applying one
+    # edit can move the record the next one was staged against, so a check
+    # interleaved with the writes would report the batch as contradicting itself.
+    verdicts = conflicts.batch_verdicts(cid, edits)
+    for e, verdict in zip(edits, verdicts):
         if not isinstance(e, dict):
             continue  # malformed batch item: skip, best-effort
+        if verdict is not None:
+            # Reported, never silently dropped: the reviewer approved this row
+            # and would otherwise read the save as a success (same contract the
+            # dossier branch below has had since #235).
+            failures.append({"id": e.get("id", ""), "kind": "conflict",
+                             "reason": verdict["reason"]})
+            continue
         if e.get("kind") == "sheet":
             eid = e.get("id", "")
             if not isinstance(eid, str) or not eid:
