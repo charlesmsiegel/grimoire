@@ -5,7 +5,8 @@ import pathlib
 
 import pytest
 
-from grimoire.store import (alternates, appearances, atomic, campaigns, pcs, scene_ids, scenes,
+from grimoire.store import (alternates, appearances, atomic, campaigns, migrations, pcs,
+                            scene_ids, scenes,
                             scene_refs, worlds)
 from grimoire.store.scenes import paths as scenes_paths
 
@@ -570,6 +571,36 @@ def test_a_calendar_plugins_long_date_cannot_overflow_the_id(monkeypatch, tmp_pa
     assert sid.startswith("0001--")
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     assert len(f"{sid}.alts.json") <= 255
+
+
+def test_the_legacy_migration_finds_an_unclearable_destination_first_too(monkeypatch, tmp_path):
+    """`repad` was not the only path that renames every transcript before
+    repointing: the startup migration for legacy ids does the same, and its
+    `taken` set is built from `*.md`, so a destination can be an id an orphaned
+    sidecar still holds."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Realm")
+    cid = campaigns.create_campaign("Run", wid)
+    d = scenes_paths._scenes_dir(cid)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "saltmarch.md").write_text(          # a legacy id: no number prefix
+        "---\ntitle: Saltmarch\ncreated: 2024-01-01T00:00:00Z\n"
+        "updated: 2024-01-01T00:00:00Z\n---\n\nharbour\n", encoding="utf-8")
+    doomed = scene_ids.format_sid(1, 3, None, "saltmarch")
+    scenes_paths._alts_path(cid, doomed).write_text("{}", encoding="utf-8")
+    real = pathlib.Path.unlink
+
+    def stuck(self, missing_ok=False):
+        if self == scenes_paths._alts_path(cid, doomed):
+            raise PermissionError(13, "in use")
+        return real(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(pathlib.Path, "unlink", stuck)
+    with pytest.raises(OSError):
+        migrations._migrate_campaign(cid)
+
+    assert (d / "saltmarch.md").exists()      # nothing moved
+    assert not scenes_paths._scene_path(cid, doomed).exists()
 
 
 def test_repad_finds_an_unclearable_destination_before_it_moves_anything(monkeypatch, tmp_path):

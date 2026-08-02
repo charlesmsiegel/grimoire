@@ -140,6 +140,31 @@ test("identical in-flight GETs are shared", async () => {
   expect(await b).toEqual({ current: null, history: [] });
 });
 
+test("alternate reads never coalesce, so a set matches the transcript it was read for", async () => {
+  // `fetchAlternates` stamps the answer with the window token current when it
+  // ISSUED the read — that is the whole readiness gate. A shared read is as old
+  // as the request it joined, so a reroll firing while an earlier GET is open
+  // would attach that older set to the newer transcript: the counter names the
+  // wrong active take, and an arrow promotes a still-valid but wrong id.
+  //
+  // Here rather than in CampaignView, whose suite mocks `api.*` wholesale and
+  // so never executes the coalescing layer at all.
+  let releaseFirst: (v: unknown) => void = () => {};
+  const fetchMock = vi
+    .fn()
+    .mockImplementationOnce(() => new Promise((r) => { releaseFirst = r; }))
+    .mockResolvedValue(jsonOk({ active: 1, alternates: [{ id: "b" }] }));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+  const older = api.getAlternates("run", "s1");   // in flight, unresolved
+  const newer = api.getAlternates("run", "s1");   // issues its own, not shared
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+
+  expect(await newer).toEqual({ active: 1, alternates: [{ id: "b" }] });
+  releaseFirst(jsonOk({ active: 0, alternates: [{ id: "a" }] }));
+  expect(await older).toEqual({ active: 0, alternates: [{ id: "a" }] });
+});
+
 test("proposal reads never coalesce, so claim order is request order", async () => {
   // CampaignView orders proposal writes by the order their reads were *issued*.
   // A shared read breaks that: it is as old as the request it joined, not as
