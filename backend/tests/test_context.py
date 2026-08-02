@@ -1483,3 +1483,61 @@ def test_a_budget_trims_the_history_but_keeps_the_latest_turns(monkeypatch, tmp_
     config.write_config(context_budget="1")
     starved = context.build_messages(cid, sid)
     assert len([m for m in starved if m["role"] != "system"]) >= context_pack.HISTORY_FLOOR
+
+
+def _fits(messages, budget):
+    return sum(context.count_tokens(m["content"]) for m in messages) <= budget
+
+
+def test_every_appended_message_is_charged_to_the_budget(monkeypatch, tmp_path):
+    """A message the packer cannot drop must be counted before it packs.
+    Reserving only post_history let a large director note / opener prompt /
+    guidance block leave droppable sections in place and then push the request
+    back over the ceiling -- reintroducing the provider-side truncation the
+    packer exists to prevent."""
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    from grimoire.store import config
+    config.write_config(recap_depth="0")
+    _absorbed(cid, "2026-06-20-older", ["saltmarch"], summary="The Saltmarch crossing went badly. " * 20)
+    for n in range(6):
+        scenes.append_message(cid, sid, "user" if n % 2 == 0 else "assistant",
+                              f"Turn {n} on the Saltmarch road. " * 20)
+
+    budget = context.count_tokens(
+        "".join(m["content"] for m in context.build_messages(cid, sid)))
+    config.write_config(context_budget=str(budget))
+    assert _fits(context.build_messages(cid, sid), budget)     # baseline: it fits
+
+    # a note big enough that ignoring it would overrun -- but not so big the
+    # packer cannot absorb it, which would overrun for the legitimate reason
+    # (lock-in plus the history floor is the floor)
+    note = "Consider the Saltmarch road and everything on it. " * 60
+    assert context.count_tokens(note) > budget // 4
+    assert _fits(context.build_director_messages(cid, sid, note), budget)
+
+    # the same for an appended guidance block on a plain turn
+    assert _fits(context.build_messages(cid, sid, reserve=(note,)) + [
+        {"role": "system", "content": note}], budget)
+
+    # and for the opener, whose prompt and shape rules both ride after packing
+    assert _fits(context.build_opener_messages(cid, sid, note), budget)
+
+
+def test_an_unreserved_append_is_what_overruns(monkeypatch, tmp_path):
+    """The negative half of the test above: without `reserve` the same append
+    overruns, which is what makes passing it load-bearing rather than tidy."""
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    from grimoire.store import config
+    config.write_config(recap_depth="0")
+    _absorbed(cid, "2026-06-20-older", ["saltmarch"], summary="The Saltmarch crossing went badly. " * 20)
+    for n in range(6):
+        scenes.append_message(cid, sid, "user" if n % 2 == 0 else "assistant",
+                              f"Turn {n} on the Saltmarch road. " * 20)
+    budget = context.count_tokens(
+        "".join(m["content"] for m in context.build_messages(cid, sid)))
+    config.write_config(context_budget=str(budget))
+    note = "Consider the Saltmarch road and everything on it. " * 60
+    unreserved = context.build_messages(cid, sid) + [{"role": "system", "content": note}]
+    assert not _fits(unreserved, budget)
+    assert _fits(context.build_messages(cid, sid, reserve=(note,))
+                 + [{"role": "system", "content": note}], budget)
