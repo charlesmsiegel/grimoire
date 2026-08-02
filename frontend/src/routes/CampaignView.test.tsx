@@ -830,6 +830,133 @@ test("the scene being generated into cannot be renamed mid-turn", async () => {
     screen.getAllByRole("button", { name: /rename/i })[0]).not.toBeDisabled());
 });
 
+test("a lost error frame still gives the rolled-back prompt back", async () => {
+  // The backend rolls the post back and *then* yields the error frame, so a
+  // connection dropped in between leaves a rollback that happened and a client
+  // never told. Nothing is set — not errored, not unreached, not refused — and
+  // the poll cannot help, since it watches for growth and a rollback shrinks.
+  // The refreshed transcript is the only witness left.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  let rolledBack = false;
+  (api.getScene as any).mockImplementation(async () => ({
+    meta: {}, total: rolledBack ? 0 : 0, messages: [],
+  }));
+  (api.chat as any).mockImplementation(async () => {
+    rolledBack = true;   // headers arrived, post appended, then taken back off
+    // resolves with no `done` and no error frame: the body just ended
+  });
+  renderCampaign();
+  const ta = await screen.findByRole("textbox");
+  fireEvent.change(ta, { target: { value: "I draw my blade." } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("I draw my blade."));
+});
+
+test("an interrupted stream whose post is still there keeps the composer clear", async () => {
+  // The other side of the same gate. Headers arrived, so `post_chat` appended —
+  // and the post is still in the transcript, which means the backend did NOT
+  // roll it back and the reply may still be flushing. Restoring here would put
+  // the text in the composer and the transcript at once.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  let posted = false;
+  (api.getScene as any).mockImplementation(async () => ({
+    meta: {}, total: posted ? 1 : 0,
+    messages: posted ? [{ role: "user", content: "I draw my blade." }] : [],
+  }));
+  (api.chat as any).mockImplementation(async () => {
+    posted = true;   // post_chat appended; the body then ends with no frame
+  });
+  renderCampaign();
+  const ta = await screen.findByRole("textbox");
+  fireEvent.change(ta, { target: { value: "I draw my blade." } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  await screen.findByText("I draw my blade.");
+  await new Promise((r) => setTimeout(r, 50));
+  expect(screen.getByRole("textbox")).toHaveValue("");
+});
+
+test("the lock follows the scene being written to, not the one on screen", async () => {
+  // Scene selection stays live during a turn, and the write still lands in the
+  // scene the stream captured. A lock keyed on `activeId` unlocked the row
+  // still being written to and locked an unrelated one.
+  (api.listScenes as any).mockResolvedValue([
+    { id: "s1", title: "Old", model: "", created: "", updated: "" },
+    { id: "s2", title: "Later", model: "", created: "", updated: "" },
+  ]);
+  (api.chat as any).mockImplementation(hangingChat(["The tide "]));
+  renderCampaign();
+  const ta = await screen.findByRole("textbox");
+  fireEvent.change(ta, { target: { value: "and then?" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  await screen.findByRole("button", { name: /stop ■/i });
+  fireEvent.click(screen.getByText(/· Later/));          // navigate away mid-turn
+  await waitFor(() => {
+    const [s1Rename, s2Rename] = screen.getAllByRole("button", { name: /rename/i });
+    expect(s1Rename).toBeDisabled();        // still streaming into it
+    expect(s2Rename).not.toBeDisabled();    // merely being looked at
+  });
+});
+
+test("Stop during the preflight read does not strand the turn", async () => {
+  // The baseline read runs before the POST exists, so the turn's controller has
+  // nothing to abort yet. A stalled read left `runStream` parked outside its
+  // try/finally with `busy` set: no Send, no Stop that works, no prompt back.
+  // No scene selected, so Send creates one and streams into it with no read in
+  // between — the window where the baseline has to be fetched before the POST.
+  (api.listScenes as any).mockResolvedValue([]);
+  (api.getScene as any).mockImplementation(async (_c: string, _s: string, w?: any) => {
+    if (w?.limit === 1) return new Promise(() => {});   // the preflight never answers
+    return { meta: {}, total: 0, messages: [] };
+  });
+  (api.createScene as any).mockResolvedValue({ id: "s2" });
+  (api.chat as any).mockImplementation(async (_c: string, _s: string, _t: string,
+                                              _e: any, _r: unknown, signal: AbortSignal) => {
+    const err: Error & { beforeResponse?: boolean } = new Error("The operation was aborted.");
+    err.name = "AbortError";
+    err.beforeResponse = true;
+    if (signal.aborted) throw err;
+    await new Promise<void>((_res, rej) => signal.addEventListener("abort", () => rej(err)));
+  });
+  renderCampaign();
+  const ta = await screen.findByRole("textbox");
+  fireEvent.change(ta, { target: { value: "I draw my blade." } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
+  // the turn unwinds instead of hanging: Send comes back and so does the prompt
+  await screen.findByRole("button", { name: /continue ▶/i });
+  await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("I draw my blade."));
+});
+
+test("Retry after a failed reroll rerolls again, with its guidance", async () => {
+  // `/retry` continues from the transcript as it stands. A failed reroll now
+  // puts the old reply back, so retrying through `/retry` would generate a
+  // continuation of the very reply the player asked to replace — and drop the
+  // guidance they typed with it.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({
+    meta: {}, total: 2, messages: [
+      { role: "user", content: "and then?" },
+      { role: "assistant", content: "The tide turns." }],
+  });
+  (api.regenerate as any).mockImplementation(
+    async (_c: string, _s: string, onEvent: any) => {
+      onEvent({ error: { detail: "OpenRouter API key is not set", kind: "missing_key" } });
+    });
+  renderCampaign();
+  await screen.findByText("The tide turns.");
+  fireEvent.click(screen.getByRole("button", { name: /reroll/i }));
+  fireEvent.change(screen.getByPlaceholderText(/reroll/i),
+                   { target: { value: "darker this time" } });
+  fireEvent.click(screen.getByRole("button", { name: /reroll ▸/i }));
+  await screen.findByText(/OpenRouter API key is not set/);
+  expect(api.regenerate).toHaveBeenCalledTimes(1);
+
+  fireEvent.click(screen.getByRole("button", { name: /^retry$/i }));
+  await waitFor(() => expect(api.regenerate).toHaveBeenCalledTimes(2));
+  expect(api.retry).not.toHaveBeenCalled();
+  expect((api.regenerate as any).mock.calls[1][3]).toBe("darker this time");
+});
+
 test("a poll fetch already in flight cannot clear a new turn's preview", async () => {
   // The check-then-await window: the poll verifies it owns the view, then
   // awaits getScene, and a turn starting during that await would otherwise have
@@ -1070,8 +1197,22 @@ test("an abort whose post did land does not duplicate the prompt", async () => {
 test("a cancel after the request landed leaves the composer alone", async () => {
   // The post is durably stored by then — a cancel keeps it — so restoring would
   // have the player send the same line twice.
+  //
+  // The refreshed transcript has to actually contain that post, or the test
+  // asserts its opposite: this used to run against the default empty-scene
+  // mock, so it modelled a cancel whose post was NOT stored and passed only
+  // because nothing restored on this path at all. Growth is now what tells the
+  // two apart (review, #95).
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
-  (api.chat as any).mockImplementation(hangingChat(["The tide "]));
+  let posted = false;
+  (api.getScene as any).mockImplementation(async () => ({
+    meta: {}, total: posted ? 1 : 0,
+    messages: posted ? [{ role: "user", content: "I draw my blade." }] : [],
+  }));
+  (api.chat as any).mockImplementation((...args: any[]) => {
+    posted = true;   // post_chat appended before returning the stream
+    return (hangingChat(["The tide "]) as any)(...args);
+  });
   renderCampaign();
   const ta = await screen.findByRole("textbox");
   fireEvent.change(ta, { target: { value: "I draw my blade." } });
