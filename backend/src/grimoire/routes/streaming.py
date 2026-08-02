@@ -340,12 +340,21 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
         if watcher.narration.strip():  # a normal turn keeps its partial reply
             _persist_reply(cid, sid, watcher.narration)
             return {}
-        if not _owns_turn(cid, sid, turn_token):
-            return {}
-        if restore_removed is not None:
-            restore_removed()
-        if undo_user_post is not None and undo_user_post():
-            return {"post_returned": True}
+        # Under the lock, for the reason `on_abort` is: the check and the
+        # rollback have to be one step. Review caught this path checking
+        # ownership and then acting on it outside any lock, so a turn claiming
+        # the scene in between would have its post deleted by the failed turn's
+        # undo — the exact interleaving the check exists to prevent, just moved
+        # a few lines later. Both writers take the lock now (`_claim_turn` since
+        # the round before this one), so the window is closed rather than
+        # narrowed.
+        with store.locks.campaign_lock(cid):
+            if not _owns_turn(cid, sid, turn_token):
+                return {}
+            if restore_removed is not None:
+                restore_removed()
+            if undo_user_post is not None and undo_user_post():
+                return {"post_returned": True}
         return {}
 
     def on_abort(watcher) -> list[str]:

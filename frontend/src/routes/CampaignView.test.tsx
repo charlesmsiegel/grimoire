@@ -1139,6 +1139,9 @@ test("a pending rename also blocks a proposal continuation", async () => {
   fireEvent.click(decline);
   await new Promise((r) => setTimeout(r, 50));
   expect(api.resolveProposal).not.toHaveBeenCalled();   // the file may be moving
+  // and the chip is still there: refusing to send must not also hide the
+  // decision, or the roll becomes unreachable until some later refresh
+  expect(screen.getByRole("button", { name: /decline/i })).toBeInTheDocument();
 
   finishRename!({ id: "s1", title: "Renamed" });
   await waitFor(() => expect(screen.queryByDisplayValue("Renamed")).toBeNull());
