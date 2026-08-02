@@ -1093,6 +1093,25 @@ test("Generate previews a voice anchor without persisting it (#59)", async () =>
   expect(api.setCharacterVoiceAnchor).not.toHaveBeenCalled();
 });
 
+test("saving the card version does not discard an anchor draft (#59)", async () => {
+  // `select()` is the refresh every other save runs, and none of them touch the
+  // anchor -- so reloading it unconditionally threw away a draft whenever the
+  // user edited the card and the anchor in one sitting and saved the card first.
+  (api.getCharacterVoiceAnchor as any).mockResolvedValue({ voice_anchor: "The stored one." });
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await openEditForm();
+  await screen.findByLabelText("Voice anchor");
+
+  fireEvent.change(screen.getByLabelText("Voice anchor"),
+                   { target: { value: "A draft I have not saved." } });
+  fireEvent.click(screen.getByText("Save version"));
+
+  await waitFor(() => expect(api.updateVersion).toHaveBeenCalled());
+  expect((screen.getByLabelText("Voice anchor") as HTMLTextAreaElement).value)
+    .toBe("A draft I have not saved.");
+  expect(api.setCharacterVoiceAnchor).not.toHaveBeenCalled();   // still unsaved, not written
+});
+
 test("a pending anchor load cannot be saved as a blank opt-out (#59)", async () => {
   // A blank anchor PUT DELETES it. "" is also the placeholder shown while the
   // GET is in flight, so an enabled Save button would let a fast click wipe a

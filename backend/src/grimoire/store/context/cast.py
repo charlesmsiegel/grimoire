@@ -129,16 +129,33 @@ def _voice_notes(cid: str, croot, cast: list[dict]) -> list[dict]:
     present = [a["name"] for a in cast if isinstance(a.get("name"), str) and a["name"].strip()]
     present += ["You", "Grimoire"]
 
+    # Cards come off the APPEARANCE-RECORD root, not the bare campaign root the
+    # flags use. Same directory, but only one of those reads is legitimate
+    # campaign-side: `cast` is a `scene_cast` result, so every actor in it is
+    # locked and its card was copied into the campaign tree -- the documented
+    # exception `locked_actor_root` names. A raw-croot card read is the mistake
+    # the overlay exists to prevent, and the guard flags it as such.
+    aroot = appearances_paths.locked_actor_root(cid)
     out: list[dict] = []
     for a in cast:
         if a["kind"] != "characters" or a["role"] != "npc":
             continue
+        # The RAW card name, like the judge reads (routes/scenes.py). `a["name"]`
+        # substitutes the actor id for a card carrying no usable one, and a slug
+        # is not a name the model can match to anything: the NPC card in front of
+        # it has no `name` at all, so a corrective addressed to the slug is an
+        # instruction about nobody. Suppress rather than address a stranger.
+        try:
+            vid = appearances_versions.locked_version(cid, "characters", a["id"])
+            data = characters.read_card(aroot, a["id"], vid).get("data")
+        except Exception:  # noqa: BLE001 -- an unreadable card owes no corrective
+            continue
+        name = data.get("name") if isinstance(data, dict) else None
         # `scenes.confusable` rather than a whole-name comparison, for the same
         # reason absorb uses it: "Winifred Vance" and "Winifred Vale" are
         # distinct strings, but neither owns the label "Winifred" -- and the
         # model reading this corrective is holding both their cards.
-        name = a.get("name")
-        if scenes_serialize.confusable(name, present):
+        if not isinstance(name, str) or scenes_serialize.confusable(name, present):
             continue
         # ONE read for note and provenance: the flag is replaced atomically, so
         # reading them separately can straddle a chronicle save and validate a
