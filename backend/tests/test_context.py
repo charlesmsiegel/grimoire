@@ -2094,6 +2094,82 @@ def test_a_given_name_behind_an_unlisted_title_is_a_form(monkeypatch, tmp_path):
     assert "The Guild watches the pier." in section
 
 
+def test_an_elided_particle_still_yields_both_ends_of_the_name(monkeypatch, tmp_path):
+    """`_PARTICLE` is matched whole, so `d'Ormesson` -- one token, lower-cased
+    head, in no set -- read as an epithet and rejected the WHOLE name: neither
+    end was derived and the suspicion went to the prompt. The apostrophe is the
+    signal, and the name behind it is a form in its own right because prose
+    drops the particle as readily as it keeps it."""
+    from grimoire.store import appearances, campaigns, characters, playstate, scenes, worlds
+    from grimoire.store.context import world_state
+    assert world_state._short_alias("Jean d'Ormesson") == "Jean"
+    assert world_state._surname_alias("Jean d'Ormesson") == "d'Ormesson"
+    assert world_state._forms({"Jean d'Ormesson"}) == {
+        "Jean d'Ormesson", "Jean", "d'Ormesson", "Ormesson"}
+    assert world_state._forms({"Mara dell'Acqua"}) == {
+        "Mara dell'Acqua", "Mara", "dell'Acqua", "Acqua"}
+    # An epithet is still an epithet: the article rejects it however it is
+    # punctuated, and a bare lower-case token still has no apostrophe to save it.
+    assert world_state._name_tokens("The Woman o' the Pier") == []
+    assert world_state._name_tokens("Mara vance") == []
+
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = campaigns.create_campaign("Run", worlds.create_world("W"))
+    croot = campaigns.campaign_root(cid)
+    elided = "Jean d'Ormesson"
+    watcher = characters.create_character(croot, "Seraphine", "main",
+                                          characters.blank_card("Seraphine"))[0]
+    named = characters.create_character(croot, elided, "main",
+                                        characters.blank_card(elided))[0]
+    sid = scenes.create_scene(cid, "Now")
+    appearances.appear(cid, sid, "characters", watcher, "main", "npc")
+    appearances.appear(cid, sid, "characters", named, "main", "npc")
+    playstate.write_state(croot, watcher, playstate.compose_body(
+        "Wary.", "",
+        "Jean is hiding the ledger.\n\nOrmesson sold the manifest.\n\n"
+        "The Guild watches the pier."))
+    section = _state_section(cid, sid)
+    assert "hiding the ledger" not in section
+    assert "sold the manifest" not in section        # the particle-less form too
+    assert "The Guild watches the pier." in section
+
+
+def test_a_colon_heading_survives_the_blank_before_its_list(monkeypatch, tmp_path):
+    """`Winifred:` / blank / `- is hiding the ledger` is as ordinary as writing
+    it tight. Popping the governor at the blank withheld the heading that names
+    her and published the subjectless bullet under it — the governor leak again,
+    reached through the blank line instead of the syntax."""
+    from grimoire.store import playstate
+    cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
+    playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
+        "Wary.", "",
+        "Winifred:\n"
+        "\n"
+        "- is hiding the ledger\n"
+        "\n"
+        "Mara sold the manifest."))
+    section = _state_section(cid, sid)
+    assert "hiding the ledger" not in section
+    assert "Mara sold the manifest." in section     # an absent character is untouched
+
+
+def test_a_paragraph_after_the_blank_is_not_governed(monkeypatch, tmp_path):
+    """Only a LIST keeps a colon heading open across the blank. An ordinary
+    paragraph below one is a new statement, which is the case the pop was
+    written for — without this the fix above becomes the all-or-nothing
+    behaviour `_entries` exists to avoid."""
+    from grimoire.store import playstate
+    cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
+    playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
+        "Wary.", "",
+        "Winifred:\n"
+        "\n"
+        "The crates moved again last night."))
+    section = _state_section(cid, sid)
+    assert "Winifred:" not in section                     # the heading names her
+    assert "The crates moved again last night." in section
+
+
 def test_a_stacked_title_does_not_consume_the_given_name_slot(monkeypatch, tmp_path):
     """`_name_tokens` strips only a leading token it RECOGNIZES as a title, so
     with titles stacked the interior one is still a title — and stopping on it
