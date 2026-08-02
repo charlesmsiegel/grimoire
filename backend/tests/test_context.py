@@ -3400,3 +3400,34 @@ def test_a_corrective_is_suppressed_when_the_card_has_no_name(monkeypatch, tmp_p
     assert [a["name"] for a in ap.scene_cast(cid, sid) if a["id"] == "winifred"] == ["winifred"]
 
     assert "drifted out of voice" not in context.build_messages(cid, sid)[-1]["content"]
+
+
+def test_indentation_is_measured_in_columns_not_characters(monkeypatch, tmp_path):
+    """Markdown nests by column, and a tab is one character but four columns. A
+    child bullet written with a tab counted as shallower than its space-indented
+    parent, so the parent naming her was popped and the subjectless child was
+    left ungoverned."""
+    from grimoire.store import playstate
+    cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
+    playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
+        "Wary.", "", "Notes:\n  - Winifred\n\t- is hiding the ledger"))
+    section = _state_section(cid, sid)
+    assert "hiding the ledger" not in section
+
+
+def test_a_name_soft_wrapped_across_a_line_break_is_still_matched(monkeypatch, tmp_path):
+    """An epithet-shaped name yields no short alias, so the full form is the
+    only thing that can match her — and a multi-word form is only ever found
+    within one line. Wrapped across the break it appeared in neither, and the
+    whole private suspicion survived into the prompt."""
+    from grimoire.store import appearances, characters, playstate
+    cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
+    # An epithet-shaped name: `_forms` derives no short alias from it, so the
+    # whole string is the only form she has.
+    epithet = "The Woman on the Pier"
+    wid = characters.create_character(croot, epithet, "main",
+                                      characters.blank_card(epithet))[0]
+    appearances.appear(cid, sid, "characters", wid, "main", "npc")
+    playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
+        "Wary.", "", "The Woman on the\nPier is hiding the ledger."))
+    assert "hiding the ledger" not in _state_section(cid, sid)

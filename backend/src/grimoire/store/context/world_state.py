@@ -427,6 +427,10 @@ def _mentions(text: str, form: str) -> bool:
 _USER_MACRO = re.compile(r"\{\{user\}\}", re.IGNORECASE)
 
 
+#: Markdown's tab stop. Indentation is a COLUMN count, not a character count,
+#: and every nesting comparison below is one of those columns.
+_TAB = 4
+
 _LIST_MARKER = re.compile(r"[-*•+]\s|\d+[.)]\s")
 
 #: Blockquote markers, taken off the front before a line is classified. A quote
@@ -606,8 +610,17 @@ def _entries(suspects: str) -> list[list[str]]:
         # quoted list nests exactly as an unquoted one does. A line that is
         # nothing but quote markers IS the blank line of its quote, and is
         # treated as one.
-        outer = len(line) - len(line.lstrip())
-        stripped = line.strip()
+        #
+        # Measured on a TAB-EXPANDED copy, because markdown nests by column and
+        # a tab is one character but four columns. `  - Winifred` followed by
+        # `\t- is hiding the ledger` is a child bullet, and counting characters
+        # made it 2 against 1 -- the child looked shallower, popped the parent
+        # that names her, and the subjectless line under it went to the prompt.
+        # The ORIGINAL line is what gets stored, so nothing here rewrites the
+        # author's whitespace; only the arithmetic sees the expansion.
+        exp = line.expandtabs(_TAB)
+        outer = len(exp) - len(exp.lstrip())
+        stripped = exp.strip()
         quote = _QUOTE.match(stripped)
         if quote:
             inner = stripped[quote.end():]
@@ -850,8 +863,18 @@ def _visible_suspects(suspects: str, others: set[str]) -> str:
     entries = _entries(suspects)
     dropped: list[bool] = []
     for lines, head in entries:
+        # The JOINED entry as well as each line. `_entries` already groups a
+        # paragraph correctly, but a multi-word form is only ever found within
+        # one line -- so a name soft-wrapped across the break (`The Woman on
+        # the` / `Pier is hiding the ledger`) appeared in neither line and the
+        # whole private suspicion survived. That is exactly the actor whose name
+        # yields no short alias, so the full form is the only thing that can
+        # match her at all. Joined with spaces because the break is where a
+        # space would otherwise be, and the forms are written with spaces.
         dropped.append((head >= 0 and dropped[head])
-                       or any(_names_present_actor(line, others) for line in lines))
+                       or any(_names_present_actor(line, others) for line in lines)
+                       or (len(lines) > 1
+                           and _names_present_actor(" ".join(lines), others)))
     kept: list[str] = []
     for (lines, _), gone in zip(entries, dropped):
         if not gone:
