@@ -1704,6 +1704,29 @@ def test_a_turn_that_fails_with_nothing_takes_its_user_post_back(client):
     assert resp.status_code == 200
     assert '"kind": "network"' in resp.text
     assert client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"] == []
+    # and it says so, because the client has to give the player their words back
+    assert '"post_returned": true' in resp.text
+
+
+async def test_a_failed_turn_does_not_roll_back_once_a_newer_turn_claimed(monkeypatch, tmp_path):
+    """The rollback is as destructive as the abort write and needs the same
+    ownership check. An overlapping retry or director note appends nothing, so
+    index-and-tail still match the older turn's post while the newer one is
+    generating *from* it — and deleting it there takes away the question the
+    newer reply is about to answer."""
+    cid, sid, at = _scene_with_a_pending_post(tmp_path, monkeypatch)
+    conn = {"kind": "openrouter", "model": "m"}
+    older = routes.streaming._chat_stream(
+        cid, sid, [{"role": "user", "content": "and then?"}], conn, FailingOpenRouter(),
+        undo_user_post=lambda: store.scenes.remove_trailing_user_post(cid, sid, at, "and then?"))
+    routes.streaming._chat_stream(          # a retry claims the scene, appending nothing
+        cid, sid, [{"role": "user", "content": "and then?"}], conn, StallingOpenRouter())
+    frames = [f async for f in older.body_iterator]
+
+    assert store.scenes.read_scene(cid, sid)["messages"] == [
+        {"role": "user", "content": "and then?"}]        # the post survives
+    assert '"kind": "network"' in "".join(frames)
+    assert "post_returned" not in "".join(frames)         # and the client is not told otherwise
 
 
 def test_a_turn_that_fails_part_way_keeps_both_halves(client):

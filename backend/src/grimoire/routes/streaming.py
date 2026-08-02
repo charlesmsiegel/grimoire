@@ -176,9 +176,10 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
                 yield _sse({"delta": tail})
         except LLMError as exc:
             watcher.finish()
+            note: dict = {}
             if on_error is not None:
                 try:
-                    await run_in_threadpool(on_error, watcher)
+                    note = await run_in_threadpool(on_error, watcher) or {}
                 except (store.locks.StoreBusy, store.scenes.SceneNotFound):
                     # on_error writes to the scene -- it persists the partial
                     # reply, and now may also take the user post back off (#95)
@@ -195,7 +196,15 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
                     # failure that brought us here. The write is lost; the frame
                     # below still tells the user why.
                     pass
-            yield _sse({"error": {"detail": exc.detail, "kind": exc.kind}})
+            # `note` carries what the handler *did*, not what went wrong: today
+            # just `post_returned`, so the client can put the player's words
+            # back in the composer instead of losing them (#95). Reported rather
+            # than recomputed on the client, because only this side knows
+            # whether the rollback actually fired -- it declines when the post
+            # is no longer the tail, and a client guessing "failed with no text
+            # ⇒ rolled back" would restore a prompt that is still in the
+            # transcript and have the player send it twice.
+            yield _sse({"error": {"detail": exc.detail, "kind": exc.kind, **note}})
             return
         except BaseException:
             # Cancellation, `GeneratorExit`, or anything else that ends this
@@ -286,11 +295,28 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
         frames.append(_sse({"done": True}))
         return frames
 
-    def on_error(watcher) -> None:
+    def on_error(watcher) -> dict:
+        """What to do with a turn the provider failed, and what to tell the
+        client about it.
+
+        The rollback is gated on this turn still holding the scene's claim, for
+        the reason `on_abort` is: an overlapping retry or director note appends
+        nothing, so index-and-tail still match A's post while B is generating
+        from it, and the undo would delete the very post B is answering. Failing
+        the check leaves an orphan, which is the direction this is allowed to be
+        wrong in.
+
+        Gating only the *rollback*, not the partial-reply persist beside it. The
+        persist is additive and predates this branch; dropping it under
+        contention would be a new way to lose text, decided as a rider on a fix
+        for a different problem. Deleting is what needs the discipline.
+        """
         if watcher.narration.strip():  # a normal turn keeps its partial reply
             _persist_reply(cid, sid, watcher.narration)
-        elif undo_user_post is not None:
-            undo_user_post()
+        elif undo_user_post is not None and _owns_turn(cid, sid, turn_token):
+            if undo_user_post():
+                return {"post_returned": True}
+        return {}
 
     def on_abort(watcher) -> list[str]:
         """Finish a cancelled turn exactly as a completed one — but only while

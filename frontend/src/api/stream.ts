@@ -6,7 +6,13 @@ export type RollProposalPayload = {
   available?: Record<string, [string, string][]>;
   problems: string[];
 };
-export type ChatEvent = { delta?: string; done?: boolean; error?: { detail: string; kind: string }; proposal?: RollProposalPayload };
+// `post_returned` on a chat error means the backend took the player's post back
+// off the transcript (#95) — so the composer has to give them their words back,
+// or a failed send silently destroys what they typed.
+export type ChatEvent = {
+  delta?: string; done?: boolean; proposal?: RollProposalPayload;
+  error?: { detail: string; kind: string; post_returned?: boolean };
+};
 
 export type LocalizeSummary = {
   total: number;
