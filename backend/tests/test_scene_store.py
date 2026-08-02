@@ -418,6 +418,52 @@ def test_remove_trailing_assistant_run(monkeypatch, tmp_path):
         scenes.remove_trailing_assistant_run(cid, sid)
 
 
+def test_remove_trailing_user_post_takes_back_the_orphan(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    scenes.append_message(cid, sid, "user", "hi")
+    scenes.append_message(cid, sid, "assistant", "hello")
+    scenes.append_message(cid, sid, "user", "and then?")
+    assert scenes.remove_trailing_user_post(cid, sid, "and then?") is True
+    assert scenes.read_scene(cid, sid)["messages"] == [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello"},
+    ]
+
+
+def test_remove_trailing_user_post_leaves_a_transcript_that_moved_on(monkeypatch, tmp_path):
+    """Only the post the caller named, and only while it is still last. A reply
+    or a manual roll landing behind it means the turn is no longer the tail, and
+    an undo that deleted anyway would take back an answered post."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    scenes.append_message(cid, sid, "user", "and then?")
+    assert scenes.remove_trailing_user_post(cid, sid, "something else") is False
+    scenes.append_message(cid, sid, "assistant", "the door opens")
+    assert scenes.remove_trailing_user_post(cid, sid, "and then?") is False
+    assert len(scenes.read_scene(cid, sid)["messages"]) == 2
+
+
+def test_remove_trailing_user_post_keeps_turn_boundaries(monkeypatch, tmp_path):
+    """turn_sizes counts model blocks, so taking a user post off must not
+    disturb it — a shifted boundary would have reroll eat the wrong generation."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    scenes.append_reply(cid, sid, [{"speaker": None, "content": "one"},
+                                   {"speaker": None, "content": "two"}])
+    scenes.append_message(cid, sid, "user", "orphan")
+    assert scenes.remove_trailing_user_post(cid, sid, "orphan") is True
+    assert scenes.get_turn_sizes(cid, sid) == [2]
+
+
+def test_remove_trailing_user_post_on_an_empty_or_missing_scene(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    assert scenes.remove_trailing_user_post(cid, sid, "anything") is False
+    with pytest.raises(scenes.SceneNotFound):
+        scenes.remove_trailing_user_post(cid, "nope", "anything")
+
+
 def test_roll_speaker_does_not_collide_with_a_character_actually_named_roll(monkeypatch, tmp_path):
     # A real speaker literally named "Roll" must round-trip as plain "Roll",
     # not be swallowed by the (invisible-prefixed) manual-roll sentinel.

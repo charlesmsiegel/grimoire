@@ -34,12 +34,50 @@ from __future__ import annotations
 
 import json
 
+import anyio
 from fastapi.responses import StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
 from .. import store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
+
+# An SSE comment: framing every proxy on the path understands as traffic, and
+# that `parseSSEChunk` already skips (it only reads `data:` lines), so the
+# client needs no matching change to tolerate one. Emitted whenever the facade
+# reports it is still waiting on the model (#95) -- before the first token, a
+# generation is otherwise indistinguishable from a dead connection.
+_HEARTBEAT = ": heartbeat\n\n"
+
+
+async def _flush_on_abort(hook, watcher) -> None:
+    """Persist a turn's partial output while the stream is being torn down.
+
+    The disconnect path, not the error path: a client that navigates away or
+    presses Cancel makes Starlette cancel the task driving this generator, and
+    the resulting ``CancelledError``/``GeneratorExit`` is not an ``LLMError``,
+    so the handler that persists partials never used to run and the text was
+    dropped on the floor (#95).
+
+    Shielded, because the cancellation is already in flight: inside a cancelled
+    scope the next await would re-raise before the write could start. The wait
+    is bounded by the store lock's own timeout rather than a second one here --
+    ``run_in_threadpool`` is not cancellable, so a bound around it would only
+    lie about when this returns.
+    """
+    if hook is None:
+        return
+    try:
+        with anyio.CancelScope(shield=True):
+            await run_in_threadpool(hook, watcher)
+    except Exception:  # noqa: BLE001 - a failed rescue must not replace the teardown
+        # Nothing left to tell anyone: the client is gone and the exception that
+        # brought us here is about to be re-raised, so anything raised in here
+        # would only mask it. Broad rather than `StoreBusy` alone (the error
+        # path's narrower catch, #234) because this one runs during unwinding,
+        # where the loop may be shutting down under it -- and losing a partial
+        # is the outcome this path already accepts.
+        pass
 
 
 def _persist_reply(cid: str, sid: str, text: str) -> None:
@@ -70,7 +108,7 @@ def _sse_response(frames: list[str]):
 
 
 def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
-                  client: LLMClient, finalize, on_error=None):
+                  client: LLMClient, finalize, on_error=None, on_abort=None):
     """Stream one persisted turn while watching for a ```roll fence.
 
     Deltas are routed through a FenceWatcher, so an opener (even split across
@@ -80,11 +118,23 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
     (proposal / done). `on_error(watcher)` decides what to persist on an
     upstream LLM failure. Fence watching runs on persisted turns only;
     `_ephemeral_stream` is deliberately untouched.
+
+    `on_abort(watcher)` is the same decision for a *disconnect* — the client
+    cancelled, or the connection died — which arrives as cancellation rather
+    than as an `LLMError` and so needs its own handler. It is deliberately a
+    second hook and not a reuse of `on_error`: a hard failure and a deliberate
+    cancel want different things done with a turn that produced nothing (a
+    failure's orphaned user post is rolled back, a cancelled one is kept so the
+    player can retry it), and only `on_error` is reached with a frame still to
+    send.
     """
     async def event_stream():
         watcher = store.fence.FenceWatcher()
         try:
             async for delta in client.stream(messages, conn):
+                if not delta:
+                    yield _HEARTBEAT  # the facade is still waiting on the model
+                    continue
                 out = watcher.feed(delta)
                 if out:
                     yield _sse({"delta": out})
@@ -108,6 +158,16 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
                     pass
             yield _sse({"error": {"detail": exc.detail, "kind": exc.kind}})
             return
+        except BaseException:
+            # Cancellation, `GeneratorExit`, or anything else that ends this
+            # generator without going through the branch above. No frame can be
+            # emitted -- the socket is gone and a generator being closed may not
+            # yield -- so the only thing left to do is save the text, then let
+            # the teardown continue: swallowing it here would tell Starlette the
+            # response ended normally.
+            watcher.finish()
+            await _flush_on_abort(on_abort, watcher)
+            raise
         try:
             # In a worker thread, not inline (#234). `finalize` is synchronous
             # and now waits on a cross-process lock, whose retry loop sleeps for
@@ -146,11 +206,24 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
-def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: LLMClient):
+def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: LLMClient,
+                 undo_user_post=None):
     """A normal persisted turn. A ```roll fence cuts the stream: the pending
     proposal record is written *before* the pre-fence narration persists, so a
     transcript that ends at a mechanical decision point always has a
-    recoverable proposal (see the crash-window disclosure above)."""
+    recoverable proposal (see the crash-window disclosure above).
+
+    `undo_user_post` makes the turn transactional (#95). The caller appends the
+    player's message before the stream starts, because the context builders
+    render history out of the transcript and so need it already there; that
+    leaves a window where an upstream failure strands a post with no reply and
+    no way to tell it apart from one the model simply ignored. When a turn fails
+    having produced *nothing*, this callback takes that post back off, so the
+    scene ends up where it started. A turn that produced even a partial reply
+    keeps both halves — the post is answered, just not fully — and a cancelled
+    turn keeps its post too, since the player asked to stop and will likely
+    retry from exactly there.
+    """
     def finalize(watcher) -> list[str]:
         frames: list[str] = []
         if watcher.complete or watcher.truncated:
@@ -167,8 +240,16 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
     def on_error(watcher) -> None:
         if watcher.narration.strip():  # a normal turn keeps its partial reply
             _persist_reply(cid, sid, watcher.narration)
+        elif undo_user_post is not None:
+            undo_user_post()
 
-    return _fence_stream(cid, sid, messages, conn, client, finalize, on_error)
+    def on_abort(watcher) -> None:
+        # The persist half of on_error and nothing else: see `undo_user_post`
+        # above for why a cancel keeps the post a failure would have removed.
+        if watcher.narration.strip():
+            _persist_reply(cid, sid, watcher.narration)
+
+    return _fence_stream(cid, sid, messages, conn, client, finalize, on_error, on_abort)
 
 
 def _continuation_stream(cid: str, sid: str, pid: str, messages: list[dict],
@@ -194,9 +275,12 @@ def _continuation_stream(cid: str, sid: str, pid: str, messages: list[dict],
         frames.append(_sse({"done": True}))
         return frames
 
-    # No on_error: an upstream failure mid-continuation drops the partial
-    # (nothing persisted) and leaves the record resolved/declined, so a retry
-    # re-streams a fresh continuation cleanly.
+    # No on_error, and no on_abort either: an upstream failure or a disconnect
+    # mid-continuation drops the partial (nothing persisted) and leaves the
+    # record resolved/declined, so a retry re-streams a fresh continuation
+    # cleanly. Persisting here would be worse than losing the text — narration
+    # committed outside `commit_narration` is narration a supersede can no
+    # longer displace.
     return _fence_stream(cid, sid, messages, conn, client, finalize)
 
 
@@ -205,6 +289,9 @@ def _ephemeral_stream(messages: list[dict], conn: dict, client: LLMClient):
     async def event_stream():
         try:
             async for delta in client.stream(messages, conn):
+                if not delta:
+                    yield _HEARTBEAT  # still waiting on the model (#95)
+                    continue
                 yield f"data: {json.dumps({'delta': delta})}\n\n"
             yield f"data: {json.dumps({'done': True})}\n\n"
         except LLMError as exc:

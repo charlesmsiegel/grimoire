@@ -1,3 +1,4 @@
+import asyncio
 import importlib
 import io
 import json
@@ -7,6 +8,7 @@ from fastapi.testclient import TestClient
 
 import grimoire.store as store
 from grimoire import routes
+from grimoire.llm_errors import LLMError
 from grimoire.main import create_app
 
 
@@ -1516,6 +1518,154 @@ def test_chat_streams_and_persists(client):
     assert 'data: {"done": true}' in resp.text
     msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
     assert msgs[-1] == {"role": "assistant", "content": "Hello"}
+
+
+# ---- turn cancel / heartbeat / transactional post+response (#95) ----
+
+class FailingOpenRouter:
+    """Streams `deltas`, then fails upstream — a turn that dies part-way."""
+
+    def __init__(self, deltas=()):
+        self.deltas = list(deltas)
+
+    async def stream(self, messages, cfg):
+        for d in self.deltas:
+            yield d
+        raise LLMError("network", "connection reset")
+
+
+class StallingOpenRouter:
+    """Streams `deltas`, then holds the connection open — the model still
+    talking when the client walks away."""
+
+    def __init__(self, deltas=()):
+        self.deltas = list(deltas)
+
+    async def stream(self, messages, cfg):
+        for d in self.deltas:
+            yield d
+        await asyncio.sleep(30)  # bounded so a regression fails rather than hangs
+
+
+class QuietThenAnswers:
+    """Reports liveness with no text before answering — what the LLM facade
+    surfaces while it is still waiting on the provider."""
+
+    async def stream(self, messages, cfg):
+        yield ""
+        yield "At last."
+
+
+def _scene_with_a_pending_post(tmp_path, monkeypatch, content="and then?"):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    importlib.reload(store)
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Run", wid)
+    sid = store.scenes.create_scene(cid, "Saltmarch")
+    store.scenes.append_message(cid, sid, "user", content)
+    return cid, sid
+
+
+async def test_a_disconnect_mid_turn_still_persists_what_arrived(monkeypatch, tmp_path):
+    """The data-loss gap this issue was filed for (#95). A client that goes away
+    closes the generator, which raises GeneratorExit at the yield — not an
+    LLMError — so the handler that saves partial replies never ran and the text
+    was dropped silently."""
+    cid, sid = _scene_with_a_pending_post(tmp_path, monkeypatch)
+    resp = routes.streaming._chat_stream(
+        cid, sid, [{"role": "user", "content": "and then?"}], {"kind": "openrouter", "model": "m"},
+        StallingOpenRouter(["The tide ", "turns."]))
+    frames = resp.body_iterator
+    assert "The tide " in await frames.__anext__()
+    assert "turns." in await frames.__anext__()
+    await frames.aclose()  # exactly what Starlette does when the socket dies
+    msgs = store.scenes.read_scene(cid, sid)["messages"]
+    assert msgs[-1] == {"role": "assistant", "content": "The tide turns."}
+
+
+async def test_a_cancelled_turn_keeps_the_post_it_could_not_answer(monkeypatch, tmp_path):
+    """Cancel is not failure: the player stopped a turn they mean to run again,
+    so the post stays put even though nothing came back. The rollback below is
+    reserved for turns that failed."""
+    cid, sid = _scene_with_a_pending_post(tmp_path, monkeypatch)
+    resp = routes.streaming._chat_stream(
+        cid, sid, [{"role": "user", "content": "and then?"}], {"kind": "openrouter", "model": "m"},
+        StallingOpenRouter(),
+        undo_user_post=lambda: store.scenes.remove_trailing_user_post(cid, sid, "and then?"))
+    await resp.body_iterator.aclose()
+    assert store.scenes.read_scene(cid, sid)["messages"] == [
+        {"role": "user", "content": "and then?"}]
+
+
+def test_a_turn_that_fails_with_nothing_takes_its_user_post_back(client):
+    """Transactional post+response (#95): the post is appended before the
+    stream, so a generation that produces nothing at all would otherwise leave
+    it in the transcript unanswered and indistinguishable from a turn the model
+    chose to skip."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    client.app.dependency_overrides[routes.get_llm] = lambda: FailingOpenRouter()
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "and then?"})
+    assert resp.status_code == 200
+    assert '"kind": "network"' in resp.text
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"] == []
+
+
+def test_a_turn_that_fails_part_way_keeps_both_halves(client):
+    """A partial reply means the post WAS answered, just not fully — rolling it
+    back would delete a question its own answer refers to."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: FailingOpenRouter(["The tide turns."])
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "and then?"})
+    assert resp.status_code == 200
+    msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    assert [m["content"] for m in msgs] == ["and then?", "The tide turns."]
+
+
+def test_a_failed_retry_leaves_the_transcript_alone(client):
+    """Only chat hands over an undo — retry and regenerate append nothing of
+    their own, so there is nothing of theirs to take back."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "and then?")
+    client.app.dependency_overrides[routes.get_llm] = lambda: FailingOpenRouter()
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/retry")
+    assert resp.status_code == 200
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"] == [
+        {"role": "user", "content": "and then?"}]
+
+
+def test_chat_emits_a_heartbeat_while_the_model_is_silent(client):
+    """An SSE comment, so proxies see traffic through the quiet stretch before
+    the first token — and so the client can ignore it with no change of its own
+    (`parseSSEChunk` reads `data:` lines only)."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    client.app.dependency_overrides[routes.get_llm] = lambda: QuietThenAnswers()
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "hi"})
+    assert ": heartbeat\n\n" in resp.text
+    assert 'data: {"delta": "At last."}' in resp.text
+    msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+    assert msgs[-1] == {"role": "assistant", "content": "At last."}
+
+
+def test_the_opener_heartbeats_too(client):
+    """The ephemeral stream persists nothing, but it waits on the same model
+    behind the same proxies."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    client.app.dependency_overrides[routes.get_llm] = lambda: QuietThenAnswers()
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/opener", json={"prompt": "begin"})
+    assert ": heartbeat\n\n" in resp.text
+    assert 'data: {"delta": "At last."}' in resp.text
+    assert client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"] == []
 
 
 def test_chat_resolves_roll_macro_once_and_persists_stably(client):
