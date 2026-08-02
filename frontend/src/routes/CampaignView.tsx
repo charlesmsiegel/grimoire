@@ -1399,6 +1399,11 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       try {
         await api.pickAlternate(cid, sid, target.id);
       } catch (err: any) {
+        // Scoped like every other write this component reports. Switching
+        // scenes clears the banner deliberately — one scene's failure must not
+        // offer its Retry against another — and a swap rejecting after the move
+        // would put it straight back under a scene it has nothing to do with.
+        if (!stillHere()) return;
         fail(err, false);
         // `promote` removes the live run and then appends the chosen one. If
         // the append is what failed, the slot is now EMPTY — the sidecar still
@@ -1406,7 +1411,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
         // reply on screen means every message index below it is a lie and an
         // edit saves over the wrong post. Re-read so the empty slot and the
         // control that refills it are what the reader sees.
-        if (stillHere()) await selectScene(sid).catch(() => {});
+        await selectScene(sid).catch(() => {});
         return;
       }
       // Past here the swap has COMMITTED, and nothing that fails below may be
