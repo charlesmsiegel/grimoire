@@ -1812,6 +1812,40 @@ test("a rename whose relist fails still re-reads the renamed transcript", async 
   expect((api.getScene as any).mock.calls.at(-1)[1]).toBe("s1-renamed");
 });
 
+test("a rename whose relist is slow does not pull the reader back", async () => {
+  // The rename PUT is not the only await in that path. Deciding whether to
+  // refresh from a flag captured before the relist means a reader who moved on
+  // during it gets dragged back: `selectScene` calls `setActive`.
+  let finishRelist: (v: any) => void = () => {};
+  (api.listScenes as any).mockResolvedValueOnce([
+    { id: "s1", title: "One", model: "", created: "", updated: "" },
+    { id: "s2", title: "Two", model: "", created: "", updated: "" },
+  ]).mockImplementation(() => new Promise((res) => { finishRelist = res; }));
+  (api.getScene as any).mockImplementation(async (_c: string, s: string) => ({
+    meta: {}, messages: [
+      { role: "user", content: "hi" },
+      { role: "assistant", content: s === "s2" ? "the other scene" : "a reply" }] }));
+  (api.renameScene as any).mockResolvedValue({ id: "s1-renamed", title: "New" });
+  renderCampaign();
+  await screen.findByText("a reply");
+
+  fireEvent.click(screen.getAllByRole("button", { name: /rename/i })[0]);
+  const input = screen.getByDisplayValue("One");
+  fireEvent.change(input, { target: { value: "New" } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  // the PUT has landed and the id is adopted; the relist is still open
+  await waitFor(() => expect(api.listScenes).toHaveBeenCalledTimes(2));
+  fireEvent.click(await screen.findByText(/· Two$/));
+  await waitFor(() => expect((api.getScene as any).mock.calls.map((c: any) => c[1])).toContain("s2"));
+  finishRelist([{ id: "s1-renamed", title: "New", model: "", created: "", updated: "" },
+                { id: "s2", title: "Two", model: "", created: "", updated: "" }]);
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+  // no read for the renamed scene after the reader left it: `selectScene` calls
+  // `setActive`, so one would have navigated them back and loaded it over Two
+  expect((api.getScene as any).mock.calls.map((c: any) => c[1])).toEqual(["s1", "s2"]);
+});
+
 test("a stale swap succeeding does not clear the new scene's banner", async () => {
   // The scoped latch deliberately leaves the destination usable, so it can
   // raise a failure of its own while the old scene's POST is still open. That

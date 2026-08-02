@@ -866,7 +866,6 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     markRenaming(true);
     try {
       const { id: newId } = await api.renameScene(cid, id, title);
-      const stillReading = activeIdRef.current === id;   // before adopting re-points it
       adoptSceneId(id, newId);
       try {
         setScenes(await api.listScenes(cid));
@@ -888,11 +887,17 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
         // The re-read is the half that keeps edits from saving over the wrong
         // post; the rail being stale is cosmetic.
         //
-        // `activeIdRef`, not the render-captured `activeId`: the reader can
-        // select another scene while the rename is in flight, and pulling this
-        // one back over it would be wrong twice — the wrong scene, carrying the
-        // turn state of the one they left.
-        if (stillReading) await selectScene(newId, undefined, true);
+        // Asked HERE, against the new id, rather than remembered from before
+        // the rename: the relist above is a second await, and a flag captured
+        // ahead of it says what was true then. `selectScene` calls `setActive`,
+        // so a reader who moved on during the relist would not merely get a
+        // refresh they did not need — they would be dragged back to it.
+        //
+        // The new id is the right side of the comparison because `adoptSceneId`
+        // has already re-pointed the ref: a reader still on this scene is
+        // wearing `newId` by now, and one who left is somewhere else. Same test
+        // the first-date path makes, for the same reason.
+        if (activeIdRef.current === newId) await selectScene(newId, undefined, true);
       }
     } catch (err: any) {
       fail(err, false);   // the rename itself; generating is not its recovery
