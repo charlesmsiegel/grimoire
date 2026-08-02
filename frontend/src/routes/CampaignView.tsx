@@ -349,7 +349,25 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   } | null>(null);
   const [checkActors, setCheckActors] = useState<SceneCheckActor[]>([]);
   const checksFetched = useRef(false); // one getSceneChecks per popover session
-  const [rolling, setRolling] = useState(false);
+  // The in-flight-store-mutation latch, shared by the dice roll, the check roll
+  // and the alternate swap. Scoped to the scene that took it rather than being a
+  // bare boolean: it was component-wide, so an operation belonging to a scene
+  // the reader has left held every control in the scene they entered — Send,
+  // Retry, reroll, edit, roll — until an unrelated request settled. Review found
+  // that against the swap; the two roll paths had it already.
+  //
+  // The token is what makes releasing safe: a slow operation finishing after a
+  // newer one took the latch must not clear the newer one's.
+  const [rollingFor, setRollingFor] =
+    useState<{ cid: string; sid: string; token: number } | null>(null);
+  const rollTokenRef = useRef(0);
+  const rolling = !!rollingFor && rollingFor.cid === cid && rollingFor.sid === activeId;
+
+  function takeRollLatch(forSid: string) {
+    const token = ++rollTokenRef.current;
+    setRollingFor({ cid, sid: forSid, token });
+    return () => setRollingFor((cur) => (cur?.token === token ? null : cur));
+  }
   // a pending/resolved roll-proposal record surfaced by the model mid-stream
   // or rehydrated on scene select; RollProposal only renders pending/resolved.
   const [proposal, setProposal] = useState<ProposalRecord | null>(null);
@@ -839,18 +857,27 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       const { id: newId } = await api.renameScene(cid, id, title);
       const stillReading = activeIdRef.current === id;   // before adopting re-points it
       adoptSceneId(id, newId);
-      setScenes(await api.listScenes(cid));
-      // Re-read the transcript, not only the ids that point at it. A swap in
-      // flight against the OLD id finds `activeIdRef` already moved on and
-      // skips its own refresh, so without this nothing ever replaces the
-      // pre-swap posts on screen — with the renamed set's counter on top of
-      // them, and edits saving against indices that have shifted.
-      //
-      // `activeIdRef`, not the render-captured `activeId`: the reader can
-      // select another scene while the rename is in flight, and pulling this
-      // one back over it would be wrong twice — the wrong scene, carrying the
-      // turn state of the one they left.
-      if (stillReading) await selectScene(newId, undefined, true);
+      try {
+        setScenes(await api.listScenes(cid));
+      } finally {
+        // Re-read the transcript, not only the ids that point at it. A swap in
+        // flight against the OLD id finds `activeIdRef` already moved on and
+        // skips its own refresh, so without this nothing ever replaces the
+        // pre-swap posts on screen — with the renamed set's counter on top of
+        // them, and edits saving against indices that have shifted.
+        //
+        // In a `finally`, because the rail relist above is unrelated to it:
+        // ordered first so the row exists before the reader is moved onto it,
+        // but its failure must not decide whether the transcript gets re-read.
+        // The re-read is the half that keeps edits from saving over the wrong
+        // post; the rail being stale is cosmetic.
+        //
+        // `activeIdRef`, not the render-captured `activeId`: the reader can
+        // select another scene while the rename is in flight, and pulling this
+        // one back over it would be wrong twice — the wrong scene, carrying the
+        // turn state of the one they left.
+        if (stillReading) await selectScene(newId, undefined, true);
+      }
     } finally {
       markRenaming(false);
     }
@@ -862,18 +889,25 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   async function sceneRenamed(id: string) {
     const initiator = activeId;   // the scene whose inspector asked for the stamp
     if (initiator) adoptSceneId(initiator, id);
-    setScenes(await api.listScenes(cid));
-    // Only pull the renamed scene onto the screen if it is still the one being
-    // read. A slow first-date request can land after the reader has moved to
-    // another scene, and this callback belongs to the scene that started it —
-    // forcing that one back would be wrong on its own, and doing it as a
-    // *rename refresh* would carry the turn state of the scene they left onto
-    // the one they get.
-    // Compared against the NEW id, not the initiator: `adoptSceneId` re-points
-    // the ref as part of adopting, so the scene that asked for the stamp is
-    // already wearing `id` by now. A reader who moved on during the re-list
-    // leaves the ref somewhere else, and this stays put.
-    if (initiator && activeIdRef.current === id) selectScene(id, undefined, true);
+    try {
+      setScenes(await api.listScenes(cid));
+    } finally {
+      // Only pull the renamed scene onto the screen if it is still the one being
+      // read. A slow first-date request can land after the reader has moved to
+      // another scene, and this callback belongs to the scene that started it —
+      // forcing that one back would be wrong on its own, and doing it as a
+      // *rename refresh* would carry the turn state of the scene they left onto
+      // the one they get.
+      // Compared against the NEW id, not the initiator: `adoptSceneId` re-points
+      // the ref as part of adopting, so the scene that asked for the stamp is
+      // already wearing `id` by now. A reader who moved on during the re-list
+      // leaves the ref somewhere else, and this stays put.
+      //
+      // In a `finally` for the same reason `renameScene` uses one: the relist is
+      // the rail's business, the re-read is the transcript's, and a failure in
+      // the first must not decide whether the second happens.
+      if (initiator && activeIdRef.current === id) selectScene(id, undefined, true);
+    }
   }
 
   async function deleteScene(s: SceneMeta) {
@@ -1383,12 +1417,13 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     // by the time it arrives; an id that is no longer in the set 404s instead.
     const target = alternates.alternates[index];
     if (!target) return;
-    // `rolling` is the in-flight-store-mutation flag doRoll uses, and every
-    // control that must not fire alongside one already reads it. Without it a
-    // double-click computes both indices from the same `alternates.active`
-    // snapshot — two ‹ clicks step back once — and the two selectScene
-    // refreshes can land out of order.
-    setRolling(true);
+    // The in-flight-store-mutation latch doRoll uses, and every control that
+    // must not fire alongside one already reads it. Without it a double-click
+    // computes both indices from the same `alternates.active` snapshot — two ‹
+    // clicks step back once — and the two selectScene refreshes can land out of
+    // order. Taken for `sid`, so leaving the scene releases the controls there
+    // rather than waiting on a request that no longer concerns the reader.
+    const releaseLatch = takeRollLatch(sid);
     // Only the scene the swap was for, and only while it is still the one on
     // screen: the user may have moved on while the POST was in flight, and
     // refreshing would navigate them back to a scene they left. The campaign is
@@ -1449,7 +1484,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
         }
       }
     } finally {
-      setRolling(false);
+      releaseLatch();
     }
   }
 
@@ -1464,7 +1499,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     if (!activeId || busy || sceneLocked || rolling || !rollForm) return;
     const notation = rollForm.notation.trim();
     if (!notation) return;
-    setRolling(true);
+    const releaseLatch = takeRollLatch(activeId);
     try {
       await api.roll(cid, activeId, notation, rollForm.label.trim() || undefined);
       setRollForm(null);
@@ -1472,7 +1507,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     } catch (err: any) {
       setRollForm({ ...rollForm, error: err.detail ?? String(err) });
     } finally {
-      setRolling(false);
+      releaseLatch();
     }
   }
 
@@ -1500,7 +1535,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   async function doCheck() {   // same window, same loss — see doRoll
     if (!activeId || busy || sceneLocked || rolling || !rollForm) return;
     if (!rollForm.checkActor || !rollForm.checkId) return;
-    setRolling(true);
+    const releaseLatch = takeRollLatch(activeId);
     try {
       const body: { check: string; actor: string; difficulty?: number; modifier: number } = {
         check: rollForm.checkId, actor: rollForm.checkActor, modifier: rollForm.modifier,
@@ -1512,7 +1547,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     } catch (err: any) {
       setRollForm({ ...rollForm, error: err.detail ?? String(err) });
     } finally {
-      setRolling(false);
+      releaseLatch();
     }
   }
 
@@ -1546,7 +1581,12 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   // than silently re-absorbing: lore edits append and plot movements add a beat,
   // so a second pass duplicates both (#235). Confirm, then retry with force.
   async function endScene() {
-    if (!activeId || absorbing) return;
+    // `rolling` too, not only `sceneLocked`. Absorb takes its transcript
+    // snapshot once, so a swap committing after it means the review summarises
+    // the take the reader replaced — and saving that review marks the *swapped*
+    // transcript absorbed, with staged edits derived from narration it never
+    // read. The same reasoning as the rule above, for the other latch.
+    if (!activeId || absorbing || rolling) return;
     setAbsorbing(true);
     setError(null);
     setEditFailures([]);
@@ -1846,7 +1886,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
               already marked absorbed. That one does not come back: the review
               is committed against a transcript that no longer matches (#95). */}
           <button className="sub-end" onClick={endScene}
-                  disabled={!activeId || absorbing || busy || sceneLocked}>
+                  disabled={!activeId || absorbing || busy || sceneLocked || rolling}>
             {absorbing ? "Ending…" : "End scene"}
           </button>
         </div>

@@ -1743,6 +1743,75 @@ test("the swipe control renders on a windowed page, where indices are absolute",
   expect(await screen.findByText("2/2")).toBeInTheDocument();
 });
 
+test("a swap in flight does not disable the scene the reader moved to", async () => {
+  // `rolling` is component-wide, so an operation belonging to the scene that was
+  // left held every control in the scene that was entered — Send, Retry, reroll,
+  // edit and roll — until an unrelated request settled.
+  (api.listScenes as any).mockResolvedValue([
+    { id: "s1", title: "One", model: "", created: "", updated: "" },
+    { id: "s2", title: "Two", model: "", created: "", updated: "" },
+  ]);
+  (api.getScene as any).mockImplementation(async (_c: string, s: string) => ({
+    meta: {}, messages: [
+      { role: "user", content: "hi" },
+      { role: "assistant", content: s === "s1" ? "a reply" : "the other scene" }] }));
+  (api.getAlternates as any).mockResolvedValue({
+    active: 1, alternates: [ALT("old"), ALT("a reply")] });
+  (api.pickAlternate as any).mockImplementation(() => new Promise(() => {}));  // never settles
+  renderCampaign();
+  await screen.findByText("2/2");
+
+  fireEvent.click(screen.getByRole("button", { name: /previous alternate/i }));
+  fireEvent.click(await screen.findByText(/· Two$/));
+  await screen.findByText("the other scene");
+
+  expect(screen.getByRole("button", { name: /^Reroll$/i })).not.toBeDisabled();
+});
+
+test("End scene is refused while a swap is in flight", async () => {
+  // Absorb takes its transcript snapshot once, so a swap committing afterwards
+  // means the review summarises the take the reader replaced — and saving it
+  // marks the swapped transcript absorbed against narration it never read.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
+  (api.getAlternates as any).mockResolvedValue({
+    active: 1, alternates: [ALT("old"), ALT("a reply")] });
+  (api.pickAlternate as any).mockImplementation(() => new Promise(() => {}));  // never settles
+  renderCampaign();
+  await screen.findByText("2/2");
+
+  fireEvent.click(screen.getByRole("button", { name: /previous alternate/i }));
+
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: /End scene/ })).toBeDisabled());
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  expect(api.absorbScene).not.toHaveBeenCalled();
+});
+
+test("a rename whose relist fails still re-reads the renamed transcript", async () => {
+  // The re-read is what replaces posts a swap against the OLD id skipped. Behind
+  // the rail relist, an unrelated failure there left the reader on the old take
+  // under the new id, with edits saving against indices that have shifted.
+  (api.listScenes as any).mockResolvedValueOnce(ONE_SCENE)
+    .mockRejectedValue(new Error("relist failed"));
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
+  (api.renameScene as any).mockResolvedValue({ id: "s1-renamed", title: "New" });
+  renderCampaign();
+  await screen.findByText("a reply");
+  const before = (api.getScene as any).mock.calls.length;
+
+  fireEvent.click(screen.getByRole("button", { name: /rename/i }));
+  const input = screen.getByDisplayValue("Old");
+  fireEvent.change(input, { target: { value: "New" } });
+  fireEvent.keyDown(input, { key: "Enter" });
+
+  await waitFor(() =>
+    expect((api.getScene as any).mock.calls.length).toBeGreaterThan(before));
+  expect((api.getScene as any).mock.calls.at(-1)[1]).toBe("s1-renamed");
+});
+
 test("a failed post-swap read does not retry the reader back onto the old scene", async () => {
   // The retry is a second `selectScene`, and `selectScene` calls `setActive` —
   // so once the reader has moved on it does not merely refresh a scene nobody
