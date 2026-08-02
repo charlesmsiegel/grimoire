@@ -2215,6 +2215,31 @@ test("a failed swap does not offer to generate", async () => {
   expect(screen.queryByRole("button", { name: /^retry$/i })).toBeNull();
 });
 
+test("a swap is refused while a cancelled turn is still flushing", async () => {
+  // `busy` clears the moment the socket is torn down, but the scene stays
+  // locked until the backend's shielded flush lands — and a swap in that window
+  // races the abort hook for the partial it is about to persist: landing first
+  // it loses that text, landing second it parks it. Same rule every other
+  // transcript mutation outside `runStream` reads (#95).
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
+  (api.getAlternates as any).mockResolvedValue({
+    active: 1, alternates: [ALT("old"), ALT("a reply")] });
+  (api.chat as any).mockImplementation(hangingChat(["a streamed fragment"]));
+  renderCampaign();
+  const ta = await screen.findByRole("textbox");
+  fireEvent.change(ta, { target: { value: "and then?" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
+
+  // the gutter is back (the stream is over) while the flush poll still runs
+  const back = await screen.findByRole("button", { name: /previous alternate/i });
+  expect(back).toBeDisabled();
+  fireEvent.click(back);
+  expect(api.pickAlternate).not.toHaveBeenCalled();
+});
+
 test("a swap is refused while an edit form is open", async () => {
   // the guard runs both ways: an edit opened before the swap outlives it, and
   // after the refresh the form rebinds to the promoted variant at the same

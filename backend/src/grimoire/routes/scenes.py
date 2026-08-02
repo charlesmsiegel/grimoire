@@ -199,6 +199,27 @@ def post_retry(cid: str, sid: str, body: RetryBody | None = None,
     return _chat_stream(cid, sid, messages, conn, client)
 
 
+def _restore_reroll(cid: str, sid: str, removed: dict):
+    """Put the outgoing reply back, and take the hint back with it.
+
+    Two halves of one undo. The transcript half is #95's: a reroll that produces
+    nothing must not cost the reply it deleted. The sidecar half is this PR's —
+    `archive` recorded the guidance against a replacement that never landed, and
+    with the original run live again `_resolve` would credit it with an
+    instruction it was not generated from, then persist that on the next write.
+
+    Best-effort on the second, deliberately: the reply is the artifact that
+    cannot be regenerated, and a wrong label is not worth failing a restore for.
+    """
+    def restore() -> None:
+        store.scenes.restore_trailing_assistant_run(cid, sid, removed)
+        try:
+            store.alternates.disown_guidance(cid, sid)
+        except OSError:
+            pass
+    return restore
+
+
 @router.post("/campaigns/{cid}/scenes/{sid}/regenerate")
 def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
                     client: LLMClient = Depends(get_llm)):
@@ -290,12 +311,20 @@ def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
                         detail="this scene's recorded turn boundaries no longer match its "
                                "transcript — delete the last reply manually to regenerate") from exc
                 raise
+        # Built BEFORE the retirement below, not after: `supersede` writes
+        # proposals.json and can fail, and until this exists there is nothing
+        # holding the way back — the reply would be gone with the decision it
+        # was derived from still pending and still acceptable.
+        restore = _restore_reroll(cid, sid, removed) if removed else None
         # Everything that can refuse has refused and the removal is on disk, so
         # this reroll is committed: retire the decision the outgoing narration
         # was derived from, exactly as a fresh generation does anywhere else.
-        store.proposals.supersede(cid, sid)
-    restore = (lambda: store.scenes.restore_trailing_assistant_run(cid, sid, removed)
-               ) if removed else None
+        try:
+            store.proposals.supersede(cid, sid)
+        except BaseException:
+            if restore is not None:
+                restore()
+            raise
     # Everything from here to the `return` runs with the scene one reply short,
     # and until the stream exists there is nothing holding the way back: the
     # restore hooks live inside `_chat_stream`'s generator, so a raise here
