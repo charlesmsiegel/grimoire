@@ -1244,3 +1244,40 @@ def test_apply_edits_reports_a_failed_changes_log(scene_with_sheeted_cast, monke
     assert applied == ["lore:salt-cathedral"]
     assert [(f["id"], f["kind"]) for f in failures] == [("changes", "error")]
     assert entities.read_entity(croot, "lore", "salt-cathedral")["body"].strip() == "Flooded."
+
+
+def test_a_plot_beat_is_stamped_with_the_scene_being_saved(monkeypatch, tmp_path):
+    """`materialize` stages `payload.scene` as the scene being absorbed, so the
+    two normally agree. They part after a RENAME between a crashed commit and its
+    retry: the ledger follows the rename so the retry is accepted, but the body
+    cannot change -- the fingerprint refuses any retry whose body differs -- so
+    the payload still names the id the scene had before. Writing that would stamp
+    the beat and `last_scene` with a scene that no longer exists, and
+    `plot.repoint_scenes` has already run, so nothing would come back for it."""
+    from grimoire.store import plot
+    cid = _campaign(monkeypatch, tmp_path)
+    edit = {"id": "plot:the-map", "kind": "plot", "field": "beat",
+            "target": {"kind": "plot", "id": "the-map"},
+            "before": "", "after": "It is a forgery.",
+            "payload": {"id": "the-map", "title": "The map", "status": "advanced",
+                        "scene": "001--the-crypt"}}   # the id the scene had at absorb
+
+    applied, failures = absorb.apply_edits(cid, [edit], sid="001--the-lower-crypt")
+
+    assert applied == ["plot:the-map"] and failures == []
+    thread = plot.read(cid)["the-map"]
+    assert thread["last_scene"] == "001--the-lower-crypt"
+    assert [b["scene"] for b in thread["beats"]] == ["001--the-lower-crypt"]
+
+
+def test_a_plot_beat_falls_back_to_the_payload_when_there_is_no_scene(monkeypatch, tmp_path):
+    """`sid` is optional on `apply_edits`, and a caller that passes none still
+    gets the staged attribution rather than a blank one."""
+    from grimoire.store import plot
+    cid = _campaign(monkeypatch, tmp_path)
+    absorb.apply_edits(cid, [{"id": "plot:the-map", "kind": "plot", "field": "beat",
+                              "target": {"kind": "plot", "id": "the-map"},
+                              "before": "", "after": "It is a forgery.",
+                              "payload": {"id": "the-map", "title": "The map",
+                                          "status": "advanced", "scene": "001--the-crypt"}}])
+    assert plot.read(cid)["the-map"]["last_scene"] == "001--the-crypt"

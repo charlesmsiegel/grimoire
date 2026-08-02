@@ -204,6 +204,56 @@ def current_value(cid: str, edit: dict) -> str | None:
     return None
 
 
+def target_key(edit: dict) -> tuple | None:
+    """Which record `current_value` would read this edit's value FROM, as a
+    hashable key. None when the edit names no judgeable record.
+
+    Two edits with equal keys address one record, so a value written by one is
+    what the other's read returns. `apply._outside_drift` needs exactly that: a
+    resumed commit recognises its own earlier writes, and a value alone cannot
+    tell them apart from an outside change to a DIFFERENT record that happens to
+    hold the same text -- which is not exotic, since "" and other common state
+    values collide readily.
+
+    Every component is stringified, because these come off a client PUT body:
+    a `target` id that arrives as a dict would otherwise make the key
+    unhashable and raise out of the set it goes into.
+
+    This tracks the dispatch in `current_value` and is kept honest by
+    `test_every_judged_kind_has_a_target_key` -- a kind added to `_REASONS`
+    without a key here fails that test rather than quietly losing the
+    protection.
+    """
+    if not isinstance(edit, dict):
+        return None
+    kind = edit.get("kind")
+    if not isinstance(kind, str) or kind not in _REASONS:
+        return None
+    try:
+        target = edit.get("target") or {}
+        payload = edit.get("payload") or {}
+        field = str(edit.get("field", ""))
+        if kind in ("character_state", "group_state", "plot"):
+            return (kind, str(target.get("id", "")))
+        if kind == "lore":
+            return (kind, str(target.get("kind", "")), str(target.get("id", "")))
+        if kind == "authored":
+            return (kind, str(target.get("id", "")), field)
+        if kind == "relationship":
+            return (kind, str(payload.get("from", "")), str(payload.get("to", "")))
+        if kind == "bond":
+            # Not normalised into an unordered pair even though `get_bond` treats
+            # it as one: a key that is merely too FINE costs a false conflict the
+            # reviewer resolves, where one too coarse costs a silent overwrite.
+            return (kind, str(payload.get("a", "")), str(payload.get("b", "")))
+        if kind == "weather":
+            return (kind, str(payload.get("location", "")),
+                    str(payload.get("native")), field)
+    except Exception:  # noqa: BLE001 -- a malformed target names no record
+        return None
+    return None
+
+
 def merge_text(before: str, after: str, stored: str) -> str:
     """Prefill for the **merge** choice: the stored text with whatever the
     proposal *added* appended, so the reviewer trims rather than retypes.

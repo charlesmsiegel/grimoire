@@ -774,3 +774,77 @@ def test_a_resume_rejudges_a_row_an_outside_write_moved(monkeypatch, tmp_path):
     # and the outside write still stands
     assert overlay.read_entity(cid, "lore", "the-charter")["body"].strip() == (
         "Sealed in wax.\n\nThen burnt.")
+
+
+def test_every_judged_kind_has_a_target_key():
+    """`_outside_drift` exempts a resumed row from re-judging only when the value
+    it reads was written by one of this commit's own edits to the SAME record. A
+    kind `target_key` cannot name is never exempted -- correct, but it means a
+    kind added to `_REASONS` and forgotten here silently starts reporting
+    conflicts that are its own batch's work. That is what this catches."""
+    edit = {"target": {"kind": "lore", "id": "the-pact"}, "field": "body",
+            "payload": {"from": "a", "to": "b", "a": "a", "b": "b",
+                        "location": "the-docks", "native": None}}
+    for kind in conflicts._REASONS:
+        assert conflicts.target_key({**edit, "kind": kind}) is not None, kind
+    # and the keys separate the kinds rather than colliding across them
+    keys = {conflicts.target_key({**edit, "kind": k}) for k in conflicts._REASONS}
+    assert len(keys) == len(conflicts._REASONS)
+
+
+def test_a_target_key_is_hashable_even_for_a_malformed_target():
+    """These come off a client PUT body: an id that arrives as a dict would make
+    the key unhashable and raise out of the set it goes into."""
+    assert isinstance(conflicts.target_key(
+        {"kind": "lore", "target": {"kind": "lore", "id": {"not": "a string"}}}), tuple)
+
+
+def test_a_resume_does_not_mistake_another_record_holding_the_same_text(monkeypatch, tmp_path):
+    """A resumed commit recognises its own earlier writes so it does not report
+    them as conflicts. The value alone cannot do that: an outside write to a
+    DIFFERENT record that happens to store the same text would be waved through
+    too, and with "" and other common state values that collision is ordinary.
+    Target and value both have to match."""
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "lore", "The Pact", body="Signed at dusk.")
+    entities.create_entity(croot, "lore", "The Ledger", body="Kept dry.")
+    entities.create_entity(croot, "lore", "The Charter", body="Sealed in wax.")
+    shared = "Struck through."
+    edits = [_lore_edit("Signed at dusk.", shared),
+             {"id": "lore:the-ledger", "kind": "lore", "field": "body",
+              "target": {"kind": "lore", "id": "the-ledger"},
+              "before": "Kept dry.", "after": "Kept dry.\n\nSoaked."},
+             {"id": "lore:the-charter", "kind": "lore", "field": "body",
+              "target": {"kind": "lore", "id": "the-charter"},
+              "before": "Sealed in wax.", "after": "Sealed in wax.\n\nCountersigned."}]
+
+    live: dict = {}
+    persisted: list[dict] = []
+    real_update = overlay.update_entity
+
+    def crash_on_the_ledger(cid_, kind, eid, **kw):
+        if eid == "the-ledger":
+            raise KeyboardInterrupt("killed mid-write")
+        return real_update(cid_, kind, eid, **kw)
+
+    monkeypatch.setattr(overlay, "update_entity", crash_on_the_ledger)
+    try:
+        absorb.apply_edits(cid, edits, progress=live,
+                           checkpoint=lambda: persisted.append(copy.deepcopy(live)))
+    except KeyboardInterrupt:
+        pass
+    monkeypatch.setattr(overlay, "update_entity", real_update)
+
+    journal = persisted[-1]
+    assert journal["edits"]["0"]["read"] == shared      # what this commit wrote
+
+    # somebody else stores that same text into an UNRELATED record the commit
+    # has not reached yet
+    overlay.update_entity(cid, "lore", "the-charter", body=shared)
+
+    applied, failures = absorb.apply_edits(cid, edits, progress=journal)
+    assert applied == ["lore:the-pact"]
+    assert [(f["id"], f["kind"]) for f in failures] == [("lore:the-ledger", "error"),
+                                                        ("lore:the-charter", "conflict")]
+    assert overlay.read_entity(cid, "lore", "the-charter")["body"].strip() == shared
