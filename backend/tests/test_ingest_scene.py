@@ -332,9 +332,13 @@ _PARTIAL_SCENE = {
 #: One timeline event and two edits: the plot beat lands, the commitment does not.
 #: Both halves matter — the timeline append and the applied beat are the two things
 #: a whole-scene retry would file twice.
+#: The one event `_PARTIAL_OUTPUT` extracts, named so a test can file the
+#: identical batch from another writer.
+_PARTIAL_EVENTS = [{"date": "Firstmonth 3", "text": "Marisol swore on the stair."}]
+
 _PARTIAL_OUTPUT = json_module.dumps({
     "one_line": "Marisol needles Julian.", "summary": "s", "keywords": [],
-    "timeline_events": [{"date": "Firstmonth 3", "text": "Marisol swore on the stair."}],
+    "timeline_events": _PARTIAL_EVENTS,
     "character_state_edits": [], "lore_edits": [], "authored_edits": [],
     "relationship_deltas": [], "bond_changes": [],
     "plot_movements": [{"id": "the-siege", "title": "The siege", "status": "open",
@@ -821,27 +825,112 @@ def test_a_resume_after_its_own_append_does_not_file_the_events_twice(monkeypatc
     assert timeline.read_text(encoding="utf-8").count("swore on the stair") == 1
 
 
-def test_a_manifest_entry_without_a_pre_image_falls_back_to_the_tail(monkeypatch, tmp_path):
-    """An entry written before this field existed, or by hand. `_NO_PREIMAGE` is
-    not the same value as a stored `None`, which is the real pre-image of a
-    campaign with no timeline file yet — reading the two alike would make an old
-    entry claim its timeline was empty when it started and re-file a landed
-    batch."""
+def test_a_later_concurrent_append_does_not_make_the_resume_refile(monkeypatch, tmp_path):
+    """A whole-file digest only answers "has anything changed", and somebody
+    else's append changes it too — after which the tail is theirs, not ours, and
+    the resume filed this scene's events a second time. The pre-image is a
+    POSITION, so the question is whether OUR lines sit at the offset our append
+    would have started at; what came after them belongs to whoever wrote it."""
+    from grimoire.store import campaigns as campaigns_store, chronicle, worlds as worlds_store
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    ingest_scene.ensure_character(cid, {"name": "Marisol"})
+    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+    timeline = campaigns_store.campaign_root(cid) / "timeline.md"
+
+    real_mark = ingest_scene.scenes.mark_absorbed
+
+    def _fails_once(*a, **kw):                     # dies AFTER our append
+        monkeypatch.setattr(ingest_scene.scenes, "mark_absorbed", real_mark)
+        raise OSError("scene file temporarily unwritable")
+
+    monkeypatch.setattr(ingest_scene.scenes, "mark_absorbed", _fails_once)
+    with pytest.raises(OSError):
+        asyncio.run(ingest_scene.ingest_one_scene(
+            cid, _PARTIAL_SCENE, FakeClient(_PARTIAL_OUTPUT), conn))
+    assert timeline.read_text(encoding="utf-8").count("swore on the stair") == 1
+
+    # A live absorb files its own scene while the ingest is down.
+    chronicle.append_timeline(cid, [{"date": "Firstmonth 5", "text": "An unrelated errand."}])
+
+    asyncio.run(ingest_scene.ingest_one_scene(
+        cid, _PARTIAL_SCENE, FakeClient(_PARTIAL_OUTPUT), conn))
+    assert timeline.read_text(encoding="utf-8").count("swore on the stair") == 1
+    assert timeline.read_text(encoding="utf-8").count("unrelated errand") == 1
+
+
+def test_the_pre_image_is_retaken_inside_the_lock(monkeypatch, tmp_path):
+    """The write-ahead runs before the campaign lock is acquired, and
+    `put_chronicle` appends while holding it — so a live absorb can land in
+    between and leave the recorded pre-image describing a file that no longer
+    exists. Re-taken under the lock, the capture and the append are one span."""
+    from grimoire.store import worlds as worlds_store
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    ingest_scene.ensure_character(cid, {"name": "Marisol"})
+    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+
+    real_absorb = ingest_scene.chronicle.absorb
+    stale = ingest_scene._timeline_preimage(cid)     # what the write-ahead would record
+
+    def _slip_in_before_the_append(cid_, rec):
+        # Inside the lock, after the write-ahead: a live absorb has just landed.
+        ingest_scene.chronicle.append_timeline(
+            cid_, [{"date": "Firstmonth 1", "text": "An unrelated errand."}])
+        monkeypatch.setattr(ingest_scene.chronicle, "absorb", real_absorb)
+        return real_absorb(cid_, rec)
+
+    monkeypatch.setattr(ingest_scene.chronicle, "absorb", _slip_in_before_the_append)
+    # Leave the scene unfinished so the entry keeps its pre-image on disk.
+    real_mark = ingest_scene.scenes.mark_absorbed
+
+    def _fails(*a, **kw):
+        monkeypatch.setattr(ingest_scene.scenes, "mark_absorbed", real_mark)
+        raise OSError("scene file temporarily unwritable")
+
+    monkeypatch.setattr(ingest_scene.scenes, "mark_absorbed", _fails)
+    with pytest.raises(OSError):
+        asyncio.run(ingest_scene.ingest_one_scene(
+            cid, _PARTIAL_SCENE, FakeClient(_PARTIAL_OUTPUT), conn))
+
+    pre = ingest_scene.load_manifest(cid)["file1-scene01"].get("timeline_before")
+    assert isinstance(pre, dict)
+    assert pre != stale, "the write-ahead pre-image predates the live absorb"
+    # And it is the one this scene's append actually started from, so the resume
+    # recognizes its own block rather than re-filing it.
+    assert ingest_scene._timeline_already_has(cid, _PARTIAL_EVENTS, pre) is True
+
+
+def test_the_positional_check_answers_only_for_this_scene(monkeypatch, tmp_path):
+    """The protocol, at the level of the predicate. Without a usable pre-image
+    there is nothing to anchor on, so the batch is filed — that path can
+    duplicate, and the alternative (guessing from the tail) can lose a scene."""
     from grimoire.store import chronicle, worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
     events = [{"date": "Firstmonth 3", "text": "Marisol swore on the stair."}]
 
-    assert ingest_scene._timeline_already_has(cid, events) is False   # nothing written
+    pre = ingest_scene._timeline_preimage(cid)       # taken before the append
+    assert ingest_scene._timeline_already_has(cid, events, pre) is False
     chronicle.append_timeline(cid, events)
-    # No pre-image: the tail alone decides, which is what the old entries got.
-    assert ingest_scene._timeline_already_has(cid, events) is True
-    # A stored `None` means "there was no timeline file when this scene started",
-    # so a timeline that now exists has changed and the tail is read.
-    assert ingest_scene._timeline_already_has(cid, events, None) is True
-    # And the pre-image taken now says the append cannot have happened since.
-    digest = ingest_scene._timeline_digest(cid)
-    assert ingest_scene._timeline_already_has(cid, events, digest) is False
+    assert ingest_scene._timeline_already_has(cid, events, pre) is True
+
+    # A later append by somebody else does not un-answer it: ours is still at
+    # the offset it was written to.
+    chronicle.append_timeline(cid, [{"date": "Firstmonth 5", "text": "Elsewhere."}])
+    assert ingest_scene._timeline_already_has(cid, events, pre) is True
+
+    # But the SAME batch filed by somebody else, from a pre-image taken before
+    # it, is not ours: the offset holds their block, not one we wrote.
+    theirs = ingest_scene._timeline_preimage(cid)
+    chronicle.append_timeline(cid, [{"date": "Firstmonth 9", "text": "A different errand."}])
+    assert ingest_scene._timeline_already_has(cid, events, theirs) is False
+
+    # No pre-image at all, and a malformed one: file the batch.
+    assert ingest_scene._timeline_already_has(cid, events) is False
+    assert ingest_scene._timeline_already_has(cid, events, {"size": "no"}) is False
+    # Nothing to file is always already filed.
+    assert ingest_scene._timeline_already_has(cid, [], ingest_scene._NO_PREIMAGE) is True
 
 
 def test_a_resume_keeps_the_conflict_basis_it_was_staged_against(monkeypatch, tmp_path):
@@ -891,9 +980,10 @@ def test_the_timeline_check_agrees_with_the_store(monkeypatch, tmp_path):
     events = [{"date": "Firstmonth 3", "text": "Marisol swore on the stair."},
               {"date": "Firstmonth 4", "text": "The gate held."}]
 
-    assert ingest_scene._timeline_already_has(cid, events) is False   # nothing written yet
+    pre = ingest_scene._timeline_preimage(cid)       # includes the header the store seeds
+    assert ingest_scene._timeline_already_has(cid, events, pre) is False   # nothing written yet
     chronicle.append_timeline(cid, events)
-    assert ingest_scene._timeline_already_has(cid, events) is True
+    assert ingest_scene._timeline_already_has(cid, events, pre) is True
 
     # Only as a contiguous block at the END: anything appended after it means
     # this batch is no longer what the tail records.
