@@ -579,12 +579,19 @@ async def _stage_voice_drift(cid: str, sid: str, transcript: str, client: LLMCli
             # Checked HERE, inside the per-actor boundary: everything below
             # treats the name as text, and one bad card must cost that actor its
             # voice check rather than 500 the whole absorb.
+            # `label_preserved`, not merely "is a nonblank string": the
+            # serializer silently writes the generic role label instead of a
+            # name it cannot form a marker from (one holding `*` or a newline,
+            # or over 64 characters). Those lines land in the transcript as
+            # "Grimoire", so pointing the judge at the card name hunts for a
+            # speaker that cannot appear -- and risks charging generic
+            # assistant prose to this character instead.
             name = a.get("name")
-            if not isinstance(name, str) or not name.strip():
+            if not isinstance(name, str) or not store.scenes.label_preserved(name):
                 out["failed"].append({
                     "id": a["id"],
-                    "reason": "the locked card has no usable name, so the judge cannot be "
-                              "pointed at this character's lines"})
+                    "reason": "the locked card's name cannot appear as a transcript label, "
+                              "so the judge cannot be pointed at this character's lines"})
                 continue
             # Report the clash instead of judging through it -- naming it is
             # actionable (rename a card), whereas judging is a coin flip

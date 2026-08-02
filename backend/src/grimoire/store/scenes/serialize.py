@@ -48,10 +48,21 @@ _MARKER = re.compile(r"^\*\*([^*\n]{1,64}?)(?: \(([^)\n]+)\))?:\*\*[ ]?", re.MUL
 _SAFE_LABEL = re.compile(r"^[^*\n]{1,64}$")
 
 
+def label_preserved(speaker: str | None) -> bool:
+    """True when a message stored for `speaker` keeps that name as its
+    transcript label, rather than falling back to the generic role label.
+
+    The serializer silently substitutes the role label for a name it cannot
+    write as a marker -- one holding `*` or a newline, longer than 64
+    characters, or colliding with a reserved label. Anything that later reasons
+    about a character BY their transcript label has to know that, or it ends up
+    hunting for a name the transcript cannot contain (see the voice judge)."""
+    return bool(speaker) and bool(_SAFE_LABEL.match(speaker)) \
+        and speaker not in RESERVED_LABELS
+
+
 def _label(role: str, speaker: str | None) -> str:
-    if speaker and _SAFE_LABEL.match(speaker) and speaker not in RESERVED_LABELS:
-        return speaker
-    return ROLE_TO_LABEL[role]
+    return speaker if label_preserved(speaker) else ROLE_TO_LABEL[role]
 
 
 def _markers(body: str) -> list[re.Match]:
