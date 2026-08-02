@@ -659,6 +659,16 @@ async def _stage_voice_drift(cid: str, sid: str, transcript: str, client: LLMCli
             if finding["verdict"] == store.voice_drift.DRIFT and not finding["note"]:
                 out["failed"].append({"id": aid, "reason": "drift reported with no corrective"})
                 continue
+            # The corrective is rendered into the post-history message, which the
+            # packer reserves and cannot trim, so an oversized note is charged
+            # against every later generation with nothing able to give way.
+            if len(finding["note"]) > store.voice_drift.MAX_NOTE:
+                out["failed"].append({
+                    "id": aid,
+                    "reason": f"the voice judge returned a corrective over "
+                              f"{store.voice_drift.MAX_NOTE} characters, too long to put "
+                              f"in front of every following turn"})
+                continue
             edit = store.voice_drift.stage_edit(aid, name, prior, finding,
                                                 record["text"], record["id"], prior_fp)
         except BudgetRefused:

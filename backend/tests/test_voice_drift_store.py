@@ -313,3 +313,20 @@ def test_a_concurrently_cleared_flag_reads_as_absent(monkeypatch, tmp_path):
     monkeypatch.setattr(type(target), "read_text", vanished)
 
     assert voice_drift.read_record(tmp_path, "winifred") == {"note": "", "anchor": ""}
+
+
+def test_clearing_an_already_cleared_flag_succeeds(tmp_path):
+    """Same write-side race as the anchor: a clear is idempotent."""
+    voice_drift.write(tmp_path, "winifred", "She hedged.")
+    voice_drift.write(tmp_path, "winifred", "")
+    voice_drift.write(tmp_path, "winifred", "")        # must not raise
+    assert voice_drift.read(tmp_path, "winifred") == ""
+
+
+def test_an_oversized_note_is_not_a_usable_corrective():
+    """The flag renders into the post-history message, which the packer reserves
+    and cannot trim -- so an unbounded note is charged against every later
+    generation with nothing able to give way."""
+    assert voice_drift.MAX_NOTE > 200        # room for the two sentences asked for
+    long_note = "She hedged. " * 500
+    assert len(long_note) > voice_drift.MAX_NOTE

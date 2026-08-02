@@ -104,8 +104,12 @@ def write(root: Path, char_id: str, text: str) -> None:
     """
     p = anchor_path(root, char_id)       # raises BadAnchorId before mkdir touches disk
     if not text.strip():
-        if p.exists():
-            p.unlink()
+        # `missing_ok`, not exists-then-unlink: clearing an already-cleared
+        # anchor is a success, and two blank PUTs from separate tabs would
+        # otherwise have the loser raise FileNotFoundError and 500 -- for
+        # reaching the state it asked for. Same race the readers just fixed,
+        # on the write side.
+        p.unlink(missing_ok=True)
         return
     # Preserve the existing nonce, mint one only when the anchor is being
     # CREATED. Editing or reformatting an anchor is the same anchor and must not

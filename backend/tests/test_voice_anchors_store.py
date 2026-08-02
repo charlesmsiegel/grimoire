@@ -144,3 +144,14 @@ def test_a_concurrently_cleared_anchor_reads_as_absent(monkeypatch, tmp_path):
 
     assert voice_anchors.read_record(root, "winifred") == {
         "text": "", "id": "", "disabled": False}
+
+
+def test_clearing_an_already_cleared_anchor_succeeds(monkeypatch, tmp_path):
+    """Two blank PUTs from separate tabs: the loser used to raise
+    FileNotFoundError and 500 -- for reaching the state it asked for."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    root = tmp_path / "w"
+    voice_anchors.write(root, "winifred", "Clipped.")
+    voice_anchors.write(root, "winifred", "")
+    voice_anchors.write(root, "winifred", "")          # must not raise
+    assert voice_anchors.read(root, "winifred") == ""
