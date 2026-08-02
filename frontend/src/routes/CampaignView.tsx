@@ -72,6 +72,16 @@ function dossierNotice(d: Dossiers): string {
                                  : `NPC dossier refresh failed: ${d.reason}`;
 }
 
+// Resolves when the signal aborts, for racing a wait that has no cancellation
+// of its own against Stop. `once`, so a long-lived controller does not
+// accumulate listeners across the turns that share it.
+function settleOn<T>(signal: AbortSignal, value: T): Promise<T> {
+  return new Promise<T>((resolve) => {
+    if (signal.aborted) resolve(value);
+    else signal.addEventListener("abort", () => resolve(value), { once: true });
+  });
+}
+
 // The scene rail lists scenes most-recently-edited first, but the displayed
 // number must reflect story order — the id's own leading number (its
 // filename stem is "<NNN>--<date>--<slug>"), never the list position, which
@@ -179,6 +189,13 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   const [streaming, setStreaming] = useState("");
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  // Which scene a turn is streaming into, or null. Distinct from `activeId`,
+  // which is the scene being *looked at* — a player can start a turn on A and
+  // navigate to B while it runs, and the write still lands in A. Anything that
+  // would move A's file has to stay locked for as long as that is true, so the
+  // lock follows the stream rather than the view (review, #95). State, not a
+  // ref, because the rail renders it.
+  const [streamingId, setStreamingId] = useState<string | null>(null);
   // Held for the life of one turn so Cancel can reach it. A ref, not state:
   // the controller is not rendered, and rebuilding the component tree on every
   // send just to store it would remount the transcript mid-stream.
@@ -680,6 +697,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     const controller = new AbortController();
     abortRef.current = controller;
     setBusy(true);
+    setStreamingId(id);
     setError(null);
     // How long this scene's transcript was before the turn wrote anything —
     // the baseline the pre-response restore below compares against.
@@ -693,11 +711,24 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     // (the player sends it twice) or dropping one that never did (review, #95).
     // So: use the ref only when it is this scene's, and otherwise read the one
     // number needed, which costs a request only inside that window.
+    //
+    // Raced against Stop rather than cancelled by it. This read runs before the
+    // POST, so the turn's controller has nothing to abort yet, and review caught
+    // that a stalled preflight against an unhealthy server then hung the whole
+    // turn here: outside the try, with `busy` set and no way to clear it. The
+    // race gives the wait an exit; the stray GET resolves into nothing, and an
+    // unknown baseline is the answer this already knows how to handle.
+    // Cancelling it properly would mean threading a signal through `request`,
+    // whose in-flight GET sharing hands one promise to several callers — one
+    // caller's Stop must not abort another component's read.
     const totalBefore = totalSceneRef.current === id
       ? totalRef.current
-      : await api.getScene(cid, id, { limit: 1 })
-          .then((s) => s.total ?? s.messages.length)
-          .catch(() => null);   // unknown — treated as unverifiable below
+      : await Promise.race([
+          api.getScene(cid, id, { limit: 1 })
+            .then((s) => s.total ?? s.messages.length)
+            .catch(() => null),   // unknown — treated as unverifiable below
+          settleOn(controller.signal, null),
+        ]);
     let acc = "";
     // Three separate questions, and none of them is "did the promise resolve".
     // `finished`: a `done` frame arrived, which the backend sends only after
@@ -765,6 +796,9 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       abortRef.current = null;
       setStreaming("");
       setBusy(false);
+      // Released here, with `busy`: past this point nothing else writes to the
+      // scene through this turn, so its file is free to move again.
+      setStreamingId(null);
       // the reply is persisted as per-speaker posts — re-fetch to show them
       // (selectScene also bumps ctxKey and refreshes the player name)
       //
@@ -826,7 +860,22 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       // loud — not merely the absence of evidence that it did.
       const unverifiable = !refreshed || totalBefore === null;
       const nothingLanded = !unverifiable && seen >= 0 && seen <= totalBefore;
-      if ((unreached || refused) && (unverifiable || nothingLanded)) {
+      // A stream that started and then stopped without either frame is the
+      // third way to end up with no post, and review caught it as the one the
+      // client had no answer for: the backend rolls the post back *before* it
+      // yields the error frame, so a connection dropped in between leaves a
+      // rollback that happened and a client that was never told. Nothing is set
+      // — not errored, not unreached, not refused — and the poll cannot help,
+      // because it watches for growth and a rollback only ever shrinks.
+      //
+      // Only on positive proof, unlike the two above. Headers arrived, which
+      // for a chat means `post_chat` already appended; so an unverifiable
+      // refresh here means the post is most likely sitting in the transcript,
+      // and restoring on a guess would duplicate it. `nothingLanded` is the
+      // transcript saying the rollback ran.
+      const interrupted = !finished && !errored && !unreached && !refused;
+      if (((unreached || refused) && (unverifiable || nothingLanded))
+          || (interrupted && nothingLanded)) {
         onPromptUnstored?.();
       }
       // Nothing to wait for when nothing on the server can produce a partial: a
@@ -856,6 +905,9 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
 
   async function send() {
     if (busy || rolling) return;
+    // A new prompt supersedes a failed reroll: whatever Retry would have
+    // repeated, the player has moved on from it.
+    rerollToRetryRef.current = null;
     // a new turn supersedes any pending proposal durably on the backend —
     // clear the chip optimistically rather than wait for the re-fetch. Ordered,
     // so a read issued before this send cannot put the chip back afterwards.
@@ -917,18 +969,33 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     await selectScene(activeId);
   }
 
+  // What the error banner's Retry re-runs. `/retry` continues from the
+  // transcript as it stands, which is the right redo for a chat or a retry —
+  // but not for a reroll. A failed reroll now puts the old reply back (#95), so
+  // "try that again" through `/retry` would generate a *continuation* of the
+  // reply the player asked to replace, and silently drop their guidance with
+  // it. Review caught this as a consequence of the restore: before it, the
+  // reply was gone, so `/retry` happened to do the right thing by accident.
+  //
+  // Reset on every turn that lands, so Retry only ever repeats the operation
+  // that actually failed.
+  const rerollToRetryRef = useRef<string | null>(null);
+
   async function retry() {
     if (!activeId || busy || rolling) return;
+    const again = rerollToRetryRef.current;
+    if (again !== null) return void await reroll(again);
     const landed = await runStream(activeId, (onEvent, signal) => pendingResponse
       ? api.retry(cid, activeId, onEvent, pendingResponse, signal)
       : api.retry(cid, activeId, onEvent, undefined, signal));
     if (landed) setPendingResponse(null);
   }
 
-  async function reroll() {
+  async function reroll(repeatGuidance?: string) {
     if (!activeId || busy || rolling) return;
-    const guidance = (rerollPrompt ?? "").trim();
+    const guidance = repeatGuidance ?? (rerollPrompt ?? "").trim();
     setRerollPrompt(null);
+    rerollToRetryRef.current = guidance;
     // one turn is a run of assistant posts — drop the whole trailing run, but
     // keep any trailing transition lines, which the backend also preserves
     setMessages((m) => {
@@ -948,7 +1015,10 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       if (pendingResponse) return api.regenerate(cid, activeId!, onEvent, undefined, pendingResponse, signal);
       return api.regenerate(cid, activeId!, onEvent, undefined, undefined, signal);
     });
-    if (landed) setPendingResponse(null);
+    if (landed) {
+      setPendingResponse(null);
+      rerollToRetryRef.current = null;   // it worked; Retry is a plain retry again
+    }
   }
 
   async function doRoll() {
@@ -1328,7 +1398,12 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
               // the same mechanism. Locked for the turn's duration; the other
               // rows stay editable, since only this scene is being written to
               // (review, #95).
-              locked={busy && s.id === activeId}
+              //
+              // Keyed on the scene being *streamed into*, not the one on screen:
+              // navigating away mid-turn does not move the write, so a lock that
+              // followed the view would unlock the very row that is still being
+              // written to — and lock an unrelated one.
+              locked={s.id === streamingId}
               lockedReason="Not while this scene is generating"
               onSelect={() => selectScene(s.id)}
               onRename={(title) => renameScene(s.id, title)}
@@ -1598,7 +1673,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
             onSceneRenamed={sceneRenamed}
             initialPrompt={seedPrompt?.sid === activeId ? seedPrompt.prompt : undefined}
             pcless={activePcless}
-            sceneLocked={busy}
+            sceneLocked={activeId === streamingId}
           />
         )}
         {activeId && (
@@ -1670,7 +1745,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
                             if (e.key === "Escape") setRerollPrompt(null);
                           }}
                         />
-                        <button className="btn-chrome" onClick={reroll} disabled={rolling}>Reroll ▸</button>
+                        <button className="btn-chrome" onClick={() => reroll()} disabled={rolling}>Reroll ▸</button>
                       </span>
                     )}
                   </span>

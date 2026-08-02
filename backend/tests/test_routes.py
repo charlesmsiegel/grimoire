@@ -1773,6 +1773,30 @@ async def test_a_cancelled_reroll_puts_the_old_reply_back(monkeypatch, tmp_path)
         "and then?", "The tide turns."]
 
 
+def test_a_reroll_that_dies_before_its_stream_puts_the_reply_back(client, monkeypatch):
+    """The deletion happens in the route, but every way back lives inside the
+    stream's generator — so anything that raises between the two destroys a
+    reply and returns a 500 with no trace of it. No race needed: the context
+    build reads the whole store."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "and then?")
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "The tide turns."}])
+    before = store.scenes.get_turn_sizes(cid, sid)
+
+    def boom(*a, **k):
+        raise RuntimeError("context build failed")
+    monkeypatch.setattr(store.context, "build_messages", boom)
+    with pytest.raises(RuntimeError):
+        client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
+
+    assert [m["content"] for m in client.get(
+        f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]] == [
+        "and then?", "The tide turns."]
+    assert store.scenes.get_turn_sizes(cid, sid) == before
+
+
 async def test_a_cancelled_reroll_restores_instead_of_minting_a_proposal(monkeypatch, tmp_path):
     """A reply can be all roll fence and no narration, so "produced nothing the
     player can see" and "produced a proposal" overlap. Doing both would file a
