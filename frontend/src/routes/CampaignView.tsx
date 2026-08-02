@@ -163,10 +163,12 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   const [editFailures, setEditFailures] = useState<
     { id: string; reason: string; kind: "conflict" | "error"; label: string }[]>([]);
   // Rows the server refused because their target moved since the scene was
-  // absorbed (#111). The save is rejected whole and before anything is written,
-  // so this is a state the review sits IN rather than a report of what landed:
-  // it clears a row at a time as the reviewer keeps, replaces or merges.
-  const [conflicts, setConflicts] = useState<EditConflict[]>([]);
+  // absorbed (#111), each already bound to its index in `editRows`. The save is
+  // rejected whole and before anything is written, so this is a state the
+  // review sits IN rather than a report of what landed: it clears a row at a
+  // time as the reviewer keeps, replaces or merges.
+  const [conflicts, setConflicts] =
+    useState<{ row: number; conflict: EditConflict }[]>([]);
   // A failed SAVE gets its own surface, not the shared `error` banner: that
   // banner's Retry is wired to chat generation, so pointing a save failure at
   // it invites the user to generate another reply with the review still open.
@@ -637,7 +639,19 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       // reviewer answer each one, and save again -- no `saveError`, whose
       // "Try saving again" would just re-post the batch that was refused.
       if (err?.kind === "edit_conflicts") {
-        setConflicts((err.body?.conflicts ?? []) as EditConflict[]);
+        // Resolve each verdict to the ROW it belongs to, here and now, while
+        // `editRows` is still the exact array this batch was built from
+        // (`saving` latches the panel for the whole round-trip). The server
+        // stamps a batch index; `approvedIdx` is that batch's row numbers, so
+        // the two line up positionally even when the response has dropped the
+        // unconflicted rows in between. Storing row numbers rather than the
+        // raw verdicts also survives what comes next: unapproving a row is the
+        // keep answer, and it would shift every batch index after it.
+        const approvedIdx = editRows.flatMap((r, i) => (r.approved ? [i] : []));
+        const rows = ((err.body?.conflicts ?? []) as EditConflict[])
+          .map((c) => ({ row: approvedIdx[c.index] ?? -1, conflict: c }))
+          .filter((p) => p.row >= 0);
+        setConflicts(rows);
         setSaveError(null);
         return;
       }
@@ -647,23 +661,14 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     }
   }
 
-  // Which ROW each conflict belongs to, by position in `editRows`.
-  //
-  // Not a lookup by `id`: `materialize` dedupes only plot threads, so two lore
-  // or relationship proposals naming one target can share an edit id. Matching
-  // on it alone would badge both rows with one conflict and — worse — let one
-  // click answer for a row the reviewer never looked at. The server judges the
-  // batch positionally and returns its rows in batch order, so walking the
-  // approved rows in that same order and CONSUMING each match pairs them off
-  // exactly, duplicates included.
+  // Conflicts still showing, keyed by their row. Already bound to a row when
+  // the refusal arrived; all that is left is to drop the ones whose row has
+  // since been unapproved, which IS the keep answer.
   const conflictByRow = useMemo(() => {
-    const unclaimed = [...conflicts];
     const out = new Map<number, EditConflict>();
-    editRows.forEach((r, i) => {
-      if (!r.approved) return;   // unapproved is the keep answer: no badge
-      const k = unclaimed.findIndex((c) => c.id === r.id);
-      if (k >= 0) out.set(i, unclaimed.splice(k, 1)[0]);
-    });
+    for (const { row, conflict } of conflicts) {
+      if (editRows[row]?.approved) out.set(row, conflict);
+    }
     return out;
   }, [conflicts, editRows]);
 
@@ -682,9 +687,9 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       ? { ...r, resolve, resolve_from: conflict.stored,
           ...(after === undefined ? {} : { after }) }
       : r)));
-    // By identity, not by id — the duplicate-id case again: the sibling row's
-    // conflict is a different object and stays exactly where it is.
-    setConflicts((cs) => cs.filter((c) => c !== conflict));
+    // By row, not by edit id — the duplicate-id case: a sibling row sharing
+    // this one's id keeps its own conflict and its own unanswered badge.
+    setConflicts((cs) => cs.filter((c) => c.row !== i));
   }
 
   // Replaces absorb.mechanics with a fresh audit and swaps in its sheet
@@ -712,6 +717,11 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
         ...rows.filter((r) => r.kind !== "sheet"),
         ...res.edits.map((e) => ({ ...e, approved: true })),
       ]);
+      // Conflicts are bound to row numbers, and this rebuilds the array — so
+      // any that survived a refusal would now point at whichever row inherited
+      // their index. Sheet edits never conflict, so there is nothing to carry
+      // over; the next save re-reports whatever is still drifted.
+      setConflicts([]);
     } catch (err: any) {
       setError(err.detail ?? String(err));
     }

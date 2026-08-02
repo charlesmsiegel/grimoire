@@ -109,6 +109,37 @@ def resolved(edit: dict) -> bool:
     return isinstance(resolve, str) and resolve in RESOLUTIONS
 
 
+def _text(value) -> str | None:
+    """A textual field as a string, or None when it is not one.
+
+    JSON ``null`` reads as empty -- a client's way of saying "nothing was
+    stored". Anything else that is not a string (a dict, a list, a number) is
+    malformed input and gets no verdict, the same boundary `current_value`
+    keeps around `target`: `merge_text` diffs these fields through
+    `changes.line_diff`, whose `.splitlines()` would otherwise raise out of the
+    whole save.
+    """
+    if value is None:
+        return ""
+    return value if isinstance(value, str) else None
+
+
+def replaced_value(edit: dict) -> str:
+    """The value this edit's write actually replaces.
+
+    For an answered row that is `resolve_from`, the text the reviewer was
+    looking at -- not the staged `before`, which is what the record said at
+    absorb time and has since been superseded. `apply_edits` logs the Changes
+    entry from this: diffing an answered edit against the staged `before` would
+    render text that was already stored as part of what the edit added.
+    """
+    if resolved(edit):
+        seen = edit.get("resolve_from")
+        if isinstance(seen, str):
+            return seen
+    return _text(edit.get("before")) or ""
+
+
 def plot_line(thread: dict) -> str:
     """A plot thread's current position as one line: its status, plus its most
     recent beat when it has one. Shared with `materializer.materialize` so the
@@ -211,7 +242,8 @@ def _basis(edit: dict) -> tuple[str, bool] | None:
         return (seen, True) if isinstance(seen, str) else None
     if "before" not in edit:
         return None
-    return (edit.get("before") or "", False)
+    before = _text(edit.get("before"))
+    return None if before is None else (before, False)
 
 
 def conflict_row(cid: str, edit: dict) -> dict | None:
@@ -230,12 +262,15 @@ def conflict_row(cid: str, edit: dict) -> dict | None:
     if claim is None:
         return None
     basis, rechecking = claim
+    after = _text(edit.get("after"))
+    if after is None:
+        return None   # malformed: nothing to diff, and apply cannot write it either
     stored = current_value(cid, edit)
     if stored is None or stored == basis:
         return None
-    after, mergeable = edit.get("after", ""), kind in MERGEABLE
+    mergeable = kind in MERGEABLE
     return {"id": edit.get("id", ""), "label": edit.get("label", ""), "kind": kind,
-            "field": edit.get("field", ""), "before": edit.get("before") or "",
+            "field": edit.get("field", ""), "before": _text(edit.get("before")) or "",
             "after": after, "stored": stored, "mergeable": mergeable,
             "reason": _RECHECK_REASON if rechecking else _REASONS[kind],
             # Diffed from the BASIS, not from `before`: on a recheck the basis is
@@ -259,6 +294,15 @@ def batch_verdicts(cid: str, edits: list[dict]) -> list[dict | None]:
 
 
 def check_conflicts(cid: str, edits: list[dict]) -> list[dict]:
-    """Every conflicted edit in the batch, in batch order. A row the reviewer
-    already answered comes back only if its target moved since they answered."""
-    return [v for v in batch_verdicts(cid, edits) if v is not None]
+    """Every conflicted edit in the batch, each stamped with its `index` in the
+    submitted batch. A row the reviewer already answered comes back only if its
+    target moved since they answered.
+
+    The stamp is what makes a client able to put a verdict back on the right
+    row. Order alone is not enough: this drops the unconflicted rows, so with
+    two edits sharing an id -- which `materialize` allows for everything except
+    plot threads -- a client walking its own rows and matching on id would hand
+    the *second* row's conflict to the *first*, then answer the wrong proposal.
+    """
+    return [{**v, "index": i}
+            for i, v in enumerate(batch_verdicts(cid, edits)) if v is not None]
