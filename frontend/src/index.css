@@ -492,6 +492,24 @@ button.primary { background: var(--accent); color: var(--on-accent); border: var
   padding: 12px 22px; font-size: 14px; line-height: 1.7; flex: none;
   max-height: 40vh; overflow-y: auto;
 }
+/* continuity ledger (#117) — same slot and scroll behaviour as .changes-panel,
+   but sectioned rather than two-pane: it is read-only, so there is nothing to
+   select into a detail view. */
+.ledger-panel {
+  background: var(--panel2); border-bottom: var(--rw) solid var(--rule); color: var(--ink);
+  padding: 12px 22px; font-size: 14px; line-height: 1.7; flex: none;
+  max-height: 40vh; overflow-y: auto;
+}
+.ledger-panel .ledger-group { margin-bottom: 10px; }
+.ledger-panel h5 {
+  font-family: var(--fm); font-size: 11px; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--subtle); margin: 8px 0 4px;
+}
+.ledger-row { padding: 4px 0; border-bottom: 1px solid var(--muted); }
+.ledger-row:last-child { border-bottom: none; }
+.ledger-row-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.ledger-beat { margin: 2px 0; }
+.ledger-meta { margin: 0; }
 .cast-panel summary { cursor: pointer; padding: 8px 12px; color: var(--accent); font-family: var(--fd); }
 .cast-panel .panel-body { padding: 12px; border-top: 1px solid var(--muted); display: flex; flex-direction: column; gap: 16px; }
 .cast-row { display: flex; gap: 8px; align-items: baseline; font-size: 13px; }

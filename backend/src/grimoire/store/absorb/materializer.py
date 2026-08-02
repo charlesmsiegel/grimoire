@@ -8,8 +8,8 @@ materialize` would bind the function rather than the module.
 
 from __future__ import annotations
 
-from .. import (characters, entities, groupstate, overlay, pcs, playstate,
-                plot, relationships)
+from .. import (characters, commitments, entities, groupstate, overlay, pcs,
+                playstate, plot, relationships)
 from ..appearances import paths as appearances_paths, versions as appearances_versions
 from ..campaigns import paths as campaigns_paths
 from ..paths import slugify
@@ -52,6 +52,77 @@ def _entity_kind(cid: str, eid: str) -> str | None:
         except entities.EntityNotFound:
             continue
     return None
+
+
+def _text(value) -> str:
+    """A stored field as text, or "" for anything that is not a string.
+
+    commitments.json is hand-editable and read by a bare `json.loads`, so every
+    field inside a record is whatever the file says — a list-valued `status`
+    concatenated into a label, or a list-valued `due` handed to `.strip()`,
+    raises from inside `materialize`. That is AFTER the extraction call and is
+    not caught by the absorb route, so one malformed record turns a paid-for
+    absorb into a 500. Checking the document's top-level shape does not reach
+    this; the fields have to be coerced where they are read.
+    """
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _new_commitment_id(owed: dict, staged: dict, slug: str, title: str) -> str:
+    """`slug`, or the first `slug-N` that is free or holds the SAME commitment.
+
+    Only for a movement the model opened WITHOUT an id, where the id is derived
+    from the title and a collision may be an accident rather than a reference.
+    A collision is honoured only when the stored record is unresolved AND its
+    title is the one the model wrote: then the model saw that record in the
+    snapshot under that title, and treating the movement as a beat on it is
+    what "one edit per commitment per scene" means. Anything else gets a fresh
+    id, for two different reasons:
+
+    - a **resolved** record cannot have been meant: `commitment_snapshot` offers
+      only unresolved ones, so the model was never shown it. Approving the row
+      would reopen a fulfilled promise and file the new beat into the closed
+      record's history.
+    - a **different title** is a slug accident. `slugify` strips everything that
+      is not `[a-z0-9]`, so it is not merely near-misses that collide: every
+      title with no ASCII letters at all — a CJK or Cyrillic one, say — maps to
+      the literal `untitled`, and the second such commitment a campaign opens
+      would otherwise be swallowed by the first, keeping the first's title and
+      leaving the new one with no record of its own.
+
+    Titles are compared case- and space-insensitively; a rename between the two
+    absorbs looks like a different commitment here, and opening a second record
+    is the safe direction — nothing is lost or overwritten, and the reviewer can
+    see both rows.
+
+    `staged` is {id: folded title} for the rows this same batch has already
+    placed, and closes the same collision one scope in: two new commitments in
+    ONE absorb are both absent from `owed`, so slug-alone would hand them the
+    same id and the caller's one-edit-per-commitment dedup would drop the
+    second outright. A candidate this batch already took is reusable only when
+    it was taken under the same title, which is the case the dedup is for.
+
+    A movement that DOES carry an id keeps pointing where it says, resolved or
+    not: that is a reference, and silently redirecting it would be the opposite
+    mistake.
+    """
+    want = title.strip().casefold()
+
+    def _free(candidate: str) -> bool:
+        if candidate in staged:
+            return staged[candidate] == want
+        cur = owed.get(candidate)
+        if not isinstance(cur, dict):
+            return True
+        if _text(cur.get("status")) in commitments.RESOLVED:
+            return False
+        return _text(cur.get("title")).casefold() == want
+
+    n, candidate = 1, slug
+    while not _free(candidate):
+        n += 1
+        candidate = f"{slug}-{n}"
+    return candidate
 
 
 def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
@@ -226,6 +297,90 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
                     "label": f"{disp_title} — {status}",
                     "field": "beat", "before": before, "after": beat, "authored": False,
                     "payload": {"id": pid, "title": disp_title, "status": status, "scene": sid}})
+
+    # Same shape as plot_movements above, and deliberately a second block rather
+    # than a parameterized shared one: the two record types agree on "id or a
+    # slugged title, one edit per record per scene" and on nothing else -- the
+    # label, the payload and the vocabulary the status is drawn from all differ,
+    # so the factored version would be a function whose body is mostly branches
+    # on which of the two called it.
+    try:
+        owed = commitments.read(cid)
+    except Exception:  # noqa: BLE001 — garbled commitments.json: skip these, don't 500
+        owed = None
+    if not isinstance(owed, dict):
+        # `read` is a bare json.loads, so a commitments.json holding `[]` is
+        # valid JSON of the wrong shape: it raises nothing and `owed.get` below
+        # would then throw. That happens AFTER the extraction call, turning a
+        # paid-for absorb into a 500 rather than a dropped section.
+        owed = None
+    # An UNREADABLE store stages nothing, where an empty one stages normally.
+    # Falling back to {} conflates the two and every movement is staged as a new
+    # commitment -- a row whose `before` says "nothing is stored" when the truth
+    # is unknown, and whose save is worse than the lie: `apply_edits` hits the
+    # same broken read, its per-edit `except` swallows it, and the reviewer's
+    # panel closes on a 200 with the approved commitment gone and no failure
+    # reported. Staging nothing costs this section (the same price a garbled
+    # file already pays in `render_open` and the ledger) and cannot lose an
+    # approval, because there is no approval to lose.
+    seen_mids: set[str] = set()
+    staged_titles: dict[str, str] = {}   # id -> folded title, for new rows in THIS batch
+    for e in (parsed.get("commitment_movements", []) if owed is not None else []):
+        beat = (e.get("beat", "") or "").strip()
+        if not beat:
+            continue
+        given = (e.get("id", "") or "").strip()
+        title = (e.get("title", "") or "").strip()
+        # Blank means "the model said nothing" -- see parse.py. Carried into the
+        # payload AS blank so `set_movement` keeps the stored value; the label
+        # below shows the resolved value the reviewer will actually get.
+        kind = (e.get("kind", "") or "").strip()
+        status = (e.get("status", "") or "").strip()
+        # None, not "": the key's PRESENCE is the signal (see parse.py). "" is
+        # an instruction to clear the deadline; absent means leave it alone.
+        due = _text(e["due"]) if "due" in e else None
+        if given:
+            mid = given
+        elif any(c.isalnum() for c in title):
+            # New commitment — needs a title with real content, and an id that
+            # does not land on somebody else's record.
+            mid = _new_commitment_id(owed, staged_titles, slugify(title), title)
+            staged_titles[mid] = title.strip().casefold()
+        else:
+            continue  # no id and no usable title -> drop
+        if mid in seen_mids:
+            continue  # one edit per commitment per scene (avoids duplicate ids / double-apply)
+        seen_mids.add(mid)
+        cur = owed.get(mid)
+        if isinstance(cur, dict):  # existing commitment (by id, or a colliding new title)
+            # The STORED head, deadline included: `due` is applied on save and
+            # then steers the ledger and every later scene prompt, so a model
+            # that invents or overwrites one must not be able to do it in a row
+            # whose only visible text is the beat. Here it is what the deadline
+            # was; the label below is what it will be. It doubles as the
+            # staleness token `apply_edits` re-checks at save time.
+            before = conflicts.commitment_line(cur)
+            stored_due = _text(cur.get("due"))
+            disp_title = _text(cur.get("title")) or title or mid  # keep the stored title
+            # What the record will read AFTER the save: the model's value where
+            # it gave one, the stored value where it did not.
+            disp_kind = kind or _text(cur.get("kind")) or "promise"
+            disp_status = status or _text(cur.get("status")) or "open"
+            disp_due = stored_due if due is None else due
+        else:
+            before, disp_title = "", title or mid
+            disp_kind = kind or "promise"      # set_movement's own defaults, for
+            disp_status = status or "open"     # a commitment being created here
+            disp_due = due or ""
+        label = f"{disp_title} — {disp_kind}, {disp_status}"
+        if disp_due:
+            label += f", due {disp_due}"
+        out.append({"id": f"commitment:{mid}", "kind": "commitment",
+                    "target": {"kind": "commitments", "id": mid},
+                    "label": label,
+                    "field": "beat", "before": before, "after": beat, "authored": False,
+                    "payload": {"id": mid, "title": disp_title, "kind": kind,
+                                "status": status, "due": due, "scene": sid}})
 
     existing_char_names = {c["name"].strip().lower() for c in overlay.list_characters(cid)}
     for e in parsed.get("new_characters", []):

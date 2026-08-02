@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from .. import (cards, changes, characters, dossiers, entities, groupstate,
+from .. import (cards, changes, characters, commitments, dossiers, entities, groupstate,
                 overlay, playstate, plot, relationships, voice_drift)
 from ..appearances import (paths as appearances_paths,
                            transitions as appearances_transitions,
@@ -292,6 +292,46 @@ def _apply_one(cid: str, croot, e: dict, sid: str | None,
             # so nothing would come back for it. The payload stays the fallback
             # for a caller that passes no `sid`.
             plot.set_movement(cid, p["id"], title, p["status"], after, sid or p["scene"])
+        elif kind == "commitment":
+            p = e["payload"]
+            # No staleness check here: `commitment` is registered in
+            # `conflicts._REASONS`, so the one-pass gate in `apply_edits` already
+            # refused this row if the record moved since it was staged. It had a
+            # bespoke check inline before #111 landed; keeping that would have
+            # meant two definitions of "has this commitment moved" drifting
+            # apart.
+            #
+            # Blank title for the same reason as the plot branch above, and
+            # `.get` for the three fields materialize added last: a row that
+            # round-tripped through the reviewer's PUT body may predate them, and
+            # `set_movement` reads a blank as "keep what is stored" rather than
+            # as a value -- so the beat still lands instead of the whole edit
+            # being dropped.
+            #
+            # A title is suppressed only when there is a READABLE one to
+            # preserve. A truthy non-dict record -- a hand-edited `[1]` -- is not
+            # one: `materialize` skips it and stages the model's title as a new
+            # commitment, `set_movement` then replaces the record wholesale, and
+            # blanking on mere truthiness would leave a row the reviewer approved
+            # as "The debt" stored under its id.
+            #
+            # The read sits inside the handler on purpose: `commitments.json` can
+            # be valid when the review is staged and unparseable by the time it
+            # is saved (a hand edit, a sync). Both conflict passes call that
+            # unjudgeable, so the read here is where it surfaces -- and since
+            # #271 the generic handler below reports it, which is why this branch
+            # no longer carries a bespoke one of its own.
+            cur = commitments.get(cid, p["id"])
+            stored_title = cur.get("title") if isinstance(cur, dict) else None
+            title = "" if isinstance(stored_title, str) and stored_title.strip() \
+                else p["title"]
+            # `sid` over the staged `payload.scene`, for the reason the plot
+            # branch above gives at length: a retry after a rename must stamp the
+            # beat with the id the scene has now, since `commitments.repoint_scenes`
+            # has already moved every stored reference onto it.
+            commitments.set_movement(cid, p["id"], title, p.get("kind", ""),
+                                     p.get("status", ""), p.get("due"),
+                                     after, sid or p["scene"])
         elif kind == "new_character":
             p = e["payload"]
             card = characters.blank_card(p["name"])

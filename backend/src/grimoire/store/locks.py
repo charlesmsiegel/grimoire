@@ -124,6 +124,11 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     "store.scenes.write",
     "store.scenes.moment",
     "store.scenes.lifecycle",
+    # `commitments.json` is rewritten whole by `set_movement` and
+    # `repoint_scenes`, exactly like `plot.json` -- but this module is new
+    # (#115), so it starts inside the exclusion rather than joining the
+    # `UNREVIEWED` backlog `plot` sits in.
+    "store.commitments",
     "store.sheets.tally",
     "store.sheets.writer",
     "store.audit.baselines",

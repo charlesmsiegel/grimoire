@@ -60,6 +60,7 @@ vi.mock("../api/client", async () => {
       listResponsePresets: vi.fn(), getSceneResponse: vi.fn(),
       listCharacters: vi.fn(), listPCs: vi.fn(), listCampaignPCs: vi.fn(),
       campaignChanges: vi.fn(),
+      campaignLedger: vi.fn(),
       listAppearances: vi.fn(), listEntityImages: vi.fn(), listEntities: vi.fn(),
       campaignImageUrl: (_c: string, char: string, v: string, n: string) => `/img/${char}/${v}/${n}`,
       entityImageUrl: () => "/loc-img",
@@ -167,6 +168,7 @@ beforeEach(() => {
     applied: [], failures: [] });
   (api.getChronicle as any).mockResolvedValue([]);
   (api.campaignChanges as any).mockResolvedValue([]);
+  (api.campaignLedger as any).mockResolvedValue({ plot: [], commitments: [], chronicle: [] });
   (api.listResponsePresets as any).mockResolvedValue([]);
 });
 
@@ -3756,6 +3758,47 @@ test("renaming the reviewed scene repoints its staged plot edits too", async () 
   expect(saved.edits[0].payload.scene).toBe("s1-renamed");
 });
 
+test("renaming the reviewed scene repoints a commitment row's conflict basis", async () => {
+  // `conflicts.commitment_line` ends `[N beats, last moved in <scene>]`, and the
+  // server's scene_refs.repoint rewrites that id in the stored record. A staged
+  // row left holding the old id no longer matches what the store says, so the
+  // save reports a conflict on a commitment nobody touched.
+  const COMMITMENT_EDIT = {
+    id: "commitment:the-debt", kind: "commitment",
+    target: { kind: "commitments", id: "the-debt" },
+    label: "Repay Winifred — promise, open", field: "beat",
+    before: "promise, open — She swore it. [1 beat, last moved in s1]",
+    after: "She missed a payment.", authored: false,
+    resolve_from: "promise, open — She swore it. [1 beat, last moved in s1]",
+    payload: { id: "the-debt", title: "Repay Winifred", kind: "", status: "",
+               due: null, scene: "s1" },
+  };
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  (api.renameScene as any).mockResolvedValue({ id: "s1-renamed", title: "New" });
+  absorbWithPhases(PHASES_NONE_CUT, { edits: [COMMITMENT_EDIT] });
+  (api.saveChronicle as any).mockResolvedValue({ id: "s1-renamed", one_line: "o", summary: "s",
+    keywords: [], cast: [], location: "", date: "", absorbed: "t", applied: [], failures: [] });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await screen.findByText("Review scene summary");
+
+  fireEvent.click(screen.getByRole("button", { name: /rename/i }));
+  const input = screen.getByDisplayValue("Old");
+  fireEvent.change(input, { target: { value: "New" } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  await waitFor(() => expect(api.renameScene).toHaveBeenCalled());
+
+  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  await waitFor(() => expect(api.saveChronicle).toHaveBeenCalled());
+  const saved = (api.saveChronicle as any).mock.calls[0][2].edits[0];
+  expect(saved.payload.scene).toBe("s1-renamed");
+  expect(saved.before).toBe("promise, open — She swore it. [1 beat, last moved in s1-renamed]");
+  expect(saved.resolve_from).toBe(
+    "promise, open — She swore it. [1 beat, last moved in s1-renamed]");
+});
+
 test("the budget notice never sends the reviewer back through End scene", async () => {
   // End scene posts the *active* scene and replaces the review wholesale, so
   // advising it here would tell the user to discard the edits this very notice
@@ -4439,6 +4482,92 @@ test("clean and skipped voice phases render no notice (#59)", async () => {
     expect(screen.queryByText(/voice check/i)).toBeNull();
     view.unmount();
   }
+});
+
+test("renaming the reviewed scene repoints its staged commitment edits too", async () => {
+  // Same browser-only `payload.scene` as the plot case above: apply_edits hands
+  // it straight to commitments.set_movement, so a rename that moved only
+  // `absorbSid` would append a beat pointing at a scene id that is gone (#115).
+  const COMMITMENT_EDIT = {
+    id: "commitment:the-debt", kind: "commitment",
+    target: { kind: "commitments", id: "the-debt" },
+    label: "Repay Winifred — promise, open", field: "beat",
+    before: "", after: "She swore it aloud.", authored: false,
+    payload: { id: "the-debt", title: "Repay Winifred", kind: "promise",
+               status: "open", due: "before the thaw", scene: "s1" },
+  };
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  (api.renameScene as any).mockResolvedValue({ id: "s1-renamed", title: "New" });
+  absorbWithPhases(PHASES_NONE_CUT, { edits: [COMMITMENT_EDIT] });
+  (api.saveChronicle as any).mockResolvedValue({ id: "s1-renamed", one_line: "o", summary: "s",
+    keywords: [], cast: [], location: "", date: "", absorbed: "t", applied: [], failures: [] });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await screen.findByText("Review scene summary");
+
+  fireEvent.click(screen.getByRole("button", { name: /rename/i }));
+  const input = screen.getByDisplayValue("Old");
+  fireEvent.change(input, { target: { value: "New" } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  await waitFor(() => expect(api.renameScene).toHaveBeenCalled());
+
+  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  await waitFor(() => expect(api.saveChronicle).toHaveBeenCalled());
+  const saved = (api.saveChronicle as any).mock.calls[0][2];
+  expect(saved.edits[0].payload.scene).toBe("s1-renamed");
+});
+
+test("the Ledger button opens the continuity ledger", async () => {
+  (api.campaignLedger as any).mockResolvedValue({ plot: [], commitments: [], chronicle: [] });
+  renderCampaign();
+  fireEvent.click(await screen.findByRole("button", { name: "Ledger" }));
+  expect(await screen.findByText(/Nothing on the ledger yet/)).toBeInTheDocument();
+  expect(api.campaignLedger).toHaveBeenCalledWith("run");
+});
+
+test("renaming a scene re-reads an open ledger", async () => {
+  // Every thread and commitment on the ledger carries the TITLE of the scene
+  // that last moved it, so a rename changes what the route returns — and this
+  // path touches neither of the panel's dependencies otherwise: same campaign,
+  // no absorb saved. Without the revision bump the panel keeps the old title
+  // until the user selects a scene or closes and reopens it.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.campaignLedger as any).mockResolvedValue({ plot: [], commitments: [], chronicle: [] });
+  (api.renameScene as any).mockResolvedValue({ id: "s1-renamed", title: "New" });
+  renderCampaign();
+  fireEvent.click(await screen.findByRole("button", { name: "Ledger" }));
+  await screen.findByText(/Nothing on the ledger yet/);
+  const before = (api.campaignLedger as any).mock.calls.length;
+
+  fireEvent.click(screen.getByRole("button", { name: /rename/i }));
+  const input = screen.getByDisplayValue("Old");
+  fireEvent.change(input, { target: { value: "New" } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  await waitFor(() => expect(api.renameScene).toHaveBeenCalled());
+  await waitFor(() =>
+    expect((api.campaignLedger as any).mock.calls.length).toBeGreaterThan(before));
+});
+
+test("deleting a scene re-reads an open ledger", async () => {
+  // Same reason as the rename above — the ledger resolves every row against the
+  // scene list — and neither branch of `deleteScene` reaches `selectScene`:
+  // deleting an inactive scene selects nothing, and deleting the last one
+  // clears the view instead.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.campaignLedger as any).mockResolvedValue({ plot: [], commitments: [], chronicle: [] });
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  renderCampaign();
+  fireEvent.click(await screen.findByRole("button", { name: "Ledger" }));
+  await screen.findByText(/Nothing on the ledger yet/);
+  const before = (api.campaignLedger as any).mock.calls.length;
+
+  (api.listScenes as any).mockResolvedValue([]);
+  fireEvent.click(screen.getByRole("button", { name: /delete/i }));
+  await waitFor(() => expect(api.deleteScene).toHaveBeenCalled());
+  await waitFor(() =>
+    expect((api.campaignLedger as any).mock.calls.length).toBeGreaterThan(before));
 });
 
 // ---- paginated scene history (#94) ----

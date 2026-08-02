@@ -1,0 +1,5 @@
+{#- One unresolved commitment, context form (the # Commitments block — no id,
+    the model just reads it). Vars: c ({title, kind, status, due, latest_beat}). -#}
+{{ c.title }} ({{ c.kind }}, {{ c.status }})
+{%- if c.due %}, due {{ c.due }}{% endif %}
+{%- if c.latest_beat %}: {{ c.latest_beat }}{% endif -%}
