@@ -2630,6 +2630,36 @@ def test_a_reroll_that_cannot_archive_leaves_the_pending_proposal_alone(client, 
     assert record["status"] == "pending"
 
 
+def test_a_swap_whose_transcript_write_fails_leaves_the_proposal_alone(client, monkeypatch):
+    """The sidecar preflight only proves the SIDECAR is writable. `promote`
+    rewrites the transcript too, and that write failing leaves the reader looking
+    at the exact narration the decision came from."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "hi")
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "old reply"}])
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
+    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/alternates").json()
+    vid = next(a["id"] for i, a in enumerate(body["alternates"]) if i != body["active"])
+    store.proposals.new(cid, sid, {"check": "athletics", "actor": None, "problems": []})
+    refuse = {"on": True}
+    real = store.scenes.remove_trailing_assistant_run
+
+    def boom(*a, **k):
+        if refuse["on"]:
+            raise OSError(28, "no space left on device")
+        return real(*a, **k)
+
+    monkeypatch.setattr(store.alternates.scenes_write, "remove_trailing_assistant_run", boom)
+    with pytest.raises(OSError):
+        client.post(f"/api/campaigns/{cid}/scenes/{sid}/alternates/{vid}")
+    refuse["on"] = False
+
+    record = client.get(f"/api/campaigns/{cid}/scenes/{sid}/roll-proposal").json()["record"]
+    assert record["status"] == "pending"
+
+
 def test_a_swap_that_cannot_persist_leaves_the_pending_proposal_alone(client, monkeypatch):
     """Retiring the decision before the sidecar is known to be writable retired
     it for a swap that never happened — and the narration it was derived from is

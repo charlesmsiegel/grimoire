@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import atomic, cards, characters, entities, greetings, locks, overlay, scene_ids, scene_refs, worlds
+from . import (alternates, atomic, cards, characters, entities, greetings, locks, overlay,
+               scene_ids, scene_refs, worlds)
 from .appearances import paths as appearances_paths, versions as appearances_versions
 from .campaigns import paths as campaigns_paths, read as campaigns_read
 from .frontmatter import parse_frontmatter
@@ -64,6 +65,12 @@ def _migrate_campaign_locked(cid: str) -> None:
         new_sid = uniquify(base, lambda cand: cand in taken)
         taken.add(new_sid)
         mapping[stem] = new_sid
+    # Before a single transcript moves, exactly as `repad` does. `taken` is
+    # built from `*.md`, so a destination can be an id an orphaned sidecar still
+    # sits on — and clearing one can fail. Left to `scene_refs.repoint` at the
+    # end, that failure lands with every legacy scene already renamed and every
+    # other store still pointing at the old ids, on a startup migration.
+    alternates.clear_destinations(cid, set(mapping.values()))
     for old, new in mapping.items():
         (d / f"{old}.md").rename(d / f"{new}.md")
     scene_refs.repoint(cid, mapping)
