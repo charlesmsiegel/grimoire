@@ -3799,6 +3799,64 @@ test("renaming the reviewed scene repoints a commitment row's conflict basis", a
     "promise, open — She swore it. [1 beat, last moved in s1-renamed]");
 });
 
+test("renaming the reviewed scene repoints an UNANSWERED conflict snapshot", async () => {
+  // The conflict the server returned carries the same fingerprint, and it is the
+  // value Replace copies into `resolve_from`. The server's own repoint has
+  // already moved the stored record onto the new id, so a stale snapshot here
+  // means the retry is refused as changed again — the reviewer answering a
+  // conflict that no longer exists, twice. It is also what the panel shows them.
+  const STALE = "promise, open — She swore it. [1 beat, last moved in s1]";
+  const COMMITMENT_EDIT = {
+    id: "commitment:the-debt", kind: "commitment",
+    target: { kind: "commitments", id: "the-debt" },
+    label: "Repay Winifred — promise, open", field: "beat",
+    before: STALE, after: "She missed a payment.", authored: false,
+    payload: { id: "the-debt", title: "Repay Winifred", kind: "", status: "",
+               due: null, scene: "s1" },
+  };
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [{ role: "user", content: "hi" }] });
+  (api.renameScene as any).mockResolvedValue({ id: "s1-renamed", title: "New" });
+  absorbWithPhases(PHASES_NONE_CUT, { edits: [COMMITMENT_EDIT] });
+  // First save comes back as a conflict, so the review sits holding one.
+  const { ApiError } = await vi.importActual<typeof import("../api/client")>("../api/client");
+  (api.saveChronicle as any)
+    .mockRejectedValueOnce(new ApiError(
+      409, "some proposed changes no longer match what is stored", "edit_conflicts",
+      { conflicts: [{ id: "commitment:the-debt", label: "Repay Winifred — promise, open",
+                      kind: "commitment", field: "beat", before: STALE,
+                      after: "She missed a payment.", stored: STALE,
+                      reason: "this commitment changed since the scene was absorbed",
+                      mergeable: false, merged: "", index: 0 }] }))
+    .mockResolvedValue({ id: "s1-renamed", one_line: "o", summary: "s", keywords: [],
+      cast: [], location: "", date: "", absorbed: "t", applied: [], failures: [] });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  await screen.findByText("Review scene summary");
+
+  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  await screen.findByText(/no longer match(es)? what is stored/i);
+
+  fireEvent.click(screen.getByRole("button", { name: /rename/i }));
+  const input = screen.getByDisplayValue("Old");
+  fireEvent.change(input, { target: { value: "New" } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  await waitFor(() => expect(api.renameScene).toHaveBeenCalled());
+
+  // What the reviewer is shown moved with the rename — the conflict's `stored`
+  // panel and the row's own `before` both carry the fingerprint, so both move.
+  const moved = "promise, open — She swore it. [1 beat, last moved in s1-renamed]";
+  await waitFor(() => expect(screen.getAllByText(moved).length).toBeGreaterThan(0));
+
+  // ...and so does what Replace sends as the value they answered over.
+  fireEvent.click(screen.getByRole("button", { name: /Replace stored/i }));
+  fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
+  await waitFor(() => expect((api.saveChronicle as any).mock.calls.length).toBe(2));
+  const saved = (api.saveChronicle as any).mock.calls[1][2].edits[0];
+  expect(saved.resolve_from).toBe(moved);
+});
+
 test("the budget notice never sends the reviewer back through End scene", async () => {
   // End scene posts the *active* scene and replaces the review wholesale, so
   // advising it here would tell the user to discard the edits this very notice

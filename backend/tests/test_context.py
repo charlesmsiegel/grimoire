@@ -1962,6 +1962,45 @@ def test_a_malformed_card_name_costs_only_its_own_actor(monkeypatch, tmp_path):
     assert "Mara sold the manifest." in section
 
 
+def test_an_uncased_script_still_yields_its_name_parts():
+    """`isupper()` is False for every token of an Arabic or Hebrew name, so
+    requiring upper case rejected the whole name and derived no alias at all —
+    the `\\b` failure again: not a missed edge, an entire class of campaign for
+    which the filter did nothing. What marks an epithet is an explicitly LOWER
+    case token, and an uncased one is neither."""
+    from grimoire.store.context import world_state
+    assert world_state._short_alias("ليلى حسن") == "ليلى"
+    assert world_state._surname_alias("ליאורה כהן") == "כהן"
+    # A single CJK character stays out, and does not need to be in: the
+    # one-character floor is the initial guard, and an unspaced `李明` is one
+    # token that `_mentions` already matches in full.
+    assert world_state._short_alias("李 明") == ""
+    # The cased rules are unchanged, in both directions.
+    assert world_state._short_alias("Winifred Vance") == "Winifred"
+    assert world_state._short_alias("The Woman on the Pier") == ""
+    assert world_state._short_alias("Woman of the Pier") == ""
+
+
+def test_an_indented_continuation_stays_under_its_bullet(monkeypatch, tmp_path):
+    """A list item continues across a blank line when the paragraph below is
+    indented inside it — ordinary markdown. Popping the governor at the blank
+    made that paragraph independent: the named bullet withheld, and the
+    continuation, which has no subject of its own, published."""
+    from grimoire.store import playstate
+    cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
+    playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
+        "Wary.", "",
+        "- Winifred is lying.\n"
+        "\n"
+        "  She hid the ledger at the pier.\n"
+        "\n"
+        "Mara sold the manifest."))
+    section = _state_section(cid, sid)
+    assert "Winifred is lying" not in section
+    assert "hid the ledger" not in section          # the continuation goes with it
+    assert "Mara sold the manifest." in section     # an UNindented paragraph does not
+
+
 def test_a_suspicion_naming_a_player_s_container_name_is_withheld(monkeypatch, tmp_path):
     """A PC's container name and its locked persona name can differ. Taking only
     the persona left a suspicion written against the canonical PC name unmatched
