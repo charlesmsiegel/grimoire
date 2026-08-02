@@ -66,7 +66,7 @@ vi.mock("../api/client", async () => {
   };
 });
 vi.mock("../api/models", () => ({ getModels: vi.fn() }));
-import { api } from "../api/client";
+import { api, ApiError } from "../api/client";
 import { getModels } from "../api/models";
 
 const ONE_SCENE = [{ id: "s1", title: "Old", model: "", created: "", updated: "" }];
@@ -724,6 +724,110 @@ test("a refresh that fails with the send still gives the prompt back", async () 
   fireEvent.change(ta, { target: { value: "I draw my blade." } });
   fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
   await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("I draw my blade."));
+});
+
+test("a rolled-back prompt comes back beside a draft typed since", async () => {
+  // The composer stays editable while a turn runs, so the player can be typing
+  // the next line when this one fails. `cur || content` dropped the failed
+  // prompt in exactly that case — it is in no transcript and no composer, which
+  // is the loss the restore exists to prevent. Both texts survive.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  let fail: (() => void) | null = null;
+  (api.chat as any).mockImplementation(
+    async (_c: string, _s: string, _t: string, onEvent: any) => {
+      await new Promise<void>((r) => { fail = r; });
+      onEvent({ error: { detail: "OpenRouter API key is not set", kind: "missing_key",
+                         post_returned: true } });
+    });
+  renderCampaign();
+  const ta = await screen.findByRole("textbox");
+  fireEvent.change(ta, { target: { value: "I draw my blade." } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  await screen.findByRole("button", { name: /stop ■/i });
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "Wait, I hesitate." } });
+  fail!();
+  await screen.findByText(/OpenRouter API key is not set/);
+  await waitFor(() => expect(screen.getByRole("textbox"))
+    .toHaveValue("I draw my blade.\n\nWait, I hesitate."));
+});
+
+test("a pre-response abort whose post landed still waits for the flush", async () => {
+  // `beforeResponse` says no response came back, not that nothing was written:
+  // the server can append the post, start generating, and have the abort beat
+  // its headers home. Growth in the refresh proves that happened, so there is a
+  // turn on the server and its abort write is still coming — skipping the poll
+  // on `unreached` alone left that partial invisible.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  let landed = false;
+  let flushed = false;
+  (api.getScene as any).mockImplementation(async () => ({
+    meta: {},
+    total: flushed ? 2 : landed ? 1 : 0,
+    messages: flushed
+      ? [{ role: "user", content: "I draw my blade." },
+         { role: "assistant", content: "the whole persisted partial" }]
+      : landed ? [{ role: "user", content: "I draw my blade." }] : [],
+  }));
+  (api.chat as any).mockImplementation(async () => {
+    landed = true;              // post_chat appended and began generating
+    const err: Error & { beforeResponse?: boolean } = new Error("The operation was aborted.");
+    err.name = "AbortError";
+    err.beforeResponse = true;
+    throw err;
+  });
+  renderCampaign();
+  const ta = await screen.findByRole("textbox");
+  fireEvent.change(ta, { target: { value: "I draw my blade." } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  await screen.findByText("I draw my blade.");
+  setTimeout(() => { flushed = true; }, 100);   // the shielded write lands after
+  await waitFor(() =>
+    expect(screen.getByText("the whole persisted partial")).toBeInTheDocument());
+});
+
+test("a refused turn neither polls for a flush nor loses the prompt", async () => {
+  // A non-2xx is the whole outcome: `streamPost` throws it before any body
+  // exists, so no stream was cut short and no abort write is coming. The poll
+  // ran anyway — twelve seconds of refreshes for a turn that never started.
+  // And every 4xx `post_chat` raises comes from a check that runs before the
+  // post is appended, so the prompt was cleared and stored nowhere.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, total: 0, messages: [] });
+  (api.chat as any).mockImplementation(async () => {
+    throw new ApiError(409, "a turn is already running on this scene", "busy");
+  });
+  renderCampaign();
+  const ta = await screen.findByRole("textbox");
+  fireEvent.change(ta, { target: { value: "I draw my blade." } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  await screen.findByText(/a turn is already running/);
+  await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("I draw my blade."));
+  const readsAfterSettling = (api.getScene as any).mock.calls.length;
+  await new Promise((r) => setTimeout(r, 400));   // past the first two poll ticks
+  expect((api.getScene as any).mock.calls.length).toBe(readsAfterSettling);
+});
+
+test("the scene being generated into cannot be renamed mid-turn", async () => {
+  // A scene's id is its filename and renaming re-slugs it, so a rename mid-turn
+  // moves the file out from under the stream: the abort write that saves the
+  // partial fails with SceneNotFound and is swallowed during teardown.
+  (api.listScenes as any).mockResolvedValue([
+    { id: "s1", title: "Old", model: "", created: "", updated: "" },
+    { id: "s2", title: "Later", model: "", created: "", updated: "" },
+  ]);
+  (api.chat as any).mockImplementation(hangingChat(["The tide "]));
+  renderCampaign();
+  const ta = await screen.findByRole("textbox");
+  fireEvent.change(ta, { target: { value: "and then?" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  await screen.findByRole("button", { name: /stop ■/i });
+  const [activeRename, otherRename] = screen.getAllByRole("button", { name: /rename/i });
+  expect(activeRename).toBeDisabled();
+  expect(otherRename).not.toBeDisabled();   // only the scene being written to
+  fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
+  await screen.findByRole("button", { name: /continue ▶/i });
+  await waitFor(() => expect(
+    screen.getAllByRole("button", { name: /rename/i })[0]).not.toBeDisabled());
 });
 
 test("a poll fetch already in flight cannot clear a new turn's preview", async () => {

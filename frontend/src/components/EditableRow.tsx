@@ -5,6 +5,8 @@ export function EditableRow({
   prefix,
   subtitle,
   active,
+  locked,
+  lockedReason,
   onSelect,
   onRename,
   onDelete,
@@ -14,6 +16,11 @@ export function EditableRow({
   prefix?: string;
   subtitle?: string;
   active?: boolean;
+  /** Disable rename and delete — the record is busy being written to. Selecting
+   *  it stays live, since reading a row is never what makes a write unsafe. */
+  locked?: boolean;
+  /** Tooltip explaining the lock; disabled controls with no reason read as bugs. */
+  lockedReason?: string;
   onSelect?: () => void;
   onRename: (next: string) => void;
   onDelete: () => void;
@@ -55,7 +62,8 @@ export function EditableRow({
           <span className="row-actions">
             <button
               aria-label="Rename"
-              title="Rename"
+              title={locked ? lockedReason ?? "Rename" : "Rename"}
+              disabled={locked}
               onClick={(e) => {
                 e.stopPropagation();
                 start();
@@ -65,7 +73,8 @@ export function EditableRow({
             </button>
             <button
               aria-label="Delete"
-              title="Delete"
+              title={locked ? lockedReason ?? "Delete" : "Delete"}
+              disabled={locked}
               onClick={(e) => {
                 e.stopPropagation();
                 onDelete();

@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
-  api, type Actor, type AbsorbPhase, type Dossiers, type EditConflict, type SceneMeta,
+  api, ApiError, type Actor, type AbsorbPhase, type Dossiers, type EditConflict, type SceneMeta,
   type Message, type RosterEntry, type SceneAbsorb,
   type SceneDatetime, type StagedEdit, type ProposalRecord, type SceneCheckActor,
   type ResponsePresetSummary, type ResponseOverride, type ResponseBundle,
@@ -709,6 +709,11 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     let finished = false;
     let errored = false;
     let unreached = false;  // the request never reached the server
+    // The server answered with a status instead of a stream. A fourth question,
+    // because it is the one outcome that is *complete* on arrival: `streamPost`
+    // throws a non-2xx before any body exists, so there is no stream that was
+    // cut short, no partial in flight and nothing for the flush poll to wait on.
+    let refused = false;
     try {
       await start((e) => {
         if (e.delta) {
@@ -749,6 +754,14 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       // is also in the transcript, and the next Send would duplicate it. The
       // refresh below settles it (review, #95).
       if (err?.beforeResponse) unreached = true;
+      // A refusal reaches the server but may still leave nothing behind: every
+      // 4xx `post_chat` raises comes from a check that runs *before* the post is
+      // appended, so the prompt was cleared out of a composer and stored
+      // nowhere — the same position a rollback leaves the player in. Not
+      // assumed, though: a 500 out of `build_messages` lands here too, and that
+      // one raises *after* the append. The transcript settles which, exactly as
+      // it does for `unreached` (review, #95).
+      else if (err instanceof ApiError) refused = true;
     } finally {
       abortRef.current = null;
       setStreaming("");
@@ -807,12 +820,26 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       // Both mean the same thing: nothing proves the post landed. Erring the
       // other way risks a duplicate the player can see and delete; erring this
       // way destroys text that exists in no other place.
+      //
+      // Both outcomes that can leave the post unwritten ask the same question,
+      // so they share the answer: the request that never arrived, and the one
+      // the server refused. `nothingLanded` is the transcript saying it, out
+      // loud — not merely the absence of evidence that it did.
       const unverifiable = !refreshed || totalBefore === null;
-      if (unreached && (unverifiable || (seen >= 0 && seen <= totalBefore))) {
+      const nothingLanded = !unverifiable && seen >= 0 && seen <= totalBefore;
+      if ((unreached || refused) && (unverifiable || nothingLanded)) {
         onPromptUnstored?.();
       }
-      // Nothing to wait for when the request never arrived: there is no turn
-      // on the server to have produced a partial.
+      // Nothing to wait for when nothing on the server can produce a partial: a
+      // refusal never started a stream, and a request that verifiably never
+      // arrived never made a turn.
+      //
+      // `unreached` alone is not that proof, and review caught it standing in
+      // for it. It says no *response* came back, which the server can do having
+      // already appended the post and begun generating — and growth in the
+      // refresh proves exactly that happened. So the poll is skipped only when
+      // the transcript confirms the turn does not exist; an unverified guess
+      // costs a few reads, while being wrong the other way loses the partial.
       //
       // The poll needs a length to watch for growth past, and a refresh that
       // failed did not produce one. Fall back to this scene's pre-turn length:
@@ -820,7 +847,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       // where the turn started. `-1` only when even that is unknown, which
       // makes the first successful read count as growth — the poll refreshes
       // once and stops, which is what an unmeasurable scene can honestly do.
-      if (!finished && !errored && !unreached) {
+      if (!finished && !errored && !refused && !(unreached && nothingLanded)) {
         await awaitFlushedPartial(id, refreshed ? seen : (totalBefore ?? -1));
       }
     }
@@ -870,10 +897,17 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     // From the callback rather than after the await: `runStream` does not
     // return until its flush poll has finished, and the player should not have
     // to wait that out to get their own words back.
+    // Appended above a newer draft rather than dropped or overwritten. The
+    // composer stays editable while a turn runs, so by the time a turn fails
+    // the player may already be typing the next thing — and review caught that
+    // `cur || content` then threw the failed prompt away, in exactly the case
+    // it exists to protect. Both texts are the player's, neither is anywhere
+    // else, so both come back: the failed one first, since it was typed first,
+    // and joined visibly so it reads as two things to edit rather than one.
     const landed = await runStream(id, (onEvent, signal) => pendingResponse
       ? api.chat(cid, id!, content, onEvent, pendingResponse, signal)
       : api.chat(cid, id!, content, onEvent, undefined, signal),
-      () => setInput((cur) => cur || content));
+      () => setInput((cur) => (cur.trim() ? `${content}\n\n${cur}` : content)));
     if (landed) setPendingResponse(null);
   }
 
@@ -1288,6 +1322,15 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
               prefix={String(sceneNumber(s.id, scenes.length - i)).padStart(2, "0")}
               subtitle={s.pcless ? "Offscreen" : undefined}
               active={s.id === activeId}
+              // A scene's id is its filename, and renaming re-slugs it — so a
+              // rename mid-turn moves the file out from under the stream, and
+              // the abort write that would have saved the partial fails with
+              // `SceneNotFound` and is swallowed during teardown. Deleting is
+              // the same mechanism. Locked for the turn's duration; the other
+              // rows stay editable, since only this scene is being written to
+              // (review, #95).
+              locked={busy && s.id === activeId}
+              lockedReason="Not while this scene is generating"
               onSelect={() => selectScene(s.id)}
               onRename={(title) => renameScene(s.id, title)}
               onDelete={() => deleteScene(s)}
@@ -1575,6 +1618,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
             onSceneRenamed={sceneRenamed}
             initialPrompt={seedPrompt?.sid === activeId ? seedPrompt.prompt : undefined}
             pcless={activePcless}
+            sceneLocked={busy}
           />
         )}
         {activeId && (
