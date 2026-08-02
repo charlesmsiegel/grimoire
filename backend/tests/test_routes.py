@@ -1668,6 +1668,29 @@ async def test_a_cancelled_turn_still_persists_while_it_owns_the_tail(monkeypatc
         "and then?", "The tide turns."]
 
 
+def test_a_scene_renamed_mid_turn_still_gets_its_error_frame(client):
+    """A rename mints a new scene id and moves the file, so the rollback (and
+    the partial-persist beside it) can only find a scene that is gone. That must
+    not end the generator bare: the response has already started, so an escaping
+    SceneNotFound truncates the stream and the upstream failure is never
+    reported."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+
+    class RenamesThenFails:
+        async def stream(self, messages, cfg):
+            store.scenes.rename_scene(cid, sid, "Saltmarch")   # the file moves
+            raise LLMError("network", "connection reset")
+            yield  # pragma: no cover - never reached, keeps this a generator
+
+    client.app.dependency_overrides[routes.get_llm] = lambda: RenamesThenFails()
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "and then?"})
+    assert resp.status_code == 200
+    assert '"kind": "network"' in resp.text          # the frame survived the vanished scene
+    assert '"detail": "connection reset"' in resp.text
+
+
 def test_a_turn_that_fails_with_nothing_takes_its_user_post_back(client):
     """Transactional post+response (#95): the post is appended before the
     stream, so a generation that produces nothing at all would otherwise leave
