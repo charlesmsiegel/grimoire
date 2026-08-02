@@ -115,22 +115,49 @@ def match_name(label: str, names) -> str | None:
     return prefixed[0] if len(prefixed) == 1 else None
 
 
+def _labels(name: str) -> set[str]:
+    """Every transcript label that could be written for `name`: the full name
+    and each of its word-boundary prefixes. The model abbreviates -- it writes
+    `**Winifred:**` for a character carded as "Winifred Vance" -- so a name owns
+    more labels than itself."""
+    return {label for label in
+            {name} | {name[:i] for i in range(1, len(name)) if not name[i].isalnum()}
+            if label.strip()}
+
+
 def confusable(name: str, names) -> bool:
     """True when some transcript label that could mean `name` could also mean
     something else in `names`.
 
-    `match_name` is the resolver that decides which cast member a written label
-    refers to, so it also defines when a label is ambiguous -- and comparing
-    whole names does NOT capture that. "Winifred Vance" and "Winifred Vale" are
-    distinct strings, but a block labelled "Winifred" is a word-boundary prefix
-    of both and belongs to neither in particular.
+    Comparing whole names does NOT capture that. "Winifred Vance" and "Winifred
+    Vale" are distinct strings, but a block labelled "Winifred" is a
+    word-boundary prefix of both and belongs to neither in particular. So the
+    question is asked of every label that could name this actor, and the actor
+    is confusable unless all of them settle on it alone.
 
-    So the test is applied to every label that could name this actor -- the full
-    name and each of its word-boundary prefixes -- and the actor is confusable
-    unless all of them resolve back to it. Deliberately conservative: a name
-    reachable by an ambiguous label is rejected even when its own full-name
-    label would have been fine, because nothing downstream can tell which label
-    a given block was written with.
+    Two directions, and BOTH are needed -- the second was missing, and no amount
+    of care with the first would have covered it:
+
+    - Every label that could name this actor must RESOLVE BACK to it. This is
+      `match_name`, the same resolver that decides which cast member a written
+      label refers to, so ambiguity is defined by the code that will actually do
+      the reading rather than by a second opinion about it. It also rejects a
+      name that is not in `names` at all, which is how a card name that differs
+      from the actor's roster entry gets caught.
+
+    - No label that resolves to this actor may be WRITABLE FOR SOMEONE ELSE.
+      `match_name` breaks a tie by exact match, so with both "Mary" and "Mary
+      Jane" on the roster the label "Mary" resolves to "Mary" -- cleanly, and
+      wrongly, because the model writing `**Mary:**` may well have been
+      shortening "Mary Jane". Direction one cannot see this: it only ever asks
+      where a label lands, never who else could have written it.
+
+    Deliberately conservative in both: an actor reachable by an ambiguous label
+    is rejected even when its own full-name label would have been fine, because
+    nothing downstream can tell which label a given block was written with. In
+    the "Mary" / "Mary Jane" case that rejects both, which is correct -- "Mary"
+    has no unambiguous label at all, and "Mary Jane" has one only if you assume
+    the model never abbreviates.
 
     Used wherever a name has to identify exactly one actor: the voice judge
     (which is handed the transcript) and the voice corrective (which addresses
@@ -138,8 +165,16 @@ def confusable(name: str, names) -> bool:
     """
     if not isinstance(name, str) or not name.strip():
         return True
-    labels = {name} | {name[:i] for i in range(1, len(name)) if not name[i].isalnum()}
-    return any(match_name(label, names) != name for label in labels if label.strip())
+    mine = _labels(name)
+    if any(match_name(label, names) != name for label in mine):
+        return True
+    lowered = {label.strip().lower() for label in mine}
+    # `other != name` skips this actor's own entry. A DUPLICATE of it in `names`
+    # is skipped here too, and deliberately: direction one already rejected that
+    # (two exact matches make `match_name` return None), so letting it fall
+    # through here would only re-derive the same answer.
+    return any(lowered & {label.strip().lower() for label in _labels(other)}
+               for other in names if isinstance(other, str) and other != name)
 
 
 def _speaker_and_role(m: re.Match, players: frozenset[str]) -> tuple[str | None, str]:

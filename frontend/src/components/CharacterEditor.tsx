@@ -91,6 +91,32 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   const [worldVersions, setWorldVersions] = useState<VersionRef[]>([]);
   const [importVid, setImportVid] = useState("");
 
+  // LIVE mirrors of state that async continuations have to read. A handler
+  // closes over the values from the render that created it, and everything
+  // below runs after at least one `await` -- so by the time it resumes, its
+  // `scope`, `detail` and `voiceAnchor` may all describe a screen the user has
+  // already left. Refs assigned during render always hold the current value.
+  const liveScope = useRef(scope);
+  liveScope.current = scope;
+  const liveAnchor = useRef({ cid: "", text: "", state: "loading" as typeof anchorState });
+  liveAnchor.current = { cid: detail?.meta.id ?? "", text: voiceAnchor, state: anchorState };
+
+  /** Install a freshly-read character — unless the editor has since left the
+   *  scope it was read from, in which case drop it.
+   *
+   *  The scope effect below clears the open character precisely so a stale id
+   *  cannot be combined with the new scope on a write. A read still in flight
+   *  when the scope changes puts it straight back: the continuation calls
+   *  `setDetail` with scope A's record while the component renders under scope
+   *  B, and the next save — the anchor PUT among them — addresses B by A's id.
+   *  Guarded here rather than at each call site, because every one of them is
+   *  the same shape and only one of them has to forget. */
+  function adopt(d: CharacterDetail, from: EntityScope): boolean {
+    if (liveScope.current.kind !== from.kind || liveScope.current.id !== from.id) return false;
+    setDetail(d);
+    return true;
+  }
+
   const reload = useCallback(() => api.listCharacters(scope).then(setChars), [scope.kind, scope.id]);  // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     reload();
@@ -182,7 +208,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       });
       // show the rewritten text + any new images for the version we localized
       const d = await api.readCharacter(scope, cid);
-      setDetail(d);
+      if (!adopt(d, scope)) return;
       loadVersion(d, version);  // clears localizeMsg, so set the summary after it
     } catch (err: any) {
       finalMsg = `Localize failed: ${err.detail ?? String(err)}`;
@@ -251,10 +277,10 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     );
   }
 
-  async function select(cid: string) {
+  async function select(cid: string): Promise<CharacterDetail | null> {
     setError(null);
     const d = await api.readCharacter(scope, cid);
-    setDetail(d);
+    if (!adopt(d, scope)) return null;
     setBirthdate(d.meta.birthdate ?? "");
     loadVersion(d, d.meta.default_version);
     // `select()` is the refresh EVERY other save runs (card version, avatar,
@@ -264,8 +290,15 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     // when there is nothing to lose: a different character, or no unsaved edit.
     // `focusCharacter` still reloads unconditionally -- that is navigation TO a
     // character, not a refresh of the one already open.
-    const keepDraft = detail?.meta.id === cid && anchorState === "ready"
-      && voiceAnchor !== anchorLoaded.current;
+    //
+    // Read LIVE, not from the closure. Every caller reaches here after awaiting
+    // its own write, and a draft typed during that await is invisible to the
+    // render snapshot the handler captured -- so the closed-over `voiceAnchor`
+    // still equals `anchorLoaded` and the draft is judged absent, one keystroke
+    // too late to save it.
+    const live = liveAnchor.current;
+    const keepDraft = live.cid === cid && live.state === "ready"
+      && live.text !== anchorLoaded.current;
     if (!keepDraft) loadVoiceAnchor(cid);   // campaign-local characters need one too (#59)
     if (worldScope) loadTagline(cid);
     else await loadLockState(cid);
@@ -432,6 +465,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   async function openDetail(cid: string) {
     window.scrollTo(0, 0);
     const d = await select(cid);
+    if (!d) return null;   // scope changed under the read; do not open anything
     setMode("detail");
     return d;
   }
@@ -440,7 +474,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     window.scrollTo(0, 0);
     setError(null);
     const d = await api.readCharacter(scope, cid);
-    setDetail(d);
+    if (!adopt(d, scope)) return;
     setBirthdate(d.meta.birthdate ?? "");
     loadVersion(d, d.versions.some((v) => v.id === vid) ? vid : d.meta.default_version);
     loadVoiceAnchor(cid);   // campaign-local characters need one too (#59)
@@ -451,7 +485,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
 
   async function openEdit(cid: string) {
     window.scrollTo(0, 0);
-    await select(cid);
+    if (!(await select(cid))) return;   // scope changed under the read
     setMode("edit");
   }
 
@@ -497,7 +531,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     const name = window.prompt("New version name?")?.trim();
     if (!name) return;
     const { version } = await api.createVersion(scope, detail.meta.id, { name, card: buildCard() });
-    await select(detail.meta.id);
+    if (!(await select(detail.meta.id))) return;   // scope changed under the read
     loadVersion(await api.readCharacter(scope, detail.meta.id), version);
   }
 
@@ -508,7 +542,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     try {
       const { version } = await api.importCharacter(wid, file, formatOf(file), detail.meta.id);
       const d = await api.readCharacter(scope, detail.meta.id);
-      setDetail(d);
+      if (!adopt(d, scope)) return;
       loadVersion(d, version);
       await reload();
       await runLocalize(detail.meta.id, version);
@@ -570,7 +604,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   async function refreshVersion() {
     if (!detail) return;
     const d = await api.readCharacter(scope, detail.meta.id);
-    setDetail(d);
+    if (!adopt(d, scope)) return;
     loadVersion(d, vid);
     await reload();
     setAvatarBust((n) => n + 1);
@@ -653,7 +687,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     else if (imported.length === 1) {
       // single import: open the card so its localize progress shows inline
       const d = await openDetail(imported[0].cid);
-      setTaglineQueue([{ cid: imported[0].cid, name: d.meta.name }]);
+      if (d) setTaglineQueue([{ cid: imported[0].cid, name: d.meta.name }]);
       await runLocalize(imported[0].cid, imported[0].version);
     } else if (imported.length > 1) {
       await runBulkLocalize(imported);
@@ -723,7 +757,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     try {
       const result = await api.importCharacterFromChub(wid, url, detail.meta.id, vid);
       const d = await api.readCharacter(scope, detail.meta.id);
-      setDetail(d);
+      if (!adopt(d, scope)) return;
       loadVersion(d, result.version);
       await reload();
       setImportMsg(describeChubResult(result));
@@ -742,7 +776,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     try {
       const result = await api.importCharacterFromChub(wid, chubSource, detail.meta.id, vid);
       const d = await api.readCharacter(scope, detail.meta.id);
-      setDetail(d);
+      if (!adopt(d, scope)) return;
       loadVersion(d, result.version);
       await reload();
       setImportMsg(describeChubResult(result));
@@ -763,7 +797,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     try {
       await api.setCharacterChubSource(wid, detail.meta.id, vid, url);
       const d = await api.readCharacter(scope, detail.meta.id);
-      setDetail(d);
+      if (!adopt(d, scope)) return;
       loadVersion(d, vid);
     } catch (err: any) {
       setError(err.detail ?? String(err));
@@ -776,7 +810,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     try {
       await api.clearCharacterChubSource(wid, detail.meta.id, vid);
       const d = await api.readCharacter(scope, detail.meta.id);
-      setDetail(d);
+      if (!adopt(d, scope)) return;
       loadVersion(d, vid);
     } catch (err: any) {
       setError(err.detail ?? String(err));
@@ -807,7 +841,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       });
       // refresh so newly downloaded images show without navigating away and back
       const d = await api.readCharacter(scope, detail.meta.id);
-      setDetail(d);
+      if (!adopt(d, scope)) return;
       loadVersion(d, vid);
       setAvatarBust((n) => n + 1); // bust the cache in case a re-download overwrote images in place
     } catch (err: any) {
