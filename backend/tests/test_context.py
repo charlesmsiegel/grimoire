@@ -2153,6 +2153,26 @@ def test_a_colon_heading_survives_the_blank_before_its_list(monkeypatch, tmp_pat
     assert "Mara sold the manifest." in section     # an absent character is untouched
 
 
+def test_a_blockquoted_list_is_still_a_list(monkeypatch, tmp_path):
+    """A blockquote is a wrapper, not a syntax of its own. Classifying the raw
+    line saw `>` where the bullet is, called it an ordinary paragraph, popped the
+    heading that named her, and published the subjectless detail underneath."""
+    from grimoire.store import playstate
+    cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
+    playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
+        "Wary.", "",
+        "Winifred:\n"
+        "\n"
+        "> - is hiding the ledger\n"
+        ">   - and moved it at midnight\n"
+        "\n"
+        "Mara sold the manifest."))
+    section = _state_section(cid, sid)
+    assert "hiding the ledger" not in section
+    assert "moved it at midnight" not in section   # the quoted list still nests
+    assert "Mara sold the manifest." in section    # an absent character is untouched
+
+
 def test_a_paragraph_after_the_blank_is_not_governed(monkeypatch, tmp_path):
     """Only a LIST keeps a colon heading open across the blank. An ordinary
     paragraph below one is a new statement, which is the case the pop was
