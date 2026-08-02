@@ -8,7 +8,7 @@ import {
   type SceneDatetime, type StagedEdit, type ProposalRecord, type SceneCheckActor,
   type ResponsePresetSummary, type ResponseOverride, type ResponseBundle,
 } from "../api/client";
-import type { ChatEvent } from "../api/stream";
+import { isAbortError, type ChatEvent } from "../api/stream";
 import { EditableRow } from "../components/EditableRow";
 import { CastPanel } from "../components/CastPanel";
 import { NewSceneChooser } from "../components/NewSceneChooser";
@@ -168,6 +168,10 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   const [streaming, setStreaming] = useState("");
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  // Held for the life of one turn so Cancel can reach it. A ref, not state:
+  // the controller is not rendered, and rebuilding the component tree on every
+  // send just to store it would remount the transcript mid-stream.
+  const abortRef = useRef<AbortController | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [ctxKey, setCtxKey] = useState(0);
   const [editing, setEditing] = useState<{ index: number; text: string } | null>(null);
@@ -511,7 +515,12 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   // Returns whether the turn actually landed (no thrown error and no e.error
   // event) — callers use this to decide whether a pending one-shot response
   // override was honoured and can be cleared, or must survive for retry/reroll.
-  async function runStream(id: string, start: (onEvent: (e: ChatEvent) => void) => Promise<void>) {
+  async function runStream(
+    id: string,
+    start: (onEvent: (e: ChatEvent) => void, signal: AbortSignal) => Promise<void>,
+  ) {
+    const controller = new AbortController();
+    abortRef.current = controller;
     setBusy(true);
     setError(null);
     let acc = "";
@@ -527,11 +536,17 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
         } else if (e.proposal) {
           setProposal({ id: e.proposal.id, status: "pending", payload: e.proposal, resolution: null });
         }
-      });
+      }, controller.signal);
     } catch (err: any) {
-      setError(err.detail ?? String(err));
+      // A cancel is the user getting what they asked for, so it raises no
+      // error banner — but it is still not a landed turn, so a one-shot
+      // response override survives for the retry that usually follows. The
+      // partial the backend persisted on the disconnect shows up in the
+      // re-fetch below, same as any other reply.
+      if (!isAbortError(err)) setError(err.detail ?? String(err));
       landed = false;
     } finally {
+      abortRef.current = null;
       setStreaming("");
       setBusy(false);
       // the reply is persisted as per-speaker posts — re-fetch to show them
@@ -563,9 +578,9 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     if (activePcless || !content) {
       if (activePcless) setDirectorNote(content || null);
       try {
-        const landed = await runStream(id, (onEvent) => pendingResponse
-          ? api.chat(cid, id!, content, onEvent, pendingResponse)
-          : api.chat(cid, id!, content, onEvent));
+        const landed = await runStream(id, (onEvent, signal) => pendingResponse
+          ? api.chat(cid, id!, content, onEvent, pendingResponse, signal)
+          : api.chat(cid, id!, content, onEvent, undefined, signal));
         if (landed) setPendingResponse(null);
       } finally {
         setDirectorNote(null);
@@ -573,9 +588,9 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       return;
     }
     setMessages((m) => [...m, { role: "user", content }]);
-    const landed = await runStream(id, (onEvent) => pendingResponse
-      ? api.chat(cid, id!, content, onEvent, pendingResponse)
-      : api.chat(cid, id!, content, onEvent));
+    const landed = await runStream(id, (onEvent, signal) => pendingResponse
+      ? api.chat(cid, id!, content, onEvent, pendingResponse, signal)
+      : api.chat(cid, id!, content, onEvent, undefined, signal));
     if (landed) setPendingResponse(null);
   }
 
@@ -588,9 +603,9 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
 
   async function retry() {
     if (!activeId || busy || rolling) return;
-    const landed = await runStream(activeId, (onEvent) => pendingResponse
-      ? api.retry(cid, activeId, onEvent, pendingResponse)
-      : api.retry(cid, activeId, onEvent));
+    const landed = await runStream(activeId, (onEvent, signal) => pendingResponse
+      ? api.retry(cid, activeId, onEvent, pendingResponse, signal)
+      : api.retry(cid, activeId, onEvent, undefined, signal));
     if (landed) setPendingResponse(null);
   }
 
@@ -607,14 +622,15 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       while (end > 0 && m[end - 1].role === "assistant") end--;
       return [...m.slice(0, end), ...kept];
     });
-    // omit trailing arguments entirely for a plain reroll (an explicit
-    // undefined would change the call shape) — but a pending one-shot
-    // override must ride regenerate too, same promise as retry.
-    const landed = await runStream(activeId, (onEvent) => {
-      if (guidance && pendingResponse) return api.regenerate(cid, activeId!, onEvent, guidance, pendingResponse);
-      if (guidance) return api.regenerate(cid, activeId!, onEvent, guidance);
-      if (pendingResponse) return api.regenerate(cid, activeId!, onEvent, undefined, pendingResponse);
-      return api.regenerate(cid, activeId!, onEvent);
+    // The trailing arguments stay positional-explicit here rather than being
+    // omitted: the signal sits behind them, so a plain reroll still has to say
+    // `undefined, undefined` to reach it. What the four branches preserve is
+    // the promise retry makes — a pending one-shot override rides regenerate.
+    const landed = await runStream(activeId, (onEvent, signal) => {
+      if (guidance && pendingResponse) return api.regenerate(cid, activeId!, onEvent, guidance, pendingResponse, signal);
+      if (guidance) return api.regenerate(cid, activeId!, onEvent, guidance, undefined, signal);
+      if (pendingResponse) return api.regenerate(cid, activeId!, onEvent, undefined, pendingResponse, signal);
+      return api.regenerate(cid, activeId!, onEvent, undefined, undefined, signal);
     });
     if (landed) setPendingResponse(null);
   }
@@ -682,7 +698,16 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   async function resolve(body: ResolveBody) {
     if (!activeId) return;
     setProposal(null);
-    await runStream(activeId, (onEvent) => api.resolveProposal(cid, activeId!, body, onEvent));
+    await runStream(activeId, (onEvent, signal) =>
+      api.resolveProposal(cid, activeId!, body, onEvent, signal));
+  }
+
+  // No-op unless a turn is in flight; the abort rejects the fetch, `runStream`
+  // recognises it and unwinds without an error banner. Nothing is sent to the
+  // server — closing the connection IS the cancel, and the backend persists
+  // whatever the model had produced when it sees the disconnect (#95).
+  function cancelTurn() {
+    abortRef.current?.abort();
   }
 
   // A scene already in the chronicle comes back as 409 "already_absorbed" rather
@@ -1516,9 +1541,16 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
               </ul>
             )}
           </div>
-          <button className="send" onClick={send} disabled={busy || rolling}>
-            {busy ? "…" : !input.trim() ? "Continue ▶" : "Send ▸"}
-          </button>
+          {/* Replaces Send rather than sitting beside it: Send is already
+              disabled for the whole turn, so the slot is dead space at exactly
+              the moment a way out is wanted. */}
+          {busy ? (
+            <button className="send cancel-turn" onClick={cancelTurn}>Stop ■</button>
+          ) : (
+            <button className="send" onClick={send} disabled={rolling}>
+              {!input.trim() ? "Continue ▶" : "Send ▸"}
+            </button>
+          )}
         </div>
       </section>
       {inspectorCollapsed ? (

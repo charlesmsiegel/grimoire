@@ -579,15 +579,22 @@ function entityBase(scope: EntityScope): string {
   return scope.kind === "world" ? `/api/worlds/${scope.id}` : `/api/campaigns/${scope.id}`;
 }
 
+// `signal` is how a turn gets cancelled (#95). Aborting closes the connection,
+// which the backend sees as a disconnect — it persists whatever the model had
+// produced and unwinds — so there is no cancel endpoint to call and nothing to
+// clean up on this side beyond letting the rejection out. Callers tell an abort
+// from a real failure with `isAbortError`.
 async function streamPost<T = ChatEvent>(
   path: string,
   body: unknown,
   onEvent: (e: T) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   const res = await fetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
+    signal,
   });
   if (!res.ok || !res.body) {
     const data = await res.json().catch(() => ({}));
@@ -678,19 +685,20 @@ export const api = {
   // `response` is a one-shot, unpersisted per-turn override (the length chip
   // beside Send) — rides only this call, exactly like regenerate's guidance.
   chat: (cid: string, sid: string, content: string, onEvent: (e: ChatEvent) => void,
-         response?: ResponseOverride) =>
+         response?: ResponseOverride, signal?: AbortSignal) =>
     streamPost(`/api/campaigns/${cid}/scenes/${sid}/chat`,
-               response ? { content, response } : { content }, onEvent),
-  retry: (cid: string, sid: string, onEvent: (e: ChatEvent) => void, response?: ResponseOverride) =>
+               response ? { content, response } : { content }, onEvent, signal),
+  retry: (cid: string, sid: string, onEvent: (e: ChatEvent) => void, response?: ResponseOverride,
+          signal?: AbortSignal) =>
     streamPost(`/api/campaigns/${cid}/scenes/${sid}/retry`,
-               response ? { response } : undefined, onEvent),
+               response ? { response } : undefined, onEvent, signal),
   regenerate: (cid: string, sid: string, onEvent: (e: ChatEvent) => void, guidance?: string,
-               response?: ResponseOverride) =>
+               response?: ResponseOverride, signal?: AbortSignal) =>
     streamPost(`/api/campaigns/${cid}/scenes/${sid}/regenerate`,
                (guidance || response)
                  ? { ...(guidance ? { guidance } : {}), ...(response ? { response } : {}) }
                  : undefined,
-               onEvent),
+               onEvent, signal),
 
   // dice rolls
   roll: (cid: string, sid: string, notation: string, label?: string) =>
@@ -704,8 +712,8 @@ export const api = {
                     body: { proposal: string; action: "accept" | "decline";
                             check?: string; actor?: string;
                             difficulty?: number; modifier?: number },
-                    onEvent: (e: ChatEvent) => void) =>
-    streamPost(`/api/campaigns/${cid}/scenes/${sid}/roll-proposal`, body, onEvent),
+                    onEvent: (e: ChatEvent) => void, signal?: AbortSignal) =>
+    streamPost(`/api/campaigns/${cid}/scenes/${sid}/roll-proposal`, body, onEvent, signal),
   getSceneChecks: (cid: string, sid: string) =>
     request<{ actors: SceneCheckActor[] }>("GET", `/api/campaigns/${cid}/scenes/${sid}/checks`),
   rollCheck: (cid: string, sid: string,

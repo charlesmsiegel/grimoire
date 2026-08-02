@@ -344,7 +344,7 @@ test("Enter sends a message in the active scene", async () => {
   fireEvent.change(ta, { target: { value: "hello" } });
   fireEvent.keyDown(ta, { key: "Enter" });
   await waitFor(() =>
-    expect(api.chat).toHaveBeenCalledWith("run", "s1", "hello", expect.any(Function)),
+    expect(api.chat).toHaveBeenCalledWith("run", "s1", "hello", expect.any(Function), undefined, expect.any(AbortSignal)),
   );
 });
 
@@ -401,7 +401,7 @@ test("sends the one-shot override in the chat request payload", async () => {
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "Go on." } });
   fireEvent.click(screen.getByRole("button", { name: /Send/ }));
   await waitFor(() => expect(api.chat).toHaveBeenCalledWith(
-    "run", "s1", "Go on.", expect.any(Function), { response_preset: "terse" }));
+    "run", "s1", "Go on.", expect.any(Function), { response_preset: "terse" }, expect.any(AbortSignal)));
 });
 
 test("a failed stream keeps the override, and retry carries it", async () => {
@@ -419,7 +419,7 @@ test("a failed stream keeps the override, and retry carries it", async () => {
   await waitFor(() => expect(chip).toHaveTextContent("Terse")); // NOT cleared by the failure
   fireEvent.click(screen.getByRole("button", { name: /Retry/ }));
   await waitFor(() => expect(api.retry).toHaveBeenCalledWith(
-    "run", "s1", expect.any(Function), { response_preset: "terse" }));
+    "run", "s1", expect.any(Function), { response_preset: "terse" }, expect.any(AbortSignal)));
 });
 
 test("sending with no scene creates one first", async () => {
@@ -430,7 +430,7 @@ test("sending with no scene creates one first", async () => {
   fireEvent.change(ta, { target: { value: "hi" } });
   fireEvent.keyDown(ta, { key: "Enter" });
   await waitFor(() => expect(api.createScene).toHaveBeenCalledWith("run"));
-  await waitFor(() => expect(api.chat).toHaveBeenCalledWith("run", "s1", "hi", expect.any(Function)));
+  await waitFor(() => expect(api.chat).toHaveBeenCalledWith("run", "s1", "hi", expect.any(Function), undefined, expect.any(AbortSignal)));
 });
 
 test("+ New Scene opens the chooser without creating a scene", async () => {
@@ -526,8 +526,57 @@ test("an error shows a Retry button that retries the scene", async () => {
   fireEvent.keyDown(ta, { key: "Enter" });
   const retryBtn = await screen.findByRole("button", { name: /retry/i });
   fireEvent.click(retryBtn);
-  await waitFor(() => expect(api.retry).toHaveBeenCalledWith("run", "s1", expect.any(Function)));
+  await waitFor(() => expect(api.retry).toHaveBeenCalledWith("run", "s1", expect.any(Function), undefined, expect.any(AbortSignal)));
   expect(screen.getAllByText("hello")).toHaveLength(1);
+});
+
+// ---- cancelling a turn (#95) ----
+
+/** api.chat that streams `deltas` and then hangs until its signal aborts,
+ *  rejecting the way fetch does — the shape a real in-flight turn has. */
+function hangingChat(deltas: string[] = []) {
+  return async (_c: string, _s: string, _t: string, onEvent: any,
+                _r: unknown, signal: AbortSignal) => {
+    deltas.forEach((d) => onEvent({ delta: d }));
+    await new Promise<void>((_resolve, reject) => {
+      signal.addEventListener("abort", () => {
+        const err = new Error("The operation was aborted.");
+        err.name = "AbortError";
+        reject(err);
+      });
+    });
+  };
+}
+
+test("a turn in flight offers Stop in place of Send", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.chat as any).mockImplementation(hangingChat(["The tide "]));
+  renderCampaign();
+  const ta = await screen.findByRole("textbox");
+  fireEvent.change(ta, { target: { value: "and then?" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  const stop = await screen.findByRole("button", { name: /stop ■/i });
+  expect(screen.queryByRole("button", { name: /send ▸/i })).toBeNull();
+  fireEvent.click(stop);
+  // back to a composer that can send again, with no error banner: the player
+  // asked for this, and the partial the backend kept arrives with the re-fetch
+  await screen.findByRole("button", { name: /continue ▶/i });
+  expect(screen.queryByText(/aborted/i)).toBeNull();
+  expect(api.getScene).toHaveBeenCalled();
+});
+
+test("cancelling keeps a one-shot response override for the retry", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.listResponsePresets as any).mockResolvedValue(RESPONSE_PRESETS);
+  (api.chat as any).mockImplementation(hangingChat());
+  renderCampaign();
+  const chip = await screen.findByRole("button", { name: /Response length/ });
+  fireEvent.click(chip);
+  fireEvent.click(screen.getByRole("option", { name: "Terse" }));
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "and then?" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
+  await waitFor(() => expect(chip).toHaveTextContent("Terse")); // unspent, like a failure
 });
 
 test("Reroll on the last assistant post replaces it with a fresh reply", async () => {
@@ -547,7 +596,8 @@ test("Reroll on the last assistant post replaces it with a fresh reply", async (
   expect(api.regenerate).not.toHaveBeenCalled();
   expect(screen.getByTitle("Reroll")).toBeInTheDocument(); // hovertext present
   fireEvent.click(screen.getByRole("button", { name: /reroll ▸/i })); // empty = plain reroll
-  await waitFor(() => expect(api.regenerate).toHaveBeenCalledWith("run", "s1", expect.any(Function)));
+  await waitFor(() => expect(api.regenerate).toHaveBeenCalledWith(
+    "run", "s1", expect.any(Function), undefined, undefined, expect.any(AbortSignal)));
   await screen.findByText("fresh reply");
   expect(screen.queryByText("old reply")).toBeNull();
 });
@@ -563,7 +613,7 @@ test("typed guidance is passed to regenerate", async () => {
   fireEvent.change(input, { target: { value: "make her angrier" } });
   fireEvent.keyDown(input, { key: "Enter" });
   await waitFor(() => expect(api.regenerate).toHaveBeenCalledWith(
-    "run", "s1", expect.any(Function), "make her angrier"));
+    "run", "s1", expect.any(Function), "make her angrier", undefined, expect.any(AbortSignal)));
 });
 
 test("Escape closes the reroll popover without firing", async () => {
@@ -593,7 +643,7 @@ test("regenerate carries a pending override", async () => {
   fireEvent.click(screen.getByTitle("Reroll"));
   fireEvent.click(screen.getByRole("button", { name: /reroll ▸/i })); // empty guidance = plain reroll
   await waitFor(() => expect(api.regenerate).toHaveBeenCalledWith(
-    "run", "s1", expect.any(Function), undefined, { response_preset: "terse" }));
+    "run", "s1", expect.any(Function), undefined, { response_preset: "terse" }, expect.any(AbortSignal)));
 });
 
 test("no Reroll when a manual dice roll trails the assistant reply", async () => {
@@ -1823,7 +1873,7 @@ test("offscreen scene: empty Continue sends an empty note", async () => {
   (api.listScenes as any).mockResolvedValue(OFFSCREEN_SCENE);
   renderCampaign();
   fireEvent.click(await screen.findByRole("button", { name: /continue ▶/i }));
-  await waitFor(() => expect(api.chat).toHaveBeenCalledWith("run", "s1", "", expect.any(Function)));
+  await waitFor(() => expect(api.chat).toHaveBeenCalledWith("run", "s1", "", expect.any(Function), undefined, expect.any(AbortSignal)));
 });
 
 test("offscreen scene: typed note shows transiently, never lands in messages", async () => {
@@ -1852,7 +1902,7 @@ test("normal scene: empty Continue sends an ephemeral round, no user message add
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   renderCampaign();
   fireEvent.click(await screen.findByRole("button", { name: /continue ▶/i }));
-  await waitFor(() => expect(api.chat).toHaveBeenCalledWith("run", "s1", "", expect.any(Function)));
+  await waitFor(() => expect(api.chat).toHaveBeenCalledWith("run", "s1", "", expect.any(Function), undefined, expect.any(AbortSignal)));
 });
 
 test("Roll dice is disabled on a fresh scene until the opener/cast setup produces a message", async () => {
@@ -1992,7 +2042,7 @@ test("resolving a roll-proposal chip calls api.resolveProposal and clears the ch
   await waitFor(() => expect(api.resolveProposal).toHaveBeenCalledWith(
     "run", "s1",
     { proposal: "pr-1", action: "accept", check: "brawl", actor: "characters:mara", difficulty: 6, modifier: 0 },
-    expect.any(Function)));
+    expect.any(Function), expect.any(AbortSignal)));
   await waitFor(() => expect(screen.queryByRole("button", { name: "Roll it" })).toBeNull());
 });
 
@@ -2094,7 +2144,7 @@ test("switching between two scenes that both have pending proposals shows the ne
   await waitFor(() => expect(api.resolveProposal).toHaveBeenCalledWith(
     "run", "002--2024-01-02--two",
     { proposal: "pr-b", action: "accept", check: "stealth", actor: "characters:borys", difficulty: 4, modifier: 0 },
-    expect.any(Function)));
+    expect.any(Function), expect.any(AbortSignal)));
   expect(api.resolveProposal).not.toHaveBeenCalledWith(
     "run", expect.anything(),
     expect.objectContaining({ proposal: "pr-a" }),

@@ -6,6 +6,7 @@ The shared error type lives in `llm_errors.py`, not here — see its docstring.
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import AsyncIterator
 
 from .claude_agent import ClaudeAgentClient
@@ -17,6 +18,13 @@ from .openrouter import OpenRouterClient
 # comes from config.md via the resolver routes injects (#243); this only covers
 # callers that inject nothing.
 DEFAULT_TIMEOUT = 120.0
+# How long the facade waits for the next provider frame before telling the
+# caller it is still alive (#95). Chosen well under the idle timeouts proxies
+# and load balancers apply to a quiet connection (commonly 30-60s), because the
+# gap this covers -- connect plus time-to-first-token, or a model reasoning
+# silently -- otherwise looks exactly like a hung stream from outside.
+# ``tick <= 0`` disables it.
+HEARTBEAT_INTERVAL = 15.0
 # Grace period for a provider to unwind. aclose() throws GeneratorExit into it,
 # which unwinds httpx's stream context manager — normally instant, but the
 # connection being closed is by definition a sick one, so cleanup gets its own
@@ -81,7 +89,7 @@ async def _aclose(agen) -> None:
         task.cancel()  # asked to stop; deliberately not awaited
 
 
-async def _guard(agen, timeout: float) -> AsyncIterator[str]:
+async def _guard(agen, timeout: float, tick: float | None = None) -> AsyncIterator[str]:
     """Bound the gap between deltas, whatever the provider underneath.
 
     The wait covers connect + time-to-first-token on the first pull and
@@ -101,21 +109,48 @@ async def _guard(agen, timeout: float) -> AsyncIterator[str]:
 
     Deltas already received are yielded before the timeout raises, so a partial
     reply stays recoverable by the fence watcher's on_error path.
+
+    Every `tick` seconds spent waiting, an empty string is yielded: the facade's
+    own liveness signal (#95), for callers that have to keep a connection of
+    their own visibly alive. It is emitted from *this* wait, not forwarded from
+    the provider — a provider's own empty frame still resets the bound and stops
+    here, because the two carry different information and only this one is
+    guaranteed to arrive on a schedule the caller picked. So `""` reaching a
+    caller means "no text yet, still connected", and never anything else;
+    `complete()` joins it away for callers that only want the finished string.
     """
+    # Read at call time, not bound as a default: the constant is the knob tests
+    # and any future config path turn, and a default argument would freeze
+    # whatever it happened to be at import.
+    tick = HEARTBEAT_INTERVAL if tick is None else tick
     it = agen.__aiter__()
     pull: asyncio.Task | None = None
     try:
         while True:
             pull = asyncio.ensure_future(it.__anext__())
-            done, _ = await asyncio.wait({pull}, timeout=None if timeout <= 0 else timeout)
-            if not done:
-                raise LLMError(
-                    "timeout", f"the model sent nothing for {timeout:g}s — giving up")
+            # Both bounds run off one wait: `tick` paces the liveness signal,
+            # `deadline` is the idle bound, and whichever is nearer sets the
+            # next sleep. Re-derived each pass because a tick consumes part of
+            # the timeout's budget and must not extend it -- ticking forever is
+            # exactly the "never times out" failure the bound exists to prevent.
+            deadline = None if timeout <= 0 else time.monotonic() + timeout
+            while True:
+                wait = tick if tick > 0 else None
+                if deadline is not None:
+                    left = deadline - time.monotonic()
+                    wait = left if wait is None else min(wait, left)
+                done, _ = await asyncio.wait({pull}, timeout=wait)
+                if done:
+                    break
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise LLMError(
+                        "timeout", f"the model sent nothing for {timeout:g}s — giving up")
+                yield ""  # still waiting on the provider; tell the caller so
             try:
                 chunk = pull.result()  # re-raises the provider's own LLMError
             except StopAsyncIteration:
                 return
-            if chunk:  # "" was a heartbeat: it reset the wait above, nothing more
+            if chunk:  # "" was a provider heartbeat: it reset the wait, nothing more
                 yield chunk
     finally:
         # Every exit settles the outstanding pull and closes the provider: on a

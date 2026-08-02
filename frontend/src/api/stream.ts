@@ -30,7 +30,23 @@ export type ChubGalleryEvent = {
   error?: { detail: string; kind: string };
 };
 
+// Aborting a stream is a deliberate outcome, not a failure, but `fetch` and the
+// body reader report it the same way they report a dead network: a rejected
+// promise. Everything that catches around a stream needs to tell the two apart
+// before it decides whether to show the user an error, so the test lives here
+// next to the parser rather than being re-derived at each call site.
+//
+// Matched on `name` rather than `instanceof DOMException`: the abort can be
+// raised by `fetch`, by `read()`, or by a signal that was already aborted
+// before the call, and only the name is common to all three.
+export function isAbortError(err: unknown): boolean {
+  return typeof err === "object" && err !== null
+    && (err as { name?: string }).name === "AbortError";
+}
+
 // Appends a chunk to `buffer`, emits each complete `data:` event, returns the leftover buffer.
+// A frame with no `data:` line is skipped — which is what makes the backend's
+// `: heartbeat` comments free to ignore here (#95).
 export function parseSSEChunk<T = ChatEvent>(
   buffer: string,
   chunk: string,
