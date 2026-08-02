@@ -1061,7 +1061,11 @@ def test_scene_context_breakdown(client):
     labels = [s["label"] for s in body["sections"]]
     assert "Character descriptions" in labels
     assert all(s["tokens"] > 0 for s in body["sections"])
-    assert body["total_tokens"] == sum(s["tokens"] for s in body["sections"])
+    # The total is the cost of the REQUEST, not the sum of the rows: the blank
+    # lines joining the sections are real tokens and per-string counts do not
+    # add up across a join. Checked against the messages that actually ship.
+    assert body["total_tokens"] == sum(store.context.count_tokens(m["content"])
+                                       for m in store.context.build_messages(cid, sid))
     # no budget configured -> nothing is dropped and the packer is inert
     assert body["budget_tokens"] == 0
     assert body["dropped_tokens"] == 0
@@ -1090,8 +1094,10 @@ def test_scene_context_reports_what_the_budget_dropped(client):
     assert dropped or trimmed, "a halved budget dropped nothing"
     assert all(s["text"] for s in dropped)                       # still inspectable
     assert body["dropped_tokens"] == sum(s["tokens"] for s in dropped)
-    assert body["total_tokens"] == sum(s["tokens"] for s in body["sections"] if not s["dropped"])
     assert body["total_tokens"] < before["total_tokens"]
+    # still the cost of the real request, now that the packer has cut it down
+    assert body["total_tokens"] == sum(store.context.count_tokens(m["content"])
+                                       for m in store.context.build_messages(cid, sid))
 
 
 # ---- windowed scene reads (#94) ----

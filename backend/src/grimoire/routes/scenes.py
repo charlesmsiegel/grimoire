@@ -854,26 +854,15 @@ def put_scene_response(cid: str, sid: str, body: ResponseSettings):
 
 @router.get("/campaigns/{cid}/scenes/{sid}/context")
 def get_scene_context(cid: str, sid: str):
-    """The context breakdown, as packed. `total_tokens` counts only what was
-    actually sent — a section the packer dropped still ships here, with its
-    text and `dropped: true`, so the inspector can show what was cut without
-    that cut inflating the total it is cut to fit."""
+    """The context breakdown, as packed. `total_tokens` is what was actually
+    sent, measured the way the packer measures it — a section the packer
+    dropped still ships here, with its text and `dropped: true`, so the
+    inspector can show what was cut without that cut counting toward the total
+    it was cut to fit. See `context.context_breakdown` for why the total is not
+    the sum of the rows."""
     scene = _require_scene(cid, sid)
-    sections = []
-    total = 0
-    dropped_tokens = 0
-    for s in store.context.context_sections(cid, sid):
-        tokens = store.context.count_tokens(s["text"])
-        if s["dropped"]:
-            dropped_tokens += tokens
-        else:
-            total += tokens
-        sections.append({"label": s["label"], "text": s["text"], "tokens": tokens,
-                         "tier": s["tier"], "dropped": s["dropped"],
-                         "trimmed": s.get("trimmed", 0)})
-    return {"model": scene["meta"].get("model", ""), "total_tokens": total,
-            "dropped_tokens": dropped_tokens,
-            "budget_tokens": store.context.budget_tokens(), "sections": sections}
+    return {"model": scene["meta"].get("model", ""),
+            **store.context.context_breakdown(cid, sid)}
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}/cast/{kind}/{id}")
