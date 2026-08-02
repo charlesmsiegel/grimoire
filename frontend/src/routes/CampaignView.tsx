@@ -1389,24 +1389,52 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     // snapshot — two ‹ clicks step back once — and the two selectScene
     // refreshes can land out of order.
     setRolling(true);
+    // Only the scene the swap was for, and only while it is still the one on
+    // screen: the user may have moved on while the POST was in flight, and
+    // refreshing would navigate them back to a scene they left. The campaign is
+    // half of "the same scene" — `selectScene` is this render's closure, so in
+    // campaign B it would fetch B's sid out of A.
+    const stillHere = () => cidRef.current === cid && activeIdRef.current === sid;
     try {
-      await api.pickAlternate(cid, sid, target.id);
-      // Only refresh the scene the swap was for, and only if it is still the
-      // one on screen: the user may have moved on while the POST was in flight,
-      // and refreshing would navigate them back to a scene they left. The
-      // campaign is half of "the same scene" — `selectScene` is this render's
-      // closure, so in campaign B it would fetch B's sid out of A.
-      if (cidRef.current === cid && activeIdRef.current === sid) await selectScene(sid);
-    } catch (err: any) {
-      fail(err, false);
-      // `promote` removes the live run and then appends the chosen one. If the
-      // append is what failed, the slot is now EMPTY — the sidecar still holds
-      // both variants, but the transcript does not, and leaving the old reply
-      // on screen means every message index below it is a lie and an edit
-      // saves over the wrong post. Re-read so the empty slot and the control
-      // that refills it are what the reader sees.
-      if (cidRef.current === cid && activeIdRef.current === sid) {
-        await selectScene(sid).catch(() => {});
+      try {
+        await api.pickAlternate(cid, sid, target.id);
+      } catch (err: any) {
+        fail(err, false);
+        // `promote` removes the live run and then appends the chosen one. If
+        // the append is what failed, the slot is now EMPTY — the sidecar still
+        // holds both variants, but the transcript does not, and leaving the old
+        // reply on screen means every message index below it is a lie and an
+        // edit saves over the wrong post. Re-read so the empty slot and the
+        // control that refills it are what the reader sees.
+        if (stillHere()) await selectScene(sid).catch(() => {});
+        return;
+      }
+      // Past here the swap has COMMITTED, and nothing that fails below may be
+      // reported as a failed swap: it would deny a change that happened, and
+      // the recovery it implies — do it again — is not the one that helps.
+      //
+      // The swap is also the recovery the player chose over Retry. Leaving a
+      // failed reroll's banner up offers a Retry that regenerates over the take
+      // just selected, with the guidance that failed, undoing the choice.
+      if (rerollToRetryRef.current?.sid === sid) rerollToRetryRef.current = null;
+      setError(null);
+      if (!stillHere()) return;
+      try {
+        await selectScene(sid);
+      } catch (err: any) {
+        // One more attempt before giving up — the read that failed is the only
+        // thing between the reader and a transcript that is already correct on
+        // disk.
+        try {
+          await selectScene(sid);
+        } catch {
+          // Still stale. Drop the readiness the counter and the ‹/› control
+          // depend on, so nothing acts on a transcript the set no longer
+          // indexes, and say what actually happened.
+          setLoaded(null);
+          setError({ text: `The take was swapped, but the scene could not be re-read: `
+                           + (err?.detail ?? String(err)), retryable: false });
+        }
       }
     } finally {
       setRolling(false);
