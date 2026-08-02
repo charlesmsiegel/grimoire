@@ -1729,6 +1729,50 @@ async def test_a_failed_turn_does_not_roll_back_once_a_newer_turn_claimed(monkey
     assert "post_returned" not in "".join(frames)         # and the client is not told otherwise
 
 
+def test_a_reroll_that_produces_nothing_puts_the_old_reply_back(client):
+    """Reroll deletes before it generates, so a turn that produces nothing would
+    leave the scene one reply short — a reply the player never asked to lose and
+    cannot retype. The deletion and its replacement have to be one thing."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-secret"})
+    _wid, cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "and then?")
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "The tide turns."}])
+    before = store.scenes.get_turn_sizes(cid, sid)
+
+    client.app.dependency_overrides[routes.get_llm] = lambda: FailingOpenRouter()
+    resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
+    assert resp.status_code == 200 and '"kind": "network"' in resp.text
+    assert [m["content"] for m in client.get(
+        f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]] == [
+        "and then?", "The tide turns."]
+    assert store.scenes.get_turn_sizes(cid, sid) == before   # boundaries restored too
+
+
+async def test_a_cancelled_reroll_puts_the_old_reply_back(monkeypatch, tmp_path):
+    """Unlike a cancelled chat, which keeps the player's post because they still
+    have it, a cancelled reroll must undo its own deletion — nothing else holds
+    the reply it removed."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    importlib.reload(store)
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Run", wid)
+    sid = store.scenes.create_scene(cid, "Saltmarch")
+    store.scenes.append_message(cid, sid, "user", "and then?")
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "The tide turns."}])
+    removed = store.scenes.remove_trailing_assistant_run(cid, sid)   # as regenerate does
+
+    resp = routes.streaming._chat_stream(
+        cid, sid, [{"role": "user", "content": "and then?"}], {"kind": "openrouter", "model": "m"},
+        StallingOpenRouter([""]),
+        restore_removed=lambda: store.scenes.restore_trailing_assistant_run(cid, sid, removed))
+    frames = resp.body_iterator
+    assert await frames.__anext__() == ": heartbeat\n\n"   # suspended, nothing produced
+    await frames.aclose()
+    assert [m["content"] for m in store.scenes.read_scene(cid, sid)["messages"]] == [
+        "and then?", "The tide turns."]
+
+
 def test_a_turn_that_fails_part_way_keeps_both_halves(client):
     """A partial reply means the post WAS answered, just not fully — rolling it
     back would delete a question its own answer refers to."""
