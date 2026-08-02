@@ -653,22 +653,31 @@ async def _stage_voice_drift(cid: str, sid: str, transcript: str, client: LLMCli
             if finding["verdict"] == store.voice_drift.UNKNOWN:
                 out["failed"].append({"id": aid, "reason": "unreadable verdict from the voice judge"})
                 continue
-            # A drift verdict with no note is unusable: the note IS the
-            # corrective the next turn gets. Report it rather than staging a
-            # flag that would say nothing, or silently downgrading it to "fine".
-            if finding["verdict"] == store.voice_drift.DRIFT and not finding["note"]:
-                out["failed"].append({"id": aid, "reason": "drift reported with no corrective"})
-                continue
-            # The corrective is rendered into the post-history message, which the
-            # packer reserves and cannot trim, so an oversized note is charged
-            # against every later generation with nothing able to give way.
-            if len(finding["note"]) > store.voice_drift.MAX_NOTE:
-                out["failed"].append({
-                    "id": aid,
-                    "reason": f"the voice judge returned a corrective over "
-                              f"{store.voice_drift.MAX_NOTE} characters, too long to put "
-                              f"in front of every following turn"})
-                continue
+            # Both note checks are DRIFT-only, because only a drift verdict
+            # stores a note: `stage_edit` writes `after=""` for IN_VOICE and
+            # proposes nothing at all for NOT_ENOUGH, so their notes never reach
+            # a prompt. Failing the call on an oversized note there would punish
+            # a chatty explanation by leaving an obsolete corrective standing --
+            # the clear is the whole point of a clean verdict, and a note nobody
+            # stores cannot cost a single token.
+            if finding["verdict"] == store.voice_drift.DRIFT:
+                # No note is unusable: the note IS the corrective the next turn
+                # gets. Report it rather than staging a flag that would say
+                # nothing, or silently downgrading it to "fine".
+                if not finding["note"]:
+                    out["failed"].append({"id": aid, "reason": "drift reported with no corrective"})
+                    continue
+                # ...and the corrective is rendered into the post-history
+                # message, which the packer reserves and cannot trim, so an
+                # oversized one is charged against every later generation with
+                # nothing able to give way.
+                if len(finding["note"]) > store.voice_drift.MAX_NOTE:
+                    out["failed"].append({
+                        "id": aid,
+                        "reason": f"the voice judge returned a corrective over "
+                                  f"{store.voice_drift.MAX_NOTE} characters, too long to put "
+                                  f"in front of every following turn"})
+                    continue
             edit = store.voice_drift.stage_edit(aid, name, prior, finding,
                                                 record["text"], record["id"], prior_fp)
         except BudgetRefused:

@@ -1206,6 +1206,48 @@ test("a character read still in flight at a scope change does not reopen it (#59
   expect(screen.queryByLabelText("Description")).toBeNull();
 });
 
+test("an anchor save abandoned by navigation cannot unblock a later one (#59)", async () => {
+  // The single-flight check is not enough on its own. Leaving the character
+  // clears `anchorSaving`, so the next save is free to start while the first
+  // PUT is still open -- and the first one's `finally` would then clear the
+  // flag out from under it, letting a THIRD start. Two writes for the same
+  // character overlap, the slower wins the file, and the editor shows the
+  // newer text.
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "seraphine", name: "Seraphine", default_version: "default", has_avatar: false, versions: [] },
+    { id: "mara", name: "Mara", default_version: "default", has_avatar: false, versions: [] },
+  ]);
+  (api.getCharacterVoiceAnchor as any).mockResolvedValue({ voice_anchor: "A" });
+  const releases: (() => void)[] = [];
+  (api.setCharacterVoiceAnchor as any).mockImplementation(
+    () => new Promise<void>((res) => { releases.push(() => res()); }));
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+
+  fireEvent.click((await screen.findAllByRole("button", { name: /^edit$/i }))[0]);
+  await screen.findByLabelText("Voice anchor");
+  fireEvent.click(screen.getByText("Save voice anchor"));      // save #1, left in flight
+
+  (api.readCharacter as any).mockResolvedValue({
+    meta: { id: "mara", name: "Mara", default_version: "default" },
+    versions: [{ id: "default", name: "default", card: CARD, images: [] }],
+  });
+  fireEvent.click(screen.getByText("‹ All characters"));
+  fireEvent.click((await screen.findAllByRole("button", { name: /^edit$/i }))[1]);
+  await screen.findByLabelText("Voice anchor");
+
+  fireEvent.change(screen.getByLabelText("Voice anchor"), { target: { value: "Mara's voice." } });
+  fireEvent.click(screen.getByText("Save voice anchor"));      // save #2, for Mara
+  await waitFor(() => expect(api.setCharacterVoiceAnchor).toHaveBeenCalledTimes(2));
+  expect((screen.getByText("Saving…") as HTMLButtonElement).disabled).toBe(true);
+
+  await act(async () => { releases[0](); });                   // save #1 lands, late
+  expect(screen.queryByText("Save voice anchor")).toBeNull();  // #2 still holds the lock
+  expect((screen.getByText("Saving…") as HTMLButtonElement).disabled).toBe(true);
+
+  await act(async () => { releases[1](); });                   // ...and only #2 releases it
+  await waitFor(() => expect(screen.getByText("Save voice anchor")).toBeTruthy());
+});
+
 test("a second anchor save cannot start while the first is in flight (#59)", async () => {
   // Two overlapping PUTs race on the server and the SLOWER one wins the file,
   // so an edit made between them can be discarded while the editor still shows

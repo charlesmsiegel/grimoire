@@ -606,13 +606,24 @@ def set_voice_anchor(cid: str, char_id: str, text: str) -> None:
             return
         voice_anchors.write(croot, char_id, text)   # nothing to erase: just delete
         return
-    if not mine["text"] and not mine["disabled"] and text.strip() == inherited.strip():
+    if not mine["text"] and not mine["disabled"] and text.split() == inherited.split():
         # Still inheriting, and the submitted text IS the inherited text: the
         # editor shows the resolved anchor, so re-saving an untouched form
         # lands here. Materializing a copy would mint a new nonce -- silently
         # suppressing every committed flag fingerprinted against the identical
         # world anchor -- and detach the campaign from later world edits, all
         # for a save that changed nothing. Only a real divergence diverges.
+        #
+        # `.split()`, not `.strip()`, so "the same anchor" means here exactly
+        # what it means to `voice_drift.anchor_fingerprint` -- which normalizes
+        # whitespace THROUGHOUT because rewrapping a line is presentation, not a
+        # new standard. With `.strip()` the two disagreed, and the disagreement
+        # was the bug: rewrapping an inherited anchor materialized a campaign
+        # copy whose nonce suppressed every flag judged against text the
+        # fingerprint still considered identical. The rewrap itself is not
+        # persisted, which is the same outcome as re-saving an untouched form
+        # and for the same reason: by the only definition of anchor identity
+        # this feature has, nothing changed.
         #
         # Deliberately not extended to a standing TOMBSTONE: re-entering the
         # world's words there is a decision to be judged again, and it gets a
