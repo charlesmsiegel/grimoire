@@ -11,6 +11,8 @@ that loop.
 
 from __future__ import annotations
 
+import errno
+
 from .. import atomic, calendars, commits, scene_ids, scene_refs
 from ..audit import baselines
 from ..campaigns import paths as campaigns_paths
@@ -24,12 +26,35 @@ from . import locking, paths, serialize
 def repad(cid: str, width: int) -> None:
     """Re-pad every scene number to `width` digits (renames files, repoints all
     referencing stores). Keeps widths uniform so lexicographic order stays exact."""
-    mapping = {}
-    for p in paths._scenes_dir(cid).glob("*.md"):
+    mapping, claimed = {}, set()
+    for p in sorted(paths._scenes_dir(cid).glob("*.md")):
         parsed = scene_ids.parse_sid(p.stem)
         if parsed and parsed["width"] != width:
-            mapping[p.stem] = scene_ids.format_sid(
+            base = scene_ids.format_sid(
                 parsed["number"], width, parsed["date_slug"], parsed["title_slug"])
+            # Two targets can be the same id, and the rename below would then
+            # overwrite one transcript with the other rather than fail. Numbering
+            # keeps app-created scenes apart — distinct numbers, distinct
+            # prefixes, whatever the titles truncate to — but a store is plain
+            # files the user owns, and two hand-placed transcripts carrying the
+            # same number at different widths land on one id here. Take the next
+            # free id instead: a suffixed id is a small surprise, a lost scene is
+            # not.
+            # Transcripts only, deliberately NOT `_sid_taken`: an orphaned
+            # sidecar on the width-normalised id is repad's to clear (it is the
+            # one path that cannot skip a taken id), and skipping it here would
+            # strand the scene at a suffixed id forever. A target always differs
+            # in width from every source, so it can only collide with a scene
+            # that is not moving.
+            # Case-folded, because a planned target is compared against other
+            # *planned* targets — nothing is on disk yet for the filesystem to
+            # answer for. On a case-insensitive volume `0001--Saltmarch` and
+            # `0001--saltmarch` are one file, so comparing exactly would let
+            # both through and the second rename would land on the first.
+            new_sid = uniquify(base, lambda c: c.casefold() in claimed
+                               or paths._scene_path(cid, c).exists())
+            claimed.add(new_sid.casefold())
+            mapping[p.stem] = new_sid
     for old, new in mapping.items():
         paths._scene_path(cid, old).rename(paths._scene_path(cid, new))
     scene_refs.repoint(cid, mapping)
@@ -77,7 +102,7 @@ def _create_scene(cid: str, title: str, pcless: bool, date_hint: str) -> str:
         repad(cid, width)
     now = now_iso()
     base = scene_ids.format_sid(number, width, None, slugify(title))
-    sid = uniquify(base, lambda c: paths._scene_path(cid, c).exists())
+    sid = uniquify(base, lambda c: paths._sid_taken(cid, c))
     active = _get_active_connection()
     meta = {"title": title, "model": active["model"] if active else "",
              "created": now, "updated": now}
@@ -102,8 +127,8 @@ def rename_scene(cid: str, sid: str, title: str) -> str:
         base = scene_ids.format_sid(
             parsed["number"], parsed["width"], parsed["date_slug"], slugify(title))
     else:  # legacy (pre-migration) id: keep the old created-date prefix scheme
-        base = f"{meta.get('created', now_iso())[:10]}-{slugify(title)}"
-    new_sid = uniquify(base, lambda c: c != sid and paths._scene_path(cid, c).exists())
+        base = scene_ids.fit_sid(f"{meta.get('created', now_iso())[:10]}-", slugify(title))
+    new_sid = uniquify(base, lambda c: c != sid and paths._sid_taken(cid, c))
     atomic.write_text(p, dump_frontmatter(meta, body))
     if new_sid != sid:
         p.rename(paths._scene_path(cid, new_sid))
@@ -130,4 +155,28 @@ def delete_scene(cid: str, sid: str) -> None:
     # unlink fails -- costs an open review of a surviving scene a 409 it clears
     # by re-absorbing.
     commits.retire_scene(cid, sid)
+    # The reroll-alternates sidecar goes FIRST. Deleting the transcript is what
+    # frees the id for reuse, so a crash between the two unlinks must not be
+    # able to leave a sidecar without one: that orphan would be adopted by the
+    # next scene to take this id, handing it someone else's parked transcripts.
+    # The other order is recoverable in the harmless direction -- a scene that
+    # still exists merely loses its alternates.
+    try:
+        paths._alts_path(cid, sid).unlink(missing_ok=True)
+    except OSError as exc:
+        # `missing_ok` swallows only FileNotFoundError. A store written before
+        # ids were capped can hold a sid whose `.md` fits its directory entry
+        # and whose `.alts.json` does not, and the OS reports that as
+        # ENAMETOOLONG on the unlink itself — refusing to delete a scene over a
+        # sidecar that cannot exist would be the worst reading of it.
+        #
+        # ONLY that one. Every other OSError is a sidecar that does exist and
+        # would not go: a read-only attribute, a sharing violation, a failing
+        # disk. Swallowing those reports the delete as done while the scene's
+        # parked replies stay on disk forever — `_sid_taken` stops the orphan
+        # being adopted, but nothing ever completes what the caller asked for.
+        # Windows reports the overlong name as ERROR_FILENAME_EXCED_RANGE,
+        # which does not always reach errno.
+        if exc.errno != errno.ENAMETOOLONG and getattr(exc, "winerror", None) != 206:
+            raise
     p.unlink()

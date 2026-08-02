@@ -132,6 +132,25 @@ def delete_scene(cid: str, sid: str):
     return {"ok": True}
 
 
+def _disown_dead_guidance(cid: str, sid: str) -> None:
+    """Re-aim the reroll hint before streaming something that did not send it.
+
+    A guided reroll whose stream died leaves its hint parked for "whatever lands
+    next". Every other way of streaming into that empty slot — Retry, and the
+    empty-send / director turn, which persist no player message — never sent
+    that hint, so the take they produce must not be labelled with it.
+
+    Only over an *empty* slot. Above a live reply these paths append a
+    consecutive generation rather than replacing one, which moves the slot and
+    retires the set anyway; archiving there would park a reply nobody asked to
+    replace. A normal send needs none of this: it appends a player message,
+    which moves the anchor and retires the set on its own.
+    """
+    parked = store.alternates.state(cid, sid)
+    if parked["runs"] and parked["active"] is None:
+        store.alternates.archive(cid, sid, "")
+
+
 @router.post("/campaigns/{cid}/scenes/{sid}/chat")
 def post_chat(cid: str, sid: str, turn: ChatTurn, client: LLMClient = Depends(get_llm)):
     _require_scene(cid, sid)
@@ -141,6 +160,7 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, client: LLMClient = Depends(ge
         # ephemeral turn, never stored: a director note steering one generation
         # (pcless), or — in any scene — an empty send meaning "next NPC round"
         note = turn.content.strip() or prompts.render("scene/director_note.j2")
+        _disown_dead_guidance(cid, sid)
         messages = store.context.build_director_messages(
             cid, sid, note, turn=_turn_override(turn))
         return _chat_stream(cid, sid, messages, conn, client)
@@ -174,6 +194,7 @@ def post_retry(cid: str, sid: str, body: RetryBody | None = None,
     store.proposals.supersede(cid, sid)  # a fresh generation retires the old decision
     if not scene["messages"]:
         raise HTTPException(status_code=400, detail="nothing to retry")
+    _disown_dead_guidance(cid, sid)
     messages = store.context.build_messages(cid, sid, turn=_turn_override(body))
     return _chat_stream(cid, sid, messages, conn, client)
 
@@ -181,43 +202,98 @@ def post_retry(cid: str, sid: str, body: RetryBody | None = None,
 @router.post("/campaigns/{cid}/scenes/{sid}/regenerate")
 def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
                     client: LLMClient = Depends(get_llm)):
-    """Redo the most recent post: drop a trailing assistant reply, stream a fresh one."""
+    """Redo the most recent post: park the trailing assistant reply as an
+    alternate, stream a fresh one."""
     _require_scene(cid, sid)
     conn = _require_connection()
-    store.proposals.supersede(cid, sid)  # regenerating retires the old decision
-    # Re-read AFTER the retire: superseding heals the record it retires, which
-    # can append a 🎲 line the pre-retire snapshot doesn't have. Judging the
-    # checks below on the stale snapshot let the ROLL_SPEAKER guard pass and
-    # `remove_trailing_assistant_run` then refuse (IndexError -> 500) — it
-    # never deletes a roll line, but the caller deserves the 400 instead.
-    msgs = _require_scene(cid, sid)["messages"]
-    if not msgs:
-        raise HTTPException(status_code=400, detail="nothing to regenerate")
-    # Trailing scene transitions are stepped over, not consumed: reroll targets
-    # the last generation BENEATH them, and every check below has to look at
-    # that generation rather than at the transition line sitting on top of it.
-    core = msgs[:len(msgs) - store.scenes.trailing_transitions(msgs)]
+    # Heal now, retire later. Healing is what can append a 🎲 line, and the
+    # checks below have to judge the transcript that leaves behind — but
+    # RETIRING the decision waits until the reroll has actually committed to
+    # happening, or a failure cancels a decision whose narration is still
+    # exactly what the reader sees.  `heal` is idempotent and `supersede` calls
+    # it again itself.
+    store.proposals.heal(cid, sid)
+    guidance = (body.guidance or "").strip() if body else ""
     removed: dict | None = None   # set only when there is actually a reply to drop
-    if core and core[-1]["role"] == "assistant":
-        if all(m["role"] == "assistant" for m in core):
-            raise HTTPException(status_code=400, detail="cannot regenerate the opening post")
-        if core[-1].get("speaker") in store.scenes.SYNTHETIC_SPEAKERS:
-            # Enumerated from the same tuple `remove_trailing_assistant_run`
-            # refuses on, not from one speaker name: only ROLL_SPEAKER is
-            # reachable here (trailing transitions are already stripped
-            # above), but a future synthetic speaker gets this 400 rather than
-            # the bare IndexError (500) that refusal would otherwise surface.
-            raise HTTPException(status_code=400, detail="cannot regenerate past a manual dice roll")
-        try:
-            removed = store.scenes.remove_trailing_assistant_run(cid, sid)
-        except store.scenes.TurnSizesDesynced:
-            # Refusing beats guessing: the recorded turn boundaries don't fit
-            # the transcript, so any deletion could take blocks from an earlier
-            # generation. Nothing has been changed on disk.
-            raise HTTPException(
-                status_code=400,
-                detail="this scene's recorded turn boundaries no longer match its "
-                       "transcript — delete the last reply manually to regenerate")
+    # ONE lock across the decision, the archive and the removal. A gap anywhere
+    # in that span is a gap another writer's generation can land in — and the
+    # removal would then take a reply the archive never saw, losing exactly what
+    # the non-destructive guarantee promises to keep. Held only across a read
+    # and two file writes; the stream starts after it is released.
+    with store.locks.campaign_lock(cid):
+        # Read AFTER the heal, which can append a 🎲 line the pre-heal snapshot
+        # doesn't have. Judging the checks below on a stale snapshot let the
+        # ROLL_SPEAKER guard pass and `remove_trailing_assistant_run` then
+        # refuse (IndexError -> 500) — it never deletes a roll line, but the
+        # caller deserves the 400 instead.
+        msgs = _require_scene(cid, sid)["messages"]
+        if not msgs:
+            raise HTTPException(status_code=400, detail="nothing to regenerate")
+        # Trailing scene transitions are stepped over, not consumed: reroll
+        # targets the last generation BENEATH them, and every check below has to
+        # look at that generation rather than at the transition line on top.
+        core = msgs[:len(msgs) - store.scenes.trailing_transitions(msgs)]
+        # An archived set whose slot is EMPTY means the previous reroll's stream
+        # died before its replacement landed. Generations can sit back to back
+        # (an empty send and a director turn persist no player message), so what
+        # is exposed at the tail is then the generation BEFORE that slot —
+        # removing it would delete a reply nobody asked to reroll and carry the
+        # slot past the parked one, losing both. Stream into the empty slot.
+        parked = store.alternates.state(cid, sid)
+        replacing = (bool(core) and core[-1]["role"] == "assistant"
+                     and not (parked["runs"] and parked["active"] is None))
+        if replacing:
+            if all(m["role"] == "assistant" for m in core):
+                raise HTTPException(status_code=400,
+                                    detail="cannot regenerate the opening post")
+            if core[-1].get("speaker") in store.scenes.SYNTHETIC_SPEAKERS:
+                # Enumerated from the same tuple `remove_trailing_assistant_run`
+                # refuses on, not from one speaker name: only ROLL_SPEAKER is
+                # reachable here (trailing transitions are already stripped
+                # above), but a future synthetic speaker gets this 400 rather
+                # than the bare IndexError (500) that refusal would surface.
+                raise HTTPException(status_code=400,
+                                    detail="cannot regenerate past a manual dice roll")
+        # Archive BEFORE the removal, and let the replacement join the set on
+        # its own when the next read reconciles: no callback has to fire deep
+        # inside the stream's persist path, and a stream that dies between the
+        # two leaves the outgoing reply recoverable rather than gone.
+        #
+        # Called even with nothing to remove. There is no run to keep then, but
+        # the hint still has to be re-aimed at whatever lands next, or the
+        # variant that does land is filed under the *previous* attempt's
+        # guidance. `archive` writes nothing at all for a scene that has no set,
+        # so the refusals above still leave the scene untouched.
+        store.alternates.archive(cid, sid, guidance)
+        if replacing:
+            try:
+                removed = store.scenes.remove_trailing_assistant_run(cid, sid)
+            except Exception as exc:
+                # The archive above recorded the hint against a replacement that
+                # is now never going to land, and the reply it was meant to
+                # replace is still live. Left there, the next resolution credits
+                # that unchanged reply to an instruction it never received.
+                #
+                # Best-effort: whatever stopped the removal (a full disk, most
+                # likely) may stop this too, and the original failure is the one
+                # worth reporting.
+                try:
+                    store.alternates.disown_guidance(cid, sid)
+                except OSError:
+                    pass    # the disk that stopped the removal can stop this too
+                if isinstance(exc, store.scenes.TurnSizesDesynced):
+                    # Refusing beats guessing: the recorded turn boundaries don't
+                    # fit the transcript, so any deletion could take blocks from
+                    # an earlier generation. The transcript is untouched.
+                    raise HTTPException(
+                        status_code=400,
+                        detail="this scene's recorded turn boundaries no longer match its "
+                               "transcript — delete the last reply manually to regenerate") from exc
+                raise
+        # Everything that can refuse has refused and the removal is on disk, so
+        # this reroll is committed: retire the decision the outgoing narration
+        # was derived from, exactly as a fresh generation does anywhere else.
+        store.proposals.supersede(cid, sid)
     restore = (lambda: store.scenes.restore_trailing_assistant_run(cid, sid, removed)
                ) if removed else None
     # Everything from here to the `return` runs with the scene one reply short,
@@ -227,7 +303,6 @@ def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
     # Reachable without any race — `build_messages` reads the whole store, and
     # `prompts.render` compiles a template (review, #95).
     try:
-        guidance = (body.guidance or "").strip() if body else ""
         # rendered before the context build so its tokens can be reserved against
         # the context budget -- it is appended unconditionally, so the packer must
         # not fit the prompt to a ceiling this then pushes it over
@@ -247,6 +322,11 @@ def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
     # end it there: a reply destroyed by a reroll the player stopped or that
     # never started (#95). Hand the stream the way back.
     #
+    # The parked alternate is the other half of that guarantee and survives
+    # either way: `archive` ran before the removal, so a stream that never
+    # lands leaves the reply recoverable through the swipe control even if the
+    # restore hook never fires.
+    #
     # One window this does NOT close, deliberately, because closing it is a
     # redesign rather than a guard: between this return and the generator's
     # first step, the response body can be cancelled outright — uvicorn reports
@@ -258,6 +338,91 @@ def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
     # `finalize`, under the same lock that writes the new reply — which is
     # tracked with the other transcript-identity work rather than bolted on.
     return _chat_stream(cid, sid, messages, conn, client, restore_removed=restore)
+
+
+_PREVIEW_CHARS = 200
+
+
+def _alternate(run: dict) -> dict:
+    """One variant as the transcript would read it — the posts joined the way
+    they render, clipped. The full text is never sent: the client's job is to
+    pick a variant, and the one it picks arrives as transcript."""
+    text = "\n\n".join(s["content"] for s in run["segments"])
+    return {"id": store.alternates.variant_id(run),
+            "created": run.get("created", ""), "guidance": run.get("guidance", ""),
+            "posts": len(run["segments"]),
+            "preview": text[:_PREVIEW_CHARS] + ("…" if len(text) > _PREVIEW_CHARS else "")}
+
+
+@router.get("/campaigns/{cid}/scenes/{sid}/alternates")
+def get_scene_alternates(cid: str, sid: str):
+    """Every variant of the generation a reroll would replace. `active` is the
+    one in the transcript, and null means the slot is empty — what a reroll
+    whose stream died leaves behind."""
+    _require_scene(cid, sid)
+    state = store.alternates.state(cid, sid)
+    return {"active": state["active"],
+            "alternates": [_alternate(r) for r in state["runs"]]}
+
+
+@router.post("/campaigns/{cid}/scenes/{sid}/alternates/{vid}")
+def post_scene_alternate(cid: str, sid: str, vid: str):
+    """Cycle (or pin) a stored variant into the transcript, parking the live one.
+
+    Addressed by `variant_id`, not by position: retention shifts every index
+    when a full set gains a variant, and a client snapshot from before that
+    shift would otherwise name a different take than the one it previewed.
+    """
+    _require_scene(cid, sid)
+    # One lock over the whole check-retire-swap span, so nothing lands between
+    # the three and the request is all-or-nothing.
+    with store.locks.campaign_lock(cid):
+        # Resolve FIRST. The id comes from a client snapshot that another tab
+        # may have moved on from, and retiring a decision is not something a
+        # request that then 404s gets to do: a stale click would cancel a
+        # proposal belonging to a turn it never swaps past. Position is safe
+        # from here on — `promote` re-resolves under this same lock.
+        state = store.alternates.state(cid, sid)
+        index = next((i for i, r in enumerate(state["runs"])
+                      if store.alternates.variant_id(r) == vid), None)
+        if index is None:
+            raise HTTPException(status_code=404, detail="alternate not found")
+        if state["active"] == index:
+            # Already showing. `promote` would return without touching the
+            # transcript, so retiring anything below would be a side effect of a
+            # request that changed nothing — and a delayed click for a variant
+            # another tab has since promoted would cancel that tab's proposal.
+            return {"ok": True}
+        # A swap replaces the narration a pending roll fence was derived from,
+        # so the decision hanging off it has to be retired too — exactly why
+        # regenerate supersedes. Accepting a proposal whose text is no longer in
+        # the transcript would continue a mechanical decision nothing on screen
+        # asked for. Before the swap, not after: superseding heals the record it
+        # retires, which can append a 🎲 line, and `promote` has to reconcile
+        # against the transcript that leaves behind.
+        # Persist the reconciliation BEFORE retiring anything. It is the same
+        # write `promote` does first, and it is where an unwritable sidecar
+        # fails — so a swap that cannot happen is refused with the proposal
+        # still pending, rather than retiring a decision whose narration is
+        # still exactly what the reader sees. Idempotent, and safe to repeat
+        # inside `promote`.
+        store.alternates.reconcile(cid, sid)
+        store.proposals.supersede(cid, sid)
+        try:
+            store.alternates.promote(cid, sid, index)
+        except store.alternates.AlternateNotFound:
+            # Reachable despite the check above only if that heal appended a
+            # roll line and moved the slot -- in which case the transcript now
+            # ends on a roll and there is nothing to swap.
+            raise HTTPException(status_code=404, detail="alternate not found")
+        except store.scenes.TurnSizesDesynced:
+            # Same refusal regenerate makes, for the same reason: boundaries that
+            # do not fit the transcript cannot authorize replacing a run.
+            raise HTTPException(
+                status_code=400,
+                detail="this scene's recorded turn boundaries no longer match its "
+                       "transcript — delete the last reply manually to swap alternates")
+    return {"ok": True}
 
 
 @router.get("/campaigns/{cid}/chronicle")
@@ -1269,7 +1434,17 @@ def put_scene_message(cid: str, sid: str, index: int, body: EditMessage):
     content = store.context.expand_macros(
         body.content, store.context.scene_substitutions(cid, sid), cid, sid)
     try:
-        store.scenes.edit_message(cid, sid, index, content)
+        # Same pairing as `_persist_reply`: every write to the transcript is
+        # followed by reconciling the set, under one lock. An edit of the live
+        # reply parks the pre-edit text as a variant — but that variant exists
+        # only in the transcript until this runs, so a *second* edit would
+        # overwrite the sole copy of the first and drop it from the set.
+        with store.locks.campaign_lock(cid):
+            store.scenes.edit_message(cid, sid, index, content)
+            try:
+                store.alternates.reconcile(cid, sid)
+            except OSError:
+                pass          # the edit is on disk; the sidecar is not a reason to fail it
     except IndexError:
         raise HTTPException(status_code=400, detail="message index out of range")
     except store.scenes.RollMessageImmutable:

@@ -735,6 +735,10 @@ button.primary { background: var(--accent); color: var(--on-accent); border: var
 .check-pop input[type="number"] { width: 60px; }
 .msg-edit { background: transparent; border: none; color: var(--page-muted); cursor: pointer; font-size: 13px; padding: 0; }
 .msg-edit:hover { color: var(--accent); }
+.msg-edit:disabled { opacity: 0.4; cursor: default; }
+/* reroll alternates: ‹ n/m › in the gutter, on the message Reroll acts on */
+.swipe-nav { display: flex; align-items: center; gap: 3px; }
+.swipe-count { color: var(--page-muted); font-family: var(--fm); font-size: 10px; }
 .msg-edit-form textarea { width: 100%; background: var(--surface); color: var(--ink); border: var(--rw2) solid var(--accent); padding: 8px; font-family: var(--fb); resize: vertical; }
 
 /* ---- scene inspector + record drawer ---- */
