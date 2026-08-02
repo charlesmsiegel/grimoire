@@ -697,6 +697,14 @@ export const api = {
   createScene: (cid: string, title?: string, suggestedDate?: string, pcless?: boolean) =>
     request<{ id: string }>("POST", `/api/campaigns/${cid}/scenes`,
       { title, suggested_date: suggestedDate, pcless }),
+  // Never shared, like the alternates and proposal reads. `selectScene` is the
+  // refresh every mutating path funnels through, and a shared read is as old as
+  // the request it joined — so a reroll or swap firing while an earlier refresh
+  // was open would pair a fresh alternate set with a PRE-mutation transcript,
+  // and the readiness gate cannot tell: the transcript carries the new window
+  // token either way. Opted out for every caller rather than at each mutation's
+  // call site, because a rule each caller has to remember is one the next
+  // caller forgets.
   getScene: (cid: string, sid: string, window?: { limit: number; before?: number }) => {
     const qs = window
       ? "?" + new URLSearchParams({
@@ -704,7 +712,8 @@ export const api = {
           ...(window.before === undefined ? {} : { before: String(window.before) }),
         })
       : "";
-    return request<ScenePage>("GET", `/api/campaigns/${cid}/scenes/${sid}${qs}`);
+    return request<ScenePage>("GET", `/api/campaigns/${cid}/scenes/${sid}${qs}`,
+                              undefined, { fresh: true });
   },
   renameScene: (cid: string, sid: string, title: string) =>
     request<{ id: string; title: string }>("PUT", `/api/campaigns/${cid}/scenes/${sid}`, { title }),

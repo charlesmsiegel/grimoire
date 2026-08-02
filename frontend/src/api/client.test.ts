@@ -165,6 +165,34 @@ test("alternate reads never coalesce, so a set matches the transcript it was rea
   expect(await older).toEqual({ active: 0, alternates: [{ id: "a" }] });
 });
 
+test("scene reads never coalesce, so a refresh after a mutation sees the mutation", async () => {
+  // The alternates read being fresh is only half of it: the readiness gate
+  // compares a set against the TRANSCRIPT it was read with, and `selectScene` is
+  // the refresh every mutating path funnels through. A shared read is as old as
+  // the request it joined, so a reroll or swap firing while an earlier refresh
+  // is open would pair a fresh set with a pre-mutation transcript — the same
+  // wrong-active-take and wrong-promotion the alternates fix closed, reached
+  // from the other side.
+  //
+  // Opted out for every caller rather than at each mutation's call site: the
+  // one thing this PR has learned repeatedly is that a rule each caller must
+  // remember is a rule the next caller forgets.
+  let releaseFirst: (v: unknown) => void = () => {};
+  const fetchMock = vi
+    .fn()
+    .mockImplementationOnce(() => new Promise((r) => { releaseFirst = r; }))
+    .mockResolvedValue(jsonOk({ messages: [{ role: "assistant", content: "new" }] }));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+  const older = api.getScene("run", "s1", { limit: 40 });   // in flight, unresolved
+  const newer = api.getScene("run", "s1", { limit: 40 });   // issues its own, not shared
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+
+  expect((await newer).messages[0].content).toBe("new");
+  releaseFirst(jsonOk({ messages: [{ role: "assistant", content: "old" }] }));
+  expect((await older).messages[0].content).toBe("old");
+});
+
 test("proposal reads never coalesce, so claim order is request order", async () => {
   // CampaignView orders proposal writes by the order their reads were *issued*.
   // A shared read breaks that: it is as old as the request it joined, not as

@@ -220,6 +220,35 @@ def _restore_reroll(cid: str, sid: str, removed: dict):
     return restore
 
 
+def _put_back(cid: str, sid: str, showing: str | None) -> bool:
+    """Promote the take that was in the transcript when a swap began.
+
+    Addressed by content, like the request itself: retention shifts indices, so
+    the position it sat at is not the position it sits at now. Reports whether
+    the transcript really is showing it again, because the callers differ in
+    what they do when it is not.
+
+    Best-effort. Every failure it swallows is a second failure on top of the one
+    being repaired, and that first one is the one worth reporting. Returns False
+    for an empty slot too: `promote` can fill one but not empty one, and a
+    decision derived from a reply a dead reroll already removed is not on screen
+    whatever happens next.
+    """
+    if showing is None:
+        return False
+    try:
+        back = store.alternates.state(cid, sid)
+        at = next((i for i, r in enumerate(back["runs"])
+                   if store.alternates.variant_id(r) == showing), None)
+        if at is None:
+            return False
+        store.alternates.promote(cid, sid, at)
+        return True
+    except (OSError, store.scenes.TurnSizesDesynced,
+            store.alternates.AlternateNotFound):
+        return False
+
+
 @router.post("/campaigns/{cid}/scenes/{sid}/regenerate")
 def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
                     client: LLMClient = Depends(get_llm)):
@@ -227,21 +256,29 @@ def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
     alternate, stream a fresh one."""
     _require_scene(cid, sid)
     conn = _require_connection()
-    # Heal now, retire later. Healing is what can append a 🎲 line, and the
-    # checks below have to judge the transcript that leaves behind — but
-    # RETIRING the decision waits until the reroll has actually committed to
-    # happening, or a failure cancels a decision whose narration is still
-    # exactly what the reader sees.  `heal` is idempotent and `supersede` calls
-    # it again itself.
-    store.proposals.heal(cid, sid)
     guidance = (body.guidance or "").strip() if body else ""
     removed: dict | None = None   # set only when there is actually a reply to drop
-    # ONE lock across the decision, the archive and the removal. A gap anywhere
-    # in that span is a gap another writer's generation can land in — and the
-    # removal would then take a reply the archive never saw, losing exactly what
-    # the non-destructive guarantee promises to keep. Held only across a read
-    # and two file writes; the stream starts after it is released.
+    # ONE lock across the heal, the decision, the archive and the removal. A gap
+    # anywhere in that span is a gap another writer's generation can land in —
+    # and the removal would then take a reply the archive never saw, losing
+    # exactly what the non-destructive guarantee promises to keep. Held only
+    # across a read and two file writes; the stream starts after it is released.
     with store.locks.campaign_lock(cid):
+        # Heal now, retire later. Healing is what can append a 🎲 line, and the
+        # checks below have to judge the transcript that leaves behind — but
+        # RETIRING the decision waits until the reroll has actually committed to
+        # happening, or a failure cancels a decision whose narration is still
+        # exactly what the reader sees.  `heal` is idempotent and `supersede`
+        # calls it again itself.
+        #
+        # INSIDE the lock, not before it: `heal` is a no-op on a proposal that
+        # is still `resolving`, and the resolution needs this same lock to
+        # persist. Healing outside it let that resolution land in the gap, so
+        # the read below saw no roll line, the guards passed, and the line only
+        # appeared when `supersede` healed it — after the narration that
+        # produced the roll had already been removed. Reentrant, so `heal`
+        # taking it again is free.
+        store.proposals.heal(cid, sid)
         # Read AFTER the heal, which can append a 🎲 line the pre-heal snapshot
         # doesn't have. Judging the checks below on a stale snapshot let the
         # ROLL_SPEAKER guard pass and `remove_trailing_assistant_run` then
@@ -449,6 +486,24 @@ def post_scene_alternate(cid: str, sid: str, vid: str):
                 status_code=400,
                 detail="this scene's recorded turn boundaries no longer match its "
                        "transcript — delete the last reply manually to swap alternates")
+        except BaseException:
+            # `promote` is TWO transcript writes — drop the live run, append the
+            # chosen one — and failing between them is a third window: the slot
+            # is empty, so the pending decision's narration is not on screen at
+            # all, and neither refusal above applies because a write really did
+            # land. Both repairs are correct here; they just differ in what the
+            # reader ends up looking at.
+            if not _put_back(cid, sid, showing):
+                # The put-back is preferred: it restores the state the request
+                # started from, decision and narration together. Failing that,
+                # the decision has to go, because what it was derived from is
+                # gone — an empty slot the ‹/› control can refill, beside a
+                # proposal that would otherwise still be acceptable.
+                try:
+                    store.proposals.supersede(cid, sid)
+                except (OSError, store.scenes.TurnSizesDesynced):
+                    pass    # the original failure is the one worth reporting
+            raise
         # The transcript is now showing a different take, so the decision the
         # old narration produced is retired — and only now that it really is.
         # Accepting a proposal whose text is no longer on screen would continue
@@ -466,22 +521,12 @@ def post_scene_alternate(cid: str, sid: str, vid: str):
             # Put the take that was showing back. A different file failed
             # (proposals.json), so the write that just succeeded is likely to
             # succeed again — unlike the reroll restore, where the same disk
-            # stopped both. Best-effort all the same: reporting the original
-            # failure matters more than a rollback that cannot be guaranteed.
+            # stopped both.
             #
-            # Nothing to roll back to when the slot was EMPTY: `promote` can
-            # fill a slot but not empty one, and a decision derived from a reply
-            # that a dead reroll already removed is not on screen either way.
-            if showing is not None:
-                try:
-                    back = store.alternates.state(cid, sid)
-                    at = next((i for i, r in enumerate(back["runs"])
-                               if store.alternates.variant_id(r) == showing), None)
-                    if at is not None:
-                        store.alternates.promote(cid, sid, at)
-                except (OSError, store.scenes.TurnSizesDesynced,
-                        store.alternates.AlternateNotFound):
-                    pass    # the original failure is the one worth reporting
+            # No second repair here, unlike the partial-promotion path above:
+            # the fallback there is to retire the decision, and retiring it is
+            # precisely what has just failed.
+            _put_back(cid, sid, showing)
             raise
     return {"ok": True}
 
