@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import CampaignView from "./CampaignView";
@@ -623,6 +624,105 @@ test("a cancel that streamed nothing still waits for the backend's flush", async
   setTimeout(() => { flushed = true; }, 100);
   await waitFor(() =>
     expect(screen.getByText("held back all along")).toBeInTheDocument());
+});
+
+test("StrictMode's mount cycle does not switch the flush poll off", async () => {
+  // main.tsx renders the app inside StrictMode, so in development React runs
+  // setup / cleanup / setup on mount. A cleanup-only mounted flag is left false
+  // by that middle step, and `owns()` reads it: every post-cancel poll bows out
+  // before its first look and a late flush stays invisible. Same scenario as
+  // the late-flush test above, rendered the way development renders it.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  let flushed = false;
+  (api.getScene as any).mockImplementation(async () => ({
+    meta: {},
+    messages: flushed ? [{ role: "assistant", content: "the whole persisted partial" }] : [],
+  }));
+  (api.chat as any).mockImplementation(hangingChat(["a streamed fragment"]));
+  render(
+    <StrictMode>
+      <MemoryRouter initialEntries={["/campaigns/run"]}>
+        <Routes>
+          <Route path="/campaigns/:cid" element={<CampaignView ready={true} />} />
+        </Routes>
+      </MemoryRouter>
+    </StrictMode>,
+  );
+  const ta = await screen.findByRole("textbox");
+  fireEvent.change(ta, { target: { value: "and then?" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
+  setTimeout(() => { flushed = true; }, 100);
+  await waitFor(() =>
+    expect(screen.getByText("the whole persisted partial")).toBeInTheDocument());
+});
+
+test("a send on a scene still loading is measured against that scene", async () => {
+  // Send stays enabled while a freshly clicked scene loads, and the cached
+  // length belongs to whichever scene was read last. Measuring the new scene's
+  // growth against the old scene's length answers by which transcript happened
+  // to be longer: here the post did land, but the scene left behind is longer
+  // than the one it landed in, so the stale baseline reads that as "nothing
+  // stored" and hands back a prompt the player would then send twice.
+  (api.listScenes as any).mockResolvedValue([
+    { id: "s1", title: "Old", model: "", created: "", updated: "" },
+    { id: "s2", title: "Later", model: "", created: "", updated: "" },
+  ]);
+  let postLanded = false;
+  let pagesOfS2 = 0;
+  (api.getScene as any).mockImplementation(async (_c: string, sid: string, w?: any) => {
+    if (sid !== "s2") {
+      return { meta: {}, total: 4, messages: [
+        { role: "user", content: "a" }, { role: "assistant", content: "b" },
+        { role: "user", content: "c" }, { role: "assistant", content: "d" }] };
+    }
+    // s2's first page never arrives, so its length is still unknown when the
+    // turn starts — the window the stale baseline is reachable through.
+    if (w?.limit !== 1 && pagesOfS2++ === 0) return new Promise(() => {});
+    return postLanded
+      ? { meta: {}, total: 1, messages: [{ role: "user", content: "I draw my blade." }] }
+      : { meta: {}, total: 0, messages: [] };
+  });
+  (api.chat as any).mockImplementation(async () => {
+    postLanded = true;          // post_chat appended, then the abort beat the headers
+    const err: Error & { beforeResponse?: boolean } = new Error("The operation was aborted.");
+    err.name = "AbortError";
+    err.beforeResponse = true;
+    throw err;
+  });
+  renderCampaign();
+  fireEvent.click(await screen.findByText(/· Later/));
+  const ta = await screen.findByRole("textbox");
+  fireEvent.change(ta, { target: { value: "I draw my blade." } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  await screen.findByText("I draw my blade.");   // the refreshed transcript has it
+  await new Promise((r) => setTimeout(r, 50));
+  expect(screen.getByRole("textbox")).toHaveValue("");
+});
+
+test("a refresh that fails with the send still gives the prompt back", async () => {
+  // The verification read fails for the same reason the send did — the server
+  // is unreachable — so the one case that most needs the player's words back is
+  // the case that cannot confirm anything. Throwing out of the refresh skipped
+  // the restore entirely; now an unverifiable turn restores, because a visible
+  // duplicate is recoverable and a destroyed prompt is not.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  let loaded = false;
+  (api.getScene as any).mockImplementation(async () => {
+    if (loaded) throw new Error("Failed to fetch");
+    loaded = true;
+    return { meta: {}, total: 0, messages: [] };
+  });
+  (api.chat as any).mockImplementation(async () => {
+    const err: Error & { beforeResponse?: boolean } = new Error("Failed to fetch");
+    err.beforeResponse = true;
+    throw err;
+  });
+  renderCampaign();
+  const ta = await screen.findByRole("textbox");
+  fireEvent.change(ta, { target: { value: "I draw my blade." } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("I draw my blade."));
 });
 
 test("a poll fetch already in flight cannot clear a new turn's preview", async () => {
