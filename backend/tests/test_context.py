@@ -2072,9 +2072,9 @@ def test_a_given_name_behind_an_unlisted_title_is_a_form(monkeypatch, tmp_path):
         "Professor Mara Vance", "Professor", "Mara", "Vance"}
     # A two-token name has nothing between its ends, and a name whose second
     # token is only a particle yields no form of its own.
-    assert world_state._second_alias("Mara Vance") == ""
-    assert world_state._second_alias("Mara de Vance") == ""
-    assert world_state._second_alias("The Woman on the Pier") == ""
+    assert world_state._interior_aliases("Mara Vance") == set()
+    assert world_state._interior_aliases("Mara de Vance") == set()
+    assert world_state._interior_aliases("The Woman on the Pier") == set()
 
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = campaigns.create_campaign("Run", worlds.create_world("W"))
@@ -2241,6 +2241,34 @@ def test_an_indented_heading_stays_under_its_list_item(monkeypatch, tmp_path):
     assert "The Guild watches the pier." in section
 
 
+def test_stacked_unrecognized_titles_still_yield_the_given_name(monkeypatch, tmp_path):
+    """Taking ONE interior token and stepping over only the tokens `_usable`
+    rejects meant a second title the honorific set does not list stopped the
+    walk: `Professor Reverend Mara Vance` yielded `Reverend` and lost `Mara`.
+    Titles stack, and how many is no more knowable than which."""
+    from grimoire.store import appearances, campaigns, characters, playstate, scenes, worlds
+    from grimoire.store.context import world_state
+    assert world_state._forms({"Professor Reverend Mara Vance"}) == {
+        "Professor Reverend Mara Vance", "Professor", "Reverend", "Mara", "Vance"}
+
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = campaigns.create_campaign("Run", worlds.create_world("W"))
+    croot = campaigns.campaign_root(cid)
+    stacked = "Professor Reverend Mara Vance"
+    watcher = characters.create_character(croot, "Seraphine", "main",
+                                          characters.blank_card("Seraphine"))[0]
+    named = characters.create_character(croot, stacked, "main",
+                                        characters.blank_card(stacked))[0]
+    sid = scenes.create_scene(cid, "Now")
+    appearances.appear(cid, sid, "characters", watcher, "main", "npc")
+    appearances.appear(cid, sid, "characters", named, "main", "npc")
+    playstate.write_state(croot, watcher, playstate.compose_body(
+        "Wary.", "", "Mara is hiding the ledger.\n\nThe Guild watches the pier."))
+    section = _state_section(cid, sid)
+    assert "hiding the ledger" not in section
+    assert "The Guild watches the pier." in section
+
+
 def test_a_top_level_heading_with_leading_spaces_is_not_nested(monkeypatch, tmp_path):
     """Markdown allows a top-level heading up to three leading spaces. Closing
     one because a later column-zero bullet is "less indented" withheld the line
@@ -2266,6 +2294,32 @@ def test_a_top_level_heading_with_leading_spaces_is_not_nested(monkeypatch, tmp_
     assert "Mara sold the manifest." in section     # the next section is its own
 
 
+def test_a_colon_heading_with_leading_spaces_governs_a_top_level_list(monkeypatch, tmp_path):
+    """The same cosmetic-indent trap as the ATX fix, one governor kind over.
+    Ranking `  Winifred:` by its raw column made a following column-zero bullet
+    look like a return to an outer level, popping the heading that names her and
+    leaving the subjectless bullet ungoverned."""
+    from grimoire.store import playstate
+    cid, sid, croot, ids = _two_npc_scene(monkeypatch, tmp_path)
+    playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
+        "Wary.", "",
+        # Not the block's first line — `playstate` strips that one's indent.
+        "Notes:\n"
+        "\n"
+        "  Winifred:\n"
+        "- is hiding the ledger\n"
+        "\n"
+        "Mara sold the manifest."))
+    section = _state_section(cid, sid)
+    assert "hiding the ledger" not in section
+    assert "Mara sold the manifest." in section
+    # Real nesting still ranks by its indent: an indented `Plans:` inside a list
+    # must not govern the outer bullet that follows it (round twenty).
+    from grimoire.store.context import world_state
+    assert world_state._visible_suspects(
+        "Winifred:\n- Plans:\n  - steal it\n- knows the truth", {"Winifred"}) == ""
+
+
 def test_a_paragraph_after_the_blank_is_not_governed(monkeypatch, tmp_path):
     """Only a LIST keeps a colon heading open across the blank. An ordinary
     paragraph below one is a new statement, which is the case the pop was
@@ -2284,7 +2338,7 @@ def test_a_paragraph_after_the_blank_is_not_governed(monkeypatch, tmp_path):
 
 
 def test_a_quoted_nickname_is_matched_without_its_quotes(monkeypatch, tmp_path):
-    """A nickname is written set off by quotes or brackets, and `_second_alias`
+    """A nickname is written set off by quotes or brackets, and `_interior_aliases`
     lands on exactly that token — so keeping the marks made the form `"Red"` and
     `_mentions` then required the suspicion to quote her too. The name is what
     is inside the marks."""
@@ -2323,9 +2377,14 @@ def test_a_stacked_title_does_not_consume_the_given_name_slot(monkeypatch, tmp_p
     rule was written to close, one token further in."""
     from grimoire.store import appearances, campaigns, characters, playstate, scenes, worlds
     from grimoire.store.context import world_state
-    assert world_state._second_alias("Professor Dr. Mara Vance") == "Mara"
-    assert world_state._second_alias("Professor J. Mara Vance") == "Mara"   # nor an initial
-    assert world_state._second_alias("Professor Dr. Vance") == ""           # nothing between
+    assert world_state._interior_aliases("Professor Dr. Mara Vance") == {"Mara"}
+    assert world_state._interior_aliases("Professor J. Mara Vance") == {"Mara"}  # nor an initial
+    assert world_state._interior_aliases("Professor Dr. Vance") == set()   # nothing between
+    # Titles STACK, and how many is not knowable either: every interior token
+    # that is name-shaped is a form, so a second unrecognized one cannot stop
+    # the walk short of the given name.
+    assert world_state._interior_aliases("Professor Reverend Mara Vance") == {
+        "Reverend", "Mara"}
 
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = campaigns.create_campaign("Run", worlds.create_world("W"))
