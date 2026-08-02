@@ -378,7 +378,12 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
 
   useEffect(() => { activeIdRef.current = activeId; }, [activeId]);
 
-  async function selectScene(id: string) {
+  // `stillWanted`, when given, is re-asked immediately before any state is
+  // applied. Only background refreshes need it — the post-cancel flush poll,
+  // which can be running while the player starts a new turn or opens another
+  // scene. Returns the fetched message count, or -1 if it bowed out.
+  async function selectScene(id: string, stillWanted?: () => boolean) {
+    if (stillWanted && !stillWanted()) return -1;
     // selectScene also runs to *refresh* the current scene (runStream's
     // finally, doRoll/doCheck, saveEdit, …) — only an actual scene switch
     // should clear the chip/popover synchronously below; clearing on every
@@ -423,7 +428,11 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       .then((r) => setSceneResponse(r ?? null))
       .catch(() => setSceneResponse(null));
     const scene = await api.getScene(cid, id, { limit: windowSizeRef.current });
-    if (windowTokenRef.current !== token) return; // a later select already landed
+    if (windowTokenRef.current !== token) return -1; // a later select already landed
+    // Asked again here, not only on entry: this fetch is an await, and a turn
+    // starting during it would otherwise have the stale response clear the new
+    // stream's live preview (`setStreaming`) below.
+    if (stillWanted && !stillWanted()) return -1;
     setMessages(scene.messages);
     // an unwindowed reply (no `offset`) is the whole transcript, which starts at 0
     setFirstIndex(scene.offset ?? 0);
@@ -546,20 +555,27 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   const FLUSH_POLL_BUDGET_MS = 12000;
 
   async function awaitFlushedPartial(id: string, seen: number) {
+    // Stop the moment this poll stops being the thing that owns the view. A new
+    // turn (abortRef) or a different scene (activeIdRef) has its own refresh,
+    // and carrying on would have `selectScene` clear the new stream's live
+    // preview — or, worse, yank the player back to the scene they just left.
+    // Refs, not state: this loop runs across renders and a captured
+    // `busy`/`activeId` would be stale.
+    //
+    // Handed to `selectScene` as well as checked here, because checking only
+    // here leaves a window review caught: the check passes, then `getScene` is
+    // awaited, and a turn starting during that await still gets its preview
+    // cleared by the response.
+    const owns = () => !abortRef.current && activeIdRef.current === id;
     let wait = FLUSH_POLL_MS;
     let waited = 0;
     while (waited < FLUSH_POLL_BUDGET_MS) {
       await new Promise((r) => setTimeout(r, wait));
       waited += wait;
       wait = Math.min(wait * 2, FLUSH_POLL_MAX_MS);
-      // Stop looking the moment this poll stops being the thing that owns the
-      // view. A new turn (abortRef) or a different scene (activeIdRef) has its
-      // own refresh, and carrying on would have `selectScene` clear the new
-      // stream's live preview on every tick — or, worse, yank the player back
-      // to the scene they just left. Both are refs, not state: this loop runs
-      // across renders and a captured `busy`/`activeId` would be stale.
-      if (abortRef.current || activeIdRef.current !== id) return;
-      if ((await selectScene(id)) > seen) return;
+      if (!owns()) return;
+      const n = await selectScene(id, owns);
+      if (!owns() || n > seen) return;
     }
   }
 
@@ -603,10 +619,16 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       // the reply is persisted as per-speaker posts — re-fetch to show them
       // (selectScene also bumps ctxKey and refreshes the player name)
       const seen = await selectScene(id);
-      // Only when a cancel interrupted text that was already on its way: with
-      // nothing streamed there is no partial for the backend to flush, and
-      // polling for one would just be six wasted round trips per empty Stop.
-      if (cancelled && acc) await awaitFlushedPartial(id, seen);
+      // Every cancel, not only the ones that showed text. Gating on `acc` was
+      // wrong and review caught it: what reached the client is not what the
+      // backend has to flush. `FenceWatcher.feed` returns "" for the whole of a
+      // roll fence and withholds anything that might yet become one, so a reply
+      // that opens with a fence streams nothing at all while the server still
+      // persists a proposal — invisible until some later refresh under the old
+      // gate. The cost of being wrong the other way is a few polls after a Stop
+      // that truly produced nothing, and they stop early the moment the player
+      // does anything else.
+      if (cancelled) await awaitFlushedPartial(id, seen);
     }
     return landed;
   }
