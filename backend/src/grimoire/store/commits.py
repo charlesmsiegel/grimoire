@@ -125,7 +125,12 @@ def fingerprint(body: dict) -> str:
 #: like `٠-<32 hex>` would be read as a minted token and parsed as epoch 0 --
 #: `int()` accepts those digits too, so it would not even fail loudly. `mint`
 #: emits ASCII and nothing else.
-_MINTED_TOKEN = re.compile(r"\A([0-9]+)-[0-9a-f]{32}\Z")
+#:
+#: Bounded, because the group feeds `int()`: past ~4300 digits CPython refuses
+#: the conversion outright, so an unbounded match would turn a caller key of
+#: 5000 digits plus a hex tail into a 500 on its first save. A scene's commit
+#: count will not reach ten digits.
+_MINTED_TOKEN = re.compile(r"\A([0-9]{1,9})-[0-9a-f]{32}\Z")
 
 
 def mint(epoch: int) -> str:

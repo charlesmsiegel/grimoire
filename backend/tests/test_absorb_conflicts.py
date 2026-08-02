@@ -9,9 +9,11 @@ it.
 
 from __future__ import annotations
 
+import copy
+
 from grimoire.store import (absorb, campaigns, characters, dossiers, entities,
-                            groupstate, playstate, plot, relationships, scenes,
-                            worlds)
+                            groupstate, overlay, playstate, plot, relationships,
+                            scenes, worlds)
 from grimoire.store.absorb import conflicts
 
 
@@ -659,3 +661,58 @@ def test_a_brand_new_thread_still_gets_its_title(monkeypatch, tmp_path):
                      "status": "open", "scene": "s1"}}])
 
     assert plot.get(cid, "the-tide-charter")["title"] == "The Tide Charter"
+
+
+def test_a_resume_keeps_the_verdicts_the_first_attempt_computed(monkeypatch, tmp_path):
+    """Two rows may target one record on purpose -- `batch_verdicts` pairs them
+    positionally for exactly that. A resume re-judging a row that never ran would
+    weigh it against a store its own batch-mates already moved, so it would be
+    refused as a conflict although both passed together before any write and an
+    uninterrupted attempt would have applied both.
+
+    Three edits, because that is what it takes to reach the case: the journal
+    settles slot k-1 and marks slot k pending in one write, so a crash always
+    leaves a settled prefix, one unconfirmed slot, and only THEN slots that are
+    still unjudged.
+    """
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "lore", "The Pact", body="Signed at dusk.")
+    entities.create_entity(croot, "lore", "The Ledger", body="Kept dry.")
+    ledger = {"id": "lore:the-ledger", "kind": "lore", "field": "body",
+              "target": {"kind": "lore", "id": "the-ledger"},
+              "before": "Kept dry.", "after": "Kept dry.\n\nSoaked."}
+    edits = [_lore_edit("Signed at dusk.", "Signed at dusk.\n\nBroken by morning."),
+             ledger,
+             _lore_edit("Signed at dusk.", "Signed at dusk.\n\nAnd again at noon.")]
+
+    # The durable journal is only what a checkpoint actually wrote, so the resume
+    # starts from the last persisted copy rather than the live dict.
+    live: dict = {}
+    persisted: list[dict] = []
+    real_update = overlay.update_entity
+
+    def crash_on_the_ledger(cid_, kind, eid, **kw):
+        if eid == "the-ledger":
+            raise KeyboardInterrupt("killed mid-write")
+        return real_update(cid_, kind, eid, **kw)
+
+    monkeypatch.setattr(overlay, "update_entity", crash_on_the_ledger)
+    try:
+        absorb.apply_edits(cid, edits, progress=live,
+                           checkpoint=lambda: persisted.append(copy.deepcopy(live)))
+    except KeyboardInterrupt:
+        pass
+    monkeypatch.setattr(overlay, "update_entity", real_update)
+
+    journal = persisted[-1]
+    assert journal["verdicts"] == [None, None, None]   # judged together, pre-write
+    assert journal["edits"]["0"]["state"] == "applied"
+    assert journal["edits"]["1"]["state"] == "pending"
+    assert "2" not in journal["edits"]                 # never judged, never run
+
+    applied, failures = absorb.apply_edits(cid, edits, progress=journal)
+    # slot 2 shares its target with slot 0, which has now landed -- re-judging it
+    # would call that a conflict. The kept verdict applies it.
+    assert applied == ["lore:the-pact", "lore:the-pact"]
+    assert [(f["id"], f["kind"]) for f in failures] == [("lore:the-ledger", "error")]

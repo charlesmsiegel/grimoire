@@ -263,11 +263,23 @@ def apply_edits(cid: str, edits: list[dict], sid: str | None = None,
     # One pass over the whole batch before the first write (#111): applying one
     # edit can move the record the next was staged against, so a check
     # interleaved with the writes would report the batch as contradicting
-    # itself. On a RESUME the earlier writes are this commit's own, already
-    # landed -- so an edit that never ran can be judged against a store its
-    # siblings moved. That errs the reported-not-applied way, which is the same
-    # answer the reviewer would get by saving again.
-    verdicts = conflicts.batch_verdicts(cid, edits)
+    # itself.
+    #
+    # Journalled for the same reason it is computed up front. A resume's earlier
+    # writes are this commit's OWN, already landed, so recomputing would judge a
+    # not-yet-run edit against a store its siblings moved -- and two rows may
+    # legitimately target one record, which `batch_verdicts` supports on purpose.
+    # The second row would then be refused as a conflict although both passed
+    # together before the first write, and an uninterrupted attempt would have
+    # applied both. Keeping the original verdicts makes the resume decide what
+    # the interrupted attempt decided.
+    verdicts = journal.get("verdicts")
+    if not isinstance(verdicts, list) or len(verdicts) != len(edits):
+        verdicts = conflicts.batch_verdicts(cid, edits)
+        # Durable before the first write: the checkpoint below runs ahead of
+        # edit 0, and a crash before that leaves nothing applied to be judged
+        # against, so a recomputation there is judging the same store anyway.
+        journal["verdicts"] = verdicts
     for i, e in enumerate(edits):
         slot = str(i)
         prior = outcomes.get(slot)
