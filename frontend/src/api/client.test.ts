@@ -127,6 +127,31 @@ test("chat hands its abort signal to fetch, and ignores heartbeat comments", asy
   expect(events).toEqual([{ delta: "hi" }]);
 });
 
+test("identical in-flight GETs are shared, but a fresh read is not", async () => {
+  // The sharing is deliberate and normally free. It is not free for a read
+  // whose job is to verify a write landed: handed a promise started before that
+  // write, it gets a pre-write answer and concludes the write never happened.
+  // That is exactly the post-cancel proposal check (#95), so it opts out — and
+  // this has to be tested here rather than in CampaignView, where `api.*` is
+  // mocked and the coalescing layer is never reached at all.
+  let releaseFirst: (v: unknown) => void = () => {};
+  const fetchMock = vi
+    .fn()
+    .mockImplementationOnce(() => new Promise((r) => { releaseFirst = r; }))
+    .mockResolvedValue(jsonOk({ record: { id: "pr-1" } }));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+  const first = api.getRollProposal("run", "s1");           // in flight, unresolved
+  const shared = api.getRollProposal("run", "s1");          // coalesced onto it
+  const fresh = api.getRollProposal("run", "s1", true);     // must issue its own
+  expect(fetchMock).toHaveBeenCalledTimes(2);               // not 3, and not 1
+
+  expect(await fresh).toEqual({ record: { id: "pr-1" } });  // the post-flush answer
+  releaseFirst(jsonOk({ record: null }));
+  expect(await first).toEqual({ record: null });            // the stale one, still shared
+  expect(await shared).toEqual({ record: null });
+});
+
 test("localizeImages posts to the localize endpoint and forwards SSE events", async () => {
   const fetchMock = vi.fn().mockResolvedValue(
     sseResponse([
