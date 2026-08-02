@@ -173,6 +173,11 @@ def _apply_one(cid: str, croot, e: dict, sid: str | None,
                 return {"state": "failed", "id": eid, "kind": "error",
                         "reason": "a voice-drift note cannot be blank — uncheck the row "
                                   "to skip it, or leave the corrective in place"}
+            if len(after) > voice_drift.MAX_NOTE:
+                return {"state": "failed", "id": eid, "kind": "error",
+                        "reason": f"a voice-drift note cannot be longer than "
+                                  f"{voice_drift.MAX_NOTE} characters — it is put in front "
+                                  f"of every following turn"}
             # The guards below key on what this row WRITES, not on how it is
             # labelled. `op` catches a raise whose text the reviewer emptied
             # (above); it must not also decide whether the write is checked,

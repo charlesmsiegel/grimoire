@@ -137,8 +137,12 @@ def write(croot: Path, char_id: str, note: str, anchor_fp: str = "") -> None:
     """
     p = flag_path(croot, char_id)        # raises BadDriftId before mkdir touches disk
     if not note.strip():
-        if p.exists():
-            p.unlink()
+        # `missing_ok`, not exists-then-unlink: clearing an already-cleared
+        # flag is a success, and two blank PUTs from separate tabs would
+        # otherwise have the loser raise FileNotFoundError and 500 -- for
+        # reaching the state it asked for. Same race the readers just fixed,
+        # on the write side.
+        p.unlink(missing_ok=True)
         return
     p.parent.mkdir(parents=True, exist_ok=True)
     atomic.write_text(p, dump_frontmatter({"anchor": anchor_fp}, note.strip() + "\n"))
@@ -199,6 +203,21 @@ def fingerprint_matches(stored: str, anchor: str, anchor_id: str = "") -> bool:
     if stored == anchor_fingerprint(anchor, anchor_id):
         return True
     return bool(stored) and stored == _digest(anchor.strip(), anchor_id)
+
+
+#: Longest corrective that may be staged or stored, in characters.
+#:
+#: The flag is rendered into the POST-HISTORY system message, which
+#: `context.assemble` reserves and the packer is not allowed to drop or trim --
+#: so an unbounded note is charged against every later generation's budget with
+#: nothing able to compensate, and a big enough one pushes each of them over.
+#: That makes the character unusable until someone clears the flag by hand.
+#:
+#: The template asks for one or two sentences, so this is far above any
+#: well-formed corrective; it bounds the damage from a judge that ignored the
+#: format, and from a client-supplied row, without second-guessing a reviewer
+#: who wanted to be thorough.
+MAX_NOTE = 1000
 
 
 def build_prompt(name: str, anchor: str, transcript: str) -> list[dict]:

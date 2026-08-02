@@ -1121,6 +1121,26 @@ test("a failed anchor load disables saving instead of offering a blank (#59)", a
   expect(api.setCharacterVoiceAnchor).not.toHaveBeenCalled();
 });
 
+test("a scope change closes the open character rather than re-aiming it (#59)", async () => {
+  // `detail.meta.id` is combined with the CURRENT scope on every write, so a
+  // character left open across a scope change addresses the new world by the
+  // old one's id -- and where that id also exists there, Save lands on the
+  // wrong record.
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "seraphine", name: "Seraphine", default_version: "default", has_avatar: false, versions: [] },
+  ]);
+  (api.getCharacterVoiceAnchor as any).mockResolvedValue({ voice_anchor: "World A's anchor." });
+  const { rerender } = render(<CharacterEditor scope={{ kind: "world", id: "a" }} wid="a" />);
+
+  fireEvent.click((await screen.findAllByRole("button", { name: /^edit$/i }))[0]);
+  expect((await screen.findByLabelText("Voice anchor") as HTMLTextAreaElement).value)
+    .toBe("World A's anchor.");
+
+  rerender(<CharacterEditor scope={{ kind: "world", id: "b" }} wid="b" />);
+  await waitFor(() => expect(screen.queryByLabelText("Voice anchor")).toBeNull());
+  expect(screen.queryByText("Save voice anchor")).toBeNull();
+});
+
 test("a second anchor save cannot start while the first is in flight (#59)", async () => {
   // Two overlapping PUTs race on the server and the SLOWER one wins the file,
   // so an edit made between them can be discarded while the editor still shows

@@ -2790,6 +2790,43 @@ def test_a_departed_speaker_sharing_the_label_still_disqualifies(client):
     assert [f["id"] for f in body["voice"]["failed"]] == ["aese"]
 
 
+def test_an_oversized_judge_note_is_reported_not_staged(client):
+    """The corrective renders into the post-history message, which the packer
+    reserves and cannot trim, so an oversized one is charged against every later
+    generation with nothing able to give way -- and the character stays unusable
+    until somebody clears the flag by hand."""
+    cid, sid = _voice_scene(client)
+    huge = "She used contractions. " * 200
+    assert len(huge) > store.voice_drift.MAX_NOTE
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouterComplete(
+        [_EXTRACTION, _DOSSIER, json.dumps({"verdict": "drift", "note": huge})])
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").json()
+
+    assert not [e for e in body["edits"] if e["kind"] == "voice_drift"]
+    assert [f["id"] for f in body["voice"]["failed"]] == ["aese"]
+    assert "too long" in body["voice"]["failed"][0]["reason"]
+
+
+def test_an_oversized_voice_drift_row_is_rejected_on_save(client):
+    """The judge is not the only way in: a PUT body is client-supplied."""
+    cid, sid = _voice_scene(client)
+    croot = store.campaigns.campaign_root(cid)
+    wid = store.campaigns.read_campaign(cid)["meta"]["world"]
+    rec = store.voice_anchors.read_record(store.worlds.world_root(wid), "aese")
+    fp = store.voice_drift.anchor_fingerprint(rec["text"], rec["id"])
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
+                   json={"one_line": "o", "summary": "s", "keywords": [], "timeline_events": [],
+                         "edits": [{"id": "voice_drift:aese", "kind": "voice_drift",
+                                    "target": {"kind": "characters", "id": "aese"},
+                                    "label": "l", "field": "voice_drift", "before": "",
+                                    "after": "x" * (store.voice_drift.MAX_NOTE + 1),
+                                    "authored": False,
+                                    "payload": {"op": "raise", "anchor": fp}}]})
+    assert r.status_code == 200 and r.json()["applied"] == []
+    assert "cannot be longer" in r.json()["failures"][0]["reason"]
+    assert store.voice_drift.read(croot, "aese") == ""
+
+
 def test_a_card_with_no_name_is_not_judged_against_its_slug(client):
     """`_actor_name` substitutes the actor id for a card carrying no usable
     name. That id is a display convenience, not something the transcript is
