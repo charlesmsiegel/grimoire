@@ -4608,6 +4608,29 @@ test("renaming a scene re-reads an open ledger", async () => {
     expect((api.campaignLedger as any).mock.calls.length).toBeGreaterThan(before));
 });
 
+test("a rename that keeps the scene id still re-reads an open ledger", async () => {
+  // A capitalisation or punctuation edit slugs to the same id, so the route
+  // returns the scene unchanged — but `meta.title` moved, and the title is
+  // exactly what every ledger row carries. The bump sits ahead of
+  // `adoptSceneId`'s same-id guard for that reason: everything else in that
+  // function is about the id, and this one thing is not.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.campaignLedger as any).mockResolvedValue({ plot: [], commitments: [], chronicle: [] });
+  (api.renameScene as any).mockResolvedValue({ id: "s1", title: "OLD" });
+  renderCampaign();
+  fireEvent.click(await screen.findByRole("button", { name: "Ledger" }));
+  await screen.findByText(/Nothing on the ledger yet/);
+  const before = (api.campaignLedger as any).mock.calls.length;
+
+  fireEvent.click(screen.getByRole("button", { name: /rename/i }));
+  const input = screen.getByDisplayValue("Old");
+  fireEvent.change(input, { target: { value: "OLD" } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  await waitFor(() => expect(api.renameScene).toHaveBeenCalled());
+  await waitFor(() =>
+    expect((api.campaignLedger as any).mock.calls.length).toBeGreaterThan(before));
+});
+
 test("deleting a scene re-reads an open ledger", async () => {
   // Same reason as the rename above — the ledger resolves every row against the
   // scene list — and neither branch of `deleteScene` reaches `selectScene`:

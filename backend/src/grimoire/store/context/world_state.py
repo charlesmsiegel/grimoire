@@ -823,6 +823,35 @@ def _names_present_actor(text: str, others: set[str]) -> bool:
     return bool(_USER_MACRO.search(text)) or any(_mentions(text, f) for f in others)
 
 
+def _joined(lines: list[str]) -> str:
+    """An entry's lines as one string a multi-word form can be found in.
+
+    Not `" ".join(lines)`: the lines still carry their markdown, and a wrapped
+    name is written under it. `- The Woman on the` / `  Pier is hiding the
+    ledger` joins raw to `- The Woman on the   Pier ...` -- three spaces where
+    the form has one -- and the escaped pattern matched nothing, so the fix that
+    added this check did not reach the shape it is most likely to meet. A
+    continuation carrying a blockquote marker puts a `>` in the middle of the
+    name, which is worse.
+
+    So each line is reduced to its own content first -- quote markers, then a
+    leading list marker, then the surrounding whitespace -- and the runs between
+    are collapsed to the single space the forms are written with. Only the
+    COPY used for matching; the stored lines are untouched.
+    """
+    out = []
+    for line in lines:
+        text = line.expandtabs(_TAB).strip()
+        quote = _QUOTE.match(text)
+        if quote:
+            text = text[quote.end():].strip()
+        marker = _LIST_MARKER.match(text)
+        if marker:
+            text = text[marker.end():].strip()
+        out.append(text)
+    return re.sub(r"\s+", " ", " ".join(out)).strip()
+
+
 def _visible_suspects(suspects: str, others: set[str]) -> str:
     """`suspects` with every ENTRY about ANOTHER present actor removed (#116).
 
@@ -869,12 +898,11 @@ def _visible_suspects(suspects: str, others: set[str]) -> str:
         # the` / `Pier is hiding the ledger`) appeared in neither line and the
         # whole private suspicion survived. That is exactly the actor whose name
         # yields no short alias, so the full form is the only thing that can
-        # match her at all. Joined with spaces because the break is where a
-        # space would otherwise be, and the forms are written with spaces.
+        # match her at all.
         dropped.append((head >= 0 and dropped[head])
                        or any(_names_present_actor(line, others) for line in lines)
                        or (len(lines) > 1
-                           and _names_present_actor(" ".join(lines), others)))
+                           and _names_present_actor(_joined(lines), others)))
     kept: list[str] = []
     for (lines, _), gone in zip(entries, dropped):
         if not gone:
