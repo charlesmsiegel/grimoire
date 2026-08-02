@@ -835,6 +835,33 @@ test("a Stop before the request lands gives the prompt back too", async () => {
   await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("I draw my blade."));
 });
 
+test("an abort whose post did land does not duplicate the prompt", async () => {
+  // `beforeResponse` only means no response arrived. The server can have
+  // appended the post and had the abort beat its headers back — restoring then
+  // puts the text in the composer *and* the transcript, and the next Send
+  // sends it twice. Growth in the refreshed transcript is what settles it.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  let landedOnServer = false;
+  (api.getScene as any).mockImplementation(async () => ({
+    meta: {}, total: landedOnServer ? 1 : 0,
+    messages: landedOnServer ? [{ role: "user", content: "I draw my blade." }] : [],
+  }));
+  (api.chat as any).mockImplementation(async () => {
+    landedOnServer = true;      // it did reach post_chat, headers just never came back
+    const err: Error & { beforeResponse?: boolean } = new Error("The operation was aborted.");
+    err.name = "AbortError";
+    err.beforeResponse = true;
+    throw err;
+  });
+  renderCampaign();
+  const ta = await screen.findByRole("textbox");
+  fireEvent.change(ta, { target: { value: "I draw my blade." } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  await screen.findByText("I draw my blade.");   // the post is really there
+  await new Promise((r) => setTimeout(r, 50));
+  expect(screen.getByRole("textbox")).toHaveValue("");
+});
+
 test("a cancel after the request landed leaves the composer alone", async () => {
   // The post is durably stored by then — a cancel keeps it — so restoring would
   // have the player send the same line twice.

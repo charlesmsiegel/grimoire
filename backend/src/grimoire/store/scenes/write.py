@@ -169,8 +169,15 @@ def split_reply(text: str, players: frozenset[str]) -> list[dict]:
 
 
 @locking._serialized
-def remove_trailing_assistant_run(cid: str, sid: str) -> None:
+def remove_trailing_assistant_run(cid: str, sid: str) -> dict:
     """Drop the trailing run of assistant-side messages (one turn's output).
+
+    Returns what it took, so the caller can put it back. Reroll deletes the old
+    reply *before* generating its replacement — the context builders read the
+    transcript, so the reply has to be gone before the model is asked for
+    another — and a generation that then produces nothing would otherwise have
+    destroyed a reply the player still had (#95). The token is opaque; feed it
+    to `restore_trailing_assistant_run`.
 
     Trailing scene-transition lines are stepped over and PRESERVED in order —
     the generation removed is the last one beneath them. Stops at (and refuses
@@ -200,16 +207,61 @@ def remove_trailing_assistant_run(cid: str, sid: str) -> None:
         # removal would eat every consecutive generation, because director turns
         # persist no user message to stop at — deleting more than the caller
         # asked to reroll, and desyncing turn_sizes permanently.
-        del messages[len(messages) - sizes[-1]:]
+        cut = len(messages) - sizes[-1]
+        removed, size = messages[cut:], sizes[-1]
+        del messages[cut:]
         sizes = sizes[:-1]
     else:
         # Untracked (or unparseable, which means the same thing): the whole
         # trailing model run comes off, as it did before boundaries existed.
-        del messages[len(messages) - turns._trailing_model_run(messages):]
+        cut = len(messages) - turns._trailing_model_run(messages)
+        removed, size = messages[cut:], None
+        del messages[cut:]
     meta["updated"] = now_iso()
     turns._set_turn_sizes(meta, sizes)
     atomic.write_text(p, dump_frontmatter(
         meta, serialize._serialize_messages(messages + tail)))
+    # `kept` is the transcript this leaves behind, transitions excluded, and it
+    # is what the restore checks it still sees: anything written since means the
+    # tail is no longer the one this took from.
+    return {"messages": removed, "size": size, "kept": len(messages)}
+
+
+@locking._serialized
+def restore_trailing_assistant_run(cid: str, sid: str, token: dict) -> bool:
+    """Put back what `remove_trailing_assistant_run` took, if nothing has been
+    written since. Returns whether it fired.
+
+    Reroll's deletion and its replacement are two writes with a model call in
+    between, so a generation that produces nothing leaves the player short one
+    reply they never asked to lose (#95). This is the other half, and it is
+    conditional for the same reason the user-post undo is: a transcript that
+    moved on underneath belongs to something else now.
+
+    Trailing transition lines are stepped over, exactly as the removal stepped
+    over them, so the restored run goes back beneath them rather than on top.
+    """
+    p = paths._scene_path(cid, sid)
+    if not safe_id(sid) or not p.exists():
+        raise paths.SceneNotFound(sid)
+    if not token or not token.get("messages"):
+        return False
+    messages = read.read_scene(cid, sid)["messages"]
+    keep = len(messages) - read.trailing_transitions(messages)
+    if keep != token["kept"]:
+        return False
+    body = messages[:keep] + list(token["messages"]) + messages[keep:]
+    meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
+    sizes = turns._parse_turn_sizes(meta.get("turn_sizes", ""))
+    if token.get("size"):
+        # Only when the removal took a *tracked* generation. Pushing a boundary
+        # onto a scene whose sizes were unparseable would invent tracking that
+        # was never there, and reroll trusts sizes[-1] absolutely.
+        sizes = sizes + [token["size"]]
+    meta["updated"] = now_iso()
+    turns._set_turn_sizes(meta, sizes)
+    atomic.write_text(p, dump_frontmatter(meta, serialize._serialize_messages(body)))
+    return True
 
 
 @locking._serialized

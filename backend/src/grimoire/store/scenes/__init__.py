@@ -34,7 +34,7 @@ from .turns import (  # noqa: F401
 from .write import (  # noqa: F401
     RESPONSE_FIELDS, RollMessageImmutable, add_dismissed, append_message,
     append_reply, edit_message, mark_absorbed, remove_trailing_assistant_run,
-    remove_trailing_user_post, set_pcless, set_response, split_reply, stamp_greeting,
+    remove_trailing_user_post, restore_trailing_assistant_run, set_pcless, set_response, split_reply, stamp_greeting,
     stamp_user_speaker, trim_continuation,
 )
 from .moment import _apply_datetime, _stamp_start_date, set_datetime, set_location  # noqa: F401

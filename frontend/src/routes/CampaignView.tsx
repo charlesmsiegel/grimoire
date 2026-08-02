@@ -193,6 +193,13 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   // React warning at worst — but a loop that keeps refetching a scene nobody is
   // looking at is waste with no upside.
   const mountedRef = useRef(true);
+  // The transcript length the server last reported. A turn that failed without
+  // a response compares against this to find out whether its post landed after
+  // all — `beforeResponse` proves only that no response arrived, not that the
+  // request never did (review caught the difference). Counts, not content:
+  // `post_chat` expands macros before storing, so what came back never has to
+  // equal what was typed.
+  const totalRef = useRef(0);
   // Orders writes to the chip, because the proposal is read from two places
   // that can answer out of order. `selectScene` fires a read and does not await
   // it; the post-cancel `settleProposal` fires a later one deliberately. Making
@@ -480,7 +487,12 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     setSceneResponsePreset(scene.meta.response_preset ?? "");
     setStreaming("");
     setCtxKey((n) => n + 1);
-    return scene.messages.length;
+    // `total`, not `messages.length`: the fetch is windowed now (#94), so once a
+    // transcript is longer than a page the window size is a constant and would
+    // report no growth however much lands. The flush poll compares this across
+    // ticks to notice a cancelled turn's partial arriving.
+    totalRef.current = scene.total ?? scene.messages.length;
+    return totalRef.current;
   }
 
   // Prepend the page of posts just above the window. Called by the scroll
@@ -650,6 +662,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   ) {
     const controller = new AbortController();
     abortRef.current = controller;
+    const totalBefore = totalRef.current;   // before this turn writes anything
     setBusy(true);
     setError(null);
     let acc = "";
@@ -695,7 +708,13 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       // down, lost the prompt exactly as the rollback did: the composer was
       // cleared, and the refresh below finds no post to restore it from. The
       // response is the line, because `post_chat` appends before returning one.
-      if (err?.beforeResponse) { unreached = true; onPromptUnstored?.(); }
+      // Deliberately not restoring here. `beforeResponse` says no response
+      // arrived, which is not the same as the request never arriving: the
+      // server can append the post and then have the abort beat its headers
+      // back to the browser. Deciding now would put text in the composer that
+      // is also in the transcript, and the next Send would duplicate it. The
+      // refresh below settles it (review, #95).
+      if (err?.beforeResponse) unreached = true;
     } finally {
       abortRef.current = null;
       setStreaming("");
@@ -727,6 +746,11 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       // withholds anything that might yet become one, so a reply that opens with
       // a fence streams nothing at all while the server still persists a
       // proposal — invisible until some later refresh under the old gate.
+      // Now the transcript has answered it: no growth means the post never
+      // landed, so the prompt exists nowhere and the composer has to have it
+      // back. `seen < 0` is `selectScene` bowing out to a newer owner — it did
+      // not look, so it cannot say.
+      if (unreached && seen >= 0 && seen <= totalBefore) onPromptUnstored?.();
       // Nothing to wait for when the request never arrived: there is no turn
       // on the server to have produced a partial.
       if (!finished && !errored && !unreached) await awaitFlushedPartial(id, seen);
