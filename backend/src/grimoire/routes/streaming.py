@@ -423,6 +423,23 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
             # its continuation after an answer it never saw. So the two are
             # exclusive, and this is the side to take, because the reply is the
             # half nothing else holds; the proposal is one more reroll away.
+            # The boolean is discarded deliberately, and review asked why. A
+            # refusal here means something appended behind the deletion that
+            # the restore will not step over — in practice a manual dice roll,
+            # whose transcript line has to stay in lockstep with rolls.json and
+            # so blocks the insert outright. There is no better second move
+            # from inside this hook: `narration` is empty by the branch
+            # condition, so there is nothing to persist instead, and forcing
+            # the reply back above the roll would reorder the transcript
+            # against the one invariant the roll line exists to hold.
+            #
+            # So the answer is not to lose the race: the roll button and the
+            # check submit are locked for the whole of the flush window
+            # (`sceneLocked`, the same signal rename and End scene use), which
+            # is the only way a roll could land here from this client. Another
+            # client — a second tab, a direct API call — can still do it, and
+            # that is the wider concurrency class this PR documents rather than
+            # closes (#95).
             if restore_removed is not None and not watcher.narration.strip():
                 restore_removed()
                 return []
