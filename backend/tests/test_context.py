@@ -2094,6 +2094,35 @@ def test_a_given_name_behind_an_unlisted_title_is_a_form(monkeypatch, tmp_path):
     assert "The Guild watches the pier." in section
 
 
+def test_a_stacked_title_does_not_consume_the_given_name_slot(monkeypatch, tmp_path):
+    """`_name_tokens` strips only a leading token it RECOGNIZES as a title, so
+    with titles stacked the interior one is still a title — and stopping on it
+    yielded no given-name form at all, which is the same leak the second-token
+    rule was written to close, one token further in."""
+    from grimoire.store import appearances, campaigns, characters, playstate, scenes, worlds
+    from grimoire.store.context import world_state
+    assert world_state._second_alias("Professor Dr. Mara Vance") == "Mara"
+    assert world_state._second_alias("Professor J. Mara Vance") == "Mara"   # nor an initial
+    assert world_state._second_alias("Professor Dr. Vance") == ""           # nothing between
+
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = campaigns.create_campaign("Run", worlds.create_world("W"))
+    croot = campaigns.campaign_root(cid)
+    stacked = "Professor Dr. Mara Vance"
+    watcher = characters.create_character(croot, "Seraphine", "main",
+                                          characters.blank_card("Seraphine"))[0]
+    named = characters.create_character(croot, stacked, "main",
+                                        characters.blank_card(stacked))[0]
+    sid = scenes.create_scene(cid, "Now")
+    appearances.appear(cid, sid, "characters", watcher, "main", "npc")
+    appearances.appear(cid, sid, "characters", named, "main", "npc")
+    playstate.write_state(croot, watcher, playstate.compose_body(
+        "Wary.", "", "Mara is hiding the ledger.\n\nThe Guild watches the pier."))
+    section = _state_section(cid, sid)
+    assert "hiding the ledger" not in section
+    assert "The Guild watches the pier." in section
+
+
 def test_a_suspicion_naming_a_player_s_container_name_is_withheld(monkeypatch, tmp_path):
     """A PC's container name and its locked persona name can differ. Taking only
     the persona left a suspicion written against the canonical PC name unmatched
