@@ -1812,6 +1812,35 @@ test("a rename whose relist fails still re-reads the renamed transcript", async 
   expect((api.getScene as any).mock.calls.at(-1)[1]).toBe("s1-renamed");
 });
 
+test("a first-date rename whose re-read fails says so instead of going quiet", async () => {
+  // The re-read is what replaces posts a swap against the old id skipped, and
+  // this path fired it without awaiting: the rejection went nowhere, no banner
+  // appeared, and the pre-rename messages stayed on screen under the new id —
+  // editable, against indices that have shifted.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  // only the read for the NEW id fails, so nothing else in the view is disturbed
+  (api.getScene as any).mockImplementation(async (_c: string, s: string) => {
+    if (s === "s1-dated") throw Object.assign(new Error("boom"), { detail: "scene read failed" });
+    return { meta: {}, messages: [
+      { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] };
+  });
+  (api.getSceneDatetime as any).mockResolvedValue(
+    { current: null, history: [], suggested: "2026-07-06" });
+  (api.getCalendarMonths as any).mockResolvedValue({ months: [
+    { key: "07", name: "July", days: 31 }] });
+  (api.setSceneDatetime as any).mockResolvedValue({ id: "s1-dated" });
+  renderCampaign();
+  await screen.findByText("a reply");
+
+  // the first date set re-slugs the file, so this is the rename path
+  const setDate = await screen.findByRole("button", { name: /set date/i });
+  await waitFor(() => expect(setDate).not.toBeDisabled());
+  fireEvent.click(setDate);
+  await waitFor(() => expect(api.setSceneDatetime).toHaveBeenCalled());
+
+  expect(await screen.findByText(/scene read failed/)).toBeTruthy();
+});
+
 test("a rename whose relist is slow does not pull the reader back", async () => {
   // The rename PUT is not the only await in that path. Deciding whether to
   // refresh from a flag captured before the relist means a reader who moved on

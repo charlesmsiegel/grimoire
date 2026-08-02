@@ -369,15 +369,6 @@ def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
         # holding the way back — the reply would be gone with the decision it
         # was derived from still pending and still acceptable.
         restore = _restore_reroll(cid, sid, removed) if removed else None
-        # Everything that can refuse has refused and the removal is on disk, so
-        # this reroll is committed: retire the decision the outgoing narration
-        # was derived from, exactly as a fresh generation does anywhere else.
-        try:
-            store.proposals.supersede(cid, sid)
-        except BaseException:
-            if restore is not None:
-                restore()
-            raise
     # Everything from here to the `return` runs with the scene one reply short,
     # and until the stream exists there is nothing holding the way back: the
     # restore hooks live inside `_chat_stream`'s generator, so a raise here
@@ -393,6 +384,22 @@ def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
                                                 reserve=(block,) if block else ())
         if block:
             messages.append({"role": "system", "content": block})
+    except BaseException:
+        if restore is not None:
+            restore()
+        raise
+    # LAST, because it is the one step with no way back. Everything that can
+    # refuse has now refused — the guards, the removal, and the setup above,
+    # which reads the whole store and compiles a template and so can fail on its
+    # own — and the stream is the next statement. Retiring any earlier cancelled
+    # a decision whose narration the restore then put straight back, still valid
+    # and no longer resolvable.
+    #
+    # Outside the lock, unlike the archive and the removal: `supersede` takes it
+    # itself, and holding it across the context build would stretch a span
+    # documented as a read and two writes over the slowest part of the request.
+    try:
+        store.proposals.supersede(cid, sid)
     except BaseException:
         if restore is not None:
             restore()
