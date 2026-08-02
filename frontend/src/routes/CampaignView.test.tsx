@@ -593,6 +593,31 @@ test("a cancelled turn's partial appears even when the backend flush lands late"
     expect(screen.getByText("the whole persisted partial")).toBeInTheDocument());
 });
 
+test("the post-cancel poll stops once a new turn owns the view", async () => {
+  // Stop clears `busy` before the poll finishes, so the player can send again
+  // while it is still running. Left alone it would keep calling selectScene,
+  // clearing the new stream's live preview on every tick.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [] });
+  (api.chat as any).mockImplementation(hangingChat(["a streamed fragment"]));
+  renderCampaign();
+  const ta = await screen.findByRole("textbox");
+  fireEvent.change(ta, { target: { value: "and then?" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
+  await screen.findByRole("button", { name: /continue ▶/i });   // cancel settled
+  const afterCancel = (api.getScene as any).mock.calls.length;
+
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "again" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  await screen.findByRole("button", { name: /stop ■/i });       // second turn in flight
+  await new Promise((r) => setTimeout(r, 700));                 // past two poll ticks
+  // The live preview of the second turn survives, and the stale poll made no
+  // further fetches of its own.
+  expect(screen.getByText("a streamed fragment")).toBeInTheDocument();
+  expect((api.getScene as any).mock.calls.length).toBe(afterCancel);
+});
+
 test("cancelling keeps a one-shot response override for the retry", async () => {
   (api.listScenes as any).mockResolvedValue(ONE_SCENE);
   (api.listResponsePresets as any).mockResolvedValue(RESPONSE_PRESETS);

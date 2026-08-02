@@ -225,6 +225,11 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
     turn keeps its post too, since the player asked to stop and will likely
     retry from exactly there.
     """
+    # How long the transcript was when this turn began, so the abort path can
+    # tell whether it still owns the tail (see `on_abort`). Read once, here,
+    # while the caller is still synchronous and nothing else can be mid-write.
+    owned_tail = len(store.scenes.read_scene(cid, sid)["messages"])
+
     def finalize(watcher) -> list[str]:
         frames: list[str] = []
         if watcher.complete or watcher.truncated:
@@ -244,17 +249,39 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
         elif undo_user_post is not None:
             undo_user_post()
 
-    # `finalize` IS the abort handler, frames and all -- they are simply
-    # discarded, since the socket that would have carried them is gone. Review
-    # caught the version that only persisted narration: a fence can close in the
-    # same chunk that carries the pre-fence text, so `watcher.complete` is
-    # already true at the yield the disconnect lands on, and persisting only the
-    # narration would end the transcript at a mechanical decision whose proposal
-    # record was never written -- the check silently lost, and the
-    # proposal-before-narration guarantee broken from the one direction the
-    # StoreBusy path takes such care to avoid. Running the real thing keeps the
-    # two writes in their required order instead of choosing which to drop.
-    return _fence_stream(cid, sid, messages, conn, client, finalize, on_error, finalize)
+    def on_abort(watcher) -> list[str]:
+        """Finish a cancelled turn exactly as a completed one — but only while
+        it still owns the scene's tail.
+
+        `finalize` itself, frames and all: they are discarded, since the socket
+        that would have carried them is gone. Review caught the version that
+        only persisted narration — a fence can close in the same chunk that
+        carries the pre-fence text, so `watcher.complete` is already true at the
+        yield a disconnect lands on, and persisting only the narration would end
+        the transcript at a mechanical decision whose proposal record was never
+        written: the check silently lost, and proposal-before-narration broken
+        from the one direction the StoreBusy path takes such care to avoid.
+
+        The tail check is the second half of the same review. Stop-then-send is
+        a natural sequence, and this teardown runs after the socket closes — so
+        the new turn can have appended its user post, and possibly a reply,
+        before this fires. Persisting then would file the cancelled turn's
+        narration under the new turn's post, and a closed fence would mint a
+        proposal that displaces the live one. Anything at all having been
+        written since means this turn no longer owns what it is about to append
+        (a transition line from the inspector counts, and dropping there is the
+        conservative direction), so it drops the partial instead — the same
+        trade `_continuation_stream` makes, for the same reason.
+
+        Under the campaign lock so the check and the writes cannot be split. The
+        lock is reentrant, so `finalize` re-taking it is free.
+        """
+        with store.locks.campaign_lock(cid):
+            if len(store.scenes.read_scene(cid, sid)["messages"]) != owned_tail:
+                return []
+            return finalize(watcher)
+
+    return _fence_stream(cid, sid, messages, conn, client, finalize, on_error, on_abort)
 
 
 def _continuation_stream(cid: str, sid: str, pid: str, messages: list[dict],

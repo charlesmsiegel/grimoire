@@ -1557,13 +1557,18 @@ class QuietThenAnswers:
 
 
 def _scene_with_a_pending_post(tmp_path, monkeypatch, content="and then?"):
+    """A scene whose tail is an unanswered user post — the state `post_chat` is
+    in when it hands the stream its undo. Returns the post's index too, so the
+    undo a test builds is the real four-argument one: a callback that raises
+    TypeError is swallowed by `_flush_on_abort` and would leave a
+    cancel-keeps-the-post assertion passing for the wrong reason."""
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     importlib.reload(store)
     wid = store.worlds.create_world("Realm")
     cid = store.campaigns.create_campaign("Run", wid)
     sid = store.scenes.create_scene(cid, "Saltmarch")
-    store.scenes.append_message(cid, sid, "user", content)
-    return cid, sid
+    at = store.scenes.append_message(cid, sid, "user", content)
+    return cid, sid, at
 
 
 async def test_a_disconnect_mid_turn_still_persists_what_arrived(monkeypatch, tmp_path):
@@ -1571,7 +1576,7 @@ async def test_a_disconnect_mid_turn_still_persists_what_arrived(monkeypatch, tm
     closes the generator, which raises GeneratorExit at the yield — not an
     LLMError — so the handler that saves partial replies never ran and the text
     was dropped silently."""
-    cid, sid = _scene_with_a_pending_post(tmp_path, monkeypatch)
+    cid, sid, _at = _scene_with_a_pending_post(tmp_path, monkeypatch)
     resp = routes.streaming._chat_stream(
         cid, sid, [{"role": "user", "content": "and then?"}], {"kind": "openrouter", "model": "m"},
         StallingOpenRouter(["The tide ", "turns."]))
@@ -1587,14 +1592,58 @@ async def test_a_cancelled_turn_keeps_the_post_it_could_not_answer(monkeypatch, 
     """Cancel is not failure: the player stopped a turn they mean to run again,
     so the post stays put even though nothing came back. The rollback below is
     reserved for turns that failed."""
-    cid, sid = _scene_with_a_pending_post(tmp_path, monkeypatch)
+    cid, sid, at = _scene_with_a_pending_post(tmp_path, monkeypatch)
     resp = routes.streaming._chat_stream(
         cid, sid, [{"role": "user", "content": "and then?"}], {"kind": "openrouter", "model": "m"},
-        StallingOpenRouter(),
-        undo_user_post=lambda: store.scenes.remove_trailing_user_post(cid, sid, "and then?"))
-    await resp.body_iterator.aclose()
+        # One empty frame, so the generator is suspended on a heartbeat yield
+        # when the close arrives. Two ways this test can pass without testing
+        # anything, both of which review caught in one form or another:
+        # `aclose()` on a generator that has never yielded runs none of its body,
+        # so the abort path would not execute at all; and an undo built with the
+        # wrong arguments raises TypeError, which `_flush_on_abort` swallows.
+        StallingOpenRouter([""]),
+        undo_user_post=lambda: store.scenes.remove_trailing_user_post(cid, sid, at, "and then?"))
+    frames = resp.body_iterator
+    assert await frames.__anext__() == ": heartbeat\n\n"
+    await frames.aclose()
     assert store.scenes.read_scene(cid, sid)["messages"] == [
         {"role": "user", "content": "and then?"}]
+
+
+async def test_a_cancelled_turn_drops_its_partial_once_a_newer_turn_owns_the_tail(
+        monkeypatch, tmp_path):
+    """Stop-then-send, with the teardown still in flight. The cancelled turn's
+    flush runs after the socket closes, by which time the next turn has appended
+    its own post — filing the old narration there would attribute it to a
+    question it never answered, and a closed fence would mint a proposal that
+    displaces the live one. Losing the partial is the cheaper outcome."""
+    cid, sid, _at = _scene_with_a_pending_post(tmp_path, monkeypatch)
+    resp = routes.streaming._chat_stream(
+        cid, sid, [{"role": "user", "content": "and then?"}], {"kind": "openrouter", "model": "m"},
+        StallingOpenRouter(["The tide ", "turns."]))
+    frames = resp.body_iterator
+    await frames.__anext__()
+    await frames.__anext__()
+    store.scenes.append_message(cid, sid, "user", "actually, something else")  # the next turn
+    await frames.aclose()
+    assert [m["content"] for m in store.scenes.read_scene(cid, sid)["messages"]] == [
+        "and then?", "actually, something else"]   # no narration wedged in behind it
+
+
+async def test_a_cancelled_turn_still_persists_while_it_owns_the_tail(monkeypatch, tmp_path):
+    """The ownership check must not become a reason to drop every partial: with
+    nothing written behind it, the cancelled turn is still the tail and its text
+    is kept. This is the case the whole safety net exists for."""
+    cid, sid, _at = _scene_with_a_pending_post(tmp_path, monkeypatch)
+    resp = routes.streaming._chat_stream(
+        cid, sid, [{"role": "user", "content": "and then?"}], {"kind": "openrouter", "model": "m"},
+        StallingOpenRouter(["The tide ", "turns."]))
+    frames = resp.body_iterator
+    await frames.__anext__()
+    await frames.__anext__()
+    await frames.aclose()
+    assert [m["content"] for m in store.scenes.read_scene(cid, sid)["messages"]] == [
+        "and then?", "The tide turns."]
 
 
 def test_a_turn_that_fails_with_nothing_takes_its_user_post_back(client):

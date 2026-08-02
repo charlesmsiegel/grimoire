@@ -171,6 +171,10 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   // the controller is not rendered, and rebuilding the component tree on every
   // send just to store it would remount the transcript mid-stream.
   const abortRef = useRef<AbortController | null>(null);
+  // Mirrors `activeId` for code that outlives the render it started in — the
+  // post-cancel flush poll, which must not keep refreshing a scene the player
+  // has since navigated away from.
+  const activeIdRef = useRef<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [ctxKey, setCtxKey] = useState(0);
   const [editing, setEditing] = useState<{ index: number; text: string } | null>(null);
@@ -372,6 +376,8 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   }, [responseChipOpen]);
   const [directorNote, setDirectorNote] = useState<string | null>(null);
 
+  useEffect(() => { activeIdRef.current = activeId; }, [activeId]);
+
   async function selectScene(id: string) {
     // selectScene also runs to *refresh* the current scene (runStream's
     // finally, doRoll/doCheck, saveEdit, …) — only an actual scene switch
@@ -523,15 +529,36 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   // then notices the disconnect and runs its shielded flush — so the refresh
   // that follows a Stop can legitimately read a transcript the partial has not
   // reached yet, and the text would sit on disk while the screen denied it
-  // existed until some later refresh. Bounded rather than indefinite: past this
+  // existed until some later refresh.
+  //
+  // The budget has to clear the backend's own cancellation grace, which review
+  // caught an earlier flat 1.5s falling short of: `llm._settle` gives an
+  // unresponsive provider up to `_CLOSE_TIMEOUT` (5s) to unwind and `_aclose`
+  // another 5s, and on the common path — cancellation arriving while waiting on
+  // the next delta — that unwinding happens *before* the write. Hence a
+  // doubling delay: the ordinary case (a provider that lets go at once) still
+  // resolves on the first retry, and the tail covers the documented worst case
+  // instead of giving up in the middle of it. Still bounded, because past this
   // the write is contending on the store lock, which no amount of polling here
   // will shorten, and the player's next action refreshes anyway.
-  const FLUSH_POLL_TRIES = 6;
   const FLUSH_POLL_MS = 250;
+  const FLUSH_POLL_MAX_MS = 2000;
+  const FLUSH_POLL_BUDGET_MS = 12000;
 
   async function awaitFlushedPartial(id: string, seen: number) {
-    for (let i = 0; i < FLUSH_POLL_TRIES; i++) {
-      await new Promise((r) => setTimeout(r, FLUSH_POLL_MS));
+    let wait = FLUSH_POLL_MS;
+    let waited = 0;
+    while (waited < FLUSH_POLL_BUDGET_MS) {
+      await new Promise((r) => setTimeout(r, wait));
+      waited += wait;
+      wait = Math.min(wait * 2, FLUSH_POLL_MAX_MS);
+      // Stop looking the moment this poll stops being the thing that owns the
+      // view. A new turn (abortRef) or a different scene (activeIdRef) has its
+      // own refresh, and carrying on would have `selectScene` clear the new
+      // stream's live preview on every tick — or, worse, yank the player back
+      // to the scene they just left. Both are refs, not state: this loop runs
+      // across renders and a captured `busy`/`activeId` would be stale.
+      if (abortRef.current || activeIdRef.current !== id) return;
       if ((await selectScene(id)) > seen) return;
     }
   }
