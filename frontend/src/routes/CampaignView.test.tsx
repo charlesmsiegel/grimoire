@@ -1143,6 +1143,15 @@ test("a verification read retired by a scene switch still gives the prompt back"
   await waitFor(() => expect(releaseVerify).not.toBeNull());
   fireEvent.click(screen.getByText(/· Later/));   // retires the pending read
   releaseVerify!();
+  await new Promise((r) => setTimeout(r, 60));
+  // Recovered, but not into the composer the player is looking at: these are
+  // scene s1's words and Send here would post them to s2. The prompt is held
+  // under the scene it was written for (review, #95) …
+  expect(document.querySelector(".row.active .row-name")?.textContent).toMatch(/Later/);
+  expect(screen.getByRole("textbox")).toHaveValue("");
+  // … and handed back when that scene is on screen again. Recovered, not lost,
+  // which is the whole point of counting a retired read as unverifiable.
+  fireEvent.click(screen.getByText(/. Old/));
   await waitFor(() =>
     expect(screen.getByRole("textbox")).toHaveValue("I draw my blade."));
 });
@@ -3381,4 +3390,64 @@ test("a refresh of the open scene re-reads everything already on screen", async 
   fireEvent.change(await screen.findByLabelText("Edit message"), { target: { value: "fixed" } });
   fireEvent.click(screen.getByRole("button", { name: /save/i }));
   await waitFor(() => expect(api.getScene).toHaveBeenLastCalledWith("run", "s1", { limit: 61 }));
+});
+
+test("a recovered prompt is never shown against the scene the player moved to", async () => {
+  // The composer is one shared box that survives a scene switch, so restoring
+  // a rolled-back prompt straight into it puts scene A's words in front of a
+  // player looking at scene B, and Send there posts them to B.
+  //
+  // The window is short but real: `runStream`'s finally refreshes the turn's
+  // scene and `selectScene` sets `activeId` synchronously, so the player is
+  // pulled back to A a couple of microtasks later. Measured against the old
+  // code, the DOM does commit in between — scene B on screen, A's prompt in
+  // the composer — and in the browser the stream read that sits between the
+  // error frame and the body ending is a task boundary, so that state can
+  // paint and be clicked. Relying on an unrelated navigation side effect to
+  // close it is also the kind of accident this PR keeps finding.
+  //
+  // So the invariant is sampled across the whole window rather than at one
+  // instant: the composer must never hold text while a scene other than the
+  // turn's own is the active one.
+  (api.listScenes as any).mockResolvedValue([
+    { id: "s1", title: "Old", model: "", created: "", updated: "" },
+    { id: "s2", title: "Later", model: "", created: "", updated: "" },
+  ]);
+  (api.getScene as any).mockResolvedValue({ meta: {}, total: 0, messages: [] });
+  let fail: (() => void) | null = null;
+  (api.chat as any).mockImplementation(
+    async (_c: string, _s: string, _m: string, onEvent: any) => {
+      await new Promise<void>((r) => {
+        fail = () => {
+          onEvent({ error: { detail: "OpenRouter API key is not set",
+                             post_returned: true } });
+          r();
+        };
+      });
+    });
+  renderCampaign();
+  const ta = await screen.findByRole("textbox");
+  fireEvent.change(ta, { target: { value: "I draw my blade." } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue(""));
+
+  fireEvent.click(screen.getByText(/. Later/));          // leave before it fails
+  await waitFor(() => expect(
+    document.querySelector(".row.active .row-name")?.textContent).toMatch(/Later/));
+
+  const wrong: string[] = [];
+  fail!();
+  for (let i = 0; i < 8; i++) {
+    await Promise.resolve();
+    const row = document.querySelector(".row.active .row-name")?.textContent ?? "";
+    const composer = (screen.getByRole("textbox") as HTMLTextAreaElement).value;
+    if (composer && !/Old/.test(row)) wrong.push(`${row} | ${composer}`);
+  }
+  expect(wrong).toEqual([]);
+
+  // And it is not dropped: it comes back with the scene it was written for.
+  await waitFor(() => expect(
+    document.querySelector(".row.active .row-name")?.textContent).toMatch(/Old/));
+  await waitFor(() =>
+    expect(screen.getByRole("textbox")).toHaveValue("I draw my blade."));
 });
