@@ -187,6 +187,15 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   // post-cancel flush poll, which must not keep refreshing a scene the player
   // has since navigated away from.
   const activeIdRef = useRef<string | null>(null);
+  // Orders writes to the chip, because the proposal is read from two places
+  // that can answer out of order. `selectScene` fires a read and does not await
+  // it; the post-cancel `settleProposal` fires a later one deliberately. Making
+  // the fresh read bypass the shared promise (#95) was not enough on its own —
+  // review caught that it still left the older read free to resolve afterwards
+  // and put its pre-flush `null` back over the record that had just been
+  // settled, with the poll already finished. So: every write bumps this, and a
+  // read may only apply while its own bump is still the newest.
+  const proposalSeqRef = useRef(0);
   const [error, setError] = useState<string | null>(null);
   const [ctxKey, setCtxKey] = useState(0);
   const [editing, setEditing] = useState<{ index: number; text: string } | null>(null);
@@ -390,6 +399,27 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
 
   useEffect(() => { activeIdRef.current = activeId; }, [activeId]);
 
+  // A write the caller knows the answer to — a live SSE proposal, or a clear
+  // the player's own action implies. Retires every read still in flight, since
+  // all of them were issued against a world older than this.
+  function setProposalNow(record: ProposalRecord | null) {
+    proposalSeqRef.current += 1;
+    setProposal(record);
+  }
+
+  // A write from a read: `claim` is what `claimProposalRead` handed out when the
+  // request went out, and it applies only if nothing has been written or read
+  // since. Last *issued* wins rather than last resolved, which is the whole
+  // point — the slow answer is by definition the one asked earliest.
+  function claimProposalRead(): number {
+    proposalSeqRef.current += 1;
+    return proposalSeqRef.current;
+  }
+
+  function applyProposalRead(claim: number, record: ProposalRecord | null) {
+    if (claim === proposalSeqRef.current) setProposal(liveProposal(record));
+  }
+
   // `stillWanted`, when given, is re-asked immediately before any state is
   // applied. Only background refreshes need it — the post-cancel flush poll,
   // which can be running while the player starts a new turn or opens another
@@ -408,7 +438,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       // clear the previous scene's chip/popover synchronously so scene A's
       // proposal never renders against scene B while the fetch below is in
       // flight (and so a stale checkActors list can't leak across scenes).
-      setProposal(null);
+      setProposalNow(null);
       setRollForm(null);
       // a one-shot override belongs to the turn the player picked it for, on
       // the scene they picked it on — switching scenes must not carry it
@@ -421,8 +451,9 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     api.getSceneDatetime(cid, id).then(setDt).catch(() => setDt(null));
     api.getCast(cid, id).then(setCast).catch(() => setCast([]));
     api.listAppearances(cid).then(setRoster).catch(() => setRoster([]));
-    api.getRollProposal(cid, id).then((r) => setProposal(liveProposal(r.record)))
-      .catch(() => setProposal(null));
+    const claim = claimProposalRead();
+    api.getRollProposal(cid, id).then((r) => applyProposalRead(claim, r.record))
+      .catch(() => applyProposalRead(claim, null));
     // Re-read on every selectScene, refresh included: the inspector's picker
     // calls onSceneChanged after a save, so this is what keeps the chip from
     // showing a preset the scene no longer has.
@@ -597,8 +628,9 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   // started before the flush — the stale answer this exists to overrule. Review
   // caught that after the first version of this shipped (#95).
   async function settleProposal(id: string, owns: () => boolean) {
+    const claim = claimProposalRead();   // issued after selectScene's, so it wins
     const r = await api.getRollProposal(cid, id, true).catch(() => null);
-    if (r && owns()) setProposal(liveProposal(r.record));
+    if (r && owns()) applyProposalRead(claim, r.record);
   }
 
   // Returns whether the turn actually landed (no thrown error and no e.error
@@ -624,7 +656,8 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
           setError(e.error.detail);
           landed = false;
         } else if (e.proposal) {
-          setProposal({ id: e.proposal.id, status: "pending", payload: e.proposal, resolution: null });
+          // Live from the stream, so it outranks any read still in flight.
+          setProposalNow({ id: e.proposal.id, status: "pending", payload: e.proposal, resolution: null });
         }
       }, controller.signal);
     } catch (err: any) {
@@ -658,8 +691,9 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   async function send() {
     if (busy || rolling) return;
     // a new turn supersedes any pending proposal durably on the backend —
-    // clear the chip optimistically rather than wait for the re-fetch.
-    setProposal(null);
+    // clear the chip optimistically rather than wait for the re-fetch. Ordered,
+    // so a read issued before this send cannot put the chip back afterwards.
+    setProposalNow(null);
     const content = input.trim();
     let id = activeId;
     if (!id) {
@@ -796,7 +830,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   // plumbing here; clearing eagerly avoids a stale chip lingering mid-stream.
   async function resolve(body: ResolveBody) {
     if (!activeId) return;
-    setProposal(null);
+    setProposalNow(null);
     await runStream(activeId, (onEvent, signal) =>
       api.resolveProposal(cid, activeId!, body, onEvent, signal));
   }

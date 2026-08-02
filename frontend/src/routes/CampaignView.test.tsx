@@ -684,6 +684,39 @@ test("a cancelled fence's proposal survives a stale proposal read", async () => 
   expect(await screen.findByRole("button", { name: "Roll it" })).toBeInTheDocument();
 });
 
+test("a slow pre-flush proposal read cannot undo the settling read", async () => {
+  // selectScene's proposal read is fired and not awaited. If it resolves after
+  // settleProposal has installed the record, last-write-wins puts its pre-flush
+  // null back — chip gone, poll already finished. The settling read is issued
+  // later, so it must win regardless of which lands first.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  let flushed = false;
+  let releaseStale: (() => void) | null = null;
+  (api.getScene as any).mockImplementation(async () => ({
+    meta: {}, total: flushed ? 1 : 0,
+    messages: flushed ? [{ role: "assistant", content: "She lunges" }] : [],
+  }));
+  (api.getRollProposal as any).mockImplementation(async (_c: string, _s: string, fresh?: boolean) => {
+    if (fresh) {
+      return { record: { id: "pr-1", status: "pending", payload: PROPOSAL_PAYLOAD, resolution: null } };
+    }
+    // the unawaited read: parked, so it lands *after* the settling one
+    if (flushed) await new Promise<void>((r) => { releaseStale = r; });
+    return { record: null };
+  });
+  (api.chat as any).mockImplementation(hangingChat(["She lunges"]));
+  renderCampaign();
+  const ta = await screen.findByRole("textbox");
+  fireEvent.change(ta, { target: { value: "I punch him" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
+  setTimeout(() => { flushed = true; }, 100);
+  await screen.findByRole("button", { name: "Roll it" });
+  (releaseStale as unknown as () => void)();   // the stale null finally arrives
+  await new Promise((r) => setTimeout(r, 50));
+  expect(screen.getByRole("button", { name: "Roll it" })).toBeInTheDocument();
+});
+
 test("the post-cancel poll stops once a new turn owns the view", async () => {
   // Stop clears `busy` before the poll finishes, so the player can send again
   // while it is still running. Left alone it would keep calling selectScene,
