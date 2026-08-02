@@ -11,7 +11,7 @@ that loop.
 
 from __future__ import annotations
 
-from .. import atomic, calendars, scene_ids, scene_refs
+from .. import atomic, calendars, commits, scene_ids, scene_refs
 from ..audit import baselines
 from ..campaigns import paths as campaigns_paths
 from ..frontmatter import dump_frontmatter, parse_frontmatter
@@ -117,4 +117,17 @@ def delete_scene(cid: str, sid: str) -> None:
     p = paths._scene_path(cid, sid)
     if not safe_id(sid) or not p.exists():
         raise paths.SceneNotFound(sid)
+    # A scene id is recycled -- the numbering reuses the highest deleted number,
+    # so remaking a scene under the same title can hand it this very id (see
+    # _already_absorbed). Retire the commit ledger's state for it, or a review
+    # or unfinished reservation left over from this scene matches the
+    # replacement and writes the old summary, timeline and edits into it.
+    #
+    # BEFORE the unlink, which is the irreversible half: a ledger write that
+    # fails afterwards would leave the scene gone and its id un-retired, which is
+    # exactly the state this prevents. Failing first means the delete raises with
+    # the scene still there. The opposite order of failure -- retired, then the
+    # unlink fails -- costs an open review of a surviving scene a 409 it clears
+    # by re-absorbing.
+    commits.retire_scene(cid, sid)
     p.unlink()

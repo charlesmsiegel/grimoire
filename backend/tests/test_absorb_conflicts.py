@@ -179,16 +179,24 @@ def test_the_batch_is_judged_before_it_writes_over_itself(monkeypatch, tmp_path)
     assert failures == [] and len(applied) == 2
 
 
-def test_a_target_that_will_not_read_is_left_to_the_existing_skip(monkeypatch, tmp_path):
-    """An unreadable target proves no contradiction. `apply_edits` has always
-    tolerated a missing entity by skipping it, and that stays a skip rather
-    than becoming a conflict the reviewer has to resolve."""
+def test_a_target_that_will_not_read_is_an_error_not_a_conflict(monkeypatch, tmp_path):
+    """An unreadable target proves no contradiction, so it must not become a
+    conflict the reviewer is asked to resolve -- there is nothing to resolve
+    against. It is reported as an ERROR instead.
+
+    This assertion changed with #271: it used to be a silent skip. A record that
+    vanished between absorbing and saving is the commonest way an approved edit
+    fails, and it is precisely the "returns 200 while quietly dropping a change"
+    that #271 exists to end -- the dossier branch has reported the same case
+    since #235, so the skip was the inconsistency."""
     cid = _campaign(monkeypatch, tmp_path)
 
     applied, failures = absorb.apply_edits(cid, [
         _lore_edit("Signed at dusk.", "Broken by morning.")])
 
-    assert applied == [] and failures == []
+    assert applied == []
+    assert failures == [{"id": "lore:the-pact", "kind": "error",
+                         "reason": "that record no longer exists in this campaign"}]
 
 
 def test_a_dossier_keeps_its_own_guard_and_its_own_wording(monkeypatch, tmp_path):

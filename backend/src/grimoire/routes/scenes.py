@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import asyncio
 import time
-import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -520,7 +519,30 @@ def _already_absorbed(scene: dict) -> bool:
 @router.post("/campaigns/{cid}/scenes/{sid}/absorb")
 async def post_absorb(cid: str, sid: str, force: bool = False,
                       client: LLMClient = Depends(get_llm)):
-    scene = _require_scene(cid, sid)
+    # Read before ANY of the scene state this review is built from (#271),
+    # `meta.done` included. The token minted at the end of this handler is
+    # stamped with this value, and the stamp has to date the snapshot, not the
+    # response: a save landing while this handler runs advances the epoch, and a
+    # stamp taken afterwards would match it -- letting a proposal built from
+    # pre-save state pass its own supersession check, and letting the
+    # already-absorbed guard below read a `done` that the save has since set.
+    #
+    # The campaign is validated first because this reads under campaign_root,
+    # and an unusable cid has to surface as a 404 rather than a 500
+    # (test_path_guard_store).
+    #
+    # Both reads under ONE hold, because `PUT /chronicle` advances the epoch in
+    # `reserve()` and writes `meta.done` in `mark_absorbed()` several steps
+    # later. Reading across that gap would pair the new epoch with a stale
+    # `done` -- the already-absorbed guard below would wave the review through,
+    # and its token would carry an epoch current enough to survive the
+    # supersession check, so a second absorption of the same transcript could
+    # save. The hold is two reads long and the commit holds the same lock for
+    # its whole sequence, so this snapshot falls wholly before or wholly after.
+    _campaign_root_or_404(cid)
+    with store.locks.campaign_lock(cid):
+        epoch = store.commits.scene_epoch(cid, sid)
+        scene = _require_scene(cid, sid)
     conn = _require_connection()
     if not scene["messages"]:
         raise HTTPException(status_code=400, detail="nothing to absorb")
@@ -562,8 +584,11 @@ async def post_absorb(cid: str, sid: str, force: bool = False,
             "phases": _phase_report(dossiers, mechanics),
             # Idempotency key for the save this review will become (#235): the
             # commit appends in six places, so a replay whose first response was
-            # lost must return that result rather than apply it again.
-            "commit_token": uuid.uuid4().hex}
+            # lost must return that result rather than apply it again. It also
+            # carries the scene's commit epoch as captured at the TOP of this
+            # handler -- what tells a save that some OTHER review of the scene
+            # committed while this one was being prepared or sat open (#271).
+            "commit_token": store.commits.mint(epoch)}
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/audit")
@@ -605,6 +630,7 @@ def put_chronicle(cid: str, sid: str, body: ChronicleSave):
     with store.locks.campaign_lock(cid):
         # Inside the lock: two saves racing on one token must not both miss.
         prior = store.commits.lookup(cid, body.commit_token)
+        progress: dict = {}
         if prior is not None:
             if prior.get("sid") and prior["sid"] != sid:
                 # The review panel survives a scene switch, so a retry can carry
@@ -628,51 +654,136 @@ def put_chronicle(cid: str, sid: str, body: ChronicleSave):
                             "kind": "commit_body_changed"})
             if prior["done"]:
                 return prior["result"]
-            # Reserved but never completed: the first attempt got past the point
-            # where its appends land and died before saying what it did. Running
-            # them again is the duplication this token exists to prevent.
-            raise HTTPException(
-                status_code=409,
-                detail={"detail": "an earlier save of this review started and did not "
-                                  "finish — reload the campaign to see what landed",
-                        "kind": "commit_incomplete"})
-        # Contradiction check (#111), before the first write and after the replay
-        # branches above -- a replay of a save that already landed must return its
-        # result, not be told the records it wrote now contradict it.
-        #
-        # This is the REVIEWER'S check, not the guard: it runs ahead of every
-        # write so a 409 leaves the chronicle untouched and this commit token
-        # unspent, letting the panel offer keep/replace/merge on a review that is
-        # still intact. The guard is `apply_edits`' own pass, which re-judges the
-        # batch immediately before it writes -- so a target that moves between
-        # here and there is still caught, as a conflict failure rather than a
-        # clean refusal.
-        #
-        # Neither pass makes check-and-write atomic, and the campaign lock does
-        # not either: `overlay` (and most of `locks.UNREVIEWED`) mutates without
-        # taking it, and the lock is machine-local, so a synced store sees none
-        # of it. Closing the remaining window means compare-and-swap in each
-        # mutator -- what `sheets.write(expected=...)` already does, and what the
-        # other seven would need -- which is the concurrency change `locks.py`
-        # says those modules are waiting on, not something to bolt on here.
-        drifted = store.absorb.check_conflicts(cid, body.edits)
-        if drifted:
-            raise HTTPException(
-                status_code=409,
-                detail={"detail": "some proposed changes no longer match what is "
-                                  "stored — review them and save again",
-                        "kind": "edit_conflicts", "conflicts": drifted})
+            if not prior["journalled"]:
+                # Reserved before #271, so there is no account of what it did --
+                # and it could have appended the timeline and applied any number
+                # of edits before it died. Resuming it as fresh work would repeat
+                # every one of them, so this keeps the pre-#271 refusal. Only
+                # entries written by an older build can land here.
+                raise HTTPException(
+                    status_code=409,
+                    detail={"detail": "an earlier save of this review started and did "
+                                      "not finish — reload the campaign to see what "
+                                      "landed",
+                            "kind": "commit_incomplete"})
+            claimed = prior.get("claimed")
+            if claimed is not None and store.commits.scene_epoch(cid, sid) > claimed:
+                # The epoch this reservation's own claim produced, recorded by
+                # `reserve`. Anything past it is a LATER commit for this scene --
+                # the re-absorb that the wedge deliberately leaves room for, or
+                # the scene's deletion. Resuming now would rewrite the chronicle
+                # entry and the scene summary with this older review on top of
+                # that one. Being stranded half-applied is the better of the two:
+                # the newer save is the current record, this one is history.
+                #
+                # Read from the entry rather than derived from the token, so a
+                # caller-minted key -- which carries no epoch and is a supported
+                # thing to send -- is fenced exactly like a server-minted one.
+                raise HTTPException(
+                    status_code=409,
+                    detail={"detail": "a newer save of this scene completed while this "
+                                      "one was unfinished — reload the campaign to see "
+                                      "what landed",
+                            "kind": "commit_incomplete"})
+            # Reserved and never completed: some of the four writes landed and
+            # nobody knows which. Its journal does, so this attempt RESUMES it
+            # (#271) -- every step the journal accounts for is skipped, and a
+            # step it marked attempted without confirming is reported rather
+            # than repeated.
+            progress = prior["progress"]
+        else:
+            epoch = store.commits.token_epoch(body.commit_token)
+            if epoch is not None and epoch != store.commits.scene_epoch(cid, sid):
+                # Two reviews of one scene carry different tokens, so the key
+                # cannot order them: the second to save would append a second
+                # set of timeline events and plot beats for the same scene. The
+                # epoch stamped into the token is what the key is missing --
+                # this review was prepared before some other save of this scene
+                # completed, so it describes a state that no longer exists.
+                raise HTTPException(
+                    status_code=409,
+                    detail={"detail": "another review of this scene was saved after "
+                                      "this one was prepared — re-absorb the scene to "
+                                      "review it against what is now recorded",
+                            "kind": "commit_superseded"})
+            # Contradiction check (#111), before the first write and after the
+            # replay branches above -- a replay of a save that already landed must
+            # return its result, not be told the records it wrote now contradict it.
+            # On a FRESH commit only, for the same reason taken one step further: a
+            # resume's own earlier writes have already moved the records its
+            # remaining edits were staged against, so this pass would refuse the
+            # very commit it is trying to finish. Those edits still meet
+            # `apply_edits`' per-edit pass, which reports them as conflict failures
+            # rather than as a clean refusal.
+            #
+            # This is the REVIEWER'S check, not the guard: it runs ahead of every
+            # write so a 409 leaves the chronicle untouched and this commit token
+            # unspent, letting the panel offer keep/replace/merge on a review that is
+            # still intact. The guard is `apply_edits`' own pass, which re-judges the
+            # batch immediately before it writes -- so a target that moves between
+            # here and there is still caught, as a conflict failure rather than a
+            # clean refusal.
+            #
+            # Neither pass makes check-and-write atomic, and the campaign lock does
+            # not either: `overlay` (and most of `locks.UNREVIEWED`) mutates without
+            # taking it, and the lock is machine-local, so a synced store sees none
+            # of it. Closing the remaining window means compare-and-swap in each
+            # mutator -- what `sheets.write(expected=...)` already does, and what the
+            # other seven would need -- which is the concurrency change `locks.py`
+            # says those modules are waiting on, not something to bolt on here.
+            drifted = store.absorb.check_conflicts(cid, body.edits)
+            if drifted:
+                raise HTTPException(
+                    status_code=409,
+                    detail={"detail": "some proposed changes no longer match what is "
+                                      "stored — review them and save again",
+                            "kind": "edit_conflicts", "conflicts": drifted})
         record = store.chronicle.absorb(cid, {
             "id": sid, "one_line": body.one_line, "summary": body.summary,
             "keywords": body.keywords, **facts})
-        # Claimed BEFORE the first non-idempotent write (the chronicle entry
-        # above is keyed by scene id and merely overwrites); every append below
-        # is covered by the reservation.
-        store.commits.reserve(cid, body.commit_token, fp, sid)
-        store.chronicle.append_timeline(cid, body.timeline_events)
+        # The one step of the four that appends -- the other three overwrite (the
+        # chronicle entry is keyed by scene id, the frontmatter below is a
+        # rewrite, and each edit has its own slot in the journal). So it is the
+        # one that has to be durably *attempted* before it is attempted: the
+        # journal entry rides along on the reservation below, which is claimed
+        # BEFORE any non-idempotent write. `progress` carries a resumed
+        # attempt's journal forward so this one adds to that account rather than
+        # opening a second one.
+        timeline = progress.get("timeline")
+        if timeline is None:
+            progress["timeline"] = "pending"
+        store.commits.reserve(cid, body.commit_token, fp, sid, progress)
+        started: list[dict] = []
+        if timeline is None:
+            try:
+                store.chronicle.append_timeline(cid, body.timeline_events)
+            except Exception as exc:  # noqa: BLE001 — unreadable timeline, full disk, ...
+                # An exception means the append did NOT publish: atomic.write_text
+                # replaces by rename as its last act. So this is an ordinary
+                # reported failure, and the mark comes back off -- "unconfirmed"
+                # is for a process that died without returning, not for a call
+                # that returned by raising.
+                progress.pop("timeline", None)
+                started.append({"id": "timeline", "kind": "error",
+                                "reason": f"the timeline events could not be "
+                                          f"recorded: {exc}"})
+            else:
+                progress["timeline"] = "done"
+            # Settled straight away rather than left to apply_edits' first
+            # checkpoint: a failure in mark_absorbed below would otherwise leave
+            # an append that demonstrably landed reading as unconfirmed forever.
+            store.commits.checkpoint(cid, body.commit_token, progress)
+        elif timeline == "pending" and body.timeline_events:
+            # An earlier attempt journalled the append and never confirmed it.
+            # Repeating it would double the campaign's timeline, so say so
+            # instead -- the events are in the review and in the response.
+            started.append({"id": "timeline", "kind": "error",
+                            "reason": store.absorb.UNCONFIRMED})
         store.scenes.mark_absorbed(cid, sid, body.one_line, body.summary)
-        applied, failures = store.absorb.apply_edits(cid, body.edits, sid)
-        result = {**record, "applied": applied, "failures": failures}
+        applied, failures = store.absorb.apply_edits(
+            cid, body.edits, sid, progress=progress,
+            checkpoint=lambda: store.commits.checkpoint(cid, body.commit_token, progress))
+        result = {**record, "applied": applied, "failures": started + failures}
         store.commits.record(cid, body.commit_token, result, fp, sid)
     return result
 
