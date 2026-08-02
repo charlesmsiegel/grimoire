@@ -246,28 +246,34 @@ def _basis(edit: dict) -> tuple[str, bool] | None:
     return None if before is None else (before, False)
 
 
-def conflict_row(cid: str, edit: dict) -> dict | None:
-    """The conflict this edit is in, or None. Carries everything the reviewer
-    needs to choose without a second round-trip: what is stored, what was
-    proposed, and the merged draft when merging makes sense for the kind."""
+def survey(cid: str, edit: dict) -> tuple[dict | None, str | None]:
+    """This edit's conflict row, and what its target read while judging it.
+
+    The reading comes back even when there is no conflict, because
+    `apply.apply_edits` journals it (#271): a resumed commit compares the target
+    against the value the interrupted attempt judged, which is how it tells an
+    outside write from its own earlier edits. ``None`` means no reading was
+    taken at all -- an unjudged kind, a row making no claim, a target that would
+    not read -- and nothing can be proven about that row's drift either.
+    """
     if not isinstance(edit, dict):
-        return None
+        return None, None
     kind = edit.get("kind")
     # A `kind` that is not a string is malformed input rather than an unknown
     # kind, and an unhashable one raises out of the lookup. Same boundary as the
     # `target` read in `current_value`.
     if not isinstance(kind, str) or kind not in _REASONS:
-        return None
+        return None, None
     claim = _basis(edit)
     if claim is None:
-        return None
+        return None, None
     basis, rechecking = claim
     after = _text(edit.get("after"))
     if after is None:
-        return None   # malformed: nothing to diff, and apply cannot write it either
+        return None, None   # malformed: nothing to diff, and apply cannot write it either
     stored = current_value(cid, edit)
     if stored is None or stored == basis:
-        return None
+        return None, stored
     mergeable = kind in MERGEABLE
     return {"id": edit.get("id", ""), "label": edit.get("label", ""), "kind": kind,
             "field": edit.get("field", ""), "before": _text(edit.get("before")) or "",
@@ -276,7 +282,14 @@ def conflict_row(cid: str, edit: dict) -> dict | None:
             # Diffed from the BASIS, not from `before`: on a recheck the basis is
             # the text the reviewer was looking at, so basis -> after is their
             # own edit and nothing else.
-            "merged": merge_text(basis, after, stored) if mergeable else after}
+            "merged": merge_text(basis, after, stored) if mergeable else after}, stored
+
+
+def conflict_row(cid: str, edit: dict) -> dict | None:
+    """The conflict this edit is in, or None. Carries everything the reviewer
+    needs to choose without a second round-trip: what is stored, what was
+    proposed, and the merged draft when merging makes sense for the kind."""
+    return survey(cid, edit)[0]
 
 
 def batch_verdicts(cid: str, edits: list[dict]) -> list[dict | None]:
@@ -291,6 +304,16 @@ def batch_verdicts(cid: str, edits: list[dict]) -> list[dict | None]:
     own work.
     """
     return [conflict_row(cid, e) for e in edits]
+
+
+def batch_survey(cid: str, edits: list[dict]) -> tuple[list[dict | None], list[str | None]]:
+    """`batch_verdicts`, plus the reading each verdict was drawn from.
+
+    Two lists rather than one of pairs because both are journalled positionally
+    and read back positionally; see `survey` for what the readings are for.
+    """
+    rows = [survey(cid, e) for e in edits]
+    return [row for row, _ in rows], [stored for _, stored in rows]
 
 
 def check_conflicts(cid: str, edits: list[dict]) -> list[dict]:

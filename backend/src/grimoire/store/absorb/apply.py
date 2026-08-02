@@ -28,6 +28,39 @@ _BROWSABLE_KINDS = ("character_state", "dossier", "lore", "authored", "new_chara
                     "new_location", "new_lore")
 
 
+def _outside_drift(cid: str, e: dict, reading, landed: set[str]) -> dict | None:
+    """The conflict somebody else's write introduced while this commit was down,
+    or None.
+
+    A resume replays the verdicts the interrupted attempt computed, so a row
+    whose target one of its OWN earlier edits moved is not refused as a conflict
+    with the batch's own work. That reasoning covers this commit's writes and
+    nothing else: between the crash and the retry a direct entity route, or
+    another device writing into the same synced store, can move a target this
+    commit has not reached yet. Replaying the stale "no conflict" over that is
+    the silent lost update `conflicts` exists to stop -- and the one a fresh save
+    would have caught, so a resume must not be the weaker path.
+
+    The target is therefore read again, and a value that is neither what the
+    first attempt saw nor something this commit has since written is an outside
+    change, judged fresh so the reviewer is shown the real `stored` and
+    `merged`.
+
+    `landed` is matched by VALUE rather than by target: what identifies a target
+    differs per kind, and a second dispatch over the kinds here would be one more
+    place to forget a new one. The looseness costs only where an outside writer
+    stored precisely the text one of this commit's own edits had already written
+    -- in which case what is stored is the value this commit was going to
+    produce anyway.
+    """
+    if not isinstance(reading, str):
+        return None   # nothing was read the first time: no drift to prove either way
+    now = conflicts.current_value(cid, e)
+    if now is None or now == reading or now in landed:
+        return None
+    return conflicts.conflict_row(cid, e)
+
+
 def _apply_one(cid: str, croot, e: dict, sid: str | None,
                verdict: dict | None = None) -> dict:
     """Apply ONE approved StagedEdit and say what became of it.
@@ -273,26 +306,44 @@ def apply_edits(cid: str, edits: list[dict], sid: str | None = None,
     # together before the first write, and an uninterrupted attempt would have
     # applied both. Keeping the original verdicts makes the resume decide what
     # the interrupted attempt decided.
+    #
+    # The readings beside them are what keeps that from also replaying a stale
+    # "no conflict" over an OUTSIDE write -- see `_outside_drift`.
     verdicts = journal.get("verdicts")
-    if not isinstance(verdicts, list) or len(verdicts) != len(edits):
-        verdicts = conflicts.batch_verdicts(cid, edits)
+    readings = journal.get("readings")
+    replaying = (isinstance(verdicts, list) and len(verdicts) == len(edits)
+                 and isinstance(readings, list) and len(readings) == len(edits))
+    if not replaying:
+        verdicts, readings = conflicts.batch_survey(cid, edits)
         # Durable before the first write: the checkpoint below runs ahead of
         # edit 0, and a crash before that leaves nothing applied to be judged
         # against, so a recomputation there is judging the same store anyway.
-        journal["verdicts"] = verdicts
+        journal["verdicts"], journal["readings"] = verdicts, readings
+    landed: set[str] = set()
     for i, e in enumerate(edits):
         slot = str(i)
         prior = outcomes.get(slot)
         if not isinstance(prior, dict):
+            verdict = verdicts[i]
+            if replaying and verdict is None:
+                verdict = _outside_drift(cid, e, readings[i], landed)
             outcomes[slot] = {"state": "pending",
                               "id": e.get("id", "") if isinstance(e, dict) else ""}
             if checkpoint:
                 checkpoint()
-            prior = outcomes[slot] = _apply_one(cid, croot, e, sid, verdicts[i])
+            prior = outcomes[slot] = _apply_one(cid, croot, e, sid, verdict)
             for ref, rows in prior.pop("recorded", {}).items():
                 recorded.setdefault(ref, []).extend(rows)
+            if prior.get("state") == "applied":
+                # Journalled with the outcome: what the target reads now this
+                # edit has landed is how a LATER slot, resuming after a crash,
+                # recognises the movement as this commit's own work.
+                prior["read"] = conflicts.current_value(cid, e)
         if prior.get("state") == "applied":
             applied.append(prior.get("id", ""))
+            read = prior.get("read")
+            if isinstance(read, str):
+                landed.add(read)
         elif prior.get("state") == "pending":
             failures.append({"id": prior.get("id", ""), "kind": "error",
                              "reason": UNCONFIRMED})

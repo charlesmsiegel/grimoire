@@ -220,6 +220,18 @@ def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
         hit = hit or target != sid
         # max(): a rename INTO an id that already carries an epoch would
         # otherwise lower it, and an epoch must never go backwards.
+        #
+        # Including the epoch `retire_scene` left behind for a scene that was
+        # DELETED, which costs the arriving scene an open review and is still
+        # the right way round. Delete a scene, rename another onto the id it
+        # freed, and the dead scene's leftover entries -- which name a scene by
+        # id and nothing else -- now match the live one; its tombstone epoch is
+        # the only thing still refusing them. Taking the arriving scene's lower
+        # epoch would resume a dead scene's commit into an unrelated one. The
+        # review open across the rename is refused as `commit_superseded` and
+        # re-absorbed, which is recoverable; the write this would otherwise let
+        # through is not. Ids that cannot be recycled at all are the real fix,
+        # and belong to the scene-identity follow-up rather than here.
         out[target] = max(epoch, out[target]) if target in out else epoch
     if not hit:
         return
