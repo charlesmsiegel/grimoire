@@ -78,8 +78,14 @@ def budget_tokens() -> int:
         return 0
 
 
+#: How system.j2 joins the sections. `pack` only uses it as the fallback for
+#: `compose`; the real callers pass the template render itself, so what the
+#: packer measures is the string that gets sent.
+SEPARATOR = "\n\n"
+
+
 def pack(sections: list[dict], history: list[dict], reserved: int = 0,
-         budget: int | None = None) -> dict:
+         budget: int | None = None, compose=None) -> dict:
     """Fit `sections` + `history` into `budget` tokens.
 
     `sections` are the rendered sections in prompt order, each ``{"label",
@@ -90,6 +96,10 @@ def pack(sections: list[dict], history: list[dict], reserved: int = 0,
     keeps the packed prompt and the sent request the same size; anything left
     out is budget the request overspends silently. `budget` defaults to the
     configured one.
+
+    `compose` joins the surviving section texts into the system message exactly
+    as the caller will send it — the packer measures that composed string, not
+    the sum of its parts. Defaults to the blank-line join system.j2 does.
 
     Returns ``{"sections", "history", "history_trimmed"}``: the same sections
     in the same order with a ``dropped`` flag added (dropped ones stay in the
@@ -105,11 +115,28 @@ def pack(sections: list[dict], history: list[dict], reserved: int = 0,
         budget = budget_tokens()
     if budget <= 0:  # unbounded: skip counting entirely, it is not free
         return {"sections": packed, "history": list(history), "history_trimmed": 0}
+    if compose is None:
+        compose = SEPARATOR.join
 
+    # Per-section costs order the drops (largest first); they do NOT decide
+    # whether we are over. Token counts are not additive: the separators
+    # between sections go uncharged in a sum, and on the tiktoken-less Android
+    # path every section's `len // 4` throws away its own remainder. A sum can
+    # therefore clear a ceiling the real message misses, which is the one thing
+    # this must not do -- so the system message is composed and measured whole,
+    # and re-measured after each drop.
     costs = [tokens.count_tokens(s["text"]) for s in packed]
+
+    def system_cost() -> int:
+        return tokens.count_tokens(compose([s["text"] for s in packed if not s["dropped"]]))
+
     hist = list(history)
+    # History messages ARE sent separately, so summing their counts is right --
+    # nothing joins them into one string.
     hist_costs = [tokens.count_tokens(m["content"]) for m in hist]
-    total = reserved + sum(costs) + sum(hist_costs)
+    hist_total = sum(hist_costs)
+    sys_cost = system_cost()
+    total = reserved + sys_cost + hist_total
     trimmed = 0
 
     for tier in DROP_ORDER:
@@ -121,11 +148,13 @@ def pack(sections: list[dict], history: list[dict], reserved: int = 0,
             if total <= budget:
                 break
             packed[i]["dropped"] = True
-            total -= costs[i]
+            sys_cost = system_cost()
+            total = reserved + sys_cost + hist_total
         if tier == ARCHIVE:
             while total > budget and len(hist) > HISTORY_FLOOR:
-                total -= hist_costs.pop(0)
+                hist_total -= hist_costs.pop(0)
                 hist.pop(0)
                 trimmed += 1
+                total = reserved + sys_cost + hist_total
 
     return {"sections": packed, "history": hist, "history_trimmed": trimmed}
