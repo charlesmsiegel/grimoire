@@ -1112,6 +1112,29 @@ test("saving the card version does not discard an anchor draft (#59)", async () 
   expect(api.setCharacterVoiceAnchor).not.toHaveBeenCalled();   // still unsaved, not written
 });
 
+test("a draft typed DURING the card save survives it too (#59)", async () => {
+  // The draft-preserving check above ran on values closed over when the click
+  // handler was created. A draft typed while `updateVersion` is in flight is
+  // not in that snapshot, so the guard read the pre-save text, found it equal to
+  // the loaded anchor, and reloaded over the draft anyway -- the same bug one
+  // keystroke later.
+  (api.getCharacterVoiceAnchor as any).mockResolvedValue({ voice_anchor: "The stored one." });
+  let finishSave!: () => void;
+  (api.updateVersion as any).mockReturnValue(new Promise((res) => { finishSave = () => res({ ok: true }); }));
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+  await openEditForm();
+  await screen.findByLabelText("Voice anchor");
+
+  fireEvent.click(screen.getByText("Save version"));            // anchor still pristine here
+  await waitFor(() => expect(api.updateVersion).toHaveBeenCalled());
+  fireEvent.change(screen.getByLabelText("Voice anchor"),
+                   { target: { value: "Typed while the card was saving." } });
+  await act(async () => { finishSave(); });
+
+  expect((screen.getByLabelText("Voice anchor") as HTMLTextAreaElement).value)
+    .toBe("Typed while the card was saving.");
+});
+
 test("a pending anchor load cannot be saved as a blank opt-out (#59)", async () => {
   // A blank anchor PUT DELETES it. "" is also the placeholder shown while the
   // GET is in flight, so an enabled Save button would let a fast click wipe a
@@ -1158,6 +1181,29 @@ test("a scope change closes the open character rather than re-aiming it (#59)", 
   rerender(<CharacterEditor scope={{ kind: "world", id: "b" }} wid="b" />);
   await waitFor(() => expect(screen.queryByLabelText("Voice anchor")).toBeNull());
   expect(screen.queryByText("Save voice anchor")).toBeNull();
+});
+
+test("a character read still in flight at a scope change does not reopen it (#59)", async () => {
+  // The scope effect clears the open character so a stale id cannot be combined
+  // with the new scope on a write. A read that was ALREADY in flight puts it
+  // straight back: the continuation installs world A's record while the editor
+  // renders under world B, and the next save -- the anchor PUT included --
+  // addresses B by A's id. Closing the editor is not enough; the late reply has
+  // to be dropped.
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "seraphine", name: "Seraphine", default_version: "default", has_avatar: false, versions: [] },
+  ]);
+  (api.getCharacterVoiceAnchor as any).mockResolvedValue({ voice_anchor: "World A's anchor." });
+  let release!: (v: typeof DETAIL) => void;
+  (api.readCharacter as any).mockReturnValue(new Promise((res) => { release = res; }));
+  const { rerender } = render(<CharacterEditor scope={{ kind: "world", id: "a" }} wid="a" />);
+
+  fireEvent.click((await screen.findAllByRole("button", { name: /^edit$/i }))[0]);
+  rerender(<CharacterEditor scope={{ kind: "world", id: "b" }} wid="b" />);
+  await act(async () => { release(DETAIL); });
+
+  expect(screen.queryByLabelText("Voice anchor")).toBeNull();
+  expect(screen.queryByLabelText("Description")).toBeNull();
 });
 
 test("a second anchor save cannot start while the first is in flight (#59)", async () => {
