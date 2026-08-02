@@ -68,6 +68,7 @@ vi.mock("../api/client", async () => {
 vi.mock("../api/models", () => ({ getModels: vi.fn() }));
 import { api, ApiError } from "../api/client";
 import { getModels } from "../api/models";
+import { LOCKED_WHILE_GENERATING } from "../components/sceneLock";
 
 const ONE_SCENE = [{ id: "s1", title: "Old", model: "", created: "", updated: "" }];
 // Stand-in `phases` for the absorb mocks that are about something else. What
@@ -856,6 +857,38 @@ test("the scene stays locked while the cancelled turn's flush is still coming", 
   await screen.findByRole("button", { name: /continue ▶/i });
   await new Promise((r) => setTimeout(r, 400));   // past the first two poll ticks
   expect(screen.getByRole("button", { name: /rename/i })).toBeDisabled();
+});
+
+test("a manual roll cannot land in the window a cancelled reroll restores into", async () => {
+  // The worst of the `busy`-instead-of-`streamingId` misses, because unlike
+  // the others it destroys something outright. A reroll deletes the old reply
+  // up front; cancelled before its first token, `on_abort` puts it back — but
+  // `restore_trailing_assistant_run` steps over trailing *transitions* only
+  // and refuses behind a manual roll, whose line must stay in lockstep with
+  // rolls.json. So a roll in the flush window makes the restore refuse and the
+  // reply is gone: nothing else holds it, and no backend hook can rescue it.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({
+    meta: {}, total: 2,
+    messages: [{ role: "user", content: "and then?" },
+               { role: "assistant", content: "The tide turns." }],
+  });
+  (api.regenerate as any).mockImplementation(hangingChat([]));   // no first token
+  renderCampaign();
+  await screen.findByText("The tide turns.");
+  // The roll is available before the turn — this is the control being locked,
+  // not one that happened to be disabled anyway.
+  expect(screen.getByRole("button", { name: /roll dice/i })).not.toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: /reroll/i }));
+  fireEvent.click(screen.getByRole("button", { name: /reroll ▸/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /stop ■/i }));
+  // Send is back, so `busy` has cleared — but the abort write that restores
+  // the deleted reply has not landed yet, and a roll now would defeat it.
+  await screen.findByRole("button", { name: /continue ▶/i });
+  await new Promise((r) => setTimeout(r, 400));   // past the first two poll ticks
+  const roll = screen.getByRole("button", { name: /roll dice/i });
+  expect(roll).toBeDisabled();
+  expect(roll).toHaveAttribute("title", LOCKED_WHILE_GENERATING);
 });
 
 test("a lost error frame still gives the rolled-back prompt back", async () => {
