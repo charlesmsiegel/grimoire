@@ -121,7 +121,26 @@ def _persist_reply(cid: str, sid: str, text: str) -> None:
     segments = [{"speaker": seg["speaker"],
                  "content": store.context.expand_macros(seg["content"], subs, cid, sid)}
                 for seg in store.scenes.split_reply(text, players)]
-    store.scenes.append_reply(cid, sid, segments)
+    # One lock over both: a reply landing in a slot a reroll emptied is a
+    # variant that exists only in the transcript until `reconcile` writes it
+    # down, and an edit arriving in between would destroy it. Reentrant, so the
+    # acquisitions inside each call cost nothing. `reconcile` writes nothing for
+    # a reply that lands anywhere else, which is every ordinary turn.
+    with store.locks.campaign_lock(cid):
+        store.scenes.append_reply(cid, sid, segments)
+        try:
+            store.alternates.reconcile(cid, sid)
+        except OSError:
+            # The reply is already in the transcript. A sidecar that cannot be
+            # written (a full disk, a read-only store) must not turn a landed
+            # generation into a failed one: the exception would escape the
+            # stream finalizer before its `done` frame, so the client would show
+            # a failure over a reply that is on disk and offer a retry that
+            # appends a *second* generation. Same judgement `_read_raw` already
+            # makes on the way in — the sidecar is a convenience beside the
+            # transcript, never a reason to lose or misreport one. The cost is
+            # the round-eleven durability window staying open for this turn.
+            pass
 
 
 def _sse(data: dict) -> str:

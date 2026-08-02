@@ -112,6 +112,11 @@ _registry_guard = threading.Lock()
 
 #: Modules whose public campaign-scoped mutators all take `campaign_lock(cid)`.
 DOMAIN_MODULES: frozenset[str] = frozenset({
+    # Reroll alternates read the transcript, decide against it, and write a
+    # sidecar beside it -- and `promote` then drives two `scenes` mutators. All
+    # of that has to be one critical section with the scene writes it brackets,
+    # or a concurrent reply lands between the decision and the swap.
+    "store.alternates",
     # The three `store.scenes` submodules that mutate. Each public mutator in
     # them either wears the package's `@locking._serialized` -- `campaign_lock`
     # around the whole body -- or delegates to a private one that does, which is
