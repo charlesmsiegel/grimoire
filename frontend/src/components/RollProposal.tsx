@@ -42,13 +42,23 @@ export function RollProposal({ record, busy, onResolve }:
   const [difficulty, setDifficulty] = useState<number | "">(payload.difficulty ?? "");
   const [modifier, setModifier] = useState(payload.modifier ?? 0);
 
-  if (record.status === "resolved") {
+  // Both states mean the same thing: the decision is made and only its
+  // narration is outstanding, because the continuation stream failed or was
+  // stopped. The backend re-streams either one on request, keyed to the state
+  // the record is already in — so the action here restates that state rather
+  // than making a new decision, and re-declining a declined record is not a
+  // second decline.
+  if (record.status === "resolved" || record.status === "declined") {
+    const declined = record.status === "declined";
     return (
       <div className="roll-proposal">
-        <p className="field-hint">Roll made, narration pending.</p>
+        <p className="field-hint">
+          {declined ? "Roll declined, narration pending." : "Roll made, narration pending."}
+        </p>
         <div className="form-actions">
           <button className="primary" type="button" disabled={busy}
-                  onClick={() => onResolve({ proposal: record.id, action: "accept" })}>
+                  onClick={() => onResolve({ proposal: record.id,
+                                             action: declined ? "decline" : "accept" })}>
             Continue narration
           </button>
         </div>

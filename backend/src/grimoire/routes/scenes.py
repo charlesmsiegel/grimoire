@@ -152,16 +152,18 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, client: LLMClient = Depends(ge
     # must not re-roll on every later context build (retry, next turn, ...).
     content = store.context.expand_macros(
         turn.content, store.context.scene_substitutions(cid, sid), cid, sid)
-    store.scenes.append_message(cid, sid, "user", content, speaker=speaker)
+    posted_at = store.scenes.append_message(cid, sid, "user", content, speaker=speaker)
     messages = store.context.build_messages(cid, sid, turn=_turn_override(turn))
     # The post has to precede the stream — `build_messages` renders history out
     # of the transcript, so a turn the model never sees is a turn it cannot
     # answer — which is exactly what makes a failed generation able to strand
     # it. Hand `_chat_stream` the undo so the pair is transactional (#95): if
-    # the turn produces nothing at all, the post comes back off.
+    # the turn produces nothing at all, the post comes back off. `posted_at`
+    # travels with it because nothing holds a lock across the stream, so by the
+    # time the undo runs the tail may belong to a different turn entirely.
     return _chat_stream(cid, sid, messages, conn, client,
                         undo_user_post=lambda: store.scenes.remove_trailing_user_post(
-                            cid, sid, content))
+                            cid, sid, posted_at, content))
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/retry")

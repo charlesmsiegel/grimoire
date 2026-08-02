@@ -122,11 +122,12 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
     `on_abort(watcher)` is the same decision for a *disconnect* — the client
     cancelled, or the connection died — which arrives as cancellation rather
     than as an `LLMError` and so needs its own handler. It is deliberately a
-    second hook and not a reuse of `on_error`: a hard failure and a deliberate
+    third hook and not a reuse of `on_error`: a hard failure and a deliberate
     cancel want different things done with a turn that produced nothing (a
     failure's orphaned user post is rolled back, a cancelled one is kept so the
     player can retry it), and only `on_error` is reached with a frame still to
-    send.
+    send. Callers whose abort case wants the ordinary end-of-turn writes pass
+    `finalize` itself here and let its frames fall on the floor.
     """
     async def event_stream():
         watcher = store.fence.FenceWatcher()
@@ -243,13 +244,17 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
         elif undo_user_post is not None:
             undo_user_post()
 
-    def on_abort(watcher) -> None:
-        # The persist half of on_error and nothing else: see `undo_user_post`
-        # above for why a cancel keeps the post a failure would have removed.
-        if watcher.narration.strip():
-            _persist_reply(cid, sid, watcher.narration)
-
-    return _fence_stream(cid, sid, messages, conn, client, finalize, on_error, on_abort)
+    # `finalize` IS the abort handler, frames and all -- they are simply
+    # discarded, since the socket that would have carried them is gone. Review
+    # caught the version that only persisted narration: a fence can close in the
+    # same chunk that carries the pre-fence text, so `watcher.complete` is
+    # already true at the yield the disconnect lands on, and persisting only the
+    # narration would end the transcript at a mechanical decision whose proposal
+    # record was never written -- the check silently lost, and the
+    # proposal-before-narration guarantee broken from the one direction the
+    # StoreBusy path takes such care to avoid. Running the real thing keeps the
+    # two writes in their required order instead of choosing which to drop.
+    return _fence_stream(cid, sid, messages, conn, client, finalize, on_error, finalize)
 
 
 def _continuation_stream(cid: str, sid: str, pid: str, messages: list[dict],
