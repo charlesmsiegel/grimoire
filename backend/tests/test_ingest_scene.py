@@ -689,17 +689,72 @@ def test_a_failure_after_the_timeline_does_not_file_it_twice(monkeypatch, tmp_pa
     assert len(scenes.list_scenes(cid)) == 1          # and still no duplicate scene
 
 
-def test_the_timeline_is_not_refiled_even_with_no_manifest_record(monkeypatch, tmp_path):
-    """A flag written after the append cannot cover the case where the flag's
-    OWN write is what failed — the window just moves. So the resume asks the
-    artifact instead: here the manifest is wiped between the failure and the
-    retry, which is the worst version of that, and the events still land once."""
+def test_the_extraction_is_recorded_before_the_timeline_is_written(monkeypatch, tmp_path):
+    """The write-ahead half of the protocol. The extraction is persisted BEFORE
+    the append, so the case that motivated a checkpoint — the manifest being
+    unwritable while the timeline is not — cannot file events the resume will
+    not know about: the run dies before appending anything at all."""
     from grimoire.store import campaigns as campaigns_store, worlds as worlds_store
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
     ingest_scene.ensure_character(cid, {"name": "Marisol"})
     conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
     timeline = campaigns_store.campaign_root(cid) / "timeline.md"
+
+    real_save = ingest_scene.save_manifest
+
+    def _refuse_the_extraction(c, data):
+        if any(isinstance(v, dict) and "parsed" in v for v in data.values()):
+            raise OSError("ingest_manifest.json is read-only")
+        return real_save(c, data)
+
+    monkeypatch.setattr(ingest_scene, "save_manifest", _refuse_the_extraction)
+    with pytest.raises(OSError):
+        asyncio.run(ingest_scene.ingest_one_scene(
+            cid, _PARTIAL_SCENE, FakeClient(_PARTIAL_OUTPUT), conn))
+    assert not timeline.exists() or "swore on the stair" not in \
+        timeline.read_text(encoding="utf-8")
+
+    monkeypatch.setattr(ingest_scene, "save_manifest", real_save)
+    asyncio.run(ingest_scene.ingest_one_scene(
+        cid, _PARTIAL_SCENE, FakeClient(_PARTIAL_OUTPUT), conn))
+    assert timeline.read_text(encoding="utf-8").count("swore on the stair") == 1
+
+
+def test_a_new_scene_repeating_the_previous_events_still_files_them(monkeypatch, tmp_path):
+    """Tail equality cannot tell a retry from a NEW scene whose events repeat
+    the batch before it — and two consecutive scenes can honestly extract the
+    same date and wording. Skipping the append there loses that scene's events
+    outright, which is worse than the duplicate the check exists to prevent, so
+    only a run resuming a scene a previous run started may consult the tail."""
+    from grimoire.store import campaigns as campaigns_store, worlds as worlds_store
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    ingest_scene.ensure_character(cid, {"name": "Marisol"})
+    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
+    timeline = campaigns_store.campaign_root(cid) / "timeline.md"
+
+    first = asyncio.run(ingest_scene.ingest_one_scene(
+        cid, _PARTIAL_SCENE, FakeClient(_PARTIAL_OUTPUT), conn))
+    assert first["status"] in ("done", "incomplete")
+
+    second = {**_PARTIAL_SCENE, "key": "file1-scene02", "title": "The Reckoning, Again"}
+    asyncio.run(ingest_scene.ingest_one_scene(
+        cid, second, FakeClient(_PARTIAL_OUTPUT), conn))
+    # Both scenes happened; both are on the timeline.
+    assert timeline.read_text(encoding="utf-8").count("swore on the stair") == 2
+
+
+def test_a_resume_keeps_the_conflict_basis_it_was_staged_against(monkeypatch, tmp_path):
+    """`before` records what the reviewer's proposal actually saw. Re-running
+    `materialize` on resume takes each record's CURRENT value instead, so a
+    movement another save made in between becomes the basis rather than the
+    conflict it is — and the stale row sails through the conflict pass."""
+    from grimoire.store import commitments, worlds as worlds_store
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    ingest_scene.ensure_character(cid, {"name": "Marisol"})
+    conn = {"kind": "openrouter", "model": "test/model", "api_key": "k"}
 
     real_mark = ingest_scene.scenes.mark_absorbed
 
@@ -712,14 +767,19 @@ def test_the_timeline_is_not_refiled_even_with_no_manifest_record(monkeypatch, t
         asyncio.run(ingest_scene.ingest_one_scene(
             cid, _PARTIAL_SCENE, FakeClient(_PARTIAL_OUTPUT), conn))
 
-    sid = ingest_scene.load_manifest(cid)[_PARTIAL_SCENE["key"]]["sid"]
-    ingest_scene.save_manifest(cid, {})              # every note about it, gone
-    ingest_scene.save_manifest(cid, {_PARTIAL_SCENE["key"]: {"status": "in_progress",
-                                                             "sid": sid}})
+    # Somebody else moves the very commitment this extraction proposed.
+    commitments.set_movement(cid, "the-debt", "The debt", "promise", "fulfilled",
+                             "", "Paid in full, elsewhere.", "s9")
 
-    asyncio.run(ingest_scene.ingest_one_scene(
+    got = asyncio.run(ingest_scene.ingest_one_scene(
         cid, _PARTIAL_SCENE, FakeClient(_PARTIAL_OUTPUT), conn))
-    assert timeline.read_text(encoding="utf-8").count("swore on the stair") == 1
+    assert got["status"] == "incomplete"
+    assert [f["kind"] for f in got["failures"]] == ["conflict"]
+    # And the newer state is untouched: no older beat appended after it, and
+    # nothing reopened.
+    rec = commitments.get(cid, "the-debt")
+    assert rec["status"] == "fulfilled"
+    assert [b["text"] for b in rec["beats"]] == ["Paid in full, elsewhere."]
 
 
 def test_the_timeline_check_agrees_with_the_store(monkeypatch, tmp_path):
