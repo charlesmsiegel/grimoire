@@ -90,6 +90,39 @@ def test_campaign_reads_inherit_the_world_anchor(monkeypatch, tmp_path):
     assert overlay.voice_anchor(cid, "winifred") == "Warmer here."
 
 
+def test_rewrapping_an_inherited_anchor_does_not_diverge_the_campaign(monkeypatch, tmp_path):
+    """The no-op check and `anchor_fingerprint` both answer "is this the same
+    anchor?", and they have to agree. The fingerprint normalizes whitespace
+    THROUGHOUT -- rewrapping a line is presentation, not a new standard -- so a
+    `.strip()` comparison here materialized a campaign copy for an edit the
+    fingerprint calls identical. The copy mints a nonce, and every committed
+    flag judged against the world's anchor goes silently unread."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Realm")
+    wroot = worlds.world_root(wid)
+    characters.create_character(wroot, "Winifred", "main", characters.blank_card("Winifred"))
+    voice_anchors.write(wroot, "winifred", "Clipped.  Never hedges.")
+    cid = campaigns.create_campaign("Run", wid)
+    croot = campaigns.campaign_root(cid)
+    before = overlay.voice_anchor_record(cid, "winifred")
+
+    # the same words, rewrapped: internal run collapsed, a newline for a space
+    overlay.set_voice_anchor(cid, "winifred", "Clipped.\nNever hedges.")
+
+    assert voice_anchors.read_record(croot, "winifred")["text"] == ""   # nothing materialized
+    assert overlay.voice_anchor_record(cid, "winifred") == before       # same identity
+    from grimoire.store import voice_drift
+    assert voice_drift.fingerprint_matches(
+        voice_drift.anchor_fingerprint(before["text"], before["id"]),
+        overlay.voice_anchor_record(cid, "winifred")["text"],
+        overlay.voice_anchor_record(cid, "winifred")["id"])
+
+    # ...and a real divergence still diverges, with its own identity
+    overlay.set_voice_anchor(cid, "winifred", "Warmer here.")
+    assert voice_anchors.read_record(croot, "winifred")["text"] == "Warmer here."
+    assert overlay.voice_anchor_record(cid, "winifred")["id"] != before["id"]
+
+
 def test_saving_a_legacy_anchor_unchanged_does_not_mint_a_nonce(monkeypatch, tmp_path):
     """A pre-nonce anchor saved back unchanged must stay pre-nonce. Minting an
     id moves its fingerprint off the legacy content-only formula, and every flag

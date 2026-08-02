@@ -369,6 +369,10 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     // Without this line one abandoned Generate disables the button for every
     // character selected afterwards, until the editor remounts.
     setAnchorBusy(false);
+    // Same for an orphaned SAVE: its `finally` no longer matches either, so
+    // without this a PUT abandoned by navigation would leave Save disabled for
+    // every character opened afterwards.
+    setAnchorSaving(false);
     api.getCharacterVoiceAnchor(scope, cid)
       .then((r) => {
         if (anchorReq.current !== req) return;
@@ -386,16 +390,25 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
     // discarded while the editor still shows it. Blocking the second click is
     // enough here: the writes are whole-value, so there is nothing to merge.
     setAnchorSaving(true);
+    // Tokened like the load and the generation -- CAPTURED, not bumped, since a
+    // save invalidates nothing. The single-flight check above is not enough on
+    // its own: leaving the character (or the scope) clears `anchorSaving`, so
+    // the next save is free to start while this PUT is still open, and this
+    // one's `finally` would then clear the flag out from under it. Two writes
+    // for the same character overlap, the slower wins the file, and the editor
+    // goes on showing the newer text.
+    const req = anchorReq.current;
     try {
       // Trimmed to blank on purpose: a blank anchor removes it, which is how a
       // character opts back out of voice-drift detection. Only reachable once
       // the load succeeded, so the blank is the user's, not a placeholder.
       await api.setCharacterVoiceAnchor(scope, detail.meta.id, voiceAnchor.trim());
+      if (anchorReq.current !== req) return;
       anchorLoaded.current = voiceAnchor;   // in sync again: no longer a draft
     } catch (err: any) {
-      setError(err.detail ?? String(err));
+      if (anchorReq.current === req) setError(err.detail ?? String(err));
     } finally {
-      setAnchorSaving(false);
+      if (anchorReq.current === req) setAnchorSaving(false);
     }
   }
 
