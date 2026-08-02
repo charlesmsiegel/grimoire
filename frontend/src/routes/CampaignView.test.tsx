@@ -2524,6 +2524,24 @@ test("a review saves to the scene it was absorbed from, not the selected one", a
   expect((api.saveChronicle as any).mock.calls[0][1]).toBe("s1");
 });
 
+test("a turn whose refresh fails says so, rather than showing an empty banner", async () => {
+  // The turn itself succeeded, so nothing else has reported anything: this is
+  // the one writer of `error` that has to build the object rather than defer to
+  // an earlier one. Written as a bare string it rendered a banner with no text
+  // and no Retry — worse than the failure it was reporting, because the view is
+  // now showing a transcript it could not confirm.
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any)
+    .mockResolvedValueOnce({ meta: {}, messages: [{ role: "user", content: "hi" }] })
+    .mockRejectedValue(Object.assign(new Error("boom"), { detail: "scene read failed" }));
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "and then?" } });
+  fireEvent.click(screen.getByRole("button", { name: /send ▸/i }));
+  expect(await screen.findByText(/scene read failed/)).toBeTruthy();
+  expect(screen.getByRole("button", { name: /^Retry$/ })).toBeTruthy();
+});
+
 test("a failed save offers a retry that saves, not one that generates a reply", async () => {
   // The shared error banner's Retry calls api.retry (chat generation). Routing a
   // save failure there would invite the user to generate another reply with the
