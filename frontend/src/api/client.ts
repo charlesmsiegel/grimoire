@@ -583,11 +583,21 @@ async function streamPost<T = ChatEvent>(
   onEvent: (e: T) => void,
   signal?: AbortSignal,
 ): Promise<void> {
+  // Tagged so a caller can tell "the server never got this" from "the server
+  // got it and then something went wrong" (#95). The line between them is the
+  // response: `post_chat` appends the player's post and *then* returns the
+  // streaming response, so a response arriving means the post exists, and a
+  // failure before one means it may never have been written. A chat that
+  // cannot tell the difference has to guess whether the prompt still exists
+  // anywhere, and guessing either way loses or duplicates it.
   const res = await fetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
     signal,
+  }).catch((err) => {
+    if (err && typeof err === "object") (err as { beforeResponse?: boolean }).beforeResponse = true;
+    throw err;
   });
   if (!res.ok || !res.body) {
     const data = await res.json().catch(() => ({}));
