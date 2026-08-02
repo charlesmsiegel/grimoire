@@ -19,8 +19,8 @@ from __future__ import annotations
 from typing import NamedTuple
 
 from ... import prompts
-from .. import (characters, config, entities, length_drift, lengths, overlay,
-                pcs, plot, response_presets, styles)
+from .. import (characters, commitments, config, entities, length_drift, lengths,
+                overlay, pcs, plot, response_presets, styles)
 from ..appearances import (cast as appearances_cast, paths as appearances_paths,
                            versions as appearances_versions)
 from ..campaigns import paths as campaigns_paths, read as campaigns_read
@@ -155,7 +155,10 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         "prose_style_body": resolved_style["body"].strip() if resolved_style else "",
         "budget": {k: budget[k] for k in lengths.KNOBS},
         "npc_cards": npc_cards,
-        "states": world_state._character_states(aroot, cast),
+        # The POV filter (#116) resolves the present cast's names itself, from
+        # the cast record: `npc_names`/`player_names` here are one name each and
+        # the wrong one for it (see `world_state._actor_aliases`).
+        "states": world_state._character_states(aroot, cid, cast, pcless),
         "relationship_lines": story._relationship_lines(cid, cast),
         "players": players, "ref_names": ref_names, "refs": refs,
         "story_entries": story._story_entries(cid, depth=full_recap or None, full=bool(full_recap)),
@@ -166,6 +169,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         "archive_entries": archive._archive_entries(
             cid, recent_text, story._recap_ids(cid, full_recap or None), before=sid),
         "plot_lines": plot.render_open(cid, with_id=False),
+        "commitment_lines": commitments.render_open(cid, with_id=False),
         "today": world_state._today_data(cid, sid, croot),
         "weather": world_state._weather_data(cid, sid),
         "current_setting": current_setting,
@@ -232,6 +236,7 @@ _SECTIONS = [
     Section("Story so far", "scene/sections/story_so_far", pack.BACKGROUND),
     Section("Earlier scenes", "scene/sections/archive.j2", pack.ARCHIVE),
     Section("Plot threads", "scene/sections/plot_threads.j2", pack.SPOTLIGHT),
+    Section("Commitments", "scene/sections/commitments.j2", pack.SPOTLIGHT),
     Section("Today", "scene/sections/today.j2", pack.SPOTLIGHT),
     Section("Weather", "scene/sections/weather.j2", pack.SPOTLIGHT),
     Section("Current setting", "scene/sections/current_setting.j2", pack.SPOTLIGHT),

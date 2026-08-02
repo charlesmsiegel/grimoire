@@ -2,19 +2,20 @@
 
 A scene's id is its filename stem, so file renames (title renames, first-date
 stamps, width re-pads, legacy migration) must be followed by every persisted
-reference. Seven stores hold scene ids: appearances (per-actor scenes lists),
+reference. Eight stores hold scene ids: appearances (per-actor scenes lists),
 audit (sheet baselines keyed by scene id), chronicle (record keys + id
-fields), changes (per-record scene field), plot (beats[].scene +
-last_scene), rolls (per-entry scene field), commits (the per-scene commit
-epoch's keys + each token entry's sid), and alternates (a `<sid>.alts.json`
-sidecar, which moves rather than being rewritten — it is the one store keyed by
-*filename* instead of by a field, and so is not reachable through the fan-out
-the others share). Callers rename the `.md` files themselves.
+fields), changes (per-record scene field), plot and commitments (both
+beats[].scene + last_scene), rolls (per-entry scene field), commits (the
+per-scene commit epoch's keys + each token entry's sid), and alternates (a
+`<sid>.alts.json` sidecar, which moves rather than being rewritten — it is the
+one store keyed by *filename* instead of by a field, and so is not reachable
+through the fan-out the others share). Callers rename the `.md` files
+themselves.
 """
 
 from __future__ import annotations
 
-from . import alternates, changes, chronicle, commits, plot, rolls
+from . import alternates, changes, chronicle, commitments, commits, plot, rolls
 from .appearances import paths as appearances_paths
 from .audit import baselines as audit_baselines
 
@@ -23,6 +24,6 @@ def repoint(cid: str, mapping: dict[str, str]) -> None:
     mapping = {old: new for old, new in mapping.items() if old != new}
     if not mapping:
         return
-    for mod in (alternates, appearances_paths, audit_baselines,
-                changes, chronicle, commits, plot, rolls):
+    for mod in (alternates, appearances_paths, audit_baselines, changes, chronicle,
+                commitments, commits, plot, rolls):
         mod.repoint_scenes(cid, mapping)

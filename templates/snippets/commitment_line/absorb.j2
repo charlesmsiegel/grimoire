@@ -1,0 +1,6 @@
+{#- One unresolved commitment, absorb-prompt form (leads with the id so the
+    model can resolve the right one in commitment_movements).
+    Vars: c ({id, title, kind, status, due, latest_beat}). -#}
+{{ c.id }}: {{ c.title }} ({{ c.kind }}, {{ c.status }})
+{%- if c.due %}, due {{ c.due }}{% endif %}
+{%- if c.latest_beat %} — {{ c.latest_beat }}{% endif -%}

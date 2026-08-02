@@ -93,9 +93,26 @@ call while reading — this skill does not delegate that to another LLM call.
       A failed or interrupted run resumes cleanly: the scene is only ever created once per `key`
       (recorded `in_progress` with its `sid` right after creation, before the LLM call), so
       fixing the problem and re-issuing `ingest` for the scene that failed resumes work on that
-      same scene rather than duplicating it. Residual risk: if the process dies between the
-      absorb call finishing and the manifest being marked `done`, a retry re-absorbs and
-      re-applies that one scene — rare, and applying the same edits twice is the only
+      same scene rather than duplicating it. A scene that absorbed but whose edits did not all
+      land is recorded `incomplete`, with `failures` (why each row was refused) and `pending`
+      (the rows worth replaying); re-issuing `ingest` replays exactly those rows — no second LLM
+      call, no second copy of the scene's timeline events, and no re-application of the beats
+      that already landed. **`ingest` exits nonzero for an incomplete scene** — do not go on to
+      the next scene, because every later scene is absorbed against the state this one wrote.
+
+      A `failures` entry with `"kind": "conflict"` is **not** replayable and gets no `pending`
+      row: the record it was staged against has since moved, so re-running produces the same
+      verdict forever. Reconcile it by hand (the reason names the record), then close the key
+      with `ingest_scene.py resolve --campaign <cid> --key <key>`, which marks it `done` while
+      keeping its `sid` and records what you reconciled under `reconciled`. **Do not delete the
+      key** — a deleted key is an unknown scene, so the next run rebuilds and re-absorbs it,
+      duplicating the scene, its timeline events and every beat that already landed. Likewise, **do not rename or delete a scene with an
+      unfinished manifest entry** — a rename changes the scene's id, the manifest is not one of
+      the stores `scene_refs.repoint` follows, and the new id is not recoverable, so `ingest`
+      refuses to resume that key rather than write beats against an id no scene has.
+      Residual risk: if the process dies *inside* the apply
+      sequence, or between it finishing and the manifest being written, a retry re-absorbs and
+      re-applies that one scene — rare, and duplicated beats under one scene id are the
       consequence.
 
 3. **Parallelize the rewriting with subagents — don't do it all yourself.** Segmentation and
@@ -168,5 +185,8 @@ call while reading — this skill does not delegate that to another LLM call.
   leave the orphan or try to hand-patch it in place.
 - Running scenes out of order, or re-running an already-`"done"` key expecting it to refresh —
   `ingest_one_scene` treats "done" as final; delete the manifest entry first if a scene genuinely
-  needs redoing (this also un-applies nothing — you'd be re-applying on top of the old state).
-  The manifest lives at `<campaign_root>/ingest_manifest.json`.
+  needs redoing — and know what that means: the key becomes unknown, so the run rebuilds the
+  scene from the JSON and absorbs it again. That is right only when you have also deleted the
+  scene it built; on top of an existing one it duplicates the scene, its timeline events and
+  every beat. To close an `incomplete` key without redoing it, use `resolve` (above), not
+  deletion. The manifest lives at `<campaign_root>/ingest_manifest.json`.

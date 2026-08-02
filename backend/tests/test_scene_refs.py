@@ -1,6 +1,7 @@
 import json
 
-from grimoire.store import appearances, campaigns, changes, chronicle, plot, scene_refs, worlds
+from grimoire.store import (appearances, campaigns, changes, chronicle, commitments,
+                            plot, scene_refs, worlds)
 
 
 def _campaign(monkeypatch, tmp_path):
@@ -17,13 +18,15 @@ def _seed_appearance(cid, sid):
     }), encoding="utf-8")
 
 
-def test_repoint_updates_all_four_stores(monkeypatch, tmp_path):
+def test_repoint_updates_every_store_that_holds_scene_ids(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     old = "001--s"
     _seed_appearance(cid, old)
     chronicle.absorb(cid, {"id": old, "one_line": "x", "summary": "", "keywords": []})
     changes.record(cid, old, {"characters/a": [{"op": "equal", "text": "hi"}]})
     plot.set_movement(cid, "heist", "The Heist", "open", "cased the vault", old)
+    commitments.set_movement(cid, "the-debt", "The debt", "promise", "open", "",
+                             "sworn at the vault door", old)
 
     scene_refs.repoint(cid, {old: "001--2026-07-04--s"})
 
@@ -36,6 +39,9 @@ def test_repoint_updates_all_four_stores(monkeypatch, tmp_path):
     thread = plot.read(cid)["heist"]
     assert thread["last_scene"] == "001--2026-07-04--s"
     assert thread["beats"][0]["scene"] == "001--2026-07-04--s"
+    owed = commitments.read(cid)["the-debt"]
+    assert owed["last_scene"] == "001--2026-07-04--s"
+    assert owed["beats"][0]["scene"] == "001--2026-07-04--s"
 
 
 def test_repoint_identity_and_empty_are_noops(monkeypatch, tmp_path):

@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from grimoire.store import absorb, audit, campaigns, changes, playstate, sheets, worlds
 
 
@@ -55,6 +57,7 @@ def test_parse_output_tolerates_garbage():
         "one_line": "", "summary": "", "keywords": [], "timeline_events": [],
         "character_state_edits": [], "group_state_edits": [], "lore_edits": [], "authored_edits": [],
         "relationship_deltas": [], "bond_changes": [], "plot_movements": [],
+        "commitment_movements": [],
         "new_characters": [], "new_locations": [], "new_lore": [], "weather_edits": []}
 
 
@@ -1195,6 +1198,592 @@ def test_apply_edits_skips_non_dict_batch_items(scene_with_sheeted_cast):
     assert applied == ["lore:salt-cathedral"]
     assert entities.read_entity(croot, "lore", "salt-cathedral")["body"].strip() == "Flooded."
 
+
+# ---- commitments: promises, threats and foreshadowing (#115) ----------------
+
+def test_parse_output_commitment_movements():
+    text = ('{"commitment_movements": ['
+            '{"id": "the-debt", "title": "Repay Winifred", "kind": "promise",'
+            ' "status": "fulfilled", "due": "before the thaw", "beat": "She paid."},'
+            '{"id": null, "title": "A knock at midnight", "kind": "WAGER",'
+            ' "status": "advanced", "due": null, "beat": "Someone knocked."}]}')
+    out = absorb.parse_output(text)
+    assert out["commitment_movements"] == [
+        {"id": "the-debt", "title": "Repay Winifred", "kind": "promise",
+         "status": "fulfilled", "due": "before the thaw", "beat": "She paid."},
+        # An unknown kind and a status from plot's vocabulary both normalize to
+        # "" -- "the model said nothing" -- NOT to a default, so set_movement
+        # keeps whatever is stored. A null id becomes "" the same way.
+        #
+        # `due` is the exception and drops OUT of the row: for it, "" is an
+        # instruction to clear the deadline, and a null is the model saying
+        # nothing rather than saying "none".
+        {"id": "", "title": "A knock at midnight", "kind": "",
+         "status": "", "beat": "Someone knocked."}]
+
+
+def test_parse_output_carries_due_only_when_the_model_sent_the_key():
+    """`due` takes the key-PRESENCE rule, not the blank-means-nothing rule the
+    rest of the section takes. Absent = "this scene said nothing about the
+    deadline, keep it"; an explicit "" = "the deadline is gone". Collapsing the
+    two leaves a lifted deadline riding the ledger and every later prompt
+    forever, with nothing the model can say to clear it."""
+    out = absorb.parse_output(
+        '{"commitment_movements": ['
+        '{"id": "a", "beat": "b"},'
+        '{"id": "b", "due": "", "beat": "b"},'
+        '{"id": "c", "due": "by the third night", "beat": "b"},'
+        '{"id": "d", "due": null, "beat": "b"},'
+        '{"id": "e", "due": 7, "beat": "b"}]}')
+    assert "due" not in out["commitment_movements"][0]
+    assert out["commitment_movements"][1]["due"] == ""
+    assert out["commitment_movements"][2]["due"] == "by the third night"
+    # A non-string is omission, not "none". `_str` collapses null to "" for every
+    # other field because the model uses the two interchangeably — but here that
+    # would read as "lift the deadline" and quietly drop a stored one, which is
+    # the very failure the three-valued contract was added to make expressible.
+    assert "due" not in out["commitment_movements"][3]
+    assert "due" not in out["commitment_movements"][4]
+
+
+def test_a_scene_that_says_nothing_about_a_deadline_leaves_it_alone(monkeypatch, tmp_path):
+    """The absorb path end to end: no `due` key survives as None through
+    materialize's payload, and `set_movement` reads None as "keep it"."""
+    from grimoire.store import commitments, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    commitments.set_movement(cid, "the-debt", "Repay Winifred", "promise", "open",
+                             "before the thaw", "She swore it.", "s1")
+    parsed = absorb.parse_output(
+        '{"commitment_movements": [{"id": "the-debt", "beat": "She missed a payment."}]}')
+    edits = absorb.materialize(cid, sid, parsed)
+    assert edits[0]["payload"]["due"] is None
+    assert edits[0]["label"] == "Repay Winifred — promise, open, due before the thaw"
+    applied, failures = absorb.apply_edits(cid, edits, sid)
+    assert applied == ["commitment:the-debt"] and failures == []
+    assert commitments.get(cid, "the-debt")["due"] == "before the thaw"
+
+
+def test_a_scene_that_lifts_a_deadline_clears_it(monkeypatch, tmp_path):
+    """The other half: an explicit "" reaches the store as a cleared deadline,
+    and the reviewer sees it go — the label drops the `due` clause the `before`
+    head still carries, so the diff shows what the save will do."""
+    from grimoire.store import commitments, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    commitments.set_movement(cid, "the-debt", "Repay Winifred", "promise", "open",
+                             "before the thaw", "She swore it.", "s1")
+    parsed = absorb.parse_output(
+        '{"commitment_movements": [{"id": "the-debt", "due": "",'
+        ' "beat": "Pay me whenever, she said."}]}')
+    edits = absorb.materialize(cid, sid, parsed)
+    assert edits[0]["payload"]["due"] == ""
+    assert edits[0]["before"].startswith("promise, open, due before the thaw")
+    assert edits[0]["label"] == "Repay Winifred — promise, open"
+    applied, failures = absorb.apply_edits(cid, edits, sid)
+    assert applied == ["commitment:the-debt"] and failures == []
+    assert commitments.get(cid, "the-debt")["due"] == ""
+
+
+def test_commitment_snapshot_renders_unresolved(monkeypatch, tmp_path):
+    from grimoire.store import commitments, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    scenes.create_scene(cid, "S")
+    commitments.set_movement(cid, "the-debt", "Repay Winifred", "promise", "open",
+                             "before the thaw", "She swore it.", "s1")
+    commitments.set_movement(cid, "done", "Settled", "promise", "fulfilled", "", "Paid.", "s2")
+    snap = absorb.commitment_snapshot(cid)
+    assert "the-debt: Repay Winifred (promise, open), due before the thaw — She swore it." in snap
+    assert "Settled" not in snap          # resolved commitments are not re-offered
+
+
+def test_commitment_snapshot_tolerates_garbled(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    (campaigns.campaign_root(cid) / "commitments.json").write_text("{ no", encoding="utf-8")
+    assert absorb.commitment_snapshot(cid) == ""
+
+
+def test_materialize_commitment_new_and_resolve(monkeypatch, tmp_path):
+    from grimoire.store import commitments, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    commitments.set_movement(cid, "the-debt", "Repay Winifred", "promise", "open",
+                             "before the thaw", "She swore it.", "s10")
+    parsed = {"commitment_movements": [
+        {"id": "the-debt", "title": "Repay Winifred", "kind": "promise",
+         "status": "broken", "due": "", "beat": "The thaw came and went."},
+        {"id": "", "title": "A knock at midnight", "kind": "foreshadowing",
+         "status": "open", "due": "", "beat": "Three knocks, then nothing."},
+        {"id": "", "title": "", "kind": "promise", "status": "open", "beat": "no id no title"},
+        {"id": "x", "title": "X", "kind": "promise", "status": "open", "beat": ""}]}
+    edits = {e["id"]: e for e in absorb.materialize(cid, sid, parsed)}
+    resolved = edits["commitment:the-debt"]
+    assert resolved["kind"] == "commitment" and resolved["field"] == "beat"
+    assert resolved["target"] == {"kind": "commitments", "id": "the-debt"}
+    # the stored KIND and deadline ride the head, so a reclassification or an
+    # overwritten deadline is visible beside the label's resulting values, and the
+    # trailing stamp makes the line a fingerprint rather than a description
+    assert resolved["before"] == (
+        "promise, open, due before the thaw — She swore it. [1 beat, last moved in s10]")
+    assert resolved["after"] == "The thaw came and went."
+    assert resolved["payload"] == {"id": "the-debt", "title": "Repay Winifred",
+                                   "kind": "promise", "status": "broken", "due": "",
+                                   "scene": sid}
+    new = edits["commitment:a-knock-at-midnight"]      # slugified from the title
+    assert new["before"] == "" and new["payload"]["kind"] == "foreshadowing"
+    assert "commitment:x" not in edits                 # empty beat dropped
+    assert "commitment:untitled" not in edits          # no id and no usable title dropped
+
+
+def test_materialize_commitment_dedupes_same_id(monkeypatch, tmp_path):
+    from grimoire.store import scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    parsed = {"commitment_movements": [
+        {"id": "", "title": "The debt", "kind": "promise", "status": "open", "beat": "first"},
+        {"id": "", "title": "The debt", "kind": "promise", "status": "broken", "beat": "second"}]}
+    rows = [e for e in absorb.materialize(cid, sid, parsed) if e["kind"] == "commitment"]
+    assert len(rows) == 1     # one edit per commitment per scene (no duplicate ids)
+
+
+def test_apply_edits_writes_a_commitment(monkeypatch, tmp_path):
+    from grimoire.store import commitments, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    applied, failures = absorb.apply_edits(cid, [
+        {"id": "commitment:the-debt", "kind": "commitment",
+         "target": {"kind": "commitments", "id": "the-debt"}, "field": "beat",
+         "after": "She swore it.",
+         "payload": {"id": "the-debt", "title": "Repay Winifred", "kind": "promise",
+                     "status": "open", "due": "before the thaw", "scene": sid}}], sid)
+    assert applied == ["commitment:the-debt"] and failures == []
+    got = commitments.get(cid, "the-debt")
+    assert got == {"title": "Repay Winifred", "kind": "promise", "status": "open",
+                   "due": "before the thaw", "last_scene": sid,
+                   "beats": [{"scene": sid, "text": "She swore it."}]}
+
+
+def test_apply_edits_commitment_payload_without_the_newer_keys_still_lands(monkeypatch, tmp_path):
+    """A row that round-tripped through the reviewer's PUT body may carry only
+    the keys plot's payload has. The beat must still land rather than the whole
+    edit being swallowed."""
+    from grimoire.store import commitments, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    applied, _ = absorb.apply_edits(cid, [
+        {"id": "commitment:the-debt", "kind": "commitment",
+         "target": {"kind": "commitments", "id": "the-debt"}, "field": "beat",
+         "after": "She swore it.",
+         "payload": {"id": "the-debt", "title": "Repay Winifred", "scene": sid}}], sid)
+    assert applied == ["commitment:the-debt"]
+    got = commitments.get(cid, "the-debt")
+    assert got["kind"] == "promise" and got["status"] == "open"   # the defaults
+    assert got["beats"][0]["text"] == "She swore it."
+
+
+def test_commitments_are_not_browsable_record_changes(monkeypatch, tmp_path):
+    """Like plot movements, a commitment is not a record with a page to open, so
+    it must not turn up in the Changes panel's per-record diffs."""
+    from grimoire.store import changes, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    absorb.apply_edits(cid, [
+        {"id": "commitment:the-debt", "kind": "commitment",
+         "target": {"kind": "commitments", "id": "the-debt"}, "field": "beat",
+         "label": "Repay Winifred — promise, open", "before": "", "after": "She swore it.",
+         "payload": {"id": "the-debt", "title": "Repay Winifred", "kind": "promise",
+                     "status": "open", "due": "", "scene": sid}}], sid)
+    assert changes.read(cid) == {}
+
+
+def test_omitting_kind_does_not_reclassify_an_existing_commitment(monkeypatch, tmp_path):
+    """Appending a beat to a THREAT while saying nothing about its kind must not
+    turn it into a promise. The blank has to survive parse and materialize, or
+    set_movement's preserve-on-blank never gets the chance to fire."""
+    from grimoire.store import commitments, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    commitments.set_movement(cid, "the-deadline", "Midnight deadline", "threat", "open",
+                             "midnight", "She named the hour.", "s1")
+    parsed = absorb.parse_output(
+        '{"commitment_movements": [{"id": "the-deadline", "beat": "The hour came."}]}')
+    edits = absorb.materialize(cid, sid, parsed)
+    absorb.apply_edits(cid, edits, sid)
+    got = commitments.get(cid, "the-deadline")
+    assert got["kind"] == "threat"          # not silently reclassified
+    assert got["status"] == "open"
+    assert got["due"] == "midnight"
+    assert [b["text"] for b in got["beats"]] == ["She named the hour.", "The hour came."]
+
+
+def test_the_staged_label_shows_the_kind_and_status_the_save_will_produce(monkeypatch, tmp_path):
+    """The payload carries blanks (meaning "unchanged"), but the reviewer's label
+    has to name the values the record will actually read after the save."""
+    from grimoire.store import commitments, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    commitments.set_movement(cid, "the-deadline", "Midnight deadline", "threat", "open",
+                             "", "She named the hour.", "s1")
+    parsed = {"commitment_movements": [
+        {"id": "the-deadline", "title": "", "kind": "", "status": "", "due": "",
+         "beat": "The hour came."},
+        {"id": "", "title": "A new promise", "kind": "", "status": "", "due": "",
+         "beat": "Sworn on the spot."}]}
+    edits = {e["id"]: e for e in absorb.materialize(cid, sid, parsed)}
+    existing = edits["commitment:the-deadline"]
+    assert existing["label"] == "Midnight deadline — threat, open"   # the STORED values
+    assert existing["payload"]["kind"] == "" and existing["payload"]["status"] == ""
+    fresh = edits["commitment:a-new-promise"]
+    assert fresh["label"] == "A new promise — promise, open"         # set_movement's defaults
+
+
+@pytest.mark.parametrize("body", ["{ no", "[]"])
+def test_an_unreadable_commitments_file_stages_nothing(monkeypatch, tmp_path, body):
+    """Unparseable, and valid JSON of the wrong shape — `read` is a bare
+    json.loads, so the second raises nothing and reaches `owed.get`. Neither may
+    crash: that lands AFTER the extraction call and turns a paid-for absorb into
+    a 500.
+
+    Neither may stage a row either, which is the stronger half. Falling back to
+    `{}` reads as "no such commitment" and stages every movement as NEW, and
+    that row is a trap: its `before` claims nothing is stored when the truth is
+    unknown, and approving it hits the same broken read inside `apply_edits`,
+    whose per-edit `except` drops it without recording a failure — so the panel
+    closes on a 200 and the approved commitment is simply gone."""
+    from grimoire.store import scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    (campaigns.campaign_root(cid) / "commitments.json").write_text(body, encoding="utf-8")
+    parsed = {"commitment_movements": [
+        {"id": "the-debt", "title": "The debt", "kind": "promise", "status": "open",
+         "beat": "moved"}],
+        "plot_movements": [{"id": "t", "title": "T", "status": "open", "beat": "b"}]}
+    edits = absorb.materialize(cid, sid, parsed)     # must not raise
+    assert [e["id"] for e in edits] == ["plot:t"]    # the section, and only it
+
+
+def test_a_commitment_deadline_is_visible_before_it_is_approved(monkeypatch, tmp_path):
+    """`due` is applied on save and then steers the ledger and every later scene
+    prompt. A model that invents or overwrites one must not be able to do it in a
+    row whose only visible text is the beat."""
+    from grimoire.store import commitments, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    commitments.set_movement(cid, "the-deadline", "Midnight deadline", "threat", "open",
+                             "midnight", "She named the hour.", "s1")
+    parsed = {"commitment_movements": [
+        # an overwritten deadline on an existing commitment...
+        {"id": "the-deadline", "title": "", "kind": "", "status": "",
+         "due": "the following dawn", "beat": "She moved the hour."},
+        # ...and an invented one on a brand-new commitment
+        {"id": "", "title": "A new promise", "kind": "promise", "status": "open",
+         "due": "before the thaw", "beat": "Sworn on the spot."}]}
+    edits = {e["id"]: e for e in absorb.materialize(cid, sid, parsed)}
+    moved = edits["commitment:the-deadline"]
+    assert moved["label"] == "Midnight deadline — threat, open, due the following dawn"
+    assert "due midnight" in moved["before"]        # what it was, beside what it becomes
+    assert edits["commitment:a-new-promise"]["label"] == \
+        "A new promise — promise, open, due before the thaw"
+
+
+@pytest.mark.parametrize("record", [
+    {"status": [], "due": "", "beats": []},                  # list-valued status
+    {"status": "open", "due": ["x"], "beats": []},           # list-valued due
+    {"status": "open", "due": "", "beats": [{"text": []}]},  # list-valued beat text
+    {"status": "open", "due": "", "beats": "nope"},          # beats not a list
+    {"title": 7, "kind": None, "status": "open"},            # title/kind wrong types
+])
+def test_materialize_tolerates_malformed_fields_inside_a_commitment(monkeypatch, tmp_path, record):
+    """The top-level shape check does not reach the fields INSIDE a record, and
+    a list-valued `status` concatenated into a label (or a list-valued `due`
+    handed to `.strip()`) raises from inside materialize — after the extraction
+    call, so a paid-for absorb becomes a 500."""
+    from grimoire.store import scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    (campaigns.campaign_root(cid) / "commitments.json").write_text(
+        json.dumps({"x": record}), encoding="utf-8")
+    parsed = {"commitment_movements": [
+        {"id": "x", "title": "X", "kind": "", "status": "", "due": "", "beat": "moved"}]}
+    edits = {e["id"]: e for e in absorb.materialize(cid, sid, parsed)}   # must not raise
+    assert edits["commitment:x"]["after"] == "moved"
+
+
+def test_a_commitment_resolved_by_a_newer_review_is_not_reopened(monkeypatch, tmp_path):
+    """Two reviews open on one commitment. The newer is saved first and marks it
+    fulfilled; this one still carries the `open` it saw at materialize time. The
+    campaign lock serializes the two writes but cannot tell the second is stale
+    — only the staged `before` dates the proposal."""
+    from grimoire.store import commitments, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    commitments.set_movement(cid, "the-debt", "Repay Winifred", "promise", "open",
+                             "", "She swore it.", "s1")
+    stale = absorb.materialize(cid, sid, {"commitment_movements": [
+        {"id": "the-debt", "title": "", "kind": "", "status": "open", "due": "",
+         "beat": "Still owed."}]})
+
+    # the other review lands first
+    commitments.set_movement(cid, "the-debt", "", "", "fulfilled", "", "Repaid in full.", "s2")
+
+    applied, failures = absorb.apply_edits(cid, stale, sid)
+    assert applied == []
+    assert failures == [{"id": "commitment:the-debt", "kind": "conflict",
+                         "reason": "this commitment changed since the scene was absorbed"}]
+    assert commitments.get(cid, "the-debt")["status"] == "fulfilled"   # not reopened
+
+
+def test_an_intervening_movement_with_the_same_beat_text_is_still_a_conflict(
+        monkeypatch, tmp_path):
+    """The case the rendering alone cannot see. Kind, status, deadline and the
+    latest beat TEXT are all identical after the newer movement — two absorbs
+    really can produce the same short sentence — so a `before` built from those
+    four reads as unmoved. Applying the stale row appends its older-scene beat
+    AFTER the newer one and rewinds `last_scene`, which is what #103's aging
+    reads. The beat count and last scene in the line are what close it."""
+    from grimoire.store import commitments, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    commitments.set_movement(cid, "the-debt", "Repay Winifred", "promise", "open",
+                             "", "She missed the payment.", "s1")
+    stale = absorb.materialize(cid, sid, {"commitment_movements": [
+        {"id": "the-debt", "title": "", "kind": "", "status": "",
+         "beat": "She missed the payment."}]})
+
+    # the other review lands first, with a beat that happens to read the same
+    commitments.set_movement(cid, "the-debt", "", "", "", None,
+                             "She missed the payment.", "s2")
+
+    applied, failures = absorb.apply_edits(cid, stale, sid)
+    assert applied == []
+    assert failures == [{"id": "commitment:the-debt", "kind": "conflict",
+                         "reason": "this commitment changed since the scene was absorbed"}]
+    got = commitments.get(cid, "the-debt")
+    assert got["last_scene"] == "s2"          # not rewound to s1
+    assert len(got["beats"]) == 2             # the stale beat was not filed after the newer one
+
+
+def test_a_new_commitment_does_not_reopen_a_resolved_one_by_title(monkeypatch, tmp_path):
+    """A title-derived id colliding with a RESOLVED commitment gets a fresh id.
+    `commitment_snapshot` offers only unresolved records, so the model was never
+    shown the old one and cannot have meant it; treating the collision as a
+    reference reopens a fulfilled promise and files the new beat into the closed
+    record's history."""
+    from grimoire.store import commitments, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    commitments.set_movement(cid, "the-debt", "The debt", "promise", "fulfilled",
+                             "", "Repaid in full.", "s1")
+    edits = absorb.materialize(cid, sid, {"commitment_movements": [
+        {"id": "", "title": "The debt", "kind": "promise", "status": "open",
+         "beat": "She borrowed again."}]})
+    assert [e["id"] for e in edits] == ["commitment:the-debt-2"]
+    assert edits[0]["before"] == ""            # a new commitment, not a reopened one
+    absorb.apply_edits(cid, edits, sid)
+    old = commitments.get(cid, "the-debt")
+    assert old["status"] == "fulfilled" and len(old["beats"]) == 1   # untouched
+    assert commitments.get(cid, "the-debt-2")["status"] == "open"
+
+
+def test_a_new_commitment_still_lands_on_an_open_one_of_the_same_title(monkeypatch, tmp_path):
+    """The other side of the rule: an OPEN commitment under that title is in the
+    snapshot, so the model naming it without an id is moving it, not opening a
+    second one."""
+    from grimoire.store import commitments, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    commitments.set_movement(cid, "the-debt", "The debt", "promise", "open",
+                             "", "Sworn.", "s1")
+    edits = absorb.materialize(cid, sid, {"commitment_movements": [
+        {"id": "", "title": "The debt", "kind": "", "status": "", "beat": "Still owed."}]})
+    assert [e["id"] for e in edits] == ["commitment:the-debt"]
+    assert edits[0]["before"].startswith("promise, open")
+
+
+def test_two_titles_that_slug_alike_do_not_merge(monkeypatch, tmp_path):
+    """`slugify` keeps only `[a-z0-9]`, so a title with no ASCII letters at all
+    becomes the literal `untitled` — every one of them. Reusing an open record
+    on the slug alone would file the second commitment's beat into the first and
+    keep the first's title, leaving the new one with no record of its own."""
+    from grimoire.store import commitments, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    commitments.set_movement(cid, "untitled", "Промолчать", "promise", "open",
+                             "", "Sworn.", "s1")
+    edits = absorb.materialize(cid, sid, {"commitment_movements": [
+        {"id": "", "title": "Долг", "kind": "promise", "status": "open",
+         "beat": "A different promise entirely."}]})
+    assert [e["id"] for e in edits] == ["commitment:untitled-2"]
+    assert edits[0]["before"] == ""                     # its own record, not a beat on hers
+    assert edits[0]["payload"]["title"] == "Долг"       # and its own title
+
+
+def test_two_titles_that_slug_alike_in_one_absorb_do_not_merge(monkeypatch, tmp_path):
+    """The same collision one scope in: neither is in the store yet, so slug
+    alone hands both the same id and the one-edit-per-commitment dedup drops the
+    second outright — the model opened two commitments and one silently vanishes
+    before the reviewer ever sees it."""
+    from grimoire.store import scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    edits = absorb.materialize(cid, sid, {"commitment_movements": [
+        {"id": "", "title": "Долг", "kind": "promise", "status": "open", "beat": "One."},
+        {"id": "", "title": "Промолчать", "kind": "threat", "status": "open", "beat": "Two."}]})
+    assert [e["id"] for e in edits] == ["commitment:untitled", "commitment:untitled-2"]
+    assert [e["payload"]["title"] for e in edits] == ["Долг", "Промолчать"]
+
+
+def test_one_commitment_named_twice_in_a_batch_is_still_one_edit(monkeypatch, tmp_path):
+    """And the dedup this must not break: the SAME title twice is one commitment
+    moving twice in one scene, which stays a single staged row."""
+    from grimoire.store import scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    edits = absorb.materialize(cid, sid, {"commitment_movements": [
+        {"id": "", "title": "The debt", "kind": "promise", "status": "open", "beat": "One."},
+        {"id": "", "title": "the debt ", "kind": "", "status": "", "beat": "Two."}]})
+    assert [e["id"] for e in edits] == ["commitment:the-debt"]
+
+
+def test_the_same_title_still_lands_on_its_open_record(monkeypatch, tmp_path):
+    """Case and surrounding space do not make it a different commitment."""
+    from grimoire.store import commitments, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    commitments.set_movement(cid, "the-debt", "The debt", "promise", "open",
+                             "", "Sworn.", "s1")
+    edits = absorb.materialize(cid, sid, {"commitment_movements": [
+        {"id": "", "title": "  the DEBT ", "kind": "", "status": "", "beat": "Still owed."}]})
+    assert [e["id"] for e in edits] == ["commitment:the-debt"]
+    assert edits[0]["before"].startswith("promise, open")
+
+
+def test_an_id_the_model_gave_is_never_redirected(monkeypatch, tmp_path):
+    """A movement carrying an id is a reference and keeps pointing where it says,
+    resolved or not — silently redirecting it would be the opposite mistake."""
+    from grimoire.store import commitments, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    commitments.set_movement(cid, "the-debt", "The debt", "promise", "fulfilled",
+                             "", "Repaid.", "s1")
+    edits = absorb.materialize(cid, sid, {"commitment_movements": [
+        {"id": "the-debt", "title": "", "kind": "", "status": "broken",
+         "beat": "The payment bounced."}]})
+    assert [e["id"] for e in edits] == ["commitment:the-debt"]
+
+
+def test_applying_over_an_unreadable_record_keeps_the_approved_title(monkeypatch, tmp_path):
+    """The apply branch blanks the payload title when a commitment already
+    exists, so an absorb cannot rename one. A truthy non-dict record is not a
+    commitment that exists: `materialize` skips it and stages the model's title
+    as new, `set_movement` replaces the record wholesale, and blanking on mere
+    truthiness stored the row the reviewer approved as "The debt" under its id."""
+    from grimoire.store import commitments, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    (campaigns.campaign_root(cid) / "commitments.json").write_text(
+        '{"the-debt": [1]}', encoding="utf-8")
+    edits = absorb.materialize(cid, sid, {"commitment_movements": [
+        {"id": "the-debt", "title": "The debt", "kind": "promise", "status": "open",
+         "beat": "Sworn."}]})
+    assert edits[0]["label"].startswith("The debt")     # what the reviewer approves
+    applied, failures = absorb.apply_edits(cid, edits, sid)
+    assert applied == ["commitment:the-debt"] and failures == []
+    assert commitments.get(cid, "the-debt")["title"] == "The debt"   # ...is what is stored
+
+
+def test_a_store_that_breaks_between_staging_and_saving_is_reported(monkeypatch, tmp_path):
+    """`materialize` refuses to stage against an unreadable store, but the file
+    can also break AFTER a good review is staged — a hand edit, a sync. Both
+    conflict passes call that unjudgeable and the write raises, and the shared
+    per-edit `except` would drop the row *after* the chronicle is written: a 200
+    with no failure, and the panel closing on a movement that never landed.
+
+    The commitment branch carried a bespoke handler for this until #271 gave
+    every kind an error contract; the reason text is the generic one now, and
+    what this pins is the contract rather than the wording."""
+    from grimoire.store import scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    edits = absorb.materialize(cid, sid, {"commitment_movements": [
+        {"id": "", "title": "The debt", "kind": "promise", "status": "open",
+         "beat": "Sworn."}]})
+    (campaigns.campaign_root(cid) / "commitments.json").write_text("{ no", encoding="utf-8")
+    applied, failures = absorb.apply_edits(cid, edits, sid)
+    assert applied == []
+    assert [f["id"] for f in failures] == ["commitment:the-debt"]
+    assert failures[0]["kind"] == "error"
+    assert "could not apply this change" in failures[0]["reason"]
+
+
+def test_an_absorb_still_cannot_rename_a_readable_commitment(monkeypatch, tmp_path):
+    """The rule the fix above must not undo: a stored title stands."""
+    from grimoire.store import commitments, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    commitments.set_movement(cid, "the-debt", "Repay Winifred", "promise", "open",
+                             "", "She swore it.", "s1")
+    edits = absorb.materialize(cid, sid, {"commitment_movements": [
+        {"id": "the-debt", "title": "Something else", "kind": "", "status": "",
+         "beat": "Still owed."}]})
+    absorb.apply_edits(cid, edits, sid)
+    assert commitments.get(cid, "the-debt")["title"] == "Repay Winifred"
+
+
+def test_an_unchanged_commitment_still_applies(monkeypatch, tmp_path):
+    """The staleness check must not turn every ordinary save into a conflict —
+    materialize and apply have to spell the head identically."""
+    from grimoire.store import commitments, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    commitments.set_movement(cid, "the-debt", "Repay Winifred", "promise", "open",
+                             "before the thaw", "She swore it.", "s1")
+    edits = absorb.materialize(cid, sid, {"commitment_movements": [
+        {"id": "the-debt", "title": "", "kind": "", "status": "broken",
+         "beat": "The thaw came and went."}]})
+    applied, failures = absorb.apply_edits(cid, edits, sid)
+    assert applied == ["commitment:the-debt"] and failures == []
+    got = commitments.get(cid, "the-debt")
+    assert got["status"] == "broken" and got["due"] == "before the thaw"
+
+
+def test_a_reclassification_is_visible_before_it_is_approved(monkeypatch, tmp_path):
+    """Approving the row writes the new kind. The label names the resulting kind;
+    without the stored one in `before` there is nothing to read it against and a
+    threat-to-promise reclassification looks like an ordinary beat."""
+    from grimoire.store import commitments, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    commitments.set_movement(cid, "the-deadline", "Midnight deadline", "threat", "open",
+                             "", "She named the hour.", "s1")
+    edits = {e["id"]: e for e in absorb.materialize(cid, sid, {"commitment_movements": [
+        {"id": "the-deadline", "title": "", "kind": "promise", "status": "",
+         "beat": "She softened it."}]})}
+    row = edits["commitment:the-deadline"]
+    assert row["before"].startswith("threat, open")             # what it is
+    assert row["label"] == "Midnight deadline — promise, open"  # what it becomes
+
+
+# Derived from the contract rather than restated, the way evals/graders.py
+# derives it: a section added later is covered the day it is added, which is
+# exactly how the first round of this fix ended up covering one section and
+# leaving seven behind.
+_LIST_SECTIONS = [k for k, v in absorb.parse_output("{}").items() if isinstance(v, list)]
+
+
+@pytest.mark.parametrize("value", ["null", "1", "true", '"a string"', "{}"])
+@pytest.mark.parametrize("section", _LIST_SECTIONS)
+def test_parse_output_treats_a_non_list_section_as_empty(section, value):
+    """`"commitment_movements": null` is valid JSON a model really returns, and
+    `.get(key, [])` hands back the null. Nothing catches parse errors between the
+    extraction call and the reviewer, so iterating it is a 500 on a usable reply.
+
+    Every non-list shape, not just null: `or []` was the first fix and a truthy
+    scalar raised straight through it. A bare string is the nastiest of them —
+    it iterates without raising, so `keywords` would come back as a list of
+    single characters rather than as nothing."""
+    out = absorb.parse_output('{"%s": %s}' % (section, value))
+    assert out[section] == []
 
 # ---- the failure contract for the non-sheet kinds (#271) ----
 def test_apply_edits_reports_a_failed_non_sheet_write(scene_with_sheeted_cast, monkeypatch):

@@ -56,8 +56,8 @@ conflict contract.
 
 from __future__ import annotations
 
-from .. import (changes, characters, groupstate, overlay, playstate, plot,
-                relationships, weather as weather_store)
+from .. import (changes, characters, commitments, groupstate, overlay, playstate,
+                plot, relationships, weather as weather_store)
 from ..appearances import (paths as appearances_paths,
                            versions as appearances_versions)
 from ..campaigns import paths as campaigns_paths
@@ -75,6 +75,7 @@ _REASONS: dict[str, str] = {
     "relationship": "this relationship changed since the scene was absorbed",
     "bond": "this bond changed since the scene was absorbed",
     "plot": "this plot thread changed since the scene was absorbed",
+    "commitment": "this commitment changed since the scene was absorbed",
     "weather": "the weather here changed since the scene was absorbed",
 }
 
@@ -150,6 +151,58 @@ def plot_line(thread: dict) -> str:
     return thread.get("status", "open")
 
 
+def commitment_line(rec: dict) -> str:
+    """A commitment's current position as one line: its kind, its status, the
+    deadline if it has one, and its most recent beat. `plot_line`'s sibling, and
+    shared with `materializer.materialize` for the same reason — the `before` it
+    stages and the value checked against it here cannot be allowed to drift
+    apart.
+
+    The KIND is in the line because `kind` is a field an absorb can change and
+    the reviewer approves the row on what they can see. A reclassification from
+    `threat` to `promise` shows in the staged label, which names the resulting
+    kind; without the stored one here there is nothing to read it against, and
+    the row looks like an ordinary beat. Same reasoning that put `due` here.
+
+    The trailing stamp -- how many beats the record has and where it last moved
+    -- is what makes this a fingerprint rather than a description. Kind, status,
+    deadline and latest beat TEXT can all be identical across two different
+    movements: a second absorb that produces the same sentence ("She missed the
+    payment.") leaves every visible field unchanged, so a review staged before
+    it would read as unmoved and apply, appending its older-scene beat AFTER the
+    newer one and rewinding `last_scene` -- the exact lost update this module
+    exists to stop, in the one place the rendering could not see it. The beat
+    count and `last_scene` move on every movement by construction, so they close
+    it. They are shown to the reviewer rather than checked behind their back:
+    the staged `before` and the value checked against it are one string on
+    purpose (see the module docstring), and "last moved in ..." is the same
+    thing the ledger tells them anyway.
+
+    Every field is coerced rather than trusted: commitments.json is
+    hand-editable and read by a bare `json.loads`, so a list-valued `status`
+    would otherwise be concatenated into the line and raise. `plot_line` does
+    not do this and predates the concern -- and carries the fingerprint gap
+    above for the same reason; the difference is deliberate rather than an
+    inconsistency to tidy away, since changing plot's behaviour belongs to
+    whoever hardens `plot.read` (see the PR discussion).
+    """
+    def _field(value) -> str:
+        return value.strip() if isinstance(value, str) else ""
+
+    due = _field(rec.get("due"))
+    head = (f"{_field(rec.get('kind')) or 'promise'}, "
+            f"{_field(rec.get('status')) or 'open'}"
+            + (f", due {due}" if due else ""))
+    beats = rec.get("beats")
+    beats = beats if isinstance(beats, list) else []
+    last = beats[-1] if beats else None
+    text = _field(last.get("text")) if isinstance(last, dict) else ""
+    line = f"{head} — {text}" if text else head
+    scene = _field(rec.get("last_scene"))
+    stamp = f"{len(beats)} beat{'' if len(beats) == 1 else 's'}"
+    return f"{line} [{stamp}{f', last moved in {scene}' if scene else ''}]"
+
+
 def current_value(cid: str, edit: dict) -> str | None:
     """What the edit's target says right now, or None when there is no verdict
     to give -- an unjudgeable kind, or a target that would not read."""
@@ -193,6 +246,9 @@ def current_value(cid: str, edit: dict) -> str | None:
         if kind == "plot":
             cur = plot.read(cid).get(tid)
             return plot_line(cur) if isinstance(cur, dict) else ""
+        if kind == "commitment":
+            cur = commitments.get(cid, tid)
+            return commitment_line(cur) if isinstance(cur, dict) else ""
         if kind == "weather":
             now = weather_store.current_weather(cid, payload.get("location", ""),
                                                 payload.get("native"))
@@ -233,7 +289,10 @@ def target_key(edit: dict) -> tuple | None:
         target = edit.get("target") or {}
         payload = edit.get("payload") or {}
         field = str(edit.get("field", ""))
-        if kind in ("character_state", "group_state", "plot"):
+        # `commitment` keys like `plot` and for the same reason: both are a
+        # whole-record line rendered from one id, so two edits naming the same id
+        # address the same record.
+        if kind in ("character_state", "group_state", "plot", "commitment"):
             return (kind, str(target.get("id", "")))
         if kind == "lore":
             return (kind, str(target.get("kind", "")), str(target.get("id", "")))

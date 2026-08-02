@@ -1,0 +1,4 @@
+{#- Unresolved promises, threats and foreshadowing. Vars: commitment_lines
+    ([str] — lines rendered per snippets/commitment_line/context.j2). -#}
+{%- if commitment_lines %}# Commitments
+{{ commitment_lines | join("\n") }}{% endif -%}

@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import re
 
-from .. import calendars, characters, groupstate, overlay, playstate, weather
+from .. import calendars, characters, groupstate, overlay, pcs, playstate, weather
+from ..appearances import versions as appearances_versions
 from ..scenes import read as scenes_read
 # Aliased to match `assemble.py` and `macros.py`, and because `_character_states`
 # below takes a parameter named `cast`.
@@ -101,21 +102,578 @@ def _weather_data(cid: str, sid: str) -> dict | None:
     return out
 
 
-def _character_states(aroot, cast) -> list[dict]:
+#: Titles that PRECEDE a personal name. The token after one of these is the
+#: name, so `_short_alias` steps over it rather than giving up.
+_HONORIFIC = frozenset({
+    "mr", "mrs", "ms", "dr", "sir", "lady", "lord", "saint", "st",
+    "old", "young", "king", "queen", "prince", "princess", "captain",
+})
+#: Articles. The token after one of these is a common noun, not a name -- "The
+#: Woman" is an epithet -- so these end the search instead of being stepped over.
+_ARTICLE = frozenset({"the", "a", "an"})
+#: Nobiliary and patronymic particles, which are conventionally lower-cased
+#: INSIDE a personal name -- `Winifred van Saltmarch`, `Mara de la Vance`. They
+#: are the one place the capitalization rule below has to yield: a name is not
+#: an epithet because it carries one. Allowed only in non-head position, so
+#: nothing here can become an alias itself.
+_PARTICLE = frozenset({
+    "van", "von", "der", "den", "de", "del", "della", "di", "da", "do", "dos",
+    "du", "la", "le", "ter", "ten", "bin", "ibn", "al", "af", "av",
+})
+#: First tokens that are ordinary words rather than a personal name. A name
+#: whose head is one of these yields no alias directly -- see `_short_alias`.
+_NOT_A_GIVEN_NAME = _HONORIFIC | _ARTICLE
+
+
+def _word(token: str) -> str:
+    """One token, lower-cased and stripped of the punctuation names carry --
+    so `Dr.` is read as `dr` and `J.` as `j`."""
+    return token.strip(".,").lower()
+
+
+def _name_tokens(name: str) -> list[str]:
+    """`name` split into tokens when it looks like a personal name, else [].
+
+    One place decides that, because `_short_alias` and `_surname_alias` have to
+    agree about it: a string either is a personal name, in which case both ends
+    of it are worth matching, or it is an epithet, in which case neither is.
+    """
+    parts = name.split()
+    if parts and _word(parts[0]) in _HONORIFIC:
+        parts = parts[1:]                # "Dr. Mara Vance" -> "Mara Vance"
+    elif len(parts) < 2:
+        return []                        # one bare token needs no alias
+    if not parts:
+        return []                        # a bare honorific names nobody
+    if not all(p[:1].isupper() or _word(p) in _PARTICLE for p in parts[1:]):
+        return []                        # "The Woman on the Pier" -- an epithet
+    if not parts[0][:1].isupper():
+        return []                        # a particle is never the head
+    if any(_word(p) in _ARTICLE for p in parts):
+        return []                        # "Woman Of The Pier" -- the same, title-cased
+    return parts
+
+
+def _short_alias(name: str) -> str:
+    """The given name inside `name`, or "" when it has none to offer.
+
+    `_mentions` needs this because prose says "Winifred is lying", not
+    "Winifred Vance is lying" -- a whole-name match alone misses every ordinary
+    reference.
+
+    But the short form is only derived from something that LOOKS like a personal
+    name: every token capitalized, no article among them, the head at least two
+    characters and not an article or honorific. Taking the first token
+    unconditionally was a real bug, not a theoretical one -- a card named "The
+    Woman on the Pier" contributed the alias "The", and every suspicion
+    containing the word "the" was then read as naming her and withheld. That is
+    not the conservative direction; it silently empties the block.
+
+    What rejects an epithet is the ARTICLE, not the token count. This capped
+    names at three tokens for a while, which is a proxy that fails on the thing
+    it is supposed to allow: four capitalized tokens -- a given name, a middle
+    name and two surnames -- is an ordinary personal name, and capping it meant
+    "Winifred is hiding the ledger" was checked only against the whole
+    four-token string and reached the prompt. A title-cased epithet is caught by
+    the article wherever it sits -- `Woman Of The Pier`, `Keeper Of The Flame`
+    -- and a lower-cased one by the capitalization rule, so the count was never
+    doing the work.
+
+    The capitalization rule yields in exactly one place: a `_PARTICLE` inside
+    the name. `Winifred van Saltmarch` and `Mara de la Vance` are conventional
+    personal names whose middle tokens are lower-case by convention, and
+    requiring every token to be capitalized rejected them wholesale -- so the
+    card matched only in full while prose said "Winifred". The head is still
+    required to be capitalized and is still checked against
+    `_NOT_A_GIVEN_NAME`, so a particle can never become the alias itself, and
+    the article check is unchanged: `de la` passes, `The`/`A`/`An` anywhere
+    still does not.
+
+    An honorific is STEPPED OVER rather than treated as a dead end: "Dr Mara
+    Vance" yields `Mara`, because what follows a title is a name. An article is
+    not, because what follows one is a common noun -- deriving `Woman` from "The
+    Woman on the Pier" is the same over-match by a different route. That
+    asymmetry is the whole reason the two sets are separate now.
+
+    After the title is stepped over a SINGLE remaining token is enough ("Lady
+    Winifred" -> `Winifred`, "Dr Vance" -> `Vance`), where a bare one is not:
+    "Mara" alone needs no alias, since `_mentions` already matches it in full.
+
+    Both lookups compare the token with its trailing punctuation removed, so
+    the conventional "Dr. Mara Vance" is read the same as "Dr Mara Vance".
+    Without that the abbreviation matched no set at all and `Dr.` came back as
+    the alias itself -- missing the name it precedes AND matching every line
+    that happens to abbreviate a doctor.
+    """
+    parts = _name_tokens(name)
+    if not parts:
+        return ""
+    return _usable(parts[0])
+
+
+def _surname_alias(name: str) -> str:
+    """The family name inside `name`, or "" -- the other half of `_short_alias`.
+
+    Prose refers to a character by surname as readily as by given name ("Vance
+    is hiding the ledger"), and a form set holding only the full name and the
+    given name matched neither, so the suspicion reached the prompt. It carries
+    the same collision handling for free: `_character_states` subtracts the
+    entry OWNER's forms, so two actors sharing a surname drop it from each
+    other's filter exactly as two sharing a given name do.
+
+    A trailing particle is not a surname (`Mara de` is a malformed name, not a
+    person called `de`), and the one-character rule is the initial rule again.
+    """
+    parts = _name_tokens(name)
+    if len(parts) < 2:
+        return ""                        # nothing follows the given name
+    tail = parts[-1]
+    return "" if _word(tail) in _PARTICLE else _usable(tail)
+
+
+def _usable(token: str) -> str:
+    """One token as a matchable form, or "" if it is not one on its own.
+
+    Two characters, not three: `Jo Li` and `Dr. Li Chen` are ordinary names, and
+    rejecting them meant the card matched only in full while prose said "Li
+    knows the truth". Three was a proxy for "not a short ordinary word", and
+    `_mentions` now does that job properly by matching one-word forms
+    case-sensitively. One character stays out -- an initial would match every
+    capital J standing alone.
+
+    The length is measured on the token with its punctuation removed, which is
+    the whole point: `J.` is two characters and one letter, so checking the raw
+    token let the conventional `J. Smith` through as the alias `J.` -- the
+    initial guard, defeated by the punctuation that marks it as an initial.
+    """
+    word = _word(token)
+    return "" if len(word) < 2 or word in _NOT_A_GIVEN_NAME else token.strip(".,")
+
+
+def _forms(names: set[str]) -> set[str]:
+    """Every string an actor can be recognized by: each name plus the given name
+    and the surname inside it. Resolved for the OWNER as well as for the others
+    (see `_character_states`), which is what keeps two actors sharing either
+    name from hiding each other's interiority."""
+    out: set[str] = set()
+    for n in names:
+        out.update({n.strip(), _short_alias(n), _surname_alias(n)})
+    return out - {""}
+
+
+def _mentions(text: str, form: str) -> bool:
+    """Whether `text` contains this one form of an actor's name. The caller
+    supplies the forms (`_forms`), so that "which names count as this actor's"
+    is decided once, where the owner's names are also in scope.
+
+    A ONE-WORD form is matched case-sensitively; a multi-word one is not. Plenty
+    of names are also ordinary words — Will, May, Hope, Grace, Art — and a
+    case-insensitive whole-word match reads "Mara will steal the crates" as
+    naming Will and withholds the paragraph. With that actor on stage, most of
+    every other NPC's state disappears; this is the `The`-matches-everything bug
+    again, reached without an epithet. A name is a proper noun and is
+    capitalized wherever it is used as one, so case is the signal already in the
+    text, and no whitelist of ambiguous names has to be right. Multi-word forms
+    keep the looser match: "the woman on the pier" collides with nothing.
+
+    The word boundary is applied only at an end that is ASCII alphanumeric.
+    `\b` is defined between a word character and a non-word character, and in
+    a script written without spaces — 李明 in 李明藏着账本, ジョー in
+    ジョーが隠している — both neighbours are word characters, so the boundary
+    never matches and the name is never found. That is not a rare shape; it is
+    every campaign not written in a spaced script, for which this filter did
+    nothing whatsoever. Such a form is matched as a plain substring instead.
+
+    The residual imprecision here is NOT one-directional, and that is worth
+    stating plainly because the rest of this filter's is. An epithet-shaped name
+    ("The Woman on the Pier") is matched only in full, so a suspicion that calls
+    her "The Woman" is not recognized and reaches the prompt; a suspicion that
+    writes a one-word name in lowercase is missed too; and a boundary-less form
+    can match inside a longer word. The first two leak and the third over-hides,
+    and all three are accepted rather than papered over: a leak costs one line,
+    the over-match cost the feature, and a filter that cannot see a script at
+    all costs everything for the people writing in it.
+    """
+    if not form:
+        return False
+    edge = r"\b"
+    lead = edge if form[0].isascii() and form[0].isalnum() else ""
+    tail = edge if form[-1].isascii() and form[-1].isalnum() else ""
+    flags = re.IGNORECASE if " " in form else 0
+    return bool(re.search(rf"{lead}{re.escape(form)}{tail}", text, flags))
+
+
+#: The player macro, matched exactly as `macros._substitute` matches it —
+#: `re.escape` of the literal token under IGNORECASE, so `{{User}}` counts and
+#: `{{ user }}` does not (that one never expands either, so it is not a name).
+_USER_MACRO = re.compile(r"\{\{user\}\}", re.IGNORECASE)
+
+
+_LIST_MARKER = re.compile(r"[-*•+]\s|\d+[.)]\s")
+
+#: Markdown emphasis, stripped from the END of a line before asking whether it
+#: is a heading. These blocks are authored prose and `**Winifred:**` is how a
+#: subject line is conventionally written; a bare `endswith(":")` saw the
+#: closing `**`, called it an ordinary line, and left the bullets under it
+#: ungoverned -- publishing the detail whose subject had just been withheld.
+_EMPHASIS_TAIL = "*_`~ \t"
+
+
+#: An ATX markdown heading -- `## Winifred`. A heading is the other way a
+#: subject line is written, and it carries no colon, so `_heads_a_list` has to
+#: know both. Its level is what nests it, and unlike a colon heading it is NOT
+#: ended by a blank line: `## Winifred` / blank / `- is hiding the ledger` is
+#: ordinary markdown, and a heading that stopped governing at the blank would
+#: leave that bullet with no subject.
+_ATX = re.compile(r"(#{1,6})\s+\S")
+
+#: A SETEXT underline -- the other standard markdown heading, where the title is
+#: an ordinary line and the line BELOW it makes it a heading::
+#:
+#:     Winifred
+#:     --------
+#:     - is hiding the ledger
+#:
+#: It is the one heading form that is not recognizable from its own line, which
+#: is why it needs its own pass: the title reads as a paragraph, so the bullets
+#: under it were ungoverned and the detail survived while its subject was
+#: withheld. `=` is level 1 and `-` is level 2, as in markdown.
+_SETEXT = re.compile(r"(=+|-+)$")
+
+
+def _heads_a_list(stripped: str) -> bool:
+    """Whether this line introduces the list items below it."""
+    return bool(_ATX.match(stripped)) or stripped.rstrip(_EMPHASIS_TAIL).endswith(":")
+
+
+def _entries(suspects: str) -> list[list[str]]:
+    """`suspects` grouped into entries — the unit the filter withholds.
+
+    **A paragraph is one entry.** Only a blank line or a list marker starts a
+    new one; consecutive unbulleted lines belong together no matter how they
+    begin.
+
+    This was three times a whitelist of "words that continue a sentence"
+    instead, and it leaked three times: first by dropping only the named line
+    and keeping its pronoun-led continuation, then by keeping the lines BEFORE
+    the name, then — with both of those closed — by treating a capitalized
+    continuation as a fresh statement:
+
+        Winifred is lying.
+        At midnight, she plans to steal the crates.
+
+    "At" is not a pronoun, so the second line read as new and survived. The
+    lesson is not that the whitelist needed another word in it. Whether a
+    sentence continues the one above is anaphora, and no list of head words
+    decides it; within a paragraph any sentence can be about the previous
+    sentence's subject. So the whitelist is gone rather than extended.
+
+    The cost is real and is the one worth accepting: a paragraph of unbulleted
+    suspicions is withheld together when any of them names a present actor, so
+    granularity below the paragraph is no longer available. A blank line or a
+    bullet buys it back, and both are cheap to write. The alternative — a
+    heuristic that decides where a thought ends — has now been wrong three
+    times in the direction that publishes a secret.
+
+    A blank line becomes its own (empty) entry rather than being swallowed: it
+    names nobody, so it survives, and paragraph spacing is preserved instead of
+    collapsing when a neighbour is withheld.
+
+    **A bullet under a heading is GOVERNED by that heading**, which is what the
+    second element of each pair records: the index of the entry that heads this
+    one, or -1. A heading is a non-bullet line ending in `:`, and the shape it
+    creates is the natural way to write these::
+
+        Winifred:
+        - is hiding the ledger
+
+    The bullet is its own entry and names nobody, so on its own verdict it
+    survives -- publishing the private half of a suspicion whose subject was
+    withheld one line above, which is the same leak `_entries` was written to
+    close, arriving through the list marker instead of the line break.
+
+    Governed rather than merged, deliberately. Merging the block into one entry
+    would also bind `Notes:` to every bullet under it, so one named suspicion
+    would cost the whole list -- and a heading that names nobody is exactly
+    where entry granularity is worth keeping. `_visible_suspects` drops a
+    subordinate entry when its heading is dropped and judges it on its own
+    otherwise.
+
+    Headings NEST, so the open ones are a stack rather than one innermost
+    heading: a list can descend into a sub-heading and come back out, and the
+    bullet that comes back out is still governed by the heading it never left.
+    """
+    out: list[list[str]] = []
+    heads: list[int] = []
+    fresh = True                            # the next line opens a new entry
+    # Open headings, outermost first: (entry, rank, kind). `rank` is the
+    # indent for a colon heading or a heading bullet, and the heading LEVEL for
+    # an ATX one -- the two never nest against each other by the same measure.
+    open_heads: list[tuple[int, int, str]] = []
+    for line in suspects.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            out.append([line])              # blank: its own entry, and ends the paragraph
+            heads.append(-1)
+            fresh = True
+            # A blank ends a paragraph, and with it the colon headings and
+            # heading bullets that belong to that paragraph -- but NOT a
+            # markdown section heading, which is conventionally separated from
+            # its own list by exactly this blank line.
+            while open_heads and open_heads[-1][2] != "atx":
+                open_heads.pop()
+            continue
+        atx = _ATX.match(stripped)
+        item = bool(_LIST_MARKER.match(stripped))
+        indent = len(line) - len(line.lstrip())
+        # A setext underline retroactively makes the line ABOVE it a heading, so
+        # it is handled where that line's entry is still reachable rather than
+        # in `_heads_a_list`, which only ever sees one line at a time. A `-----`
+        # is not a list item -- `_LIST_MARKER` wants whitespace after the dash --
+        # so it cannot have been consumed above.
+        # The non-blank check keeps a horizontal RULE from being read as one: a
+        # `---` after a blank line underlines nothing, and treating the blank as
+        # a heading would govern the list below it by an entry that names nobody.
+        if not item and out and out[-1][-1].strip() and _SETEXT.fullmatch(stripped):
+            level = 1 if stripped[0] == "=" else 2
+            while open_heads and (open_heads[-1][2] != "atx" or open_heads[-1][1] >= level):
+                open_heads.pop()
+            # The title's OWN governor is re-decided here, because it was
+            # assigned one line too early: when it was read it looked like an
+            # ordinary paragraph and inherited the section still open above it.
+            # A heading is not governed by the section it closes -- without this
+            # the second `Winifred` / `-------` block in a file would be
+            # withheld along with the first.
+            heads[len(out) - 1] = open_heads[-1][0] if open_heads else -1
+            open_heads.append((len(out) - 1, level, "atx"))
+        if atx:
+            # A section ends at the next heading of its own level or shallower,
+            # and takes every colon heading and bullet inside it along.
+            level = len(atx.group(1))
+            while open_heads and (open_heads[-1][2] != "atx" or open_heads[-1][1] >= level):
+                open_heads.pop()
+        elif item:
+            # Returning to an outer level POPS the headings it has left, and
+            # leaves the one that governs BOTH levels in place. A single
+            # innermost heading could not express that: it reset to "governed by
+            # nobody" instead of to the outer heading, so in
+            #
+            #     Winifred:
+            #     - Plans:
+            #       - steal the ledger
+            #     - knows the truth
+            #
+            # the last bullet came back ungoverned and published a suspicion
+            # about a present actor.
+            #
+            # The two kinds pop at different depths, and the asymmetry is the
+            # convention rather than an accident: a heading BULLET is a sibling
+            # of the bullets at its own indent, so it goes at `>=`, while a
+            # plain colon heading sits at the SAME indent as the bullets it
+            # governs, so it may only be popped by something shallower (`>`).
+            # Popping neither by indent left an indented `Nested:` governing the
+            # outer-level bullet that came after it -- withholding an unrelated
+            # suspicion rather than leaking one, but wrong in the same way.
+            while open_heads and (
+                    (open_heads[-1][2] == "item" and open_heads[-1][1] >= indent)
+                    or (open_heads[-1][2] == "colon" and open_heads[-1][1] > indent)):
+                open_heads.pop()
+        governor = open_heads[-1][0] if open_heads else -1
+        if item or atx or fresh:
+            out.append([line])
+            heads.append(governor)
+            fresh = False
+        else:
+            out[-1].append(line)
+        if _heads_a_list(stripped):
+            # Heading-ness belongs to the line just read, whichever entry it
+            # landed in -- a `:` line arriving as a continuation still heads the
+            # bullets below it.
+            open_heads.append((len(out) - 1, len(atx.group(1)) if atx else indent,
+                               "atx" if atx else ("item" if item else "colon")))
+    return list(zip(out, heads))
+
+
+def _names_present_actor(text: str, others: set[str]) -> bool:
+    """Whether `text` refers to a present actor other than the one it belongs to.
+
+    Two ways it can: by one of their names (`_mentions`), or through the
+    `{{user}}` macro. The macro is the one an alias sweep structurally cannot
+    see — at storage time the entry holds a token, not a name, so matching
+    aliases against it finds nothing and the entry survives the filter. Then
+    `_system_text` runs the assembled block through `macros.expand_macros`,
+    which replaces `{{user}}` with the present player's name, and the private
+    suspicion arrives at the model reading `Seraphine is hiding the ledger`
+    after all. The filter has to know about the macro because the filter runs
+    first.
+
+    No expansion is done here, and none is needed: `_visible_suspects` only
+    runs in a scene with a player in it, so the macro names a present actor by
+    construction — and never *this* NPC, who is not the player. Resolving it to
+    check would only be able to change the answer to the same one.
+    """
+    return bool(_USER_MACRO.search(text)) or any(_mentions(text, f) for f in others)
+
+
+def _visible_suspects(suspects: str, others: set[str]) -> str:
+    """`suspects` with every ENTRY about ANOTHER present actor removed (#116).
+
+    An NPC's suspicions are the one tier of stored knowledge that is wrong by
+    construction: `knows` is what the character holds as fact and the narration
+    may lean on, while `suspects` is a private, possibly-false belief. Feeding
+    every present NPC's suspicions about each other into the same prompt on
+    every turn is how a scene gets narration that quietly knows what no one on
+    stage has said — the model has no way to tell "Mara believes this" from
+    "this is true", because nothing in the block marks the difference.
+
+    So a suspicion about someone *in the room* is withheld, and a suspicion
+    about the absent world is kept: the first is the leak, the second is what
+    makes the character play consistently offstage-aware. Its own subject is
+    never "another actor" — an NPC suspecting something about herself is her
+    own interiority and stays.
+
+    Entry-granular rather than all-or-nothing, so one named suspicion does not
+    cost the block — but an entry is withheld ENTIRE if any of its lines names a
+    present actor, wherever in the entry that name falls (`_entries`). Half a
+    suspicion is still the private half, whichever half it is.
+
+    The residual imprecision is deliberate and one-directional: an entry about
+    an absent character that happens to name a present one is dropped, because
+    withholding a true line costs a detail while publishing a private one costs
+    the scene.
+
+    `others` is every FORM the other present actors are recognized by — their
+    names and the given name inside each (`_forms`), minus the owner's own
+    forms. See `_actor_aliases` for why one name each is not enough.
+
+    An entry under a heading goes when the heading goes. Written in the order
+    the entries come in, so it is transitive without a second pass: an entry's
+    head always precedes it, and that head's verdict already includes its own.
+
+    Not applied in `pcless` scenes — see `_character_states`.
+    """
+    entries = _entries(suspects)
+    dropped: list[bool] = []
+    for lines, head in entries:
+        dropped.append((head >= 0 and dropped[head])
+                       or any(_names_present_actor(line, others) for line in lines))
+    kept: list[str] = []
+    for (lines, _), gone in zip(entries, dropped):
+        if not gone:
+            kept.extend(lines)
+    return "\n".join(kept).strip()
+
+
+def _npc_name(aroot, char_id: str) -> str:
+    try:
+        return characters.read_character(aroot, char_id)["meta"].get("name", char_id)
+    except characters.CharacterNotFound:
+        return char_id
+
+
+def _actor_aliases(aroot, cid: str, actor: dict) -> set[str]:
+    """Every name a present actor is referred to by — the character's own meta
+    name AND the name on the card/persona version locked into this scene.
+
+    Both, because the two can differ and each is the one some part of the app
+    uses. The meta name labels the `# Character state` block; the locked card's
+    `data.name` is what the character-description section, the transcript and
+    the cast UI show, and therefore what another NPC's stored `suspects` is
+    likely to call them. Matching on either one alone leaves a hole in the
+    opposite direction: with only the meta name, a suspicion written as "The
+    Woman on the Pier is hiding the ledger" sails past a filter looking for
+    "Seraphine"; with only the card name, an NPC's own interiority reads as
+    being about somebody else and is withheld for nothing.
+
+    Failure is per actor and silent: an actor whose card cannot be read
+    contributes the names that could be resolved. Fewer aliases can only hide
+    less, never leak more — the same one-directional bias the rest of this
+    filter is built on — and the alternative is one unreadable card emptying the
+    whole block.
+    """
+    kind, aid = actor["kind"], actor["id"]
+    names: set[str] = set()
+    vid = appearances_versions.locked_version(cid, kind, aid)
+    if kind == "characters":
+        names.add(_npc_name(aroot, aid))
+        if vid:
+            try:
+                names.add(characters.read_card(aroot, aid, vid)["data"].get("name", ""))
+            except (characters.CharacterNotFound, characters.VersionNotFound):
+                pass
+    elif kind == "pcs":
+        # BOTH names here too, for the reason the character branch above takes
+        # both: a PC's container name and its locked persona name can differ,
+        # and taking only the persona left a suspicion written against the
+        # canonical PC name unmatched. The asymmetry was an oversight, not a
+        # judgement about PCs.
+        try:
+            names.add(pcs.read_pc(aroot, aid)["meta"].get("name", ""))
+        except pcs.PCNotFound:
+            pass
+        if vid:
+            try:
+                names.add(pcs.read_persona(aroot, aid, vid).get("name", ""))
+            except (pcs.PCNotFound, pcs.PCVersionNotFound):
+                pass
+    return {n.strip() for n in names if isinstance(n, str) and n.strip()}
+
+
+def _character_states(aroot, cid: str, cast, pcless: bool) -> list[dict]:
     """`aroot` is an `appearances.locked_actor_root` — `cast` comes from the
     appearance record, so both the campaign-local state.md and the actor's
-    campaign-side copy are found under it."""
+    campaign-side copy are found under it.
+
+    `pcless` drives the POV filter (#116). A pcless scene is the director's own
+    view — there is no player whose knowledge the narration has to respect, and
+    the whole point of an offscreen turn is to move NPCs by what they privately
+    believe — so it gets full disclosure. A scene with a player in it does not:
+    each present NPC's `suspects` is filtered to what is not about another
+    present actor. `current_state` and `knows` are never filtered; they are the
+    tier the narration is allowed to treat as true.
+
+    Every present actor's names are resolved HERE, from the cast, rather than
+    handed in by `assemble`. Its `npc_names` / `player_names` are one name each
+    and the wrong one for this: they are the locked card's `data.name`, while
+    the block is labelled with the character's meta name. Passing either list
+    made the filter and the label disagree — see `_actor_aliases`, which
+    resolves both names for each actor so neither hole is open.
+
+    This is the coarse half of #116. Filtering by mentioned name is a heuristic
+    standing in for an audience marked on the entry itself, and true
+    player-facing POV needs a scene to record whose eyes it is behind (#86) and
+    knowledge to be stored per-entry rather than as prose (#122). Both are
+    prerequisites this deliberately does not invent a field for.
+    """
     try:
+        aliases = [(a, _actor_aliases(aroot, cid, a)) for a in cast]
         out = []
-        for a in cast:
-            if a["role"] != "npc" or a["kind"] != "characters":
+        for actor, own in aliases:
+            if actor["role"] != "npc" or actor["kind"] != "characters":
                 continue
-            st = playstate.read_state(aroot, a["id"])
-            if st and (st["current_state"] or st["knows"] or st["suspects"]):
-                try:
-                    name = characters.read_character(aroot, a["id"])["meta"].get("name", a["id"])
-                except characters.CharacterNotFound:
-                    name = a["id"]
+            char_id = actor["id"]
+            st = playstate.read_state(aroot, char_id)
+            if not st:
+                continue
+            name = _npc_name(aroot, char_id)
+            if not pcless:
+                # Every FORM of every OTHER present actor, minus this one's
+                # own — a character suspecting something about herself is her
+                # own interiority, under whichever name she is written down by.
+                #
+                # Forms, not names, because the collision is between the
+                # DERIVED ones: an owner called `Mara Chen` beside an actor
+                # called `Mara Vance` shares the short alias `Mara`, and
+                # subtracting stored names alone left it in `others` — so her
+                # own "Mara Chen fears she made a mistake" matched the other
+                # actor and was withheld, which is precisely the exception this
+                # subtraction exists to make. `Mara Vance` in full still
+                # withholds, because only the ambiguous form is dropped.
+                own_forms = _forms(own)
+                others = set().union(*(_forms(names) for other, names in aliases
+                                       if other is not actor), set()) - own_forms
+                st = {**st, "suspects": _visible_suspects(st["suspects"], others)}
+            if st["current_state"] or st["knows"] or st["suspects"]:
                 out.append({"name": name, **st})
         return out
     except Exception:  # noqa: BLE001 — garbled state: omit, don't crash the context build

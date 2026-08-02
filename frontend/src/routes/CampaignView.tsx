@@ -14,6 +14,7 @@ import { LOCKED_WHILE_GENERATING } from "../components/sceneLock";
 import { CastPanel } from "../components/CastPanel";
 import { NewSceneChooser } from "../components/NewSceneChooser";
 import { ChangesPanel } from "../components/ChangesPanel";
+import { LedgerPanel } from "../components/LedgerPanel";
 import { CalendarConfig } from "../components/CalendarConfig";
 import MechanicsConfig from "../components/MechanicsConfig";
 import { ResponsePresetPicker } from "../components/ResponsePresetPicker";
@@ -81,6 +82,11 @@ const PHASE_LABELS: Record<AbsorbPhase["name"], string> = {
   voice: "voice checks",
   audit: "mechanics audit",
 };
+
+// Staged edit kinds whose payload stamps the scene the beat came from, and so
+// have to follow a scene rename made while the review is open — see
+// `reviewSceneRenamed`.
+const SCENE_STAMPED: StagedEdit["kind"][] = ["plot", "commitment"];
 
 // The dossier phase has five distinguishable bad endings and the wording has to
 // match the edit list beside it: "prepared", never "refreshed" (a dossier is
@@ -378,6 +384,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   const [roster, setRoster] = useState<RosterEntry[]>([]);
   const [drawer, setDrawer] = useState<DrawerTarget | null>(null);
   const [showChanges, setShowChanges] = useState(false);
+  const [showLedger, setShowLedger] = useState(false);
   const [absorb, setAbsorb] = useState<SceneAbsorb | null>(null);
   // The scene this review was absorbed FROM. Switching scenes leaves the panel
   // open, so saving against the currently selected scene would commit scene A's
@@ -786,14 +793,30 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   }
 
   // A scene's id is its filename, so a rename mints a new one. `scene_refs.repoint`
-  // carries every *persisted* reference across; three more live only in this
+  // carries every *persisted* reference across; four more live only in this
   // browser, where no server-side repointer can see them:
   //   - `absorbSid`, the id an open review's save and audit retry POST;
-  //   - `payload.scene` on each staged plot edit, which absorb.materialize
-  //     embedded and apply_edits passes straight to plot.set_movement — so a save
-  //     after a rename would append beats pointing at a scene that is gone; and
+  //   - `payload.scene` on each staged plot or commitment edit, which
+  //     absorb.materialize embedded and apply_edits passes straight to
+  //     plot.set_movement / commitments.set_movement — so a save after a rename
+  //     would append beats pointing at a scene that is gone. Both kinds, because
+  //     both stamp the beat with the scene it came from (#115);
+  //   - the staged CONFLICT BASIS of a commitment row. `conflicts.commitment_line`
+  //     ends `[N beats, last moved in <scene>]`, and `scene_refs.repoint` rewrites
+  //     that scene id in the stored record — so a row left holding the old id no
+  //     longer matches what the store says and saves as a spurious conflict, on a
+  //     commitment nobody touched. `resolve_from` gets the same treatment: it is
+  //     the value the reviewer was shown, and it is compared the same way; and
   //   - the id the reroll-alternates state is scoped to (below).
   function reviewSceneRenamed(oldId: string, newId: string) {
+    // Anchored to the END of the line, so a beat that happens to quote the old
+    // scene id in its own text is left alone — only the fingerprint moves. The
+    // beat count sits in front of this and is not matched: it is "1 beat" in the
+    // singular and "N beats" otherwise, and matching the plural alone silently
+    // skipped every commitment with exactly one beat.
+    const from = `, last moved in ${oldId}]`;
+    const to = `, last moved in ${newId}]`;
+    const repoint = (v: string) => (v.endsWith(from) ? v.slice(0, -from.length) + to : v);
     setAbsorbSid((s) => (s === oldId ? newId : s));
     // The alternates sidecar moves with the scene file (`scene_refs.repoint`),
     // but the id this state is scoped to lives only here — left stale, the
@@ -813,9 +836,16 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     // its rejection says nothing about the renamed scene, and honouring that
     // rejection would hide the controls until something re-selects the scene.
     if (altsReq.current.sid === oldId) fetchAlternates(cid, newId);
-    setEditRows((rows) => rows.map((r) => (
-      r.kind === "plot" && r.payload?.scene === oldId
-        ? { ...r, payload: { ...r.payload, scene: newId } } : r)));
+    setEditRows((rows) => rows.map((r) => {
+      if (!SCENE_STAMPED.includes(r.kind)) return r;
+      const next = { ...r };
+      if (r.payload?.scene === oldId) next.payload = { ...r.payload, scene: newId };
+      if (r.kind === "commitment") {
+        next.before = repoint(r.before);
+        if (r.resolve_from !== undefined) next.resolve_from = repoint(r.resolve_from);
+      }
+      return next;
+    }));
   }
 
   // A scene's id is its filename, so a rename mints a new one and every piece
@@ -856,6 +886,14 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     }
     const again = rerollToRetryRef.current;
     if (again && again.sid === oldId) rerollToRetryRef.current = { ...again, sid: newId };
+    // A rename changes data the ledger route returns — every thread and
+    // commitment carries the TITLE of the scene that last moved it — and the
+    // rename paths touch none of the panel's other dependencies: same campaign,
+    // no absorb saved. Bumped HERE for the same reason everything else id-keyed
+    // moved here: `sceneRenamed` reaches it through `selectScene`, renaming
+    // from the scene list does not select anything, and a sixth caller would be
+    // a sixth chance to forget.
+    setCtxKey((k) => k + 1);
   }
 
   // Reports rather than throws. `EditableRow` calls this from an event handler
@@ -953,6 +991,12 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     await api.deleteScene(cid, s.id);
     const list = await api.listScenes(cid);
     setScenes(list);
+    // Same reason as `renameScene`: the ledger resolves every thread,
+    // commitment and fact against the scene list, so a deletion changes what
+    // it returns. Deleting an INACTIVE scene selects nothing, and deleting the
+    // last one takes the `else` branch below, so neither reaches the
+    // `selectScene` that would otherwise bump this.
+    setCtxKey((k) => k + 1);
     if (activeId === s.id) {
       if (list.length) selectScene(list[0].id);
       else {
@@ -1921,6 +1965,9 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
               <a href={`/api/campaigns/${cid}/export.json`} download>JSON</a>
             </div>
           </details>
+          <button className="sub-changes" onClick={() => setShowLedger((v) => !v)}>
+            {showLedger ? "Close" : "Ledger"}
+          </button>
           <button className="sub-changes" onClick={() => setShowChanges((v) => !v)}>
             {showChanges ? "Close" : "Changes"}
           </button>
@@ -2020,6 +2067,10 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
                                   onChanged={() => activeId && selectScene(activeId)} />
           </div>
         )}
+        {/* `ctxKey` bumps on every successful absorb save (and on scene select),
+            which is what re-reads a ledger the user left open across one — the
+            mount alone only covers toggling it shut and back. */}
+        {showLedger && <LedgerPanel cid={cid} refreshKey={ctxKey} />}
         {showChanges && <ChangesPanel cid={cid} />}
         {editFailures.length > 0 && (
           <div className="mechanics-notice">
