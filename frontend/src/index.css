@@ -790,6 +790,11 @@ button.primary { background: var(--accent); color: var(--on-accent); border: var
 .ctx-section > summary::-webkit-details-marker { display: none; }
 .ctx-dot { width: 7px; height: 7px; background: var(--ink); flex: none; }
 .ctx-dot.hot { background: var(--accent); }
+/* A dropped section is still listed — the point of showing it is that the cut
+   is visible — but struck through and dimmed, so it never reads as sent. */
+.ctx-section.dropped .ctx-dot { background: none; border: 1px solid var(--muted); }
+.ctx-section.dropped .ctx-label { color: var(--muted); text-decoration: line-through; }
+.ctx-drop { font-family: var(--fm); font-size: 9px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); border: 1px solid var(--rule-soft); padding: 0 4px; }
 .ctx-label { flex: 1; font-size: 14px; }
 .ctx-meta { font-family: var(--fm); font-size: 10px; color: var(--muted); }
 .ctx-mini { height: 4px; background: var(--track); margin: 2px 0 6px; }

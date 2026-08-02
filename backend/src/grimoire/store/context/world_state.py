@@ -16,6 +16,17 @@ from ..scenes import read as scenes_read
 from . import cast as cast_data
 
 
+def keyword_hit(keys, text: str) -> bool:
+    """Whole-word, case-insensitive: does any key appear in `text`?
+
+    Factored out of `activate` so archive retrieval (`archive._archive_entries`)
+    selects by exactly these semantics rather than a lookalike that drifts from
+    them -- "pact" must keep not matching the key "pac" on both sides of the
+    seam.
+    """
+    return any(re.search(rf"\b{re.escape(k)}\b", text, re.IGNORECASE) for k in keys)
+
+
 def activate(entries: list[dict], recent_text: str, present: frozenset = frozenset()) -> list[dict]:
     """Select world-info entries. Owned entries (owners non-empty) are silent unless one
     owner ref is in `present`; then keyless = always-on, keyed = any key whole-word (ci) in
@@ -29,7 +40,7 @@ def activate(entries: list[dict], recent_text: str, present: frozenset = frozens
         if not keys:
             out.append(e)
             continue
-        if any(re.search(rf"\b{re.escape(k)}\b", recent_text, re.IGNORECASE) for k in keys):
+        if keyword_hit(keys, recent_text):
             out.append(e)
     return out
 

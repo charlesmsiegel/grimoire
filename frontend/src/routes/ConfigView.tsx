@@ -15,6 +15,8 @@ export default function ConfigView() {
   const [assistantLabel, setAssistantLabel] = useState("");
   const [llmTimeout, setLlmTimeout] = useState("");
   const [absorbBudget, setAbsorbBudget] = useState("");
+  const [contextBudget, setContextBudget] = useState("");
+  const [archiveDepth, setArchiveDepth] = useState("");
   const [saved, setSaved] = useState(false);
 
   const [dataDir, setDataDir] = useState<DataDirInfo | null>(null);
@@ -30,6 +32,8 @@ export default function ConfigView() {
       setAssistantLabel(c.assistant_label);
       setLlmTimeout(c.llm_timeout);
       setAbsorbBudget(c.absorb_budget);
+      setContextBudget(c.context_budget);
+      setArchiveDepth(c.archive_depth);
     });
     api.getDataDir().then((d) => {
       setDataDir(d);
@@ -53,7 +57,7 @@ export default function ConfigView() {
 
   if (!config) return <div className="page page-narrow config">Loading…</div>;
 
-  async function save(fields: Partial<{ theme: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string; active_connection_id: string; llm_timeout: string; absorb_budget: string }>) {
+  async function save(fields: Partial<{ theme: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string; active_connection_id: string; llm_timeout: string; absorb_budget: string; context_budget: string; archive_depth: string }>) {
     const next = await api.putConfig(fields);
     setConfig(next);
     setSaved(true);
@@ -146,6 +150,28 @@ export default function ConfigView() {
         <code> 0</code> to remove the limit, e.g. for a slow local endpoint.
       </p>
 
+      <div className="section-label">Context</div>
+      <div className="field-row">
+        <div className="field">
+          <label htmlFor="cfg-context-budget">Context budget (tokens)</label>
+          <input id="cfg-context-budget" type="text" inputMode="numeric" value={contextBudget}
+                 placeholder="0" onChange={(e) => setContextBudget(e.target.value)} />
+        </div>
+        <div className="field">
+          <label htmlFor="cfg-archive-depth">Recalled scenes</label>
+          <input id="cfg-archive-depth" type="text" inputMode="numeric" value={archiveDepth}
+                 placeholder="3" onChange={(e) => setArchiveDepth(e.target.value)} />
+        </div>
+      </div>
+      <p className="field-hint">
+        The token ceiling a scene's prompt is packed into. Over it, whole sections are
+        dropped — recalled scenes first, then the older conversation, then the standing
+        frame; the system prompts, the characters and the reply format are never dropped.
+        The scene inspector shows what was cut. <code>0</code> means no ceiling, and
+        nothing is ever dropped. Recalled scenes is how many older absorbed scenes a
+        keyword match may pull back into context at once.
+      </p>
+
       <div className="section-label">System prompt</div>
       <label className="sr-only" htmlFor="cfg-system-prompt">
         System prompt (sent with every scene)
@@ -204,6 +230,7 @@ export default function ConfigView() {
             system_prompt: systemPrompt,
             user_label: userLabel, assistant_label: assistantLabel,
             llm_timeout: llmTimeout, absorb_budget: absorbBudget,
+            context_budget: contextBudget, archive_depth: archiveDepth,
           })}
         >
           Save

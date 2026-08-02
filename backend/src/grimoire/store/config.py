@@ -12,6 +12,13 @@ DEFAULT_MODEL = "anthropic/claude-opus-4.1"
 DEFAULT_THEME = "codex"
 DEFAULT_SCAN_DEPTH = "8"
 DEFAULT_RECAP_DEPTH = "5"
+# How many older scenes keyword-triggered archive retrieval may recall at once
+# (context/archive.py). 0 disables it.
+DEFAULT_ARCHIVE_DEPTH = "3"
+# Token ceiling the context packer fits the prompt into (context/pack.py).
+# "0" = unbounded, which is what every install gets until the user sets one:
+# the backend cannot see the model's window size, only the frontend can.
+DEFAULT_CONTEXT_BUDGET = "0"
 DEFAULT_USER_LABEL = "You"
 DEFAULT_ASSISTANT_LABEL = "Grimoire"
 DEFAULT_CLAUDE_MODEL = "opus"
@@ -30,7 +37,8 @@ _LENGTH_KEYS = ("response_preset", "length_reply_words", "length_blocks",
                 "length_paragraphs", "length_speakers", "length_blocks_per_speaker")
 
 _CONFIG_KEYS = ("theme", "context_scan_depth", "system_prompt",
-                "quote_color", "recap_depth", "user_label", "assistant_label",
+                "quote_color", "recap_depth", "archive_depth", "context_budget",
+                "user_label", "assistant_label",
                 "default_style_id", "active_connection_id",
                 "llm_timeout", "absorb_budget") + _LENGTH_KEYS
 
@@ -45,6 +53,8 @@ def read_config() -> dict[str, str]:
     defaults = {"theme": DEFAULT_THEME,
                 "context_scan_depth": DEFAULT_SCAN_DEPTH, "system_prompt": "", "quote_color": "off",
                 "recap_depth": DEFAULT_RECAP_DEPTH,
+                "archive_depth": DEFAULT_ARCHIVE_DEPTH,
+                "context_budget": DEFAULT_CONTEXT_BUDGET,
                 "user_label": DEFAULT_USER_LABEL, "assistant_label": DEFAULT_ASSISTANT_LABEL,
                 "default_style_id": "", "active_connection_id": "",
                 "llm_timeout": DEFAULT_LLM_TIMEOUT, "absorb_budget": DEFAULT_ABSORB_BUDGET,

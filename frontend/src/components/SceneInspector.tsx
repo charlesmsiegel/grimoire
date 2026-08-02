@@ -201,9 +201,13 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
     }
   }
 
-  const ctxLen = useMemo(
+  const modelLen = useMemo(
     () => models.find((m) => m.id === ctx?.model)?.context ?? 0,
     [models, ctx]);
+  // Percentages measure against whatever actually bounds the prompt: the
+  // configured packer budget when there is one (that is the ceiling sections
+  // get dropped to fit), otherwise the model's own window.
+  const ctxLen = ctx?.budget_tokens ? ctx.budget_tokens : modelLen;
 
   const pct = (t: number) => (ctxLen > 0 ? ` · ${Math.round((t / ctxLen) * 100)}%` : "");
   const pctNumber = (t: number) => (ctxLen > 0 ? Math.round((t / ctxLen) * 100) : 0);
@@ -350,14 +354,21 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
             <div className="ctx-tokens">
               {ctx.total_tokens.toLocaleString()}{ctxLen > 0 ? ` / ${ctxLen.toLocaleString()}` : ""} tok
             </div>
+            {ctx.dropped_tokens > 0 && (
+              <div className="ctx-tokens">
+                {ctx.dropped_tokens.toLocaleString()} tok dropped to fit the budget
+              </div>
+            )}
             <div className="ctx-caption">Breakdown · click a row to inspect</div>
           </>
         )}
         {ctx?.sections.map((s) => (
-          <details className="ctx-section" key={s.label}>
+          <details className={"ctx-section" + (s.dropped ? " dropped" : "")} key={s.label}>
             <summary>
               <span className={"ctx-dot" + (s.label.toLowerCase().includes("transcript") ? " hot" : "")} />
               <span className="ctx-label">{s.label}</span>
+              {s.dropped && <span className="ctx-drop">dropped</span>}
+              {s.trimmed > 0 && <span className="ctx-drop">{s.trimmed} trimmed</span>}
               <span className="ctx-meta">{s.tokens.toLocaleString()}{pct(s.tokens)}</span>
             </summary>
             <div className="ctx-mini">

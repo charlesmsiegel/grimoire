@@ -58,8 +58,9 @@ beforeEach(() => {
   (api.listCampaignPCs as any).mockResolvedValue([]);
   (api.getSceneLocation as any).mockResolvedValue({ current: { id: "crypt", name: "The Crypt" }, visited: [] });
   (api.getSceneContext as any).mockResolvedValue({
-    model: "m", total_tokens: 100,
-    sections: [{ label: "World info", text: "lore text", tokens: 100 }],
+    model: "m", total_tokens: 100, dropped_tokens: 0, budget_tokens: 0,
+    sections: [{ label: "World info", text: "lore text", tokens: 100,
+                 tier: "spotlight", dropped: false, trimmed: 0 }],
   });
   (api.getCastDetail as any).mockResolvedValue({ kind: "characters", id: "seraphine", name: "Seraphine", version: "default", body: "keeper" });
   (getModels as any).mockResolvedValue([{ id: "m", name: "M", context: 1000, prompt: "0", completion: "0" }]);
@@ -352,4 +353,44 @@ test("a failed remove surfaces the error banner instead of silently failing", as
   await screen.findByText("Seraphine");
   fireEvent.click(screen.getByRole("button", { name: /remove seraphine from scene/i }));
   await screen.findByText("actor kind not found");
+});
+
+test("a section the budget dropped is shown as dropped, not hidden", async () => {
+  // The whole point of reporting drops is that the user can see them; a
+  // dropped section that simply vanished would be the silent truncation the
+  // packer replaced.
+  (api.getSceneContext as any).mockResolvedValue({
+    model: "m", total_tokens: 100, dropped_tokens: 40, budget_tokens: 120,
+    sections: [
+      { label: "World info", text: "lore text", tokens: 100, tier: "spotlight", dropped: false, trimmed: 0 },
+      { label: "Earlier scenes", text: "old scene", tokens: 40, tier: "archive", dropped: true, trimmed: 0 },
+    ],
+  });
+  renderInspector();
+  const dropped = await screen.findByText("Earlier scenes");
+  expect(dropped.closest("details")!.className).toContain("dropped");
+  await screen.findByText("dropped");
+  await screen.findByText(/40 tok dropped to fit the budget/i);
+});
+
+test("percentages measure against the configured budget, not the model window", async () => {
+  (api.getSceneContext as any).mockResolvedValue({
+    model: "m", total_tokens: 100, dropped_tokens: 0, budget_tokens: 200,
+    sections: [{ label: "World info", text: "lore text", tokens: 100,
+                 tier: "spotlight", dropped: false, trimmed: 0 }],
+  });
+  renderInspector();
+  // 100 of a 200-token budget is 50%, not 10% of the model's 1000-token window
+  await screen.findByText("50%");
+  await screen.findByText(/100 \/ 200 tok/);
+});
+
+test("a trimmed history says how many turns went", async () => {
+  (api.getSceneContext as any).mockResolvedValue({
+    model: "m", total_tokens: 100, dropped_tokens: 0, budget_tokens: 200,
+    sections: [{ label: "Conversation history", text: "turns", tokens: 100,
+                 tier: "history", dropped: false, trimmed: 3 }],
+  });
+  renderInspector();
+  await screen.findByText("3 trimmed");
 });
