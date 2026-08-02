@@ -28,6 +28,12 @@ field's own text (`MERGEABLE`): a plot row's `before` is a rendering of status
 plus last beat, so pasting it into the beat textarea would write the rendering
 back as a beat.
 
+An answered row is **not** waved through on the strength of the flag. It also
+carries ``resolve_from``, the value the reviewer was shown, and stays under the
+same comparison against that snapshot -- `resolve` is permission to overwrite
+one specific text, not permission to overwrite whatever is there by the time
+the retry lands. See `_basis`.
+
 Two deliberate silences, both so the check never invents a conflict it cannot
 prove:
 
@@ -72,6 +78,13 @@ _REASONS: dict[str, str] = {
     "weather": "the weather here changed since the scene was absorbed",
 }
 
+#: Why an already-answered row is back. One line rather than a second table:
+#: what matters to the reviewer is not which kind moved -- they are looking at
+#: the row -- but that it moved *after* they answered, so the value they were
+#: shown is no longer the one they would be overwriting.
+_RECHECK_REASON = ("this changed again after you answered — the value you were "
+                   "shown is not what is stored now")
+
 #: Kinds whose `before`/`after` are the stored field's own literal text, so a
 #: merged draft can be written straight back into it. The rest render a value
 #: (a feeling, a bond type, a plot status + beat, a weather axis) into a line
@@ -84,8 +97,16 @@ RESOLUTIONS: frozenset[str] = frozenset({"replace", "merge"})
 
 
 def resolved(edit: dict) -> bool:
-    """Whether the reviewer already authorized this edit over a conflict."""
-    return isinstance(edit, dict) and edit.get("resolve") in RESOLUTIONS
+    """Whether the reviewer already authorized this edit over a conflict.
+
+    The `isinstance` is not decoration: `edits` reaches us straight off a client
+    PUT body, `ChronicleSave` validates only that each item is a dict, and
+    ``[] in frozenset(...)`` raises rather than returning False.
+    """
+    if not isinstance(edit, dict):
+        return False
+    resolve = edit.get("resolve")
+    return isinstance(resolve, str) and resolve in RESOLUTIONS
 
 
 def plot_line(thread: dict) -> str:
@@ -104,10 +125,16 @@ def current_value(cid: str, edit: dict) -> str | None:
     if not isinstance(edit, dict):
         return None
     kind = edit.get("kind")
-    target = edit.get("target") or {}
-    tid = target.get("id") or ""
-    payload = edit.get("payload") or {}
+    # `target`/`payload` are read INSIDE the guard, not above it. They come
+    # off a client PUT body that is validated only as "a dict", so a `target`
+    # that is a string or a list makes `.get` raise -- and raising out here
+    # would turn one malformed row into a 500 for the whole save, where
+    # `apply_edits` has always skipped such a row under its best-effort
+    # contract. Unreadable and malformed land in the same place: no verdict.
     try:
+        target = edit.get("target") or {}
+        tid = target.get("id") or ""
+        payload = edit.get("payload") or {}
         if kind == "character_state":
             st = playstate.read_state(campaigns_paths.campaign_root(cid), tid)
             if not st:
@@ -141,8 +168,8 @@ def current_value(cid: str, edit: dict) -> str | None:
             if now is None:
                 return None   # unparseable moment: the case the resolver declines
             return now.get(edit.get("field", ""))
-    except Exception:  # noqa: BLE001 -- an unreadable target proves no contradiction
-        return None
+    except Exception:  # noqa: BLE001 -- an unreadable or malformed target proves
+        return None                   # no contradiction
     return None
 
 
@@ -165,40 +192,73 @@ def merge_text(before: str, after: str, stored: str) -> str:
     return (stored.rstrip() + "\n\n" + "\n".join(fresh)).strip()
 
 
+def _basis(edit: dict) -> tuple[str, bool] | None:
+    """The value this edit claims its target holds, and whether that claim is a
+    reviewer's answer rather than the staged proposal. None when the edit makes
+    no claim at all -- the opt-out no read can overrule.
+
+    An **answered** row is judged against ``resolve_from``, the value the
+    reviewer was actually shown, and not against `before`. `resolve` authorizes
+    overwriting *that specific text*; the record can move again between the
+    refusal and the retry, and treating the flag alone as standing permission
+    would let the retry overwrite a value nobody ever saw -- exactly the lost
+    update this module exists to stop. A resolution carrying no snapshot keeps
+    the older unconditional meaning, so a client that does not send one still
+    saves.
+    """
+    if resolved(edit):
+        seen = edit.get("resolve_from")
+        return (seen, True) if isinstance(seen, str) else None
+    if "before" not in edit:
+        return None
+    return (edit.get("before") or "", False)
+
+
 def conflict_row(cid: str, edit: dict) -> dict | None:
     """The conflict this edit is in, or None. Carries everything the reviewer
     needs to choose without a second round-trip: what is stored, what was
     proposed, and the merged draft when merging makes sense for the kind."""
-    if not isinstance(edit, dict) or "before" not in edit:
+    if not isinstance(edit, dict):
         return None
-    reason = _REASONS.get(edit.get("kind", ""))
-    if reason is None:
+    kind = edit.get("kind")
+    # A `kind` that is not a string is malformed input rather than an unknown
+    # kind, and an unhashable one raises out of the lookup. Same boundary as the
+    # `target` read in `current_value`.
+    if not isinstance(kind, str) or kind not in _REASONS:
         return None
+    claim = _basis(edit)
+    if claim is None:
+        return None
+    basis, rechecking = claim
     stored = current_value(cid, edit)
-    before = edit.get("before") or ""
-    if stored is None or stored == before:
+    if stored is None or stored == basis:
         return None
-    kind, after = edit["kind"], edit.get("after", "")
-    mergeable = kind in MERGEABLE
+    after, mergeable = edit.get("after", ""), kind in MERGEABLE
     return {"id": edit.get("id", ""), "label": edit.get("label", ""), "kind": kind,
-            "field": edit.get("field", ""), "before": before, "after": after,
-            "stored": stored, "reason": reason, "mergeable": mergeable,
-            "merged": merge_text(before, after, stored) if mergeable else after}
+            "field": edit.get("field", ""), "before": edit.get("before") or "",
+            "after": after, "stored": stored, "mergeable": mergeable,
+            "reason": _RECHECK_REASON if rechecking else _REASONS[kind],
+            # Diffed from the BASIS, not from `before`: on a recheck the basis is
+            # the text the reviewer was looking at, so basis -> after is their
+            # own edit and nothing else.
+            "merged": merge_text(basis, after, stored) if mergeable else after}
 
 
 def batch_verdicts(cid: str, edits: list[dict]) -> list[dict | None]:
     """One verdict per edit, positionally.
 
     Positional rather than keyed by edit id so two rows cannot collide on a
-    blank or duplicated id, and computed in a single pass **before** any of the
-    batch is written: applying edit A can move the record edit B was staged
-    against, and a check interleaved with the writes would report B as
-    conflicted with the batch's own work.
+    blank or duplicated id -- `materialize` dedupes only plot threads, so two
+    lore or relationship proposals naming one target really can share an id --
+    and computed in a single pass **before** any of the batch is written:
+    applying edit A can move the record edit B was staged against, and a check
+    interleaved with the writes would report B as conflicted with the batch's
+    own work.
     """
-    return [None if resolved(e) else conflict_row(cid, e) for e in edits]
+    return [conflict_row(cid, e) for e in edits]
 
 
 def check_conflicts(cid: str, edits: list[dict]) -> list[dict]:
-    """Every conflicted edit in the batch, in batch order. Rows the reviewer has
-    already resolved (`replace`/`merge`) are authorized and never reported."""
+    """Every conflicted edit in the batch, in batch order. A row the reviewer
+    already answered comes back only if its target moved since they answered."""
     return [v for v in batch_verdicts(cid, edits) if v is not None]
