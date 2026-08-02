@@ -155,12 +155,23 @@ def _disown_dead_guidance(cid: str, sid: str) -> None:
 def post_chat(cid: str, sid: str, turn: ChatTurn, client: LLMClient = Depends(get_llm)):
     _require_scene(cid, sid)
     conn = _require_connection()
-    store.proposals.supersede(cid, sid)  # a new send retires any pending decision
-    if store.scenes.is_pcless(cid, sid) or not turn.content.strip():
-        # ephemeral turn, never stored: a director note steering one generation
-        # (pcless), or — in any scene — an empty send meaning "next NPC round"
+    # ephemeral turn, never stored: a director note steering one generation
+    # (pcless), or — in any scene — an empty send meaning "next NPC round"
+    ephemeral = store.scenes.is_pcless(cid, sid) or not turn.content.strip()
+    # Heal, then the sidecar, then retire — the same split regenerate makes, and
+    # for the same reason. `_disown_dead_guidance` writes a file that can refuse
+    # the write, and it used to run AFTER the retirement: an empty send over an
+    # unwritable sidecar then retired a recoverable decision and returned 500
+    # having generated nothing. Heal still leads, because it is what can append
+    # a 🎲 line, and the sidecar has to resolve against the transcript that
+    # leaves behind. One lock, so a resolution cannot land between the three.
+    with store.locks.campaign_lock(cid):
+        store.proposals.heal(cid, sid)
+        if ephemeral:
+            _disown_dead_guidance(cid, sid)
+        store.proposals.supersede(cid, sid)  # a new send retires any pending decision
+    if ephemeral:
         note = turn.content.strip() or prompts.render("scene/director_note.j2")
-        _disown_dead_guidance(cid, sid)
         messages = store.context.build_director_messages(
             cid, sid, note, turn=_turn_override(turn))
         return _chat_stream(cid, sid, messages, conn, client)
@@ -191,10 +202,15 @@ def post_retry(cid: str, sid: str, body: RetryBody | None = None,
                client: LLMClient = Depends(get_llm)):
     scene = _require_scene(cid, sid)
     conn = _require_connection()
-    store.proposals.supersede(cid, sid)  # a fresh generation retires the old decision
+    # Ahead of the retirement, not behind it: a refusal must not cost a decision
+    # for a request that then does nothing at all.
     if not scene["messages"]:
         raise HTTPException(status_code=400, detail="nothing to retry")
-    _disown_dead_guidance(cid, sid)
+    # Same order as the send above, for the same reason — see there.
+    with store.locks.campaign_lock(cid):
+        store.proposals.heal(cid, sid)
+        _disown_dead_guidance(cid, sid)
+        store.proposals.supersede(cid, sid)  # a fresh generation retires the old decision
     messages = store.context.build_messages(cid, sid, turn=_turn_override(body))
     return _chat_stream(cid, sid, messages, conn, client)
 
@@ -439,10 +455,21 @@ def post_scene_alternate(cid: str, sid: str, vid: str):
     when a full set gains a variant, and a client snapshot from before that
     shift would otherwise name a different take than the one it previewed.
     """
-    _require_scene(cid, sid)
     # One lock over the whole check-retire-swap span, so nothing lands between
     # the three and the request is all-or-nothing.
     with store.locks.campaign_lock(cid):
+        # The existence check belongs INSIDE the lock. Outside it, a rename or
+        # delete could land while this request waited, and the reads below would
+        # then fault on a scene that was there when they were authorized. Every
+        # `store.scenes` mutator runs under this same lock (`@_serialized`), so
+        # from here on the scene cannot go anywhere.
+        #
+        # A plain race with either already answered 404, because both carry the
+        # sidecar with the transcript and the resolve then finds no set. What
+        # this catches is the sidecar OUTLIVING its transcript — the stranded
+        # source `repoint_scenes` leaves behind on purpose, and the over-long
+        # sidecar name `delete_scene` is allowed to fail to unlink.
+        _require_scene(cid, sid)
         # Resolve FIRST. The id comes from a client snapshot that another tab
         # may have moved on from, and retiring a decision is not something a
         # request that then 404s gets to do: a stale click would cancel a
