@@ -76,6 +76,7 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   const [taglineQueue, setTaglineQueue] = useState<{ cid: string; name: string }[]>([]);
   const [voiceAnchor, setVoiceAnchor] = useState("");
   const [anchorBusy, setAnchorBusy] = useState(false);
+  const [anchorSaving, setAnchorSaving] = useState(false);
   const [anchorState, setAnchorState] = useState<"loading" | "ready" | "error">("loading");
   const anchorReq = useRef(0);
   const [urlPromptOpen, setUrlPromptOpen] = useState(false);
@@ -317,7 +318,12 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
   }
 
   async function saveVoiceAnchor() {
-    if (!detail || anchorState !== "ready") return;
+    if (!detail || anchorState !== "ready" || anchorSaving) return;
+    // One PUT at a time. Two overlapping saves race on the server, and the
+    // SLOWER one wins the file -- so an edit made between them can end up
+    // discarded while the editor still shows it. Blocking the second click is
+    // enough here: the writes are whole-value, so there is nothing to merge.
+    setAnchorSaving(true);
     try {
       // Trimmed to blank on purpose: a blank anchor removes it, which is how a
       // character opts back out of voice-drift detection. Only reachable once
@@ -325,6 +331,8 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
       await api.setCharacterVoiceAnchor(scope, detail.meta.id, voiceAnchor.trim());
     } catch (err: any) {
       setError(err.detail ?? String(err));
+    } finally {
+      setAnchorSaving(false);
     }
   }
 
@@ -1256,8 +1264,10 @@ export function CharacterEditor({ scope, wid, resetSignal, focus, onOpenLore, on
                   the save the user just watched succeed covers a value that is
                   no longer on screen, and the draft they can see is unsaved. */}
               <button className="subtle" type="button"
-                      disabled={anchorState !== "ready" || anchorBusy}
-                      onClick={saveVoiceAnchor}>Save voice anchor</button>
+                      disabled={anchorState !== "ready" || anchorBusy || anchorSaving}
+                      onClick={saveVoiceAnchor}>
+                {anchorSaving ? "Saving…" : "Save voice anchor"}
+              </button>
             </div>
           <Field label="Tags" hint="comma-separated">
             <input

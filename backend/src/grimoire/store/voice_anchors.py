@@ -75,9 +75,16 @@ def read_record(root: Path, char_id: str) -> dict:
     except BadAnchorId:
         # nothing can live there: read like a missing file
         return {"text": "", "id": "", "disabled": False}
-    if not p.exists():
+    try:
+        raw = p.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        # Read-and-catch, not exists-then-read: `write` CLEARS by unlinking, so
+        # another tab or device removing the anchor between the two calls used
+        # to raise here -- on the generation hot path, through
+        # `overlay.voice_anchor_record`, with no failure boundary above it. A
+        # concurrent clear is just the absent state arriving slightly late.
         return {"text": "", "id": "", "disabled": False}
-    meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
+    meta, body = parse_frontmatter(raw)
     return {"text": body.strip(), "id": str(meta.get("id") or ""),
             "disabled": str(meta.get("disabled") or "").strip().lower() == "true"}
 

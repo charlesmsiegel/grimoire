@@ -1121,6 +1121,34 @@ test("a failed anchor load disables saving instead of offering a blank (#59)", a
   expect(api.setCharacterVoiceAnchor).not.toHaveBeenCalled();
 });
 
+test("a second anchor save cannot start while the first is in flight (#59)", async () => {
+  // Two overlapping PUTs race on the server and the SLOWER one wins the file,
+  // so an edit made between them can be discarded while the editor still shows
+  // it. The writes are whole-value, so blocking the second click is enough.
+  (api.listCharacters as any).mockResolvedValue([
+    { id: "seraphine", name: "Seraphine", default_version: "default", has_avatar: false, versions: [] },
+  ]);
+  (api.getCharacterVoiceAnchor as any).mockResolvedValue({ voice_anchor: "A" });
+  let release!: () => void;
+  (api.setCharacterVoiceAnchor as any).mockReturnValue(
+    new Promise<void>((res) => { release = res; }));
+  render(<CharacterEditor scope={{ kind: "world", id: "w" }} wid="w" />);
+
+  fireEvent.click((await screen.findAllByRole("button", { name: /^edit$/i }))[0]);
+  await screen.findByLabelText("Voice anchor");
+  const save = screen.getByText("Save voice anchor") as HTMLButtonElement;
+  fireEvent.click(save);
+
+  // edit to B and try again while A's PUT is still open
+  await waitFor(() => expect(screen.getByText("Saving…")).toBeTruthy());
+  fireEvent.change(screen.getByLabelText("Voice anchor"), { target: { value: "B" } });
+  fireEvent.click(screen.getByText("Saving…"));
+  expect(api.setCharacterVoiceAnchor).toHaveBeenCalledTimes(1);
+
+  await act(async () => { release(); });
+  await waitFor(() => expect(screen.getByText("Save voice anchor")).toBeTruthy());
+});
+
 test("Save is disabled while an anchor generation is in flight (#59)", async () => {
   // A save that lands mid-generation persists the OLD text, and the completion
   // then swaps the textarea for a fresh draft -- so the save the user watched

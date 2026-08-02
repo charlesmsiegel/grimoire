@@ -122,3 +122,25 @@ def test_anchor_ids_use_the_shared_safe_id_rules(monkeypatch, tmp_path):
     for bad in ("winifred.", "winifred ", "C:evil", "a:b"):
         with pytest.raises(voice_anchors.BadAnchorId):
             voice_anchors.anchor_path(root, bad)
+
+
+def test_a_concurrently_cleared_anchor_reads_as_absent(monkeypatch, tmp_path):
+    """`write` clears by unlinking, so a read racing another request's clear
+    used to raise FileNotFoundError -- on the generation hot path, through
+    `overlay.voice_anchor_record`, with nothing above it to catch. A concurrent
+    clear is just the absent state arriving a moment late."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    root = tmp_path / "w"
+    voice_anchors.write(root, "winifred", "Clipped.")
+    assert voice_anchors.read(root, "winifred") == "Clipped."     # positive control
+
+    target = voice_anchors.anchor_path(root, "winifred")
+    real = type(target).read_text
+    def vanished(self, *a, **kw):
+        if self == target:
+            raise FileNotFoundError(2, "No such file or directory", str(self))
+        return real(self, *a, **kw)
+    monkeypatch.setattr(type(target), "read_text", vanished)
+
+    assert voice_anchors.read_record(root, "winifred") == {
+        "text": "", "id": "", "disabled": False}
