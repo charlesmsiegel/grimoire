@@ -3428,6 +3428,14 @@ def test_a_name_soft_wrapped_across_a_line_break_is_still_matched(monkeypatch, t
     wid = characters.create_character(croot, epithet, "main",
                                       characters.blank_card(epithet))[0]
     appearances.appear(cid, sid, "characters", wid, "main", "npc")
-    playstate.write_state(croot, ids["Seraphine Vale"], playstate.compose_body(
-        "Wary.", "", "The Woman on the\nPier is hiding the ledger."))
-    assert "hiding the ledger" not in _state_section(cid, sid)
+    for body in (
+        "The Woman on the\nPier is hiding the ledger.",
+        # Under markdown the continuation carries its own indent, and joining
+        # the raw lines put three spaces where the form has one.
+        "- The Woman on the\n  Pier is hiding the ledger.",
+        # A quoted continuation puts a marker in the middle of the name.
+        "> The Woman on the\n> Pier is hiding the ledger.",
+    ):
+        playstate.write_state(croot, ids["Seraphine Vale"],
+                              playstate.compose_body("Wary.", "", body))
+        assert "hiding the ledger" not in _state_section(cid, sid), body
