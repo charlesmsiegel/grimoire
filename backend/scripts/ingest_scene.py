@@ -193,6 +193,29 @@ def _vanished(sid: str) -> str:
             "or deleted after the run that recorded it; reconcile this key by hand")
 
 
+def _record_vanished(cid: str, manifest: dict, key: str, sid: str) -> dict:
+    """Persist the vanished-scene outcome, then report it.
+
+    Returning `incomplete` without saving left the entry `in_progress` on disk,
+    so nothing downstream could act on what this run had just discovered:
+    `status` kept printing `in_progress`, and `resolve` -- the ONLY way out of a
+    state a rerun cannot clear, and the reason the "delete the key" instruction
+    was removed -- refuses anything not persisted as `incomplete`. The key was
+    stuck: no rerun could finish it, because the scene is gone, and no person
+    could close it either.
+
+    The detail rides along, because `incomplete` alone would read as ordinary
+    unapplied rows and send the next run looking for `pending` that is not the
+    problem. Everything else on the entry is kept: its sid is the missing scene
+    and its `applied`/`failures` are the record of what did land before it went.
+    """
+    entry = {**(manifest.get(key) or {}), "status": "incomplete", "sid": sid,
+             "detail": _vanished(sid)}
+    manifest[key] = entry
+    save_manifest(cid, manifest)
+    return {"key": key, **entry}
+
+
 #: Edit kinds that write more than one thing, so a failure can leave the first
 #: one made. Never replayed -- see `_unapplied`.
 _MULTI_STEP = ("new_character", "new_location", "new_lore")
@@ -271,8 +294,7 @@ async def ingest_one_scene(cid: str, scene: dict, client: LLMClient, conn: dict)
         # beats and change records pointing at a scene that does not exist;
         # rebuilding would mint a duplicate of the renamed one. Neither is a
         # decision to make unattended, so this stops and names the missing id.
-        return {"key": key, **entry, "status": "incomplete",
-                "detail": _vanished(entry["sid"])}
+        return _record_vanished(cid, manifest, key, entry["sid"])
 
     # An "incomplete" entry means a prior attempt absorbed this scene and some
     # approved rows did not land; it carries those rows in `pending`, so the
@@ -298,7 +320,7 @@ async def ingest_one_scene(cid: str, scene: dict, client: LLMClient, conn: dict)
         except SceneVanished:
             # Lost the race the check above cannot close: the scene went while
             # this run was between that check and the lock.
-            return {"key": key, **entry, "status": "incomplete", "detail": _vanished(sid)}
+            return _record_vanished(cid, manifest, key, sid)
         # The first attempt's applied ids stay on the record: this run did not
         # re-apply them, and dropping them would report the scene as having
         # landed only what the retry touched.
@@ -337,7 +359,7 @@ async def ingest_one_scene(cid: str, scene: dict, client: LLMClient, conn: dict)
         try:
             applied, failures = apply_scene(cid, sid, result["parsed"], result["edits"])
         except SceneVanished:
-            return {"key": key, "sid": sid, "status": "incomplete", "detail": _vanished(sid)}
+            return _record_vanished(cid, manifest, key, sid)
         pending = _unapplied(result["edits"], failures)
 
     # A scene whose edits did not all land is NOT done. Marking it done would
