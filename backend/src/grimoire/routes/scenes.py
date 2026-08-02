@@ -218,25 +218,46 @@ def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
                 status_code=400,
                 detail="this scene's recorded turn boundaries no longer match its "
                        "transcript — delete the last reply manually to regenerate")
-    guidance = (body.guidance or "").strip() if body else ""
-    # rendered before the context build so its tokens can be reserved against
-    # the context budget -- it is appended unconditionally, so the packer must
-    # not fit the prompt to a ceiling this then pushes it over
-    block = prompts.render("scene/regenerate_guidance.j2", guidance=guidance) if guidance else ""
-    messages = store.context.build_messages(cid, sid, turn=_turn_override(body),
-                                            reserve=(block,) if block else ())
-    if block:
-        messages.append({"role": "system", "content": block})
+    restore = (lambda: store.scenes.restore_trailing_assistant_run(cid, sid, removed)
+               ) if removed else None
+    # Everything from here to the `return` runs with the scene one reply short,
+    # and until the stream exists there is nothing holding the way back: the
+    # restore hooks live inside `_chat_stream`'s generator, so a raise here
+    # would delete a reply and hand the caller a 500 with no trace of it.
+    # Reachable without any race — `build_messages` reads the whole store, and
+    # `prompts.render` compiles a template (review, #95).
+    try:
+        guidance = (body.guidance or "").strip() if body else ""
+        # rendered before the context build so its tokens can be reserved against
+        # the context budget -- it is appended unconditionally, so the packer must
+        # not fit the prompt to a ceiling this then pushes it over
+        block = prompts.render("scene/regenerate_guidance.j2", guidance=guidance) if guidance else ""
+        messages = store.context.build_messages(cid, sid, turn=_turn_override(body),
+                                                reserve=(block,) if block else ())
+        if block:
+            messages.append({"role": "system", "content": block})
+    except BaseException:
+        if restore is not None:
+            restore()
+        raise
     # The old reply had to go before the context was built — the builders read
     # the transcript, so the model cannot be asked to replace something it can
     # still see. That leaves a window where the scene is one reply short and the
     # replacement does not exist yet, and a generation producing nothing would
     # end it there: a reply destroyed by a reroll the player stopped or that
     # never started (#95). Hand the stream the way back.
-    return _chat_stream(cid, sid, messages, conn, client,
-                        restore_removed=(
-                            lambda: store.scenes.restore_trailing_assistant_run(cid, sid, removed)
-                        ) if removed else None)
+    #
+    # One window this does NOT close, deliberately, because closing it is a
+    # redesign rather than a guard: between this return and the generator's
+    # first step, the response body can be cancelled outright — uvicorn reports
+    # ASGI spec 2.3, so Starlette races `stream_response` against
+    # `listen_for_disconnect` in a task group, and an already-queued disconnect
+    # cancels the former before it runs. An async generator that never started
+    # runs none of its body on close, so no hook here can fire. The fix is to
+    # stop deleting ahead of the replacement at all — remove the old run inside
+    # `finalize`, under the same lock that writes the new reply — which is
+    # tracked with the other transcript-identity work rather than bolted on.
+    return _chat_stream(cid, sid, messages, conn, client, restore_removed=restore)
 
 
 @router.get("/campaigns/{cid}/chronicle")
