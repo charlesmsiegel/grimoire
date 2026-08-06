@@ -5107,7 +5107,7 @@ test("each routed row shows its band, why it was banded, and its citation", asyn
   expect(screen.getByText(/— Grimoire/)).toBeTruthy();
 
   fireEvent.click(screen.getByRole("button", { name: /Show 1 low-confidence/ }));
-  expect(screen.getByText(/low · speaker not in this scene/)).toBeTruthy();
+  expect(screen.getByText(/low · no one speaker matches/)).toBeTruthy();
 });
 
 test("rows the extraction did not stage carry no band and stay pre-approved", async () => {
