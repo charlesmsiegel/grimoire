@@ -23,14 +23,17 @@ export default function App() {
   // another library, both change the answer without this component hearing
   // about it otherwise (#194).
   const [firstRun, setFirstRun] = useState(false);
-  // ...and a one-way latch for "this session has left setup". Without it the
-  // live verdict is a trap: `finish()` treats its `setup_done` write as
-  // best-effort so a failure can't strand anyone, and on a store that cannot
-  // record the flag the next refresh would answer first-run again and redirect
-  // straight back into the wizard, forever. The latch is what guarantees one
-  // exit is always enough.
-  const [leftSetup, setLeftSetup] = useState(false);
-  const inSetup = firstRun && !leftSetup;
+  // ...and a latch for "setup has been left", scoped to the store it was left
+  // in. Unscoped it is a trap in the other direction: `finish()` treats its
+  // `setup_done` write as best-effort so a failure can't strand anyone, and on
+  // a store that cannot record the flag the next refresh would answer first-run
+  // again and redirect straight back into the wizard, forever. Keyed to the
+  // data dir it still guarantees one exit is enough — while letting a *different*
+  // library, pointed at from Config later in the same session, get its own
+  // first run rather than inheriting this one's dismissal.
+  const [dataDir, setDataDir] = useState("");
+  const [leftSetupFor, setLeftSetupFor] = useState<string | null>(null);
+  const inSetup = firstRun && leftSetupFor !== dataDir;
   const [ready, setReady] = useState(false);
   const [activeLabel, setActiveLabel] = useState("NO CONNECTION");
 
@@ -53,7 +56,7 @@ export default function App() {
 
   useEffect(() => {
     api.getConfig()
-      .then((c) => { setTheme(c.theme); setFirstRun(c.first_run); })
+      .then((c) => { setTheme(c.theme); setFirstRun(c.first_run); setDataDir(c.data_dir); })
       .catch(() => setTheme(DEFAULT_THEME));
   }, []);
 
@@ -64,6 +67,7 @@ export default function App() {
     api.getConfig({ fresh: true }).then((c) => {
       setReady(c.ready);
       setFirstRun(c.first_run);
+      setDataDir(c.data_dir);
       setActiveLabel(c.active_connection ? c.active_connection.name.toUpperCase() : "NO CONNECTION");
     });
   }, [location.pathname]);
@@ -121,7 +125,9 @@ export default function App() {
             from restarting at step one and creating a second world. */}
         <Route path="/" element={inSetup ? <Navigate to="/welcome" replace /> : <CampaignsView />} />
         <Route path="/welcome" element={
-          inSetup ? <SetupWizard onDone={() => setLeftSetup(true)} /> : <Navigate to="/" replace />} />
+          inSetup
+            ? <SetupWizard onDone={(dir) => setLeftSetupFor(dir ?? dataDir)} />
+            : <Navigate to="/" replace />} />
         <Route path="/campaigns/new" element={<CampaignWizard ready={ready} />} />
         <Route path="/campaigns/:cid" element={
           <CampaignView ready={ready} topbarCollapsed={topbarCollapsed} onToggleTopbar={toggleTopbar} />} />

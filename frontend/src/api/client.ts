@@ -88,6 +88,9 @@ export type Config = {
    *  AND the store holds no worlds and no campaigns. Derived rather than left
    *  to the client so a boot needs one request, not three. */
   first_run: boolean;
+  /** The store this config describes, so a client can tell that a decision it
+   *  made about `first_run` belongs to a library it is no longer looking at. */
+  data_dir: string;
 };
 export type DataDirInfo = {
   data_dir: string;
