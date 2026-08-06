@@ -25,7 +25,7 @@ from .serialize import (  # noqa: F401
 from .read import (  # noqa: F401
     get_dismissed, get_location_history, get_rolling_summary, get_suggested_date,
     get_time_history, is_pcless, list_scenes, read_scene, read_scene_meta,
-    read_scene_window, trailing_transitions,
+    read_scene_window, rolling_summary_fields, trailing_transitions,
 )
 from .turns import (  # noqa: F401
     TurnSizesDesynced, _model_blocks, _parse_turn_sizes, _reconciled_turn_sizes,
