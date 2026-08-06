@@ -5,6 +5,7 @@ import pytest
 
 from grimoire.store import (appearances, assets, atomic, campaigns, characters, entities,
                             greetings, overlay, pcs, worlds)
+from grimoire.store.campaigns import lifecycle
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 
 
@@ -468,6 +469,11 @@ def _fatter_campaign(monkeypatch, tmp_path):
     dvid, dver = characters.create_character(wroot, "Mara")
     assets.put_image(wroot, dvid, dver, "avatar", b"\x89PNG\r\n\x1a\nmara", "png")
     shutil.copytree(wroot / "characters" / dvid, croot / "characters" / dvid)
+    # A second, campaign-only image, so `_prune_duplicate_files` cannot empty and
+    # rmdir the version directory: without it the directory disappears with the
+    # duplicate and the asset-attribution gate swallows a re-attribution the
+    # `PRUNING_KEY` fence is what actually prevents (Codex review).
+    assets.put_image(croot, dvid, dver, "gallery_1", b"\x89PNG\r\n\x1a\nmine", "png")
     g = greetings.create_greeting(wroot, "Gala", aid, vid, body="Hi.")
     greetings.set_edges(wroot, g, leads_to=[], excludes=[])
     pid, _ = pcs.create_pc(wroot, "Elara", [])
@@ -540,7 +546,7 @@ def test_no_interruption_of_the_migration_tombstones_a_live_record(monkeypatch, 
     assert not [r for r in dead if r.startswith("assets/")], f"asset tombstoned: {sorted(dead)}"
     assert f"lore/{f['removed']}" in dead                              # the real deletion stands
     # the world's image is still the campaign's, not hidden behind a tombstone
-    assert [i["name"] for i in overlay.list_images(cid, f["dvid"], f["dver"])] == ["avatar"]
+    assert [i["name"] for i in overlay.list_images(cid, f["dvid"], f["dver"])] == ["avatar", "gallery_1"]
     # …and every live record still reads, with the content it had
     assert overlay.read_entity(cid, "lore", f["same"])["body"] == "same"
     assert overlay.read_entity(cid, "lore", f["diverged"])["body"] == "campaign text"
@@ -605,6 +611,83 @@ def test_slim_sweep_keeps_an_untracked_copy_that_differs_from_the_world(monkeypa
     card = characters.read_card(overlay.char_root(cid, aid), aid, ver)
     assert card["data"]["name"] == "Mara (edited)"   # the campaign's edit, not the world's card
     assert campaigns.read_manifest(cid) == {}    # kept, and still not adopted
+
+
+def test_slim_marks_itself_decided_before_it_prunes_duplicates(monkeypatch, tmp_path):
+    """`_finish`'s fence, pinned directly: the marker has to be on disk before
+    `_prune_duplicate_files` runs — that is what stops a resumed run deriving
+    asset deletions from a tree the last one already pruned — and gone once the
+    migration completes, so nothing re-enters the tail forever."""
+    f = _fatter_campaign(monkeypatch, tmp_path)
+    mp = campaigns.campaign_meta_path(f["cid"])
+    seen = {}
+    real = lifecycle._prune_duplicate_files
+
+    def spy(root, wroot):
+        seen["meta"] = parse_frontmatter(mp.read_text(encoding="utf-8"))[0]
+        return real(root, wroot)
+
+    monkeypatch.setattr(lifecycle, "_prune_duplicate_files", spy)
+    campaigns.ensure_campaign_slim(f["cid"])
+
+    assert seen["meta"].get(lifecycle.PRUNING_KEY)          # decided, not yet pruned
+    assert seen["meta"]["world_copy"] == "overlay"          # …and not a third world_copy value,
+    #                                                        which an older build would rerun over
+    after = parse_frontmatter(mp.read_text(encoding="utf-8"))[0]
+    assert lifecycle.PRUNING_KEY not in after
+    assert after["world_copy"] == "overlay"
+
+
+def test_slim_resumed_in_the_pruning_window_attributes_nothing(monkeypatch, tmp_path):
+    """The fence's whole point. Interrupt inside `_prune_duplicate_files`, after
+    the marker landed, and the resumed run must finish the pruning without
+    re-deriving a single deletion from the tree the first run already cut."""
+    f = _fatter_campaign(monkeypatch, tmp_path)
+    cid = f["cid"]
+
+    class Interrupted(Exception):
+        pass
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(lifecycle, "_prune_duplicate_files",
+                   lambda *_a: (_ for _ in ()).throw(Interrupted()))
+        with pytest.raises(Interrupted):
+            campaigns.ensure_campaign_slim(cid)
+    assert parse_frontmatter(campaigns.campaign_meta_path(cid).read_text(encoding="utf-8"))[0] \
+        .get(lifecycle.PRUNING_KEY)
+
+    campaigns.ensure_campaign_slim(cid)
+
+    assert not [r for r in overlay.deleted(cid) if r.startswith("assets/")]
+    assert [i["name"] for i in overlay.list_images(cid, f["dvid"], f["dver"])] == ["avatar", "gallery_1"]
+    # and it did FINISH: the duplicate is pruned, the campaign-only image kept
+    croot = campaigns.campaign_root(cid)
+    assert assets.image_path(croot, f["dvid"], f["dver"], "avatar") is None
+    assert assets.image_path(croot, f["dvid"], f["dver"], "gallery_1") is not None
+
+
+def test_slim_keeps_images_of_a_version_the_fork_never_copied(monkeypatch, tmp_path):
+    """The gate is per VERSION, not per record. A world version created after
+    the fork has no asset directory in the campaign even though the record's
+    does, so its images were never the campaign's to delete — coarsening the
+    gate to the record hides every one of them."""
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    aid, ver = characters.create_character(wroot, "Mara")
+    assets.put_image(wroot, aid, ver, "avatar", b"\x89PNG\r\n\x1a\nold", "png")
+    cid = campaigns.create_campaign("C", wid)
+    croot = campaigns.campaign_root(cid)
+    shutil.copytree(wroot / "characters" / aid, croot / "characters" / aid)   # the fork
+    campaigns.write_manifest(cid, {f"characters/{aid}": characters.dir_hash(wroot, aid)})
+    _stamp_full(cid)
+    characters.create_version(wroot, aid, "grim", characters.blank_card("Mara"))   # …after it
+    assets.put_image(wroot, aid, "grim", "avatar", b"\x89PNG\r\n\x1a\ngrim", "png")
+
+    campaigns.ensure_campaign_slim(cid)
+
+    assert f"assets/characters/{aid}/grim/avatar" not in overlay.deleted(cid)
+    assert [i["name"] for i in overlay.list_images(cid, aid, "grim")] == ["avatar"]
 
 
 def test_slim_keeps_the_images_of_a_record_materialized_before_it_ran(monkeypatch, tmp_path):
