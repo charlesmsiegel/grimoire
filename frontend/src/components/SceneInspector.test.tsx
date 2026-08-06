@@ -944,3 +944,87 @@ test("a refresh that fails after the reader moves on does not banner the new sce
 
   expect(screen.queryByText("OpenRouter key not set")).toBeNull();
 });
+
+test("switching scenes frees the new scene's Refresh button", async () => {
+  // `rollingBusy` was a bare boolean, so scene A's in-flight refold left B's
+  // button disabled and reading "Summarizing…" for as long as A's provider call
+  // took — for a result B can no longer use.
+  (api.refreshRollingSummary as any).mockReturnValueOnce(new Promise(() => {}));
+  const view = render(
+    <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+  fireEvent.click(await screen.findByRole("button", { name: /refresh now/i }));
+  await screen.findByRole("button", { name: /summarizing/i });
+
+  view.rerender(
+    <SceneInspector cid="c" sid="s2" refreshKey={0} onSceneChanged={() => {}} />);
+  const button = await screen.findByRole("button", { name: /refresh now/i });
+  expect(button).not.toBeDisabled();
+});
+
+test("a failed reread is reported even when older prose is on screen", async () => {
+  // Same scene, `refreshKey` bumped: the cached value still matches the key, so
+  // the failure used to be suppressed entirely and the panel kept presenting
+  // pre-turn coverage as current with nothing to say otherwise.
+  (api.getRollingSummary as any).mockResolvedValueOnce({
+    summary: "Mara reaches the salt gate.", at: 10, total: 10,
+    stale: false, every: 10, due: false });
+  const view = render(
+    <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+  await screen.findByText("Mara reaches the salt gate.");
+
+  (api.getRollingSummary as any).mockRejectedValueOnce(new Error("offline"));
+  view.rerender(
+    <SceneInspector cid="c" sid="s" refreshKey={1} onSceneChanged={() => {}} />);
+
+  // A failed read beside cached prose reads differently from a failed read with
+  // nothing to show: the prose is not gone, it just cannot claim to be current.
+  await screen.findByText(/latest read failed/i);
+  // the prose is still the best thing anyone has, so it stays
+  expect(screen.getByText("Mara reaches the salt gate.")).toBeInTheDocument();
+  // ...but its coverage must not be presented as current
+  expect(screen.queryByText(/Covers 10 of 10 posts/)).toBeNull();
+});
+
+test("a read issued before a manual refresh cannot undo it", async () => {
+  // The GET and the POST shared one token, so a read issued while the refold was
+  // in flight bumped it, and the POST's authoritative answer was then thrown
+  // away as superseded — leaving the panel on the old summary although the new
+  // one is durable on the server.
+  let answerRead: ((v: any) => void) | undefined;
+  let answerPost: ((v: any) => void) | undefined;
+  (api.getRollingSummary as any).mockResolvedValueOnce({
+    summary: "The old summary.", at: 4, total: 4, stale: false, every: 10, due: false });
+  (api.refreshRollingSummary as any).mockImplementationOnce(
+    () => new Promise((resolve) => { answerPost = resolve; }));
+  const view = render(
+    <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+  await screen.findByText("The old summary.");
+  fireEvent.click(screen.getByRole("button", { name: /refresh now/i }));
+
+  // a routine reread starts while the refold is still out, and answers first
+  (api.getRollingSummary as any).mockImplementationOnce(
+    () => new Promise((resolve) => { answerRead = resolve; }));
+  view.rerender(
+    <SceneInspector cid="c" sid="s" refreshKey={1} onSceneChanged={() => {}} />);
+  await waitFor(() => expect(answerRead).toBeDefined());
+  await act(async () => {
+    answerRead!({ summary: "The old summary.", at: 4, total: 4,
+                  stale: false, every: 10, due: false });
+  });
+  await act(async () => {
+    answerPost!({ summary: "The refolded summary.", at: 9, total: 9,
+                  stale: false, every: 10, due: false, refreshed: true });
+  });
+
+  await screen.findByText("The refolded summary.");
+});
+
+test("Refresh is held while a turn is streaming into the scene", async () => {
+  // A chat appends the player post before streaming and the reply only when it
+  // lands, so a refold in between covers an unanswered post — and the reply is
+  // an append, which does not invalidate the digest, so it can stay out of the
+  // "current" summary until the next threshold.
+  render(<SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}}
+                         sceneLocked />);
+  expect(await screen.findByRole("button", { name: /refresh now/i })).toBeDisabled();
+});

@@ -48,12 +48,24 @@ def covered_digest(messages: list[dict]) -> str:
         json.dumps(canonical, ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
-def build_prompt(prior: str, transcript: str) -> list[dict]:
+def build_prompt(prior: str, transcript: str, facts: dict | None = None) -> list[dict]:
     """The refresh call's system/user pair. `prior` is "" on a from-scratch
-    fold, in which case `transcript` is the whole scene rather than the tail."""
+    fold, in which case `transcript` is the whole scene rather than the tail.
+
+    `facts` is `chronicle.scene_facts()`, and it is not optional in spirit: the
+    system prompt asks where the scene is and who is present, and the transcript
+    is not guaranteed to say. A scene's FIRST location is set silently and cast
+    seated before the first message is seated silently, so on exactly the scenes
+    that never move or re-cast -- the ordinary ones -- neither fact appears in
+    the text at all. Worse for a fold than for absorb, because a fact missing
+    from the first refresh can never be recovered by a later one: the transcript
+    it would have come from is behind the fold. Defaulted only so the parameter
+    can be omitted where there is genuinely nothing to say.
+    """
     return [{"role": "system", "content": prompts.render("rolling_summary/system.j2")},
             {"role": "user", "content": prompts.render(
-                "rolling_summary/user.j2", prior=prior, transcript=transcript)}]
+                "rolling_summary/user.j2", prior=prior, transcript=transcript,
+                facts=facts)}]
 
 
 def parse_output(text: str) -> str:

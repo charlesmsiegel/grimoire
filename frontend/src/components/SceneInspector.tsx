@@ -183,6 +183,11 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   const [rolling, setRolling] =
     useState<{ key: string; data: RollingSummary } | undefined>();
   const [rollingUnread, setRollingUnread] = useState(false);
+  // The record whose refold is in flight, not a bare boolean: the button belongs
+  // to a scene, and review caught that one scene's pending refresh disabled
+  // every other scene's button — reading "Summarizing…" about a result that
+  // record can no longer use.
+  const [rollingBusy, setRollingBusy] = useState<string | null>(null);
   // The stamp decides what may be RENDERED. This decides what may be STORED,
   // and one without the other is not enough — that took two review rounds:
   //
@@ -197,7 +202,15 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   // So it is a monotonic token, not an identity: only the most recently issued
   // request may write, whatever it was issued for.
   const readToken = useRef(0);
-  const [rollingBusy, setRollingBusy] = useState(false);
+  // How many manual refolds have INSTALLED. A read carries the value it saw when
+  // it was issued and may only install while that still holds, because a refold
+  // that landed in between wrote the store: the read is answering from before
+  // that write however recently it was issued. One shared token could not say
+  // this — it ordered the two by issue time, so a routine reread starting while
+  // a refold was out discarded the refold's authoritative answer.
+  const writeSeq = useRef(0);
+  // The record on screen, readable from a callback created for an earlier one.
+  const currentKey = useRef(`${cid}/${sid}`);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(loadSectionCollapse);
   const toggleSection = useCallback((id: string, current: boolean) => {
     setCollapsed((prev) => {
@@ -285,16 +298,18 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
 
     api.getChronicle(cid).then(setRecap).catch(() => setRecap([]));
     const token = ++readToken.current;
+    const seenWrites = writeSeq.current;
+    const key = `${cid}/${sid}`;
+    currentKey.current = key;
+    const mine = () => readToken.current === token && writeSeq.current === seenWrites;
     setRollingUnread(false);
     // The previous record's summary is deliberately NOT cleared here: this
     // effect also re-runs on `refreshKey`, i.e. twice per turn, and blanking
     // would flash "No summary yet" over a summary that is about to come back.
     // The stamp below is what makes that safe.
     api.getRollingSummary(cid, sid)
-      .then((data) => {
-        if (readToken.current === token) setRolling({ key: `${cid}/${sid}`, data });
-      })
-      .catch(() => { if (readToken.current === token) setRollingUnread(true); });
+      .then((data) => { if (mine()) setRolling({ key, data }); })
+      .catch(() => { if (mine()) setRollingUnread(true); });
     reloadWhen();
     reloadCfg();
   }, [cid, sid, refreshKey, reloadWhen, reloadCfg, reloadCast]);
@@ -456,34 +471,38 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
     [turns, cid, sid]);
   async function refreshRolling() {
     setError(null);
-    setRollingBusy(true);
-    // Claimed OUTSIDE the try, so both the success and the failure path can see
-    // it — the catch needs the same guard, and a token declared inside the try
-    // would not be in scope there.
-    const token = ++readToken.current;
+    // Captured OUTSIDE the try, so success, failure and the `finally` all judge
+    // themselves against the record this refold was started for.
+    const key = `${cid}/${sid}`;
+    setRollingBusy(key);
     try {
       // `force`, always: this button exists so the player can ask for a summary
       // *now*, including when the automatic refresh is switched off. The
       // server still declines to spend a call when nothing has happened since
       // the last one, and says so in `refreshed`.
       const data = await api.refreshRollingSummary(cid, sid, true);
-      // Retired the same way a superseded read is: the reader can move on while
-      // a refold is in flight, and this one is for the record they left.
-      if (readToken.current !== token) return;
-      setRolling({ key: `${cid}/${sid}`, data });
+      // Retired only if the reader has moved on — NOT on the read token. This
+      // answer is authoritative: the server wrote the store and reconciled what
+      // it returned, so it outranks any read issued before now however recently.
+      // `writeSeq` is what tells those reads so.
+      if (currentKey.current !== key) return;
+      writeSeq.current += 1;
+      setRolling({ key, data });
       setRollingUnread(false);
     } catch (err: any) {
-      // Retired on the same token as the success path, and review caught that
-      // guarding only the success path is not enough: `error` is shared by
-      // every action in this panel and the scene-change effect does not clear
-      // it, so a refresh that failed for the record the reader LEFT would sit
-      // as a banner over the one they are on until something else cleared it.
-      if (readToken.current !== token) return;
+      // Guarded like the success path, because `error` is shared by every action
+      // in this panel and the scene-change effect does not clear it: a refold
+      // that failed for the record the reader LEFT would otherwise sit as a
+      // banner over the one they are on until something else cleared it.
+      if (currentKey.current !== key) return;
       // Reported, never destructive: the summary already on screen is still the
       // best thing anyone has, so a failed refold leaves it exactly where it is.
       setError(err.detail ?? String(err));
     } finally {
-      setRollingBusy(false);
+      // Only if it is still ours. The reader can leave and start a refold on
+      // another record while this one is out, and clearing unconditionally
+      // would free that one's button while its call is still running.
+      setRollingBusy((busy) => (busy === key ? null : busy));
     }
   }
 
@@ -553,35 +572,48 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
       <SideSection id="scenesofar" title="Scene so far" collapsed={!!collapsed.scenesofar}
                    onToggle={toggleSection}>
         {(() => {
-          // Only this campaign-and-scene's answer is shown; another record's is
-          // not an answer about this one, and neither is a read that failed.
+          // Only this campaign-and-scene's answer is shown: another record's is
+          // not an answer about this one.
           const r = rolling?.key === `${cid}/${sid}` ? rolling.data : undefined;
-          if (rollingUnread && !r) {
-            return <div className="field-hint">The summary could not be read.</div>;
-          }
+          // The prose and the status line are decided separately, and review
+          // caught why they have to be. A failed read used to be suppressed
+          // whenever ANY cached value matched the key — which is every reread of
+          // the same scene — so the panel kept presenting the coverage it read
+          // before the turn as current. The prose is still the best thing anyone
+          // has and stays; what it may no longer claim is to be up to date.
+          const status = rollingUnread
+            ? "The latest read failed, so this may be behind."
+            : r?.stale
+              ? "Posts it covered have changed since — it may be out of date."
+              : r && `Covers ${r.at} of ${r.total} posts.`;
           if (!r?.summary) {
             return (
               <div className="field-hint">
-                No summary yet{r && r.every > 0
-                  ? ` — one is written every ${r.every} posts.`
-                  : "."}
+                {rollingUnread
+                  ? "The summary could not be read."
+                  : `No summary yet${r && r.every > 0
+                      ? ` — one is written every ${r.every} posts.` : "."}`}
               </div>
             );
           }
           return (
             <>
               <div className="field-hint">{r.summary}</div>
-              <div className="field-hint">
-                {r.stale
-                  ? "Posts it covered have changed since — it may be out of date."
-                  : `Covers ${r.at} of ${r.total} posts.`}
-              </div>
+              {status && <div className="field-hint">{status}</div>}
             </>
           );
         })()}
         <div className="form-actions">
-          <button className="primary" onClick={refreshRolling} disabled={rollingBusy}>
-            {rollingBusy ? "Summarizing…" : "Refresh now"}
+          {/* Held while a turn is streaming into this scene, like the two date
+              actions above. A chat appends the player's post before streaming
+              and the reply only when it lands, so a refold in between covers an
+              unanswered post — and the reply is an APPEND, which leaves the
+              digest valid, so it would stay out of the "current" summary until
+              the next threshold came round. */}
+          <button className="primary" onClick={refreshRolling}
+                  disabled={rollingBusy === `${cid}/${sid}` || sceneLocked}
+                  title={sceneLocked ? LOCKED_WHILE_GENERATING : undefined}>
+            {rollingBusy === `${cid}/${sid}` ? "Summarizing…" : "Refresh now"}
           </button>
         </div>
       </SideSection>
