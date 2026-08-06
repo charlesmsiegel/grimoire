@@ -1028,3 +1028,19 @@ test("Refresh is held while a turn is streaming into the scene", async () => {
                          sceneLocked />);
   expect(await screen.findByRole("button", { name: /refresh now/i })).toBeDisabled();
 });
+
+test("a refresh error does not follow the reader to the next scene", async () => {
+  // The token guard only retires a rejection that arrives AFTER navigation. One
+  // that lands while the scene is still selected is stored, and nothing on the
+  // scene-change path clears the panel's shared banner.
+  (api.refreshRollingSummary as any).mockRejectedValueOnce({ detail: "OpenRouter key not set" });
+  const view = render(
+    <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+  fireEvent.click(await screen.findByRole("button", { name: /refresh now/i }));
+  await screen.findByText("OpenRouter key not set");
+
+  view.rerender(
+    <SceneInspector cid="c" sid="s2" refreshKey={0} onSceneChanged={() => {}} />);
+  await waitFor(() =>
+    expect(screen.queryByText("OpenRouter key not set")).toBeNull());
+});
