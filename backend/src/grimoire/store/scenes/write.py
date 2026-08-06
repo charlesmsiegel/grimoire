@@ -450,10 +450,14 @@ def set_rolling_summary(cid: str, sid: str, summary: str, at: int, digest: str) 
     every key after it with it. That is scene-file corruption from a model reply,
     so the guarantee belongs to the store rather than to a caller remembering.
 
-    `updated` is deliberately NOT stamped. It orders the scene rail (`list_scenes`
-    sorts on it) and gates nothing else; a summary is a derived read-aid, and
-    letting a background refresh reorder the player's scene list would make the
-    rail jump for a write they never made.
+    `updated` is deliberately NOT stamped, and it is load-bearing that it is not.
+    Two readers treat that stamp as "when the TRANSCRIPT last changed", which a
+    summary write does not do: `list_scenes` orders the scene rail by it, so a
+    background refresh would make the rail jump for a write the player never
+    made, and `alternates._landed_at` stamps a newly observed reroll variant
+    with it -- so a refresh landing between the reply and the variant's
+    reconciliation would misdate the variant to the summary rather than to the
+    generation it came from.
     """
     p = paths._scene_path(cid, sid)
     if not safe_id(sid) or not p.exists():

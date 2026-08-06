@@ -840,3 +840,20 @@ test("a summary that cannot be read is not an empty summary", async () => {
   renderInspector();
   await screen.findByText(/could not be read/i);
 });
+
+test("switching scenes never shows the previous scene's summary", async () => {
+  // Prose under the wrong scene reads as fact, where a stale token count reads
+  // as lag — and two selects in a row can answer out of order.
+  (api.getRollingSummary as any).mockResolvedValueOnce({
+    summary: "Scene one: Mara reaches the salt gate.", at: 4, total: 4,
+    stale: false, every: 10, due: false });
+  const view = render(
+    <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+  await screen.findByText("Scene one: Mara reaches the salt gate.");
+
+  (api.getRollingSummary as any).mockReturnValueOnce(new Promise(() => {}));  // never answers
+  view.rerender(
+    <SceneInspector cid="c" sid="s2" refreshKey={0} onSceneChanged={() => {}} />);
+  await waitFor(() =>
+    expect(screen.queryByText("Scene one: Mara reaches the salt gate.")).toBeNull());
+});
