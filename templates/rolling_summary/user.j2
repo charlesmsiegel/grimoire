@@ -1,4 +1,13 @@
 {#- The incremental fold's one user message. Vars:
+      facts — dict from chronicle.scene_facts(): location (str), date (str),
+              cast ([str] of "<kind>/<id>" refs). Same head absorb/user.j2
+              builds, and for the same reason: the system prompt asks the model
+              to say where the scene is and who is present, and the transcript
+              does not always contain that. A scene's FIRST location is set
+              silently (scenes/moment.py) and cast added before the first
+              message is added silently (appearances/transitions.py), so those
+              facts appear nowhere in the text — and an incremental fold can
+              never recover a fact it was never given.
       prior — the stored summary this refresh folds forward, "" on a
               from-scratch fold (no summary yet, or the covered prefix moved
               under it; see rolling_summary.covered_digest)
@@ -6,6 +15,14 @@
               `prior` was written when there is a prior, the WHOLE scene when
               there is not. The two cases are labelled differently below so the
               model is never asked to fold new posts onto nothing. -#}
+{%- set head = [] -%}
+{%- if facts and facts.get("location") -%}{%- set _ = head.append("Location: " ~ facts.location) -%}{%- endif -%}
+{%- if facts and facts.get("date") -%}{%- set _ = head.append("Date: " ~ facts.date) -%}{%- endif -%}
+{%- if facts and facts.get("cast") -%}{%- set _ = head.append("Present: " ~ (facts.cast | join(", "))) -%}{%- endif -%}
+{%- if head -%}
+{{ head | join("\n") }}
+
+{% endif -%}
 {%- if prior -%}
 Summary so far:
 {{ prior }}

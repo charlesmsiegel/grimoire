@@ -1494,7 +1494,8 @@ async def _rolling_refresh(cid: str, sid: str, scene: dict, view: dict, every: i
     covered, base = len(messages), view["base"]
     digest = store.rolling_summary.covered_digest(messages)
     prompt = store.rolling_summary.build_prompt(
-        view["prior"], store.chronicle.transcript_text(messages[base:]))
+        view["prior"], store.chronicle.transcript_text(messages[base:]),
+        store.chronicle.scene_facts(cid, sid))
     try:
         text = await client.complete(prompt, conn)
     except LLMError as exc:
