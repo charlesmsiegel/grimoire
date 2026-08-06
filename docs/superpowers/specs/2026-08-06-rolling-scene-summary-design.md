@@ -113,9 +113,16 @@ Never calls the LLM. Returns:
 ```
 
 `stale` is the digest mismatch — the panel says so rather than presenting prose
-about a rerolled turn as current. `due` is what the POST would decide.
+about a rerolled turn as current. `due` always answers the *automatic*
+question ("would a plain per-turn POST spend a call"), never the forced one.
 
-### `POST /campaigns/{cid}/scenes/{sid}/rolling-summary?force=`
+A stale summary is still **returned**, and the distinction matters: what a fold
+may build *on* (`""` once the digest breaks) is not the same as what a reader
+should be *shown* (the stored prose, flagged). Collapsing the two makes the
+panel report a scene that has a summary as having none, and takes the staleness
+warning — which renders beside that prose — with it.
+
+### `POST /campaigns/{cid}/scenes/{sid}/rolling-summary?force=true`
 
 Same body plus `"refreshed": bool`. When not due it returns immediately having
 spent nothing (`refreshed: false`); this is the ordinary per-turn case. `force`

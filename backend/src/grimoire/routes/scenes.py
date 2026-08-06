@@ -1270,12 +1270,20 @@ async def post_audit(cid: str, sid: str, client: LLMClient = Depends(get_llm)):
 def _rolling_view(cid: str, sid: str, scene: dict) -> dict:
     """The stored summary reconciled against the transcript as it stands now.
 
-    `base` is the answer to "how much of this transcript does the stored summary
-    actually cover" -- `at` when the covered prefix is still the prefix on disk,
-    and 0 when it is not, which is what makes an invalidated fold start over
-    from the whole scene rather than carry prose about a post that was rerolled
-    or edited away. `stale` is that same finding, reported so the panel can say
-    the summary is behind rather than presenting it as current.
+    Three things come out of this, and keeping them apart is the point:
+
+    - `summary` is what is stored, ALWAYS, however stale. A summary whose posts
+      were rerolled still describes most of the scene, and it is the best thing
+      anyone has until the next refold; blanking it would leave the panel saying
+      "no summary yet" about a scene that has one. Review caught that: it also
+      made the panel's own staleness warning unreachable, since the warning
+      renders beside prose there was then never any of.
+    - `prior` is what a fold may build ON, which is `summary` only while the
+      prefix it covered is still the prefix on disk. Otherwise "" -- start over
+      from the whole transcript rather than carry prose about a post the player
+      deleted.
+    - `stale` is that same finding said out loud, so the panel can present the
+      summary as behind rather than as current.
 
     An unsummarized scene is not stale: it has nothing to be stale about, and
     saying otherwise would put a warning on every scene nobody has summarized.
@@ -1289,10 +1297,10 @@ def _rolling_view(cid: str, sid: str, scene: dict) -> dict:
     intact = (stored["at"] <= total
               and store.rolling_summary.covered_digest(messages[:stored["at"]])
               == stored["digest"])
-    stale = bool(stored["summary"]) and not intact
-    base = stored["at"] if intact else 0
-    return {"summary": stored["summary"] if intact else "", "at": stored["at"],
-            "total": total, "stale": stale, "base": base}
+    return {"summary": stored["summary"], "at": stored["at"], "total": total,
+            "stale": bool(stored["summary"]) and not intact,
+            "prior": stored["summary"] if intact else "",
+            "base": stored["at"] if intact else 0}
 
 
 def _rolling_due(view: dict, every: int, force: bool) -> bool:
@@ -1312,10 +1320,14 @@ def _rolling_due(view: dict, every: int, force: bool) -> bool:
     return force or (every > 0 and pending >= every)
 
 
-def _rolling_body(view: dict, every: int, force: bool) -> dict:
+def _rolling_body(view: dict, every: int) -> dict:
+    """`due` always answers the AUTOMATIC question — would a plain per-turn POST
+    spend a call — never the forced one. A forced call that found nothing new
+    would otherwise report `due: false` for an unrelated reason, and the panel
+    reads this field to say when the next refresh is coming."""
     return {"summary": view["summary"], "at": view["at"], "total": view["total"],
             "stale": view["stale"], "every": every,
-            "due": _rolling_due(view, every, force)}
+            "due": _rolling_due(view, every, force=False)}
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}/rolling-summary")
@@ -1327,7 +1339,7 @@ def get_rolling_summary(cid: str, sid: str):
     """
     scene = _require_scene(cid, sid)
     return _rolling_body(_rolling_view(cid, sid, scene),
-                         store.config.rolling_summary_every(), force=False)
+                         store.config.rolling_summary_every())
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/rolling-summary")
@@ -1349,7 +1361,7 @@ async def post_rolling_summary(cid: str, sid: str, force: bool = False,
     every = store.config.rolling_summary_every()
     view = _rolling_view(cid, sid, scene)
     if not _rolling_due(view, every, force):
-        return {**_rolling_body(view, every, force), "refreshed": False}
+        return {**_rolling_body(view, every), "refreshed": False}
 
     messages = scene["messages"]
     # The snapshot is what gets recorded, not a re-read afterwards: a turn
@@ -1358,7 +1370,7 @@ async def post_rolling_summary(cid: str, sid: str, force: bool = False,
     covered, base = len(messages), view["base"]
     digest = store.rolling_summary.covered_digest(messages)
     prompt = store.rolling_summary.build_prompt(
-        view["summary"], store.chronicle.transcript_text(messages[base:]))
+        view["prior"], store.chronicle.transcript_text(messages[base:]))
     try:
         text = await client.complete(prompt, conn)
     except LLMError as exc:
@@ -1369,15 +1381,28 @@ async def post_rolling_summary(cid: str, sid: str, force: bool = False,
         # summary the player can still read AND record it as covering the whole
         # scene, so the next refresh would fold new posts onto nothing and never
         # recover what was lost.
-        return {**_rolling_body(view, every, force), "refreshed": False}
+        return {**_rolling_body(view, every), "refreshed": False}
     # Off the event loop: this takes the campaign lock, whose acquisition blocks
     # for up to LOCK_TIMEOUT, and this handler is async -- inline it would freeze
     # every unrelated request and open stream on the backend rather than just
     # this refresh. Same treatment `post_absorb` and `streaming.py` give theirs.
-    await run_in_threadpool(store.scenes.set_rolling_summary, cid, sid,
-                            summary, covered, digest)
+    try:
+        await run_in_threadpool(store.scenes.set_rolling_summary, cid, sid,
+                                summary, covered, digest)
+    except store.scenes.SceneNotFound:
+        # The scene was renamed or deleted while the model was answering, which
+        # mints a new id and moves the file out from under this write -- the
+        # same race `streaming.py`'s `on_error` already catches, and reachable
+        # here from the UI because the play loop fires this refresh AFTER
+        # releasing the scene lock that holds rename off during a turn.
+        #
+        # Not an error to report: the summary describes a transcript that has
+        # moved on, there is nowhere to put it, and this call is fire-and-forget
+        # from the client. Left unhandled it is a 500 with no handler above it.
+        return {**_rolling_body(view, every), "refreshed": False}
     return {"summary": summary, "at": covered, "total": view["total"],
-            "stale": False, "every": every, "due": False, "refreshed": True}
+            "stale": False, "every": every,
+            "due": False, "refreshed": True}
 
 
 @router.put("/campaigns/{cid}/scenes/{sid}/chronicle")
