@@ -338,12 +338,17 @@ def test_every_staged_row_carries_a_review_block(monkeypatch, tmp_path):
         "new_characters": [{"name": "The Harbourmaster", "description": "[character(\"x\")]"}],
         "new_locations": [{"name": "The Long Pier", "body": "Rotting planks."}],
         "new_lore": [{"name": "The Salt Circle", "body": "A cabal."}],
+        "facts": [{"text": "The east gate is barred at dusk."}],
     })
     kinds = {e["kind"] for e in edits}
     # Every section this fixture feeds actually produced a row, or the sweep
-    # below proves nothing about the sections that silently dropped out.
+    # below proves nothing about the sections that silently dropped out. `fact`
+    # is here because the ledger (#114) landed on main while this branch was
+    # open and its `out.append` did not go through `_staged` -- the rows carried
+    # no review block at all, and this sweep is where that has to surface.
     assert kinds == {"character_state", "group_state", "lore", "authored", "relationship",
-                     "bond", "plot", "commitment", "new_character", "new_location", "new_lore"}
+                     "bond", "plot", "commitment", "new_character", "new_location",
+                     "new_lore", "fact"}
     for e in edits:
         assert set(e["review"]) == {"certainty", "quote", "speaker", "authority",
                                     "score", "band"}, e["id"]

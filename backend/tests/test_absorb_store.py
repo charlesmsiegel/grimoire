@@ -2639,6 +2639,11 @@ _CITED_SECTIONS = {
     "new_locations": {"name": "The Long Pier", "body": "Rotting planks."},
     "new_lore": {"name": "The Salt Circle", "body": "A cabal."},
     "weather_edits": {"condition": "storm"},
+    # The fact ledger (#114) landed on main while this branch was open, and this
+    # guard is what caught that it needed a citation like every other staged
+    # section: a fact reaches the reviewer as a StagedEdit, so it is routed on
+    # the same evidence as the rest.
+    "facts": {"text": "The east gate is barred at dusk."},
 }
 
 
