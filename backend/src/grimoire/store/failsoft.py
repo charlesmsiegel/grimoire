@@ -6,11 +6,15 @@ garbled ledger should not make the app unusable. Staying silent about it is the
 right call when the empty value is *less* than the file held -- the user sees
 something missing and comes looking.
 
-Two readers are not like that, and they are why this module exists:
+Three readers are not like that, and they are why this module exists:
 
 - ``overlay.deleted`` -- an empty tombstone set means "nothing was deleted", so
   every record the user deleted campaign-side comes back, inherited from the
   world. Failure *adds* content.
+- ``overlay.detached`` -- an empty set means "still attached", so a campaign
+  record whose world original was deleted resumes inheriting sync updates,
+  images, tagline and voice anchor from whatever unrelated record now holds its
+  id (#225). Failure *adds* content, and content from a stranger.
 - ``paths._read_pointer`` -- an empty pointer drops the configured ``data_dir``,
   so the store reverts to ``~/.grimoire`` and a library kept in a synced folder
   opens empty. Failure *relocates* the store.
