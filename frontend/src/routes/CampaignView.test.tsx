@@ -5195,3 +5195,40 @@ test("the turn does not wait on the summary refresh", async () => {
   expect(release).toBeDefined();      // ...and the refresh really is still in flight
   await act(async () => { release!(); });
 });
+
+test("a manual dice roll also asks whether the summary is due", async () => {
+  // Rolls append narrator posts, so a mechanics-heavy stretch of play can cross
+  // the threshold with no generated turn to carry the request (#85).
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
+  (api.roll as any).mockResolvedValue({ ok: true, total: 7, message: "" });
+  renderCampaign();
+  await screen.findByText("a reply");
+  fireEvent.click(screen.getByRole("button", { name: "Roll dice" }));
+  fireEvent.change(screen.getByLabelText("Dice notation"), { target: { value: "2d6" } });
+  fireEvent.click(screen.getByRole("button", { name: "Roll ▸" }));
+  await waitFor(() => expect(api.roll).toHaveBeenCalled());
+  // Without `force`, exactly like the per-turn call: the server still decides.
+  await waitFor(() => expect(api.refreshRollingSummary).toHaveBeenCalledWith("run", "s1"));
+});
+
+test("a check also asks whether the summary is due", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
+  (api.getSceneChecks as any).mockResolvedValue({ actors: [
+    { ref: "characters:mara", label: "Mara", sheet_type: "vampire",
+      checks: [["brawl", "Vigor + Brawl"]] },
+  ] });
+  renderCampaign();
+  await screen.findByText("a reply");
+  fireEvent.click(screen.getByRole("button", { name: "Roll dice" }));
+  fireEvent.click(screen.getByRole("button", { name: "Check" }));
+  fireEvent.change(await screen.findByLabelText("Check actor"),
+                   { target: { value: "characters:mara" } });
+  fireEvent.change(screen.getByLabelText("Check"), { target: { value: "brawl" } });
+  fireEvent.click(screen.getByRole("button", { name: "Roll ▸" }));
+  await waitFor(() => expect(api.rollCheck).toHaveBeenCalled());
+  await waitFor(() => expect(api.refreshRollingSummary).toHaveBeenCalledWith("run", "s1"));
+});

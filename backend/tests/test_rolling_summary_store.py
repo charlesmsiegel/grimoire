@@ -61,7 +61,8 @@ def test_zero_is_off_and_survives_the_round_trip(monkeypatch, tmp_path):
 def test_unset_scene_reports_an_empty_summary(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "Landing")
-    assert scenes.get_rolling_summary(cid, sid) == {"summary": "", "at": 0, "digest": ""}
+    assert scenes.get_rolling_summary(cid, sid) == {
+        "summary": "", "at": 0, "digest": "", "facts": ""}
 
 
 def test_missing_scene_reports_empty_rather_than_raising(monkeypatch, tmp_path):
@@ -74,9 +75,10 @@ def test_missing_scene_reports_empty_rather_than_raising(monkeypatch, tmp_path):
 def test_set_then_get_round_trips(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "Landing")
-    scenes.set_rolling_summary(cid, sid, "Mara reaches the salt gate.", 4, "abc123")
+    scenes.set_rolling_summary(cid, sid, "Mara reaches the salt gate.", 4, "abc123", "f00d")
     assert scenes.get_rolling_summary(cid, sid) == {
-        "summary": "Mara reaches the salt gate.", "at": 4, "digest": "abc123"}
+        "summary": "Mara reaches the salt gate.", "at": 4, "digest": "abc123",
+        "facts": "f00d"}
 
 
 def test_a_multiline_summary_cannot_corrupt_the_frontmatter(monkeypatch, tmp_path):
