@@ -505,7 +505,7 @@ def test_world_module_rebind_acquires_in_sorted_order(monkeypatch, tmp_path):
 # WHY IT IS SHAPED LIKE THIS -- the part worth reading before changing it.
 # Earlier drafts asked the opposite question: "does this look like a multi-hold
 # I recognize?" They enumerated the bad spellings, and the enumeration was
-# always one spelling short. Across eight review rounds, sixteen separate
+# always one spelling short. Across nine review rounds, eighteen separate
 # findings, every one of them the same hold in punctuation the detector had not
 # been taught:
 #
@@ -524,6 +524,8 @@ def test_world_module_rebind_acquires_in_sorted_order(monkeypatch, tmp_path):
 #   `hold_all(cids)`, `cids.append(x)`, `hold_all(cids)`        (mutated)
 #   `with ...(cid), await make():`                              (in the header)
 #   `with hold_all(cid), campaign_lock(cid):`                   (two factories)
+#   `case {"id": cid}:` rebinding between acquisitions          (a pattern)
+#   `async for` / `async with` / `[x async for x in y]`         (implicit await)
 #
 # The last seven are a second kind of gap, worth naming separately: not a way to
 # HOLD a lock the detector missed, but a way to NAME one -- the factory, the
@@ -592,7 +594,24 @@ _WITHS = (ast.With, ast.AsyncWith)
 #: A generator paused in `with campaign_lock(cid):` still holds that lock, so
 #: two live instances hold two campaigns in whatever order the consumer
 #: advanced them -- a multi-hold with one syntactic acquisition.
-_SUSPENDS = (ast.Yield, ast.YieldFrom, ast.Await)
+#: `async for`, `async with` and `[x async for x in y]` await without
+#: containing an `ast.Await` node -- the suspension is in the protocol, not the
+#: syntax. With `Await`, `Yield` and `YieldFrom` this is the complete set of
+#: suspension points the grammar has, which is why it can be a list at all:
+#: the language defines it, not a guess about how somebody might write it.
+_SUSPENDS = (ast.Yield, ast.YieldFrom, ast.Await, ast.AsyncFor, ast.AsyncWith)
+
+
+#: Matched on the comprehension EXPRESSION rather than the `ast.comprehension`
+#: clause that carries `is_async`, because only the expression has a `lineno`
+#: to report -- a clause is not a node the grammar gives a position to.
+_COMPREHENSIONS = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
+
+
+def _suspends(node: ast.AST) -> bool:
+    return (isinstance(node, _SUSPENDS)
+            or (isinstance(node, _COMPREHENSIONS)
+                and any(gen.is_async for gen in node.generators)))
 
 #: ...unless the function IS a context manager, whose single yield is bounded
 #: by its caller's `with`. That is the sanctioned spelling here, and the only
@@ -669,20 +688,36 @@ def _rebound(scope: ast.AST) -> set[str]:
     "every rule here reads that name as *this function's campaign*, which is a
     claim about the parameter". Same claim here, and the same answer when the
     scope rebinds the name -- it isn't one campaign, it is two spelled alike.
+
+    Asked of the AST rather than enumerated. The first version listed the
+    statement types that bind (`Assign`, `For`, `with ... as`, ...) and was one
+    short: a `case {"id": cid}:` capture rebinds `cid` without appearing in it.
+    Listing statement types is the losing move for the same reason it was
+    everywhere else in this guard -- so the question here is "does the AST call
+    this a store?", which covers every form that binds through a `Name`,
+    including ones added to the language later.
+
+    What that misses is the handful of binders that carry a bare `str` instead
+    of a `Name` node. Those genuinely are a closed list, because the grammar
+    says so, and they are enumerated below with `ast` as the authority.
     """
     out: set[str] = set()
     for node in _here(scope):
-        if isinstance(node, ast.Assign):
-            targets = node.targets
-        elif isinstance(node, (ast.AnnAssign, ast.AugAssign, ast.NamedExpr,
-                               ast.For, ast.AsyncFor, ast.comprehension)):
-            targets = [node.target]
-        elif isinstance(node, _WITHS):
-            targets = [i.optional_vars for i in node.items if i.optional_vars]
-        else:
-            continue
-        out |= {n.id for t in targets for n in ast.walk(t)
-                if isinstance(n, ast.Name)}
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            out.add(node.id)                                  # every Name-form
+        elif isinstance(node, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar)):
+            out.add(node.name or "")                          # `except E as x`,
+        elif isinstance(node, ast.MatchMapping):              # `case [*rest]`,
+            out.add(node.rest or "")                          # `case {**rest}`
+        elif isinstance(node, ast.alias):
+            out.add(node.asname or node.name.split(".")[0])
+        elif isinstance(node, (ast.Global, ast.Nonlocal)):
+            out |= set(node.names)     # bound elsewhere, so not ours to pin
+        # A nested `def`/`lambda` is not traversed by `_here`, but the name it
+        # binds belongs to THIS scope.
+        out |= {c.name for c in ast.iter_child_nodes(node)
+                if isinstance(c, _NESTED_SCOPES) and hasattr(c, "name")}
+    out.discard("")
     return out
 
 
@@ -768,7 +803,7 @@ def _multi_holds(tree: ast.AST) -> list[tuple[int, str]]:
                     for region in [*(i.context_expr for i in node.items[first + 1:]),
                                    *node.body]
                     for n in _here(region)
-                    if isinstance(n, _SUSPENDS) and not _is_bounded(n, scope)]
+                    if _suspends(n) and not _is_bounded(n, scope)]
         # Every other mention fails -- without the guard having to know what it
         # was going to be used for. An alias assignment, an argument to
         # `enter_context`, a `getattr` string: none of them is here.
@@ -957,6 +992,33 @@ _PREFIX = "import contextlib\nfrom grimoire.store import locks\n"
     (_PREFIX + "def f(cid):\n"
      "    with locks.hold_all(cid), locks.campaign_lock(cid):\n"
      "        pass\n", "hold_all and campaign_lock on one argument"),
+    # --- the two Codex found on a3df0ce, each a grammar form the enumeration
+    # --- had missed. Both are now asked of `ast` rather than listed.
+    (_PREFIX + "def f(cid, rec):\n"
+     "    with locks.campaign_lock(cid):\n"
+     "        match rec:\n"
+     "            case {'id': cid}:\n"
+     "                with locks.campaign_lock(cid):\n"
+     "                    pass\n", "a match-pattern capture rebinding it"),
+    (_PREFIX + "def f(cid):\n"
+     "    with locks.campaign_lock(cid):\n"
+     "        try:\n"
+     "            go()\n"
+     "        except E as cid:\n"
+     "            with locks.campaign_lock(cid):\n"
+     "                pass\n", "an except-as capture rebinding it"),
+    (_PREFIX + "async def f(cid, src):\n"
+     "    with locks.campaign_lock(cid):\n"
+     "        async for x in src:\n"
+     "            pass\n", "an async for inside a lock"),
+    (_PREFIX + "async def f(cid, cm):\n"
+     "    with locks.campaign_lock(cid):\n"
+     "        async with cm:\n"
+     "            pass\n", "an async with inside a lock"),
+    (_PREFIX + "async def f(cid, src):\n"
+     "    with locks.campaign_lock(cid):\n"
+     "        return [x async for x in src]\n",
+     "an async comprehension inside a lock"),
     # Safe, and rejected anyway -- see "WHAT IT REJECTS THAT IS SAFE" above.
     # Listed here so the trade is a test rather than a claim.
     (_PREFIX + "def f(a, b):\n"
@@ -1029,6 +1091,22 @@ def test_guard_catches_locks_not_taken_the_one_permitted_way(src, why):
     (_PREFIX + "async def f(cid):\n"
      "    with await make(), locks.campaign_lock(cid):\n"
      "        pass\n", "a suspension in an earlier `with` item"),
+    # The synchronous twins of the async shapes above. `for`, `with` and a
+    # plain comprehension suspend nothing, and flagging them would forbid
+    # ordinary code inside every critical section in the store.
+    (_PREFIX + "def f(cid, xs, p):\n"
+     "    with locks.campaign_lock(cid):\n"
+     "        for x in xs:\n"
+     "            pass\n"
+     "        with open(p) as fh:\n"
+     "            pass\n"
+     "        return [x for x in xs]\n", "sync for/with/comprehension"),
+    # A match that captures some OTHER name leaves the campaign pinned.
+    (_PREFIX + "def f(cid, rec):\n"
+     "    with locks.campaign_lock(cid):\n"
+     "        match rec:\n"
+     "            case {'id': other}:\n"
+     "                pass\n", "a match capturing an unrelated name"),
     # A different lock domain accumulated on a stack -- `store/assets.py` does
     # exactly this, and it is none of this guard's business.
     (_PREFIX + "def f(stack, images):\n"
