@@ -126,10 +126,12 @@ def post_world_character_chub_lorebooks(wid: str, cid: str, vid: str):
 
 @router.delete("/worlds/{wid}/characters/{cid}")
 def delete_world_character(wid: str, cid: str):
+    root = _world_root_or_404(wid)
     try:
-        store.characters.delete_character(_world_root_or_404(wid), cid)
+        store.characters.delete_character(root, cid)
     except store.characters.CharacterNotFound:
         raise HTTPException(status_code=404, detail="character not found")
+    store.overlay.forget_world_record(root, "characters", cid)   # #225
     return {"ok": True}
 
 

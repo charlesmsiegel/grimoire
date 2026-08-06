@@ -6730,6 +6730,33 @@ def test_group_state_routes_round_trip(client):
     assert client.put(f"/api/campaigns/{cid}/groups/no-such/state", json={}).status_code == 404
 
 
+def test_world_group_delete_leaves_no_state_for_the_next_group_of_that_name(client):
+    """#225: ids come back with the slug, so the campaign state of a group
+    deleted world-side must not greet the next group named the same way."""
+    wid, cid = _campaign(client)
+    gid = client.post(f"/api/worlds/{wid}/groups", json={"name": "Salt Circle"}).json()["id"]
+    client.put(f"/api/campaigns/{cid}/groups/{gid}/state", json={"secrets": "The abbot."})
+
+    assert client.delete(f"/api/worlds/{wid}/groups/{gid}").status_code == 200
+    again = client.post(f"/api/worlds/{wid}/groups", json={"name": "Salt Circle"}).json()["id"]
+    assert again == gid                      # the collision this is about
+    assert client.get(f"/api/campaigns/{cid}/groups/{gid}/state").json()["secrets"] == ""
+
+
+def test_world_character_delete_leaves_no_playstate_for_the_next_of_that_name(client):
+    wid, cid = _campaign(client)
+    chid = client.post(f"/api/worlds/{wid}/characters",
+                       json={"name": "Winifred"}).json()["character"]
+    croot = store.campaigns.campaign_root(cid)
+    store.playstate.write_state(croot, chid, "## Knows\nWhere the ledger is hidden.")
+
+    assert client.delete(f"/api/worlds/{wid}/characters/{chid}").status_code == 200
+    again = client.post(f"/api/worlds/{wid}/characters",
+                        json={"name": "Winifred"}).json()["character"]
+    assert again == chid
+    assert store.playstate.read_state(croot, chid) is None
+
+
 # ---- modules (#160) ----
 def test_modules_api(client):
     listed = client.get("/api/modules").json()
