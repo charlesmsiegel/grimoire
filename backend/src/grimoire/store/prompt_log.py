@@ -27,6 +27,26 @@ rename the way `alternates`' filename-keyed sidecar does.
 `next` only ever increases: a pruned id is never reissued, so a URL for an
 evicted turn 404s instead of quietly resolving to a different one.
 
+What a snapshot is, and is not (both raised in review, both deliberate):
+
+- It records the messages **grimoire composed**, not the bytes a provider
+  received. An `openai_compatible` connection with `post_process: "strict"`
+  runs `openai_compatible._strict_messages` over the list on the way out --
+  folding system blocks into user turns, merging adjacent roles, sometimes
+  inserting a `(continue)` turn -- and the Claude path flattens the whole
+  conversation into one string (`pack.MESSAGE_OVERHEAD` says the same of its
+  own estimate). Capturing post-transform would mean capturing a list with no
+  sections left in it, which is the entire vocabulary of the panel this feeds.
+  The composition is the layer that can be explained, so it is the layer that
+  is recorded.
+- `model` is the scene's stamped frontmatter, which is what the live
+  `GET .../context` route reports too. It can differ from the model the active
+  connection actually used if the connection changed after the scene was
+  created. Recording the connection's model *here alone* would make the frozen
+  panel and the live panel disagree about the same scene, which is worse than
+  the shared inaccuracy; fixing it belongs wherever that field is fixed for
+  both.
+
 Retention is `prompt_log_depth` in config.md (default 50, 0 = off), counted per
 CAMPAIGN rather than per scene. Per-scene reads better but is unbounded across
 a library -- 100 scenes at 20 entries each is 2000 payloads of tens of KB, in a
@@ -61,6 +81,18 @@ def depth() -> int:
         return int(default)
 
 
+def capturing() -> bool:
+    """Whether anything would be recorded at all.
+
+    Asked BEFORE composing, not after: building a breakdown is a full tokenizer
+    pass (`context._breakdown`), and on the default unbounded budget the packer
+    does no counting of its own — so a route that composed one anyway and let
+    `record` discard it would put that cost on every turn of a feature the user
+    has switched off.
+    """
+    return depth() > 0
+
+
 def _root(cid: str) -> Path:
     return campaigns_paths.campaign_root(cid) / "prompts"
 
@@ -83,7 +115,12 @@ def _read_index(cid: str) -> dict:
         return {"next": 1, "entries": []}
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+    except (ValueError, OSError):
+        # ValueError, not JSONDecodeError: `read_text` raises UnicodeDecodeError
+        # on invalid UTF-8 (a sync conflict, a hand edit), which is a ValueError
+        # and not an OSError -- so the narrower catch let it escape `record` and
+        # fail every generating turn over an unreadable debug file. Both are the
+        # same thing to this module: a file it cannot use.
         return {"next": 1, "entries": []}
     if not isinstance(data, dict) or not isinstance(data.get("entries"), list):
         return {"next": 1, "entries": []}
@@ -194,7 +231,7 @@ def read_entry(cid: str, eid: str, scene: str | None = None) -> dict | None:
         return None
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+    except (ValueError, OSError):   # ValueError covers UnicodeDecodeError -- see _read_index
         return None
     return data if isinstance(data, dict) else None
 
@@ -225,24 +262,29 @@ def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
 
 
 def forget_scene(cid: str, sid: str) -> None:
-    """Drop a deleted scene's snapshots. Scene ids are recycled (see
-    `scenes.lifecycle.delete_scene`), so leaving them would show the next scene
-    to take this id someone else's prompts.
+    """Drop a deleted scene's snapshots.
 
-    Never raises, for the reason `repoint_scenes` doesn't: `delete_scene` calls
-    this between two unlinks it *does* let fail, and a snapshot that will not go
-    is not worth refusing a scene deletion over. The stale rows are dropped by
-    the next capture that evicts past them.
+    **Raises**, unlike everything else here, and the exception is the point.
+    Scene ids are recycled -- `delete_scene` says so itself -- so rows left
+    behind are adopted by the next scene to take this id, which then lists
+    someone else's prompts under its own Turn history until retention happens to
+    evict them. That is the same hazard `delete_scene` already refuses to accept
+    for the reroll-alternates sidecar ("that orphan would be adopted by the next
+    scene to take this id"), and it gets the same answer: fail before the
+    transcript is unlinked, leaving the scene intact and the id unfreed, rather
+    than free an id whose old prompts are still on file.
+
+    Only the index write is load-bearing. The payloads are unlinked
+    best-effort afterwards: once the index no longer names them nothing can
+    reach them, so a payload that will not go is invisible litter rather than
+    another scene's prompt.
     """
-    try:
-        with locks.campaign_lock(cid):
-            index = _read_index(cid)
-            gone = [e for e in index["entries"] if e.get("scene") == sid]
-            if not gone:
-                return
-            index["entries"] = [e for e in index["entries"] if e.get("scene") != sid]
-            _write_index(cid, index)
-            for row in gone:
-                _unlink(cid, row["id"])
-    except (OSError, locks.StoreBusy):
-        pass
+    with locks.campaign_lock(cid):
+        index = _read_index(cid)
+        gone = [e for e in index["entries"] if e.get("scene") == sid]
+        if not gone:
+            return
+        index["entries"] = [e for e in index["entries"] if e.get("scene") != sid]
+        _write_index(cid, index)
+        for row in gone:
+            _unlink(cid, row["id"])

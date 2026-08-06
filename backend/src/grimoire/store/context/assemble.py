@@ -33,7 +33,8 @@ from . import (archive, cast as cast_data, macros, mechanics, pack, story,
 OPENER_RECAP_DEPTH = 5  # opener recap: full summaries of the last N scenes
 
 
-def compose_opener(cid: str, sid: str, prompt: str) -> tuple[list[dict], dict]:
+def compose_opener(cid: str, sid: str, prompt: str,
+                   describe: bool = True) -> tuple[list[dict], dict | None]:
     """A full-turn-context opener: the instruction plus every assembled system section
     (cast, plot threads, date, current setting, world-info, a full 5-scene recap, …),
     then the prompt as the user turn. The prompt seeds world-info activation, since a new
@@ -55,12 +56,12 @@ def compose_opener(cid: str, sid: str, prompt: str) -> tuple[list[dict], dict]:
     # the shape rules go last, right before generation, so they outrank everything above
     messages.append({"role": "system", "content": shape})
     extra = (("Opener prompt", user_text), ("Opener shape rules", shape))
-    return messages, _breakdown(a, p, extra)
+    return messages, _breakdown(a, p, extra) if describe else None
 
 
 def build_opener_messages(cid: str, sid: str, prompt: str) -> list[dict]:
     """`compose_opener` without the breakdown — see there."""
-    return compose_opener(cid, sid, prompt)[0]
+    return compose_opener(cid, sid, prompt, describe=False)[0]
 
 
 def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
@@ -312,9 +313,15 @@ def _packed(a: dict, cid: str, sid: str, opener: bool = False,
                 + sum(tokens.count_tokens(t) for t in reserve)) if budget > 0 else 0
     # `compose` is the real renderer, so the string the packer measures is the
     # string `_system_text` then produces -- not an estimate of it.
-    return pack.pack(_render_sections(a, cid, sid, opener=opener),
-                     [] if opener else a["history"], reserved, budget,
-                     compose=_compose_system)
+    #
+    # `budget` travels with the result. `_breakdown` used to re-read it from
+    # config.md, so saving a new ceiling mid-compose made the breakdown report a
+    # budget the packing pass never applied -- harmless drift in the live panel,
+    # but a frozen snapshot would keep claiming it forever.
+    return {**pack.pack(_render_sections(a, cid, sid, opener=opener),
+                        [] if opener else a["history"], reserved, budget,
+                        compose=_compose_system),
+            "budget": budget}
 
 
 def _compose_system(texts: list[str]) -> str:
@@ -333,8 +340,17 @@ Appended = tuple[str, str, str]
 
 
 def compose_turn(cid: str, sid: str, turn: dict | None = None,
-                 appended: tuple[Appended, ...] = ()) -> tuple[list[dict], dict]:
+                 appended: tuple[Appended, ...] = (),
+                 describe: bool = True) -> tuple[list[dict], dict | None]:
     """One turn's messages, and the breakdown describing them.
+
+    `describe=False` returns `None` for the breakdown and skips building it.
+    That is not a micro-optimisation: on the DEFAULT unbounded budget `pack`
+    skips tokenising entirely and deliberately says so, while `_breakdown`
+    counts every section, every history message and the composed system prompt.
+    Building one for a caller that will throw it away -- `build_messages`, or
+    any route while `prompt_log_depth` is 0 -- would put a full tokenizer pass
+    on every turn of a feature the user has turned off.
 
     BOTH out of a single `_assemble` + `_packed` pass, which is what lets a
     snapshot of this turn be trusted later (#157). Running the two entry points
@@ -367,6 +383,8 @@ def compose_turn(cid: str, sid: str, turn: dict | None = None,
     if a["post_history"]:
         messages.append({"role": "system", "content": a["post_history"]})
     messages += [{"role": role, "content": content} for _label, role, content in appended]
+    if not describe:
+        return messages, None
     return messages, _breakdown(a, p, [(label, c) for label, _role, c in appended])
 
 
@@ -379,11 +397,11 @@ def build_messages(cid: str, sid: str, turn: dict | None = None,
     and gave `compose_turn` no way to report the appended block; `appended`
     does all three jobs at once.
     """
-    return compose_turn(cid, sid, turn=turn, appended=appended)[0]
+    return compose_turn(cid, sid, turn=turn, appended=appended, describe=False)[0]
 
 
-def compose_director_turn(cid: str, sid: str, note: str,
-                          turn: dict | None = None) -> tuple[list[dict], dict]:
+def compose_director_turn(cid: str, sid: str, note: str, turn: dict | None = None,
+                          describe: bool = True) -> tuple[list[dict], dict | None]:
     """One offscreen director turn: full system + history, then the note as the
     final user message. The note rides only this call — never persisted. `turn`
     is the same one-shot response-preset override as `compose_turn`, and the
@@ -405,12 +423,12 @@ def compose_director_turn(cid: str, sid: str, note: str,
     messages.append({"role": "user", "content": note_text})
     if a["post_history"]:
         messages.append({"role": "system", "content": a["post_history"]})
-    return messages, _breakdown(a, p, [("Director note", note_text)])
+    return messages, _breakdown(a, p, [("Director note", note_text)]) if describe else None
 
 
 def build_director_messages(cid: str, sid: str, note: str, turn: dict | None = None) -> list[dict]:
     """`compose_director_turn` without the breakdown — see there."""
-    return compose_director_turn(cid, sid, note, turn=turn)[0]
+    return compose_director_turn(cid, sid, note, turn=turn, describe=False)[0]
 
 
 def _breakdown(a: dict, p: dict, extra: list[tuple[str, str]] | None = None) -> dict:
@@ -481,7 +499,7 @@ def _breakdown(a: dict, p: dict, extra: list[tuple[str, str]] | None = None) -> 
     return {"sections": rows, "total_tokens": total,
             "dropped_tokens": (sum(r["tokens"] for r in rows if r["dropped"])
                                + p["history_trimmed_tokens"]),
-            "budget_tokens": pack.budget_tokens()}
+            "budget_tokens": p["budget"]}
 
 
 def context_breakdown(cid: str, sid: str) -> dict:

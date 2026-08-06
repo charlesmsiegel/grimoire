@@ -7,6 +7,8 @@ repointing, and the refusals that must never cost a turn.
 
 import json
 
+import pytest
+
 from grimoire.store import (campaigns, config, context, entities, prompt_log,
                             scene_refs, scenes, worlds)
 
@@ -217,3 +219,94 @@ def test_a_corrupt_index_reads_as_empty_rather_than_raising(monkeypatch, tmp_pat
 def test_read_entry_refuses_a_traversing_id(monkeypatch, tmp_path):
     cid, _sid = _campaign(monkeypatch, tmp_path)
     assert prompt_log.read_entry(cid, "../../config") is None
+
+
+# ---- fixes from PR #307 review ----
+
+def test_a_non_utf8_index_reads_as_empty_rather_than_raising(monkeypatch, tmp_path):
+    """`read_text` raises UnicodeDecodeError, which is a ValueError and NOT an
+    OSError — so the narrow catch let it past `record` and every generating turn
+    failed over an unreadable debug file."""
+    cid, sid = _campaign(monkeypatch, tmp_path)
+    _record(cid, sid)
+    (campaigns.campaign_root(cid) / "prompts" / "index.json").write_bytes(b'{"next": \xff\xfe}')
+
+    assert prompt_log.list_entries(cid, sid) == []
+    assert _record(cid, sid) is not None
+
+
+def test_a_non_utf8_payload_reads_as_missing(monkeypatch, tmp_path):
+    cid, sid = _campaign(monkeypatch, tmp_path)
+    eid = _record(cid, sid)
+    (campaigns.campaign_root(cid) / "prompts" / f"{eid}.json").write_bytes(b"\xff\xfe")
+    assert prompt_log.read_entry(cid, eid) is None
+
+
+def test_forget_scene_refuses_rather_than_freeing_an_id_it_could_not_clear(monkeypatch, tmp_path):
+    """Scene ids are recycled, so rows left behind are adopted by the next scene
+    to take the id. `delete_scene` already refuses over the alternates sidecar
+    for this reason; the prompt log gets the same answer."""
+    cid, sid = _campaign(monkeypatch, tmp_path)
+    _record(cid, sid)
+
+    def boom(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(prompt_log.atomic, "write_text", boom)
+    with pytest.raises(OSError):
+        scenes.delete_scene(cid, sid)
+    # the scene — and therefore its id — is still there
+    assert sid in [s["id"] for s in scenes.list_scenes(cid)]
+
+
+def test_the_frozen_budget_is_the_one_the_packer_used(monkeypatch, tmp_path):
+    """Saving a new ceiling mid-compose used to make the breakdown report a
+    budget the packing pass never applied — drift the live panel could shrug
+    off, but a snapshot would claim forever."""
+    cid, sid = _campaign(monkeypatch, tmp_path)
+    scenes.append_message(cid, sid, "user", "hello")
+    config.write_config(context_budget="4000")
+
+    real_pack = context.pack.pack
+
+    def repack(*args, **kwargs):
+        # the user hits Save on the Configuration page mid-compose
+        config.write_config(context_budget="999999")
+        return real_pack(*args, **kwargs)
+
+    monkeypatch.setattr(context.pack, "pack", repack)
+    _messages, breakdown = context.compose_turn(cid, sid)
+    assert breakdown["budget_tokens"] == 4000
+
+
+def test_describe_false_builds_no_breakdown(monkeypatch, tmp_path):
+    """Capture off must not leave a full tokenizer pass on every turn: on the
+    default unbounded budget the packer counts nothing, and `_breakdown` counts
+    everything."""
+    cid, sid = _campaign(monkeypatch, tmp_path)
+    scenes.append_message(cid, sid, "user", "hello")
+
+    calls = {"n": 0}
+    real = context.tokens.count_tokens
+
+    def counted(text):
+        calls["n"] += 1
+        return real(text)
+
+    monkeypatch.setattr(context.tokens, "count_tokens", counted)
+    messages, breakdown = context.compose_turn(cid, sid, describe=False)
+    assert breakdown is None
+    assert messages
+    assert calls["n"] == 0          # unbounded budget: nothing counted at all
+
+    calls["n"] = 0
+    _m, described = context.compose_turn(cid, sid, describe=True)
+    assert described is not None
+    assert calls["n"] > 0
+
+
+def test_capturing_follows_the_configured_depth(monkeypatch, tmp_path):
+    _cid, _sid = _campaign(monkeypatch, tmp_path)
+    assert prompt_log.capturing() is True
+    config.write_config(prompt_log_depth="0")
+    assert prompt_log.capturing() is False
