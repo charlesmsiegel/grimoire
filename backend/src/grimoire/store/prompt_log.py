@@ -77,7 +77,13 @@ def depth() -> int:
     default = config.DEFAULT_PROMPT_LOG_DEPTH
     try:
         return max(int(config.read_config().get("prompt_log_depth", default)), 0)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OSError):
+        # OSError as well as the conversion errors, so this function cannot be
+        # the thing that fails a turn -- config.md locked by a sync client reads
+        # as "use the default", like a malformed number. It does NOT make an
+        # unreadable config.md survivable overall: `context._assemble` calls
+        # `read_config()` with no guard at all a moment later, so the turn fails
+        # there instead. This only keeps the promise THIS module makes.
         return int(default)
 
 
@@ -111,17 +117,36 @@ def _entry_path(cid: str, eid: str) -> Path:
     return _root(cid) / f"{eid}.json"
 
 
-def _read_index(cid: str) -> dict:
+def _read_index(cid: str, strict: bool = False) -> dict:
     """The index, or an empty one. A corrupt or unreadable file reads as empty
     rather than raising: this is a debug view beside the campaign, and refusing
     to list turns -- or worse, refusing to record one -- is a poor trade for a
-    file nothing else depends on. The next capture rebuilds it."""
+    file nothing else depends on. The next capture rebuilds it.
+
+    `strict` re-raises an OSError instead, for the one caller that cannot
+    tolerate a false empty: `forget_scene`. There, "no rows for this scene" is
+    what lets `delete_scene` free a recycled id, so a transiently locked index
+    read as empty would leave the rows on disk and hand them to the next scene
+    to take that id -- the exact hazard the write-side raise closes, reached
+    through the read instead.
+
+    Only OSError, deliberately. A structurally corrupt index is not transient:
+    raising on it would block every scene deletion in the campaign forever,
+    while its rows are invisible to `list_entries` anyway (which reads through
+    this same empty result), so a recycled id inherits nothing a user can see.
+    A locked file, by contrast, becomes readable again -- and that is precisely
+    when the stale rows would surface.
+    """
     p = _index_path(cid)
     if not p.exists():
         return {"next": 1, "entries": []}
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
-    except (ValueError, OSError):
+    except OSError:
+        if strict:
+            raise
+        return {"next": 1, "entries": []}
+    except ValueError:
         # ValueError, not JSONDecodeError: `read_text` raises UnicodeDecodeError
         # on invalid UTF-8 (a sync conflict, a hand edit), which is a ValueError
         # and not an OSError -- so the narrower catch let it escape `record` and
@@ -351,7 +376,11 @@ def forget_scene(cid: str, sid: str) -> None:
     another scene's prompt.
     """
     with locks.campaign_lock(cid):
-        index = _read_index(cid)
+        # Strict: an index that cannot be READ would otherwise come back empty,
+        # `gone` would be empty, and the delete would proceed to free the id
+        # with the rows still on disk -- the write-side raise below stepped over
+        # entirely. See `_read_index`.
+        index = _read_index(cid, strict=True)
         gone = [e for e in index["entries"] if e.get("scene") == sid]
         if not gone:
             return
