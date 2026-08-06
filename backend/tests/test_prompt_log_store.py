@@ -310,3 +310,17 @@ def test_capturing_follows_the_configured_depth(monkeypatch, tmp_path):
     assert prompt_log.capturing() is True
     config.write_config(prompt_log_depth="0")
     assert prompt_log.capturing() is False
+
+
+def test_an_absurdly_long_numeric_id_does_not_reach_the_caller(monkeypatch, tmp_path):
+    """`safe_id` caps nothing and `"1" * 5000` is `isdigit()`, but CPython
+    refuses `int()` past 4300 digits — with a ValueError, straight through
+    `record`'s guard. Third instance of this hole; the length bound closes it."""
+    cid, sid = _campaign(monkeypatch, tmp_path)
+    _record(cid, sid)
+    (campaigns.campaign_root(cid) / "prompts" / "index.json").write_text(
+        json.dumps({"next": 2, "entries": [{"id": "1" * 5000, "scene": sid}]}),
+        encoding="utf-8")
+
+    assert prompt_log.list_entries(cid, sid) == []
+    assert _record(cid, sid) is not None

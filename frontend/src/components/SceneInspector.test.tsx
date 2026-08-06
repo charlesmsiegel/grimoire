@@ -654,3 +654,23 @@ test("a snapshot arriving after a scene change is dropped, not shown", async () 
   expect(screen.queryByText("the lore as it stood then")).toBeNull();
   expect(screen.queryByText(/What the model saw/)).toBeNull();
 });
+
+test("a turn list arriving after a scene change is dropped, not listed", async () => {
+  // Worse than a stale label: entry ids are per-campaign counters, so they
+  // collide across campaigns and clicking a stale row would fetch a different
+  // campaign's prompt under it.
+  (api.listScenePrompts as any).mockResolvedValue({ entries: TURNS });
+  const { rerender } = render(
+    <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+  await screen.findByText("Regenerate");
+
+  let release: (v: any) => void = () => {};
+  (api.listScenePrompts as any).mockReturnValue(new Promise((r) => { release = r; }));
+  rerender(<SceneInspector cid="c2" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+
+  // the previous campaign's rows are gone the moment the scene changes, not
+  // when the replacement request settles
+  await screen.findByText("No captured turns yet.");
+  release({ entries: TURNS });
+  await screen.findByText("Regenerate");   // c2's own rows, once they arrive
+});
