@@ -567,7 +567,11 @@ def materialize(cid: str, sid: str, parsed: dict,
         # is the retirement. Recording the new fact creates a record and
         # overwrites nothing, so it needs no target and gets its id at save time
         # (`new_character` stages the same way, and for the same reason).
-        out.append({"id": f"fact:{sup}" if sup else f"fact:{sid}:{n}", "kind": "fact",
+        # Through `_staged` like every other row: a fact reaches the reviewer as
+        # a StagedEdit, so it is routed on the same evidence as the rest. No
+        # subjects -- a standing truth about the world belongs to nobody, so no
+        # speaker can be first-hand about it (see `routing.authority`).
+        out.append(_staged({"id": f"fact:{sup}" if sup else f"fact:{sid}:{n}", "kind": "fact",
                     "target": {"kind": "facts", "id": sup},
                     "label": _fact_label(text, sup, date),
                     "field": "text",
@@ -578,7 +582,7 @@ def materialize(cid: str, sid: str, parsed: dict,
                     "before": conflicts.fact_line(prior) if prior else "",
                     "after": text, "authored": False,
                     "payload": {"text": text, "date": date, "supersedes": sup,
-                                "scene": sid}})
+                                "scene": sid}}, e))
 
     existing_char_names = {c["name"].strip().lower() for c in overlay.list_characters(cid)}
     for e in parsed.get("new_characters", []):
