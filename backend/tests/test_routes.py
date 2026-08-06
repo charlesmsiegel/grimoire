@@ -9364,3 +9364,23 @@ def test_absorb_primes_the_extraction_with_the_campaigns_standing_facts(client):
     user = seen[0][1]["content"]
     assert "Standing facts:" in user
     assert "f1: The crypt door has no lock. (the third night)" in user
+
+
+def test_world_pc_and_greeting_deletes_sweep_their_leftovers_too(client):
+    """#225's other two world-route deletes of inheritable records."""
+    wid, cid = _campaign(client)
+    pid = client.post(f"/api/worlds/{wid}/pcs", json={"name": "Mara"}).json()["pc"]
+    chid = client.post(f"/api/worlds/{wid}/characters",
+                       json={"name": "Seraphine"}).json()["character"]
+    gid = client.post(f"/api/worlds/{wid}/greetings",
+                      json={"name": "Arrival", "character": chid,
+                            "version": "default", "body": "hi"}).json()["id"]
+    croot = store.campaigns.campaign_root(cid)
+    for kind, rid in (("pcs", pid), ("greetings", gid)):
+        (croot / kind / rid).mkdir(parents=True)
+        (croot / kind / rid / "leftover.md").write_text("stale\n", encoding="utf-8")
+
+    assert client.delete(f"/api/worlds/{wid}/pcs/{pid}").status_code == 200
+    assert client.delete(f"/api/worlds/{wid}/greetings/{gid}").status_code == 200
+    assert not (croot / "pcs" / pid).exists()
+    assert not (croot / "greetings" / gid).exists()
