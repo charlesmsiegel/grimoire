@@ -324,3 +324,61 @@ def test_an_absurdly_long_numeric_id_does_not_reach_the_caller(monkeypatch, tmp_
 
     assert prompt_log.list_entries(cid, sid) == []
     assert _record(cid, sid) is not None
+
+
+def test_a_structurally_corrupt_payload_reads_as_missing(monkeypatch, tmp_path):
+    """`{}` is valid JSON. Served as a snapshot it reaches `ContextBreakdown`,
+    which calls `ctx.total_tokens.toLocaleString()` and `ctx.sections.map()`
+    unguarded — so a hand-edited payload would take the inspector down rather
+    than read as a debug entry that is unavailable."""
+    cid, sid = _campaign(monkeypatch, tmp_path)
+    eid = _record(cid, sid)
+    path = campaigns.campaign_root(cid) / "prompts" / f"{eid}.json"
+
+    for bad in ({}, {"sections": []},
+                {"total_tokens": 1, "dropped_tokens": 0, "budget_tokens": 0},
+                {"total_tokens": 1, "dropped_tokens": 0, "budget_tokens": 0,
+                 "sections": "not a list"},
+                {"total_tokens": 1, "dropped_tokens": 0, "budget_tokens": 0,
+                 "sections": [{"label": "World info"}]},          # row missing fields
+                {"total_tokens": "lots", "dropped_tokens": 0, "budget_tokens": 0,
+                 "sections": []}):
+        path.write_text(json.dumps(bad), encoding="utf-8")
+        assert prompt_log.read_entry(cid, eid) is None, bad
+
+
+def test_a_payload_with_unknown_extra_fields_still_reads(monkeypatch, tmp_path):
+    """Strict about what the panel dereferences, tolerant of everything else —
+    or a payload written by a later version stops being readable."""
+    cid, sid = _campaign(monkeypatch, tmp_path)
+    eid = _record(cid, sid)
+    path = campaigns.campaign_root(cid) / "prompts" / f"{eid}.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["some_future_field"] = {"nested": True}
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    assert prompt_log.read_entry(cid, eid) is not None
+
+
+def test_a_repoint_that_cannot_be_written_drops_the_rows(monkeypatch, tmp_path):
+    """The rename cannot be refused — transcripts are already moved by the time
+    `scene_refs.repoint` runs — so rows that cannot follow are dropped instead.
+    Left keyed to the old id they would be adopted by a recreated scene that
+    lands on it."""
+    cid, sid = _campaign(monkeypatch, tmp_path)
+    _record(cid, sid)
+    real = prompt_log.atomic.write_text
+    calls = {"n": 0}
+
+    def fail_once(path, text):
+        calls["n"] += 1
+        if calls["n"] == 1:          # the repoint write
+            raise OSError("disk full")
+        return real(path, text)      # the drop write
+
+    monkeypatch.setattr(prompt_log.atomic, "write_text", fail_once)
+    prompt_log.repoint_scenes(cid, {sid: "0002-renamed"})
+
+    # neither the old id nor the new one carries them any more
+    assert prompt_log.list_entries(cid, sid) == []
+    assert prompt_log.list_entries(cid, "0002-renamed") == []
