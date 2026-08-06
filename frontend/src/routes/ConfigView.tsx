@@ -19,6 +19,8 @@ export default function ConfigView() {
   const [contextBudget, setContextBudget] = useState("");
   const [archiveDepth, setArchiveDepth] = useState("");
   const [promptLogDepth, setPromptLogDepth] = useState("");
+  const [turnstateDepth, setTurnstateDepth] = useState("");
+  const [promoteStreak, setPromoteStreak] = useState("");
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
@@ -33,6 +35,8 @@ export default function ConfigView() {
       setContextBudget(c.context_budget);
       setArchiveDepth(c.archive_depth);
       setPromptLogDepth(c.prompt_log_depth);
+      setTurnstateDepth(c.turnstate_depth);
+      setPromoteStreak(c.promote_streak);
     });
     api.listConnections().then(setConnections).catch(() => setConnections([]));
   }, []);
@@ -40,7 +44,7 @@ export default function ConfigView() {
   if (!config) return <div className="page page-narrow config">Loading…</div>;
 
   async function save(fields: Partial<{ theme: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string; active_connection_id: string; llm_timeout: string; absorb_budget: string; context_budget: string; archive_depth: string;
-                        prompt_log_depth: string }>) {
+                        prompt_log_depth: string; turnstate_depth: string; promote_streak: string }>) {
     const next = await api.putConfig(fields);
     setConfig(next);
     setSaved(true);
@@ -127,6 +131,28 @@ export default function ConfigView() {
         one scene for long enough ages out another's. <code>0</code> records none.
       </p>
 
+      <div className="section-label">Transient state</div>
+      <div className="field-row">
+        <div className="field">
+          <label htmlFor="cfg-turnstate-depth">Tracked posts</label>
+          <input id="cfg-turnstate-depth" type="text" inputMode="numeric" value={turnstateDepth}
+                 placeholder="0" onChange={(e) => setTurnstateDepth(e.target.value)} />
+        </div>
+        <div className="field">
+          <label htmlFor="cfg-promote-streak">Promote after</label>
+          <input id="cfg-promote-streak" type="text" inputMode="numeric" value={promoteStreak}
+                 placeholder="3" onChange={(e) => setPromoteStreak(e.target.value)} />
+        </div>
+      </div>
+      <p className="field-hint">
+        Asks the narrator to record each character's mood, intent and posture at the end of
+        every reply — stripped from the transcript, never shown in the scene — and feeds the
+        last few posts' worth back into the prompt. Tracked posts is how far back that reaches;
+        <code> 0</code> turns the whole thing off, which is the default. Promote after is how
+        many replies running a value has to hold before ending a scene offers it for the
+        character's standing state, alongside the other proposed edits.
+      </p>
+
       <div className="section-label">System prompt</div>
       <label className="sr-only" htmlFor="cfg-system-prompt">
         System prompt (sent with every scene)
@@ -177,6 +203,7 @@ export default function ConfigView() {
             llm_timeout: llmTimeout, absorb_budget: absorbBudget,
             context_budget: contextBudget, archive_depth: archiveDepth,
             prompt_log_depth: promptLogDepth,
+            turnstate_depth: turnstateDepth, promote_streak: promoteStreak,
           })}
         >
           Save

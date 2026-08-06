@@ -115,7 +115,16 @@ def _persist_reply(cid: str, sid: str, text: str) -> None:
     Macros are expanded before persisting (#137): {{roll}}/{{random}} must be
     resolved once, not re-rolled on every future context build that re-reads
     this now-historical message. Goes through append_reply so the generation
-    records its own turn boundary for drift measurement."""
+    records its own turn boundary for drift measurement.
+
+    A trailing transient-state tracker block (#120) is split off FIRST, so it
+    never reaches `split_reply` and so cannot become a post. Unconditionally,
+    not gated on `turnstate_depth`: turning the feature off must not start
+    leaking blocks into transcripts while the model is still complying from the
+    scene it can see, and a block is unambiguous enough that stripping one
+    nobody asked for costs nothing.
+    """
+    text, tracked = store.turnstate.split_block(text)
     players = frozenset(store.appearances.player_names(cid, sid))
     subs = store.context.scene_substitutions(cid, sid)
     segments = [{"speaker": seg["speaker"],
@@ -127,7 +136,11 @@ def _persist_reply(cid: str, sid: str, text: str) -> None:
     # acquisitions inside each call cost nothing. `reconcile` writes nothing for
     # a reply that lands anywhere else, which is every ordinary turn.
     with store.locks.campaign_lock(cid):
+        # Read before the append, under the same lock, so the index the ledger
+        # entry is filed at is the one this generation's last post really took.
+        landed = len(store.scenes.read_scene(cid, sid)["messages"]) if tracked else 0
         store.scenes.append_reply(cid, sid, segments)
+        _record_turnstate(cid, sid, landed, segments, tracked)
         try:
             store.alternates.reconcile(cid, sid)
         except OSError:
@@ -141,6 +154,31 @@ def _persist_reply(cid: str, sid: str, text: str) -> None:
             # transcript, never a reason to lose or misreport one. The cost is
             # the round-eleven durability window staying open for this turn.
             pass
+
+
+def _record_turnstate(cid: str, sid: str, landed: int, segments: list[dict],
+                      tracked: dict) -> None:
+    """File a reply's tracker block against the index of its LAST post.
+
+    `append_reply` drops blank segments, so the count is recomputed the same
+    way here rather than assumed -- an entry filed past the transcript's end is
+    one `entries()` then discards, silently losing the turn it describes.
+
+    Never fatal. A ledger that cannot be written must not turn a landed
+    generation into a failed one: the exception would escape the stream
+    finalizer before its `done` frame, so the client would report a failure
+    over a reply that is on disk and offer a retry that appends a second one.
+    Exactly the judgement `reconcile` below already makes, and the cost is
+    smaller -- a lost mood, not a lost variant.
+    """
+    kept = sum(1 for s in segments if s["content"].strip())
+    if not tracked or not kept:
+        return
+    try:
+        states = store.turnstate.resolve(tracked, store.appearances.scene_cast(cid, sid))
+        store.turnstate.record(cid, sid, landed + kept - 1, states)
+    except OSError:
+        pass
 
 
 def _sse(data: dict) -> str:
@@ -180,17 +218,23 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
     """
     async def event_stream():
         watcher = store.fence.FenceWatcher()
+        # Display only, and deliberately downstream of the watcher rather than
+        # inside it: the tracker block is stripped from the transcript by
+        # `_persist_reply`, but by then the deltas carrying it have already been
+        # rendered. `watcher.narration` is untouched, so what gets persisted is
+        # decided in exactly one place either way (#120).
+        redactor = store.turnstate.StreamRedactor()
         try:
             async for delta in client.stream(messages, conn):
                 if not delta:
                     yield _HEARTBEAT  # the facade is still waiting on the model
                     continue
-                out = watcher.feed(delta)
+                out = redactor.feed(watcher.feed(delta))
                 if out:
                     yield _sse({"delta": out})
                 if watcher.complete:
                     break  # stop-after-fence: ignore anything past the close
-            tail = watcher.finish()
+            tail = redactor.feed(watcher.finish()) + redactor.finish()
             if tail:
                 yield _sse({"delta": tail})
         except LLMError as exc:

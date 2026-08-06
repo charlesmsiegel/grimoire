@@ -21,6 +21,7 @@ const cfg = {
   active_connection: { id: "openrouter", kind: "openrouter", name: "OpenRouter" }, ready: true,
   llm_timeout: "120", absorb_budget: "600", context_budget: "0", archive_depth: "3",
   prompt_log_depth: "50",
+  turnstate_depth: "0", promote_streak: "3",
 };
 const dataDir = {
   data_dir: "/home/u/.grimoire", default: "/home/u/.grimoire",
@@ -156,4 +157,24 @@ test("links to the Connections page to manage keys/endpoints", async () => {
   renderView();
   await screen.findByLabelText("LLM connection");
   expect(screen.getByRole("link", { name: /connections/i })).toHaveAttribute("href", "/connections");
+});
+
+
+test("saves the transient-state settings", async () => {
+  renderView();
+  fireEvent.change(await screen.findByLabelText(/tracked posts/i), { target: { value: "6" } });
+  fireEvent.change(screen.getByLabelText(/promote after/i), { target: { value: "2" } });
+  fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+  await waitFor(() =>
+    expect(api.putConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ turnstate_depth: "6", promote_streak: "2" }),
+    ),
+  );
+});
+
+test("shows the stored transient-state settings", async () => {
+  (api.getConfig as any).mockResolvedValue({ ...cfg, turnstate_depth: "4", promote_streak: "5" });
+  renderView();
+  expect(await screen.findByLabelText(/tracked posts/i)).toHaveValue("4");
+  expect(screen.getByLabelText(/promote after/i)).toHaveValue("5");
 });

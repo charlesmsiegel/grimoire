@@ -149,6 +149,12 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # it starts inside the exclusion rather than joining the `UNREVIEWED`
     # backlog -- the same call `store.commitments` made.
     "store.prompt_log",
+    # turnstate.json is rewritten whole by `record`, `repoint_scenes` and
+    # `drop_scene`, exactly like commitments.json -- and it is written from
+    # inside `_persist_reply`, which already holds this lock, so the entry that
+    # files a reply's tracker block and the append that lands the reply are one
+    # critical section rather than two.
+    "store.turnstate",
     "store.sheets.tally",
     "store.sheets.writer",
     "store.audit.baselines",
