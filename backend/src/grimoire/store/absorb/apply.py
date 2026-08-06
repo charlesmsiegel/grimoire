@@ -403,6 +403,22 @@ def _apply_one(cid: str, croot, e: dict, sid: str | None,
                             "reason": "that fact is not standing on this campaign's "
                                       "ledger — it was already retired, or it is gone"}
             else:
+                # A replacement that says what the fact already says is not a
+                # replacement. `materialize` drops the row when the MODEL writes
+                # one, but the reviewer can edit the text into a restatement
+                # afterwards and that path never goes back through it -- and
+                # this is the one that takes a client-supplied body. Left
+                # unchecked it retires a correctly dated fact and re-records the
+                # same sentence under this scene's later date, manufacturing a
+                # lifecycle change out of a truth that did not move.
+                #
+                # Reported rather than skipped: the reviewer approved a
+                # retirement, it is not going to happen, and #271's rule is that
+                # an approved change which does not land says so.
+                if fid and facts.restates(facts.get(cid, fid), text):
+                    return {"state": "failed", "id": eid, "kind": "error",
+                            "reason": "this says what the fact it replaces already says — "
+                                      "edit it to what is true now, or uncheck the row"}
                 # `sid` over the staged `payload.scene`, for the reason the plot
                 # branch gives: a retry after a rename must stamp the fact with
                 # the id the scene has now, since `facts.repoint_scenes` has
