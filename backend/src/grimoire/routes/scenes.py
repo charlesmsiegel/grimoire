@@ -1176,7 +1176,11 @@ async def post_absorb(cid: str, sid: str, force: bool = False,
         # produced yet, so there is nothing to degrade to.
         raise HTTPException(status_code=502, detail={"detail": exc.detail, "kind": exc.kind})
     parsed = store.absorb.parse_output(text)
-    edits = store.absorb.materialize(cid, sid, parsed)
+    # The SAME messages the prompt was rendered from, not a fresh read: the
+    # citations in `parsed` are claims about that transcript, and a reroll or an
+    # append landing while the call was in flight would otherwise judge them
+    # against text the model never saw.
+    edits = store.absorb.materialize(cid, sid, parsed, scene["messages"])
     # Phase 2: propose each present NPC's refreshed campaign dossier -- staged, not
     # written (never raises -- see _stage_dossiers' own failure boundary).
     dossier_edits, dossiers = await _stage_dossiers(cid, sid, transcript, client, conn, budget)

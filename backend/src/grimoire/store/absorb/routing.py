@@ -197,7 +197,21 @@ def _canonical(label: str) -> str:
     return scenes_serialize.speaker_base(label)
 
 
-def _refs(cid: str, sid: str, aliases: dict[str, str]) -> dict[str, str]:
+def _named_by(canonical: list[str], name: str) -> bool:
+    """Could one of this scene's speaker labels have been written for `name`?
+
+    The same unambiguous-prefix rule `authority` resolves labels WITH, asked in
+    the other direction. Membership used to be exact-fold equality, which is a
+    stricter test than the matcher that runs later: a character carded
+    "Cordelia Ashgrove" whose every line is labelled "Cordelia" never puts her
+    full name in `aliases`, so she was dropped from `refs` on a spelling the
+    matcher would have accepted -- losing `SELF` on her own words, and handing
+    them to a similarly-prefixed actor who happened to still be present.
+    """
+    return any(scenes_serialize.match_name(label, [name]) for label in canonical)
+
+
+def _refs(cid: str, sid: str, canonical: list[str]) -> dict[str, str]:
     """Display name -> ``"<kind>:<id>"`` for everyone who could have spoken here.
 
     The scene's current cast, PLUS any roster actor whose name the transcript
@@ -229,7 +243,7 @@ def _refs(cid: str, sid: str, aliases: dict[str, str]) -> dict[str, str]:
             if (a["kind"], a["id"]) in seen:
                 continue
             name = appearances_cast._actor_name(aroot, a["kind"], a["id"], a["version"])
-            if isinstance(name, str) and name.casefold() in aliases:
+            if isinstance(name, str) and _named_by(canonical, name):
                 members.append({**a, "name": name})
                 seen.add((a["kind"], a["id"]))
     except Exception:                                          # noqa: BLE001
@@ -255,7 +269,7 @@ def _refs(cid: str, sid: str, aliases: dict[str, str]) -> dict[str, str]:
     return refs
 
 
-def speaker_index(cid: str, sid: str) -> dict:
+def speaker_index(cid: str, sid: str, messages: list[dict] | None = None) -> dict:
     """What this scene can say about a cited speaker, gathered once per absorb.
 
     - ``canonical`` -- one entry per speaker the transcript shows, and the only
@@ -272,14 +286,23 @@ def speaker_index(cid: str, sid: str) -> dict:
     not the cast list: an actor can be present the whole scene without speaking
     a line worth quoting.
 
+    `messages` is the transcript the model was SHOWN, and callers who have it
+    must pass it. `post_absorb` renders the prompt from a snapshot taken under
+    the campaign lock and then awaits the extraction call, so re-reading the
+    scene here would judge the model's citations against a transcript it never
+    saw: a reroll or an append landing mid-call turns an honest quote into a
+    fabrication, and new content can corroborate evidence that was never in the
+    prompt. Reading the scene is the fallback for callers with no snapshot.
+
     An unreadable scene yields an empty index rather than raising: this runs
     after the extraction call has been paid for, and the failure a reviewer can
     act on is a proposal shown as uncorroborated, not a 500.
     """
-    try:
-        messages = scenes_read.read_scene(cid, sid)["messages"]
-    except Exception:                                          # noqa: BLE001
-        messages = []
+    if messages is None:
+        try:
+            messages = scenes_read.read_scene(cid, sid)["messages"]
+        except Exception:                                      # noqa: BLE001
+            messages = []
     # A list, not a set: `match_name`'s prefix rule counts how many names a
     # label could mean by iterating. Deduped as it is built, so a speaker with
     # fifty lines does not look like fifty candidates.
@@ -293,11 +316,17 @@ def speaker_index(cid: str, sid: str) -> dict:
         label = _label(m)
         if not label:
             continue
-        canon = _canonical(label)
+        # Folded FIRST, so two spellings of one label are one speaker. `canonical`
+        # deduped case-sensitively while `aliases` folded, so a scene labelling
+        # the same character "Mara" and then "mara" kept two text buckets with
+        # the alias pointing at only the first -- and a verbatim quote from the
+        # second message read as invented. `setdefault` returns the spelling
+        # already registered, so the first one seen wins and every later variant
+        # files under it.
+        canon = aliases.setdefault(_canonical(label).casefold(), _canonical(label))
         if canon not in canonical:
             canonical.append(canon)
-        for spelling in (label, canon):
-            aliases.setdefault(spelling.casefold(), canon)
+        aliases.setdefault(label.casefold(), canon)
         # Kept APART rather than flagging the canonical, because the visible
         # `Roll` is also a writable character name. Marking the shared label
         # synthetic took the real actor's identity with it -- she could never be
@@ -310,7 +339,7 @@ def speaker_index(cid: str, sid: str) -> dict:
     return {"canonical": canonical, "aliases": aliases,
             "texts": {c: "\n".join(p) for c, p in said.items()},
             "roll_texts": {c: "\n".join(p) for c, p in roll_said.items()},
-            "refs": _refs(cid, sid, aliases)}
+            "refs": _refs(cid, sid, canonical)}
 
 
 def _excerpt(quote: str) -> str:
