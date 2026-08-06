@@ -11,7 +11,7 @@ vi.mock("react-router-dom", async () => ({
 vi.mock("../api/client", () => ({
   ApiError: class ApiError extends Error {},
   api: {
-    getDataDir: vi.fn(), putDataDir: vi.fn(), putConfig: vi.fn(),
+    getDataDir: vi.fn(), putDataDir: vi.fn(), putConfig: vi.fn(), getConfig: vi.fn(),
     createConnection: vi.fn(), createWorld: vi.fn(),
   },
 }));
@@ -37,6 +37,7 @@ beforeEach(() => {
     is_default: false, source: "custom", exists: true,
   });
   (api.putConfig as any).mockResolvedValue({});
+  (api.getConfig as any).mockResolvedValue({ first_run: true });
   (api.createConnection as any).mockResolvedValue({ id: "openrouter" });
   (api.createWorld as any).mockResolvedValue({ id: "saltmarch" });
 });
@@ -136,6 +137,67 @@ test("the theme step will not advance while its save is in flight", async () => 
 
   settle({});
   await waitFor(() => expect(screen.getByRole("button", { name: /next/i })).toBeEnabled());
+});
+
+test("a failed activation retries the activation, not the creation", async () => {
+  // create_connection uniquifies the slug, so re-submitting the form would
+  // leave a `-2` connection behind on every retry.
+  (api.putConfig as any).mockRejectedValueOnce({ detail: "could not write config" });
+  await goToStep(2);
+  fireEvent.change(await screen.findByLabelText("Name"), { target: { value: "OpenRouter" } });
+  fireEvent.change(screen.getByLabelText("API key"), { target: { value: "sk-or-test" } });
+  fireEvent.click(screen.getByRole("button", { name: /save connection/i }));
+
+  expect(await screen.findByText(/could not be made active/i)).toBeInTheDocument();
+  expect(api.createConnection).toHaveBeenCalledTimes(1);
+
+  fireEvent.click(screen.getByRole("button", { name: /retry activation/i }));
+  await waitFor(() => expect(screen.getByText(/connected to openrouter/i)).toBeInTheDocument());
+  expect(api.createConnection).toHaveBeenCalledTimes(1);   // still one connection on disk
+});
+
+test("theme cards are locked while a pick is saving, so two picks cannot race", async () => {
+  let settle: (v: any) => void = () => {};
+  (api.putConfig as any).mockReturnValue(new Promise((r) => { settle = r; }));
+  await goToStep(3);
+  fireEvent.click(await screen.findByText("ASTRAL"));
+
+  await waitFor(() => expect(screen.getByText("MANUSCRIPT")).toBeDisabled());
+  expect(screen.getByText("ASTRAL")).toBeDisabled();
+
+  settle({});
+  await waitFor(() => expect(screen.getByText("MANUSCRIPT")).toBeEnabled());
+});
+
+test("Finish later is locked while the world is being created", async () => {
+  let settle: (v: any) => void = () => {};
+  (api.createWorld as any).mockReturnValue(new Promise((r) => { settle = r; }));
+  await goToStep(4);
+  fireEvent.change(await screen.findByLabelText(/world name/i), { target: { value: "Saltmarch" } });
+  fireEvent.click(screen.getByRole("button", { name: /^create$/i }));
+
+  // Leaving now would dismiss setup for good and unmount the only place the
+  // creation result can be reported.
+  await waitFor(() => expect(screen.getByRole("button", { name: /finish later/i })).toBeDisabled());
+  settle({ id: "saltmarch" });
+  await waitFor(() => expect(screen.getByText(/created saltmarch/i)).toBeInTheDocument());
+});
+
+test("moving onto a library that already has worlds drops the create-a-world step", async () => {
+  (api.getConfig as any).mockResolvedValue({ first_run: false });   // the store moved onto
+  renderWizard();
+  fireEvent.change(await screen.findByLabelText(/storage location/i), { target: { value: "/sync/grimoire" } });
+  fireEvent.click(screen.getByRole("button", { name: /^move$/i }));
+  await waitFor(() => expect(api.putDataDir).toHaveBeenCalled());
+
+  fireEvent.click(await screen.findByRole("button", { name: /next/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /^skip$/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /next/i }));
+
+  expect(await screen.findByRole("heading", { name: /already stocked/i })).toBeInTheDocument();
+  expect(screen.queryByLabelText(/world name/i)).not.toBeInTheDocument();
+  // a world already exists, so the campaign handoff is live without creating one
+  expect(screen.getByRole("button", { name: /start a campaign/i })).toBeInTheDocument();
 });
 
 test("the connection step is skippable — playing by hand is allowed", async () => {
