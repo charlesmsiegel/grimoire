@@ -138,6 +138,22 @@ test("a first run does not hijack a route other than /", async () => {
   expect(screen.queryByTestId("setup-wizard")).not.toBeInTheDocument();
 });
 
+test("/welcome bounces to the campaigns list once the store is no longer a first run", async () => {
+  // A reload part-way through the wizard: the world it created means the
+  // server no longer calls this a first run, so restarting at step one (and
+  // creating a second world) must not be possible.
+  render(<MemoryRouter initialEntries={["/welcome"]}><App /></MemoryRouter>);
+  await screen.findByText(/GRIMOIRE/);
+  expect(screen.queryByTestId("setup-wizard")).not.toBeInTheDocument();
+  await waitFor(() => expect(api.listCampaigns).toHaveBeenCalled());
+});
+
+test("/welcome still renders the wizard for a genuine first run", async () => {
+  (api.getConfig as any).mockResolvedValue(FIRST_RUN);
+  render(<MemoryRouter initialEntries={["/welcome"]}><App /></MemoryRouter>);
+  expect(await screen.findByTestId("setup-wizard")).toBeInTheDocument();
+});
+
 test("finishing the wizard gives / back without waiting on a config refetch", async () => {
   (api.getConfig as any).mockResolvedValue(FIRST_RUN);   // still says first_run
   render(<MemoryRouter initialEntries={["/"]}><App /></MemoryRouter>);

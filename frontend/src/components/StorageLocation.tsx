@@ -7,11 +7,20 @@ import { ApiError, api, type DataDirInfo } from "../api/client";
  *
  *  It owns its own state and talks to the API directly: the data dir is a
  *  property of the machine, not of whatever page happens to be showing it, and
- *  every caller wants the same read-then-write cycle. */
-export function StorageLocation() {
+ *  every caller wants the same read-then-write cycle.
+ *
+ *  `onPending` reports whether a move is in flight, for a caller that can
+ *  navigate away from this block. Unmounting mid-move throws away the only
+ *  place the failure would have been shown, and anything written in the gap
+ *  lands in whichever store the pointer still names — so the wizard holds its
+ *  Next button until this settles. */
+export function StorageLocation({ onPending }: { onPending?: (pending: boolean) => void }) {
   const [dataDir, setDataDir] = useState<DataDirInfo | null>(null);
   const [input, setInput] = useState("");
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const [moving, setMoving] = useState(false);
+
+  useEffect(() => { onPending?.(moving); }, [moving, onPending]);
 
   useEffect(() => {
     api.getDataDir().then((d) => {
@@ -22,6 +31,7 @@ export function StorageLocation() {
 
   async function saveDataDir(value: string | null) {
     setMsg(null);
+    setMoving(true);
     try {
       const next = await api.putDataDir(value);
       setDataDir(next);
@@ -30,6 +40,8 @@ export function StorageLocation() {
     } catch (e) {
       const detail = e instanceof ApiError ? e.detail : "Could not update storage location";
       setMsg({ kind: "err", text: detail });
+    } finally {
+      setMoving(false);
     }
   }
 
@@ -53,9 +65,9 @@ export function StorageLocation() {
         <button
           className="btn-accent"
           onClick={() => saveDataDir(input)}
-          disabled={dataDir?.source === "env" || input.trim() === dataDir?.data_dir}
+          disabled={moving || dataDir?.source === "env" || input.trim() === dataDir?.data_dir}
         >
-          Move
+          {moving ? "Moving…" : "Move"}
         </button>
       </div>
       {dataDir?.source === "env" && (
