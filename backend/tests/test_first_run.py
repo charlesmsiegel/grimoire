@@ -67,6 +67,19 @@ def test_any_child_record_treats_a_missing_directory_as_empty(tmp_path):
     assert paths.any_child_record(tmp_path / "never-created", "world.md") is False
 
 
+def test_a_record_that_cannot_be_probed_is_not_reported_as_absent(tmp_path, monkeypatch):
+    """The failure direction that matters: a library we could not read must not
+    come back as an empty store, because empty is what opens the wizard."""
+    (tmp_path / "worlds" / "realm").mkdir(parents=True)
+
+    def denied(entry, meta_name):
+        raise PermissionError(entry)
+
+    monkeypatch.setattr(paths, "_names_a_record", denied)
+    with pytest.raises(OSError):
+        paths.any_child_record(tmp_path / "worlds", "world.md")
+
+
 # ---- the route ----
 def test_a_fresh_install_reports_first_run(client):
     body = client.get("/api/config").json()

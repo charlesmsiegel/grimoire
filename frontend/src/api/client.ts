@@ -743,7 +743,14 @@ export const api = {
 
   // worlds
   listWorlds: () => request<WorldMeta[]>("GET", "/api/worlds"),
-  createWorld: (name: string) => request<{ id: string }>("POST", "/api/worlds", { name }),
+  // The config carries `first_run`, which is partly a statement about whether
+  // the store holds anything — so creating the first world changes the config
+  // response even though nothing wrote to config.md through this client (#194).
+  createWorld: (name: string) =>
+    request<{ id: string }>("POST", "/api/worlds", { name }).then((r) => {
+      invalidateConfigCache();
+      return r;
+    }),
   renameWorld: (wid: string, name: string) =>
     request<{ id: string; name: string }>("PUT", `/api/worlds/${wid}`, { name }),
   deleteWorld: (wid: string) => request<{ ok: boolean }>("DELETE", `/api/worlds/${wid}`),
@@ -754,7 +761,10 @@ export const api = {
                    climate?: string) =>
     request<{ id: string }>("POST", "/api/campaigns",
       { name, world, ...(region ? { region } : {}), ...(calendar ? { calendar } : {}), ...(module ? { module } : {}),
-        ...(climate ? { climate } : {}) }),
+        ...(climate ? { climate } : {}) }).then((r) => {
+      invalidateConfigCache();   // same as createWorld: this changes `first_run`
+      return r;
+    }),
   getCampaign: (cid: string) =>
     request<{ meta: CampaignMeta; body: string }>("GET", `/api/campaigns/${cid}`),
   renameCampaign: (cid: string, name: string) =>

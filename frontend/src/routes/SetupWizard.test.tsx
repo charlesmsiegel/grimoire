@@ -12,7 +12,7 @@ vi.mock("../api/client", () => ({
   ApiError: class ApiError extends Error {},
   api: {
     getDataDir: vi.fn(), putDataDir: vi.fn(), putConfig: vi.fn(), getConfig: vi.fn(),
-    createConnection: vi.fn(), createWorld: vi.fn(),
+    createConnection: vi.fn(), createWorld: vi.fn(), listWorlds: vi.fn(),
   },
 }));
 vi.mock("../api/models", () => ({ getModels: vi.fn(), priceLabel: () => "", contextLabel: () => "" }));
@@ -38,6 +38,7 @@ beforeEach(() => {
   });
   (api.putConfig as any).mockResolvedValue({});
   (api.getConfig as any).mockResolvedValue({ first_run: true });
+  (api.listWorlds as any).mockResolvedValue([]);
   (api.createConnection as any).mockResolvedValue({ id: "openrouter" });
   (api.createWorld as any).mockResolvedValue({ id: "saltmarch" });
 });
@@ -183,13 +184,96 @@ test("Finish later is locked while the world is being created", async () => {
   await waitFor(() => expect(screen.getByText(/created saltmarch/i)).toBeInTheDocument());
 });
 
-test("moving onto a library that already has worlds drops the create-a-world step", async () => {
-  (api.getConfig as any).mockResolvedValue({ first_run: false });   // the store moved onto
+async function moveTo(worlds: any[]) {
+  (api.listWorlds as any).mockResolvedValue(worlds);
   renderWizard();
   fireEvent.change(await screen.findByLabelText(/storage location/i), { target: { value: "/sync/grimoire" } });
   fireEvent.click(screen.getByRole("button", { name: /^move$/i }));
   await waitFor(() => expect(api.putDataDir).toHaveBeenCalled());
+}
 
+test("an emptied store that merely dismissed setup is not treated as stocked", async () => {
+  // `first_run: false` also describes an EMPTY store whose setup was skipped
+  // before. Calling that stocked hides the create form and hands off into
+  // CampaignWizard, which cannot get past step one with no world to pick — so
+  // the verdict has to come from the worlds, not from first_run.
+  (api.getConfig as any).mockResolvedValue({ first_run: false });
+  await moveTo([]);
+  fireEvent.click(await screen.findByRole("button", { name: /next/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /^skip$/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /next/i }));
+
+  expect(await screen.findByLabelText(/world name/i)).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: /already stocked/i })).not.toBeInTheDocument();
+});
+
+test("a move forgets the connection and world recorded in the previous store", async () => {
+  renderWizard();
+  fireEvent.click(await screen.findByRole("button", { name: /next/i }));
+  fireEvent.change(await screen.findByLabelText("Name"), { target: { value: "OpenRouter" } });
+  fireEvent.change(screen.getByLabelText("API key"), { target: { value: "sk-or-test" } });
+  fireEvent.click(screen.getByRole("button", { name: /save connection/i }));
+  expect(await screen.findByText(/connected to openrouter/i)).toBeInTheDocument();
+
+  // back to step 1 and repoint: that connection lives in the store we just left
+  fireEvent.click(screen.getByRole("button", { name: /^back$/i }));
+  fireEvent.change(await screen.findByLabelText(/storage location/i), { target: { value: "/sync/grimoire" } });
+  fireEvent.click(screen.getByRole("button", { name: /^move$/i }));
+  await waitFor(() => expect(api.putDataDir).toHaveBeenCalled());
+
+  fireEvent.click(await screen.findByRole("button", { name: /next/i }));
+  expect(await screen.findByLabelText("Name")).toBeInTheDocument();   // the form, not "Connected ✓"
+  expect(screen.queryByText(/connected to openrouter/i)).not.toBeInTheDocument();
+});
+
+test("Skip setup is locked while a connection is being activated", async () => {
+  let settle: (v: any) => void = () => {};
+  (api.putConfig as any).mockReturnValue(new Promise((r) => { settle = r; }));
+  await goToStep(2);
+  fireEvent.change(await screen.findByLabelText("Name"), { target: { value: "OpenRouter" } });
+  fireEvent.change(screen.getByLabelText("API key"), { target: { value: "sk-or-test" } });
+  fireEvent.click(screen.getByRole("button", { name: /save connection/i }));
+
+  // finish() writes setup_done; both are unlocked read-modify-writes of config.md
+  await waitFor(() => expect(screen.getByRole("button", { name: /skip setup/i })).toBeDisabled());
+  settle({});
+  await waitFor(() => expect(screen.getByRole("button", { name: /skip setup/i })).toBeEnabled());
+});
+
+test("the move stays pending until the new store has been classified", async () => {
+  // Clearing "moving" before the recheck lands lets the user reach the World
+  // step while the wizard still believes it is looking at the old store.
+  let settle: (v: any) => void = () => {};
+  (api.listWorlds as any).mockReturnValue(new Promise((r) => { settle = r; }));
+  renderWizard();
+  fireEvent.change(await screen.findByLabelText(/storage location/i), { target: { value: "/sync/grimoire" } });
+  fireEvent.click(screen.getByRole("button", { name: /^move$/i }));
+
+  await waitFor(() => expect(api.putDataDir).toHaveBeenCalled());
+  expect(screen.getByRole("button", { name: /next/i })).toBeDisabled();
+
+  settle([{ id: "saltmarch", name: "Saltmarch" }]);
+  await waitFor(() => expect(screen.getByRole("button", { name: /next/i })).toBeEnabled());
+});
+
+test("Reset to default is locked while a move is already running", async () => {
+  // Two pointer updates in flight: whichever returns last decides the store,
+  // and the first to return clears the single pending flag.
+  (api.getDataDir as any).mockResolvedValue({
+    data_dir: "/sync/grimoire", default: "/home/u/.grimoire",
+    is_default: false, source: "custom", exists: true,
+  });
+  (api.putDataDir as any).mockReturnValue(new Promise(() => {}));   // never settles
+  renderWizard();
+  fireEvent.change(await screen.findByLabelText(/storage location/i), { target: { value: "/other/grimoire" } });
+  fireEvent.click(screen.getByRole("button", { name: /^move$/i }));
+
+  await waitFor(() => expect(screen.getByRole("button", { name: /reset to default/i })).toBeDisabled());
+  expect(api.putDataDir).toHaveBeenCalledTimes(1);
+});
+
+test("moving onto a library that already has worlds drops the create-a-world step", async () => {
+  await moveTo([{ id: "saltmarch", name: "Saltmarch" }]);
   fireEvent.click(await screen.findByRole("button", { name: /next/i }));
   fireEvent.click(await screen.findByRole("button", { name: /^skip$/i }));
   fireEvent.click(await screen.findByRole("button", { name: /next/i }));

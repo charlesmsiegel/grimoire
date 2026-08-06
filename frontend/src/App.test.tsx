@@ -138,6 +138,19 @@ test("a first run does not hijack a route other than /", async () => {
   expect(screen.queryByTestId("setup-wizard")).not.toBeInTheDocument();
 });
 
+test("a world created outside the wizard retires the redirect on the next navigation", async () => {
+  // The topbar deliberately lets a fresh user escape. If they make a world in
+  // WorldsView, `/` must stop bouncing them back into setup.
+  (api.getConfig as any).mockResolvedValue(FIRST_RUN);
+  render(<MemoryRouter initialEntries={["/worlds"]}><App /></MemoryRouter>);
+  await screen.findByText(/GRIMOIRE/);
+
+  (api.getConfig as any).mockResolvedValue(READY_OPENROUTER);   // a world now exists
+  fireEvent.click(within(screen.getByRole("banner")).getByRole("link", { name: /campaigns/i }));
+  await waitFor(() => expect(api.listCampaigns).toHaveBeenCalled());
+  expect(screen.queryByTestId("setup-wizard")).not.toBeInTheDocument();
+});
+
 test("/welcome bounces to the campaigns list once the store is no longer a first run", async () => {
   // A reload part-way through the wizard: the world it created means the
   // server no longer calls this a first run, so restarting at step one (and
@@ -154,8 +167,11 @@ test("/welcome still renders the wizard for a genuine first run", async () => {
   expect(await screen.findByTestId("setup-wizard")).toBeInTheDocument();
 });
 
-test("finishing the wizard gives / back without waiting on a config refetch", async () => {
-  (api.getConfig as any).mockResolvedValue(FIRST_RUN);   // still says first_run
+test("leaving the wizard sticks even when the server still answers first_run", async () => {
+  // finish() writes setup_done best-effort so a failure can't strand anyone —
+  // which means the live verdict can still say first_run afterwards. The
+  // session latch is what makes one exit enough instead of a loop.
+  (api.getConfig as any).mockResolvedValue(FIRST_RUN);
   render(<MemoryRouter initialEntries={["/"]}><App /></MemoryRouter>);
   const wizard = await screen.findByTestId("setup-wizard");
 

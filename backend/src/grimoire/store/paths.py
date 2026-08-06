@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -131,7 +132,30 @@ def any_child_record(base: Path, meta_name: str) -> bool:
         entries = list(base.iterdir())
     except FileNotFoundError:
         return False
-    return any(d.is_dir() and safe_id(d.name) and (d / meta_name).exists() for d in entries)
+    return any(safe_id(d.name) and _names_a_record(d, meta_name) for d in entries)
+
+
+def _names_a_record(entry: Path, meta_name: str) -> bool:
+    """Whether `entry` is a directory holding `meta_name`.
+
+    Deliberately `stat` rather than `is_dir()` / `exists()`: those answer False
+    for a permission or I/O error exactly as they do for absence, and here the
+    two must stay apart. `any_child_record`'s caller reads "no records" as an
+    empty store, so a library it merely could not open would be reported empty
+    — and an empty store is precisely what sends a user with a full library
+    into first-run setup. Only genuine absence is absence; everything else
+    propagates to the caller's fail-closed handler.
+    """
+    try:
+        if not stat.S_ISDIR(entry.stat().st_mode):
+            return False
+    except FileNotFoundError:
+        return False        # removed between the listing and this probe
+    try:
+        (entry / meta_name).stat()
+    except FileNotFoundError:
+        return False
+    return True
 
 
 def now_iso() -> str:
