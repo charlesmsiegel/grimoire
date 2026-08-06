@@ -5236,3 +5236,60 @@ test("a check also asks whether the summary is due", async () => {
   await waitFor(() => expect(api.refreshRollingSummary).toHaveBeenCalledWith(
     "run", "s1", false, expect.anything()));
 });
+
+test("a turn whose re-read never landed asks for no fold at all", async () => {
+  // The boundary passed to the fold comes from the post-turn re-read. When that
+  // read is retired — a newer turn superseded it, or it failed outright — there
+  // is no verified boundary, and the earlier code fell back to an UNBOUNDED
+  // request. That is backwards: the case with a newer turn in flight is exactly
+  // the case where an unbounded fold can cover a player post whose reply has
+  // not been written yet, keeping that reply out of the summary until another
+  // threshold. Nothing is the right thing to send (#85).
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  renderCampaign();
+  await screen.findByRole("textbox");
+  (api.refreshRollingSummary as any).mockClear();
+  (api.getScene as any).mockRejectedValue(new ApiError(503, "store busy", "busy"));
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "Go on." } });
+  fireEvent.click(screen.getByRole("button", { name: /Send/ }));
+  await waitFor(() => expect(screen.queryByRole("button", { name: /Stop/ })).toBeNull());
+  expect(api.refreshRollingSummary).not.toHaveBeenCalled();
+});
+
+test("saving an edit asks whether the summary is due", async () => {
+  // An edit appends nothing, so it never crosses the threshold by count — but
+  // it rewrites text the stored summary already covers, which moves the fold's
+  // validity key and makes a from-scratch refold due. Without this the panel
+  // could only flag the summary stale and wait for a generated turn (#85).
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1" }, messages: [
+    { role: "assistant", content: "hi" }] });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getAllByTitle("Edit message")[0]);
+  fireEvent.change(await screen.findByLabelText(/edit message/i),
+                   { target: { value: "hello" } });
+  fireEvent.click(screen.getByRole("button", { name: /save/i }));
+  await waitFor(() => expect(api.editMessage).toHaveBeenCalled());
+  await waitFor(() => expect(api.refreshRollingSummary).toHaveBeenCalledWith(
+    "run", "s1", false, expect.any(Number)));
+});
+
+test("swapping to another take asks whether the summary is due", async () => {
+  // Same reasoning as the edit: the transcript is no shorter or longer, but the
+  // words the summary covers are a take the player just rejected (#85).
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "fresh reply" }] });
+  (api.getAlternates as any).mockResolvedValue({
+    active: 1, alternates: [ALT("old reply"), ALT("fresh reply")] });
+  renderCampaign();
+  await screen.findByText("2/2");
+  (api.refreshRollingSummary as any).mockClear();
+
+  fireEvent.click(screen.getByRole("button", { name: /previous alternate/i }));
+
+  await waitFor(() => expect(api.pickAlternate).toHaveBeenCalled());
+  await waitFor(() => expect(api.refreshRollingSummary).toHaveBeenCalledWith(
+    "run", "s1", false, expect.any(Number)));
+});

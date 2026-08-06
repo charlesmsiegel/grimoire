@@ -1172,7 +1172,17 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   // that generated turns are not the only writer: a manual dice roll and a
   // check both append narrator posts, so a mechanics-heavy stretch of play
   // could cross the threshold repeatedly with nothing ever asking.
-  function askForRollingSummary(id: string, upto?: number) {
+  // `upto` is REQUIRED, and a negative one means "no boundary was read" — the
+  // re-read that would have supplied it was retired by a newer select, or the
+  // reader left. Review caught what the earlier `undefined` fallback did there:
+  // it sent an UNBOUNDED request, so the one case that most needed the bound —
+  // a newer turn already in flight — was the case that dropped it, and the fold
+  // could cover a player post whose reply had not been written yet. That reply
+  // is an append, so it would stay out of the "current" summary until another
+  // threshold. Skipping costs nothing: whatever superseded this read is itself
+  // a transcript write and asks again with a boundary it actually verified.
+  function askForRollingSummary(id: string, upto: number) {
+    if (upto < 0) return;
     api.refreshRollingSummary(cid, id, false, upto)
       .then((r) => { if (r.refreshed && activeIdRef.current === id) setCtxKey((n) => n + 1); })
       .catch(() => {});
@@ -1440,7 +1450,10 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       // already released the scene, so the player can send again before this
       // request reaches the server, and a fold that swallowed that unanswered
       // post would keep the reply out of the summary until another threshold.
-      askForRollingSummary(id, seen >= 0 ? seen : undefined);
+      // A `seen` of -1 is a read that was retired rather than one that saw an
+      // empty transcript, so it is no boundary at all; `askForRollingSummary`
+      // declines it rather than falling back to an unbounded fold.
+      askForRollingSummary(id, seen);
     }
     // Landed means the backend said so, not that the promise resolved.
     return finished && !errored;
@@ -1512,7 +1525,15 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     if (!editing || !activeId || rolling) return;
     await api.editMessage(cid, activeId, editing.index, editing.text);
     setEditing(null);
-    await selectScene(activeId);
+    const seen = await selectScene(activeId);
+    // An edit does not APPEND a post, so this never crosses the threshold by
+    // count — but it rewrites text the stored summary already covers, which
+    // moves `covered_digest` and makes that summary describe words no longer
+    // in the transcript. The server reads that as a from-scratch refold being
+    // due, so the ask is what turns a summary the panel can only flag as stale
+    // back into a correct one. Review caught that leaving it out meant the
+    // stale flag sat there until some later *generated* turn asked.
+    askForRollingSummary(activeId, seen);   // #85
   }
 
   // What the error banner's Retry re-runs. `/retry` continues from the
@@ -1651,8 +1672,9 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       // generates. Ordered before the refresh below, whose own proposal read is
       // issued after this and so puts the chip back if the swap was a no-op.
       setProposalNow(null);
+      let seen = -1;
       try {
-        await selectScene(sid);
+        seen = await selectScene(sid);
       } catch (err: any) {
         // Asked again, not only before the first read. `selectScene` calls
         // `setActive`, so a retry issued after the reader moved on does not
@@ -1664,7 +1686,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
         // thing between the reader and a transcript that is already correct on
         // disk.
         try {
-          await selectScene(sid);
+          seen = await selectScene(sid);
         } catch {
           if (!stillHere()) return;
           // Still stale. Drop the readiness the counter and the ‹/› control
@@ -1675,6 +1697,14 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
                            + (err?.detail ?? String(err)), retryable: false });
         }
       }
+      // A swap replaces the reply in place: the transcript is no longer than it
+      // was, but the words the stored summary covers are a take the player
+      // rejected. Same reasoning as `saveEdit` — the moved digest is what makes
+      // the refold due, and without this ask the panel would show a summary of
+      // the discarded take, flagged stale, until the next generated turn.
+      // Scoped like every other write above, and skipped when neither re-read
+      // produced a boundary.
+      if (stillHere()) askForRollingSummary(sid, seen);   // #85
     } finally {
       releaseLatch();
     }
@@ -1698,7 +1728,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       const seen = await selectScene(activeId);
       // The length the re-read saw is this write's boundary, for the reason the
       // turn loop passes one: nothing holds the scene once this returns.
-      askForRollingSummary(activeId, seen >= 0 ? seen : undefined);   // a roll is a post too (#85)
+      askForRollingSummary(activeId, seen);   // a roll is a post too (#85)
     } catch (err: any) {
       setRollForm({ ...rollForm, error: err.detail ?? String(err) });
     } finally {
@@ -1739,7 +1769,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       await api.rollCheck(cid, activeId, body);
       setRollForm(null);
       const seen = await selectScene(activeId);
-      askForRollingSummary(activeId, seen >= 0 ? seen : undefined);   // as is a check (#85)
+      askForRollingSummary(activeId, seen);   // as is a check (#85)
     } catch (err: any) {
       setRollForm({ ...rollForm, error: err.detail ?? String(err) });
     } finally {

@@ -173,6 +173,22 @@ which is why it is present tense where `absorb/system.j2` is past.
   awaited** — the player's next turn must never wait on a summary — and bumps
   `ctxKey` when it resolves, but only while the reader is still on that scene.
   Every rejection is swallowed.
+- **A generated turn is not the only writer**, and review kept finding the ones
+  left out, so the rule is: *anything that changes the transcript asks*. That is
+  `runStream`, a manual roll, a check, `saveEdit` and `pickAlternate` in
+  `CampaignView`, and the panel's own transition controls (move, set/advance
+  date, cast join/leave) in `SceneInspector`. Appends can cross the threshold by
+  count; edits and swaps cannot, but they move `covered_digest` and so make a
+  from-scratch refold due — without the ask, the panel could only flag the
+  summary stale and wait for the next generated turn. The first date set is the
+  odd one: it renames the scene, so its ask goes to the id the rename returned.
+- Every ask carries the transcript length the caller **verified by re-reading**
+  as its `upto` bound, so a fold cannot cover a player post whose reply has not
+  been written yet (that reply is an append, and would stay out of the summary
+  until another threshold). A caller whose re-read was retired has no verified
+  boundary and so **asks for nothing at all** — an unbounded fallback would drop
+  the bound in precisely the case that needs it, a newer turn already in flight.
+  Whatever superseded that read is itself a transcript write, and asks again.
 
 ## 8. Adjacent problems, deliberately not fixed
 
