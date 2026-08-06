@@ -307,5 +307,13 @@ def post_first_post(cid: str, sid: str, body: FirstPost):
         raise HTTPException(status_code=409, detail="scene already has messages")
     if not body.text.strip():
         raise HTTPException(status_code=400, detail="empty first post")
-    _persist_reply(cid, sid, body.text)
+    # Judged on what LANDED, not on what was sent. Text can be non-empty and
+    # still produce no post: a trailing tracker block is split off before the
+    # reply is segmented (#120), and a bare speaker marker segments into
+    # nothing. Either way `append_reply` writes no message, and answering `ok`
+    # over a scene that is still empty loses the opener the user was adopting
+    # with no error to show for it. Nothing has been written when the count is
+    # zero, so the 400 leaves the scene exactly as it was.
+    if not _persist_reply(cid, sid, body.text):
+        raise HTTPException(status_code=400, detail="empty first post")
     return {"ok": True}
