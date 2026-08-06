@@ -907,3 +907,46 @@ def test_campaign_side_greeting_delete_takes_its_directory_too(monkeypatch, tmp_
     overlay.delete_greeting(cid, gid)
     assert not (croot / "greetings" / gid).exists()
     assert overlay.create_greeting(cid, "Arrival", aid, "default", "hi") == gid
+
+
+def test_a_concurrent_recreate_is_not_swept_away(monkeypatch, tmp_path):
+    """The id is free the instant the delete returns, so a create can publish a
+    new world record before the sweep runs. The sweep must not remove it."""
+    wroot, _cid, _croot = _dependent(monkeypatch, tmp_path)
+    aid, _vid = characters.create_character(wroot, "Winifred")
+    characters.delete_character(wroot, aid)
+    again, _v = characters.create_character(wroot, "Winifred")     # lands first
+    assert again == aid
+
+    overlay.forget_world_record(wroot, "characters", aid)
+    assert characters.read_character(wroot, aid)["meta"]["name"] == "Winifred"
+
+
+def test_one_unreadable_manifest_does_not_cost_the_other_campaigns(monkeypatch, tmp_path):
+    """`_drop_manifest_ref` reads sync.md; that read used to raise through the
+    loop, so every LATER dependent kept its stale state (Codex review)."""
+    wroot, _cid, _croot = _dependent(monkeypatch, tmp_path)
+    gid = entities.create_entity(wroot, "groups", "Salt Circle", "the old circle")
+    # "aaa" sorts before "zzz", so the broken one is swept first
+    broken = campaigns.campaign_root(campaigns.create_campaign("Aaa", wroot.name))
+    healthy = campaigns.campaign_root(campaigns.create_campaign("Zzz", wroot.name))
+    for croot in (broken, healthy):
+        overlay.materialize_entity(croot.name, "groups", gid)
+        groupstate.write_state(croot, gid, "## Secrets\nThe abbot is a member.")
+    (broken / "sync.md").write_bytes(b"---\n\xff\xfe: x\n---\n")
+
+    entities.delete_entity(wroot, "groups", gid)
+    overlay.forget_world_record(wroot, "groups", gid)             # does not raise
+    assert f"groups/{gid}" not in campaigns.read_manifest(healthy.name)
+
+
+def test_a_leftover_record_directory_reserves_its_slug(monkeypatch, tmp_path):
+    """Actors have always keyed uniquify on the directory; flat records keyed
+    only on the `.md`, so a new record could be handed an id whose assets and
+    sidecars were still sitting there."""
+    wroot, _cid, _croot = _dependent(monkeypatch, tmp_path)
+    gid = entities.create_entity(wroot, "groups", "Salt Circle")
+    assets.put_image(wroot, gid, "default", assets.AVATAR, PNG, "png", base="groups")
+    (wroot / "groups" / f"{gid}.md").unlink()                     # hand-deleted; dir remains
+
+    assert entities.create_entity(wroot, "groups", "Salt Circle") == f"{gid}-2"
