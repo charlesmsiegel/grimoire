@@ -81,6 +81,12 @@ def depth() -> int:
         return int(default)
 
 
+#: Longest id `_read_index` will admit. Ids are `f"{n:06d}"` off a counter that
+#: advances once per captured turn, so 18 digits is unreachable by orders of
+#: magnitude -- it exists only to keep a corrupt file's id out of `int()`.
+_MAX_ID_DIGITS = 18
+
+
 def capturing() -> bool:
     """Whether anything would be recorded at all.
 
@@ -124,13 +130,21 @@ def _read_index(cid: str) -> dict:
         return {"next": 1, "entries": []}
     if not isinstance(data, dict) or not isinstance(data.get("entries"), list):
         return {"next": 1, "entries": []}
-    # Ids must be BOTH path-safe and numeric. Numeric because `next` is derived
-    # from them below, and `int("legacy")` raising there would escape `record`'s
-    # OSError-only guard and 500 a chat turn -- turning a hand-edited debug file
-    # into a failed generation, which is the one thing this module promises not
-    # to do. A row that fails either test is dropped, like any other corruption.
+    # Ids must be path-safe, numeric, AND short. Numeric because `next` is
+    # derived from them below, and `int("legacy")` raising there would escape
+    # `record`'s OSError-only guard and 500 a chat turn -- turning a hand-edited
+    # debug file into a failed generation, which is the one thing this module
+    # promises not to do.
+    #
+    # Short for the same reason and not for tidiness: `safe_id` caps nothing,
+    # `"1" * 5000` is `isdigit()`, and CPython refuses `int()` on a string over
+    # `sys.int_info.str_digits_check_threshold` (4300 by default) -- with a
+    # ValueError, through the same hole. `_MAX_ID_DIGITS` is far past any id
+    # this module could ever have written, so anything longer is corruption by
+    # definition. A row failing any of the three is dropped, like any other.
     entries = [e for e in data["entries"]
-               if isinstance(e, dict) and safe_id(e.get("id")) and str(e["id"]).isdigit()]
+               if isinstance(e, dict) and safe_id(e.get("id"))
+               and str(e["id"]).isdigit() and len(str(e["id"])) <= _MAX_ID_DIGITS]
     try:
         nxt = int(data.get("next", 1))
     except (TypeError, ValueError):

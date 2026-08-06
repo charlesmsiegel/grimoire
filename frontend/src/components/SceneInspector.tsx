@@ -127,7 +127,14 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   const [setting, setSetting] = useState<SceneLocation | null>(null);
   const [locImages, setLocImages] = useState<string[]>([]);
   const [ctx, setCtx] = useState<SceneContext | null>(null);
-  const [turns, setTurns] = useState<PromptEntry[]>([]);
+  // Held with the campaign and scene it came from, exactly like `brief` above
+  // and for the same reason: the inspector stays mounted across both switches,
+  // so a bare array keeps the previous scene's turns on screen until the new
+  // request settles. That is worse here than a stale label — entry ids are
+  // per-campaign counters, so they collide across campaigns, and clicking a
+  // stale row would fetch a DIFFERENT campaign's prompt under it. Comparing
+  // during render makes the window impossible rather than short.
+  const [turns, setTurns] = useState<{ cid: string; sid: string; rows: PromptEntry[] } | null>(null);
   const [frozen, setFrozen] = useState<PromptSnapshot | null>(null);
   const [recap, setRecap] = useState<ChronicleEntry[]>([]);
   // Held with the campaign AND scene it came from, the way `LedgerPanel` holds
@@ -237,7 +244,9 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
     api.listAppearances(cid).then(setRoster).catch(() => setRoster([]));
     api.getSceneLocation(cid, sid).then(setSetting).catch(() => setSetting(null));
     api.getSceneContext(cid, sid).then(setCtx).catch(() => setCtx(null));
-    api.listScenePrompts(cid, sid).then((r) => setTurns(r.entries)).catch(() => setTurns([]));
+    api.listScenePrompts(cid, sid)
+      .then((r) => setTurns({ cid, sid, rows: r.entries }))
+      .catch(() => setTurns({ cid, sid, rows: [] }));
     api.getChronicle(cid).then(setRecap).catch(() => setRecap([]));
     reloadWhen();
     reloadCfg();
@@ -350,6 +359,11 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   // A selected past turn wins over the live composition — that IS the feature.
   // Both are the same shape, so everything below reads one variable.
   const shown = useMemo(() => frozen ?? ctx, [frozen, ctx]);
+  // Empty until the rows on hand are this scene's, so a switch shows "no
+  // captured turns yet" for a moment rather than the previous scene's list.
+  const shownTurns = useMemo(
+    () => (turns && turns.cid === cid && turns.sid === sid ? turns.rows : []),
+    [turns, cid, sid]);
   const nameOf = (a: Actor) => names[`${a.kind}/${a.id}`] ?? a.id;
 
   // Deliberately keyed on cid+sid and NOT on `refreshKey`, which is the same
@@ -553,10 +567,10 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
             stands NOW, which is not what any past turn was sent: chronicle,
             state, cast and world-info activation have all moved since. These
             are the frozen ones (#157). */}
-        {turns.length === 0 && (
+        {shownTurns.length === 0 && (
           <div className="field-hint">No captured turns yet.</div>
         )}
-        {turns.map((t) => (
+        {shownTurns.map((t) => (
           <button key={t.id}
                   className={"inspector-row" + (frozen?.id === t.id ? " on" : "")}
                   onClick={() => showTurn(t.id)}>
