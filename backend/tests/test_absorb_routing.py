@@ -101,14 +101,30 @@ def test_a_record_with_no_personal_subject_never_reaches_first_hand(monkeypatch,
 
 
 def test_a_speaker_the_transcript_never_had_is_uncorroborated(monkeypatch, tmp_path):
-    """Not "weak evidence" — evidence the citation was invented. It outranks
-    nothing, including an absent citation."""
+    """A citation nothing can check outranks nothing, including an absent one:
+    a weak source can still be weighed, an unfindable one cannot."""
     cid, wroot = _campaign(monkeypatch, tmp_path)
     sid, _, _, _ = _scene(cid, wroot)
     index = routing.speaker_index(cid, sid)
     assert routing.authority(index, "The Harbourmaster") == routing.UNATTRIBUTED
     assert routing.authority(index, "") == routing.UNCITED
     assert (routing.WEIGHTS[routing.UNATTRIBUTED] < routing.WEIGHTS[routing.UNCITED])
+
+
+def test_a_name_two_speakers_answer_to_is_not_a_fabricated_citation(monkeypatch, tmp_path):
+    """Two Maras speak; the model cites "Mara". `match_name` declines to guess,
+    so the row lands in the same tier as an invented citation — which is the
+    right BAND (nothing can be checked) and would be the wrong REASON if the
+    tier were called "invented". The panel's wording has to cover both."""
+    cid, wroot = _campaign(monkeypatch, tmp_path)
+    sid, _, _, _ = _scene(cid, wroot)
+    scenes.append_reply(cid, sid, [{"speaker": "Mara Cotgrave", "content": "I saw it."},
+                                   {"speaker": "Mara Vance", "content": "So did I."}])
+    index = routing.speaker_index(cid, sid)
+    assert routing.authority(index, "Mara") == routing.UNATTRIBUTED
+    # Either full name still resolves — the decline is about the ambiguity, not
+    # about those speakers being unrecognized.
+    assert routing.authority(index, "Mara Cotgrave") == routing.OTHER
 
 
 def test_a_present_but_silent_cast_member_is_still_uncorroborated(monkeypatch, tmp_path):

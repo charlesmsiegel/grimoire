@@ -403,8 +403,8 @@ export type EditReview = {
    *  Both "" when it cited nothing. */
   quote: string; speaker: string;
   /** What the transcript actually corroborates about that speaker, relative to
-   *  the record being changed. `unattributed` means the cited speaker is not in
-   *  this scene at all — an invented citation, not merely a weak one. */
+   *  the record being changed. `unattributed` means the citation cannot be
+   *  checked — nobody spoke under that name, or two speakers answer to it. */
   authority: "narration" | "self" | "other" | "unattributed" | "uncited";
   /** `certainty` weighted by `authority`, and the band the panel routes on. */
   score: number; band: "high" | "medium" | "low";

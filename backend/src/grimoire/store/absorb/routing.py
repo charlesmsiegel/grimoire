@@ -46,9 +46,12 @@ SELF = "self"
 #: about the world, or about a record they are not the subject of -- the case
 #: #112 exists to stop being weighed like narration.
 OTHER = "other"
-#: The model named a speaker this scene's transcript does not have. Not merely
-#: weak evidence: evidence that the citation was invented, which is the one
-#: thing worth ranking below hearsay.
+#: The model named a speaker this scene's transcript cannot pin down: nobody
+#: spoke under that name, or -- rarer, and the reason this tier is not called
+#: "invented" -- two speakers answer to it equally and `match_name` declines to
+#: guess. Either way the citation cannot be checked, which is the one thing
+#: worth ranking below hearsay: a claim whose source is merely weak can still be
+#: weighed, and one whose source cannot be found cannot be.
 UNATTRIBUTED = "unattributed"
 #: The model cited nobody. The prompt asks for a citation, so this is a row that
 #: did not answer -- scored below a corroborated first-hand claim and above a
@@ -58,10 +61,10 @@ UNCITED = "uncited"
 #: What each tier does to the model's own number. Chosen for the ORDER they
 #: impose and for two properties that hold at every certainty:
 #:
-#: - `UNATTRIBUTED * 1.0` is below `LOW`, so an uncorroborated citation is
-#:   always routed to the collapsed section however sure the model claims to be.
-#:   A confident fabrication is the failure mode this whole path exists to
-#:   catch, and letting certainty buy its way out would hand it the opposite.
+#: - `UNATTRIBUTED * 1.0` is below `LOW`, so an uncheckable citation is always
+#:   routed to the collapsed section however sure the model claims to be. A
+#:   confident fabrication is the failure mode this whole path exists to catch,
+#:   and letting certainty buy its way out would hand it the opposite.
 #: - `UNCITED * 1.0` is below `HIGH`, so a row that skipped the citation can
 #:   never be ranked as a strong one. It still pre-checks (it lands `medium`),
 #:   which is what keeps rows that legitimately have no speaker -- weather,
