@@ -16,12 +16,16 @@ from ..scenes import write as scenes_write
 from ..worlds import paths as worlds_paths
 from . import paths, read
 
-#: `world_copy` while the migration has decided everything and has only
-#: byte-identical duplicates left to delete. Anything other than "overlay"
-#: means the migration is unfinished (`read.slim_pending`), which this is; what
-#: it adds is that a resumed run must not attribute anything a second time —
-#: see `_finish`.
-PRUNING = "slim-pruning"
+#: Campaign.md key marking the migration as decided but not finished deleting.
+#: Deliberately NOT a third `world_copy` value: that field's only cross-version
+#: contract is `== "overlay"`, so an unknown value reads as "unmigrated" to any
+#: build that predates it, and the store is meant to be shared across devices
+#: and platforms (CLAUDE.md, `store.home()` on a synced folder). Such a build
+#: would rerun the whole old migration over a tree this one has already
+#: half-pruned -- the exact double attribution `_finish` exists to prevent.
+#: Stamped alongside `world_copy: overlay`, an older build simply skips, and the
+#: worst it leaves behind is a few unpruned duplicate files (Codex review).
+PRUNING_KEY = "slim_pruning"
 
 
 def create_campaign(name: str, world_id: str, region: str | None = None,
@@ -135,14 +139,14 @@ def ensure_campaign_slim(cid: str) -> None:
     if not mp.exists():
         raise paths.CampaignNotFound(cid)
     meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
-    if meta.get("world_copy") == "overlay":
+    if meta.get("world_copy") == "overlay" and not meta.get(PRUNING_KEY):
         return
     root = paths.campaign_root(cid)
     wroot = read.world_root_of(cid)
     if not wroot.exists():
         return
-    if meta.get("world_copy") == PRUNING:
-        _finish(cid, mp, meta, body, root, wroot)   # decisions all made; only deleting left
+    if meta.get(PRUNING_KEY):
+        _finish(mp, meta, body, root, wroot)   # decisions all made; only deleting left
         return
 
     locked = set(appearances_paths.record(cid))
@@ -204,10 +208,10 @@ def ensure_campaign_slim(cid: str) -> None:
     paths.write_manifest(cid, manifest)
     for ref in redundant:
         overlay.dematerialize(cid, ref)
-    _finish(cid, mp, meta, body, root, wroot)
+    _finish(mp, meta, body, root, wroot)
 
 
-def _finish(cid: str, mp: Path, meta: dict, body: str, root: Path, wroot: Path) -> None:
+def _finish(mp: Path, meta: dict, body: str, root: Path, wroot: Path) -> None:
     """Prune byte-identical asset/sidecar copies, then stamp the migration done.
 
     Split out and fenced behind its own stamp because it is the one phase whose
@@ -223,13 +227,14 @@ def _finish(cid: str, mp: Path, meta: dict, body: str, root: Path, wroot: Path) 
     Reordering the two cannot fix it: `_prune_duplicate_files` runs last on
     purpose, so byte-identical copies are still present when the attribution
     happens and are not mistaken for deletions. What fixes it is not attributing
-    twice — reaching `PRUNING` means every decision is durable, so a resumed run
-    re-enters here and attributes nothing."""
-    if meta.get("world_copy") != PRUNING:
-        meta["world_copy"] = PRUNING
+    twice -- `PRUNING_KEY` on disk means every decision is durable, so a resumed
+    run re-enters here and attributes nothing."""
+    if not meta.get(PRUNING_KEY):
+        meta["world_copy"] = "overlay"
+        meta[PRUNING_KEY] = True
         atomic.write_text(mp, dump_frontmatter(meta, body))
     _prune_duplicate_files(root, wroot)
-    meta["world_copy"] = "overlay"
+    meta.pop(PRUNING_KEY, None)
     atomic.write_text(mp, dump_frontmatter(meta, body))
 
 
@@ -278,10 +283,27 @@ def _tombstone_deleted_copied_assets(cid: str, root: Path, wroot: Path, copied: 
     missing from the campaign tree was deleted by the user before migration.
     Tombstone it, or the overlay would resurface the world copy once world_copy
     flips to overlay. Runs before _prune_duplicate_files so byte-identical
-    copies are still present and not mistaken for deletions. Only records the
-    full copy tracked (`copied`) are considered — world records/assets added
-    after the fork stay live-inherited; whole-deleted records already carry a
-    <base>/<aid> tombstone and are skipped."""
+    copies are still present and not mistaken for deletions. Whole-deleted
+    records already carry a <base>/<aid> tombstone and are skipped.
+
+    A manifest ref is NOT enough to conclude the fork copied the record. Every
+    overlay materializer records one, and none of them copies assets — they
+    overlay per file — so on a campaign the migration has not reached yet, an
+    ordinary edit to an inherited record was enough to make this tombstone every
+    image that record has. No crash needed, and permanent: `deleted.json` is
+    union-only and this runs once. The reserved-base residues `_recorded_base`
+    leaves behind hit it the same way (Codex review).
+
+    So the fork has to say so itself, and the asset directory is its signature:
+    the fork copied whole record directories, creating
+    `<kind>/<aid>/assets/<vid>/`, and no materializer ever creates one.
+    `assets.delete_image` unlinks files without removing the directory, so it
+    survives the user deleting every image in the version — which is exactly the
+    case this function exists to preserve.
+
+    Assets the world added to an already-copied version after the fork are still
+    misread as deletions; that is the same false premise one step further in,
+    left alone here because it is not what #270 is about."""
     gone = overlay.deleted(cid)
     for kind in ("characters", "pcs", "locations", "lore", "greetings"):
         wbase = wroot / kind
@@ -297,6 +319,8 @@ def _tombstone_deleted_copied_assets(cid: str, root: Path, wroot: Path, copied: 
             aid, vid, name = parts[1], parts[3], wp.stem
             if f"{kind}/{aid}" not in copied or f"{kind}/{aid}" in gone:
                 continue
+            if not (root / kind / aid / "assets" / vid).is_dir():
+                continue   # the fork never copied this version's assets here
             if not (root / rel).exists():
                 overlay.add_deleted(cid, f"assets/{kind}/{aid}/{vid}/{name}")
 
