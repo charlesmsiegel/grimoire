@@ -697,3 +697,4 @@ test("the last turn clicked wins even if an earlier request resolves after it", 
   await screen.findByText("the regenerate prompt");
   expect(screen.queryByText("the lore as it stood then")).toBeNull();
 });
+
