@@ -260,6 +260,78 @@ def test_a_forced_refresh_reports_the_automatic_schedule_not_its_own(client):
     assert body["refreshed"] is True and body["due"] is False
 
 
+def test_a_post_edited_during_the_call_does_not_get_the_summary_that_raced_it(client):
+    """The prefix a fold was computed FROM must still be the prefix on disk when
+    it lands. Otherwise the route pays for a summary of a transcript that no
+    longer exists and then stores it, and — because the panel's Refresh button
+    trusts this response directly — presents it as current until some later GET
+    happens to notice."""
+    _key(client)
+    _use(client, FakeLLM("First summary."))
+    cid, sid = _scene(client, posts=10)
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary")
+
+    class EditsMidCall(FakeLLM):
+        async def complete(self, messages, cfg):
+            store.scenes.edit_message(cid, sid, 0, "Post 0, rewritten mid-call.")
+            return "A summary of the transcript as it was before that edit."
+
+    for n in range(10, 25):
+        store.scenes.append_message(cid, sid, "user", f"Post {n}.")
+    _use(client, EditsMidCall())
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary").json()
+
+    assert body["refreshed"] is False
+    # ...and the response says what is actually true, rather than `stale: false`
+    assert body["stale"] is True and body["summary"] == "First summary."
+    assert store.scenes.get_rolling_summary(cid, sid)["summary"] == "First summary."
+
+
+def test_a_recycled_scene_id_does_not_inherit_the_old_scene_s_summary(client):
+    """`delete_scene` frees the id and the numbering reuses it, so remaking a
+    scene under the same title can hand it the very id a refresh is in flight
+    for. Writing there attaches one scene's prose to another — and on an empty
+    replacement even Refresh cannot clear it, because there is nothing pending
+    for a forced refresh to fold."""
+    _key(client)
+    cid, sid = _scene(client, posts=10)
+    recycled: list[str] = []
+
+    class DeletesMidCall(FakeLLM):
+        async def complete(self, messages, cfg):
+            store.scenes.delete_scene(cid, sid)
+            recycled.append(store.scenes.create_scene(cid, "Saltmarch"))
+            return "A summary of a scene that no longer exists."
+
+    _use(client, DeletesMidCall())
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary").json()
+
+    assert recycled == [sid]        # the id really was handed to the new scene
+    assert body["refreshed"] is False
+    assert store.scenes.get_rolling_summary(cid, sid)["summary"] == ""
+
+
+def test_posts_landing_during_the_call_do_not_block_the_write(client):
+    """The negative of the two above, and the common case: appending leaves the
+    covered prefix untouched, so an ordinary turn arriving mid-call must not
+    cost the summary that was already paid for."""
+    _key(client)
+    cid, sid = _scene(client, posts=10)
+
+    class AppendsMidCall(FakeLLM):
+        async def complete(self, messages, cfg):
+            store.scenes.append_message(cid, sid, "user", "A turn that landed mid-call.")
+            return "Mara reaches the salt gate."
+
+    _use(client, AppendsMidCall())
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary").json()
+
+    assert body["refreshed"] is True and body["stale"] is False
+    assert body["summary"] == "Mara reaches the salt gate."
+    # covers the ten it read, and reports the eleven that now exist
+    assert body["at"] == 10 and body["total"] == 11
+
+
 # ---- POST: failure never reaches the turn loop ----
 def test_no_connection_is_a_409_not_a_500(client):
     llm = _use(client, FakeLLM())

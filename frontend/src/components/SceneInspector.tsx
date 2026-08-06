@@ -178,6 +178,13 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   // where a stale token count merely reads as lag.
   const [rolling, setRolling] = useState<{ sid: string; data: RollingSummary } | undefined>();
   const [rollingUnread, setRollingUnread] = useState(false);
+  // Which scene the panel is actually on, readable from a callback that was
+  // created for an earlier one. The stamp above decides what may be RENDERED;
+  // this decides what may be STORED, and review caught that the first without
+  // the second is not enough: A's read answering after B's replaces the single
+  // state with A's, which the stamp then rejects — so the panel reports "no
+  // summary yet" for a scene that has one, until something re-reads.
+  const currentSid = useRef(sid);
   const [rollingBusy, setRollingBusy] = useState(false);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(loadSectionCollapse);
   const toggleSection = useCallback((id: string, current: boolean) => {
@@ -265,14 +272,15 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
     api.getSceneContext(cid, sid).then(setCtx).catch(() => setCtx(null));
 
     api.getChronicle(cid).then(setRecap).catch(() => setRecap([]));
+    currentSid.current = sid;
     setRollingUnread(false);
     // The previous scene's summary is deliberately NOT cleared here: this effect
     // also re-runs on `refreshKey`, i.e. after every turn, and blanking would
     // flash "No summary yet" over a summary that is about to come back. The
     // `sid` stamp below is what makes that safe.
     api.getRollingSummary(cid, sid)
-      .then((data) => setRolling({ sid, data }))
-      .catch(() => { setRollingUnread(true); });
+      .then((data) => { if (currentSid.current === sid) setRolling({ sid, data }); })
+      .catch(() => { if (currentSid.current === sid) setRollingUnread(true); });
     reloadWhen();
     reloadCfg();
   }, [cid, sid, refreshKey, reloadWhen, reloadCfg, reloadCast]);
@@ -440,7 +448,11 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
       // *now*, including when the automatic refresh is switched off. The
       // server still declines to spend a call when nothing has happened since
       // the last one, and says so in `refreshed`.
-      setRolling({ sid, data: await api.refreshRollingSummary(cid, sid, true) });
+      const data = await api.refreshRollingSummary(cid, sid, true);
+      // Retired the same way a late read is: the reader can switch scenes while
+      // a refold is in flight, and this one is for the scene they left.
+      if (currentSid.current !== sid) return;
+      setRolling({ sid, data });
       setRollingUnread(false);
     } catch (err: any) {
       // Reported, never destructive: the summary already on screen is still the
