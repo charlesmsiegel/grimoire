@@ -337,14 +337,19 @@ def test_a_structurally_corrupt_payload_reads_as_missing(monkeypatch, tmp_path):
     eid = _record(cid, sid)
     path = campaigns.campaign_root(cid) / "prompts" / f"{eid}.json"
 
+    good = json.loads(path.read_text(encoding="utf-8"))
+
     for bad in ({}, {"sections": []},
-                {"total_tokens": 1, "dropped_tokens": 0, "budget_tokens": 0},
-                {"total_tokens": 1, "dropped_tokens": 0, "budget_tokens": 0,
-                 "sections": "not a list"},
-                {"total_tokens": 1, "dropped_tokens": 0, "budget_tokens": 0,
-                 "sections": [{"label": "World info"}]},          # row missing fields
-                {"total_tokens": "lots", "dropped_tokens": 0, "budget_tokens": 0,
-                 "sections": []}):
+                {**good, "sections": "not a list"},
+                {**good, "sections": [{"label": "World info"}]},   # row missing fields
+                {**good, "total_tokens": "lots"},
+                # The metadata the FROZEN panel renders, which validating only
+                # the index row left reachable one click later: `seen.task` and
+                # `whenLabel(seen.ts)` come off the snapshot, not off the row.
+                {**good, "task": {}},
+                {**good, "ts": 17},
+                {**good, "model": None},
+                {**good, "id": 1}):
         path.write_text(json.dumps(bad), encoding="utf-8")
         assert prompt_log.read_entry(cid, eid) is None, bad
 

@@ -178,29 +178,32 @@ def _read_index(cid: str, strict: bool = False) -> dict:
             "entries": entries}
 
 
-#: An index row's UI-facing fields and their types. `SceneInspector` renders
-#: `TASK_LABELS[t.task] ?? t.task` and `whenLabel(t.ts)` straight into the DOM,
-#: and React throws outright on an object child -- so a hand-edited row carrying
-#: `"task": {}` would take the whole inspector down the moment Turn history is
-#: opened. Same judgement as `_well_formed` makes for a payload: being strict
-#: here is what lets the frontend stay trusting.
-_ROW_FIELD_TYPES = {"scene": str, "task": str, "ts": str, "model": str,
-                    "total_tokens": int, "dropped_tokens": int, "budget_tokens": int}
+#: The per-turn metadata, carried by an index row AND by the payload that row
+#: points at -- `record` writes the same dict to both (minus `scene`, which the
+#: index alone owns). One definition because both are validated for the same
+#: reason and against the same frontend: `SceneInspector` renders
+#: `TASK_LABELS[x.task] ?? x.task` and `whenLabel(x.ts)` straight into the DOM
+#: from the row in Turn history and from the SNAPSHOT once one is selected, and
+#: React throws outright on an object child. A hand-edited `"task": {}` in
+#: either file would take the panel down. Being strict here is what lets the
+#: frontend stay trusting; two copies of the list would eventually cover only
+#: one of the two files.
+_META_TYPES = {"task": str, "ts": str, "model": str,
+               "total_tokens": int, "dropped_tokens": int, "budget_tokens": int}
+
+
+def _valid_id(eid: object) -> bool:
+    """Path-safe (it names a file), numeric and short -- `next` is derived from
+    it, and `int()` refuses a string over 4300 digits. See `_read_index`."""
+    return bool(safe_id(eid)) and str(eid).isdigit() and len(str(eid)) <= _MAX_ID_DIGITS
 
 
 def _well_formed_row(e: object) -> bool:
-    """Whether an index row can be listed without risking the panel.
-
-    The id carries three extra requirements of its own: path-safe (it names a
-    file), numeric and short (`next` is derived from it, and `int()` refuses a
-    string over 4300 digits -- see the module's other guards).
-    """
-    if not isinstance(e, dict):
-        return False
-    eid = e.get("id")
-    if not (safe_id(eid) and str(eid).isdigit() and len(str(eid)) <= _MAX_ID_DIGITS):
-        return False
-    return all(isinstance(e.get(k), t) for k, t in _ROW_FIELD_TYPES.items())
+    """Whether an index row can be listed without risking the panel. `scene` on
+    top of the shared metadata, because the index is the field's only owner."""
+    return (isinstance(e, dict) and _valid_id(e.get("id"))
+            and isinstance(e.get("scene"), str)
+            and all(isinstance(e.get(k), t) for k, t in _META_TYPES.items()))
 
 
 def _write_index(cid: str, index: dict) -> None:
@@ -287,33 +290,37 @@ def list_entries(cid: str, sid: str) -> list[dict]:
     return [e for e in reversed(_read_index(cid)["entries"]) if e.get("scene") == sid]
 
 
-#: Every field the inspector dereferences without checking, and the type it
-#: assumes. `ContextBreakdown` calls `ctx.total_tokens.toLocaleString()` and
-#: `ctx.sections.map(...)` the moment a snapshot is selected, so a payload that
-#: is valid JSON but the wrong shape -- `{}` after a hand edit or a sync
-#: conflict -- would take the whole inspector down rather than reading as a
-#: debug entry that is simply unavailable. Being strict HERE is what lets the
-#: frontend stay trusting.
-_ROW_TYPES = {"label": str, "text": str, "tier": str,
-              "dropped": bool, "trimmed": int, "tokens": int}
-_TOTAL_KEYS = ("total_tokens", "dropped_tokens", "budget_tokens")
+#: One breakdown row's fields. `ContextBreakdown` calls
+#: `s.tokens.toLocaleString()` and renders `s.label`/`s.text` per section the
+#: moment a snapshot is selected, so a payload that is valid JSON but the wrong
+#: shape -- `{}` after a hand edit or a sync conflict -- would take the whole
+#: inspector down rather than reading as a debug entry that is unavailable.
+_SECTION_TYPES = {"label": str, "text": str, "tier": str,
+                  "dropped": bool, "trimmed": int, "tokens": int}
 
 
 def _well_formed(data: object) -> bool:
     """Whether a payload can be served to the inspector without crashing it.
+
+    Its metadata is checked against the same `_META_TYPES` an index row is: the
+    frozen panel reads `task` and `ts` off the SNAPSHOT, not off the row that
+    led to it, so validating only the row left the crash reachable one click
+    later. `scene` is absent by construction (see `record`) and so is not asked
+    for.
 
     Only the fields the panel dereferences are required; unknown extras pass
     through untouched, so a payload written by a later version stays readable.
     """
     if not isinstance(data, dict):
         return False
-    if not all(isinstance(data.get(k), int) for k in _TOTAL_KEYS):
+    if not (isinstance(data.get("id"), str)
+            and all(isinstance(data.get(k), t) for k, t in _META_TYPES.items())):
         return False
     rows = data.get("sections")
     if not isinstance(rows, list):
         return False
     return all(isinstance(r, dict)
-               and all(isinstance(r.get(k), t) for k, t in _ROW_TYPES.items())
+               and all(isinstance(r.get(k), t) for k, t in _SECTION_TYPES.items())
                for r in rows)
 
 
