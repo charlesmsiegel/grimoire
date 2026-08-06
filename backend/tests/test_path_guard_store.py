@@ -588,7 +588,7 @@ def test_a_hidden_campaign_still_pins_its_world(monkeypatch, tmp_path):
     _reject_mark(monkeypatch)
 
     assert [c["id"] for c in campaigns.list_campaigns()] == []      # hidden from the UI
-    assert ("Hidden", wid) in campaigns.world_refs()                # not from the check
+    assert (MARK, "Hidden", wid) in campaigns.world_refs()          # not from the check
     with pytest.raises(worlds.WorldInUse):
         worlds.delete_world(wid)
     assert worlds.world_root(wid).exists()
@@ -651,7 +651,7 @@ def test_an_unreadable_campaign_blocks_world_deletion(monkeypatch, tmp_path):
     # valid frontmatter, undecodable body: the reference is still in there
     mp.write_bytes(f"---\nname: Saltmarch\nworld: {wid}\n---\n".encode() + b"\xff\xfe body")
 
-    assert (("Saltmarch", wid) in campaigns.world_refs())   # recovered, not lost
+    assert ((cid, "Saltmarch", wid) in campaigns.world_refs())   # recovered, not lost
     with pytest.raises(worlds.WorldInUse):
         worlds.delete_world(wid)
     assert worlds.world_root(wid).exists()
@@ -667,7 +667,7 @@ def test_a_campaign_that_cannot_be_read_at_all_still_blocks_deletion(monkeypatch
         raise OSError("locked by a sync client")
 
     monkeypatch.setattr(type(mp), "read_text", unreadable)
-    assert (cid, None) in campaigns.world_refs()   # unknown, not absent
+    assert (cid, cid, None) in campaigns.world_refs()   # unknown, not absent
     with pytest.raises(worlds.WorldInUse):
         worlds.delete_world(wid)
 

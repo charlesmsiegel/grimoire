@@ -5,6 +5,7 @@ import pytest
 
 from grimoire.store import (assets, atomic, campaigns, characters, entities, failsoft, greetings,
                             groupstate, overlay, pcs, playstate, sync, taglines, worlds)
+from grimoire.store.campaigns import read as campaigns_read
 
 
 @pytest.fixture(autouse=True)
@@ -799,19 +800,100 @@ def test_sweep_refuses_an_id_that_could_escape_its_directory(monkeypatch, tmp_pa
     assert (croot / "campaign.md").exists()
 
 
-def test_sweep_survives_a_campaign_nobody_can_read(monkeypatch, tmp_path, caplog):
-    """A store with one undecodable campaign.md must not make a world record
-    undeletable -- the record is already gone when the sweep runs."""
+def test_a_campaign_nobody_can_read_does_not_stop_the_sweep(monkeypatch, tmp_path):
+    """One corrupt campaign.md -- of any world -- used to abort the whole sweep,
+    so every healthy dependent kept its stale state (Codex review)."""
     wroot, _cid, croot = _dependent(monkeypatch, tmp_path)
     gid = entities.create_entity(wroot, "groups", "Salt Circle")
     groupstate.write_state(croot, gid, "## Secrets\nThe abbot is a member.")
-    (croot / "campaign.md").write_bytes(b"---\nname: \xff\xfeRun\n---\n")
+    other = campaigns.campaign_root(campaigns.create_campaign("Other", wroot.name))
+    (other / "campaign.md").write_bytes(b"---\nname: Other\n---\n\xff\xfe body")
+
+    entities.delete_entity(wroot, "groups", gid)
+    overlay.forget_world_record(wroot, "groups", gid)
+    assert groupstate.read_state(croot, gid) is None
+
+
+def test_a_campaign_whose_world_cannot_be_read_is_left_alone(monkeypatch, tmp_path, caplog):
+    """`None` means "we could not tell". The in-use check counts that campaign
+    as a user; the sweep must not delete its state on the same guess."""
+    wroot, cid, croot = _dependent(monkeypatch, tmp_path)
+    gid = entities.create_entity(wroot, "groups", "Salt Circle")
+    groupstate.write_state(croot, gid, "## Secrets\nThe abbot is a member.")
+    monkeypatch.setattr(campaigns_read, "world_refs", lambda: [(cid, "Run", None)])
 
     entities.delete_entity(wroot, "groups", gid)
     with caplog.at_level(logging.WARNING):
-        overlay.forget_world_record(wroot, "groups", gid)   # does not raise
-    assert any("could not enumerate" in r.message for r in caplog.records)
-    assert groupstate.read_state(croot, gid) is not None    # honestly left behind
+        overlay.forget_world_record(wroot, "groups", gid)
+    assert groupstate.read_state(croot, gid) is not None
+    assert any("cannot read which world" in r.message for r in caplog.records)
+
+
+# ---- Codex review: a spared copy is no longer a copy OF anything ----
+
+def test_spared_copy_is_detached_from_the_deleted_world_record(monkeypatch, tmp_path):
+    """The campaign keeps its copy -- but its sync base claims a shared ancestor
+    with a record that is gone, so a recreated slug arrived as an `update` and
+    accepting it overwrote the copy while its state.md stayed put."""
+    wroot, cid, croot = _dependent(monkeypatch, tmp_path)
+    gid = entities.create_entity(wroot, "groups", "Salt Circle", "the old circle")
+    overlay.materialize_entity(cid, "groups", gid)
+    groupstate.write_state(croot, gid, "## Secrets\nThe abbot is a member.")
+
+    entities.delete_entity(wroot, "groups", gid)
+    overlay.forget_world_record(wroot, "groups", gid)
+    assert f"groups/{gid}" not in campaigns.read_manifest(cid)   # campaign-local now
+
+    entities.create_entity(wroot, "groups", "Salt Circle", "a brand new, unrelated circle")
+    assert [p for p in sync.incoming(cid) if p["ref"]["id"] == gid] == []
+    assert overlay.read_entity(cid, "groups", gid)["body"] == "the old circle"
+
+
+def test_spared_actor_copy_is_detached_from_the_deleted_world_record(monkeypatch, tmp_path):
+    wroot, cid, croot = _dependent(monkeypatch, tmp_path)
+    aid, _vid = characters.create_character(wroot, "Winifred", "default",
+                                            {"data": {"name": "Winifred", "description": "the old one"}})
+    overlay.materialize_actor(cid, "characters", aid)
+    playstate.write_state(croot, aid, "## Knows\nWhere the ledger is hidden.")
+
+    characters.delete_character(wroot, aid)
+    overlay.forget_world_record(wroot, "characters", aid)
+    assert f"characters/{aid}" not in campaigns.read_manifest(cid)
+
+    characters.create_character(wroot, "Winifred", "default",
+                                {"data": {"name": "Winifred", "description": "a DIFFERENT person"}})
+    assert [p for p in sync.incoming(cid) if p["ref"]["id"] == aid] == []
+    assert overlay.char_root(cid, aid) == croot                  # still the campaign's own
+
+
+def test_sweep_unwires_a_deleted_greeting_from_a_campaign_plot_map(monkeypatch, tmp_path):
+    """`delete_greeting` cleans the WORLD's plot map; a campaign that
+    materialized its own keeps a copy `read_plotmap` prefers."""
+    wroot, cid, _croot = _dependent(monkeypatch, tmp_path)
+    aid, _vid = characters.create_character(wroot, "Winifred")
+    doomed = greetings.create_greeting(wroot, "Arrival", aid, "default", "hi")
+    other = greetings.create_greeting(wroot, "Departure", aid, "default", "bye")
+    greetings.set_edges(wroot, other, leads_to=[doomed], excludes=[])
+    overlay.materialize_plotmap(cid)
+
+    greetings.delete_greeting(wroot, doomed)
+    overlay.forget_world_record(wroot, "greetings", doomed)
+    assert overlay.read_plotmap(cid)[other]["leads_to"] == []
+
+
+def test_sweep_does_not_fork_a_campaign_onto_its_own_plot_map(monkeypatch, tmp_path):
+    """A campaign reading the world's map must keep reading it -- materializing
+    one here would fork it off over a delete it had nothing to do with."""
+    wroot, cid, croot = _dependent(monkeypatch, tmp_path)
+    aid, _vid = characters.create_character(wroot, "Winifred")
+    doomed = greetings.create_greeting(wroot, "Arrival", aid, "default", "hi")
+    (croot / "plotmap.json").unlink(missing_ok=True)
+    campaigns.write_manifest(cid, {k: v for k, v in campaigns.read_manifest(cid).items()
+                                   if k != "plotmap"})
+
+    greetings.delete_greeting(wroot, doomed)
+    overlay.forget_world_record(wroot, "greetings", doomed)
+    assert not (croot / "plotmap.json").exists()
 
 
 def test_campaign_side_greeting_delete_takes_its_directory_too(monkeypatch, tmp_path):

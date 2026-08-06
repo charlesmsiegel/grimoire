@@ -701,14 +701,28 @@ def _drop_record_dir(root: Path, kind: str, rid: str) -> None:
 def _dependent_campaigns(wroot: Path) -> list[str]:
     """Ids of the campaigns that inherit from `wroot`.
 
-    `list_campaigns`, not `campaigns.read.world_refs`: this is the opposite of
-    `worlds.delete_world`'s in-use check, which must over-include because
-    missing a campaign there destroys a world still in use. Missing one here
-    leaves that campaign exactly as it was before this function existed, so the
-    listing that agrees with the resolvers is the right one to sweep.
+    `world_refs`, not `list_campaigns`, because it reads each campaign.md
+    independently: `list_campaigns` raises out of its own loop on the first
+    undecodable one, and a single corrupt campaign — of *any* world — must not
+    cost every healthy dependent its sweep (Codex review).
+
+    That tolerance points the other way from `worlds.delete_world`'s in-use
+    check, which shares this enumeration. There, a campaign whose reference
+    could not be read counts as a user, because "we could not tell" must not
+    become "nothing uses this world". Here it is skipped for the same reason
+    read the other way: we would be deleting that campaign's state on a guess
+    that it depends on this world at all, and a sweep that does not happen only
+    leaves the pre-#225 behaviour.
     """
-    return [c["id"] for c in campaigns_read.list_campaigns()
-            if worlds_paths.references_world(c["world"], wroot)]
+    out = []
+    for cid, _name, w in campaigns_read.world_refs():
+        if w is None:
+            log.warning("cannot read which world campaign %s belongs to -- leaving its "
+                        "state alone; a record recreated in %s may inherit it", cid, wroot)
+            continue
+        if worlds_paths.references_world(w, wroot) and campaigns_paths.campaign_exists(cid):
+            out.append(cid)
+    return out
 
 
 def forget_world_record(wroot: Path, kind: str, rid: str) -> None:
@@ -728,11 +742,18 @@ def forget_world_record(wroot: Path, kind: str, rid: str) -> None:
       unreachable but intact — until the next same-name create hands the id
       back and it re-attaches to a record it knows nothing about (#225).
 
-    A campaign that materialized its own copy is left alone: its record did not
-    go anywhere, so its state is still the state of something it has. That is
-    also why the sweep cannot simply run for every campaign — deleting a
+    A campaign that materialized its own copy keeps it: its record did not go
+    anywhere, so its state is still the state of something it has. Deleting a
     world record has never removed a campaign's copy of it (`sync.incoming`
     skips world-side deletions), and this is not the change that starts.
+
+    But that copy is no longer a copy *of* anything, and its `sync.md` base
+    still says otherwise — a base is the claim "this world record and mine share
+    an ancestor". Left standing, it is the same bug through a different door: a
+    recreated slug arrives as an `update`, and accepting it overwrites the
+    campaign's record with an unrelated one while its state.md stays put (Codex
+    review). So the base goes, which is exactly what makes a record
+    campaign-local — the state a campaign-side create leaves it in.
 
     Two limits, both deliberate. What this does NOT reach is campaign-local
     state keyed by the record id from *outside* the record's directory:
@@ -766,5 +787,26 @@ def forget_world_record(wroot: Path, kind: str, rid: str) -> None:
             mine = (croot / kind / rid / _actor_meta(kind)).exists()
         else:
             mine = _flat_path(croot, kind, rid).exists()
-        if not mine:
-            _drop_record_dir(croot, kind, rid)
+        if mine:
+            _drop_manifest_ref(cid, _flat_ref(kind, rid))
+            continue
+        _drop_record_dir(croot, kind, rid)
+        if kind == "greetings":
+            _drop_plotmap_edges(croot, rid)
+
+
+def _drop_plotmap_edges(croot: Path, gid: str) -> None:
+    """Unwire a deleted greeting from a campaign's OWN plot map.
+
+    `greetings.delete_greeting` unwires it from the world's, and a campaign
+    without a plotmap.json reads that one — but a campaign that materialized its
+    map keeps a private copy `read_plotmap` prefers, and the deleted greeting's
+    node and every `leads_to`/`excludes` pointing at it survive there. Recreate
+    the slug and those edges are the new greeting's (Codex review).
+
+    Only for a campaign that already has its own map: materializing one here
+    would fork a campaign off the world's plot map as a side effect of a delete
+    it had nothing to do with.
+    """
+    if (croot / "plotmap.json").exists():
+        greetings.remove_from_plotmap(croot, gid)
