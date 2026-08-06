@@ -440,3 +440,36 @@ def test_a_macro_in_a_tracker_value_is_resolved_once_at_persist_time(
     stored = turnstate.entries(cid, sid)[0][1][f"characters:{char_id}"]
     assert stored == {"mood": "calm"}
     assert "{{" not in stored["mood"]
+
+
+def test_adopting_an_opener_that_is_only_a_tracker_block_is_refused(
+        monkeypatch, tmp_path):
+    """`first-post` reported success on text that stripped to nothing, so the
+    opener the user was adopting vanished with no error to show for it."""
+    cid, sid, _ = _scene(monkeypatch, tmp_path)
+    client = TestClient(create_app())
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/first-post",
+                    json={"text": _block('{"Winifred Ash": {"mood": "guarded"}}')})
+    assert r.status_code == 400
+    assert scenes.read_scene(cid, sid)["messages"] == []
+
+
+def test_adopting_an_opener_that_is_only_an_unterminated_opener_is_refused(
+        monkeypatch, tmp_path):
+    cid, sid, _ = _scene(monkeypatch, tmp_path)
+    client = TestClient(create_app())
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/first-post",
+                    json={"text": '```state\n{"Winifred Ash": {"mo'})
+    assert r.status_code == 400
+    assert scenes.read_scene(cid, sid)["messages"] == []
+
+
+def test_a_real_opener_with_a_trailing_block_is_still_adopted(monkeypatch, tmp_path):
+    cid, sid, char_id = _scene(monkeypatch, tmp_path)
+    client = TestClient(create_app())
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/first-post",
+                    json={"text": "**Winifred Ash:** The hall is cold.\n\n"
+                                  + _block('{"Winifred Ash": {"mood": "guarded"}}')})
+    assert r.status_code == 200
+    messages = scenes.read_scene(cid, sid)["messages"]
+    assert len(messages) == 1 and "```" not in messages[0]["content"]

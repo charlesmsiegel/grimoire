@@ -96,6 +96,12 @@ as an unterminated block — emitting it would show the player an opener the
 transcript does not contain, and on a reroll would show it in place of the
 reply the server just restored.
 
+`_persist_reply` returns how many posts landed, and `POST .../first-post`
+refuses on zero. Text can be non-empty and still produce no post — a trailing
+block is split off before segmentation, and a bare speaker marker segments into
+nothing — and answering `ok` over a scene that is still empty loses the opener
+the user was adopting with no error to show for it.
+
 Stripping and recording are unconditional; only the *instruction* and the
 *injection* are gated on the config. Turning the feature off must not leave
 blocks landing in transcripts while the model still complies from context.

@@ -110,8 +110,18 @@ async def _flush_on_abort(hook, watcher) -> None:
         pass
 
 
-def _persist_reply(cid: str, sid: str, text: str) -> None:
-    """Split one model reply into per-speaker posts and append them (#744).
+def _persist_reply(cid: str, sid: str, text: str) -> int:
+    """Split one model reply into per-speaker posts and append them (#744),
+    returning how many actually landed.
+
+    The count is what a caller needs to tell "the model said something" from
+    "the transcript grew". They are not the same question and the gap is not
+    only the tracker block: a reply that is nothing but a speaker marker splits
+    into no non-empty segment either, and `append_reply` writes nothing for it.
+    `post_first_post` is the caller that has to know — it reports success to a
+    user who is adopting an opener, and reporting it over an empty scene loses
+    the text with no error to show for it.
+
     Macros are expanded before persisting (#137): {{roll}}/{{random}} must be
     resolved once, not re-rolled on every future context build that re-reads
     this now-historical message. Goes through append_reply so the generation
@@ -165,6 +175,8 @@ def _persist_reply(cid: str, sid: str, text: str) -> None:
             # transcript, never a reason to lose or misreport one. The cost is
             # the round-eleven durability window staying open for this turn.
             pass
+    # Counted the way `append_reply` filters, because that is what it wrote.
+    return sum(1 for s in segments if s["content"].strip())
 
 
 def _record_turnstate(cid: str, sid: str, landed: int, segments: list[dict],
