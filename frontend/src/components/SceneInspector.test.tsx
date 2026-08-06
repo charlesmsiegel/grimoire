@@ -1079,3 +1079,29 @@ test("moving the scene asks whether the summary is due", async () => {
   await waitFor(() => expect(api.refreshRollingSummary).toHaveBeenCalledWith(
     "c", "s", false, 0));
 });
+
+test("the first date set asks for a refold under the scene's NEW id", async () => {
+  // Setting a date for the first time renames the scene file, and this branch
+  // returns early to let the sid prop change re-run the load effects. Those
+  // effects only READ, and a read never evaluates the gate — while the write
+  // itself changed the scene's date FACT, which is part of the fold's validity
+  // key. So the ask belongs here, against the id the rename produced: the old
+  // one no longer names a file (#85).
+  (api.setSceneDatetime as any).mockResolvedValue(
+    { ok: true, advanced: false, friendly: "4 July 2026", id: "001--2026-07-04--s" });
+  render(<SceneInspector cid="c" sid="s" refreshKey={0}
+                         onSceneChanged={() => {}} onSceneRenamed={() => {}} />);
+  fireEvent.change(await screen.findByLabelText("Scene date year"), { target: { value: "2026" } });
+  const monthSelect = await screen.findByLabelText("Scene date month");
+  await waitFor(() => expect(monthSelect).not.toBeDisabled());
+  fireEvent.change(monthSelect, { target: { value: "07" } });
+  const daySelect = screen.getByLabelText("Scene date day");
+  await waitFor(() => expect(daySelect).not.toBeDisabled());
+  fireEvent.change(daySelect, { target: { value: "4" } });
+  fireEvent.click(screen.getByRole("button", { name: /set date/i }));
+
+  await waitFor(() => expect(api.getRollingSummary).toHaveBeenCalledWith(
+    "c", "001--2026-07-04--s"));
+  await waitFor(() => expect(api.refreshRollingSummary).toHaveBeenCalledWith(
+    "c", "001--2026-07-04--s", false, expect.any(Number)));
+});

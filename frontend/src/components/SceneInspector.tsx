@@ -466,6 +466,14 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
         // first date set renames the scene file — adopt the new id; the sid
         // prop change re-runs every load effect, so skip the stale reload
         onSceneRenamed?.(res.id);
+        // ...but those effects only READ, and a read never evaluates the gate.
+        // The first date is set SILENTLY (no "Time passes…" line, which is why
+        // this branch exists at all), so nothing else about this write asks —
+        // and it still moves the scene's date FACT, which is part of the fold's
+        // validity key. Ask against the NEW id: the old one no longer names a
+        // file. Adopted first, so `currentKey` has moved by the time the answer
+        // lands and the panel accepts it (#85).
+        askRolling(res.id);
         return;
       }
       await reloadWhen();
@@ -516,10 +524,15 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   // to two adjacent calls, which is worth having; closing it entirely would mean
   // the four transition endpoints reporting their resulting length, a wider
   // change than this one should make.
-  function askRolling() {
-    const key = `${cid}/${sid}`;
-    api.getRollingSummary(cid, sid)
-      .then((seen) => api.refreshRollingSummary(cid, sid, false, seen.total))
+  //
+  // `id` defaults to the scene this panel is showing, and is passed explicitly
+  // by the one caller whose write RENAMES the scene out from under the prop:
+  // the id in scope there is already stale, so asking with it would 404 while
+  // the scene it means sits under a new name with a summary nobody refolded.
+  function askRolling(id: string = sid) {
+    const key = `${cid}/${id}`;
+    api.getRollingSummary(cid, id)
+      .then((seen) => api.refreshRollingSummary(cid, id, false, seen.total))
       .then((data) => {
         if (currentKey.current !== key || !data.refreshed) return;
         writeSeq.current += 1;
