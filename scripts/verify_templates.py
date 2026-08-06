@@ -135,8 +135,8 @@ for label, snap, cands, off in (("empty", EMPTY_SNAP, None, False),
     check(f"suggestions user ({label})", exp[1]["content"],
           render("scene_suggestions/user.j2", s=snap, offscreen=off, greeting_candidates=cands))
 
-for label, facts, st, rel, plt, grp, cmt in (
-        ("bare", {}, None, None, None, None, None),
+for label, facts, st, rel, plt, grp, cmt, fct in (
+        ("bare", {}, None, None, None, None, None, None),
         ("full", {"location": "Night Dock", "date": "2026-07-05",
                   "cast": ["characters/seraphine-vale", "pcs/hero"]},
          {"Seraphine Vale": "Wounded. Knows: The ledger is real."},
@@ -144,18 +144,22 @@ for label, facts, st, rel, plt, grp, cmt in (
          "find-the-ledger: Find the ledger (open) — Hero learned it exists.",
          "- groups/salt-circle (Salt Circle): Goals: Expand.",
          "the-deadline: Midnight deadline (threat, open), due midnight "
-         "— Hero was given until midnight.")):
-    exp = absorb.build_prompt(transcript, facts, st, rel, plt, grp, cmt)
+         "— Hero was given until midnight.",
+         "f1: The warehouse belongs to the Salt Circle. (the third night)")):
+    exp = absorb.build_prompt(transcript, facts, st, rel, plt, grp, cmt, fct)
     check(f"absorb system ({label})", exp[0]["content"], render("absorb/system.j2"))
     check(f"absorb user ({label})", exp[1]["content"],
           render("absorb/user.j2", facts=facts, state_snapshot=st, rel_snapshot=rel,
                  plot_snapshot=plt, group_snapshot=grp, commitment_snapshot=cmt,
-                 transcript=transcript))
+                 fact_snapshot=fct, transcript=transcript))
     if grp:
         assert "Groups:" in exp[1]["content"], f"absorb user ({label}) missing Groups: head line"
     if cmt:
         assert "Open commitments:" in exp[1]["content"], \
             f"absorb user ({label}) missing Open commitments: head line"
+    if fct:
+        assert "Standing facts:" in exp[1]["content"], \
+            f"absorb user ({label}) missing Standing facts: head line"
 
 msgs = [{"role": "user", "content": "hi"},
         {"role": "user", "speaker": "Hero", "content": "yo"},
@@ -186,7 +190,8 @@ assert 'prompts.render("scene/roll_declined.j2")' in routes_src, \
 from grimoire.store import appearances as ap  # noqa: E402
 from grimoire.store import (audit, calendars, campaigns, characters, checks,  # noqa: E402
                             commitments, config,
-                            dossiers as dstore, entities, groupstate, length_drift, lengths, modules, pcs,
+                            dossiers as dstore, entities, facts as fstore, groupstate,
+                            length_drift, lengths, modules, pcs,
                             playstate, plot, response_presets, scenes, sheets, styles,
                             taglines as tstore, voice_anchors as vastore,
                             voice_drift as vdstore, weather as wstore, worlds)
@@ -283,6 +288,7 @@ relationships.set_bond(cid, f"characters:{sera}", f"pcs:{pid}", "reluctant allie
 plot.set_movement(cid, "find-the-ledger", "Find the ledger", "open", "Hero learned it exists.", sid)
 commitments.set_movement(cid, "the-deadline", "Midnight deadline", "threat", "open",
                          "midnight", "Hero was given until midnight.", sid)
+fstore.record(cid, "The warehouse belongs to the Salt Circle.", "the third night", sid)
 chronicle.absorb(cid, {"id": sid0, "one_line": "Hero met Kessler.",
                        "summary": "Hero met Doc Kessler in his clinic and traded a favor for gossip.",
                        "keywords": ["clinic"], "cast": [f"characters/{kessler}"],
@@ -680,11 +686,12 @@ rel_snap = absorb.relationships_snapshot(cid, sid)
 plot_snap = absorb.plot_snapshot(cid)
 grp_snap = absorb.group_snapshot(cid)
 cmt_snap = absorb.commitment_snapshot(cid)
-exp = absorb.build_prompt(tr, facts, st_snap, rel_snap, plot_snap, grp_snap, cmt_snap)
+fct_snap = absorb.fact_snapshot(cid)
+exp = absorb.build_prompt(tr, facts, st_snap, rel_snap, plot_snap, grp_snap, cmt_snap, fct_snap)
 check("absorb user (store)", exp[1]["content"],
       render("absorb/user.j2", facts=facts, state_snapshot=st_snap, rel_snapshot=rel_snap,
              plot_snapshot=plot_snap, group_snapshot=grp_snap,
-             commitment_snapshot=cmt_snap, transcript=tr))
+             commitment_snapshot=cmt_snap, fact_snapshot=fct_snap, transcript=tr))
 for name, line in st_snap.items():
     st = playstate.read_state(croot, sera)
     check(f"state snapshot line (store, {name})", line,
@@ -708,6 +715,10 @@ check("commitment lines (context form)", "\n".join(commitments.render_open(cid, 
       "\n".join(render("snippets/commitment_line/context.j2", c=c) for c in owed))
 check("commitment lines (absorb form)", "\n".join(commitments.render_open(cid, with_id=True)),
       "\n".join(render("snippets/commitment_line/absorb.j2", c=c) for c in owed))
+
+standing = fstore.active(cid)
+check("fact lines", "\n".join(fstore.render_active(cid)),
+      "\n".join(render("snippets/fact_line.j2", f=f) for f in standing))
 
 # ---------------------------------------------------------------------------
 

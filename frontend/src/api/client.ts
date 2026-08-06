@@ -392,8 +392,8 @@ export type CastDetail = { kind: "characters" | "pcs"; id: string; name: string;
 export type TimelineEvent = { date: string; text: string };
 export type StagedEdit = {
   id: string; kind: "character_state" | "lore" | "authored" | "relationship" | "bond" | "plot"
-    | "commitment" | "new_character" | "new_location" | "new_lore" | "sheet" | "dossier"
-    | "voice_drift";
+    | "commitment" | "fact" | "new_character" | "new_location" | "new_lore" | "sheet"
+    | "dossier" | "voice_drift";
   target: { kind: string; id: string }; label: string; field: string;
   before: string; after: string; authored: boolean;
   payload?: Record<string, unknown>;
@@ -503,9 +503,16 @@ export type PlotThread = {
   last_scene: string; latest_beat: string; scene: LedgerScene;
 };
 export type Commitment = PlotThread & { kind: string; due: string };
+/** A standing fact on the ledger (#114). `scene` is the scene that RECORDED it,
+ *  not one that last moved it: a fact's text never changes once written, and a
+ *  fact that stopped being true is retired off this list rather than rewritten. */
+export type StandingFact = {
+  id: string; text: string; date: string; scene: LedgerScene;
+};
 export type LedgerFact = { id: string; one_line: string; date: string; title: string };
 export type Ledger = {
-  plot: PlotThread[]; commitments: Commitment[]; chronicle: LedgerFact[];
+  plot: PlotThread[]; commitments: Commitment[]; facts: StandingFact[];
+  chronicle: LedgerFact[];
 };
 
 // pre-scene briefing (#118) — the ledger's per-scene sibling. The rows are the

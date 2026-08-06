@@ -542,6 +542,6 @@ test("a ledger read never joins an in-flight one", async () => {
   const first = api.campaignLedger("run");
   const second = api.campaignLedger("run");
   expect(fetchMock).toHaveBeenCalledTimes(2);
-  settle(jsonOk({ plot: [], commitments: [], chronicle: [] }));
+  settle(jsonOk({ plot: [], commitments: [], facts: [], chronicle: [] }));
   await Promise.all([first, second]);
 });

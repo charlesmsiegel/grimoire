@@ -56,8 +56,8 @@ conflict contract.
 
 from __future__ import annotations
 
-from .. import (changes, characters, commitments, groupstate, overlay, playstate,
-                plot, relationships, weather as weather_store)
+from .. import (changes, characters, commitments, facts, groupstate, overlay,
+                playstate, plot, relationships, weather as weather_store)
 from ..appearances import (paths as appearances_paths,
                            versions as appearances_versions)
 from ..campaigns import paths as campaigns_paths
@@ -76,6 +76,7 @@ _REASONS: dict[str, str] = {
     "bond": "this bond changed since the scene was absorbed",
     "plot": "this plot thread changed since the scene was absorbed",
     "commitment": "this commitment changed since the scene was absorbed",
+    "fact": "the fact this row retires changed since the scene was absorbed",
     "weather": "the weather here changed since the scene was absorbed",
 }
 
@@ -203,6 +204,31 @@ def commitment_line(rec: dict) -> str:
     return f"{line} [{stamp}{f', last moved in {scene}' if scene else ''}]"
 
 
+def fact_line(rec: dict) -> str:
+    """A ledger fact's current position as one line: its lifecycle state, what
+    superseded it if anything, and its text. `plot_line`'s sibling, and shared
+    with `materializer.materialize` for the same reason -- the `before` it
+    stages and the value checked against it here cannot drift apart.
+
+    No beat count and no scene stamp, unlike `commitment_line`, because neither
+    would say anything a fact ledger cannot already prove. A fact's text is
+    immutable by design (`store/facts.py`) and so is its date, so `status` and
+    `superseded_by` are the ONLY fields any mutator can move -- the line is a
+    complete fingerprint rather than an approximate one. That also keeps a scene
+    id out of the staged `before`, which is what spares the review panel the
+    rename-repointing `commitment_line`'s trailing stamp forces on it.
+
+    Every field is coerced rather than trusted: facts.json is hand-editable and
+    read by a bare `json.loads`, so a list-valued `status` would otherwise be
+    concatenated into the line and raise.
+    """
+    status = facts._field(rec.get("status"), facts.ACTIVE)
+    superseded_by = facts._field(rec.get("superseded_by"))
+    text = facts._field(rec.get("text"))
+    head = status + (f" (superseded by {superseded_by})" if superseded_by else "")
+    return f"{head} — {text}" if text else head
+
+
 def current_value(cid: str, edit: dict) -> str | None:
     """What the edit's target says right now, or None when there is no verdict
     to give -- an unjudgeable kind, or a target that would not read."""
@@ -249,6 +275,17 @@ def current_value(cid: str, edit: dict) -> str | None:
         if kind == "commitment":
             cur = commitments.get(cid, tid)
             return commitment_line(cur) if isinstance(cur, dict) else ""
+        if kind == "fact":
+            # A fact row's target is the fact it RETIRES, and a row that retires
+            # nothing (an ordinary new fact, which overwrites no record) names
+            # none -- so there is nothing to have drifted, and no verdict, the
+            # same silence `new_lore` and the other creations keep by staying
+            # out of `_REASONS` entirely. This kind cannot: the same kind covers
+            # both, and only the row can say which it is.
+            if not tid:
+                return None
+            cur = facts.get(cid, tid)
+            return fact_line(cur) if isinstance(cur, dict) else ""
         if kind == "weather":
             now = weather_store.current_weather(cid, payload.get("location", ""),
                                                 payload.get("native"))
@@ -292,7 +329,13 @@ def target_key(edit: dict) -> tuple | None:
         # `commitment` keys like `plot` and for the same reason: both are a
         # whole-record line rendered from one id, so two edits naming the same id
         # address the same record.
-        if kind in ("character_state", "group_state", "plot", "commitment"):
+        # `fact` keys off its target like the four above, and for the same
+        # reason: the record it can move is the one its target names -- the fact
+        # it retires. A row that retires nothing keys as ("fact", ""), which
+        # names no record and can match nothing, because `current_value` never
+        # returns a reading for one and `apply_edits` only ever pairs this key
+        # with a reading.
+        if kind in ("character_state", "group_state", "plot", "commitment", "fact"):
             return (kind, str(target.get("id", "")))
         if kind == "lore":
             return (kind, str(target.get("kind", "")), str(target.get("id", "")))

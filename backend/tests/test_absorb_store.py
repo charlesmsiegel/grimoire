@@ -54,7 +54,7 @@ def test_parse_output_extracts_knowledge_fields():
 
 def test_parse_output_tolerates_garbage():
     assert absorb.parse_output("no json") == {
-        "one_line": "", "summary": "", "keywords": [], "timeline_events": [],
+        "one_line": "", "summary": "", "keywords": [], "timeline_events": [], "facts": [],
         "character_state_edits": [], "group_state_edits": [], "lore_edits": [], "authored_edits": [],
         "relationship_deltas": [], "bond_changes": [], "plot_movements": [],
         "commitment_movements": [],
@@ -2009,3 +2009,305 @@ def test_replacing_a_new_commitment_does_not_merge_it_into_another(monkeypatch, 
     assert second["title"] == "Pay, Mara" and second["kind"] == "threat"
     assert second["due"] == "by the thaw"
     assert [b["text"] for b in second["beats"]] == ["A different debt entirely."]
+
+
+# ---- the dated fact ledger (#114) -------------------------------------------
+
+def _fact_row(cid, sid, **row):
+    """One `facts` section row through parse and materialize, as staged."""
+    parsed = absorb.parse_output(json.dumps({"facts": [row]}))
+    return absorb.materialize(cid, sid, parsed)
+
+
+def test_parse_output_facts():
+    text = ('{"facts": ['
+            '{"text": "The bridge is down.", "date": "the third night", "supersedes": "f1"},'
+            '{"text": "The east gate is barred.", "date": null, "supersedes": null},'
+            '{"supersedes": "f2"}]}')
+    assert absorb.parse_output(text)["facts"] == [
+        {"text": "The bridge is down.", "date": "the third night", "supersedes": "f1"},
+        # null and absent collapse to "" — the model uses them interchangeably
+        {"text": "The east gate is barred.", "date": "", "supersedes": ""},
+        # a bare supersedes: retire that fact, with nothing put in its place
+        {"text": "", "date": "", "supersedes": "f2"}]
+
+
+def test_fact_snapshot_renders_standing_facts(monkeypatch, tmp_path):
+    from grimoire.store import facts
+    cid = _campaign(monkeypatch, tmp_path)
+    fid = facts.record(cid, "The bridge stands.", "the third night", "s1")
+    facts.record(cid, "The east gate is barred.", "", "s2")
+    facts.retire(cid, fid, "s3")
+    assert absorb.fact_snapshot(cid) == "f2: The east gate is barred."
+
+
+def test_fact_snapshot_tolerates_garbled(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    (campaigns.campaign_root(cid) / "facts.json").write_text("{ nope", encoding="utf-8")
+    assert absorb.fact_snapshot(cid) == ""
+
+
+def test_materialize_stages_a_new_fact(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    (edit,) = _fact_row(cid, "s9", text="The east gate is barred.", date="the ninth night")
+    assert edit["kind"] == "fact" and edit["field"] == "text"
+    # No target: recording a fact creates a record and overwrites nothing, so
+    # there is nothing for `conflicts` to judge and nothing to name.
+    assert edit["target"] == {"kind": "facts", "id": ""}
+    assert edit["label"] == "New fact — the ninth night"
+    assert edit["before"] == "" and edit["after"] == "The east gate is barred."
+    assert edit["payload"] == {"text": "The east gate is barred.", "date": "the ninth night",
+                               "supersedes": "", "scene": "s9"}
+
+
+def test_materialize_stages_a_supersession_against_the_fact_it_retires(monkeypatch, tmp_path):
+    from grimoire.store import facts
+    cid = _campaign(monkeypatch, tmp_path)
+    old = facts.record(cid, "The ambassador trusts the party.", "night one", "s3")
+    (edit,) = _fact_row(cid, "s9", text="The ambassador thinks he was sold out.",
+                        supersedes=old)
+    # The target is the fact this row RETIRES: that is the write that can
+    # destroy something, so that is what `conflicts` has to judge.
+    assert edit["target"] == {"kind": "facts", "id": old}
+    assert edit["label"] == "Fact superseded"
+    assert edit["before"] == "active — The ambassador trusts the party."
+    assert edit["after"] == "The ambassador thinks he was sold out."
+    assert edit["payload"]["supersedes"] == old
+
+
+def test_materialize_stages_a_bare_retirement_as_a_deletion(monkeypatch, tmp_path):
+    from grimoire.store import facts
+    cid = _campaign(monkeypatch, tmp_path)
+    old = facts.record(cid, "The east gate is barred at dusk.", "", "s2")
+    (edit,) = _fact_row(cid, "s9", supersedes=old)
+    assert edit["label"] == "Fact retired"
+    assert edit["before"] == "active — The east gate is barred at dusk."
+    assert edit["after"] == ""      # the diff reads as the deletion it is
+    assert edit["payload"]["text"] == ""
+
+
+def test_a_supersedes_naming_a_fact_that_is_gone_still_stages_the_new_fact(monkeypatch, tmp_path):
+    """The snapshot offers only standing facts, so a reference to a retired or
+    missing one is the model's mistake — but the fact the scene established is
+    still true, and dropping the whole row would lose it."""
+    from grimoire.store import facts
+    cid = _campaign(monkeypatch, tmp_path)
+    gone = facts.record(cid, "The bridge stands.", "", "s1")
+    facts.retire(cid, gone, "s4")
+    for sup in (gone, "f99"):
+        (edit,) = _fact_row(cid, "s9", text="The bridge is rubble.", supersedes=sup)
+        assert edit["target"] == {"kind": "facts", "id": ""}
+        assert edit["before"] == "" and edit["label"] == "New fact"
+        assert edit["payload"]["supersedes"] == ""
+
+
+def test_retiring_a_fact_that_is_already_gone_stages_nothing(monkeypatch, tmp_path):
+    """With the supersession dropped there is no text left either, so the row
+    would be a staged edit that writes nothing."""
+    from grimoire.store import facts
+    cid = _campaign(monkeypatch, tmp_path)
+    gone = facts.record(cid, "The bridge stands.", "", "s1")
+    facts.retire(cid, gone, "s4")
+    assert _fact_row(cid, "s9", supersedes=gone) == []
+    assert _fact_row(cid, "s9", supersedes="f99") == []
+    assert _fact_row(cid, "s9") == []
+
+
+def test_one_fact_is_retired_at_most_once_per_scene(monkeypatch, tmp_path):
+    """The second row would retire a record the first already retired — moving
+    `superseded_by` off the fact that really replaced it."""
+    from grimoire.store import facts
+    cid = _campaign(monkeypatch, tmp_path)
+    old = facts.record(cid, "The bridge stands.", "", "s1")
+    parsed = absorb.parse_output(json.dumps({"facts": [
+        {"text": "The bridge is rubble.", "supersedes": old},
+        {"text": "The bridge was never there.", "supersedes": old},
+        {"supersedes": old}]}))
+    edits = absorb.materialize(cid, "s9", parsed)
+    assert [e["after"] for e in edits] == ["The bridge is rubble."]
+
+
+def test_two_new_facts_in_one_scene_both_stage(monkeypatch, tmp_path):
+    """The one-per-record rule is about the record a row RETIRES. Rows that
+    retire nothing address no record and must not collide with each other."""
+    cid = _campaign(monkeypatch, tmp_path)
+    parsed = absorb.parse_output(json.dumps({"facts": [
+        {"text": "The bridge stands."}, {"text": "The east gate is barred."}]}))
+    edits = absorb.materialize(cid, "s9", parsed)
+    assert [e["after"] for e in edits] == ["The bridge stands.", "The east gate is barred."]
+    assert len({e["id"] for e in edits}) == 2
+
+
+def test_re_absorbing_a_scene_does_not_re_stage_its_own_facts(monkeypatch, tmp_path):
+    """`POST .../absorb?force` re-proposes every fact the first pass found. A row
+    whose only possible effect is a duplicate must not reach the reviewer — the
+    `timeline.md` re-append this ledger exists to improve on."""
+    from grimoire.store import facts
+    cid = _campaign(monkeypatch, tmp_path)
+    facts.record(cid, "The bridge stands.", "the third night", "s9")
+    assert _fact_row(cid, "s9", text="  the BRIDGE stands.  ") == []
+    # ...but the same fact from a LATER scene is a second, differently dated one
+    assert len(_fact_row(cid, "s12", text="The bridge stands.")) == 1
+
+
+def test_a_replay_still_stages_a_retirement_its_first_pass_did_not_finish(monkeypatch, tmp_path):
+    """Dedup is only allowed to swallow a row that has nothing left to do. A
+    first pass that recorded the fact and did not retire its predecessor left
+    the ledger contradicting itself, and this is the row that fixes it."""
+    from grimoire.store import facts
+    cid = _campaign(monkeypatch, tmp_path)
+    old = facts.record(cid, "The bridge stands.", "", "s1")
+    facts.record(cid, "The bridge is rubble.", "", "s9")     # recorded, not linked
+    (edit,) = _fact_row(cid, "s9", text="The bridge is rubble.", supersedes=old)
+    assert edit["target"] == {"kind": "facts", "id": old}
+
+
+@pytest.mark.parametrize("body", ["{ not json", "[]", '"a string"'])
+def test_an_unreadable_fact_ledger_stages_nothing(monkeypatch, tmp_path, body):
+    """Falling back to {} would stage every supersession as an ordinary new
+    fact, hiding the retirement behind a row that claims to retire nothing."""
+    cid = _campaign(monkeypatch, tmp_path)
+    (campaigns.campaign_root(cid) / "facts.json").write_text(body, encoding="utf-8")
+    assert _fact_row(cid, "s9", text="The bridge is rubble.", supersedes="f1") == []
+
+
+@pytest.mark.parametrize("record", [
+    {"text": ["not a string"], "scene": "s1", "status": "active"},
+    {"text": "The bridge stands.", "scene": ["s1"], "status": "active"},
+    {"text": "The bridge stands.", "scene": "s1", "status": {"a": 1}},
+])
+def test_materialize_tolerates_malformed_fields_inside_a_fact(monkeypatch, tmp_path, record):
+    """facts.json is hand-editable and this runs AFTER the extraction call, so a
+    raise here turns a paid-for absorb into a 500."""
+    cid = _campaign(monkeypatch, tmp_path)
+    (campaigns.campaign_root(cid) / "facts.json").write_text(
+        json.dumps({"f1": record}), encoding="utf-8")
+    assert len(_fact_row(cid, "s9", text="The bridge is rubble.", supersedes="f1")) == 1
+
+
+def test_apply_edits_records_a_fact_and_retires_the_one_it_replaces(monkeypatch, tmp_path):
+    from grimoire.store import facts, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    old = facts.record(cid, "The ambassador trusts the party.", "night one", "s3")
+    edits = _fact_row(cid, sid, text="The ambassador thinks he was sold out.",
+                      date="night nine", supersedes=old)
+    applied, failures = absorb.apply_edits(cid, edits, sid)
+    assert applied == [f"fact:{old}"] and failures == []
+    assert facts.active(cid) == [{"id": "f2", "text": "The ambassador thinks he was sold out.",
+                                 "date": "night nine", "scene": sid}]
+    assert facts.get(cid, old)["superseded_by"] == "f2"
+    assert facts.get(cid, old)["retired_scene"] == sid
+
+
+def test_apply_edits_retires_a_fact_outright(monkeypatch, tmp_path):
+    from grimoire.store import facts, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    old = facts.record(cid, "The east gate is barred at dusk.", "", "s2")
+    applied, failures = absorb.apply_edits(cid, _fact_row(cid, sid, supersedes=old), sid)
+    assert applied == [f"fact:{old}"] and failures == []
+    assert facts.read(cid)[old]["status"] == "retired"
+    assert facts.read(cid)[old]["superseded_by"] == ""
+    assert facts.active(cid) == []
+
+
+def test_a_replacement_edited_down_to_nothing_is_refused_not_reclassified(monkeypatch, tmp_path):
+    """The row's intent comes from the staged payload, never from whether `after`
+    happens to be blank. Read the other way, a reviewer trimming the replacement
+    text would silently turn it into a bare retirement — a fact off the ledger
+    with nothing recorded in its place, which nobody asked for."""
+    from grimoire.store import facts, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    old = facts.record(cid, "The bridge stands.", "", "s1")
+    (edit,) = _fact_row(cid, sid, text="The bridge is rubble.", supersedes=old)
+    applied, failures = absorb.apply_edits(cid, [{**edit, "after": "  "}], sid)
+    assert applied == []
+    assert failures[0]["kind"] == "error" and "cannot be blank" in failures[0]["reason"]
+    assert facts.get(cid, old)["status"] == "active"     # nothing was retired
+
+
+def test_a_retirement_the_reviewer_typed_a_replacement_into_becomes_one(monkeypatch, tmp_path):
+    """The opposite direction is honoured: they wrote the fact that replaces it,
+    which is exactly what a supersession is."""
+    from grimoire.store import facts, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    old = facts.record(cid, "The bridge stands.", "", "s1")
+    (edit,) = _fact_row(cid, sid, supersedes=old)
+    applied, failures = absorb.apply_edits(
+        cid, [{**edit, "after": "The bridge is rubble."}], sid)
+    assert applied == [f"fact:{old}"] and failures == []
+    assert facts.get(cid, old)["superseded_by"] == "f2"
+    assert facts.get(cid, "f2")["text"] == "The bridge is rubble."
+
+
+def test_retiring_a_fact_the_ledger_does_not_hold_is_reported(monkeypatch, tmp_path):
+    """A hand-built or forged body naming an id nothing holds. Reported rather
+    than skipped: the reviewer approved it and would otherwise read the save as
+    a success."""
+    from grimoire.store import scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    applied, failures = absorb.apply_edits(cid, [
+        {"id": "fact:f7", "kind": "fact", "target": {"kind": "facts", "id": "f7"},
+         "field": "text", "after": "",
+         "payload": {"text": "", "date": "", "supersedes": "f7", "scene": sid}}], sid)
+    assert applied == []
+    assert failures[0]["kind"] == "error"
+    assert "not standing on this campaign's ledger" in failures[0]["reason"]
+
+
+def test_a_fact_row_that_writes_nothing_is_skipped_not_failed(monkeypatch, tmp_path):
+    """Neither text nor a fact to retire: nothing was written and nothing was
+    lost, which is the difference `_apply_one` draws between skipped and failed."""
+    from grimoire.store import facts, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    applied, failures = absorb.apply_edits(cid, [
+        {"id": "fact:x", "kind": "fact", "target": {"kind": "facts", "id": ""},
+         "field": "text", "after": "",
+         "payload": {"text": "", "date": "", "supersedes": "", "scene": sid}}], sid)
+    assert applied == [] and failures == []
+    assert facts.read(cid) == {}
+
+
+def test_a_fact_edit_writes_where_its_target_says(monkeypatch, tmp_path):
+    """`conflicts` surveyed the target and the reviewer's basis describes it, so
+    a payload naming a different record must not be the one that gets retired."""
+    from grimoire.store import facts, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    judged = facts.record(cid, "The bridge stands.", "", "s1")
+    other = facts.record(cid, "The east gate is barred.", "", "s1")
+    applied, _ = absorb.apply_edits(cid, [
+        {"id": "fact:x", "kind": "fact", "target": {"kind": "facts", "id": judged},
+         "field": "text", "before": "active — The bridge stands.",
+         "after": "The bridge is rubble.",
+         "payload": {"text": "The bridge is rubble.", "date": "",
+                     "supersedes": other, "scene": sid}}], sid)
+    assert applied == ["fact:x"]
+    assert facts.get(cid, judged)["status"] == "retired"
+    assert facts.get(cid, other)["status"] == "active"
+
+
+def test_facts_are_not_browsable_record_changes(monkeypatch, tmp_path):
+    """Like plot movements and commitments, a fact is not a record with a page
+    to open, so it must not turn up in the Changes panel's per-record diffs."""
+    from grimoire.store import changes, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    absorb.apply_edits(cid, _fact_row(cid, sid, text="The bridge stands."), sid)
+    assert changes.read(cid) == {}
+
+
+def test_a_fact_edit_follows_a_scene_renamed_between_absorb_and_save(monkeypatch, tmp_path):
+    """`facts.repoint_scenes` has already moved every stored reference onto the
+    new id, so a retry must stamp the fact with the id the scene has now."""
+    from grimoire.store import facts, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    (edit,) = _fact_row(cid, sid, text="The bridge stands.")
+    absorb.apply_edits(cid, [edit], "002--renamed")
+    assert facts.active(cid)[0]["scene"] == "002--renamed"

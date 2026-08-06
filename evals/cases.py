@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Callable
 
 from grimoire.store import (appearances, campaigns, characters, checks, chronicle,
-                            commitments, config, context, entities, groupstate,
+                            commitments, config, context, entities, facts, groupstate,
                             lengths, pcs, playstate, plot, relationships,
                             response_presets, scenes, sheets, worlds)
 from grimoire.store import absorb as absorb_store
@@ -292,6 +292,8 @@ def build_absorb() -> dict:
     commitments.set_movement(cid, "the-midnight-deadline", "Seraphine's midnight deadline",
                              "threat", "open", "midnight",
                              "Seraphine gave Winifred until midnight and no further.", sid)
+    facts.record(cid, "Seraphine Vale holds the lease on the Night Dock warehouse.",
+                 "since the spring floods", sid)
 
     scenes.append_message(cid, sid, "user", "Whose crates are those?", speaker="Winifred")
     scenes.append_reply(cid, sid, [
@@ -412,7 +414,8 @@ def _absorb_prompt(ctx: dict) -> list[dict]:
                                      absorb_store.relationships_snapshot(cid, sid),
                                      absorb_store.plot_snapshot(cid),
                                      absorb_store.group_snapshot(cid),
-                                     absorb_store.commitment_snapshot(cid))
+                                     absorb_store.commitment_snapshot(cid),
+                                     absorb_store.fact_snapshot(cid))
 
 
 CASES: tuple[Case, ...] = (

@@ -1,0 +1,4 @@
+{#- One standing fact, absorb-prompt form (leads with the id so the model can
+    cite it in "supersedes"). Vars: f ({id, text, date}). -#}
+{{ f.id }}: {{ f.text }}
+{%- if f.date %} ({{ f.date }}){% endif -%}

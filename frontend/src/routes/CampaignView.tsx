@@ -86,7 +86,7 @@ const PHASE_LABELS: Record<AbsorbPhase["name"], string> = {
 // Staged edit kinds whose payload stamps the scene the beat came from, and so
 // have to follow a scene rename made while the review is open — see
 // `reviewSceneRenamed`.
-const SCENE_STAMPED: StagedEdit["kind"][] = ["plot", "commitment"];
+const SCENE_STAMPED: StagedEdit["kind"][] = ["plot", "commitment", "fact"];
 
 // The dossier phase has five distinguishable bad endings and the wording has to
 // match the edit list beside it: "prepared", never "refreshed" (a dossier is
@@ -798,9 +798,13 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   //   - `absorbSid`, the id an open review's save and audit retry POST;
   //   - `payload.scene` on each staged plot or commitment edit, which
   //     absorb.materialize embedded and apply_edits passes straight to
-  //     plot.set_movement / commitments.set_movement — so a save after a rename
-  //     would append beats pointing at a scene that is gone. Both kinds, because
-  //     both stamp the beat with the scene it came from (#115);
+  //     plot.set_movement / commitments.set_movement / facts.record — so a save
+  //     after a rename would file the movement under a scene that is gone. All
+  //     three kinds, because each stamps its record with the scene it came from
+  //     (#115, #114). A fact row needs nothing beyond its payload: its staged
+  //     `before` is a `conflicts.fact_line`, which carries no scene id at all —
+  //     deliberately, so that the whole class of staleness the commitment
+  //     fingerprint forces on this function cannot arise for facts;
   //   - the staged CONFLICT BASIS of a commitment row. `conflicts.commitment_line`
   //     ends `[N beats, last moved in <scene>]`, and `scene_refs.repoint` rewrites
   //     that scene id in the stored record — so a row left holding the old id no

@@ -848,3 +848,113 @@ def test_a_resume_does_not_mistake_another_record_holding_the_same_text(monkeypa
     assert [(f["id"], f["kind"]) for f in failures] == [("lore:the-ledger", "error"),
                                                         ("lore:the-charter", "conflict")]
     assert overlay.read_entity(cid, "lore", "the-charter")["body"].strip() == shared
+
+
+# --- the fact ledger (#114) ---------------------------------------------------
+
+def _staged_fact(cid, sid, **row):
+    from grimoire.store import absorb as absorb_pkg
+    import json as _json
+    parsed = absorb_pkg.parse_output(_json.dumps({"facts": [row]}))
+    (edit,) = absorb_pkg.materialize(cid, sid, parsed)
+    return edit
+
+
+def test_a_fact_retired_between_staging_and_saving_is_reported(monkeypatch, tmp_path):
+    """Two reviews can be open on the same fact, and the second must not retire a
+    record the first already retired — that would re-aim `superseded_by` away
+    from the fact that really replaced it, with nothing on screen to say so."""
+    from grimoire.store import facts
+    cid = _campaign(monkeypatch, tmp_path)
+    old = facts.record(cid, "The bridge stands.", "", "s1")
+    edit = _staged_fact(cid, "s9", text="The bridge is rubble.", supersedes=old)
+
+    facts.record(cid, "The bridge is a ford now.", "", "s8", supersedes=old)   # elsewhere
+
+    applied, failures = absorb.apply_edits(cid, [edit], "s9")
+    assert applied == []
+    assert failures[0]["kind"] == "conflict"
+    assert failures[0]["reason"] == conflicts._REASONS["fact"]
+    # and the reviewer is shown what it says now versus what they approved
+    (row,) = conflicts.check_conflicts(cid, [edit])
+    assert row["stored"].startswith("retired (superseded by ")
+    assert row["before"] == "active — The bridge stands."
+    assert row["mergeable"] is False
+
+
+def test_a_fact_that_did_not_move_applies(monkeypatch, tmp_path):
+    from grimoire.store import facts
+    cid = _campaign(monkeypatch, tmp_path)
+    old = facts.record(cid, "The bridge stands.", "", "s1")
+    edit = _staged_fact(cid, "s9", text="The bridge is rubble.", supersedes=old)
+    assert conflicts.check_conflicts(cid, [edit]) == []
+    applied, failures = absorb.apply_edits(cid, [edit], "s9")
+    assert applied == [f"fact:{old}"] and failures == []
+
+
+def test_a_fact_row_that_retires_nothing_is_never_conflicted(monkeypatch, tmp_path):
+    """It creates a record and overwrites none, so there is nothing that could
+    have drifted — the silence `new_lore` keeps by staying out of `_REASONS`
+    entirely. This kind cannot: one kind covers both, and only the row can say
+    which it is."""
+    cid = _campaign(monkeypatch, tmp_path)
+    edit = _staged_fact(cid, "s9", text="The bridge stands.")
+    assert conflicts.survey(cid, edit) == (None, None)
+
+
+def test_a_fact_answered_over_a_conflict_lands_without_re_aiming_the_retirement(
+        monkeypatch, tmp_path):
+    """First writer wins the `superseded_by` pointer. Answering the conflict
+    gets the reviewer's fact onto the ledger — it is true, and the scene
+    established it — but not at the cost of erasing the only record of what
+    actually replaced the old fact first. Both replacements stand; a human can
+    retire the one the story did not keep."""
+    from grimoire.store import facts
+    cid = _campaign(monkeypatch, tmp_path)
+    old = facts.record(cid, "The bridge stands.", "", "s1")
+    edit = _staged_fact(cid, "s9", text="The bridge is rubble.", supersedes=old)
+    first = facts.record(cid, "The bridge is a ford now.", "", "s8", supersedes=old)
+    (row,) = conflicts.check_conflicts(cid, [edit])
+
+    applied, failures = absorb.apply_edits(
+        cid, [{**edit, "resolve": "replace", "resolve_from": row["stored"]}], "s9")
+    assert applied == [f"fact:{old}"] and failures == []
+    assert facts.get(cid, old)["superseded_by"] == first
+    assert facts.get(cid, old)["retired_scene"] == "s8"
+    assert [f["text"] for f in facts.active(cid)] == ["The bridge is a ford now.",
+                                                      "The bridge is rubble."]
+
+
+def test_a_retirement_answered_over_a_conflict_reports_rather_than_restamping(
+        monkeypatch, tmp_path):
+    """A bare retirement has nothing left to write once something else retired
+    the fact, and the reviewer has to be told: the end state they asked for
+    holds, but this scene is not what brought it about."""
+    from grimoire.store import facts
+    cid = _campaign(monkeypatch, tmp_path)
+    old = facts.record(cid, "The bridge stands.", "", "s1")
+    edit = _staged_fact(cid, "s9", supersedes=old)
+    facts.retire(cid, old, "s8")
+    (row,) = conflicts.check_conflicts(cid, [edit])
+
+    applied, failures = absorb.apply_edits(
+        cid, [{**edit, "resolve": "replace", "resolve_from": row["stored"]}], "s9")
+    assert applied == []
+    assert "already retired" in failures[0]["reason"]
+    assert facts.get(cid, old)["retired_scene"] == "s8"   # not restamped to s9
+
+
+def test_fact_line_is_a_complete_fingerprint_of_what_can_move(monkeypatch, tmp_path):
+    """A fact's text and date never change once recorded, so `status` and
+    `superseded_by` are the only fields any mutator touches. No beat count and
+    no scene stamp — which is also what keeps a scene id out of the staged
+    `before`, and the rename-repointing `commitment_line` forces on the review
+    panel out of this kind."""
+    assert conflicts.fact_line({"text": "The bridge stands.", "status": "active",
+                                "scene": "001--s"}) == "active — The bridge stands."
+    assert conflicts.fact_line({"text": "The bridge stands.", "status": "retired",
+                                "superseded_by": "f7"}) == \
+        "retired (superseded by f7) — The bridge stands."
+    # coerced, not trusted: facts.json is hand-editable
+    assert conflicts.fact_line({"text": ["nope"], "status": {"a": 1},
+                                "superseded_by": 7}) == "active"
