@@ -136,11 +136,16 @@ def _persist_reply(cid: str, sid: str, text: str) -> None:
     # acquisitions inside each call cost nothing. `reconcile` writes nothing for
     # a reply that lands anywhere else, which is every ordinary turn.
     with store.locks.campaign_lock(cid):
-        # Read before the append, under the same lock, so the index the ledger
-        # entry is filed at is the one this generation's last post really took.
-        landed = len(store.scenes.read_scene(cid, sid)["messages"]) if tracked else 0
+        # Read before the append, under the same lock, so the index is the one
+        # this generation's posts really take. Skipped entirely when there is
+        # neither a block to file nor a ledger to clean up, which is every turn
+        # on an install that leaves the feature off: the guard is a `stat`, and
+        # what it avoids is re-parsing the whole transcript.
+        landed = (len(store.scenes.read_scene(cid, sid)["messages"])
+                  if tracked or store.turnstate.read(cid).get(sid) else None)
         store.scenes.append_reply(cid, sid, segments)
-        _record_turnstate(cid, sid, landed, segments, tracked)
+        if landed is not None:
+            _record_turnstate(cid, sid, landed, segments, tracked)
         try:
             store.alternates.reconcile(cid, sid)
         except OSError:
@@ -158,10 +163,14 @@ def _persist_reply(cid: str, sid: str, text: str) -> None:
 
 def _record_turnstate(cid: str, sid: str, landed: int, segments: list[dict],
                       tracked: dict) -> None:
-    """File a reply's tracker block against the index of its LAST post.
+    """Retire what this generation displaces, then file its tracker block
+    against the index of its LAST post.
+
+    `supersede` runs whether or not there is a block, because the case it exists
+    for is a reroll whose replacement has none -- see its docstring.
 
     `append_reply` drops blank segments, so the count is recomputed the same
-    way here rather than assumed -- an entry filed past the transcript's end is
+    way here rather than assumed: an entry filed past the transcript's end is
     one `entries()` then discards, silently losing the turn it describes.
 
     Never fatal. A ledger that cannot be written must not turn a landed
@@ -171,10 +180,11 @@ def _record_turnstate(cid: str, sid: str, landed: int, segments: list[dict],
     Exactly the judgement `reconcile` below already makes, and the cost is
     smaller -- a lost mood, not a lost variant.
     """
-    kept = sum(1 for s in segments if s["content"].strip())
-    if not tracked or not kept:
-        return
     try:
+        store.turnstate.supersede(cid, sid, landed)
+        kept = sum(1 for s in segments if s["content"].strip())
+        if not tracked or not kept:
+            return
         states = store.turnstate.resolve(tracked, store.appearances.scene_cast(cid, sid))
         store.turnstate.record(cid, sid, landed + kept - 1, states)
     except OSError:
