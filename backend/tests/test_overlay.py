@@ -3,8 +3,9 @@ from pathlib import Path
 
 import pytest
 
-from grimoire.store import (assets, atomic, campaigns, characters, entities, failsoft, greetings,
-                            groupstate, overlay, pcs, playstate, sync, taglines, worlds)
+from grimoire.store import (appearances, assets, atomic, campaigns, characters, entities, failsoft,
+                            greetings, groupstate, overlay, pcs, playstate, sync, taglines,
+                            voice_anchors, worlds)
 from grimoire.store.campaigns import read as campaigns_read
 
 
@@ -950,3 +951,128 @@ def test_a_leftover_record_directory_reserves_its_slug(monkeypatch, tmp_path):
     (wroot / "groups" / f"{gid}.md").unlink()                     # hand-deleted; dir remains
 
     assert entities.create_entity(wroot, "groups", "Salt Circle") == f"{gid}-2"
+
+
+# ---- Codex review: detaching a spared copy, in every direction the id reaches ----
+
+def _spared(monkeypatch, tmp_path):
+    """A campaign that owns a copy of a world character the world then deletes."""
+    wroot, cid, croot = _dependent(monkeypatch, tmp_path)
+    aid, vid = characters.create_character(wroot, "Winifred", "default",
+                                           {"data": {"name": "Winifred", "description": "the old one"}})
+    taglines.write(wroot, aid, "The old one.")
+    assets.put_image(wroot, aid, vid, assets.AVATAR, PNG, "png")
+    overlay.materialize_actor(cid, "characters", aid)
+    return wroot, cid, croot, aid, vid
+
+
+def test_a_spared_copy_is_recorded_as_detached(monkeypatch, tmp_path):
+    wroot, cid, _croot, aid, _vid = _spared(monkeypatch, tmp_path)
+    characters.delete_character(wroot, aid)
+    overlay.forget_world_record(wroot, "characters", aid)
+    assert f"characters/{aid}" in overlay.detached(cid)
+
+
+def test_a_detached_record_takes_nothing_from_the_slug_s_next_owner(monkeypatch, tmp_path):
+    """Images, tagline and voice anchor all resolve by id, independently of
+    sync.md -- so dropping the base alone left three open doors."""
+    wroot, cid, _croot, aid, vid = _spared(monkeypatch, tmp_path)
+    characters.delete_character(wroot, aid)
+    overlay.forget_world_record(wroot, "characters", aid)
+
+    characters.create_character(wroot, "Winifred", "default",
+                                {"data": {"name": "Winifred", "description": "a stranger"}})
+    taglines.write(wroot, aid, "A stranger.")
+    voice_anchors.write(wroot, aid, "The stranger's voice.")
+    assets.put_image(wroot, aid, vid, assets.AVATAR, PNG + b"stranger", "png")
+
+    assert overlay.tagline(cid, aid) == ""
+    assert overlay.voice_anchor(cid, aid) == ""
+    assert overlay.list_images(cid, aid, vid) == []
+    assert overlay.image_root(cid, aid, vid, assets.AVATAR) == campaigns.campaign_root(cid)
+    assert overlay.read_focus(cid, aid, vid) is None
+
+
+def test_a_detached_version_lock_is_not_offered_the_strangers_card(monkeypatch, tmp_path):
+    """The lock's base lives in appearances.json, not sync.md, so `accept` used
+    to copy an unrelated world card over the locked version."""
+    wroot, cid, croot, aid, vid = _spared(monkeypatch, tmp_path)
+    appearances.appear(cid, "s1", "characters", aid, vid, "npc")
+    playstate.write_state(croot, aid, "## Knows\nWhere the ledger is hidden.")
+
+    characters.delete_character(wroot, aid)
+    overlay.forget_world_record(wroot, "characters", aid)
+    characters.create_character(wroot, "Winifred", "default",
+                                {"data": {"name": "Winifred", "description": "a stranger"}})
+
+    assert [p for p in sync.incoming(cid) if p["ref"]["id"] == aid] == []
+    assert characters.read_card(croot, aid, vid)["data"]["description"] == "the old one"
+    assert playstate.read_state(croot, aid)["knows"] == "Where the ledger is hidden."
+
+
+def test_a_detached_record_does_not_promote_a_strangers_image(monkeypatch, tmp_path):
+    wroot, cid, croot, aid, vid = _spared(monkeypatch, tmp_path)
+    characters.delete_character(wroot, aid)
+    overlay.forget_world_record(wroot, "characters", aid)
+    characters.create_character(wroot, "Winifred")
+    assets.put_image(wroot, aid, vid, "gallery_1", PNG + b"stranger", "png")
+
+    with pytest.raises(FileNotFoundError):
+        overlay.promote_image(cid, aid, vid, "gallery_1")
+    assert overlay.list_images(cid, aid, vid) == []
+
+
+def test_the_sweep_clears_asset_tombstones_of_the_record_it_removes(monkeypatch, tmp_path):
+    """A per-asset tombstone hides by SLOT, so an avatar the campaign deleted
+    for the old record would blank the next record-of-that-name's avatar."""
+    wroot, cid, croot = _dependent(monkeypatch, tmp_path)
+    aid, vid = characters.create_character(wroot, "Winifred")
+    assets.put_image(wroot, aid, vid, assets.AVATAR, PNG, "png")
+    overlay.delete_image(cid, aid, vid, assets.AVATAR)
+    assert f"assets/characters/{aid}/{vid}/{assets.AVATAR}" in overlay.deleted(cid)
+
+    characters.delete_character(wroot, aid)
+    overlay.forget_world_record(wroot, "characters", aid)
+    assert f"assets/characters/{aid}/{vid}/{assets.AVATAR}" not in overlay.deleted(cid)
+
+    characters.create_character(wroot, "Winifred")
+    assets.put_image(wroot, aid, vid, assets.AVATAR, PNG + b"new", "png")
+    assert [i["name"] for i in overlay.list_images(cid, aid, vid)] == [assets.AVATAR]
+
+
+def test_matching_plot_maps_do_not_become_a_conflict_with_itself(monkeypatch, tmp_path):
+    """Both maps get the same edit, so they still match -- but sync.md holds the
+    pre-delete hash, which showed as a conflict whose two sides were identical."""
+    wroot, cid, croot = _dependent(monkeypatch, tmp_path)
+    aid, _vid = characters.create_character(wroot, "Winifred")
+    doomed = greetings.create_greeting(wroot, "Arrival", aid, "default", "hi")
+    other = greetings.create_greeting(wroot, "Departure", aid, "default", "bye")
+    greetings.set_edges(wroot, other, leads_to=[doomed], excludes=[])
+    overlay.materialize_plotmap(cid)          # byte-identical to the world's
+
+    greetings.delete_greeting(wroot, doomed)
+    overlay.forget_world_record(wroot, "greetings", doomed)
+    assert [p for p in sync.incoming(cid) if p["ref"]["kind"] == "plotmap"] == []
+
+
+def test_a_malformed_campaign_plot_map_does_not_abort_the_sweep(monkeypatch, tmp_path):
+    """`json.loads` raises JSONDecodeError -- a ValueError, not a decode error."""
+    wroot, cid, croot = _dependent(monkeypatch, tmp_path)
+    aid, _vid = characters.create_character(wroot, "Winifred")
+    gid = greetings.create_greeting(wroot, "Arrival", aid, "default", "hi")
+    overlay.materialize_plotmap(cid)
+    (croot / "plotmap.json").write_text("{not json", encoding="utf-8")
+
+    greetings.delete_greeting(wroot, gid)
+    overlay.forget_world_record(wroot, "greetings", gid)      # does not raise
+
+
+def test_a_leftover_greeting_directory_reserves_its_slug(monkeypatch, tmp_path):
+    """The sweep is best-effort, so a locked asset can leave the directory."""
+    wroot, _cid, _croot = _dependent(monkeypatch, tmp_path)
+    aid, _vid = characters.create_character(wroot, "Winifred")
+    gid = greetings.create_greeting(wroot, "Arrival", aid, "default", "hi")
+    assets.put_image(wroot, gid, "default", "embed-1", PNG, "png", base="greetings")
+    (wroot / "greetings" / f"{gid}.md").unlink()
+
+    assert greetings.create_greeting(wroot, "Arrival", aid, "default", "hi") == f"{gid}-2"
