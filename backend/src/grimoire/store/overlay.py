@@ -27,18 +27,28 @@ sheets/, proposals/, and the per-actor sidecars filed inside an actor dir
 (dossier.md, state.md, voice_drift.md). tagline.md and voice_anchor.md are the
 exceptions among sidecars -- both are world-level identity, so both overlay per
 file, via `tagline()` / `voice_anchor()` below.
+
+Campaign-local, though, does not mean campaign-lifetime: those sidecars are
+filed under a record id, and an id outlives the record it named. Deleting a
+record frees its slug, so the next create hands the same id back -- which is
+what `forget_world_record` (at the bottom) exists to get in front of.
 """
 
 from __future__ import annotations
 
 import json
+import logging
+import shutil
 from contextlib import contextmanager
 from pathlib import Path
 
 from . import (assets, atomic, cards, characters, entities, failsoft, greetings,
-               groupstate, pcs, taglines, voice_anchors)
+               pcs, taglines, voice_anchors)
 from .campaigns import paths as campaigns_paths, read as campaigns_read
-from .paths import natural_key
+from .worlds import paths as worlds_paths
+from .paths import natural_key, safe_id
+
+log = logging.getLogger(__name__)
 
 #: Record kinds a campaign inherits from its world. A `<campaign>/<kind>/...`
 #: read for one of these is only correct through this module (or after the
@@ -233,19 +243,7 @@ def delete_entity(cid: str, kind: str, eid: str) -> None:
             raise
     if in_world:
         add_deleted(cid, ref)   # keep the world's copy from showing through
-    if kind == "groups":
-        _delete_group_state(cid, eid)
-
-
-def _delete_group_state(cid: str, gid: str) -> None:
-    """Campaign-local state.md is never inherited from the world (state is
-    campaign-local by definition), so it must die with the group record —
-    otherwise a same-slug recreate silently reattaches the dead group's
-    Secrets to scene context."""
-    p = groupstate.state_path(croot_of(cid), gid)
-    p.unlink(missing_ok=True)
-    if p.parent.exists() and not any(p.parent.iterdir()):
-        p.parent.rmdir()
+    _drop_record_dir(croot_of(cid), kind, eid)
 
 
 # ---- greetings + plot map ----
@@ -654,3 +652,88 @@ def voice_anchor(cid: str, char_id: str) -> str:
     property), but a campaign that has materialized its own copy of the
     character is entitled to its own reference text -- or to none."""
     return voice_anchor_record(cid, char_id)["text"]
+
+
+# ---- world-side deletes: nothing outlives the record it was filed beside ----
+
+def _record_dir(root: Path, kind: str, rid: str) -> Path:
+    """`<root>/<kind>/<rid>/` — the directory a record's *neighbours* live in.
+
+    Flat records are a file (`<kind>/<rid>.md`) with a sibling directory; actors
+    are the directory. Either way this holds everything filed under the record's
+    id rather than inside it: an actor's campaign-local sidecars (state.md,
+    dossier.md, voice_drift.md), a group's state.md, and any kind's `assets/`.
+    """
+    return root / kind / rid
+
+
+def _drop_record_dir(root: Path, kind: str, rid: str) -> None:
+    """Remove `_record_dir`, if there is one.
+
+    The id is the only thing tying those files to their record, and ids are
+    handed out by slug (`entities.create_entity` / `characters.create_character`
+    uniquify against what exists *now*), so a record deleted and recreated under
+    the same name gets the same id back. Anything left behind is then adopted by
+    a new, unrelated record — for a group's state.md that means a dead group's
+    Secrets in a live scene's context (#225).
+
+    A failure to remove is logged rather than raised: the record itself is
+    already gone by the time this runs, and turning a completed delete into a
+    500 helps nobody. What is left behind is the pre-#225 behaviour, not a new
+    failure mode.
+    """
+    if kind not in INHERITED_KINDS or not safe_id(rid):
+        return
+    d = _record_dir(root, kind, rid)
+    if not d.is_dir():
+        return
+    try:
+        shutil.rmtree(d)
+    except OSError as exc:
+        log.warning("could not remove %s (%s) -- a record recreated under the id "
+                    "%r will inherit what is still in it", d, exc, rid)
+
+
+def dependent_campaigns(wroot: Path) -> list[str]:
+    """Ids of the campaigns that inherit from `wroot`.
+
+    `list_campaigns`, not `campaigns.read.world_refs`: this is the opposite of
+    `worlds.delete_world`'s in-use check, which must over-include because
+    missing a campaign there destroys a world still in use. Missing one here
+    leaves that campaign exactly as it was before this function existed, so the
+    listing that agrees with the resolvers is the right one to sweep.
+    """
+    return [c["id"] for c in campaigns_read.list_campaigns()
+            if worlds_paths.references_world(c["world"], wroot)]
+
+
+def forget_world_record(wroot: Path, kind: str, rid: str) -> None:
+    """Sweep what a world-side delete of `<kind>/<rid>` leaves reachable only
+    by its id. Call it *after* the delete, from every world route that removes
+    an inheritable record.
+
+    Two places keep such leftovers:
+
+    - the world's own `_record_dir` — `entities.delete_entity` unlinks the
+      `.md` and nothing else, so the record's images survive it;
+    - each dependent campaign's `_record_dir`, holding state the campaign filed
+      against a record it only ever *inherited*. That state is campaign-local by
+      definition, so no sync ever removes it, and a world-side delete leaves it
+      unreachable but intact — until the next same-name create hands the id
+      back and it re-attaches to a record it knows nothing about (#225).
+
+    A campaign that materialized its own copy is left alone: its record did not
+    go anywhere, so its state is still the state of something it has. That is
+    also why the sweep cannot simply run for every campaign — deleting a
+    world record has never removed a campaign's copy of it (`sync.incoming`
+    skips world-side deletions), and this is not the change that starts.
+    """
+    _drop_record_dir(wroot, kind, rid)
+    for cid in dependent_campaigns(wroot):
+        croot = croot_of(cid)
+        if kind in ("characters", "pcs"):
+            mine = (croot / kind / rid / _actor_meta(kind)).exists()
+        else:
+            mine = _flat_path(croot, kind, rid).exists()
+        if not mine:
+            _drop_record_dir(croot, kind, rid)
