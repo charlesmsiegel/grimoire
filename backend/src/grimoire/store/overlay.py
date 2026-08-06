@@ -310,6 +310,7 @@ def delete_greeting(cid: str, gid: str) -> None:
         greetings.remove_from_plotmap(croot_of(cid), gid)
     if in_world:
         add_deleted(cid, ref)
+    _drop_record_dir(croot_of(cid), "greetings", gid)
 
 
 def read_plotmap(cid: str) -> dict:
@@ -731,11 +732,19 @@ def forget_world_record(wroot: Path, kind: str, rid: str) -> None:
     world record has never removed a campaign's copy of it (`sync.incoming`
     skips world-side deletions), and this is not the change that starts.
 
-    What this does NOT reach is campaign-local state keyed by the record id from
-    *outside* the record's directory: `sheets/`, `relationships.json`,
-    `appearances.json`, and the `deleted.json` tombstone that now hides a
-    recreated record rather than adopting it. Each is a separate store with its
-    own semantics, and sweeping them is the dependents design #52 carries.
+    Two limits, both deliberate. What this does NOT reach is campaign-local
+    state keyed by the record id from *outside* the record's directory:
+    `sheets/`, `relationships.json`, `appearances.json`, and the `deleted.json`
+    tombstone that now hides a recreated record rather than adopting it. Each is
+    a separate store with its own semantics, and sweeping them is the dependents
+    design #52 carries.
+
+    And being driven by the delete, this only sees campaigns that exist when the
+    delete happens: state restored from a backup taken before it, or carried in
+    from a store that never saw it, re-attaches exactly as it used to. Closing
+    that needs identity rather than an event -- #225's other suggestion, a
+    creation nonce stamped into the record and its state -- which is a store
+    format change, and a much larger one than the bug in front of us.
 
     The enumeration is best-effort for the same reason the removal is: a store
     holding one campaign nobody can read must not make a world record

@@ -185,6 +185,9 @@ def post_world_instantiate(wid: str, kind: str, mid: str, content_id: str):
         except (store.modules.ModuleNotFound, store.sheets.SheetError) as e:
             # Sheet write failed after the entity was already created -- roll
             # it back so a failed instantiate leaves no sheetless orphan.
+            # Deliberately no `forget_world_record` here, unlike the delete
+            # routes: this restores the state before the create, and anything
+            # sitting under `eid` was already sitting there then (#225).
             store.entities.delete_entity(root, kind, eid)
             raise HTTPException(status_code=400, detail=str(e))
     return {"id": eid}
