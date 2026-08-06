@@ -268,6 +268,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
       setAddActorId("");
       await reloadCast();
       onSceneChanged();
+      askRolling();   // a join/leave appends a transition post (#85)
     } catch (err: any) {
       setError(err.detail ?? String(err));
     }
@@ -279,6 +280,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
       await api.removeFromCast(cid, sid, a.kind, a.id);
       await reloadCast();
       onSceneChanged();
+      askRolling();   // a join/leave appends a transition post (#85)
     } catch (err: any) {
       setError(err.detail ?? String(err));
     }
@@ -316,7 +318,16 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
     // would flash "No summary yet" over a summary that is about to come back.
     // The stamp below is what makes that safe.
     api.getRollingSummary(cid, sid)
-      .then((data) => { if (mine()) setRolling({ key, data }); })
+      .then((data) => {
+        if (!mine()) return;
+        setRolling({ key, data });
+        // A read that arrived is also the answer to an earlier failure. Review
+        // caught that keying the banner by record was not enough on its own: a
+        // manual refold can fail and a later automatic one succeed, and the
+        // banner would go on reporting a failure the panel has since recovered
+        // from — over the very summary that proves it did.
+        setRollingError((e) => (e?.key === key ? null : e));
+      })
       .catch(() => { if (mine()) setRollingUnread(true); });
     reloadWhen();
     reloadCfg();
@@ -438,6 +449,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
       setLocPick("");
       await api.getSceneLocation(cid, sid).then(setSetting).catch(() => setSetting(null));
       onSceneChanged(); // surface the location-transition line in the stream
+      askRolling();     // ...which is a post, and may be the Nth (#85)
     } catch (err: any) {
       setError(err.detail ?? String(err));
     }
@@ -458,6 +470,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
       }
       await reloadWhen();
       onSceneChanged();  // surface the "Time passes…" transition line in the stream
+      askRolling();      // ...which is a post, and may be the Nth (#85)
     } catch (err: any) {
       setError(err.detail ?? String(err));
     } finally {
@@ -477,6 +490,30 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   const shownTurns = useMemo(
     () => (turns && turns.cid === cid && turns.sid === sid ? turns.rows : []),
     [turns, cid, sid]);
+  // A transition line is a post like any other: a location move, a time advance
+  // and a cast join/leave all append one (`scenes/moment.py`,
+  // `appearances/transitions.py`), so any of them can be the post that crosses
+  // the threshold. `onSceneChanged` only re-READS — a GET never evaluates the
+  // gate — so review was right that leaving these out let a transition-crossed
+  // threshold sit until some later generated turn. The reason given for
+  // omitting them last round (that `refreshKey` would cover it) was simply
+  // wrong.
+  //
+  // Not forced, so this is the same cheap question the play loop asks: a scene
+  // short of the threshold answers `refreshed: false` having reached no
+  // provider. Not awaited, and its rejection swallowed — none of these actions
+  // should fail because a summary could not be written.
+  function askRolling() {
+    const key = `${cid}/${sid}`;
+    api.refreshRollingSummary(cid, sid)
+      .then((data) => {
+        if (currentKey.current !== key || !data.refreshed) return;
+        writeSeq.current += 1;
+        setRolling({ key, data });
+      })
+      .catch(() => {});
+  }
+
   async function refreshRolling() {
     setRollingError(null);
     // Captured OUTSIDE the try, so success, failure and the `finally` all judge
