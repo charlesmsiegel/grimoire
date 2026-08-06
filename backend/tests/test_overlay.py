@@ -1218,3 +1218,85 @@ def test_the_sweep_rechecks_the_campaign_it_is_about_to_touch(monkeypatch, tmp_p
     entities.delete_entity(wroot, "groups", gid)
     overlay.forget_world_record(wroot, "groups", gid)
     assert groupstate.read_state(croot, gid) is not None
+
+
+# ---- Codex review: detachment must not overreach either ----
+
+def test_a_campaigns_own_plot_map_keeps_its_detached_greetings_edges(monkeypatch, tmp_path):
+    """Filtering belongs to an INHERITED map. A campaign-local one names the
+    campaign's own greetings, and its edges are relationships it authored."""
+    wroot, cid, croot = _dependent(monkeypatch, tmp_path)
+    aid, _vid = characters.create_character(wroot, "Winifred")
+    gid = greetings.create_greeting(wroot, "Arrival", aid, "default", "hi")
+    other = greetings.create_greeting(wroot, "Departure", aid, "default", "bye")
+    overlay.update_greeting(cid, gid, body="the campaign's own")
+    overlay.set_edges(cid, other, leads_to=[gid])          # materializes the campaign map
+
+    greetings.delete_greeting(wroot, gid)
+    overlay.forget_world_record(wroot, "greetings", gid)
+    assert f"greetings/{gid}" in overlay.detached(cid)
+    assert overlay.read_plotmap(cid)[other]["leads_to"] == [gid]   # still the campaign's
+
+
+def test_reattaching_clears_asset_tombstones_left_while_detached(monkeypatch, tmp_path):
+    wroot, cid, croot = _dependent(monkeypatch, tmp_path)
+    gid = entities.create_entity(wroot, "groups", "Salt Circle")
+    overlay.materialize_entity(cid, "groups", gid)
+    entities.delete_entity(wroot, "groups", gid)
+    overlay.forget_world_record(wroot, "groups", gid)
+
+    again = entities.create_entity(wroot, "groups", "Salt Circle")
+    assets.put_image(wroot, again, "default", assets.AVATAR, PNG, "png", base="groups")
+    overlay.delete_image(cid, gid, "default", assets.AVATAR, base="groups")   # hides the slot
+
+    overlay.delete_entity(cid, "groups", gid)             # reattaches to the replacement
+    assert [i["name"] for i in overlay.list_images(cid, again, "default", base="groups")] \
+        == [assets.AVATAR]
+
+
+def test_saving_a_voice_anchor_on_a_detached_character_is_not_a_no_op(monkeypatch, tmp_path):
+    """The no-op shortcut compares against the INHERITED anchor -- a stranger's,
+    once the slug has been recreated, so the save was silently discarded."""
+    wroot, cid, croot, aid, _vid = _spared(monkeypatch, tmp_path)
+    characters.delete_character(wroot, aid)
+    overlay.forget_world_record(wroot, "characters", aid)
+    characters.create_character(wroot, "Winifred")
+    voice_anchors.write(wroot, aid, "The stranger's voice.")
+
+    overlay.set_voice_anchor(cid, aid, "The stranger's voice.")   # same words, different record
+    assert overlay.voice_anchor(cid, aid) == "The stranger's voice."
+    assert voice_anchors.read(croot, aid) == "The stranger's voice."   # actually persisted
+
+
+def test_a_ledger_entry_that_is_not_a_string_does_not_500(monkeypatch, tmp_path):
+    """`failsoft` checks the outer type only, so `[1]` reads as a good list and
+    every ref.startswith() downstream raised out of a fail-soft read."""
+    wroot, cid, croot = _dependent(monkeypatch, tmp_path)
+    (croot / "detached.json").write_text("[1, \"groups/salt-circle\"]", encoding="utf-8")
+    (croot / "deleted.json").write_text("[2]", encoding="utf-8")
+
+    assert overlay.detached(cid) == {"groups/salt-circle"}
+    assert overlay.deleted(cid) == set()
+    assert overlay.read_plotmap(cid) == {}                 # the read that used to raise
+
+
+def test_a_campaign_deleted_mid_sweep_is_skipped_not_raised(monkeypatch, tmp_path):
+    """The revalidation reads campaign.md, and the campaign may be gone by then
+    -- `CampaignNotFound` is neither an OSError nor a ValueError, so it escaped
+    the per-campaign handler and 500'd a completed delete (Codex review)."""
+    wroot, cid, croot = _dependent(monkeypatch, tmp_path)
+    gid = entities.create_entity(wroot, "groups", "Salt Circle")
+    doomed = campaigns.create_campaign("Aaa", wroot.name)   # sorts first, swept first
+    groupstate.write_state(croot, gid, "## Secrets\nThe abbot is a member.")
+
+    real = overlay._forget_in_campaign
+
+    def vanish(c, kind, rid, w):
+        if c == doomed:
+            campaigns.delete_campaign(doomed)
+        return real(c, kind, rid, w)
+
+    monkeypatch.setattr(overlay, "_forget_in_campaign", vanish)
+    entities.delete_entity(wroot, "groups", gid)
+    overlay.forget_world_record(wroot, "groups", gid)       # does not raise
+    assert groupstate.read_state(croot, gid) is None        # the survivor was still swept

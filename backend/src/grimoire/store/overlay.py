@@ -78,6 +78,17 @@ def wroot_of(cid: str) -> Path:
 
 # ---- tombstones ----
 
+def _refs_in(refs) -> set[str]:
+    """The string entries of a ledger, and only those.
+
+    `failsoft.read_json` checks the OUTER type, so `[1]` reads as a perfectly
+    good list and every `ref.startswith(...)` downstream then raises
+    `AttributeError` -- a 500 out of a read whose entire contract is to fail
+    soft (Codex review). A non-string entry is an entry nothing can match, and
+    dropping just that one keeps the rest of a hand-edited ledger working."""
+    return {r for r in (refs or []) if isinstance(r, str)}
+
+
 def _deleted_path(cid: str) -> Path:
     return campaigns_paths.campaign_root(cid) / "deleted.json"
 
@@ -96,7 +107,7 @@ def deleted(cid: str) -> set[str]:
         _deleted_path(cid), list,
         f"campaign {cid} reads as having no deletions, so records deleted here "
         "will reappear, inherited from the world")
-    return set(refs) if refs else set()
+    return _refs_in(refs)
 
 
 def add_deleted(cid: str, ref: str) -> None:
@@ -138,7 +149,7 @@ def detached(cid: str) -> set[str]:
         _detached_path(cid), list,
         f"campaign {cid} reads as having no detached records, so a record whose "
         "world original was deleted will inherit from whatever now holds its id")
-    return set(refs) if refs else set()
+    return _refs_in(refs)
 
 
 def add_detached(cid: str, ref: str) -> None:
@@ -168,6 +179,11 @@ def _undetach(cid: str, ref: str) -> None:
     keep = detached(cid) - {ref}
     if keep != detached(cid):
         atomic.write_text(_detached_path(cid), json.dumps(sorted(keep), indent=2) + "\n")
+    # Images deleted while detached tombstoned SLOTS of a record that is now
+    # gone. Reattaching without clearing them inherits the world's replacement
+    # with its avatar still hidden (Codex review) -- the same reasoning as the
+    # sweep's own clearing, at the other end of a detachment.
+    _drop_deleted(cid, {r for r in deleted(cid) if r.startswith(f"assets/{ref}/")})
 
 
 # ---- flat records (locations / lore; greetings + plotmap join in Task 2) ----
@@ -407,18 +423,21 @@ def delete_greeting(cid: str, gid: str) -> None:
 def read_plotmap(cid: str) -> dict:
     croot = croot_of(cid)
     if (croot / "plotmap.json").exists() or "plotmap" in deleted(cid):
-        return _without_detached(cid, greetings.read_plotmap(croot))
+        # The campaign's OWN map. Its nodes and edges name the campaign's own
+        # greetings, detached or not, and filtering them would delete plot
+        # relationships the campaign authored (Codex review).
+        return greetings.read_plotmap(croot)
     return _without_detached(cid, greetings.read_plotmap(wroot_of(cid)))
 
 
 def _without_detached(cid: str, plotmap: dict) -> dict:
     """Drop detached greetings from a plot map, node and inbound edges alike.
 
-    Filtered on the way out rather than swept: a campaign that owns a greeting
-    copy but no plot map of its own reads the WORLD's, and the world is where
-    the recreated slug's edges are. Materializing a campaign map to clean would
-    fork it off the world's over an unrelated record's delete, and would fix
-    only the campaigns that had already been swept (Codex review)."""
+    Only ever applied to an INHERITED map. A campaign that owns a greeting copy
+    but no plot map of its own reads the WORLD's, and the world is where the
+    recreated slug's edges are. Materializing a campaign map to clean would fork
+    it off the world's over an unrelated record's delete, and would fix only the
+    campaigns that had already been swept (Codex review)."""
     gone = {r.partition("/")[2] for r in detached(cid) if r.startswith("greetings/")}
     if not gone:
         return plotmap
@@ -704,7 +723,8 @@ def set_voice_anchor(cid: str, char_id: str, text: str) -> None:
     findings judged against the world's should stop applying here.
     """
     croot = croot_of(cid)
-    inherited = voice_anchors.read(wroot_of(cid), char_id)
+    inherited = ("" if _flat_ref("characters", char_id) in detached(cid)
+                 else voice_anchors.read(wroot_of(cid), char_id))
     mine = voice_anchors.read_record(croot, char_id)
     if not text.strip():
         # Tombstone unless this blank erased nothing at all. Each of the three
@@ -931,8 +951,11 @@ def _forget_in_campaign(cid: str, kind: str, rid: str, wroot: Path) -> None:
     # and its slug taken by a new one on a different world, which never depended
     # on `wroot` at all (Codex review). Re-asking is cheap; being wrong deletes
     # a stranger's state.
-    if not worlds_paths.references_world(
-            campaigns_read.read_campaign(cid)["meta"].get("world", ""), wroot):
+    try:
+        world = campaigns_read.read_campaign(cid)["meta"].get("world", "")
+    except campaigns_paths.CampaignNotFound:
+        return   # deleted between the enumeration and its turn: nothing to sweep
+    if not worlds_paths.references_world(world, wroot):
         return
     croot, ref = croot_of(cid), _flat_ref(kind, rid)
     if _record_present(croot, kind, rid):
