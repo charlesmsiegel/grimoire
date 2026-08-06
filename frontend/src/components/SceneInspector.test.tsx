@@ -883,3 +883,46 @@ test("a late read for a scene the reader has left does not evict the current one
   expect(screen.getByText("Scene two: the ledger surfaces.")).toBeInTheDocument();
   expect(screen.queryByText(/No summary yet/)).toBeNull();
 });
+
+test("the same scene id in another campaign does not inherit the summary", async () => {
+  // Scene ids are campaign-local and collide freely — `001--saltmarch` is what
+  // every campaign's first scene by that title is called. `App.tsx` renders
+  // CampaignView without a key, so navigating between campaigns reuses this
+  // inspector rather than remounting it.
+  (api.getRollingSummary as any).mockResolvedValueOnce({
+    summary: "Campaign one: Mara reaches the salt gate.", at: 4, total: 4,
+    stale: false, every: 10, due: false });
+  const view = render(
+    <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+  await screen.findByText("Campaign one: Mara reaches the salt gate.");
+
+  (api.getRollingSummary as any).mockReturnValueOnce(new Promise(() => {}));
+  view.rerender(
+    <SceneInspector cid="c2" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+  await waitFor(() =>
+    expect(screen.queryByText("Campaign one: Mara reaches the salt gate.")).toBeNull());
+});
+
+test("an older read of the same scene cannot overwrite a newer one", async () => {
+  // This effect re-runs on `refreshKey` for the SAME scene — twice per turn, in
+  // fact — so two reads are routinely in flight together. Scene identity cannot
+  // order them.
+  let answerFirst: ((v: any) => void) | undefined;
+  (api.getRollingSummary as any).mockImplementationOnce(
+    () => new Promise((resolve) => { answerFirst = resolve; }));
+  const view = render(
+    <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+
+  (api.getRollingSummary as any).mockResolvedValueOnce({
+    summary: "The refreshed summary.", at: 12, total: 12,
+    stale: false, every: 10, due: false });
+  view.rerender(
+    <SceneInspector cid="c" sid="s" refreshKey={1} onSceneChanged={() => {}} />);
+  await screen.findByText("The refreshed summary.");
+
+  await act(async () => {
+    answerFirst!({ summary: "The summary as it was before the refresh.", at: 4,
+                   total: 4, stale: false, every: 10, due: false });
+  });
+  expect(screen.getByText("The refreshed summary.")).toBeInTheDocument();
+});
