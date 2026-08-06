@@ -6,7 +6,7 @@ import math
 
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import ensure_home, home
-from . import atomic
+from . import atomic, locks
 
 DEFAULT_MODEL = "anthropic/claude-opus-4.1"
 DEFAULT_THEME = "codex"
@@ -66,8 +66,12 @@ def read_config() -> dict[str, str]:
                 "setup_done": DEFAULT_SETUP_DONE,
                 **{k: "" for k in _LENGTH_KEYS}}
     if not path.exists():
-        atomic.write_text(path, dump_frontmatter(defaults, ""))
-        return defaults
+        # Materializing the defaults is a write, and two first-ever readers
+        # racing here would each publish a whole file.
+        with locks.config_lock():
+            if not path.exists():
+                atomic.write_text(path, dump_frontmatter(defaults, ""))
+                return defaults
     meta, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
     return {k: meta.get(k, default) for k, default in defaults.items()}
 
@@ -111,9 +115,17 @@ def write_config(**fields: str) -> dict[str, str]:
     # would otherwise silently erase them immediately.
     ensure_home()
     path = _config_path()
-    raw, _ = parse_frontmatter(path.read_text(encoding="utf-8")) if path.exists() else ({}, "")
-    for key, value in fields.items():
-        if key in _CONFIG_KEYS and value is not None:
-            raw[key] = value
-    atomic.write_text(path, dump_frontmatter(raw, ""))
-    return read_config()
+    # The read, the merge and the write are one critical section: they are
+    # three steps against a file that is rewritten whole, so two concurrent
+    # callers both merge onto the same pre-image and the second publication
+    # silently drops the first's fields. That is reachable without any user
+    # doing two things at once -- `_setup_state` backfills `setup_done` from
+    # `GET /api/config`, so a second tab merely loading the app can race a
+    # setting saved in the first (#194 review).
+    with locks.config_lock():
+        raw, _ = parse_frontmatter(path.read_text(encoding="utf-8")) if path.exists() else ({}, "")
+        for key, value in fields.items():
+            if key in _CONFIG_KEYS and value is not None:
+                raw[key] = value
+        atomic.write_text(path, dump_frontmatter(raw, ""))
+        return read_config()

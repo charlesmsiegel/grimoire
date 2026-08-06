@@ -58,7 +58,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    api.getConfig().then((c) => {
+    // `fresh`: the cached config is only invalidated by this tab's own writes,
+    // so a library populated in another tab or by a sync client would leave
+    // `firstRun` — and the connection status beside it — stale indefinitely.
+    api.getConfig({ fresh: true }).then((c) => {
       setReady(c.ready);
       setFirstRun(c.first_run);
       setActiveLabel(c.active_connection ? c.active_connection.name.toUpperCase() : "NO CONNECTION");

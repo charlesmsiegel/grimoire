@@ -26,23 +26,29 @@ const STEPS = ["Storage", "Connection", "Theme", "World"];
  *  user watched succeed. The consequence to keep in mind is that Back is
  *  navigation, not undo.
  *
- *  `onDone` is what actually retires the wizard for this session. It is called
- *  alongside the `setup_done` write rather than left to a config refetch,
- *  because App decides between `/` and this wizard on its own state: leaving
- *  that to a re-read would race the navigation and bounce the user straight
- *  back in. */
+ *  `onDone` is what actually retires the wizard for this session. App re-reads
+ *  the server's verdict on every navigation, so this is not how it learns that
+ *  setup is finished — it is the latch that makes leaving stick even when the
+ *  verdict does not change, because the `setup_done` write below is
+ *  best-effort and a store that cannot record it would otherwise answer
+ *  first-run forever. */
 export default function SetupWizard({ onDone }: { onDone: () => void }) {
   const navigate = useNavigate();
   const { name: theme, setTheme } = useTheme();
   const [step, setStep] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  // Two writes this component starts and then lets the user walk away from.
-  // `PUT /api/config` is a read-modify-write of one file, so an in-flight theme
-  // save overlapping the `setup_done` save can lose whichever landed first —
-  // holding the step until it settles is what keeps them ordered.
+  // The writes this component starts and then lets the user walk away from.
+  // `store.write_config` serializes them now, so nothing is lost either way —
+  // but two config saves in flight still make the *outcome* depend on response
+  // order, and navigating away from one unmounts the only place its failure
+  // would be reported.
   const [movingStore, setMovingStore] = useState(false);
   const [savingTheme, setSavingTheme] = useState(false);
+  const [finishing, setFinishing] = useState(false);
+  /** Any write this component has in flight. Every control that could start a
+   *  second one, or navigate away from the first, is held while it is true. */
+  const writing = busy || movingStore || savingTheme || finishing;
 
   // step 2 — the connection, unsaved until "Save connection"
   const [form, setForm] = useState<ConnectionFormValue>(BLANK_CONNECTION);
@@ -83,7 +89,13 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
     setWorldId(null);
     setWorldName("");
     try {
-      setExistingLibrary((await api.listWorlds()).length > 0);
+      // The theme is a property of the store too, so the new library's is now
+      // the live one. Without this the Theme step marks the old store's card
+      // active, and clicking that card would overwrite the new library's
+      // preference with what the previous one happened to use.
+      const [cfg, worlds] = await Promise.all([api.getConfig({ fresh: true }), api.listWorlds()]);
+      setTheme(cfg.theme);
+      setExistingLibrary(worlds.length > 0);
     } catch (err: any) {
       // Not a guess in either direction: say so, and leave the step showing the
       // form, which is recoverable. Silently claiming "already stocked" would
@@ -101,8 +113,15 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
 
   /** Record that setup has been answered, then hand control back. Marking done
    *  is deliberately best-effort: failing to write a preference must not strand
-   *  someone on the wizard, and the worst case is being offered it once more. */
+   *  someone on the wizard, and the worst case is being offered it once more.
+   *
+   *  It takes the wizard down with it while it runs. This is a config write
+   *  like the theme's, so a Back-then-pick-a-theme during a slow one is two
+   *  unlocked writes racing; and clicking both final destinations would make
+   *  the landing page depend on which response returned first. */
   async function finish(to: string) {
+    if (finishing) return;
+    setFinishing(true);
     try {
       await api.putConfig({ setup_done: "on" });
     } catch {
@@ -121,7 +140,7 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
       : form.base_url.trim() !== "");
 
   async function saveConnection() {
-    if (busy || (!createdId && !connectionUsable)) return;
+    if (writing || (!createdId && !connectionUsable)) return;
     setError(null);
     setBusy(true);
     try {
@@ -155,7 +174,7 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
 
   async function createWorld() {
     const trimmed = worldName.trim();
-    if (!trimmed || busy) return;
+    if (!trimmed || writing) return;
     setError(null);
     setBusy(true);
     try {
@@ -199,7 +218,7 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
             <span />
             {/* Label stays "Next" — the Move button is already saying
                 "Moving…", and two controls with one name is a worse hint. */}
-            <button className="btn-accent" onClick={() => setStep(2)} disabled={movingStore}>Next ▸</button>
+            <button className="btn-accent" onClick={() => setStep(2)} disabled={writing}>Next ▸</button>
           </div>
         </div>
       )}
@@ -228,14 +247,14 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
             />
           )}
           <div className="wizard-footer">
-            <button className="subtle" onClick={() => setStep(1)} disabled={busy}>Back</button>
+            <button className="subtle" onClick={() => setStep(1)} disabled={writing}>Back</button>
             {connected
-              ? <button className="btn-accent" onClick={() => setStep(3)}>Next ▸</button>
+              ? <button className="btn-accent" onClick={() => setStep(3)} disabled={writing}>Next ▸</button>
               : (
                 <span className="wizard-actions">
-                  <button className="subtle" onClick={() => setStep(3)} disabled={busy}>Skip</button>
+                  <button className="subtle" onClick={() => setStep(3)} disabled={writing}>Skip</button>
                   <button className="btn-accent" onClick={saveConnection}
-                          disabled={busy || (!createdId && !connectionUsable)}>
+                          disabled={writing || (!createdId && !connectionUsable)}>
                     {busy ? "Saving…" : createdId ? "Retry activation" : "Save connection"}
                   </button>
                 </span>
@@ -250,10 +269,10 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
           <p className="wizard-intro">
             Applies as you click, and is changeable any time from Config.
           </p>
-          <ThemePicker value={theme} onPick={pickTheme} disabled={savingTheme} />
+          <ThemePicker value={theme} onPick={pickTheme} disabled={writing} />
           <div className="wizard-footer">
-            <button className="subtle" onClick={() => setStep(2)} disabled={savingTheme}>Back</button>
-            <button className="btn-accent" onClick={() => setStep(4)} disabled={savingTheme}>
+            <button className="subtle" onClick={() => setStep(2)} disabled={writing}>Back</button>
+            <button className="btn-accent" onClick={() => setStep(4)} disabled={writing}>
               {savingTheme ? "Saving…" : "Next ▸"}
             </button>
           </div>
@@ -278,18 +297,18 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
                   onKeyDown={(e) => { if (e.key === "Enter") createWorld(); }}
                 />
                 <button className="btn-accent" onClick={createWorld}
-                        disabled={busy || !worldName.trim()}>
+                        disabled={writing || !worldName.trim()}>
                   {busy ? "Creating…" : "Create"}
                 </button>
               </div>
             )}
           <div className="wizard-footer">
-            <button className="subtle" onClick={() => setStep(3)} disabled={busy}>Back</button>
+            <button className="subtle" onClick={() => setStep(3)} disabled={writing}>Back</button>
             {worldId || existingLibrary
               ? (
                 <span className="wizard-actions">
-                  <button className="subtle" onClick={() => finish("/")}>Finish</button>
-                  <button className="btn-accent" onClick={() => finish("/campaigns/new")}>
+                  <button className="subtle" onClick={() => finish("/")} disabled={writing}>Finish</button>
+                  <button className="btn-accent" onClick={() => finish("/campaigns/new")} disabled={writing}>
                     Start a campaign ▸
                   </button>
                 </span>
@@ -297,7 +316,7 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
               /* Disabled while a world is being created: leaving now unmounts
                  the only place that would report the result, and dismisses
                  setup for good whether or not the world landed. */
-              : <button className="subtle" onClick={() => finish("/")} disabled={busy}>
+              : <button className="subtle" onClick={() => finish("/")} disabled={writing}>
                   Finish later
                 </button>}
           </div>
@@ -312,8 +331,7 @@ export default function SetupWizard({ onDone }: { onDone: () => void }) {
               mid-write races this step's config write against finish()'s.
               `busy` covers the connection step's activation, which is a config
               write like the theme's and was missed the first time round. */}
-          <button className="link" onClick={() => finish("/")}
-                  disabled={busy || movingStore || savingTheme}>
+          <button className="link" onClick={() => finish("/")} disabled={writing}>
             Skip setup
           </button>
           {" — you can do all of this later from Config."}
