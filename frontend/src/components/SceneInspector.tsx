@@ -188,6 +188,14 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   // every other scene's button — reading "Summarizing…" about a result that
   // record can no longer use.
   const [rollingBusy, setRollingBusy] = useState<string | null>(null);
+  // Stamped with its record, and kept OUT of the panel's shared `error`. The
+  // token guard only retires a rejection that arrives after the reader has
+  // moved on; one that lands while the scene is still selected is stored, and
+  // nothing on the scene-change path clears `error` — so a provider failure for
+  // one scene sat as a banner over the next indefinitely. Its own state, rather
+  // than clearing the shared one on every switch, because that banner is
+  // written by four other handlers whose behaviour is not this PR's to change.
+  const [rollingError, setRollingError] = useState<{ key: string; text: string } | null>(null);
   // The stamp decides what may be RENDERED. This decides what may be STORED,
   // and one without the other is not enough — that took two review rounds:
   //
@@ -470,7 +478,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
     () => (turns && turns.cid === cid && turns.sid === sid ? turns.rows : []),
     [turns, cid, sid]);
   async function refreshRolling() {
-    setError(null);
+    setRollingError(null);
     // Captured OUTSIDE the try, so success, failure and the `finally` all judge
     // themselves against the record this refold was started for.
     const key = `${cid}/${sid}`;
@@ -497,7 +505,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
       if (currentKey.current !== key) return;
       // Reported, never destructive: the summary already on screen is still the
       // best thing anyone has, so a failed refold leaves it exactly where it is.
-      setError(err.detail ?? String(err));
+      setRollingError({ key, text: err.detail ?? String(err) });
     } finally {
       // Only if it is still ours. The reader can leave and start a refold on
       // another record while this one is out, and clearing unconditionally
@@ -603,6 +611,9 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
             </>
           );
         })()}
+        {rollingError?.key === `${cid}/${sid}` && (
+          <div className="banner">{rollingError.text}</div>
+        )}
         <div className="form-actions">
           {/* Held while a turn is streaming into this scene, like the two date
               actions above. A chat appends the player's post before streaming

@@ -455,6 +455,27 @@ def test_reseating_the_same_cast_does_not_invalidate_a_summary(client):
         f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary").json()["stale"] is False
 
 
+def test_a_location_assigned_mid_call_does_not_get_the_fold_that_missed_it(client):
+    """The silent-write case, one layer in from the validity key. The message
+    digest cannot see a first location, so without a facts precondition the
+    route would store prose written in ignorance of it — and stamp it with the
+    facts it *was* given, making it stale on the very next read with nothing
+    scheduled to repair it."""
+    _key(client)
+    cid, sid = _scene(client, posts=10)
+
+    class SetsTheLocationMidCall(FakeLLM):
+        async def complete(self, messages, conn):
+            store.scenes.set_location(cid, sid, _location(cid, "The Night Dock"))
+            return await super().complete(messages, conn)
+
+    _use(client, SetsTheLocationMidCall([["A summary that never heard of the dock."]]))
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary").json()
+
+    assert body["refreshed"] is False
+    assert store.scenes.get_rolling_summary(cid, sid)["summary"] == ""
+
+
 # ---- POST: failure never reaches the turn loop ----
 def test_no_connection_is_a_409_not_a_500(client):
     llm = _use(client, _summarizer())
