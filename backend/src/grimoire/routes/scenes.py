@@ -5,6 +5,8 @@ response scope, the chronicle, and the absorb/audit end-of-scene flow."""
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import threading
 import time
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -1267,6 +1269,47 @@ async def post_audit(cid: str, sid: str, client: LLMClient = Depends(get_llm)):
 # holds describes a scene that has ended. Display-only: it is deliberately not
 # injected into the scene context (see the design spec), so nothing here can
 # change what the model is told on the next turn.
+
+# Scenes with a refresh already at the provider. The stored coverage does not
+# advance until a call RETURNS, so without this every turn landing during a slow
+# completion passes the same due check and starts its own call: one threshold
+# crossing, billed several times. `_rolling_commit`'s supersession check stops
+# the duplicate WRITE, but only after both calls have been paid for, and paying
+# is the part that matters here.
+#
+# In-process only, which is the same scope `streaming._turn_tokens` documents
+# for the same reason: this distinguishes two refreshes racing inside one
+# backend, which is what one player generates. Two *processes* on one scene is
+# the case `store/locks.py` already calls beyond what this app can serialize.
+#
+# A real lock rather than `_claim_turn`'s bare-dict-under-the-GIL idiom, because
+# this is a check-then-add and that is two bytecodes: `next()` and one assignment
+# are individually atomic, `key not in s` followed by `s.add(key)` is not.
+_rolling_inflight: set[tuple[str, str]] = set()
+_rolling_inflight_guard = threading.Lock()
+
+
+@contextlib.contextmanager
+def _rolling_claim(cid: str, sid: str):
+    """Yield whether this refresh may go to the provider, releasing on the way
+    out however it leaves.
+
+    The release is in a `finally` and gated on having claimed, so a failed call
+    -- a 502, a cancelled request, a raised anything -- frees the scene. A claim
+    that outlived its request would wedge that scene's summary for the life of
+    the process, which is strictly worse than the duplicate call this prevents.
+    """
+    key = (cid, sid)
+    with _rolling_inflight_guard:
+        claimed = key not in _rolling_inflight
+        if claimed:
+            _rolling_inflight.add(key)
+    try:
+        yield claimed
+    finally:
+        if claimed:
+            with _rolling_inflight_guard:
+                _rolling_inflight.discard(key)
 def _rolling_view(cid: str, sid: str, scene: dict) -> dict:
     """The stored summary reconciled against the transcript as it stands now.
 
@@ -1431,6 +1474,19 @@ async def post_rolling_summary(cid: str, sid: str, force: bool = False,
     if not _rolling_due(view, every, force):
         return {**_rolling_body(view, every), "refreshed": False}
 
+    with _rolling_claim(cid, sid) as claimed:
+        if not claimed:
+            # A refresh for this scene is already at the provider and will cover
+            # these posts too. Claimed AFTER the due check on purpose: a POST
+            # that was never going to spend anything has nothing to coalesce.
+            return {**_rolling_body(view, every), "refreshed": False}
+        return await _rolling_refresh(cid, sid, scene, view, every, conn, client)
+
+
+async def _rolling_refresh(cid: str, sid: str, scene: dict, view: dict, every: int,
+                           conn: dict, client: LLMClient) -> dict:
+    """The paid half of `post_rolling_summary`, split out so the in-flight claim
+    brackets exactly the span that reaches the provider."""
     messages = scene["messages"]
     # The snapshot is what gets recorded, not a re-read afterwards: a turn
     # landing while the model is answering must not be counted as covered by a

@@ -926,3 +926,21 @@ test("an older read of the same scene cannot overwrite a newer one", async () =>
   });
   expect(screen.getByText("The refreshed summary.")).toBeInTheDocument();
 });
+
+test("a refresh that fails after the reader moves on does not banner the new scene", async () => {
+  // `error` is shared by every action in this panel and the scene-change effect
+  // does not clear it, so an error installed for the scene the reader left
+  // sits over the scene they are on until something else happens to clear it.
+  let rejectA: ((e: any) => void) | undefined;
+  (api.refreshRollingSummary as any).mockImplementationOnce(
+    () => new Promise((_resolve, reject) => { rejectA = reject; }));
+  const view = render(
+    <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+  fireEvent.click(await screen.findByRole("button", { name: /refresh now/i }));
+
+  view.rerender(
+    <SceneInspector cid="c" sid="s2" refreshKey={0} onSceneChanged={() => {}} />);
+  await act(async () => { rejectA!({ detail: "OpenRouter key not set" }); });
+
+  expect(screen.queryByText("OpenRouter key not set")).toBeNull();
+});
