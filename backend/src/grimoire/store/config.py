@@ -142,9 +142,20 @@ def mark_setup_done() -> None:
 
     Reading first keeps this off the write path for every creation after the
     first, which is all of them on any store that has been used at all.
+
+    Best-effort, and that is the whole reason it swallows: the callers record
+    this *after* the world or campaign is already on disk, so a raised
+    `ConfigBusy` or `OSError` here would fail a request whose actual work
+    succeeded. The caller then re-offers its creation form and the retry makes
+    a uniquely-suffixed duplicate — a real record lost to a failed preference
+    (#194 review). The cost of swallowing is that the wizard may be offered
+    once more, which is what the read-side backfill is there to catch anyway.
     """
-    if read_config().get("setup_done") != "on":
-        write_config(setup_done="on")
+    try:
+        if read_config().get("setup_done") != "on":
+            write_config(setup_done="on")
+    except (locks.StoreBusy, OSError):
+        pass
 def _count(key: str, default: str) -> int:
     """A whole-number setting, clamped at 0. Same tolerance `_seconds` has and
     for the same reason: a hand-edited config.md or a field cleared in the UI

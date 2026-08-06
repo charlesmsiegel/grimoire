@@ -352,6 +352,42 @@ test("finishing reports which store the answer belongs to", async () => {
   await waitFor(() => expect(onDone).toHaveBeenCalledWith("/sync/grimoire"));
 });
 
+test("a move to a library with a working connection adopts it too", async () => {
+  // The mount path adopted an existing connection; the move path did not, so
+  // step 2 asked again for one the new library already had — and saving that
+  // form creates a duplicate of the active connection.
+  (api.listWorlds as any).mockResolvedValue([{ id: "saltmarch", name: "Saltmarch" }]);
+  (api.getConfig as any).mockResolvedValue({
+    first_run: false, theme: "codex", data_dir: "/sync/grimoire", ready: true,
+    active_connection: { id: "theirs", kind: "openrouter", name: "Their OpenRouter" },
+  });
+  renderWizard();
+  fireEvent.change(await screen.findByLabelText(/storage location/i), { target: { value: "/sync/grimoire" } });
+  fireEvent.click(screen.getByRole("button", { name: /^move$/i }));
+  await waitFor(() => expect(api.putDataDir).toHaveBeenCalled());
+
+  fireEvent.click(await screen.findByRole("button", { name: /next/i }));
+  expect(await screen.findByText(/connected to their openrouter/i)).toBeInTheDocument();
+  expect(screen.queryByLabelText("Name")).not.toBeInTheDocument();
+});
+
+test("a failed setup_done write still names the store the wizard moved to", async () => {
+  // Falling back to the caller's own idea of the store would key its latch on
+  // the pre-move path, and the next config read would redirect straight back
+  // into the wizard — the trap the latch exists to prevent.
+  (api.getConfig as any).mockResolvedValue({
+    first_run: true, theme: "codex", data_dir: "/sync/grimoire", ready: false, active_connection: null,
+  });
+  renderWizard();
+  fireEvent.change(await screen.findByLabelText(/storage location/i), { target: { value: "/sync/grimoire" } });
+  fireEvent.click(screen.getByRole("button", { name: /^move$/i }));
+  await waitFor(() => expect(api.putDataDir).toHaveBeenCalled());
+
+  (api.putConfig as any).mockRejectedValue(new Error("disk full"));
+  fireEvent.click(screen.getByRole("button", { name: /skip setup/i }));
+  await waitFor(() => expect(onDone).toHaveBeenCalledWith("/sync/grimoire"));
+});
+
 test("the connection step is skippable — playing by hand is allowed", async () => {
   await goToStep(2);
   fireEvent.click(await screen.findByRole("button", { name: /^skip$/i }));
