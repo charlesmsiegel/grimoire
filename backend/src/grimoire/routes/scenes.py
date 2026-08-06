@@ -1218,7 +1218,8 @@ async def post_absorb(cid: str, sid: str, force: bool = False,
     # or an append landing while the call was in flight would otherwise have the
     # citations (#112) judged against text the model never saw, and promotion
     # (#121) measure a ledger this review does not summarize.
-    edits = store.absorb.materialize(cid, sid, parsed, scene["messages"], ledger=ledger)
+    edits = store.absorb.materialize(cid, sid, parsed, scene["messages"],
+                                     turn_ledger=ledger)
     # Phase 2: propose each present NPC's refreshed campaign dossier -- staged, not
     # written (never raises -- see _stage_dossiers' own failure boundary).
     dossier_edits, dossiers = await _stage_dossiers(cid, sid, transcript, client, conn, budget)
