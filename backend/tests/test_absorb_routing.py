@@ -81,6 +81,43 @@ def test_a_players_own_unlabelled_post_is_narration(monkeypatch, tmp_path):
     assert routing.authority(routing.speaker_index(cid, sid), "You") == routing.NARRATION
 
 
+def test_a_word_for_the_narration_is_narration_however_the_model_spells_it(
+        monkeypatch, tmp_path):
+    """The prompt asks for "Grimoire"; models write "narrator". Read as a name
+    nobody answers to, that citation bands LOW — so a model that paraphrases one
+    word sends every narrated row into the collapsed section, which is the exact
+    opposite of what the tier is for."""
+    cid, wroot = _campaign(monkeypatch, tmp_path)
+    sid, _, _, _ = _scene(cid, wroot)
+    index = routing.speaker_index(cid, sid)
+    for spelling in ("narrator", "Narrator", "the narrator", "GM", "storyteller",
+                     "you", "grimoire"):
+        assert routing.authority(index, spelling) == routing.NARRATION, spelling
+
+
+def test_a_speaker_the_scene_has_wins_over_the_narration_words(monkeypatch, tmp_path):
+    """A character really called Narrator spoke under that label, so she is
+    matched as herself. The word list is a fallback for a name nobody answers
+    to, never an override of the transcript."""
+    cid, wroot = _campaign(monkeypatch, tmp_path)
+    sid, _, _, _ = _scene(cid, wroot)
+    scenes.append_reply(cid, sid, [{"speaker": "Narrator", "content": "I am a person."}])
+    assert routing.authority(routing.speaker_index(cid, sid), "Narrator") == routing.OTHER
+
+
+def test_a_citation_quoting_the_sub_speaker_label_verbatim_still_resolves(
+        monkeypatch, tmp_path):
+    """The transcript renders "Seraphine Vale (aside)"; a model that copies the
+    label as written has cited her, and the cast list holds no such spelling."""
+    cid, wroot = _campaign(monkeypatch, tmp_path)
+    sid, sera, _, _ = _scene(cid, wroot)
+    scenes.append_reply(cid, sid, [{"speaker": "Seraphine Vale (aside)",
+                                    "content": "Not that they'd believe me."}])
+    index = routing.speaker_index(cid, sid)
+    assert routing.authority(index, "Seraphine Vale (aside)",
+                             (f"characters:{sera}",)) == routing.SELF
+
+
 def test_a_claim_about_someone_else_is_hearsay_not_first_hand(monkeypatch, tmp_path):
     """The tier turns on WHOSE record is being changed. The same speaker is
     first-hand about their own state and third-party about Mara's."""
@@ -388,3 +425,15 @@ def test_a_malformed_card_name_does_not_take_the_absorb_down(monkeypatch, tmp_pa
     assert poisoned["labels"] == healthy["labels"]
     assert routing.authority(poisoned, "Seraphine Vale",
                              (f"characters:{sera}",)) == routing.OTHER
+
+
+def test_the_reported_score_is_the_one_the_band_was_read_off(monkeypatch, tmp_path):
+    """A band computed from the raw product and a score printed to four places
+    can disagree at the edge, which is a debugging session nobody enjoys."""
+    cid, wroot = _campaign(monkeypatch, tmp_path)
+    sid, _, _, _ = _scene(cid, wroot)
+    index = routing.speaker_index(cid, sid)
+    for certainty in (0.0, 0.3, 0.6499, 0.65, 0.6501, 0.7, 1.0):
+        for spelling in ("Grimoire", "Seraphine Vale", "Nobody", ""):
+            out = routing.review(index, {"speaker": spelling, "certainty": certainty})
+            assert out["band"] == routing.band(out["score"]), (spelling, certainty)
