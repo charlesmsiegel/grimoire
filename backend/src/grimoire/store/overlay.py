@@ -45,8 +45,8 @@ from pathlib import Path
 from . import (assets, atomic, cards, characters, entities, failsoft, greetings,
                pcs, taglines, voice_anchors)
 from .campaigns import paths as campaigns_paths, read as campaigns_read
-from .worlds import paths as worlds_paths
 from .paths import natural_key, safe_id
+from .worlds import paths as worlds_paths
 
 log = logging.getLogger(__name__)
 
@@ -720,8 +720,8 @@ def forget_world_record(wroot: Path, kind: str, rid: str) -> None:
 
     - the world's own `_record_dir` — `entities.delete_entity` and
       `greetings.delete_greeting` unlink the `.md` and nothing else, so the
-      record's images survive it. (The actor deletes already `rmtree` the
-      directory, because for an actor the directory *is* the record.);
+      record's images survive it — the actor deletes already `rmtree` the
+      directory, because for an actor the directory *is* the record;
     - each dependent campaign's `_record_dir`, holding state the campaign filed
       against a record it only ever *inherited*. That state is campaign-local by
       definition, so no sync ever removes it, and a world-side delete leaves it
