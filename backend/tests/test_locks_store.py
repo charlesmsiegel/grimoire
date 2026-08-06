@@ -489,8 +489,8 @@ def test_world_module_rebind_acquires_in_sorted_order(monkeypatch, tmp_path):
 #   1. every mention of `campaign_lock` / `hold_all` -- as a name, an
 #      attribute, or a string handed to `getattr` -- is the callee of a `with`
 #      statement's context expression, and
-#   2. those calls all name the same campaign, read positionally or from the
-#      `cid`/`cids` keyword.
+#   2. those calls all name the same campaign -- read positionally or from the
+#      `cid`/`cids` keyword, and not through a name the scope rebinds.
 #
 # Anything else fails. Two campaigns in one scope is the deadlock; a lock named
 # anywhere but a `with` has no bounded lifetime, which is how you get two; and
@@ -500,7 +500,7 @@ def test_world_module_rebind_acquires_in_sorted_order(monkeypatch, tmp_path):
 # WHY IT IS SHAPED LIKE THIS -- the part worth reading before changing it.
 # Earlier drafts asked the opposite question: "does this look like a multi-hold
 # I recognize?" They enumerated the bad spellings, and the enumeration was
-# always one spelling short. Across five review rounds, nine separate findings,
+# always one spelling short. Across six review rounds, ten separate findings,
 # every one of them the same hold in punctuation the detector had not been
 # taught:
 #
@@ -513,15 +513,19 @@ def test_world_module_rebind_acquires_in_sorted_order(monkeypatch, tmp_path):
 #   the same stack registered under an unrelated `with`         (grouping)
 #   `campaign_lock(cid=a), campaign_lock(cid=b)`                (keyword)
 #   `cl = locks.campaign_lock` then `with cl(a), cl(b):`        (renamed)
+#   `cid = a; with ...(cid): cid = b; with ...(cid):`           (rebound)
 #
-# The last two are a second kind of gap, worth naming separately: not a way to
-# HOLD a lock the detector missed, but a way to NAME one. That is the other
-# lesson `test_lock_domain_guard.py` had to learn and write down -- "**A name is
-# not a binding.** It was fixed four separate times before it was written down".
+# The last three are a second kind of gap, worth naming separately: not a way to
+# HOLD a lock the detector missed, but a way to NAME one -- the factory, or the
+# campaign. That is the other lesson `test_lock_domain_guard.py` had to learn
+# and write down -- "**A name is not a binding.** It was fixed four separate
+# times before it was written down" -- and it is a name away from that file's
+# `_rebinds_cid`, which exists because the same thing happened there.
+#
 # Both halves get the same treatment here. The whitelist is over *mentions*, so
-# a rename is an offender rather than something to resolve; and an unreadable
-# campaign argument compares equal to nothing, so two unknowns are two
-# campaigns rather than one.
+# a rename is an offender rather than something to resolve; and a campaign this
+# cannot pin down -- unreadable, or built from a name the scope rebinds --
+# compares equal to nothing, so two unknowns are two campaigns rather than one.
 #
 # So the polarity is inverted, exactly as `test_lock_domain_guard.py` inverted
 # it after the same lesson: nothing is accepted unless it matches the whitelist
@@ -614,24 +618,61 @@ def _scopes(tree: ast.AST):
 _unknown = itertools.count()
 
 
-def _campaign_of(call: ast.Call) -> str:
+def _rebound(scope: ast.AST) -> set[str]:
+    """Names this scope assigns to, in any binding form.
+
+    `test_lock_domain_guard.py` needs the same fact and calls it `_rebinds_cid`:
+    "every rule here reads that name as *this function's campaign*, which is a
+    claim about the parameter". Same claim here, and the same answer when the
+    scope rebinds the name -- it isn't one campaign, it is two spelled alike.
+    """
+    out: set[str] = set()
+    for node in _here(scope):
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, (ast.AnnAssign, ast.AugAssign, ast.NamedExpr,
+                               ast.For, ast.AsyncFor, ast.comprehension)):
+            targets = [node.target]
+        elif isinstance(node, _WITHS):
+            targets = [i.optional_vars for i in node.items if i.optional_vars]
+        else:
+            continue
+        out |= {n.id for t in targets for n in ast.walk(t)
+                if isinstance(n, ast.Name)}
+    return out
+
+
+def _campaign_of(call: ast.Call, rebound: set[str]) -> str:
     """Which campaign this call names, syntactically.
 
     Positional first, then the `cid`/`cids` keyword -- `campaign_lock(cid=a)`
     is the same call spelled differently, and reading both as "no argument"
     made two campaigns look like one.
 
-    A call whose campaign cannot be read at all gets a fresh unknown, so two of
-    them never compare equal. Unknown means *fail*, which is the polarity this
-    whole guard turns on: the alternative reads two unreadable calls as one
-    campaign and lets the pair through.
+    Two ways the campaign is UNKNOWN, and each gets a fresh sentinel so it
+    compares equal to nothing: the argument cannot be read at all, or the
+    expression is built from a name this scope rebinds -- `cid = first; with
+    campaign_lock(cid): cid = second; with campaign_lock(cid):` dumps
+    identically twice and is two campaigns held nested.
+
+    Unknown means *fail*, which is the polarity this whole guard turns on. The
+    alternative reads two unknowable calls as one campaign and lets the pair
+    through, which is exactly how both of these arrived. A scope with a single
+    lock call is unaffected either way: one campaign cannot disagree with
+    itself, so the loop `for c in ids: with campaign_lock(c):` stays legal
+    though `c` is rebound every iteration.
     """
+    expr = None
     if call.args:
-        return ast.dump(call.args[0])
-    for kw in call.keywords:
-        if kw.arg in ("cid", "cids"):
-            return ast.dump(kw.value)
-    return f"<unreadable {next(_unknown)}>"
+        expr = call.args[0]
+    else:
+        expr = next((kw.value for kw in call.keywords
+                     if kw.arg in ("cid", "cids")), None)
+    if expr is None:
+        return f"<unreadable {next(_unknown)}>"
+    if any(isinstance(n, ast.Name) and n.id in rebound for n in ast.walk(expr)):
+        return f"<rebound {next(_unknown)}>"
+    return ast.dump(expr)
 
 
 def _multi_holds(tree: ast.AST) -> list[tuple[int, str]]:
@@ -656,7 +697,8 @@ def _multi_holds(tree: ast.AST) -> list[tuple[int, str]]:
         out += [(n.lineno, "campaign lock named outside a `with` acquisition")
                 for n in _here(scope)
                 if _names_a_lock(n) and id(n) not in permitted]
-        if len({_campaign_of(c) for c in taken}) > 1:
+        rebound = _rebound(scope)
+        if len({_campaign_of(c, rebound) for c in taken}) > 1:
             out += [(c.lineno, "two different campaigns locked in one scope -- "
                                "only `hold_all` may hold more than one")
                     for c in taken]
@@ -795,6 +837,13 @@ _PREFIX = "import contextlib\nfrom grimoire.store import locks\n"
     # Nobody named this one; the mention whitelist rejects it for free.
     (_PREFIX + "def f(a):\n"
      "    return getattr(locks, 'campaign_lock')(a)\n", "a getattr spelling"),
+    # --- the one Codex found on 743759d: same spelling, two campaigns ---
+    (_PREFIX + "def f(first, second):\n"
+     "    cid = first\n"
+     "    with locks.campaign_lock(cid):\n"
+     "        cid = second\n"
+     "        with locks.campaign_lock(cid):\n"
+     "            pass\n", "a campaign expression rebound between acquisitions"),
     # Safe, and rejected anyway -- see "WHAT IT REJECTS THAT IS SAFE" above.
     # Listed here so the trade is a test rather than a claim.
     (_PREFIX + "def f(a, b):\n"
@@ -835,6 +884,15 @@ def test_guard_catches_locks_not_taken_the_one_permitted_way(src, why):
      "def f(cid):\n"
      "    with campaign_lock(cid):\n"
      "        pass\n", "a plain same-name import"),
+    # A rebound name with only ONE lock call in the scope: one campaign cannot
+    # disagree with itself, so rebinding is irrelevant. This is what keeps the
+    # rebound sentinel from failing the sequential loop above, whose target is
+    # rebound every iteration.
+    (_PREFIX + "def f(a, b):\n"
+     "    cid = a\n"
+     "    with locks.campaign_lock(cid):\n"
+     "        pass\n"
+     "    cid = b\n", "one lock whose name is rebound elsewhere"),
     # A different lock domain accumulated on a stack -- `store/assets.py` does
     # exactly this, and it is none of this guard's business.
     (_PREFIX + "def f(stack, images):\n"
