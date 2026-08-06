@@ -119,11 +119,10 @@ def ensure_campaign_slim(cid: str) -> None:
     Interrupted after the manifest, what is left is a copy the manifest no
     longer names — which the next run cannot mistake for a deletion, because
     the loop only ever looks at refs the manifest still holds, and which
-    `_reclaim_untracked_copies` settles rather than leaving adrift.
+    `_prune_untracked_copies` clears rather than leaving adrift.
 
-    That sweep runs before the manifest write and deletes only copies nothing
-    names, so it has no ref of its own to order against; the bases it hands
-    back ride along on that same write.
+    That sweep runs before the manifest write, and only ever deletes copies
+    nothing names, so it has no ref of its own to order against.
     """
     mp = paths.campaign_meta_path(cid)
     if not mp.exists():
@@ -143,9 +142,17 @@ def ensure_campaign_slim(cid: str) -> None:
     redundant: list[str] = []         # refs whose copy the world still holds, identical
     for ref, base in sorted(manifest.items()):
         kind, _, eid = ref.partition("/")
+        # A ref the fork recorded with no hash at all copied nothing, so there
+        # has never been a copy here for the user to have deleted -- both
+        # historical writers stored `<hash of the world's> or ""`, and a plot
+        # map is simply absent from most worlds, so `plotmap: ''` sits in every
+        # campaign forked before its world had one. Reading that as a deletion
+        # tombstones the world's plot map out of the campaign the moment the
+        # world gains one, which is #270's own symptom (Codex review).
+        attributable = bool(base)
         if ref == "plotmap":
             if not (root / "plotmap.json").exists():
-                if (wroot / "plotmap.json").exists():
+                if attributable and (wroot / "plotmap.json").exists():
                     deleted_by_user.append(ref)   # keep the user's deletion deleted
                 manifest.pop(ref)
             elif greetings.plotmap_hash(root) == base == greetings.plotmap_hash(wroot):
@@ -159,7 +166,7 @@ def ensure_campaign_slim(cid: str) -> None:
             dh = characters.dir_hash if kind == "characters" else pcs.dir_hash
             mine_h = dh(root, eid)
             if mine_h is None:
-                if dh(wroot, eid) is not None:
+                if attributable and dh(wroot, eid) is not None:
                     deleted_by_user.append(ref)   # keep the user's deletion deleted
                 manifest.pop(ref)
             elif mine_h == base == dh(wroot, eid):
@@ -167,7 +174,7 @@ def ensure_campaign_slim(cid: str) -> None:
                 manifest.pop(ref)
             continue
         if not (root / kind / f"{eid}.md").exists():
-            if (wroot / kind / f"{eid}.md").exists():
+            if attributable and (wroot / kind / f"{eid}.md").exists():
                 deleted_by_user.append(ref)   # keep the user's deletion deleted
             manifest.pop(ref)
         elif entities.entity_hash(root, kind, eid) == base == entities.entity_hash(wroot, kind, eid):
@@ -183,7 +190,7 @@ def ensure_campaign_slim(cid: str) -> None:
     # ordering this is here to keep. Locked refs count too -- they leave the
     # manifest holding their cards on purpose, and the sweep would take exactly
     # the files the lock invariant needs.
-    manifest.update(_reclaim_untracked_copies(cid, root, wroot, copied | locked))
+    _prune_untracked_copies(cid, root, wroot, copied | locked)
     paths.write_manifest(cid, manifest)
     for ref in redundant:
         overlay.dematerialize(cid, ref)
@@ -192,61 +199,44 @@ def ensure_campaign_slim(cid: str) -> None:
     atomic.write_text(mp, dump_frontmatter(meta, body))
 
 
-def _reclaim_untracked_copies(cid: str, root: Path, wroot: Path, tracked: set[str]) -> dict[str, str]:
-    """Settle the campaign copies sync.md does not name, returning the bases to
-    record for the ones kept.
+def _prune_untracked_copies(cid: str, root: Path, wroot: Path, tracked: set[str]) -> None:
+    """Drop campaign copies sync.md does not name and the world holds
+    byte-for-byte.
 
-    In a full copy every copy had a ref, so an untracked one is residue: every
-    writer drops the ref before the copy while `campaigns.read.slim_pending`
-    holds (#270), and the copy is what an interrupted one leaves behind. Left
-    as it is, it would survive the migration as a materialized record with no
-    base — readable, but invisible to sync, so it would never see a world edit
-    again and nothing would say so.
+    In a full copy every copy had a ref, so an untracked one is residue: the
+    migration and `overlay._recorded_base` both drop the ref before the copy
+    while the migration is pending (#270), and the copy is what an interrupted
+    one leaves behind. Its bytes are the world's own — that is where a
+    materialization gets them — so dropping it is exactly the dematerialization
+    the migration was going to do anyway.
 
-    Which residue it is decides what to do, and the world answers:
-
-    - **The world holds it identically** — an interrupted materialization,
-      whose copy was the world's own bytes. Drop it; the record goes back to
-      being inherited, which is where the migration was taking it anyway.
-    - **The world holds a different version** — an interrupted accept, which
-      got as far as disowning the copy. Keep it and record the copy's own hash
-      as its base: that is the truth (the copy is an unmodified materialization
-      of the world version it was made from), and it puts the record back in
-      front of sync, which offers the update the accept was interrupted taking.
-    - **The world does not hold it at all** — campaign-local, not residue.
-      Untouched, and no base: it has no world record to have a base against.
-    """
-    adopted: dict[str, str] = {}
+    **Only** when they match, which is what keeps this off records the campaign
+    owns. It cannot ask whether a copy was residue, only whether the world says
+    the same thing, and a campaign-local record can collide with a world record
+    created later under the same slug — ids are `slugify(name)` and each root
+    uniquifies against itself alone. Treating a differing copy as residue would
+    hand that collision a sync base of its own and offer the unrelated world
+    record as a routine update to it, which one Accept turns into the user's
+    record being deleted (Codex review). A copy that differs is left alone, and
+    the reason it is safe to leave is upstream: `sync._advance` migrates before
+    it accepts, so an interrupted accept never strands one."""
     if "plotmap" not in tracked and (root / "plotmap.json").exists():
-        mine_h, world_h = greetings.plotmap_hash(root), greetings.plotmap_hash(wroot)
-        if mine_h is not None and mine_h == world_h:
+        mine_h = greetings.plotmap_hash(root)
+        if mine_h is not None and mine_h == greetings.plotmap_hash(wroot):
             (root / "plotmap.json").unlink()
-        elif mine_h is not None and world_h is not None:
-            adopted["plotmap"] = mine_h
     for kind, eid in entities.synced_refs(root):
-        ref = f"{kind}/{eid}"
-        if ref in tracked:
-            continue
         mine_h = entities.entity_hash(root, kind, eid)
-        world_h = entities.entity_hash(wroot, kind, eid)
-        if mine_h is not None and mine_h == world_h:
+        if (f"{kind}/{eid}" not in tracked and mine_h is not None
+                and mine_h == entities.entity_hash(wroot, kind, eid)):
             (root / kind / f"{eid}.md").unlink()
-        elif mine_h is not None and world_h is not None:
-            adopted[ref] = mine_h
     for kind in appearances_paths.ACTOR_KINDS:
         dh = characters.dir_hash if kind == "characters" else pcs.dir_hash
         listed = characters.list_characters(root) if kind == "characters" else pcs.list_pcs(root)
         for item in listed:
             aid = item["id"]
-            ref = f"{kind}/{aid}"
-            if ref in tracked:
-                continue
-            mine_h, world_h = dh(root, aid), dh(wroot, aid)
-            if mine_h is not None and mine_h == world_h:
+            mine_h = dh(root, aid)
+            if f"{kind}/{aid}" not in tracked and mine_h is not None and mine_h == dh(wroot, aid):
                 overlay.dematerialize_actor(cid, kind, aid)
-            elif mine_h is not None and world_h is not None:
-                adopted[ref] = mine_h
-    return adopted
 
 
 def _tombstone_deleted_copied_assets(cid: str, root: Path, wroot: Path, copied: set[str]) -> None:
