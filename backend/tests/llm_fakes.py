@@ -167,13 +167,14 @@ class FakeLLM:
             await asyncio.sleep(STALL_SECONDS)
 
     async def complete(self, messages, conn) -> str:
-        # Recorded before the injected failure, like `stream` records before
-        # raising: a test asserting on what the caller SENT must still be able
-        # to, and a failing call is exactly when that matters.
-        deltas = self._next(messages, conn)
-        if self.error is not None:
-            raise self.error
-        return "".join(deltas)
+        # Consumes `stream`, exactly as the real `LLMClient.complete` does,
+        # rather than reaching for the next turn itself. That is not a style
+        # choice: a fake whose two methods are written separately drifts, and it
+        # drifts silently — an injected stall or failure that only `stream`
+        # honoured would let a completing route (absorb, dossier, tagline,
+        # suggestions) sail past the very condition the test set up. One call is
+        # still recorded, because `stream` records exactly once.
+        return "".join([delta async for delta in self.stream(messages, conn)])
 
     # ---- inspection ----
     @property
