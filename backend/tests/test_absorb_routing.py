@@ -34,6 +34,13 @@ def _scene(cid, wroot):
     return sid, sera, mara, win
 
 
+# Lines the fixture scene actually contains. Every citation below quotes one:
+# a speaker without an excerpt is an incomplete citation and scores as UNCITED,
+# so a test naming a speaker has to say what it heard them say.
+SAID = "Mine, until midnight."          # Seraphine Vale
+NARRATED = "Fog rolls in off the water."   # the unlabelled narration
+
+
 # ------------------------------------------------------------------- the bands
 
 def test_the_band_edges_hold_the_properties_the_weights_are_chosen_for():
@@ -66,10 +73,12 @@ def test_narration_outranks_a_character_speaking_about_themself(monkeypatch, tmp
     index = routing.speaker_index(cid, sid)
     subject = (f"characters:{sera}",)
 
-    assert routing.authority(index, "Grimoire", subject) == routing.NARRATION
-    assert routing.authority(index, "Seraphine Vale", subject) == routing.SELF
-    narrated = routing.review(index, {"speaker": "Grimoire", "certainty": 0.8}, subject)
-    claimed = routing.review(index, {"speaker": "Seraphine Vale", "certainty": 0.8}, subject)
+    assert routing.authority(index, "Grimoire", subject, NARRATED) == routing.NARRATION
+    assert routing.authority(index, "Seraphine Vale", subject, SAID) == routing.SELF
+    narrated = routing.review(index, {"speaker": "Grimoire", "quote": NARRATED,
+                                      "certainty": 0.8}, subject)
+    claimed = routing.review(index, {"speaker": "Seraphine Vale", "quote": SAID,
+                                     "certainty": 0.8}, subject)
     assert narrated["score"] > claimed["score"]
 
 
@@ -78,7 +87,8 @@ def test_a_players_own_unlabelled_post_is_narration(monkeypatch, tmp_path):
     Checked before the cast, or a character called "You" would shadow it."""
     cid, wroot = _campaign(monkeypatch, tmp_path)
     sid, _, _, _ = _scene(cid, wroot)
-    assert routing.authority(routing.speaker_index(cid, sid), "You") == routing.NARRATION
+    assert routing.authority(routing.speaker_index(cid, sid), "You", (),
+                             NARRATED) == routing.NARRATION
 
 
 def test_a_word_for_the_narration_is_narration_however_the_model_spells_it(
@@ -92,7 +102,7 @@ def test_a_word_for_the_narration_is_narration_however_the_model_spells_it(
     index = routing.speaker_index(cid, sid)
     for spelling in ("narrator", "Narrator", "the narrator", "GM", "storyteller",
                      "you", "grimoire"):
-        assert routing.authority(index, spelling) == routing.NARRATION, spelling
+        assert routing.authority(index, spelling, (), NARRATED) == routing.NARRATION, spelling
 
 
 def test_a_speaker_the_scene_has_wins_over_the_narration_words(monkeypatch, tmp_path):
@@ -102,7 +112,8 @@ def test_a_speaker_the_scene_has_wins_over_the_narration_words(monkeypatch, tmp_
     cid, wroot = _campaign(monkeypatch, tmp_path)
     sid, _, _, _ = _scene(cid, wroot)
     scenes.append_reply(cid, sid, [{"speaker": "Narrator", "content": "I am a person."}])
-    assert routing.authority(routing.speaker_index(cid, sid), "Narrator") == routing.OTHER
+    assert routing.authority(routing.speaker_index(cid, sid), "Narrator", (),
+                             "I am a person.") == routing.OTHER
 
 
 def test_a_citation_quoting_the_sub_speaker_label_verbatim_still_resolves(
@@ -114,8 +125,8 @@ def test_a_citation_quoting_the_sub_speaker_label_verbatim_still_resolves(
     scenes.append_reply(cid, sid, [{"speaker": "Seraphine Vale (aside)",
                                     "content": "Not that they'd believe me."}])
     index = routing.speaker_index(cid, sid)
-    assert routing.authority(index, "Seraphine Vale (aside)",
-                             (f"characters:{sera}",)) == routing.SELF
+    assert routing.authority(index, "Seraphine Vale (aside)", (f"characters:{sera}",),
+                             "Not that they'd believe me.") == routing.SELF
 
 
 def test_a_claim_about_someone_else_is_hearsay_not_first_hand(monkeypatch, tmp_path):
@@ -124,8 +135,10 @@ def test_a_claim_about_someone_else_is_hearsay_not_first_hand(monkeypatch, tmp_p
     cid, wroot = _campaign(monkeypatch, tmp_path)
     sid, sera, mara, _ = _scene(cid, wroot)
     index = routing.speaker_index(cid, sid)
-    assert routing.authority(index, "Seraphine Vale", (f"characters:{sera}",)) == routing.SELF
-    assert routing.authority(index, "Seraphine Vale", (f"characters:{mara}",)) == routing.OTHER
+    assert routing.authority(index, "Seraphine Vale", (f"characters:{sera}",), SAID) \
+        == routing.SELF
+    assert routing.authority(index, "Seraphine Vale", (f"characters:{mara}",), SAID) \
+        == routing.OTHER
 
 
 def test_a_record_with_no_personal_subject_never_reaches_first_hand(monkeypatch, tmp_path):
@@ -134,7 +147,8 @@ def test_a_record_with_no_personal_subject_never_reaches_first_hand(monkeypatch,
     the placement rule #112 asks for, applied to the score."""
     cid, wroot = _campaign(monkeypatch, tmp_path)
     sid, _, _, _ = _scene(cid, wroot)
-    assert routing.authority(routing.speaker_index(cid, sid), "Seraphine Vale") == routing.OTHER
+    assert routing.authority(routing.speaker_index(cid, sid), "Seraphine Vale", (),
+                             SAID) == routing.OTHER
 
 
 def test_a_speaker_the_transcript_never_had_is_uncorroborated(monkeypatch, tmp_path):
@@ -143,8 +157,8 @@ def test_a_speaker_the_transcript_never_had_is_uncorroborated(monkeypatch, tmp_p
     cid, wroot = _campaign(monkeypatch, tmp_path)
     sid, _, _, _ = _scene(cid, wroot)
     index = routing.speaker_index(cid, sid)
-    assert routing.authority(index, "The Harbourmaster") == routing.UNATTRIBUTED
-    assert routing.authority(index, "") == routing.UNCITED
+    assert routing.authority(index, "The Harbourmaster", (), SAID) == routing.UNATTRIBUTED
+    assert routing.authority(index, "", (), SAID) == routing.UNCITED
     assert (routing.WEIGHTS[routing.UNATTRIBUTED] < routing.WEIGHTS[routing.UNCITED])
 
 
@@ -158,10 +172,10 @@ def test_a_name_two_speakers_answer_to_is_not_a_fabricated_citation(monkeypatch,
     scenes.append_reply(cid, sid, [{"speaker": "Mara Cotgrave", "content": "I saw it."},
                                    {"speaker": "Mara Vance", "content": "So did I."}])
     index = routing.speaker_index(cid, sid)
-    assert routing.authority(index, "Mara") == routing.UNATTRIBUTED
+    assert routing.authority(index, "Mara", (), "I saw it.") == routing.UNATTRIBUTED
     # Either full name still resolves — the decline is about the ambiguity, not
     # about those speakers being unrecognized.
-    assert routing.authority(index, "Mara Cotgrave") == routing.OTHER
+    assert routing.authority(index, "Mara Cotgrave", (), "I saw it.") == routing.OTHER
 
 
 def test_a_present_but_silent_cast_member_is_still_uncorroborated(monkeypatch, tmp_path):
@@ -170,7 +184,8 @@ def test_a_present_but_silent_cast_member_is_still_uncorroborated(monkeypatch, t
     in for having said something."""
     cid, wroot = _campaign(monkeypatch, tmp_path)
     sid, _, _, _ = _scene(cid, wroot)
-    assert routing.authority(routing.speaker_index(cid, sid), "Mara") == routing.UNATTRIBUTED
+    assert routing.authority(routing.speaker_index(cid, sid), "Mara", (),
+                             SAID) == routing.UNATTRIBUTED
 
 
 def test_a_citation_may_shorten_a_speakers_name(monkeypatch, tmp_path):
@@ -179,7 +194,7 @@ def test_a_citation_may_shorten_a_speakers_name(monkeypatch, tmp_path):
     cid, wroot = _campaign(monkeypatch, tmp_path)
     sid, sera, _, _ = _scene(cid, wroot)
     index = routing.speaker_index(cid, sid)
-    assert routing.authority(index, "Seraphine", (f"characters:{sera}",)) == routing.SELF
+    assert routing.authority(index, "Seraphine", (f"characters:{sera}",), SAID) == routing.SELF
 
 
 def test_a_sub_speaker_label_still_names_its_speaker(monkeypatch, tmp_path):
@@ -190,7 +205,8 @@ def test_a_sub_speaker_label_still_names_its_speaker(monkeypatch, tmp_path):
     scenes.append_reply(cid, sid, [{"speaker": "Seraphine Vale (aside)",
                                     "content": "Not that they'd believe me."}])
     index = routing.speaker_index(cid, sid)
-    assert routing.authority(index, "Seraphine Vale", (f"characters:{sera}",)) == routing.SELF
+    assert routing.authority(index, "Seraphine Vale", (f"characters:{sera}",),
+                             "Not that they'd believe me.") == routing.SELF
 
 
 def test_an_unreadable_scene_leaves_every_citation_uncorroborated(monkeypatch, tmp_path):
@@ -198,9 +214,9 @@ def test_an_unreadable_scene_leaves_every_citation_uncorroborated(monkeypatch, t
     degrade to "nothing corroborates this", not to a 500."""
     cid, _ = _campaign(monkeypatch, tmp_path)
     index = routing.speaker_index(cid, "999--nope")
-    assert index == {"canonical": [], "aliases": {}, "synthetic": set(),
-                     "texts": {}, "refs": {}}
-    assert routing.authority(index, "Seraphine Vale") == routing.UNATTRIBUTED
+    assert index == {"canonical": [], "aliases": {}, "texts": {}, "roll_texts": {},
+                     "refs": {}}
+    assert routing.authority(index, "Seraphine Vale", (), SAID) == routing.UNATTRIBUTED
 
 
 # ------------------------------------------------------------- the review block
@@ -230,7 +246,7 @@ def test_a_confident_fabrication_is_still_collapsed(monkeypatch, tmp_path):
     cid, wroot = _campaign(monkeypatch, tmp_path)
     sid, _, _, _ = _scene(cid, wroot)
     out = routing.review(routing.speaker_index(cid, sid),
-                         {"speaker": "The Harbourmaster", "certainty": 1.0})
+                         {"speaker": "The Harbourmaster", "quote": SAID, "certainty": 1.0})
     assert out["authority"] == routing.UNATTRIBUTED and out["band"] == "low"
 
 
@@ -240,11 +256,10 @@ def test_review_re_clamps_a_certainty_that_escaped_the_parser(monkeypatch, tmp_p
     cid, wroot = _campaign(monkeypatch, tmp_path)
     sid, _, _, _ = _scene(cid, wroot)
     index = routing.speaker_index(cid, sid)
-    assert routing.review(index, {"speaker": "Grimoire", "certainty": 40})["score"] == 1.0
-    assert routing.review(index, {"speaker": "Grimoire", "certainty": float("nan")}
-                          )["certainty"] is None
-    assert routing.review(index, {"speaker": "Grimoire", "certainty": True}
-                          )["certainty"] is None
+    cited = {"speaker": "Grimoire", "quote": NARRATED}
+    assert routing.review(index, {**cited, "certainty": 40})["score"] == 1.0
+    assert routing.review(index, {**cited, "certainty": float("nan")})["certainty"] is None
+    assert routing.review(index, {**cited, "certainty": True})["certainty"] is None
 
 
 def test_two_present_actors_sharing_a_name_name_neither(monkeypatch, tmp_path):
@@ -257,8 +272,10 @@ def test_two_present_actors_sharing_a_name_name_neither(monkeypatch, tmp_path):
                                        characters.blank_card("Seraphine Vale"))[0]
     appearances.appear(cid, sid, "characters", twin, "default", "npc")
     index = routing.speaker_index(cid, sid)
-    assert routing.authority(index, "Seraphine Vale", (f"characters:{sera}",)) == routing.OTHER
-    assert routing.authority(index, "Seraphine Vale", (f"characters:{twin}",)) == routing.OTHER
+    assert routing.authority(index, "Seraphine Vale", (f"characters:{sera}",), SAID) \
+        == routing.OTHER
+    assert routing.authority(index, "Seraphine Vale", (f"characters:{twin}",), SAID) \
+        == routing.OTHER
 
 
 def test_a_scene_transition_line_reads_as_narration(monkeypatch, tmp_path):
@@ -270,7 +287,8 @@ def test_a_scene_transition_line_reads_as_narration(monkeypatch, tmp_path):
     sid, _, _, _ = _scene(cid, wroot)
     index = routing.speaker_index(cid, sid)
     assert scenes.TRANSITION_SPEAKER not in index["canonical"]
-    assert routing.authority(index, scenes.TRANSITION_SPEAKER) == routing.UNATTRIBUTED
+    assert routing.authority(index, scenes.TRANSITION_SPEAKER, (),
+                             NARRATED) == routing.UNATTRIBUTED
 
 
 def test_lore_is_not_a_character(monkeypatch, tmp_path):
@@ -280,7 +298,8 @@ def test_lore_is_not_a_character(monkeypatch, tmp_path):
     sid, _, _, _ = _scene(cid, wroot)
     entities.create_entity(wroot, "lore", "The Ledger", "It lists bribes.", keys="ledger")
     index = routing.speaker_index(cid, sid)
-    assert routing.authority(index, "Seraphine Vale", ("lore:the-ledger",)) == routing.OTHER
+    assert routing.authority(index, "Seraphine Vale", ("lore:the-ledger",), SAID) \
+        == routing.OTHER
 
 
 # ------------------------------------------------ what materialize does with it
@@ -434,8 +453,8 @@ def test_a_malformed_card_name_does_not_take_the_absorb_down(monkeypatch, tmp_pa
     # The transcript half is untouched, so the citation is still corroborated —
     # only the mapping from that speaker to a record is lost.
     assert poisoned["canonical"] == healthy["canonical"]
-    assert routing.authority(poisoned, "Seraphine Vale",
-                             (f"characters:{sera}",)) == routing.OTHER
+    assert routing.authority(poisoned, "Seraphine Vale", (f"characters:{sera}",),
+                             SAID) == routing.OTHER
 
 
 def test_the_reported_score_is_the_one_the_band_was_read_off(monkeypatch, tmp_path):
@@ -463,7 +482,8 @@ def test_an_aside_does_not_make_its_own_speaker_ambiguous(monkeypatch, tmp_path)
         {"speaker": "Seraphine Vale (aside)", "content": "Not that he'd know."}])
     index = routing.speaker_index(cid, sid)
 
-    assert routing.authority(index, "Seraphine", (f"characters:{sera}",)) == routing.SELF
+    assert routing.authority(index, "Seraphine", (f"characters:{sera}",),
+                             "Not that he'd know.") == routing.SELF
 
 
 def test_a_roll_line_is_cited_by_the_label_the_transcript_shows(monkeypatch, tmp_path):
@@ -476,7 +496,7 @@ def test_a_roll_line_is_cited_by_the_label_the_transcript_shows(monkeypatch, tmp
                           speaker=scenes.ROLL_SPEAKER)
     index = routing.speaker_index(cid, sid)
 
-    assert routing.authority(index, "Roll") == routing.OTHER
+    assert routing.authority(index, "Roll", (), "Winifred rolls Guile: 7.") == routing.OTHER
 
 
 def test_a_departed_speaker_is_still_the_subject_of_their_own_line(monkeypatch, tmp_path):
@@ -488,7 +508,8 @@ def test_a_departed_speaker_is_still_the_subject_of_their_own_line(monkeypatch, 
     appearances.leave(cid, sid, "characters", sera)
     index = routing.speaker_index(cid, sid)
 
-    assert routing.authority(index, "Seraphine Vale", (f"characters:{sera}",)) == routing.SELF
+    assert routing.authority(index, "Seraphine Vale", (f"characters:{sera}",), SAID) \
+        == routing.SELF
 
 
 def test_a_label_that_could_be_a_longer_name_resolves_to_neither(monkeypatch, tmp_path):
@@ -506,7 +527,8 @@ def test_a_label_that_could_be_a_longer_name_resolves_to_neither(monkeypatch, tm
 
     # Corroborated as a speaker -- somebody said it -- but not pinned to an
     # actor, so it can never be read as that actor speaking about themself.
-    assert routing.authority(index, "Mara", (f"characters:{mara}",)) == routing.OTHER
+    assert routing.authority(index, "Mara", (f"characters:{mara}",),
+                             "I saw the ledger.") == routing.OTHER
 
 
 # ------------------------------------------- codex review P1: the quote is checked too
@@ -566,12 +588,43 @@ def test_the_quote_match_ignores_casing_whitespace_and_smart_quotes(monkeypatch,
                              '"Mine, until midnight."') == routing.SELF
 
 
-def test_a_citation_with_no_quote_is_still_judged_on_the_name(monkeypatch, tmp_path):
-    """There is nothing to verify, and refusing the tier for a missing quote
-    would punish the row twice — `uncited` already covers saying nothing."""
+# --------------------------------- codex review round two: the two half-citations
+
+def test_a_speaker_with_no_quote_is_an_incomplete_citation(monkeypatch, tmp_path):
+    """`{"speaker": "Grimoire", "certainty": 1}` used to earn full NARRATION and
+    band high on the name alone — the name-only hole, reopened for any model
+    that half-answers. A citation needs both halves to be checkable, so one
+    without an excerpt scores as the non-answer it is."""
     cid, wroot = _campaign(monkeypatch, tmp_path)
     sid, sera, _, _ = _scene(cid, wroot)
     index = routing.speaker_index(cid, sid)
 
+    assert routing.authority(index, "Grimoire", (), "") == routing.UNCITED
     assert routing.authority(index, "Seraphine Vale", (f"characters:{sera}",), "") \
-        == routing.SELF
+        == routing.UNCITED
+    # Never high, and still pre-checked — exactly where a row citing nobody sits.
+    assert routing.band(1.0 * routing.WEIGHTS[routing.UNCITED]) == "medium"
+
+
+def test_a_character_named_roll_keeps_her_own_lines(monkeypatch, tmp_path):
+    """The roll sentinel canonicalizes to the visible "Roll", which is also a
+    writable character name. Marking that canonical synthetic wholesale took the
+    real actor's identity with it — she could never be first-hand about herself
+    in any scene that also had a dice line."""
+    cid, wroot = _campaign(monkeypatch, tmp_path)
+    sid, _, _, _ = _scene(cid, wroot)
+    roll = characters.create_character(wroot, "Roll", "default",
+                                       characters.blank_card("Roll"))[0]
+    appearances.appear(cid, sid, "characters", roll, "default", "npc")
+    scenes.append_reply(cid, sid, [{"speaker": "Roll", "content": "I keep the tally."}])
+    scenes.append_message(cid, sid, "assistant", "Winifred rolls Guile: 7.",
+                          speaker=scenes.ROLL_SPEAKER)
+    index = routing.speaker_index(cid, sid)
+    hers = (f"characters:{roll}",)
+
+    # Her own words: first-hand about her own record.
+    assert routing.authority(index, "Roll", hers, "I keep the tally.") == routing.SELF
+    # The dice line under the same visible label: real, quotable, spoken by
+    # nobody — so corroborated, and never first-hand.
+    assert routing.authority(index, "Roll", hers, "Winifred rolls Guile: 7.") \
+        == routing.OTHER
