@@ -578,6 +578,20 @@ def _continuation_stream(cid: str, sid: str, pid: str, messages: list[dict],
     pending record, then emit its proposal event."""
     def finalize(watcher) -> list[str]:
         frames: list[str] = []
+        # A continuation whose entire output was a tracker block persists no
+        # post, and `commit_narration` marks the record `narrated` on the
+        # strength of having CALLED persist, not on what it wrote. The proposal
+        # would leave `resolved`/`declined` for good, every retry short-circuit
+        # to `done`, and an adjudicated roll keep no narration at all — the one
+        # loss this whole path is built to prevent. Left uncommitted, the record
+        # stays committable and the next send re-streams it.
+        #
+        # Gated on the RAW narration being non-empty, so this changes nothing
+        # about a continuation that genuinely produced no text: that has always
+        # counted as narrated, and re-deciding it is not this branch's business.
+        if watcher.narration.strip() and not _narration(watcher).strip():
+            frames.append(_sse({"done": True}))
+            return frames
         persist = lambda: _persist_reply(cid, sid, watcher.narration)
         if watcher.complete or watcher.truncated:
             with store.locks.campaign_lock(cid):

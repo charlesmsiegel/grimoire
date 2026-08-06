@@ -9450,3 +9450,28 @@ async def test_a_tracker_only_regenerate_puts_the_old_reply_back(monkeypatch, tm
     contents = [m["content"] for m in store.scenes.read_scene(cid, sid)["messages"]]
     assert "The tide turns." in contents          # the deleted reply came back
     assert not any("```" in c for c in contents)  # and no block was stored
+
+
+async def test_a_tracker_only_continuation_stays_retryable(monkeypatch, tmp_path):
+    """`commit_narration` marks a proposal `narrated` on the strength of having
+    CALLED persist, not on what it wrote. A continuation that is nothing but a
+    tracker block persists no post, so committing would strand the roll with no
+    narration and short-circuit every retry to `done` (#120)."""
+    cid, sid, _at = _scene_with_a_pending_post(tmp_path, monkeypatch)
+    rec = store.proposals.new(cid, sid, {"check": "steady", "actor": "characters:w",
+                                         "problems": []})
+    store.proposals.claim(cid, sid, rec["id"])
+    store.proposals.transition(cid, sid, rec["id"], ("resolving",), "resolved",
+                               {"outcome": "success"})
+
+    class TrackerOnly:
+        async def stream(self, messages, cfg):
+            yield '```state\n{"W": {"mood": "wry"}}\n```'
+
+    resp = routes.streaming._continuation_stream(
+        cid, sid, rec["id"], [{"role": "user", "content": "and then?"}],
+        {"kind": "openrouter", "model": "m"}, TrackerOnly())
+    frames = "".join([f async for f in resp.body_iterator])
+    assert '"done": true' in frames
+    # Nothing landed, so the record must still be committable.
+    assert store.proposals.get(cid, sid)["status"] == "resolved"

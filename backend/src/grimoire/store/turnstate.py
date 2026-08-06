@@ -489,7 +489,20 @@ def current(cid: str, sid: str, tail: int, depth: int) -> dict[str, dict[str, st
     posts of the tail. That IS the decay --- an older value is not aged or
     weighted, it simply stops being in the window and drops out.
 
-    `depth <= 0` disables the feature, mirroring `archive_depth`."""
+    `depth <= 0` disables the feature, mirroring `archive_depth`.
+
+    Deliberately NOT clamped to `MAX_ENTRIES`, unlike `streaks_from`'s `need`.
+    The two bounds are in different units and only one of them is a promise:
+    `depth` counts POSTS back from the tail, `MAX_ENTRIES` counts recorded
+    ENTRIES, and entries are sparse — a scene where one NPC was tracked at post
+    0 and another at post 1000 holds two of them. Clamping would drop the post-0
+    actor from a 1001-post window she is genuinely inside and genuinely still
+    retained, which is a real loss, while the dense case that motivates
+    clamping — 201 single-post replies evicting post 0 — is one the cap has
+    already decided and the floor cannot change either way. So the window is a
+    ceiling on what is asked for, the cap is the memory that answers, and where
+    they disagree the answer is simply whatever survived.
+    """
     if depth <= 0 or tail <= 0:
         return {}
     floor = max(0, tail - depth)
@@ -568,10 +581,25 @@ def drop_scene(cid: str, sid: str) -> None:
     scene to take the id inherits a dead one's moods, and the low indices the
     stale entries sit at are exactly the ones a young scene's decay window
     covers.
+
+    Reads STRICTLY, unlike everything else here. `read` turns an unreadable
+    file into `{}`, which every other caller wants — a garbled ledger should
+    cost a prompt section, never a generation. Here it would mean the opposite:
+    "no entry for this scene, nothing to purge", after which `delete_scene`
+    unlinks the transcript and frees the id. If the file was merely locked or
+    briefly unreadable, the next scene to take that id inherits a dead one's
+    moods. Raising leaves the scene intact and the delete retryable.
     """
     with locks.campaign_lock(cid):
-        data = read(cid)
-        if sid not in data:
+        p = _path(cid)
+        if not p.exists():
+            return
+        raw = p.read_text(encoding="utf-8")     # OSError propagates, deliberately
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            return          # unparseable: nothing here can be inherited either
+        if not isinstance(data, dict) or sid not in data:
             return
         del data[sid]
         _write(cid, data)
