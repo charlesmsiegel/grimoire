@@ -9404,3 +9404,24 @@ def test_a_broken_world_plot_map_does_not_skip_the_greeting_sweep(client):
     with pytest.raises(json.JSONDecodeError):
         client.delete(f"/api/worlds/{wid}/greetings/{gid}")
     assert not (croot / "greetings" / gid).exists()        # swept anyway
+async def test_a_failure_mid_tracker_block_shows_what_it_persists(monkeypatch, tmp_path):
+    """The redactor withholds from a ```state opener, but `split_block` strips
+    only a TRAILING block — so a partial that ends in a block with narration
+    after it is persisted whole while the client was shown nothing of it. The
+    error path has to flush the redactor, or a refresh reveals text the stream
+    never sent (#120)."""
+    cid, sid, _at = _scene_with_a_pending_post(tmp_path, monkeypatch)
+
+    class BlockThenNarrationThenFails:
+        async def stream(self, messages, cfg):
+            yield 'She waits.\n\n```state\n{"W": {"mood": "wry"}}\n```\n\nShe turns back.'
+            raise LLMError("network", "connection reset")
+
+    resp = routes.streaming._chat_stream(
+        cid, sid, [{"role": "user", "content": "and then?"}],
+        {"kind": "openrouter", "model": "m"}, BlockThenNarrationThenFails())
+    streamed = "".join([f async for f in resp.body_iterator])
+    assert '"kind": "network"' in streamed
+    stored = store.scenes.read_scene(cid, sid)["messages"][-1]["content"]
+    assert "She turns back." in stored          # persisted, mid-reply block and all
+    assert "She turns back." in streamed        # and the client was told

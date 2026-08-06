@@ -50,10 +50,17 @@ The model ends a reply with:
 
 Keyed by the **name** the model already uses in its `**Speaker:**` markers,
 not by a store id — the scene prompt never shows ids, and asking for one
-would mean putting an id list in the prompt for the model to mistype. Names
-resolve against the scene cast (case-insensitively, against the locked card
-name the character-description section shows) and unresolved names are
-dropped. Fields are exactly `mood`, `intent`, `posture`; other keys are
+would mean putting an id list in the prompt for the model to mistype.
+
+Labels resolve through `scenes.match_name`, the same rule the transcript
+grammar uses: exact first, else the single cast name the label is a
+word-boundary prefix of. That matters — `**Winifred:**` is a valid transcript
+label for `Winifred Ash`, so it is a label the instruction invites the model to
+reuse, and exact-matching would have persisted the dialogue while silently
+dropping all of its state. Injected into `resolve` rather than imported:
+`scenes` imports `turnstate` (for `drop_scene`), so reaching back would close
+a cycle, and injection keeps the rule in one place. Ambiguous labels resolve
+to nobody, which is what `match_name` already says about them. Fields are exactly `mood`, `intent`, `posture`; other keys are
 dropped; values are collapsed to one line and dropped above 80 characters,
 which is #121's "constrain the tracked fields to short values so streaks are
 detectable".
@@ -96,6 +103,17 @@ false rather than merely stale:
   The tail filter alone does not cover a reroll: the replacement lands at the
   same index, so the discarded variant's entry points at a post that exists
   again, and a replacement carrying no block of its own would inherit it.
+- `PUT .../messages/{index}` supersedes from that index too. An edit is the one
+  transcript change no index-based filter can see: rewriting a furious exchange
+  as a calm one leaves the entry at a perfectly valid index. Everything after
+  the edit goes with it, since editing text can add or remove blocks and shift
+  every later index onto a post it does not describe.
+
+Promotion reads the transcript length its **caller** passes, and `post_absorb`
+passes the length of the scene snapshot it took before awaiting the extraction
+call. A turn landing while that request is in flight must not contribute a
+promoted value to a review whose summary and edits came from a transcript
+without it.
 
 A scene keeps its newest 200 entries. turnstate.json is per-campaign and is
 re-read and rewritten on every persisted turn, and both readers only ever want
