@@ -57,6 +57,13 @@ def _scene(client, posts=0):
     return cid, sid
 
 
+def _location(cid: str, name: str) -> str:
+    """A campaign location, created through the store: `set_location` resolves
+    the entity, so the scene cannot be moved somewhere that does not exist."""
+    from grimoire.store import entities
+    return entities.create_entity(store.campaigns.campaign_root(cid), "locations", name)
+
+
 def _key(client):
     """A usable LLM connection, so `_require_connection` stops being the answer."""
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-test"})
@@ -353,7 +360,9 @@ def test_an_older_refresh_does_not_overwrite_a_newer_one(client):
             msgs = store.scenes.read_scene(cid, sid)["messages"]
             store.scenes.set_rolling_summary(
                 cid, sid, "Newer summary, covering twelve.", len(msgs),
-                store.rolling_summary.covered_digest(msgs))
+                store.rolling_summary.covered_digest(msgs),
+                store.rolling_summary.facts_digest(
+                    store.chronicle.scene_facts(cid, sid)))
             return await super().complete(messages, conn)
 
     _use(client, NewerLandsFirst([["Older summary, covering ten."]]))
@@ -390,6 +399,60 @@ def test_an_empty_completion_still_reports_the_staleness_it_can_see(client):
 
     assert body["refreshed"] is False
     assert body["stale"] is True and body["summary"] == "Good summary."
+
+
+def test_setting_the_first_location_makes_the_summary_stale(client):
+    """A scene's FIRST location is set silently — no transcript message — so a
+    message digest cannot see it. Now that the facts reach the prompt, a summary
+    built without a location is as stale as one built from a deleted post, and
+    without this the panel reports "Covers N of N posts" for prose that never
+    mentions where any of it happened."""
+    _key(client)
+    _use(client, _summarizer("A summary with no location in it."))
+    cid, sid = _scene(client, posts=10)
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary")
+    assert client.get(
+        f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary").json()["stale"] is False
+
+    loc = _location(cid, "The Night Dock")
+    store.scenes.set_location(cid, sid, loc)
+
+    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary").json()
+    assert body["stale"] is True
+    # ...and the prose is still shown, it just no longer claims to be current
+    assert body["summary"] == "A summary with no location in it."
+
+
+def test_the_refold_after_a_fact_change_is_told_the_new_fact(client):
+    _key(client)
+    _use(client, _summarizer("First summary."))
+    cid, sid = _scene(client, posts=10)
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary")
+
+    loc = _location(cid, "The Night Dock")
+    store.scenes.set_location(cid, sid, loc)
+    llm = _use(client, _summarizer("A summary that knows where it is."))
+    body = client.post(
+        f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary?force=true").json()
+
+    user = _user_prompt(llm, 0)
+    assert "The Night Dock" in user
+    assert "Summary so far" not in user       # a moved fact refolds from scratch
+    assert body["refreshed"] is True and body["stale"] is False
+
+
+def test_reseating_the_same_cast_does_not_invalidate_a_summary(client):
+    """The facts digest sorts the cast: seating order is not a fact about the
+    scene, and churn there must not buy a whole-transcript refold."""
+    _key(client)
+    _use(client, _summarizer("A summary."))
+    cid, sid = _scene(client, posts=10)
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary")
+    before = client.get(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary").json()
+    assert before["stale"] is False
+    # nothing about the scene's facts has moved, so nothing may go stale
+    assert client.get(
+        f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary").json()["stale"] is False
 
 
 # ---- POST: failure never reaches the turn loop ----

@@ -1239,8 +1239,14 @@ export const api = {
   getScenePrompt: (cid: string, sid: string, eid: string) =>
     request<PromptSnapshot>(
       "GET", `/api/campaigns/${cid}/scenes/${sid}/prompts/${eid}`),
+  // `fresh`, like `sceneBriefing`: the panel re-reads this immediately after the
+  // automatic POST commits, which is exactly when a shared in-flight GET issued
+  // *before* that write would hand back a pre-write answer — and the read token
+  // would then install it as the newest word, hiding a summary that is durable
+  // on the server with no later reread scheduled.
   getRollingSummary: (cid: string, sid: string) =>
-    request<RollingSummary>("GET", `/api/campaigns/${cid}/scenes/${sid}/rolling-summary`),
+    request<RollingSummary>("GET", `/api/campaigns/${cid}/scenes/${sid}/rolling-summary`,
+                            undefined, { fresh: true }),
   /** Ask the server to refold the summary. Without `force` it is a no-op
    *  unless enough posts have landed, which is why the play loop can fire it
    *  after every turn: the gate is the server's, not the caller's. */

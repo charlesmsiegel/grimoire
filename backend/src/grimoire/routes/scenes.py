@@ -1310,7 +1310,7 @@ def _rolling_claim(cid: str, sid: str):
         if claimed:
             with _rolling_inflight_guard:
                 _rolling_inflight.discard(key)
-def _rolling_view(cid: str, sid: str, scene: dict) -> dict:
+def _rolling_view(cid: str, sid: str, scene: dict, facts: dict) -> dict:
     """The stored summary reconciled against the transcript as it stands now.
 
     Three things come out of this, and keeping them apart is the point:
@@ -1337,9 +1337,16 @@ def _rolling_view(cid: str, sid: str, scene: dict) -> dict:
     # `at > total` short-circuits rather than slicing: `messages[:at]` past the
     # end yields the whole list and would digest-match a transcript that has
     # since been trimmed back to exactly what it covered.
+    #
+    # BOTH digests, because a summary can go stale two ways and only one of them
+    # is visible in the transcript. The facts half is the price of putting facts
+    # in the prompt at all: a scene's first location and first date are set
+    # SILENTLY, so they can change with no message appended, and a summary built
+    # from the wrong location is as stale as one built from a deleted post.
     intact = (stored["at"] <= total
               and store.rolling_summary.covered_digest(messages[:stored["at"]])
-              == stored["digest"])
+              == stored["digest"]
+              and store.rolling_summary.facts_digest(facts) == stored["facts"])
     return {"summary": stored["summary"], "at": stored["at"], "total": total,
             "stale": bool(stored["summary"]) and not intact,
             "prior": stored["summary"] if intact else "",
@@ -1363,7 +1370,8 @@ def _rolling_due(view: dict, every: int, force: bool) -> bool:
     return force or (every > 0 and pending >= every)
 
 
-def _rolling_commit(cid: str, sid: str, summary: str, covered: int, digest: str) -> dict:
+def _rolling_commit(cid: str, sid: str, summary: str, covered: int, digest: str,
+                    facts_key: str) -> dict:
     """Store a fold only if the prefix it was computed FROM is still the prefix
     on disk, and report the state that results either way.
 
@@ -1388,7 +1396,8 @@ def _rolling_commit(cid: str, sid: str, summary: str, covered: int, digest: str)
     """
     with store.locks.campaign_lock(cid):
         scene = store.scenes.read_scene(cid, sid)
-        stored = _rolling_view(cid, sid, scene)
+        facts = store.chronicle.scene_facts(cid, sid)
+        stored = _rolling_view(cid, sid, scene, facts)
         # Two independent refusals, and review found the second one after the
         # first was in place, because they fail on opposite facts.
         #
@@ -1407,9 +1416,11 @@ def _rolling_commit(cid: str, sid: str, summary: str, covered: int, digest: str)
             and stored["at"] >= covered
         landed = intact and not superseded
         if landed:
-            store.scenes.set_rolling_summary(cid, sid, summary, covered, digest)
+            store.scenes.set_rolling_summary(cid, sid, summary, covered, digest,
+                                             facts_key)
             scene = store.scenes.read_scene(cid, sid)
-        return {"landed": landed, "view": _rolling_view(cid, sid, scene)}
+            facts = store.chronicle.scene_facts(cid, sid)
+        return {"landed": landed, "view": _rolling_view(cid, sid, scene, facts)}
 
 
 def _rolling_reread(cid: str, sid: str, fallback: dict) -> dict:
@@ -1426,7 +1437,8 @@ def _rolling_reread(cid: str, sid: str, fallback: dict) -> dict:
     against, and this call is fire-and-forget from the client anyway.
     """
     try:
-        return _rolling_view(cid, sid, _require_scene(cid, sid))
+        return _rolling_view(cid, sid, _require_scene(cid, sid),
+                             store.chronicle.scene_facts(cid, sid))
     except HTTPException:
         return fallback
 
@@ -1449,7 +1461,8 @@ def get_rolling_summary(cid: str, sid: str):
     select, and a store with no key configured must still render the panel.
     """
     scene = _require_scene(cid, sid)
-    return _rolling_body(_rolling_view(cid, sid, scene),
+    return _rolling_body(_rolling_view(cid, sid, scene,
+                                       store.chronicle.scene_facts(cid, sid)),
                          store.config.rolling_summary_every())
 
 
@@ -1470,7 +1483,8 @@ async def post_rolling_summary(cid: str, sid: str, force: bool = False,
     scene = _require_scene(cid, sid)
     conn = _require_connection()
     every = store.config.rolling_summary_every()
-    view = _rolling_view(cid, sid, scene)
+    facts = store.chronicle.scene_facts(cid, sid)
+    view = _rolling_view(cid, sid, scene, facts)
     if not _rolling_due(view, every, force):
         return {**_rolling_body(view, every), "refreshed": False}
 
@@ -1480,11 +1494,12 @@ async def post_rolling_summary(cid: str, sid: str, force: bool = False,
             # these posts too. Claimed AFTER the due check on purpose: a POST
             # that was never going to spend anything has nothing to coalesce.
             return {**_rolling_body(view, every), "refreshed": False}
-        return await _rolling_refresh(cid, sid, scene, view, every, conn, client)
+        return await _rolling_refresh(cid, sid, scene, view, every, conn, client,
+                                      facts)
 
 
 async def _rolling_refresh(cid: str, sid: str, scene: dict, view: dict, every: int,
-                           conn: dict, client: LLMClient) -> dict:
+                           conn: dict, client: LLMClient, facts: dict) -> dict:
     """The paid half of `post_rolling_summary`, split out so the in-flight claim
     brackets exactly the span that reaches the provider."""
     messages = scene["messages"]
@@ -1494,8 +1509,7 @@ async def _rolling_refresh(cid: str, sid: str, scene: dict, view: dict, every: i
     covered, base = len(messages), view["base"]
     digest = store.rolling_summary.covered_digest(messages)
     prompt = store.rolling_summary.build_prompt(
-        view["prior"], store.chronicle.transcript_text(messages[base:]),
-        store.chronicle.scene_facts(cid, sid))
+        view["prior"], store.chronicle.transcript_text(messages[base:]), facts)
     try:
         text = await client.complete(prompt, conn)
     except LLMError as exc:
@@ -1518,8 +1532,9 @@ async def _rolling_refresh(cid: str, sid: str, scene: dict, view: dict, every: i
     # every unrelated request and open stream on the backend rather than just
     # this refresh. Same treatment `post_absorb` and `streaming.py` give theirs.
     try:
-        result = await run_in_threadpool(_rolling_commit, cid, sid,
-                                         summary, covered, digest)
+        result = await run_in_threadpool(_rolling_commit, cid, sid, summary, covered,
+                                         digest,
+                                         store.rolling_summary.facts_digest(facts))
     except store.scenes.SceneNotFound:
         # The scene was renamed or deleted while the model was answering, which
         # mints a new id and moves the file out from under this write -- the
