@@ -375,3 +375,37 @@ def test_swapping_in_a_parked_alternate_does_not_keep_the_live_takes_state(
         f"characters:{char_id}": {"mood": "gracious"}}       # the live take's
     alternates.promote(cid, sid, 0)
     assert turnstate.entries(cid, sid) == []
+
+
+def test_a_reroll_that_produces_nothing_restores_the_state_with_the_reply(
+        monkeypatch, tmp_path):
+    """Reroll deletes before it generates, so the removal drops the ledger entry
+    too. A generation that then says nothing puts the reply back — and the mood
+    has to come back with it, or the restored reply is present in the transcript
+    and silently absent from the next prompt."""
+    cid, sid, char_id = _scene(monkeypatch, tmp_path)
+    config.write_config(turnstate_depth="4")
+    scenes.append_message(cid, sid, "user", "Where is the ledger?")
+    _persist_reply(cid, sid, "**Winifred Ash:** Get out.\n\n"
+                   + _block('{"Winifred Ash": {"mood": "furious"}}'))
+    live = turnstate.entries(cid, sid)
+    token = scenes.remove_trailing_assistant_run(cid, sid)
+    assert turnstate.entries(cid, sid) == []          # gone while the reroll runs
+    assert scenes.restore_trailing_assistant_run(cid, sid, token) is True
+    assert turnstate.entries(cid, sid) == live        # and back with the reply
+    assert "furious" in dict((s["label"], s["text"]) for s in
+                             context.context_sections(cid, sid))["Transient state"]
+
+
+def test_a_refused_restore_does_not_refile_the_state(monkeypatch, tmp_path):
+    """The restore declines when the transcript moved on. Re-filing the ledger
+    anyway would describe whatever took the reply's place."""
+    cid, sid, char_id = _scene(monkeypatch, tmp_path)
+    config.write_config(turnstate_depth="4")
+    scenes.append_message(cid, sid, "user", "Where is the ledger?")
+    _persist_reply(cid, sid, "**Winifred Ash:** Get out.\n\n"
+                   + _block('{"Winifred Ash": {"mood": "furious"}}'))
+    token = scenes.remove_trailing_assistant_run(cid, sid)
+    _persist_reply(cid, sid, "**Winifred Ash:** Please, sit.")   # something else landed
+    assert scenes.restore_trailing_assistant_run(cid, sid, token) is False
+    assert turnstate.entries(cid, sid) == []
