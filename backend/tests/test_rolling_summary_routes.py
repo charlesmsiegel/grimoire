@@ -7,8 +7,10 @@ down, and that a transcript which changed under a stored summary makes the fold
 start over instead of carrying prose about a post the player deleted.
 """
 
+import asyncio
 import importlib
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -483,3 +485,92 @@ def test_the_knob_is_readable_and_writable_over_the_config_route(client):
     assert client.put("/api/config", json={"rolling_summary_every": "25"}).json()[
         "rolling_summary_every"] == "25"
     assert client.get("/api/config").json()["rolling_summary_every"] == "25"
+
+
+# ---- one threshold crossing, one billed call ----
+async def test_a_second_turn_does_not_start_a_second_provider_call(monkeypatch, tmp_path):
+    """The stored coverage does not advance until the first call RETURNS, so
+    every turn landing while it is in flight passes the same due check and
+    starts its own provider call. The supersession check only stops the later
+    write — by then both calls have been paid for, and with a slow completion
+    and a fast player one crossing bills several times over.
+
+    Two genuinely concurrent requests, not a simulated interleave: this is about
+    what the route does before it reaches the model, so it has to be raced.
+    """
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    importlib.reload(store)
+    app = create_app()
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class SlowLLM(FakeLLM):
+        async def complete(self, messages, cfg):
+            self.prompts.append(messages)
+            started.set()
+            await release.wait()
+            return "A summary."
+
+    llm = SlowLLM()
+    app.dependency_overrides[routes.get_llm] = lambda: llm
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as ac:
+        wid = (await ac.post("/api/worlds", json={"name": "Realm"})).json()["id"]
+        cid = (await ac.post("/api/campaigns",
+                             json={"name": "Run", "world": wid})).json()["id"]
+        sid = (await ac.post(f"/api/campaigns/{cid}/scenes",
+                             json={"title": "Saltmarch"})).json()["id"]
+        await ac.put("/api/llm-connections/openrouter", json={"api_key": "sk-test"})
+        for n in range(10):
+            store.scenes.append_message(cid, sid, "user", f"Post {n}.")
+
+        url = f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary"
+        first = asyncio.create_task(ac.post(url))
+        await asyncio.wait_for(started.wait(), timeout=5)
+        # A turn lands while the first refresh is still waiting on the model...
+        store.scenes.append_message(cid, sid, "user", "Post 10.")
+        # wait_for, so a regression that deadlocks fails here instead of stalling
+        second = await asyncio.wait_for(ac.post(url), timeout=15)  # the client fires again
+        release.set()
+        first_body = (await asyncio.wait_for(first, timeout=15)).json()
+
+    assert llm.calls == 1, "the second POST paid for a duplicate provider call"
+    assert second.json()["refreshed"] is False
+    assert first_body["refreshed"] is True
+
+
+async def test_the_claim_is_released_so_the_next_refresh_can_run(monkeypatch, tmp_path):
+    """A refusal that outlived its request would wedge the scene's summary for
+    the life of the process, which is strictly worse than the duplicate call it
+    exists to prevent."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    importlib.reload(store)
+    app = create_app()
+
+    class Boom(FakeLLM):
+        async def complete(self, messages, cfg):
+            self.prompts.append(messages)
+            raise LLMError("upstream", "the model exploded")
+
+    app.dependency_overrides[routes.get_llm] = lambda: Boom()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as ac:
+        wid = (await ac.post("/api/worlds", json={"name": "Realm"})).json()["id"]
+        cid = (await ac.post("/api/campaigns",
+                             json={"name": "Run", "world": wid})).json()["id"]
+        sid = (await ac.post(f"/api/campaigns/{cid}/scenes",
+                             json={"title": "Saltmarch"})).json()["id"]
+        await ac.put("/api/llm-connections/openrouter", json={"api_key": "sk-test"})
+        for n in range(10):
+            store.scenes.append_message(cid, sid, "user", f"Post {n}.")
+
+        url = f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary"
+        assert (await ac.post(url)).status_code == 502      # claim taken, then failed
+
+        ok = FakeLLM("A summary after the failure.")
+        app.dependency_overrides[routes.get_llm] = lambda: ok
+        body = (await ac.post(url)).json()
+
+    assert body["refreshed"] is True and ok.calls == 1
