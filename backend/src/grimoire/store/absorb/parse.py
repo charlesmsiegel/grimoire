@@ -181,6 +181,14 @@ def parse_output(text: str) -> dict:
         "summary": str(obj.get("summary", "")).strip(),
         "keywords": [str(k).strip() for k in _rows(obj, "keywords") if str(k).strip()],
         "timeline_events": _list("timeline_events", ("date", "text")),
+        # The fact ledger (#114). `supersedes` is the id of a standing fact this
+        # one replaces, and a row with a `supersedes` and no `text` retires that
+        # fact outright -- so, unlike every other section here, a blank field is
+        # a meaningful instruction rather than nothing to say. `_list` is still
+        # the right normalizer: it collapses a JSON null to "", which is what
+        # the model writes for "no prior fact", and `materialize` reads the two
+        # blanks together (neither one alone stages anything).
+        "facts": _list("facts", ("text", "date", "supersedes")),
         "character_state_edits": cs_edits,
         "group_state_edits": gs_edits,
         "lore_edits": _list("lore_edits", ("id", "append")),

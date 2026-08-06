@@ -17,8 +17,8 @@ code change.
   via a dynamic `{% include %}` in the composing template, or by the caller
   choosing which file to render.
 - `snippets/` holds line formats that feed prompt *content* (transcripts,
-  relationship lines, plot-thread lines, commitment lines) and are shared
-  across calls.
+  relationship lines, plot-thread lines, commitment lines, standing-fact lines)
+  and are shared across calls.
 - Files starting with `_` are macro libraries, not messages.
 
 Rendering contract: `jinja2.Environment(loader=FileSystemLoader("templates"),
@@ -85,7 +85,8 @@ lines), `rel_snapshot` (`absorb.relationships_snapshot()` — lines per
 `snippets/feeling_line.j2` / `snippets/bond_line.j2`), `plot_snapshot`
 (`absorb.plot_snapshot()` — lines per `snippets/plot_thread_line/absorb.j2`),
 `commitment_snapshot` (`absorb.commitment_snapshot()` — lines per
-`snippets/commitment_line/absorb.j2`), `transcript`
+`snippets/commitment_line/absorb.j2`), `fact_snapshot`
+(`absorb.fact_snapshot()` — lines per `snippets/fact_line.j2`), `transcript`
 (`snippets/transcript.j2`).
 
 ### `audit/` — the post-absorb mechanics audit inside POST …/absorb

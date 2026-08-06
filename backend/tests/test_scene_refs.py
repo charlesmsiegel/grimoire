@@ -1,7 +1,7 @@
 import json
 
 from grimoire.store import (appearances, campaigns, changes, chronicle, commitments,
-                            plot, scene_refs, worlds)
+                            facts, plot, scene_refs, worlds)
 
 
 def _campaign(monkeypatch, tmp_path):
@@ -27,6 +27,8 @@ def test_repoint_updates_every_store_that_holds_scene_ids(monkeypatch, tmp_path)
     plot.set_movement(cid, "heist", "The Heist", "open", "cased the vault", old)
     commitments.set_movement(cid, "the-debt", "The debt", "promise", "open", "",
                              "sworn at the vault door", old)
+    gone = facts.record(cid, "The vault has two doors.", "the third night", old)
+    facts.record(cid, "The vault has three doors.", "", old, supersedes=gone)
 
     scene_refs.repoint(cid, {old: "001--2026-07-04--s"})
 
@@ -42,6 +44,9 @@ def test_repoint_updates_every_store_that_holds_scene_ids(monkeypatch, tmp_path)
     owed = commitments.read(cid)["the-debt"]
     assert owed["last_scene"] == "001--2026-07-04--s"
     assert owed["beats"][0]["scene"] == "001--2026-07-04--s"
+    retired = facts.get(cid, gone)
+    assert retired["scene"] == "001--2026-07-04--s"
+    assert retired["retired_scene"] == "001--2026-07-04--s"
 
 
 def test_repoint_identity_and_empty_are_noops(monkeypatch, tmp_path):

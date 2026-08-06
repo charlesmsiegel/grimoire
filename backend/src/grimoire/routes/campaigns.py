@@ -327,19 +327,22 @@ LEDGER_RECENT = 20
 def get_ledger(cid: str):
     """The continuity ledger (#117): what the campaign still owes, in one read.
 
-    Three sections, and one route rather than three, because they are read
-    together and share one failure policy — a garbled plot.json or
-    commitments.json costs its own section and nothing else, the same tolerance
+    Four sections, and one route rather than four, because they are read
+    together and share one failure policy — a garbled plot.json, commitments.json
+    or facts.json costs its own section and nothing else, the same tolerance
     `plot.render_open` and `get_changes` already apply. Splitting them would put
-    that policy in three places and make the panel reason about three loading
+    that policy in four places and make the panel reason about four loading
     states to render one view.
 
-    Each thread and commitment carries the scene that last moved it, resolved
-    the same way `get_changes` resolves its labels: the title from the scene
-    list, the in-fiction date from the chronicle. Contradictions are the fourth
-    section this view is named for and are absent until #111 gives them a
-    record; commitment aging (overdue/stale) is #103's, which reads the `due`
-    and `last_scene` this already returns.
+    Each thread, commitment and standing fact carries the scene it came from,
+    resolved the same way `get_changes` resolves its labels: the title from the
+    scene list, the in-fiction date from the chronicle. For a thread or a
+    commitment that is the scene that last moved it; for a fact it is the scene
+    that recorded it, since a fact's text never changes after that (#114) — a
+    fact that stopped being true is retired and off this list, not rewritten.
+    Contradictions are the section this view is named for and are absent until
+    #111 gives them a record; commitment aging (overdue/stale) is #103's, which
+    reads the `due` and `last_scene` this already returns.
     """
     _campaign_root_or_404(cid)
 
@@ -349,12 +352,13 @@ def get_ledger(cid: str):
         except Exception:  # noqa: BLE001 — a garbled file empties its section, not the view
             return []
 
-    # All four sources are read under ONE campaign lock, because they are four
+    # All five sources are read under ONE campaign lock, because they are five
     # files and a save writes them one after another: `put_chronicle` holds this
     # same lock while it records the chronicle and then applies the absorb's
-    # plot and commitment edits. Reading without it can catch that sequence half
-    # done and return a new fact beside the still-open commitment the very same
-    # save fulfilled -- and the panel keeps that contradictory snapshot until
+    # plot, commitment and fact edits. Reading without it can catch that
+    # sequence half done and return a new fact beside the still-open commitment
+    # the very same save fulfilled — or, since #114, beside the standing fact
+    # that same save retired -- and the panel keeps that contradictory snapshot until
     # something else bumps its revision. A continuity view that contradicts
     # itself is worse than one that is a moment stale, which is the whole reason
     # the writer takes the lock across the sequence rather than per file.
@@ -369,6 +373,7 @@ def get_ledger(cid: str):
             chron = {}
         open_threads = _tolerant(lambda: store.plot.open_threads(cid))
         owed = _tolerant(lambda: store.commitments.open_commitments(cid))
+        standing = _tolerant(lambda: store.facts.active(cid))
     # Unparseable is not the only way that file can be wrong. `read_chronicle`
     # is a bare `json.loads`, so a chronicle.json holding `[]` -- valid JSON of
     # the wrong shape -- returns a list and raises nothing, and the `.get` below
@@ -423,6 +428,9 @@ def get_ledger(cid: str):
     return {
         "plot": [{**t, "scene": _scene(t["last_scene"])} for t in threads],
         "commitments": [{**c, "scene": _scene(c["last_scene"])} for c in owed],
+        # The fact ledger (#114). `facts.active` normalizes its own rows, like
+        # `open_commitments` does, so only the scene label is resolved here.
+        "facts": [{**f, "scene": _scene(f["scene"])} for f in standing],
         # Newest first: `chronicle.recent` returns the tail in ascending order,
         # which is right for a recap read forward and backwards for a ledger.
         # `one_line or summary`, the fallback every other chronicle consumer
