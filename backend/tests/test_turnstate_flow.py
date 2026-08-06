@@ -311,7 +311,7 @@ def test_promotion_is_bounded_by_the_callers_snapshot(monkeypatch, tmp_path):
     _reinforce(cid, sid, char_id, "guarded", times=1)          # landed mid-absorb
     # Live tail sees three and promotes; the snapshot saw two and does not.
     assert absorb.materialize(cid, sid, {}) != []
-    assert absorb.materialize(cid, sid, {}, ledger=snapshot) == []
+    assert absorb.materialize(cid, sid, {}, turn_ledger=snapshot) == []
 
 
 def test_promotion_stops_when_the_feature_is_switched_off(monkeypatch, tmp_path):
