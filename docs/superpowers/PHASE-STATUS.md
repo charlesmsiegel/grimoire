@@ -103,6 +103,18 @@ worktree — the editable `backend/.venv` is pinned to this checkout). Progress 
   post-history corrective (`store/voice_drift.py`,
   `templates/scene/voice_correction.j2`).
 - Bond `since_scene` is stored but never populated (schema-ready; wire when useful).
+- #110's Option A asked the panel to **sort** by confidence; it partitions instead
+  (server order kept, `low` split off). Sorting numerically would scramble the
+  kind grouping the labels rely on, and the row's index in `editRows` is what the
+  #111 conflict verdicts are keyed on, so reordering is the one change with a
+  correctness cost. Revisit if the banding alone proves too coarse to scan.
+- #110's Option A also pre-checked only the HIGH rows; `medium` pre-checks too,
+  so the only behaviour change is that `low` rows stop being pre-approved.
+  Deliberate: withholding an approval is safe, granting one is not.
+- #112's Option A put the evidence in the StagedEdit `payload`; it rides in
+  `review` instead. `payload` is what `apply_edits` reads, and `new_character`
+  payloads already carry an `evidence` key meaning something else entirely (the
+  thin/sketched/established provenance sentence).
 - Phase-1 Minor: re-absorbing a scene re-appends `timeline.md` lines (no timeline reader
   yet; fix when one lands).
 - Relationship metrics are approve/reject only in review (no inline number editing yet).
