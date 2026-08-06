@@ -9329,7 +9329,7 @@ def test_absorb_primes_the_extraction_with_the_campaigns_standing_facts(client):
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
     store.scenes.append_message(cid, sid, "user", "We entered the crypt.")
-    store.facts.record(cid, "The crypt door has no lock.", "the third night", "earlier")
+    store.facts.record(cid, "The crypt door has no lock.", "the third night", "000--earlier")
 
     client.app.dependency_overrides[routes.get_llm] = lambda: _Recording('{"one_line": "x"}')
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb").status_code == 200

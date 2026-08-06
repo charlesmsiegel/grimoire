@@ -1342,7 +1342,7 @@ def test_run_absorb_primes_the_prompt_with_standing_facts(monkeypatch, tmp_path)
         "characters": [{"kind": "characters", "id": "marisol"}],
         "turns": [{"role": "assistant", "speaker": "Marisol", "content": "\"You've grown bold.\""}],
     })
-    facts.record(cid, "Marisol holds the stair.", "before midwinter", "earlier-scene")
+    facts.record(cid, "Marisol holds the stair.", "before midwinter", "000--earlier")
 
     client = FakeClient("{}")
     asyncio.run(ingest_scene.run_absorb(cid, sid, client, {"kind": "openrouter"}))

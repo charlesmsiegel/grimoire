@@ -61,12 +61,21 @@ def commitment_snapshot(cid: str) -> str:
 FACT_SNAPSHOT_LIMIT = 200
 
 
-def fact_snapshot(cid: str) -> str:
+def fact_snapshot(cid: str, sid: str | None = None) -> str:
     """Rendered standing facts (id + text + date) — feeds the prompt so the
     model can cite the id of a fact this scene made untrue rather than quietly
-    contradicting it. Campaign-wide (not scene-scoped), most recent
-    `FACT_SNAPSHOT_LIMIT` only; tolerant of a garbled facts.json."""
-    return "\n".join(facts.render_active(cid, FACT_SNAPSHOT_LIMIT))
+    contradicting it. Most recent `FACT_SNAPSHOT_LIMIT` only; tolerant of a
+    garbled facts.json.
+
+    Campaign-wide but AS OF `sid`, unlike its siblings here, which are all
+    "now": absorbing an older scene — out of order, or `force`-re-absorbed —
+    reads a ledger that later scenes have already moved, and showing it those
+    later facts invites the model to supersede one from a scene that ran before
+    it existed. `facts.record` refuses to write that, so the snapshot and the
+    store agree on which facts this scene can end rather than the reviewer being
+    offered a retirement that will not happen. `sid` of None keeps the whole
+    standing ledger, for a caller with no scene in hand."""
+    return "\n".join(facts.render_active(cid, FACT_SNAPSHOT_LIMIT, sid))
 
 
 def group_snapshot(cid: str) -> str:
