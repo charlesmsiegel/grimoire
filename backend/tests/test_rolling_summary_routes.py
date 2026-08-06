@@ -232,6 +232,34 @@ def test_appending_posts_does_not_make_a_summary_stale(client):
         f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary").json()["stale"] is False
 
 
+def test_a_stale_summary_is_still_returned_not_blanked(client):
+    """Review caught this: reporting a stale fold as no summary at all left the
+    panel saying "no summary yet" about a scene that has one, and made the
+    staleness warning -- which renders beside the prose -- unreachable. Stale
+    means "this describes a transcript that moved on", not "this is gone"."""
+    _key(client)
+    _use(client, FakeLLM("Mara reaches the salt gate."))
+    cid, sid = _scene(client, posts=10)
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary")
+    store.scenes.edit_message(cid, sid, 0, "Post 0, rewritten entirely.")
+
+    body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary").json()
+    assert body["stale"] is True
+    assert body["summary"] == "Mara reaches the salt gate."
+
+
+def test_a_forced_refresh_reports_the_automatic_schedule_not_its_own(client):
+    """`due` answers "would a plain per-turn POST spend a call". A forced call
+    that found nothing new must not report `due` about ITSELF -- the panel reads
+    this to say when the next refresh is coming."""
+    _key(client)
+    _use(client, FakeLLM("Once."))
+    cid, sid = _scene(client, posts=4)
+    body = client.post(
+        f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary?force=true").json()
+    assert body["refreshed"] is True and body["due"] is False
+
+
 # ---- POST: failure never reaches the turn loop ----
 def test_no_connection_is_a_409_not_a_500(client):
     llm = _use(client, FakeLLM())
@@ -278,6 +306,26 @@ def test_an_empty_reply_is_not_stored_over_a_good_summary(client):
     assert body["refreshed"] is False
     assert client.get(
         f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary").json()["summary"] == "Good summary."
+
+
+def test_a_scene_renamed_mid_refresh_is_not_a_500(client):
+    """Reachable from the UI: `runStream` fires this refresh AFTER releasing the
+    scene lock that keeps rename off during a turn, so a player who renames the
+    moment a turn ends races the write. A rename mints a new id and moves the
+    file, and `SceneNotFound` has no handler above this route."""
+    _key(client)
+    renamed: list[str] = []
+
+    class RenamesMidCall(FakeLLM):
+        async def complete(self, messages, cfg):
+            renamed.append(store.scenes.rename_scene(cid, sid, "Somewhere else"))
+            return "A summary of a scene that has since moved."
+
+    cid, sid = _scene(client, posts=10)
+    _use(client, RenamesMidCall())
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary").json()
+    assert renamed and renamed[0] != sid          # the file really did move
+    assert body["refreshed"] is False
 
 
 def test_post_on_an_unknown_scene_is_404(client):

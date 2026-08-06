@@ -168,11 +168,15 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
   const [locPick, setLocPick] = useState("");
   const [error, setError] = useState<string | null>(null);
-  // `undefined` while the read is in flight or after it failed, which is NOT the
-  // same as a scene nobody has summarized (`summary: ""`). Conflating the two
-  // would report a store that could not be reached as a scene with nothing to
-  // say, on a panel that re-reads at every scene select.
-  const [rolling, setRolling] = useState<RollingSummary | undefined>();
+  // Keyed by the scene it was read for, and both halves of that matter.
+  // `undefined` is "in flight, or the read failed", which is NOT the same as a
+  // scene nobody has summarized (`summary: ""`) — reporting an unreachable
+  // store as a scene with nothing to say would be a lie the panel tells on
+  // every select. And the `sid` stamp is what keeps one scene's prose off
+  // another's panel: this reads on every scene switch, two switches in a row
+  // can answer out of order, and prose under the wrong scene reads as fact
+  // where a stale token count merely reads as lag.
+  const [rolling, setRolling] = useState<{ sid: string; data: RollingSummary } | undefined>();
   const [rollingUnread, setRollingUnread] = useState(false);
   const [rollingBusy, setRollingBusy] = useState(false);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(loadSectionCollapse);
@@ -262,9 +266,13 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
 
     api.getChronicle(cid).then(setRecap).catch(() => setRecap([]));
     setRollingUnread(false);
+    // The previous scene's summary is deliberately NOT cleared here: this effect
+    // also re-runs on `refreshKey`, i.e. after every turn, and blanking would
+    // flash "No summary yet" over a summary that is about to come back. The
+    // `sid` stamp below is what makes that safe.
     api.getRollingSummary(cid, sid)
-      .then((r) => setRolling(r))
-      .catch(() => { setRolling(undefined); setRollingUnread(true); });
+      .then((data) => setRolling({ sid, data }))
+      .catch(() => { setRollingUnread(true); });
     reloadWhen();
     reloadCfg();
   }, [cid, sid, refreshKey, reloadWhen, reloadCfg, reloadCast]);
@@ -432,7 +440,7 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
       // *now*, including when the automatic refresh is switched off. The
       // server still declines to spend a call when nothing has happened since
       // the last one, and says so in `refreshed`.
-      setRolling(await api.refreshRollingSummary(cid, sid, true));
+      setRolling({ sid, data: await api.refreshRollingSummary(cid, sid, true) });
       setRollingUnread(false);
     } catch (err: any) {
       // Reported, never destructive: the summary already on screen is still the
@@ -508,22 +516,33 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
           ended. Display-only — this text is never added to the prompt (#85). */}
       <SideSection id="scenesofar" title="Scene so far" collapsed={!!collapsed.scenesofar}
                    onToggle={toggleSection}>
-        {rollingUnread
-          ? <div className="field-hint">The summary could not be read.</div>
-          : rolling?.summary
-            ? <>
-                <div className="field-hint">{rolling.summary}</div>
-                <div className="field-hint">
-                  {rolling.stale
-                    ? "Posts it covered have changed since — it may be out of date."
-                    : `Covers ${rolling.at} of ${rolling.total} posts.`}
-                </div>
-              </>
-            : <div className="field-hint">
-                No summary yet{rolling && rolling.every > 0
-                  ? ` — one is written every ${rolling.every} posts.`
+        {(() => {
+          // Only this scene's answer is shown; another scene's is not an answer
+          // about this one, and neither is a read that failed.
+          const r = rolling?.sid === sid ? rolling.data : undefined;
+          if (rollingUnread && !r) {
+            return <div className="field-hint">The summary could not be read.</div>;
+          }
+          if (!r?.summary) {
+            return (
+              <div className="field-hint">
+                No summary yet{r && r.every > 0
+                  ? ` — one is written every ${r.every} posts.`
                   : "."}
-              </div>}
+              </div>
+            );
+          }
+          return (
+            <>
+              <div className="field-hint">{r.summary}</div>
+              <div className="field-hint">
+                {r.stale
+                  ? "Posts it covered have changed since — it may be out of date."
+                  : `Covers ${r.at} of ${r.total} posts.`}
+              </div>
+            </>
+          );
+        })()}
         <div className="form-actions">
           <button className="primary" onClick={refreshRolling} disabled={rollingBusy}>
             {rollingBusy ? "Summarizing…" : "Refresh now"}
