@@ -4,8 +4,19 @@ from __future__ import annotations
 
 from .. import characters, entities, greetings, pcs
 from ..frontmatter import parse_frontmatter
-from ..paths import ensure_home, safe_id
+from ..paths import any_child_record, ensure_home, safe_id
 from . import paths
+
+
+def has_worlds() -> bool:
+    """Whether the store holds at least one world, without reading any of them.
+
+    `list_worlds()` would answer this too, but at the cost of parsing every
+    world's frontmatter and counting its entities — far too much for the
+    first-run check that is the only caller.
+    """
+    ensure_home()
+    return any_child_record(paths._worlds_dir(), "world.md")
 
 
 def list_worlds() -> list[dict]:

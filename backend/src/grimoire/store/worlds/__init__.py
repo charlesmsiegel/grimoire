@@ -13,5 +13,5 @@ from .paths import (  # noqa: F401
     WorldNotFound, _worlds_dir, canonical_id, names_its_directory,
     references_world, world_exists, world_meta_path, world_root,
 )
-from .read import list_worlds, read_world, world_name  # noqa: F401
+from .read import has_worlds, list_worlds, read_world, world_name  # noqa: F401
 from .lifecycle import WorldInUse, create_world, delete_world, rename_world  # noqa: F401

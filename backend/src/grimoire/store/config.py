@@ -29,6 +29,11 @@ DEFAULT_LLM_TIMEOUT = "120"
 # Wall-clock ceiling on one absorb, whose LLM calls (extraction, one dossier
 # per present NPC, audit) run sequentially inside a single request.
 DEFAULT_ABSORB_BUDGET = "600"
+# Whether the first-run setup wizard has been finished or dismissed. "off" on
+# every store that has never recorded an answer -- including one written before
+# this key existed, which is why the route backfills it rather than trusting
+# the default to mean "never set up".
+DEFAULT_SETUP_DONE = "off"
 # The global scope of the response-preset cascade. These MUST be listed here:
 # read_config() narrows its return to _CONFIG_KEYS, so a key omitted from this
 # tuple is silently dropped and the global scope resolves as if unset — no
@@ -40,7 +45,7 @@ _CONFIG_KEYS = ("theme", "context_scan_depth", "system_prompt",
                 "quote_color", "recap_depth", "archive_depth", "context_budget",
                 "user_label", "assistant_label",
                 "default_style_id", "active_connection_id",
-                "llm_timeout", "absorb_budget") + _LENGTH_KEYS
+                "llm_timeout", "absorb_budget", "setup_done") + _LENGTH_KEYS
 
 
 def _config_path():
@@ -58,6 +63,7 @@ def read_config() -> dict[str, str]:
                 "user_label": DEFAULT_USER_LABEL, "assistant_label": DEFAULT_ASSISTANT_LABEL,
                 "default_style_id": "", "active_connection_id": "",
                 "llm_timeout": DEFAULT_LLM_TIMEOUT, "absorb_budget": DEFAULT_ABSORB_BUDGET,
+                "setup_done": DEFAULT_SETUP_DONE,
                 **{k: "" for k in _LENGTH_KEYS}}
     if not path.exists():
         atomic.write_text(path, dump_frontmatter(defaults, ""))

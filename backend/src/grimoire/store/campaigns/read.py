@@ -7,7 +7,7 @@ from pathlib import Path
 from .. import atomic
 from ..frontmatter import dump_frontmatter, parse_frontmatter
 from ..worlds import paths as worlds_paths
-from ..paths import ensure_home, now_iso, safe_id
+from ..paths import any_child_record, ensure_home, now_iso, safe_id
 from . import paths
 
 # A campaign may record no world at all, and every world-side read still wants
@@ -42,6 +42,17 @@ def world_root_of(cid: str) -> Path:
         return worlds_paths.world_root(wid)
     except worlds_paths.WorldNotFound:
         return paths.campaign_meta_path(cid) / _NO_WORLD
+
+
+def has_campaigns() -> bool:
+    """Whether the store holds at least one campaign, without reading any.
+
+    The cheap counterpart to `list_campaigns()`, for the same reason
+    `worlds.read.has_worlds` exists: first-run detection only needs to know
+    whether the store is empty.
+    """
+    ensure_home()
+    return any_child_record(paths._campaigns_dir(), "campaign.md")
 
 
 def list_campaigns() -> list[dict]:
