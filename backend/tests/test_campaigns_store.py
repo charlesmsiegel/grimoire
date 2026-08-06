@@ -580,13 +580,11 @@ def test_the_interruption_sweep_reaches_the_end_of_the_migration(monkeypatch, tm
     assert 0 < n[0] <= SWEEP_POINTS, f"migration takes {n[0]} operations; widen SWEEP_POINTS"
 
 
-def test_slim_sweep_keeps_an_untracked_copy_that_differs_from_the_world(monkeypatch, tmp_path):
-    """Byte-identity is the only thing between the sweep and a record the
-    campaign owns, so it needs a case where the world holds the ref and the
-    contents differ — the half `test_slim_sweep_keeps_a_campaign_local_record`
-    cannot reach, because its record has no world counterpart at all. Drop the
-    comparison and keep only "the world has this ref" and this fails (Codex
-    review)."""
+def test_slim_keeps_an_untracked_copy_that_differs_from_the_world(monkeypatch, tmp_path):
+    """The companion to the identical case: the world holds the same ref, the
+    contents differ, and nothing in the manifest names the campaign's copy. It
+    survives untouched and unadopted — the migration has no business with a ref
+    it is not tracking, whatever the world happens to hold."""
     home(monkeypatch, tmp_path)
     wid = worlds.create_world("W")
     wroot = worlds.world_root(wid)
@@ -764,39 +762,71 @@ def test_slim_does_not_tombstone_a_ref_the_fork_recorded_no_hash_for(monkeypatch
     assert overlay.read_plotmap(cid) == greetings.read_plotmap(wroot)
 
 
-def test_slim_prunes_a_copy_the_manifest_does_not_name(monkeypatch, tmp_path):
-    """The other half of #270's ordering: every writer drops the manifest ref
-    before the copy while the migration is pending, so an interrupted one
-    leaves a copy sync.md does not name. Left alone it would survive as a
-    materialized record with no base — readable, but never syncing again and
-    never saying so. Slim sweeps it when the world still holds it identically."""
-    home(monkeypatch, tmp_path)
-    wid = worlds.create_world("W")
-    wroot = worlds.world_root(wid)
-    eid = entities.create_entity(wroot, "lore", "Saltmarch", "Tides.")
-    aid, _vid = characters.create_character(wroot, "Mara")
-    cid = campaigns.create_campaign("C", wid)
+def test_slim_recovers_its_own_interrupted_prune(monkeypatch, tmp_path):
+    """The prune reserves each ref before unlinking its copy and drops the key
+    after, so no interruption leaves a copy the manifest does not name. The
+    reserved base is not attributable to any user, and the next run re-derives
+    the same verdict and finishes the job — no guessing from content, which is
+    what let an earlier sweep mistake a campaign-owned record for residue."""
+    wroot, cid, same, diverged, removed, aid, _vid = _fat_campaign(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
-    (croot / "lore").mkdir()
-    (croot / "lore" / f"{eid}.md").write_text(
-        (wroot / "lore" / f"{eid}.md").read_text(encoding="utf-8"), encoding="utf-8")
-    shutil.copytree(wroot / "characters" / aid, croot / "characters" / aid)
-    campaigns.write_manifest(cid, {})   # …and the ref that named them is already gone
-    _stamp_full(cid)
+
+    class Interrupted(Exception):
+        pass
+
+    seen = {}
+    with pytest.MonkeyPatch.context() as mp:
+        def boom(c, ref):
+            seen["manifest"] = campaigns.read_manifest(c)
+            raise Interrupted
+        mp.setattr(overlay, "dematerialize", boom)
+        with pytest.raises(Interrupted):
+            campaigns.ensure_campaign_slim(cid)
+    # the ref is reserved, not dropped, and its copy is still there
+    assert seen["manifest"][f"lore/{same}"] == overlay.RESERVED_BASE
+    assert (croot / "lore" / f"{same}.md").exists()
 
     campaigns.ensure_campaign_slim(cid)
 
-    assert not (croot / "lore" / f"{eid}.md").exists()
-    assert not (croot / "characters" / aid / "character.md").exists()
-    assert not overlay.deleted(cid)
-    assert overlay.read_entity(cid, "lore", eid)["body"] == "Tides."   # inherited again
-    assert campaigns.read_manifest(cid) == {}
+    assert not (croot / "lore" / f"{same}.md").exists()          # prune finished
+    assert f"lore/{same}" not in campaigns.read_manifest(cid)
+    assert f"lore/{same}" not in overlay.deleted(cid)            # and attributed to nobody
+    assert overlay.read_entity(cid, "lore", same)["body"] == "same"
+    assert f"lore/{removed}" in overlay.deleted(cid)             # the real deletion still stands
+    assert (croot / "lore" / f"{diverged}.md").exists()
 
 
-def test_slim_sweep_keeps_a_campaign_local_record(monkeypatch, tmp_path):
-    """The sweep is keyed on identity with the world, which is what stops it
-    taking a record the campaign owns: an edit diverged it, and a record
-    created campaign-side has no world counterpart to be identical to."""
+def test_slim_keeps_an_untracked_copy_the_world_also_holds(monkeypatch, tmp_path):
+    """An untracked copy is NOT evidence of anything. Ids are `slugify(name)`
+    and each root uniquifies against itself alone, so a record the campaign owns
+    and a world record created later can share a slug and, if someone copied the
+    text across, its bytes. Deleting it reads as harmless — same content — but
+    the record silently becomes inherited, so the next world edit rewrites it
+    and a world deletion removes it (Codex review on #311)."""
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    cid = campaigns.create_campaign("C", wid)
+    croot = campaigns.campaign_root(cid)
+    mine = entities.create_entity(croot, "lore", "Winifred", "Keeper of the marsh.")
+    campaigns.write_manifest(cid, {})
+    _stamp_full(cid)
+    # the world independently grows the same slug, with the same text
+    entities.create_entity(wroot, "lore", "Winifred", "Keeper of the marsh.")
+    assert entities.entity_hash(croot, "lore", mine) == entities.entity_hash(wroot, "lore", mine)
+
+    campaigns.ensure_campaign_slim(cid)
+
+    assert (croot / "lore" / f"{mine}.md").exists()
+    entities.update_entity(wroot, "lore", mine, body="The world's own.")
+    assert overlay.read_entity(cid, "lore", mine)["body"] == "Keeper of the marsh."
+
+
+def test_slim_keeps_a_campaign_local_record(monkeypatch, tmp_path):
+    """A record the campaign created is not in the manifest and has no world
+    counterpart. The migration only ever visits refs the manifest holds, so it
+    never sees it — and records no base for it, because there is no world
+    record to have one against."""
     home(monkeypatch, tmp_path)
     wid = worlds.create_world("W")
     cid = campaigns.create_campaign("C", wid)
@@ -812,13 +842,11 @@ def test_slim_sweep_keeps_a_campaign_local_record(monkeypatch, tmp_path):
     assert campaigns.read_manifest(cid) == {}   # nor a base: there is no world record to have one against
 
 
-def test_slim_sweep_keeps_a_locked_actors_card(monkeypatch, tmp_path):
+def test_slim_keeps_a_locked_actors_card(monkeypatch, tmp_path):
     """A lock drops the actor's manifest ref itself (`appearances.versions._lock`
-    calls `_drop_manifest_ref`), so a locked actor's card is genuinely untracked
-    by the time the sweep runs — and identical to the world when the lock kept
-    the only version. Without the `locked` term the sweep takes exactly the
-    files the lock invariant needs, so this must NOT put the ref back: doing so
-    was what left the term unexercised (Codex review)."""
+    calls `_drop_manifest_ref`) while keeping the card, which the lock invariant
+    needs. The migration must leave both alone. Deliberately does NOT put the
+    ref back, so it runs against the shape a real lock leaves."""
     home(monkeypatch, tmp_path)
     wid = worlds.create_world("W")
     wroot = worlds.world_root(wid)
