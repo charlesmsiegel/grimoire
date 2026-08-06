@@ -95,7 +95,10 @@ const AUTHORITY_LABELS: Record<NonNullable<StagedEdit["review"]>["authority"], s
   narration: "narrated",
   self: "said of themself",
   other: "said by someone else",
-  unattributed: "speaker not in this scene",
+  // Not "speaker not in this scene": the tier also covers a name TWO speakers
+  // answer to, and telling a reviewer their model invented a citation it did
+  // not invent is a worse error than the vaguer wording.
+  unattributed: "no one speaker matches",
   uncited: "nothing cited",
 };
 
@@ -1801,6 +1804,14 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
           .map((c) => ({ row: approvedIdx[c.index] ?? -1, conflict: c }))
           .filter((p) => p.row >= 0);
         setConflicts(rows);
+        // A refusal on a collapsed row has to be answerable, and the save is
+        // refused whole -- so leaving the section shut would leave the panel
+        // insisting something is unanswered with nothing on screen to answer.
+        // Latched here rather than derived from `conflicts`: a derived flag
+        // goes false the instant the reviewer clicks Keep stored (which
+        // unapproves the row and drops its verdict), collapsing the section
+        // and the row they are looking at out from under them.
+        if (rows.some(({ row }) => editBand(editRows[row]) === "low")) setShowLow(true);
         setSaveError(null);
         return;
       }
@@ -1829,11 +1840,6 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   const lowRows = useMemo(
     () => editRows.flatMap((e, i) => (editBand(e) === "low" ? [[e, i] as const] : [])),
     [editRows]);
-  // A conflict on a hidden row is a refusal the reviewer cannot answer. The
-  // save is rejected whole, so leaving it collapsed would leave the panel
-  // insisting something is unanswered with nothing on screen to answer.
-  const lowOpen = showLow || lowRows.some(([, i]) => conflictByRow.has(i));
-
   // The reviewer's answer to one conflict. **keep** is not here: it unapproves
   // the row, which drops it from the batch entirely -- the stored value wins by
   // the edit never being sent. `replace` keeps the staged text, `merge` swaps in
@@ -2365,16 +2371,16 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
                     {/* The count is stated whether or not the section is open:
                         a proposal withheld from the default approval has to be
                         visible AS withheld, or routing becomes a silent drop. */}
-                    <button className="subtle" aria-expanded={lowOpen}
+                    <button className="subtle" aria-expanded={showLow}
                             onClick={() => setShowLow((v) => !v)}>
-                      {lowOpen ? "Hide" : "Show"} {lowRows.length} low-confidence
+                      {showLow ? "Hide" : "Show"} {lowRows.length} low-confidence
                       {lowRows.length === 1 ? " change" : " changes"}
                     </button>
-                    {!lowOpen && (
+                    {!showLow && (
                       <p className="field-hint">
                         Not approved by default — the transcript does not clearly support them.
                       </p>)}
-                    {lowOpen && lowRows.map(([e, i]) => renderEditRow(e, i))}
+                    {showLow && lowRows.map(([e, i]) => renderEditRow(e, i))}
                   </div>)}
               </div>
             )}

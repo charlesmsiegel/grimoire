@@ -2620,3 +2620,46 @@ def test_parse_output_rejects_a_non_finite_certainty():
                        {"id": "b", "append": "x", "certainty": float("nan")},
                        {"id": "c", "append": "x", "certainty": True}]}))
     assert [e.get("certainty") for e in out["lore_edits"]] == [1.0, None, None]
+
+
+#: One minimal row per edit section, enough for the section to survive parsing.
+#: The sweep below drives every one of them, and the derived-contract assertion
+#: keeps this table honest: a section added to `parse_output` without an entry
+#: here fails rather than quietly skipping the check.
+_CITED_SECTIONS = {
+    "character_state_edits": {"id": "seraphine", "current_state": "hurt"},
+    "group_state_edits": {"id": "salt-circle", "goals": "burn the ledger"},
+    "lore_edits": {"id": "the-ledger", "append": "It names him."},
+    "authored_edits": {"id": "seraphine", "field": "personality", "text": "colder"},
+    "relationship_deltas": {"from": "characters:a", "to": "characters:b", "trust": 4},
+    "bond_changes": {"a": "characters:a", "b": "characters:b", "type": "allies"},
+    "plot_movements": {"title": "The forged map", "beat": "It surfaced."},
+    "commitment_movements": {"title": "The debt", "beat": "She let it pass."},
+    "new_characters": {"name": "Winifred", "description": "[character(\"Winifred\")]"},
+    "new_locations": {"name": "The Long Pier", "body": "Rotting planks."},
+    "new_lore": {"name": "The Salt Circle", "body": "A cabal."},
+    "weather_edits": {"condition": "storm"},
+}
+
+
+def test_every_edit_section_carries_the_citation():
+    """One `| _cite(e)` dropped from one section loses that section's routing
+    silently: the row still materializes, still gets a review block, and simply
+    reports itself as uncited — so `materialize`'s own sweep cannot see it. The
+    only place the loss is visible is here, at the section that fed it."""
+    cite = {"quote": "Mine, until midnight.", "speaker": "Seraphine", "certainty": 0.8}
+    out = absorb.parse_output(json.dumps(
+        {key: [row | cite] for key, row in _CITED_SECTIONS.items()}))
+    for key in _CITED_SECTIONS:
+        assert out[key] and {k: out[key][0].get(k) for k in cite} == cite, key
+
+
+def test_the_cited_sections_are_every_edit_section_there_is():
+    """The table above is the guard, so it has to be complete. Derived from
+    `parse_output` rather than restated: a section added later arrives here as a
+    failure instead of as an untested gap."""
+    contract = absorb.parse_output("{}")
+    sections = {k for k, v in contract.items() if isinstance(v, list)}
+    # `keywords` is a list of strings and `timeline_events` never reaches
+    # `materialize` — neither is an edit, and neither carries a citation.
+    assert sections - {"keywords", "timeline_events"} == set(_CITED_SECTIONS)

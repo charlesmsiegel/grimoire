@@ -34,10 +34,11 @@ from .parse import (  # noqa: F401
     CITATION_FIELDS, CITATION_TEXT, _certainty, _cite, _confidence, _int05,
     _truthy, extract_object, parse_output,
 )
-from .routing import (  # noqa: F401
-    ASSUMED_CERTAINTY, HIGH, LOW, NARRATION, OTHER, SELF, UNATTRIBUTED,
-    UNCITED, WEIGHTS, authority, band, review, speaker_index,
-)
+# `routing` is bound as a MODULE only, unlike every other submodule here. Its
+# public names are `HIGH`, `LOW`, `WEIGHTS`, `band`, `review`, `authority` --
+# each of which says what it means read as `routing.HIGH` and nothing at all
+# read as `absorb.HIGH`, in a package whose namespace already holds conflict
+# `RESOLUTIONS` and a `review`-shaped word in half its docstrings.
 from .snapshots import (  # noqa: F401
     FACT_SNAPSHOT_LIMIT, _snapshot_line, commitment_snapshot, fact_snapshot,
     group_snapshot, plot_snapshot, relationships_snapshot, state_snapshot,
