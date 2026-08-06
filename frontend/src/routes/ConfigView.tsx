@@ -18,6 +18,7 @@ export default function ConfigView() {
   const [absorbBudget, setAbsorbBudget] = useState("");
   const [contextBudget, setContextBudget] = useState("");
   const [archiveDepth, setArchiveDepth] = useState("");
+  const [promptLogDepth, setPromptLogDepth] = useState("");
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
@@ -31,13 +32,15 @@ export default function ConfigView() {
       setAbsorbBudget(c.absorb_budget);
       setContextBudget(c.context_budget);
       setArchiveDepth(c.archive_depth);
+      setPromptLogDepth(c.prompt_log_depth);
     });
     api.listConnections().then(setConnections).catch(() => setConnections([]));
   }, []);
 
   if (!config) return <div className="page page-narrow config">Loading…</div>;
 
-  async function save(fields: Partial<{ theme: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string; active_connection_id: string; llm_timeout: string; absorb_budget: string; context_budget: string; archive_depth: string }>) {
+  async function save(fields: Partial<{ theme: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string; active_connection_id: string; llm_timeout: string; absorb_budget: string; context_budget: string; archive_depth: string;
+                        prompt_log_depth: string }>) {
     const next = await api.putConfig(fields);
     setConfig(next);
     setSaved(true);
@@ -103,6 +106,11 @@ export default function ConfigView() {
           <input id="cfg-archive-depth" type="text" inputMode="numeric" value={archiveDepth}
                  placeholder="3" onChange={(e) => setArchiveDepth(e.target.value)} />
         </div>
+        <div className="field">
+          <label htmlFor="cfg-prompt-log-depth">Kept turn prompts</label>
+          <input id="cfg-prompt-log-depth" type="text" inputMode="numeric" value={promptLogDepth}
+                 placeholder="50" onChange={(e) => setPromptLogDepth(e.target.value)} />
+        </div>
       </div>
       <p className="field-hint">
         The token ceiling a scene's prompt is packed into. Over it, whole sections are
@@ -111,6 +119,12 @@ export default function ConfigView() {
         The scene inspector shows what was cut. <code>0</code> means no ceiling, and
         nothing is ever dropped. Recalled scenes is how many older absorbed scenes a
         keyword match may pull back into context at once.
+      </p>
+      <p className="field-hint">
+        Kept turn prompts is how many past turns each campaign keeps a frozen copy of
+        the exact prompt for, readable from the scene inspector's Turn history. They
+        hold whole prompts, so the count is per campaign rather than per scene — playing
+        one scene for long enough ages out another's. <code>0</code> records none.
       </p>
 
       <div className="section-label">System prompt</div>
@@ -162,6 +176,7 @@ export default function ConfigView() {
             user_label: userLabel, assistant_label: assistantLabel,
             llm_timeout: llmTimeout, absorb_budget: absorbBudget,
             context_budget: contextBudget, archive_depth: archiveDepth,
+            prompt_log_depth: promptLogDepth,
           })}
         >
           Save

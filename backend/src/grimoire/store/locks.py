@@ -143,6 +143,12 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # its replacement in one read-modify-write, so an unlocked pair can also
     # leave a fact retired by an id that never landed.
     "store.facts",
+    # `prompts/index.json` is read-modify-written by every capture (allocate an
+    # id, append a row, evict past the retention depth), so two concurrent turns
+    # would otherwise lose one row and leak its payload. New module (#157), so
+    # it starts inside the exclusion rather than joining the `UNREVIEWED`
+    # backlog -- the same call `store.commitments` made.
+    "store.prompt_log",
     "store.sheets.tally",
     "store.sheets.writer",
     "store.audit.baselines",

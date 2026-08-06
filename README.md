@@ -45,6 +45,13 @@ from an up-to-date world.
 - **Editable prompts** — every prompt Grimoire sends to the model lives as a
   Jinja2 template under [`templates/`](templates/README.md). Edit a template
   and the change takes effect immediately; nothing prompt-shaped is hard-coded.
+- **What the model saw** — the scene inspector's Context panel breaks the
+  assembled prompt down section by section with token counts, showing anything
+  the budget packer dropped. **Turn history** beside it holds the same
+  breakdown *frozen* for past turns, so you can read the exact prompt a reply
+  came from after the chronicle, cast, and world info have all moved on.
+  Configurable under Configuration → Context (Kept turn prompts; `0` records
+  none).
 - **Themes** — ships with `codex`, `astral`, and `manuscript`.
 - **Manual dice rolls** — roll dice mid-scene with the 🎲 button; see
   [Dice notation](#dice-notation) for the syntax.

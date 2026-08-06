@@ -13,8 +13,8 @@ from starlette.concurrency import run_in_threadpool
 from .. import prompts, store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
-from .common import (_campaign_root_or_404, _dump, _require_connection, _require_scene,
-                     _response_body, _turn_override, _write_response, get_llm)
+from .common import (_campaign_root_or_404, _dump, _record_prompt, _require_connection,
+                     _require_scene, _response_body, _turn_override, _write_response, get_llm)
 from .models import (Appear, AppearBatch, ChatTurn, ChronicleSave, Dismiss, EditMessage,
                      NewScene, RegenerateBody, RenameScene, ResponseSettings, RetryBody,
                      SceneDatetime, SceneLocation)
@@ -172,8 +172,9 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, client: LLMClient = Depends(ge
         store.proposals.supersede(cid, sid)  # a new send retires any pending decision
     if ephemeral:
         note = turn.content.strip() or prompts.render("scene/director_note.j2")
-        messages = store.context.build_director_messages(
+        messages, breakdown = store.context.compose_director_turn(
             cid, sid, note, turn=_turn_override(turn))
+        _record_prompt(cid, sid, "director", breakdown)
         return _chat_stream(cid, sid, messages, conn, client)
     names = store.appearances.player_names(cid, sid)
     speaker = names[0] if len(names) == 1 else None
@@ -184,7 +185,8 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, client: LLMClient = Depends(ge
     content = store.context.expand_macros(
         turn.content, store.context.scene_substitutions(cid, sid), cid, sid)
     posted_at = store.scenes.append_message(cid, sid, "user", content, speaker=speaker)
-    messages = store.context.build_messages(cid, sid, turn=_turn_override(turn))
+    messages, breakdown = store.context.compose_turn(cid, sid, turn=_turn_override(turn))
+    _record_prompt(cid, sid, "chat", breakdown)
     # The post has to precede the stream — `build_messages` renders history out
     # of the transcript, so a turn the model never sees is a turn it cannot
     # answer — which is exactly what makes a failed generation able to strand
@@ -211,7 +213,8 @@ def post_retry(cid: str, sid: str, body: RetryBody | None = None,
         store.proposals.heal(cid, sid)
         _disown_dead_guidance(cid, sid)
         store.proposals.supersede(cid, sid)  # a fresh generation retires the old decision
-    messages = store.context.build_messages(cid, sid, turn=_turn_override(body))
+    messages, breakdown = store.context.compose_turn(cid, sid, turn=_turn_override(body))
+    _record_prompt(cid, sid, "retry", breakdown)
     return _chat_stream(cid, sid, messages, conn, client)
 
 
@@ -378,12 +381,14 @@ def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
     try:
         # rendered before the context build so its tokens can be reserved against
         # the context budget -- it is appended unconditionally, so the packer must
-        # not fit the prompt to a ceiling this then pushes it over
+        # not fit the prompt to a ceiling this then pushes it over. Named in
+        # `appended` rather than reserved-then-appended, so the snapshot reports
+        # the guidance the model actually read (#157).
         block = prompts.render("scene/regenerate_guidance.j2", guidance=guidance) if guidance else ""
-        messages = store.context.build_messages(cid, sid, turn=_turn_override(body),
-                                                reserve=(block,) if block else ())
-        if block:
-            messages.append({"role": "system", "content": block})
+        messages, breakdown = store.context.compose_turn(
+            cid, sid, turn=_turn_override(body),
+            appended=(("Regenerate guidance", "system", block),) if block else ())
+        _record_prompt(cid, sid, "regenerate", breakdown)
     except BaseException:
         if restore is not None:
             restore()
@@ -1606,6 +1611,35 @@ def get_scene_context(cid: str, sid: str):
     scene = _require_scene(cid, sid)
     return {"model": scene["meta"].get("model", ""),
             **store.context.context_breakdown(cid, sid)}
+
+
+@router.get("/campaigns/{cid}/scenes/{sid}/prompts")
+def get_scene_prompts(cid: str, sid: str):
+    """This scene's frozen per-turn prompt snapshots, newest first (#157).
+
+    Rows only — id, when, which kind of turn, the model, and the three totals.
+    The section text lives in the individual entries, which are large enough
+    that listing them all would defeat the point of a list."""
+    _require_scene(cid, sid)
+    return {"entries": store.prompt_log.list_entries(cid, sid)}
+
+
+@router.get("/campaigns/{cid}/scenes/{sid}/prompts/{eid}")
+def get_scene_prompt(cid: str, sid: str, eid: str):
+    """One frozen breakdown, in the same shape `GET .../context` returns — so
+    the inspector renders a past turn with the code it already has, pointed at
+    stored text instead of a fresh composition.
+
+    404 covers both "never existed" and "evicted by the retention window";
+    nothing downstream can tell them apart and nothing needs to."""
+    _require_scene(cid, sid)
+    # Scoped to the scene, not merely nested under it in the URL: ids are
+    # campaign-wide, so an unscoped read would serve one scene's prompt under
+    # another's heading.
+    entry = store.prompt_log.read_entry(cid, eid, scene=sid)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="prompt snapshot not found")
+    return entry
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}/cast/{kind}/{id}")

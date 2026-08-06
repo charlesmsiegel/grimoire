@@ -33,12 +33,15 @@ from . import (archive, cast as cast_data, macros, mechanics, pack, story,
 OPENER_RECAP_DEPTH = 5  # opener recap: full summaries of the last N scenes
 
 
-def build_opener_messages(cid: str, sid: str, prompt: str) -> list[dict]:
+def compose_opener(cid: str, sid: str, prompt: str) -> tuple[list[dict], dict]:
     """A full-turn-context opener: the instruction plus every assembled system section
     (cast, plot threads, date, current setting, world-info, a full 5-scene recap, …),
     then the prompt as the user turn. The prompt seeds world-info activation, since a new
     scene has no history. No conversation history is included — the opener is for a scene
-    with no messages. Ephemeral: the caller does not persist the result."""
+    with no messages. Ephemeral: the caller does not persist the result.
+
+    Returns the messages and the breakdown describing them — see `compose_turn`
+    for why those two must come out of one pass."""
     a = _assemble(cid, sid, wi_seed=prompt, full_recap=OPENER_RECAP_DEPTH)
     # Both trailing messages are rendered before packing so their tokens can be
     # reserved: neither is droppable, so neither may go uncounted.
@@ -51,7 +54,13 @@ def build_opener_messages(cid: str, sid: str, prompt: str) -> list[dict]:
         messages.append({"role": "system", "content": a["post_history"]})
     # the shape rules go last, right before generation, so they outrank everything above
     messages.append({"role": "system", "content": shape})
-    return messages
+    extra = (("Opener prompt", user_text), ("Opener shape rules", shape))
+    return messages, _breakdown(a, p, extra)
+
+
+def build_opener_messages(cid: str, sid: str, prompt: str) -> list[dict]:
+    """`compose_opener` without the breakdown — see there."""
+    return compose_opener(cid, sid, prompt)[0]
 
 
 def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
@@ -318,19 +327,38 @@ def _system_text(packed_sections: list[dict]) -> str:
     return _compose_system([s["text"] for s in packed_sections if not s["dropped"]])
 
 
-def build_messages(cid: str, sid: str, turn: dict | None = None,
-                   reserve: tuple[str, ...] = ()) -> list[dict]:
-    """`turn` is a one-shot, unpersisted response-preset override (a pending
+#: One message a caller wants appended after the system message, as
+#: ``(inspector label, role, content)``. See `compose_turn`.
+Appended = tuple[str, str, str]
+
+
+def compose_turn(cid: str, sid: str, turn: dict | None = None,
+                 appended: tuple[Appended, ...] = ()) -> tuple[list[dict], dict]:
+    """One turn's messages, and the breakdown describing them.
+
+    BOTH out of a single `_assemble` + `_packed` pass, which is what lets a
+    snapshot of this turn be trusted later (#157). Running the two entry points
+    separately would reintroduce exactly the disagreement `_SECTIONS` was
+    restructured to remove — and worse across time than within a request, since
+    `macros.expand_macros` resolves `{{random}}` and `{{roll}}` at render time,
+    so a second pass over an *identical* store still produces different text.
+
+    `turn` is a one-shot, unpersisted response-preset override (a pending
     per-turn length chip) that beats the scene/campaign/global cascade for this
     call only -- see response_presets.resolve. Callers that need it to survive a
     failed generation (retry, regenerate) must re-pass it themselves; nothing
     here remembers it.
 
-    `reserve` is any message the CALLER will append to the returned list
-    (regenerate guidance, a roll-result block). Pass it, or the budget is
-    charged for less than the request actually sends -- see _packed."""
+    `appended` is every message the caller wants AFTER the system one — the
+    regenerate-guidance block, a roll-result block, the declined-roll block.
+    Naming it here rather than appending it afterwards is deliberate: it has
+    three consequences that must agree (the packer must reserve its tokens or
+    the request silently overspends the budget, the message must actually be
+    sent, and the record must report it), and three call sites used to spell
+    the first two out separately with nothing holding them together.
+    """
     a = _assemble(cid, sid, turn=turn)
-    p = _packed(a, cid, sid, reserve=reserve)
+    p = _packed(a, cid, sid, reserve=tuple(c for _label, _role, c in appended))
     messages: list[dict] = []
     system_text = _system_text(p["sections"])
     if system_text:
@@ -338,13 +366,28 @@ def build_messages(cid: str, sid: str, turn: dict | None = None,
     messages += p["history"]
     if a["post_history"]:
         messages.append({"role": "system", "content": a["post_history"]})
-    return messages
+    messages += [{"role": role, "content": content} for _label, role, content in appended]
+    return messages, _breakdown(a, p, [(label, c) for label, _role, c in appended])
 
 
-def build_director_messages(cid: str, sid: str, note: str, turn: dict | None = None) -> list[dict]:
+def build_messages(cid: str, sid: str, turn: dict | None = None,
+                   appended: tuple[Appended, ...] = ()) -> list[dict]:
+    """`compose_turn` without the breakdown — see there.
+
+    The old `reserve=` parameter is gone. It charged the budget for a message
+    the caller then appended itself, which left the two halves free to drift
+    and gave `compose_turn` no way to report the appended block; `appended`
+    does all three jobs at once.
+    """
+    return compose_turn(cid, sid, turn=turn, appended=appended)[0]
+
+
+def compose_director_turn(cid: str, sid: str, note: str,
+                          turn: dict | None = None) -> tuple[list[dict], dict]:
     """One offscreen director turn: full system + history, then the note as the
     final user message. The note rides only this call — never persisted. `turn`
-    is the same one-shot response-preset override as build_messages."""
+    is the same one-shot response-preset override as `compose_turn`, and the
+    messages and breakdown come out of one pass for the same reason."""
     # The note is this turn's actual input, and it is never persisted -- so it
     # seeds retrieval the same way the opener's prompt does, or naming an old
     # scene in a director note could not recall it (nothing else in the scan
@@ -362,30 +405,47 @@ def build_director_messages(cid: str, sid: str, note: str, turn: dict | None = N
     messages.append({"role": "user", "content": note_text})
     if a["post_history"]:
         messages.append({"role": "system", "content": a["post_history"]})
-    return messages
+    return messages, _breakdown(a, p, [("Director note", note_text)])
 
 
-def context_breakdown(cid: str, sid: str) -> dict:
-    """The inspector's view of a turn: every section the packer produced, in
-    prompt order, each with its `tier`, its `tokens`, and whether the packer
-    `dropped` it — then the (possibly trimmed) history and the post-history
-    block, plus the totals.
+def build_director_messages(cid: str, sid: str, note: str, turn: dict | None = None) -> list[dict]:
+    """`compose_director_turn` without the breakdown — see there."""
+    return compose_director_turn(cid, sid, note, turn=turn)[0]
+
+
+def _breakdown(a: dict, p: dict, extra: list[tuple[str, str]] | None = None) -> dict:
+    """The inspector's view of a turn, from an assemble/pack pair the caller
+    already has: every section the packer produced, in prompt order, each with
+    its `tier`, its `tokens`, and whether the packer `dropped` it — then the
+    (possibly trimmed) history, the post-history block, and any `extra`
+    messages the caller appends after the system one, plus the totals.
+
+    Takes the pair rather than `(cid, sid)` so the caller that is about to SEND
+    these messages can describe exactly them (#157). Recomposing from the store
+    would describe a different prompt: `_assemble` re-expands `{{random}}` and
+    `{{roll}}` on every pass.
 
     Dropped sections stay in the list with their text: the inspector's job is to
     show what was cut, and a drop the user cannot see is the silent truncation
-    this replaced. Runs the same render and pack `build_messages` runs.
+    this replaced.
+
+    The rows are an INVENTORY, grouped sections -> history -> post-history ->
+    appended, and deliberately not a transcript of the wire order: a director
+    note and the opener's prompt are both sent above post_history and reported
+    below it. Every row is something that went out and its tokens are counted
+    once; which message index it occupied is not a question this panel answers.
 
     `total_tokens` is what the request actually costs, measured the way the
     packer measures it — the COMPOSED system message, plus each history entry
-    counted as the separate message it is sent as. It is deliberately not the
-    sum of the section rows: those are a per-row breakdown, and token counts do
-    not add up across strings that get joined (the blank lines between sections
-    are real tokens, and the tiktoken-less heuristic rounds each string on its
-    own). Summing the rows instead would let the inspector report a total that
-    disagrees with the request it is describing.
+    counted as the separate message it is sent as, plus the `extra` messages
+    `_packed` reserved. It is deliberately not the sum of the section rows:
+    those are a per-row breakdown, and token counts do not add up across
+    strings that get joined (the blank lines between sections are real tokens,
+    and the tiktoken-less heuristic rounds each string on its own). Summing the
+    rows instead would let the inspector report a total that disagrees with the
+    request it is describing.
     """
-    a = _assemble(cid, sid)
-    p = _packed(a, cid, sid)
+    extra = extra or []
     rows = [{"label": s["label"], "text": s["text"], "tier": s["tier"],
              "dropped": s["dropped"], "trimmed": 0,
              "tokens": tokens.count_tokens(s["text"])}
@@ -403,10 +463,17 @@ def context_breakdown(cid: str, sid: str) -> dict:
         rows.append({"label": "Post-history instructions", "text": a["post_history"],
                      "tier": pack.LOCK_IN, "dropped": False, "trimmed": 0,
                      "tokens": tokens.count_tokens(a["post_history"])})
+    # `lock-in`, and not merely as a label: `_packed` reserved these, so the
+    # packer could not drop them even had it wanted to. Reporting them under any
+    # droppable tier would describe a choice the packer never had.
+    extra_tokens = [tokens.count_tokens(text) for _label, text in extra]
+    rows += [{"label": label, "text": text, "tier": pack.LOCK_IN,
+              "dropped": False, "trimmed": 0, "tokens": n}
+             for (label, text), n in zip(extra, extra_tokens)]
 
     kept = [s["text"] for s in p["sections"] if not s["dropped"]]
     total = (tokens.count_tokens(_compose_system(kept)) + hist_tokens
-             + tokens.count_tokens(a["post_history"]))
+             + tokens.count_tokens(a["post_history"]) + sum(extra_tokens))
     # Trimmed history messages are gone from `rows` entirely -- they are not a
     # section that can be shown struck through -- so their cost has to be added
     # here, or a pack that fit by trimming history alone reports nothing
@@ -415,6 +482,17 @@ def context_breakdown(cid: str, sid: str) -> dict:
             "dropped_tokens": (sum(r["tokens"] for r in rows if r["dropped"])
                                + p["history_trimmed_tokens"]),
             "budget_tokens": pack.budget_tokens()}
+
+
+def context_breakdown(cid: str, sid: str) -> dict:
+    """The LIVE inspector view: compose the turn as it would be sent right now
+    and describe it. Runs the same render and pack `compose_turn` runs.
+
+    The live view has no appended blocks — those belong to a specific turn
+    (regenerate guidance, a roll result), and this composes a hypothetical one.
+    """
+    a = _assemble(cid, sid)
+    return _breakdown(a, _packed(a, cid, sid))
 
 
 def context_sections(cid: str, sid: str) -> list[dict]:
