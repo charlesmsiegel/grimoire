@@ -233,3 +233,22 @@ test("offscreen scene hides PC and player seating", async () => {
   expect(screen.queryByLabelText("Actor kind")).toBeNull();
   expect(screen.queryByLabelText("Role")).toBeNull();
 });
+
+test("generating an opener refreshes, so its captured prompt becomes visible", async () => {
+  // The backend records an `opener` snapshot for the attempt (#157). Nothing
+  // else on this path bumps the refresh, so without this the inspector's Turn
+  // history keeps saying "No captured turns yet" — and a preview the reader
+  // rejects leaves the row invisible indefinitely.
+  (api.opener as any).mockImplementation(async (_c: string, _s: string, _p: string, onEvent: any) => {
+    onEvent({ delta: "Mist rolls in." });
+  });
+  const onSeeded = vi.fn();
+  renderPanel({ onSeeded });
+  fireEvent.change(screen.getByLabelText("Opener prompt"), { target: { value: "A foggy harbor" } });
+  fireEvent.click(screen.getByRole("button", { name: /generate/i }));
+
+  await waitFor(() => expect(onSeeded).toHaveBeenCalled());
+  // and the refresh does not cost the preview: the parent re-selects the SAME
+  // scene, which refreshes rather than switching, so this state survives
+  await screen.findByText("Mist rolls in.");
+});
