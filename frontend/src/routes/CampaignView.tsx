@@ -1172,8 +1172,8 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   // that generated turns are not the only writer: a manual dice roll and a
   // check both append narrator posts, so a mechanics-heavy stretch of play
   // could cross the threshold repeatedly with nothing ever asking.
-  function askForRollingSummary(id: string) {
-    api.refreshRollingSummary(cid, id)
+  function askForRollingSummary(id: string, upto?: number) {
+    api.refreshRollingSummary(cid, id, false, upto)
       .then((r) => { if (r.refreshed && activeIdRef.current === id) setCtxKey((n) => n + 1); })
       .catch(() => {});
   }
@@ -1435,7 +1435,12 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       // The `ctxKey` bump is guarded on the reader still being here, like every
       // other post-await write in this function: a summary written for the scene
       // they just left must not re-read the panel for the scene they are on.
-      askForRollingSummary(id);
+      // `seen` is how long the transcript was when this turn finished, and it
+      // is passed as the fold's boundary: `setStreamingId(null)` above has
+      // already released the scene, so the player can send again before this
+      // request reaches the server, and a fold that swallowed that unanswered
+      // post would keep the reply out of the summary until another threshold.
+      askForRollingSummary(id, seen >= 0 ? seen : undefined);
     }
     // Landed means the backend said so, not that the promise resolved.
     return finished && !errored;
@@ -1690,8 +1695,10 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
     try {
       await api.roll(cid, activeId, notation, rollForm.label.trim() || undefined);
       setRollForm(null);
-      await selectScene(activeId);
-      askForRollingSummary(activeId);   // a roll is a post too (#85)
+      const seen = await selectScene(activeId);
+      // The length the re-read saw is this write's boundary, for the reason the
+      // turn loop passes one: nothing holds the scene once this returns.
+      askForRollingSummary(activeId, seen >= 0 ? seen : undefined);   // a roll is a post too (#85)
     } catch (err: any) {
       setRollForm({ ...rollForm, error: err.detail ?? String(err) });
     } finally {
@@ -1731,8 +1738,8 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       if (rollForm.difficulty !== "") body.difficulty = rollForm.difficulty;
       await api.rollCheck(cid, activeId, body);
       setRollForm(null);
-      await selectScene(activeId);
-      askForRollingSummary(activeId);   // as is a check (#85)
+      const seen = await selectScene(activeId);
+      askForRollingSummary(activeId, seen >= 0 ? seen : undefined);   // as is a check (#85)
     } catch (err: any) {
       setRollForm({ ...rollForm, error: err.detail ?? String(err) });
     } finally {

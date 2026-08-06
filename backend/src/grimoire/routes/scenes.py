@@ -1482,6 +1482,7 @@ def get_rolling_summary(cid: str, sid: str):
 
 @router.post("/campaigns/{cid}/scenes/{sid}/rolling-summary")
 async def post_rolling_summary(cid: str, sid: str, force: bool = False,
+                               upto: int | None = None,
                                client: LLMClient = Depends(get_llm)):
     """Refold the summary if enough has happened since the last one.
 
@@ -1493,8 +1494,25 @@ async def post_rolling_summary(cid: str, sid: str, force: bool = False,
     The connection check runs BEFORE the due check, deliberately: a 409 that
     only appeared once a scene happened to be due would be indistinguishable, on
     the client, from the quiet no-op that is this route's normal answer.
+
+    `upto` bounds the fold to a transcript the caller knows was a clean
+    boundary. The play loop releases the scene before firing this, so a fast
+    next send can append its player post before this request takes its snapshot
+    -- and a fold that swallows an unanswered prompt does not self-repair: the
+    eventual reply is an APPEND, which leaves the digest valid, so it stays out
+    of the "current" summary until another whole threshold goes by. The client
+    already knows how long the transcript was when its turn finished, so it says
+    so. Omitted (the panel's own button, which is held while a turn streams) the
+    scene is taken as it is.
     """
     scene = _require_scene(cid, sid)
+    if upto is not None:
+        if upto < 0:
+            raise HTTPException(status_code=400, detail="upto must not be negative")
+        # Clamped here and nowhere else: every decision below -- due, base,
+        # digest, what gets folded, what `covered` records -- then works from the
+        # same bounded transcript, rather than each having to remember the bound.
+        scene = {**scene, "messages": scene["messages"][:upto]}
     conn = _require_connection()
     every = store.config.rolling_summary_every()
     facts = store.chronicle.scene_facts(cid, sid)

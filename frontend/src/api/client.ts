@@ -1250,9 +1250,19 @@ export const api = {
   /** Ask the server to refold the summary. Without `force` it is a no-op
    *  unless enough posts have landed, which is why the play loop can fire it
    *  after every turn: the gate is the server's, not the caller's. */
-  refreshRollingSummary: (cid: string, sid: string, force = false) =>
-    request<RollingSummaryRefresh>(
-      "POST", `/api/campaigns/${cid}/scenes/${sid}/rolling-summary${force ? "?force=true" : ""}`),
+  /** `upto` bounds the fold to a transcript the caller knows was a clean
+   *  boundary — the play loop releases the scene before firing this, so a fast
+   *  next send can append a player post the fold would otherwise swallow, and
+   *  the reply that answers it is only an append, so it would stay out of the
+   *  "current" summary until another whole threshold went by. */
+  refreshRollingSummary: (cid: string, sid: string, force = false, upto?: number) => {
+    const params = new URLSearchParams();
+    if (force) params.set("force", "true");
+    if (upto !== undefined) params.set("upto", String(upto));
+    const qs = params.toString();
+    return request<RollingSummaryRefresh>(
+      "POST", `/api/campaigns/${cid}/scenes/${sid}/rolling-summary${qs ? `?${qs}` : ""}`);
+  },
   sceneSuggestions: (cid: string, after?: string, offscreen?: boolean) => {
     const params = new URLSearchParams();
     if (after) params.set("after", after);
