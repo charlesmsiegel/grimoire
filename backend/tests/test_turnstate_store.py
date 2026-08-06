@@ -129,12 +129,25 @@ def test_statement_is_not_an_opener():
     assert _stream(["```statement of intent"]) == "```statement of intent"
 
 
-def test_nothing_escapes_after_an_opener():
+def test_nothing_escapes_after_a_trailing_block():
     r = turnstate.StreamRedactor()
     assert r.feed("hi ```state\n") == "hi "
     assert r.feed('{"W": {}}') == ""
-    assert r.feed("```") == ""
+    assert r.feed("\n```") == ""
     assert r.finish() == ""
+
+
+def test_a_block_with_narration_after_it_is_released_whole():
+    """The transcript keeps a mid-reply block (split_block only strips a
+    trailing one), so a redactor that dropped it would end the streamed reply
+    early and disagree with what was stored."""
+    text = 'She waits.\n\n```state\n{"W": {"mood": "wry"}}\n```\n\nShe turns back.'
+    assert _stream([text]) == text
+    assert turnstate.split_block(text)[0] == text
+
+
+def test_an_unterminated_block_is_still_swallowed():
+    assert _stream(['She waits.\n\n```state\n{"W": {"mo']) == "She waits.\n\n"
 
 
 # ---- the ledger ------------------------------------------------------------
@@ -262,6 +275,24 @@ def test_streaks_ignore_entries_past_the_tail(monkeypatch, tmp_path):
 
 # ---- id lifecycle ----------------------------------------------------------
 
+def test_supersede_clears_the_slots_a_landing_reply_takes(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    turnstate.record(cid, "s1", 2, {"characters:w": {"mood": "kept"}})
+    turnstate.record(cid, "s1", 3, {"characters:w": {"mood": "discarded"}})
+    turnstate.supersede(cid, "s1", 3)
+    assert turnstate.entries(cid, "s1") == [(2, {"characters:w": {"mood": "kept"}})]
+
+
+def test_supersede_with_nothing_to_clear_does_not_rewrite(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    turnstate.record(cid, "s1", 2, {"characters:w": {"mood": "kept"}})
+    path = campaigns.campaign_root(cid) / "turnstate.json"
+    before = path.read_text(encoding="utf-8")
+    turnstate.supersede(cid, "s1", 9)
+    turnstate.supersede(cid, "other", 0)
+    assert path.read_text(encoding="utf-8") == before
+
+
 def test_repoint_follows_a_renamed_scene(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     turnstate.record(cid, "old", 1, {"characters:w": {"mood": "x"}})
@@ -307,3 +338,21 @@ def test_fold_is_idempotent():
 def test_fold_onto_an_empty_body():
     assert playstate.fold_fields("", {"mood": "guarded", "intent": "leave"}) == (
         "Mood: guarded\nIntent: leave")
+
+
+def test_a_scenes_ledger_is_capped_at_the_newest_entries(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    for i in range(turnstate.MAX_ENTRIES + 10):
+        turnstate.record(cid, "s1", i, {"characters:w": {"mood": f"m{i}"}})
+    kept = turnstate.entries(cid, "s1")
+    assert len(kept) == turnstate.MAX_ENTRIES
+    assert kept[0][0] == 10                       # the oldest ten are gone
+    assert kept[-1][1] == {"characters:w": {"mood": f"m{turnstate.MAX_ENTRIES + 9}"}}
+
+
+def test_the_cap_leaves_other_scenes_alone(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    turnstate.record(cid, "s2", 0, {"characters:w": {"mood": "kept"}})
+    for i in range(turnstate.MAX_ENTRIES + 5):
+        turnstate.record(cid, "s1", i, {"characters:w": {"mood": "x"}})
+    assert turnstate.entries(cid, "s2") == [(0, {"characters:w": {"mood": "kept"}})]
