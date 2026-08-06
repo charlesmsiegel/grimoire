@@ -7,11 +7,21 @@ Two signals, deliberately computed apart and multiplied only at the end:
   model self-reports it per edit, it is poorly calibrated by construction, and
   this module treats it as an ORDERING signal, never as a probability.
 - **authority** (#112) -- who in the transcript the proposal rests on. The model
-  cites a speaker; this module checks that citation against the scene's own
-  transcript labels and against the record the edit changes, so the tier is
-  something the store proved rather than something the model claimed. A model
-  that lies about its certainty moves one factor; a model that lies about its
-  source moves neither, because the citation is checked.
+  cites a speaker and a short excerpt; this module checks BOTH against the
+  scene's own transcript -- that somebody spoke under that label, and that the
+  words cited are in what they said -- and then against the record the edit
+  changes, so the tier is something the store proved rather than something the
+  model claimed. A model that lies about its certainty moves one factor; a
+  model that lies about its source moves neither, because both halves of the
+  citation are checked. The name alone was not enough: every scene has a
+  `Grimoire`, and the present cast's names are in the prompt's own context
+  block, so a name-only check granted the top tiers to anything that copied
+  one.
+
+  The check is deliberately insensitive to case, whitespace and quote-mark
+  shape (see `_normalized`). The cost of a FALSE fabrication report is a row
+  the reviewer needed collapsed out of sight, which is worse than the miss it
+  would be guarding against.
 
 `score = certainty * WEIGHTS[authority]`, and `band(score)` is the whole output:
 the review panel pre-checks `high` and `medium` exactly as it always did, and
@@ -30,7 +40,7 @@ not reading, so the nudge only ever runs toward reading more.
 
 from __future__ import annotations
 
-from ..appearances import cast as appearances_cast
+from ..appearances import cast as appearances_cast, paths as appearances_paths
 from ..scenes import read as scenes_read, serialize as scenes_serialize
 
 #: The narrator says so. Un-labelled prose on either side of the table: the
@@ -142,48 +152,88 @@ def _label(message: dict) -> str:
     return str(scenes_serialize.ROLE_TO_LABEL.get(role, role))
 
 
-def speaker_index(cid: str, sid: str) -> dict:
-    """What this scene can say about a cited speaker, gathered once per absorb.
+#: `ROLL_SPEAKER` without its U+2063 sentinel -- the spelling a reader (and so
+#: the extractor) actually sees above a manual dice-roll line. Derived rather
+#: than written out, so the two cannot drift apart.
+ROLL_LABEL = scenes_serialize.ROLL_SPEAKER.lstrip("⁣")
 
-    ``labels`` are the speaker labels the transcript actually shows, base forms
-    included, and they are the ground truth for whether a citation is
-    corroborated at all -- not the cast list, which holds actors who may have
-    been present without ever speaking. ``refs`` maps a cast display name to its
-    ``"<kind>:<id>"`` token, which is the only thing that can answer "is this
-    speaker the subject of the record being changed".
+#: Typographic quote marks folded to their ASCII forms before matching. A store
+#: that curled an apostrophe, or a model that straightened one, is not a
+#: different quote, and treating it as one would collapse an honest row.
+_SMART_QUOTES = str.maketrans({"“": '"', "”": '"', "„": '"',
+                               "‘": "'", "’": "'", "‚": "'",
+                               "«": '"', "»": '"'})
 
-    An unreadable scene yields an empty index rather than raising: this runs
-    after the extraction call has been paid for, and the failure a reviewer can
-    act on is a proposal shown as uncorroborated, not a 500.
+
+def _normalized(text) -> str:
+    """A quote or a message body reduced to what a match should turn on.
+
+    Case, run-length of whitespace and the shape of the quote marks are all
+    things that differ between what a model writes and what the transcript
+    holds without either being wrong -- a re-wrapped line, a tidied apostrophe.
+    Matching raw would report those as fabrications, which is the one failure
+    this check must not introduce: a false `unattributed` collapses a row the
+    reviewer needed to see.
+    """
+    if not isinstance(text, str):
+        return ""
+    return " ".join(text.translate(_SMART_QUOTES).casefold().split())
+
+
+def _canonical(label: str) -> str:
+    """The single spelling this index files a speaker under.
+
+    Two labels collapse here. A sub-speaker form drops its parenthetical, so
+    "Mara (aside)" and "Mara" are ONE speaker rather than two candidates -- with
+    both listed, `match_name`'s prefix rule counted them separately and declined
+    a citation of "Mara" as ambiguous between a speaker and herself, sending the
+    scene's most quotable lines to the collapsed section. And `ROLL_SPEAKER`
+    becomes the visible `Roll`: its sentinel renders as nothing, so the
+    extractor can only ever cite the visible form, and indexing the raw string
+    made a verbatim roll citation unmatchable.
+    """
+    if label == scenes_serialize.ROLL_SPEAKER:
+        return ROLL_LABEL
+    return scenes_serialize.speaker_base(label)
+
+
+def _refs(cid: str, sid: str, aliases: dict[str, str]) -> dict[str, str]:
+    """Display name -> ``"<kind>:<id>"`` for everyone who could have spoken here.
+
+    The scene's current cast, PLUS any roster actor whose name the transcript
+    shows as a speaker label. `leave()` removes the scene id from an actor's
+    appearance record while the lines they already spoke stay in the transcript,
+    so the cast alone reads a departed character's own first-hand claim as
+    hearsay about themself -- and, where a same-named actor is still present,
+    hands their line to that actor instead.
+
+    Widened by the transcript rather than to the whole roster on purpose: every
+    extra name is another candidate `match_name` can trip over, so a campaign's
+    unrelated cast would cost `SELF` resolutions in scenes none of them are in.
+    Only actors this transcript actually names can be the ones it quoted.
+
+    A name two actors share names NEITHER of them: keyed by name, the second
+    would overwrite the first and a citation would resolve to whichever was
+    listed last, which is how a speaker gets read as the subject of a record
+    they are not. Dropping it is `match_name`'s own answer, one step earlier
+    where the collision is visible.
     """
     try:
-        messages = scenes_read.read_scene(cid, sid)["messages"]
-    except Exception:                                          # noqa: BLE001
-        messages = []
-    # A list, not a set: `match_name`'s prefix rule needs to see how MANY names
-    # a label could mean, and it counts them by iterating. Deduped as it is
-    # built, so a speaker with fifty lines does not make one name look like
-    # fifty and turn every prefix into an ambiguity.
-    labels: list[str] = []
-    for m in messages:
-        if not isinstance(m, dict):
-            continue
-        label = _label(m)
-        # The base form as well, so a citation naming the speaker plainly still
-        # matches a line stored as "Mara (aside)".
-        for x in (label, scenes_serialize.speaker_base(label)):
-            if x and x not in labels:
-                labels.append(x)
-    try:
-        members = appearances_cast.scene_cast(cid, sid)
+        members = list(appearances_cast.scene_cast(cid, sid))
     except Exception:                                          # noqa: BLE001
         members = []
-    # A display name two present actors share names NEITHER of them: keyed by
-    # name, the second would overwrite the first and a citation would silently
-    # resolve to whichever the cast happened to list last -- which is how a
-    # speaker gets read as the subject of a record they are not. `match_name`
-    # already declines an ambiguous label; dropping the name here is the same
-    # answer one step earlier, where the collision is visible.
+    seen = {(a.get("kind"), a.get("id")) for a in members}
+    try:
+        aroot = appearances_paths.locked_actor_root(cid)
+        for a in appearances_cast.roster(cid):
+            if (a["kind"], a["id"]) in seen:
+                continue
+            name = appearances_cast._actor_name(aroot, a["kind"], a["id"], a["version"])
+            if isinstance(name, str) and name.casefold() in aliases:
+                members.append({**a, "name": name})
+                seen.add((a["kind"], a["id"]))
+    except Exception:                                          # noqa: BLE001
+        pass                          # an unreadable roster widens nothing
     refs: dict[str, str] = {}
     ambiguous: set[str] = set()
     for a in members:
@@ -202,10 +252,86 @@ def speaker_index(cid: str, sid: str) -> dict:
         refs[name] = ref
     for name in ambiguous:
         del refs[name]
-    return {"labels": labels, "refs": refs}
+    return refs
 
 
-def authority(index: dict, speaker: str, subjects: tuple[str, ...] = ()) -> str:
+def speaker_index(cid: str, sid: str) -> dict:
+    """What this scene can say about a cited speaker, gathered once per absorb.
+
+    - ``canonical`` -- one entry per speaker the transcript shows, and the only
+      list `match_name` is ever run against, so a speaker cannot be ambiguous
+      with a second spelling of themself.
+    - ``aliases`` -- every folded spelling (full label and canonical) mapped to
+      its canonical, so a verbatim citation of "Mara (aside)" resolves without
+      the prefix rule being consulted at all.
+    - ``synthetic`` -- canonical labels that stand for no actor. A roll line is
+      real transcript content and can be cited, but nobody said it.
+    - ``refs`` -- see `_refs`.
+
+    The transcript is the ground truth for whether a citation is corroborated,
+    not the cast list: an actor can be present the whole scene without speaking
+    a line worth quoting.
+
+    An unreadable scene yields an empty index rather than raising: this runs
+    after the extraction call has been paid for, and the failure a reviewer can
+    act on is a proposal shown as uncorroborated, not a 500.
+    """
+    try:
+        messages = scenes_read.read_scene(cid, sid)["messages"]
+    except Exception:                                          # noqa: BLE001
+        messages = []
+    # A list, not a set: `match_name`'s prefix rule counts how many names a
+    # label could mean by iterating. Deduped as it is built, so a speaker with
+    # fifty lines does not look like fifty candidates.
+    canonical: list[str] = []
+    aliases: dict[str, str] = {}
+    synthetic: set[str] = set()
+    said: dict[str, list[str]] = {}
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        label = _label(m)
+        if not label:
+            continue
+        canon = _canonical(label)
+        if canon not in canonical:
+            canonical.append(canon)
+        for spelling in (label, canon):
+            aliases.setdefault(spelling.casefold(), canon)
+        if label == scenes_serialize.ROLL_SPEAKER:
+            synthetic.add(canon)
+        said.setdefault(canon, []).append(_normalized(m.get("content")))
+    # Joined with a separator no quote can straddle, so two adjacent messages
+    # cannot be spliced into a sentence neither of them contains.
+    texts = {canon: "\n".join(parts) for canon, parts in said.items()}
+    return {"canonical": canonical, "aliases": aliases, "synthetic": synthetic,
+            "texts": texts, "refs": _refs(cid, sid, aliases)}
+
+
+def _said_it(index: dict, canons, quote: str) -> bool:
+    """Does the cited excerpt actually appear under one of these labels?
+
+    An empty quote passes: there is nothing to check, and refusing the tier for
+    a missing quote would punish the row twice over -- `UNCITED` already covers
+    a citation that says nothing. Surrounding quote marks are stripped off the
+    needle because a model wrapping its excerpt in them is quoting, not
+    misquoting.
+    """
+    needle = _normalized(quote).strip("\"'")
+    if not needle:
+        return True
+    texts = index.get("texts", {})
+    return any(needle in texts.get(c, "") for c in canons)
+
+
+def _narration_canons(index: dict) -> list[str]:
+    """The canonical labels that stand for the narration in this scene -- the
+    reserved role labels, and only the ones the transcript actually used."""
+    return [c for c in index.get("canonical", []) if c in scenes_serialize.RESERVED_LABELS]
+
+
+def authority(index: dict, speaker: str, subjects: tuple[str, ...] = (),
+              quote: str = "") -> str:
     """The tier a cited speaker earns for an edit about `subjects`.
 
     `subjects` are the ``"<kind>:<id>"`` actors the record BELONGS to -- the
@@ -225,20 +351,40 @@ def authority(index: dict, speaker: str, subjects: tuple[str, ...] = ()) -> str:
     label = (speaker or "").strip()
     if not label:
         return UNCITED
-    labels = index.get("labels", [])
     refs = index.get("refs", {})
-    matched = scenes_serialize.match_name(label, labels)
+    # Verbatim first, prefix second. An exact spelling the transcript holds is
+    # not a guess and must not be put to `match_name`, whose prefix rule would
+    # decline it the moment a longer label also starts with it.
+    matched = (index.get("aliases", {}).get(label.casefold())
+               or scenes_serialize.match_name(label, index.get("canonical", [])))
     if matched is None:
-        return NARRATION if label.casefold() in NARRATION_WORDS else UNATTRIBUTED
+        if label.casefold() not in NARRATION_WORDS:
+            return UNATTRIBUTED
+        # A word for the narration rather than a label: check the excerpt
+        # against every narrated line, since that is what the model meant by it.
+        return NARRATION if _said_it(index, _narration_canons(index), quote) else UNATTRIBUTED
+    # The NAME is the cheapest part of a citation to get right -- every scene
+    # has a `Grimoire`, and a present character's name is in the prompt's own
+    # context block -- so a tier granted on the name alone is a tier a
+    # confabulating model can claim by copying. The words have to be there too.
+    if not _said_it(index, (matched,), quote):
+        return UNATTRIBUTED
     if matched in scenes_serialize.RESERVED_LABELS:
         return NARRATION
-    # The MATCHED label, not the citation, and its base as a fallback: a line
-    # stored as "Mara (aside)" renders under that label, so a model quoting it
-    # verbatim matches a label the cast list does not hold under that spelling.
-    for probe in (matched, scenes_serialize.speaker_base(matched)):
-        name = scenes_serialize.match_name(probe, list(refs))
-        if name:
-            return SELF if refs[name] in subjects else OTHER
+    if matched in index.get("synthetic", set()):
+        # A roll line: real transcript content, quotable, and spoken by nobody.
+        # Corroborated, so not a fabrication -- but it can never be first-hand.
+        return OTHER
+    names = list(refs)
+    name = scenes_serialize.match_name(matched, names)
+    # `confusable` asks the second question `match_name` cannot: not "where does
+    # this label land" but "who else could have written it". With both "Mara"
+    # and "Mara Cotgrave" cast, a line labelled "Mara" resolves to "Mara"
+    # cleanly and possibly wrongly, since the model may have been abbreviating
+    # the longer name -- and `SELF` is the tier that must not be handed out on a
+    # maybe. The same helper the voice judge uses, for the same reason.
+    if name and not scenes_serialize.confusable(name, names):
+        return SELF if refs[name] in subjects else OTHER
     return OTHER
 
 
@@ -260,7 +406,7 @@ def review(index: dict, row: dict, subjects: tuple[str, ...] = ()) -> dict:
     certainty = (max(0.0, min(1.0, float(raw)))
                  if isinstance(raw, (int, float)) and not isinstance(raw, bool)
                  and raw == raw else None)                # NaN != NaN
-    tier = authority(index, speaker, subjects)
+    tier = authority(index, speaker, subjects, quote)
     # Rounded BEFORE banding, not after. A band read off the raw product and a
     # score reported to four places disagree at the edge -- 0.649999 bands
     # medium and prints 0.65 -- which is a reader's afternoon gone. It also
