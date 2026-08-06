@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { api } from "../api/client";
+import { api, type Config } from "../api/client";
 import { getModels, type Model } from "../api/models";
 import {
   BLANK_CONNECTION, ConnectionForm, type ConnectionFormValue,
@@ -74,6 +74,31 @@ export default function SetupWizard(
   // to create a "first world" in it would add a stray world to someone's
   // established collection.
   const [existingLibrary, setExistingLibrary] = useState(false);
+  /** The store the wizard is currently working in, tracked so `finish()` can
+   *  name it even when the write that would have reported it fails. */
+  const [storeDir, setStoreDir] = useState<string | null>(null);
+
+  /** Take from a config what the wizard should already consider answered for
+   *  the store it describes, so a step that is done is not asked again.
+   *
+   *  Both the mount and the post-move path go through here. They used not to,
+   *  and the move path silently kept asking for a connection the new library
+   *  already had — saving that form creates a uniquely-suffixed duplicate of
+   *  the connection that is already active.
+   *
+   *  Gated on `ready`, not merely on there being an active connection: a fresh
+   *  store ships with an OpenRouter connection selected and no key, which is
+   *  exactly the state this step exists to fix.
+   *
+   *  `data_dir` is remembered even when nothing else is adopted, because
+   *  `finish()` has to be able to name the store its answer belongs to on the
+   *  path where the write it would have learned that from failed. */
+  const adopt = useCallback((cfg: Config) => {
+    setStoreDir(cfg.data_dir);
+    if (!cfg.ready || !cfg.active_connection) return;
+    setConnected(cfg.active_connection.name);
+    setCreatedId(cfg.active_connection.id);
+  }, []);
 
   /** Re-classify the store after step 1 has repointed at a different one, and
    *  drop everything the earlier steps recorded about the old one — a
@@ -97,6 +122,7 @@ export default function SetupWizard(
       // preference with what the previous one happened to use.
       const [cfg, worlds] = await Promise.all([api.getConfig({ fresh: true }), api.listWorlds()]);
       setTheme(cfg.theme);
+      adopt(cfg);
       setExistingLibrary(worlds.length > 0);
     } catch (err: any) {
       // Not a guess in either direction: say so, and leave the step showing the
@@ -113,20 +139,10 @@ export default function SetupWizard(
     return () => { alive = false; };
   }, []);
 
-  // Adopt a connection this store already has. A reload part-way through the
-  // wizard — or leaving via the topbar and coming back — otherwise shows an
-  // empty form for a step that is done, and re-entering it creates a
-  // uniquely-suffixed duplicate of the connection that is already active.
-  // Gated on `ready`, not merely on there being an active connection: a fresh
-  // store ships with an OpenRouter connection selected and no key, which is
-  // exactly the case this step exists to fix.
   useEffect(() => {
     let alive = true;
-    api.getConfig().then((c) => {
-      if (!alive || !c.ready || !c.active_connection) return;
-      setConnected(c.active_connection.name);
-      setCreatedId(c.active_connection.id);
-    }).catch(() => { /* the form is the safe default */ });
+    api.getConfig().then((c) => alive && adopt(c))
+      .catch(() => { /* the form is the safe default */ });
     return () => { alive = false; };
   }, []);
 
@@ -150,7 +166,12 @@ export default function SetupWizard(
     } catch {
       /* the flag is a convenience, not a gate */
     }
-    onDone(store);
+    // `storeDir` is the fallback rather than the caller's own idea of the
+    // store: step 1 may have repointed at a different library since the caller
+    // last read the config, and letting it key its latch on the pre-move path
+    // sends the user straight back into the wizard — the exact trap the latch
+    // exists to prevent, on the one path where the flag write also failed.
+    onDone(store ?? storeDir ?? undefined);
     navigate(to, { replace: true });
   }
 

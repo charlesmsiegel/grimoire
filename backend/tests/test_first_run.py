@@ -154,6 +154,36 @@ def test_creating_a_campaign_records_setup_too(client):
     assert store.read_config()["setup_done"] == "on"
 
 
+def test_a_world_survives_a_failed_setup_record(client, monkeypatch):
+    """The record happens after the world is on disk, so raising here would fail
+    a request whose real work succeeded — and the caller's retry would create a
+    uniquely-suffixed duplicate of a world that already exists."""
+    def busy(**fields):
+        raise store.locks.ConfigBusy()
+
+    # `store.config.write_config`, not `store.write_config`: `mark_setup_done`
+    # calls the module-level name, so patching the facade re-export intercepts
+    # nothing and the test goes green while injecting no failure at all.
+    monkeypatch.setattr(store.config, "write_config", busy)
+    r = client.post("/api/worlds", json={"name": "Realm"})
+    assert r.status_code == 200
+    assert r.json()["id"] == "realm"
+    assert [w["id"] for w in client.get("/api/worlds").json()] == ["realm"]
+
+
+def test_a_campaign_survives_a_failed_setup_record(client, monkeypatch):
+    wid = _world(client)
+    store.write_config(setup_done="off")
+
+    def boom(**fields):
+        raise OSError("read-only store")
+
+    monkeypatch.setattr(store.config, "write_config", boom)   # see above
+    r = client.post("/api/campaigns", json={"name": "Saltmarch", "world": wid})
+    assert r.status_code == 200
+    assert store.campaigns.has_campaigns() is True
+
+
 def test_config_names_the_store_it_describes(client, tmp_path):
     assert client.get("/api/config").json()["data_dir"] == str(tmp_path)
 
