@@ -44,7 +44,7 @@ def delete_world(wid: str) -> None:
     # public listing hides, or hiding one makes its world deletable. A campaign
     # whose reference could not be read (w is None) counts as a user too --
     # deletion is irreversible, so "we could not tell" has to block it.
-    used_by = [name for name, w in campaigns_read.world_refs()
+    used_by = [name for _cid, name, w in campaigns_read.world_refs()
                if w is None or paths.references_world(w, root)]
     if used_by:
         raise WorldInUse(wid, used_by)
