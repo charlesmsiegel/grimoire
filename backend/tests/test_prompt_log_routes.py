@@ -14,14 +14,7 @@ from fastapi.testclient import TestClient
 from grimoire import routes, store
 from grimoire.main import create_app
 
-
-class FakeOpenRouter:
-    def __init__(self, deltas):
-        self.deltas = deltas
-
-    async def stream(self, messages, cfg):
-        for d in self.deltas:
-            yield d
+from .llm_fakes import FakeOpenRouter
 
 
 @pytest.fixture
@@ -170,3 +163,24 @@ def test_capture_off_leaves_the_list_empty_and_the_turn_intact(client):
     assert client.get(f"/api/campaigns/{cid}/scenes/{sid}/prompts").json()["entries"] == []
     # the turn itself still landed
     assert client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
+
+
+def test_a_regenerate_that_never_reaches_the_model_records_nothing(client, monkeypatch):
+    """`supersede` runs after the context is built and can still refuse, which
+    unwinds the reroll without a single token being sent. A snapshot written
+    beside the compose would leave Turn history showing a regeneration that
+    never happened."""
+    cid, sid = _scene(client)
+    _chat(client, cid, sid)
+    before = len(client.get(f"/api/campaigns/{cid}/scenes/{sid}/prompts").json()["entries"])
+
+    def boom(*_a, **_k):
+        raise RuntimeError("proposals write failed")
+
+    monkeypatch.setattr(store.proposals, "supersede", boom)
+    with pytest.raises(RuntimeError):
+        client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate")
+
+    entries = client.get(f"/api/campaigns/{cid}/scenes/{sid}/prompts").json()["entries"]
+    assert len(entries) == before
+    assert not any(e["task"] == "regenerate" for e in entries)

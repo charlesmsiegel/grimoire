@@ -45,7 +45,7 @@ def _turn_override(body) -> dict | None:
     return {k: v for k, v in _dump(body.response).items() if v is not None}
 
 
-def _record_prompt(cid: str, sid: str, task: str, breakdown: dict) -> None:
+def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None) -> None:
     """Freeze what this turn's model is about to see (#157).
 
     Called with the breakdown from the SAME `context.compose_*` call that
@@ -59,6 +59,10 @@ def _record_prompt(cid: str, sid: str, task: str, breakdown: dict) -> None:
     turns whose prompt is most worth having. `prompt_log.record` swallows its
     own storage failures, so this cannot cost the turn either way.
     """
+    # None means the caller composed with `describe=False` because capture is
+    # off. Nothing to record, and nothing was built to record.
+    if breakdown is None:
+        return
     scene_model = ""
     try:
         # Frontmatter only. `read_scene` would re-parse the whole transcript for
