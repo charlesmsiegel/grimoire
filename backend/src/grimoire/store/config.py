@@ -104,6 +104,22 @@ def absorb_budget() -> float:
     return _seconds("absorb_budget", DEFAULT_ABSORB_BUDGET)
 
 
+def mark_setup_done() -> None:
+    """Record that this store has been set up, unless it already says so.
+
+    Called when the first world or campaign is created, not only when a config
+    read happens to notice content exists. Those are not the same guarantee:
+    a user who escapes the wizard, makes a world and deletes it again before
+    anything reads the config leaves no trace at all, and the next navigation
+    reopens setup over a store that has plainly been used (#194 review).
+
+    Reading first keeps this off the write path for every creation after the
+    first, which is all of them on any store that has been used at all.
+    """
+    if read_config().get("setup_done") != "on":
+        write_config(setup_done="on")
+
+
 def write_config(**fields: str) -> dict[str, str]:
     # Merge onto the file's RAW frontmatter (not read_config()'s narrowed
     # reconstruction) so any key not in _CONFIG_KEYS — including the legacy

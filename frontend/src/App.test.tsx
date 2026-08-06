@@ -32,7 +32,9 @@ vi.mock("./routes/SetupWizard", () => ({
     const navigate = useNavigate();
     return (
       <div data-testid="setup-wizard">
-        <button onClick={() => { onDone(); navigate("/", { replace: true }); }}>finish-setup</button>
+        <button onClick={() => { onDone("/home/u/.grimoire"); navigate("/", { replace: true }); }}>
+          finish-setup
+        </button>
       </div>
     );
   },
@@ -42,7 +44,7 @@ const READY_OPENROUTER = {
   theme: "codex", system_prompt: "", quote_color: "off", user_label: "You", assistant_label: "Grimoire",
   active_connection_id: "openrouter",
   active_connection: { id: "openrouter", kind: "openrouter", name: "OpenRouter" }, ready: true,
-  setup_done: "on", first_run: false,
+  setup_done: "on", first_run: false, data_dir: "/home/u/.grimoire",
 };
 
 beforeEach(() => {
@@ -159,6 +161,24 @@ test("a world created outside the wizard retires the redirect on the next naviga
   fireEvent.click(within(screen.getByRole("banner")).getByRole("link", { name: /campaigns/i }));
   await waitFor(() => expect(api.listCampaigns).toHaveBeenCalled());
   expect(screen.queryByTestId("setup-wizard")).not.toBeInTheDocument();
+});
+
+test("a different store pointed at later gets its own first run", async () => {
+  // The exit latch is scoped to the library it was set in. Unscoped, finishing
+  // setup once would suppress the wizard for every store this session ever
+  // opens — including a brand-new empty one chosen from Config.
+  (api.getConfig as any).mockResolvedValue(FIRST_RUN);
+  render(<MemoryRouter initialEntries={["/"]}><App /></MemoryRouter>);
+  const wizard = await screen.findByTestId("setup-wizard");
+  fireEvent.click(within(wizard).getByText("finish-setup"));
+  await waitFor(() => expect(api.listCampaigns).toHaveBeenCalled());
+
+  // Config repoints storage at a different, empty library
+  (api.getConfig as any).mockResolvedValue({ ...FIRST_RUN, data_dir: "/sync/other" });
+  fireEvent.click(within(screen.getByRole("banner")).getByRole("link", { name: /worlds/i }));
+  await waitFor(() => expect(api.getConfig).toHaveBeenCalledWith({ fresh: true }));
+  fireEvent.click(within(screen.getByRole("banner")).getByRole("link", { name: /campaigns/i }));
+  expect(await screen.findByTestId("setup-wizard")).toBeInTheDocument();
 });
 
 test("/welcome bounces to the campaigns list once the store is no longer a first run", async () => {

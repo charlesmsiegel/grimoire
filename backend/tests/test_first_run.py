@@ -133,6 +133,31 @@ def test_emptying_the_library_does_not_bring_the_wizard_back(client):
     assert client.get("/api/config").json()["first_run"] is False
 
 
+def test_creating_a_world_records_setup_without_waiting_for_a_config_read(client):
+    """Deliberately no config read between the create and the delete: relying on
+    one made the guarantee depend on whether a read happened to interleave."""
+    wid = _world(client)
+    assert store.read_config()["setup_done"] == "on"
+    assert client.delete(f"/api/worlds/{wid}").status_code == 200
+    assert client.get("/api/config").json()["first_run"] is False
+
+
+def test_creating_a_campaign_records_setup_too(client):
+    wid = _world(client)
+    cid = client.post("/api/campaigns", json={"name": "Saltmarch", "world": wid}).json()["id"]
+    store.write_config(setup_done="off")           # as if only the campaign existed
+    client.delete(f"/api/campaigns/{cid}")
+    client.delete(f"/api/worlds/{wid}")
+    # the campaign's own create already recorded it; re-create to prove the path
+    wid2 = _world(client, "Realm")
+    client.post("/api/campaigns", json={"name": "Second", "world": wid2})
+    assert store.read_config()["setup_done"] == "on"
+
+
+def test_config_names_the_store_it_describes(client, tmp_path):
+    assert client.get("/api/config").json()["data_dir"] == str(tmp_path)
+
+
 def test_a_store_that_cannot_be_scanned_is_not_reported_as_first_run(client, monkeypatch):
     def boom():
         raise OSError("permission denied")
