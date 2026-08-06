@@ -9384,3 +9384,23 @@ def test_absorb_primes_the_extraction_with_the_campaigns_standing_facts(client):
     user = seen[0][1]["content"]
     assert "Standing facts:" in user
     assert "f1: The crypt door has no lock. (the third night)" in user
+
+
+def test_a_broken_world_plot_map_does_not_skip_the_greeting_sweep(client):
+    """#225: `delete_greeting` unlinks the record and then cleans the plot map,
+    so the second half can raise with the record already gone."""
+    wid, cid = _campaign(client)
+    chid = client.post(f"/api/worlds/{wid}/characters",
+                       json={"name": "Seraphine"}).json()["character"]
+    gid = client.post(f"/api/worlds/{wid}/greetings",
+                      json={"name": "Arrival", "character": chid,
+                            "version": "default", "body": "hi"}).json()["id"]
+    croot = store.campaigns.campaign_root(cid)
+    (croot / "greetings" / gid).mkdir(parents=True)
+    (croot / "greetings" / gid / "leftover.md").write_text("stale\n", encoding="utf-8")
+    (store.worlds.world_root(wid) / "plotmap.json").write_text("{not json", encoding="utf-8")
+
+    # TestClient re-raises the handler's exception rather than rendering the 500
+    with pytest.raises(json.JSONDecodeError):
+        client.delete(f"/api/worlds/{wid}/greetings/{gid}")
+    assert not (croot / "greetings" / gid).exists()        # swept anyway
