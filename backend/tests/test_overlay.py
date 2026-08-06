@@ -812,3 +812,16 @@ def test_sweep_survives_a_campaign_nobody_can_read(monkeypatch, tmp_path, caplog
         overlay.forget_world_record(wroot, "groups", gid)   # does not raise
     assert any("could not enumerate" in r.message for r in caplog.records)
     assert groupstate.read_state(croot, gid) is not None    # honestly left behind
+
+
+def test_campaign_side_greeting_delete_takes_its_directory_too(monkeypatch, tmp_path):
+    """Same rule as `delete_entity`: a campaign-local greeting deleted
+    campaign-side takes no tombstone, so its id is free again."""
+    _wroot, cid, croot = _dependent(monkeypatch, tmp_path)
+    aid, _vid = overlay.create_character(cid, "Winifred")
+    gid = overlay.create_greeting(cid, "Arrival", aid, "default", "hello")
+    assets.put_image(croot, gid, "default", "embed-1", PNG, "png", base="greetings")
+
+    overlay.delete_greeting(cid, gid)
+    assert not (croot / "greetings" / gid).exists()
+    assert overlay.create_greeting(cid, "Arrival", aid, "default", "hi") == gid
