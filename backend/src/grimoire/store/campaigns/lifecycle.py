@@ -16,6 +16,13 @@ from ..scenes import write as scenes_write
 from ..worlds import paths as worlds_paths
 from . import paths, read
 
+#: `world_copy` while the migration has decided everything and has only
+#: byte-identical duplicates left to delete. Anything other than "overlay"
+#: means the migration is unfinished (`read.slim_pending`), which this is; what
+#: it adds is that a resumed run must not attribute anything a second time —
+#: see `_finish`.
+PRUNING = "slim-pruning"
+
 
 def create_campaign(name: str, world_id: str, region: str | None = None,
                      calendar: str | None = None, module: str | None = None,
@@ -134,6 +141,9 @@ def ensure_campaign_slim(cid: str) -> None:
     wroot = read.world_root_of(cid)
     if not wroot.exists():
         return
+    if meta.get("world_copy") == PRUNING:
+        _finish(cid, mp, meta, body, root, wroot)   # decisions all made; only deleting left
+        return
 
     locked = set(appearances_paths.record(cid))
     manifest = paths.read_manifest(cid)
@@ -194,6 +204,30 @@ def ensure_campaign_slim(cid: str) -> None:
     paths.write_manifest(cid, manifest)
     for ref in redundant:
         overlay.dematerialize(cid, ref)
+    _finish(cid, mp, meta, body, root, wroot)
+
+
+def _finish(cid: str, mp: Path, meta: dict, body: str, root: Path, wroot: Path) -> None:
+    """Prune byte-identical asset/sidecar copies, then stamp the migration done.
+
+    Split out and fenced behind its own stamp because it is the one phase whose
+    input a previous run can already have consumed.
+    `_tombstone_deleted_copied_assets` reads a world asset missing from the
+    campaign tree as one the user deleted, and `_prune_duplicate_files` deletes
+    exactly such copies — so an interruption between them left the next run
+    deriving asset deletions from a tree the last one had already pruned, and
+    tombstoning live world images out of the campaign permanently. #270's own
+    failure, one layer down, and reachable for any record that survives the
+    classify loop while carrying a duplicate asset (Codex review).
+
+    Reordering the two cannot fix it: `_prune_duplicate_files` runs last on
+    purpose, so byte-identical copies are still present when the attribution
+    happens and are not mistaken for deletions. What fixes it is not attributing
+    twice — reaching `PRUNING` means every decision is durable, so a resumed run
+    re-enters here and attributes nothing."""
+    if meta.get("world_copy") != PRUNING:
+        meta["world_copy"] = PRUNING
+        atomic.write_text(mp, dump_frontmatter(meta, body))
     _prune_duplicate_files(root, wroot)
     meta["world_copy"] = "overlay"
     atomic.write_text(mp, dump_frontmatter(meta, body))

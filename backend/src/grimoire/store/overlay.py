@@ -63,6 +63,13 @@ INHERITED_KINDS: tuple[str, ...] = entities.SYNCED_KINDS + appearances_paths.ACT
 #: Campaign-root files that resolve through to the world the same way.
 INHERITED_FILES: tuple[str, ...] = ("plotmap.json",)
 
+#: The sync base a materialization reserves before its copy lands, while the
+#: slim migration is still pending — see `_recorded_base`. Deliberately the
+#: value the pre-overlay fork wrote for anything it did not copy, so the
+#: migration's existing rule for that (`lifecycle.ensure_campaign_slim`, which
+#: attributes no deletion to a ref carrying it) covers this too.
+RESERVED_BASE = ""
+
 
 def croot_of(cid: str) -> Path:
     return campaigns_paths.campaign_root(cid)
@@ -231,11 +238,24 @@ def _recorded_base(cid: str, ref: str, base: str, commit: Path):
     not begun.
 
     All of which describes a campaign the slim migration has already reached.
-    Before it, sync.md is the pre-overlay full copy's inventory and the same
-    residue reads as a record the user deleted, which the migration tombstones
-    (#270) — so there the two writes swap and the copy commits first. See
-    `campaigns.read.slim_pending`: what an interruption leaves there is a copy
-    the manifest does not name, which the migration sweeps.
+    Before it, sync.md is that migration's inventory of the pre-overlay full
+    copy, and *base, no copy* is the one thing it cannot survive: it reads as a
+    record the user deleted and tombstones it (#270).
+
+    Neither ordering is safe there, so the base is RESERVED before the copy and
+    recorded after it. The reservation is the empty hash — the value the fork
+    itself wrote for anything it did not copy — and `ensure_campaign_slim`
+    already refuses to attribute one to a user, because nothing was ever copied
+    for the user to have deleted. That makes both residues survivable:
+
+    - *reserved, no copy* — the migration drops the ref, leaving the record
+      inherited. Same self-healing shape as *base, no copy* past the migration.
+    - *reserved, copy* — the migration keeps the record and its reservation, so
+      it stays visible to sync, which offers it as a conflict to resolve. Noisy,
+      and the point: swapping the writes instead would leave a copy no ref
+      names, and once the world moved on the sweep could no longer recognize it
+      as residue — permanent silent divergence, the very thing above (Codex
+      review).
 
     An exception, unlike a crash, can unwind, so undo the base then. It restores
     what it displaced rather than dropping the ref: an earlier interrupted
@@ -248,18 +268,10 @@ def _recorded_base(cid: str, ref: str, base: str, commit: Path):
     materialization of the same ref that finished while ours failed is the same
     case (Codex review).
     """
-    if campaigns_read.slim_pending(cid):
-        # Copy first, base second. Nothing to undo on the way out: no base was
-        # written, and the copy's own last write is atomic, so a failed body
-        # leaves the record inherited exactly as it found it.
-        yield
-        manifest = campaigns_paths.read_manifest(cid)
-        manifest[ref] = base
-        campaigns_paths.write_manifest(cid, manifest)
-        return
+    reserving = campaigns_read.slim_pending(cid)
     manifest = campaigns_paths.read_manifest(cid)
     previous = manifest.get(ref)
-    manifest[ref] = base
+    manifest[ref] = RESERVED_BASE if reserving else base
     campaigns_paths.write_manifest(cid, manifest)
     try:
         yield
@@ -274,7 +286,23 @@ def _recorded_base(cid: str, ref: str, base: str, commit: Path):
                 campaigns_paths.write_manifest(cid, manifest)
             except Exception:  # noqa: BLE001 - the copy's failure is the one worth raising
                 pass   # the copy's failure is the one worth raising
+        elif reserving:
+            # The copy landed and the exception arrived after it, so the
+            # reservation now describes a real copy and has to be redeemed --
+            # the same reasoning as leaving the base alone above.
+            try:
+                _put_base(cid, ref, base)
+            except Exception:  # noqa: BLE001 - the copy's failure is the one worth raising
+                pass
         raise
+    if reserving:
+        _put_base(cid, ref, base)
+
+
+def _put_base(cid: str, ref: str, base: str) -> None:
+    manifest = campaigns_paths.read_manifest(cid)
+    manifest[ref] = base
+    campaigns_paths.write_manifest(cid, manifest)
 
 
 def _materialize_flat(cid: str, kind: str, eid: str) -> bool:
