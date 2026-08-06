@@ -313,9 +313,14 @@ def grade_absorb(ctx: dict, output: str) -> list[Check]:
     # check that makes absorb's replay mode react to a template edit at all:
     # drop a key from templates/absorb/system.j2 and the model stops returning
     # it, but a recorded reply from before the edit still has it.
+    # The per-edit routing fields (#110/#112) are asked for alongside the
+    # sections. They live INSIDE each row, so the contract derived from
+    # `parse_output("{}")` cannot see them and dropping the ask from the
+    # template would otherwise go unnoticed until a live run.
     prompt = graders.grade_prompt(
         ctx["messages"],
-        {f"asks_{k}": f'"{k}"' for k in graders.ABSORB_TEXT + graders.ABSORB_LISTS})
+        {f"asks_{k}": f'"{k}"'
+         for k in graders.ABSORB_TEXT + graders.ABSORB_LISTS + absorb_store.CITATION_FIELDS})
 
     out, parsed = graders.grade_absorb(output)
     if not all(c.ok for c in out):

@@ -390,6 +390,25 @@ export type SceneContext = {
 };
 export type CastDetail = { kind: "characters" | "pcs"; id: string; name: string; version: string; body: string };
 export type TimelineEvent = { date: string; text: string };
+/** How much weight one staged proposal has earned (#110/#112), computed by
+ *  `store/absorb/routing.py`. Display and default-checkbox state only — the
+ *  server never reads it back on save, and a `low` row a reviewer ticks anyway
+ *  applies exactly like any other. */
+export type EditReview = {
+  /** The extractor's own 0-1 rating, or null when it gave none. Poorly
+   *  calibrated by construction, so it is shown and ordered by, never trusted
+   *  as a probability. */
+  certainty: number | null;
+  /** The excerpt it cited, and the transcript label it attributed them to.
+   *  Both "" when it cited nothing. */
+  quote: string; speaker: string;
+  /** What the transcript actually corroborates about that speaker, relative to
+   *  the record being changed. `unattributed` means the cited speaker is not in
+   *  this scene at all — an invented citation, not merely a weak one. */
+  authority: "narration" | "self" | "other" | "unattributed" | "uncited";
+  /** `certainty` weighted by `authority`, and the band the panel routes on. */
+  score: number; band: "high" | "medium" | "low";
+};
 export type StagedEdit = {
   id: string; kind: "character_state" | "lore" | "authored" | "relationship" | "bond" | "plot"
     | "commitment" | "fact" | "new_character" | "new_location" | "new_lore" | "sheet"
@@ -397,6 +416,11 @@ export type StagedEdit = {
   target: { kind: string; id: string }; label: string; field: string;
   before: string; after: string; authored: boolean;
   payload?: Record<string, unknown>;
+  /** Present on the rows `absorb.materialize` staged from the extraction, and
+   *  absent on the ones staged by the later phases (dossier, voice, sheet),
+   *  which rest on no transcript citation to weigh. An absent block routes as
+   *  `medium`: shown and pre-approved, exactly as every row was before #110. */
+  review?: EditReview;
   /** Set once the reviewer has answered a conflict on this row (#111): the
    *  reviewer's authorization to write over a target that moved since the
    *  scene was absorbed. Both values authorize; they differ in whether `after`

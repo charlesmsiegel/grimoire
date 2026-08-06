@@ -878,6 +878,20 @@ button.primary { background: var(--accent); color: var(--on-accent); border: var
 .absorb-conflict-badge { margin-left: auto; }
 .absorb-stored { color: var(--ink); font-size: 13px; margin: 2px 0; white-space: pre-wrap; }
 
+/* Confidence routing (#110/#112). The band chip is quiet for `high` and
+   `medium` and accented only for `low`: its job is to say why a row is NOT
+   pre-approved, and painting every row would leave the one that needs reading
+   looking like the twenty that do not. */
+.absorb-band { font-size: 11px; letter-spacing: 0.02em; }
+.absorb-band-medium { color: var(--muted); }
+.absorb-band-low { background: var(--accent); color: var(--on-accent); border-color: var(--rule); }
+/* Indented past the checkbox so the citation reads as belonging to the row's
+   label rather than to the diff below it. */
+.absorb-evidence { margin: 2px 0 4px; padding-left: 22px; }
+.absorb-evidence q { color: var(--ink); }
+.absorb-low { margin-top: 8px; border-top: 1px dashed var(--muted); padding-top: 8px; }
+.absorb-low > .field-hint { margin: 4px 0 0; }
+
 .mechanics-warnings { margin: 4px 0 8px; padding-left: 16px; font-size: 13px; color: var(--ink); }
 .mechanics-notice { margin: 8px 0; padding: 8px 12px; border: var(--rw2) solid var(--rule); background: var(--surface); color: var(--ink); }
 .mechanics-notice p { margin: 4px 0; }

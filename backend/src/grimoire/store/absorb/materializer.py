@@ -13,7 +13,7 @@ from .. import (characters, commitments, entities, facts, groupstate, overlay,
 from ..appearances import paths as appearances_paths, versions as appearances_versions
 from ..campaigns import paths as campaigns_paths
 from ..paths import slugify
-from . import conflicts, parse, weather
+from . import conflicts, parse, routing, weather
 
 _CARD_FIELDS = ("description", "personality", "scenario")
 
@@ -166,6 +166,23 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
     copies. Targets that don't exist are dropped (tolerated, not an error)."""
     croot = campaigns_paths.campaign_root(cid)
     out: list[dict] = []
+    # Once per absorb, not once per edit: every row is checked against the same
+    # transcript, and the index costs a scene read and a cast read.
+    index = routing.speaker_index(cid, sid)
+
+    def _staged(edit: dict, row: dict, *subjects: str) -> dict:
+        """One StagedEdit, stamped with the review block the panel routes on.
+
+        Every `out.append` in this function goes through this rather than
+        writing the key itself. A row that skipped it would arrive at the
+        reviewer looking like the rows that genuinely have no citation to check
+        -- the dossier, voice and sheet proposals staged elsewhere -- and so be
+        pre-approved on the strength of a signal that was actually present and
+        simply dropped. `subjects` are the actors the record BELONGS to (see
+        `routing.authority`); a record that belongs to nobody passes none.
+        """
+        edit["review"] = routing.review(index, row, subjects)
+        return edit
 
     for e in parsed.get("character_state_edits", []):
         raw_id = e.get("id", "")
@@ -202,11 +219,12 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
         before = playstate.compose_body(st["current_state"], cur_knows, cur_suspects) if st else ""
         if before == after:
             continue
-        out.append({"id": f"character_state:{char_id}", "kind": "character_state",
-                    "target": {"kind": "characters", "id": char_id},
-                    "label": f"{_char_name(cid, char_id)} — current state",
-                    "field": "current_state",
-                    "before": before, "after": after, "authored": False})
+        out.append(_staged({"id": f"character_state:{char_id}", "kind": "character_state",
+                            "target": {"kind": "characters", "id": char_id},
+                            "label": f"{_char_name(cid, char_id)} — current state",
+                            "field": "current_state",
+                            "before": before, "after": after, "authored": False},
+                           e, f"characters:{char_id}"))
 
     for e in parsed.get("group_state_edits", []):
         raw_id = e.get("id", "")
@@ -229,10 +247,10 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
         before = groupstate.compose_body(cur) if st else ""
         if before == after:
             continue
-        out.append({"id": f"group_state:{gid}", "kind": "group_state",
-                    "target": {"kind": "groups", "id": gid},
-                    "label": f"{name} — group state", "field": "group_state",
-                    "before": before, "after": after, "authored": False})
+        out.append(_staged({"id": f"group_state:{gid}", "kind": "group_state",
+                            "target": {"kind": "groups", "id": gid},
+                            "label": f"{name} — group state", "field": "group_state",
+                            "before": before, "after": after, "authored": False}, e))
 
     for e in parsed.get("lore_edits", []):
         eid, append = e.get("id", ""), (e.get("append", "") or "").strip()
@@ -244,9 +262,10 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
         ent = overlay.read_entity(cid, kind, eid)
         before = ent["body"].strip()
         after = (before + "\n\n" + append).strip()
-        out.append({"id": f"lore:{eid}", "kind": "lore", "target": {"kind": kind, "id": eid},
-                    "label": f"{ent['meta'].get('name', eid)} — {kind}", "field": "body",
-                    "before": before, "after": after, "authored": False})
+        out.append(_staged({"id": f"lore:{eid}", "kind": "lore",
+                            "target": {"kind": kind, "id": eid},
+                            "label": f"{ent['meta'].get('name', eid)} — {kind}", "field": "body",
+                            "before": before, "after": after, "authored": False}, e))
 
     for e in parsed.get("authored_edits", []):
         char_id, field, text = e.get("id", ""), e.get("field", ""), (e.get("text", "") or "").strip()
@@ -262,10 +281,11 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
                                           char_id, vid)["data"].get(field, "").strip()
         except (characters.CharacterNotFound, characters.VersionNotFound):
             continue
-        out.append({"id": f"authored:{char_id}:{field}", "kind": "authored",
-                    "target": {"kind": "characters", "id": char_id},
-                    "label": f"{_char_name(cid, char_id)} — {field} (card edit)",
-                    "field": field, "before": before, "after": text, "authored": True})
+        out.append(_staged({"id": f"authored:{char_id}:{field}", "kind": "authored",
+                            "target": {"kind": "characters", "id": char_id},
+                            "label": f"{_char_name(cid, char_id)} — {field} (card edit)",
+                            "field": field, "before": before, "after": text, "authored": True},
+                           e, f"characters:{char_id}"))
 
     for e in parsed.get("relationship_deltas", []):
         frm, to = e.get("from", ""), e.get("to", "")
@@ -278,11 +298,15 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
         before = relationships._render_feeling(cur) if cur else ""
         if before == after:
             continue
-        out.append({"id": f"feeling:{relationships.feeling_key(frm, to)}", "kind": "relationship",
-                    "target": {"kind": "relationships", "id": relationships.feeling_key(frm, to)},
-                    "label": f"{relationships.actor_name(cid, frm)} → {relationships.actor_name(cid, to)}",
-                    "field": "feeling", "before": before, "after": after, "authored": False,
-                    "payload": payload})
+        # `frm` alone is the subject: the feeling is the FROM side's, so the TO
+        # side describing it is a third party's read of somebody else's heart.
+        out.append(_staged({"id": f"feeling:{relationships.feeling_key(frm, to)}",
+                            "kind": "relationship",
+                            "target": {"kind": "relationships",
+                                       "id": relationships.feeling_key(frm, to)},
+                            "label": f"{relationships.actor_name(cid, frm)} → {relationships.actor_name(cid, to)}",
+                            "field": "feeling", "before": before, "after": after,
+                            "authored": False, "payload": payload}, e, frm))
 
     for e in parsed.get("bond_changes", []):
         a_tok, b_tok, typ = e.get("a", ""), e.get("b", ""), (e.get("type", "") or "").strip()
@@ -292,11 +316,15 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
         before = cur["type"] if cur else ""
         if before == typ:
             continue
-        out.append({"id": f"bond:{relationships.bond_key(a_tok, b_tok)}", "kind": "bond",
-                    "target": {"kind": "relationships", "id": relationships.bond_key(a_tok, b_tok)},
-                    "label": f"{relationships.actor_name(cid, a_tok)} & {relationships.actor_name(cid, b_tok)}",
-                    "field": "bond", "before": before, "after": typ, "authored": False,
-                    "payload": {"a": a_tok, "b": b_tok, "type": typ}})
+        # Both ends are subjects, unlike a feeling: a bond is the pair's shared
+        # relationship type, so either of them naming it is first-hand.
+        out.append(_staged({"id": f"bond:{relationships.bond_key(a_tok, b_tok)}", "kind": "bond",
+                            "target": {"kind": "relationships",
+                                       "id": relationships.bond_key(a_tok, b_tok)},
+                            "label": f"{relationships.actor_name(cid, a_tok)} & {relationships.actor_name(cid, b_tok)}",
+                            "field": "bond", "before": before, "after": typ, "authored": False,
+                            "payload": {"a": a_tok, "b": b_tok, "type": typ}},
+                           e, a_tok, b_tok))
 
     try:
         threads = plot.read(cid)
@@ -328,11 +356,12 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
             disp_title = cur.get("title") or title or pid  # keep the stored title
         else:
             before, disp_title = "", title or pid
-        out.append({"id": f"plot:{pid}", "kind": "plot",
-                    "target": {"kind": "plot", "id": pid},
-                    "label": f"{disp_title} — {status}",
-                    "field": "beat", "before": before, "after": beat, "authored": False,
-                    "payload": {"id": pid, "title": disp_title, "status": status, "scene": sid}})
+        out.append(_staged({"id": f"plot:{pid}", "kind": "plot",
+                            "target": {"kind": "plot", "id": pid},
+                            "label": f"{disp_title} — {status}",
+                            "field": "beat", "before": before, "after": beat, "authored": False,
+                            "payload": {"id": pid, "title": disp_title, "status": status,
+                                        "scene": sid}}, e))
 
     # Same shape as plot_movements above, and deliberately a second block rather
     # than a parameterized shared one: the two record types agree on "id or a
@@ -431,12 +460,12 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
         label = f"{disp_title} — {disp_kind}, {disp_status}"
         if disp_due:
             label += f", due {disp_due}"
-        out.append({"id": f"commitment:{mid}", "kind": "commitment",
-                    "target": {"kind": "commitments", "id": mid},
-                    "label": label,
-                    "field": "beat", "before": before, "after": beat, "authored": False,
-                    "payload": {"id": mid, "title": disp_title, "kind": kind,
-                                "status": status, "due": due, "scene": sid}})
+        out.append(_staged({"id": f"commitment:{mid}", "kind": "commitment",
+                            "target": {"kind": "commitments", "id": mid},
+                            "label": label,
+                            "field": "beat", "before": before, "after": beat, "authored": False,
+                            "payload": {"id": mid, "title": disp_title, "kind": kind,
+                                        "status": status, "due": due, "scene": sid}}, e))
 
     # The fact ledger (#114). One section and one edit kind covering two
     # operations, because a row does one thing to one record and only the row
@@ -563,16 +592,20 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
         # staged diff shows the full text that lands in the card's description field.
         history = (e.get("history", "") or "").strip()
         after = f"{description}\n\n{history}" if history else description
-        out.append({"id": f"new_character:{candidate_id}", "kind": "new_character",
-                    "target": {"kind": "characters", "id": ""},
-                    "label": f"New character — {name}", "field": "description",
-                    "before": "", "after": after, "authored": False,
-                    "payload": {"name": name, "sd_prompt": e.get("sd_prompt", ""),
-                                "personality": e.get("personality", ""),
-                                "mes_example": e.get("mes_example", ""),
-                                "evidence": e.get("evidence", ""),
-                                "confidence": parse._confidence(e.get("confidence", "")),
-                                "open_questions": e.get("open_questions", "")}})
+        # No subject: the person has no record yet, so nothing they said in the
+        # scene can be first-hand ABOUT a record. Their own lines still
+        # corroborate the citation, which is what separates a proposal drawn
+        # from dialogue from one drawn from nowhere.
+        out.append(_staged({"id": f"new_character:{candidate_id}", "kind": "new_character",
+                            "target": {"kind": "characters", "id": ""},
+                            "label": f"New character — {name}", "field": "description",
+                            "before": "", "after": after, "authored": False,
+                            "payload": {"name": name, "sd_prompt": e.get("sd_prompt", ""),
+                                        "personality": e.get("personality", ""),
+                                        "mes_example": e.get("mes_example", ""),
+                                        "evidence": e.get("evidence", ""),
+                                        "confidence": parse._confidence(e.get("confidence", "")),
+                                        "open_questions": e.get("open_questions", "")}}, e))
 
     for kind, parsed_key, prefix, label_noun in (
         ("locations", "new_locations", "new_location", "location"),
@@ -596,13 +629,13 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
             if kind == "locations":
                 payload["sd_prompt"] = e.get("sd_prompt", "")
                 payload["current_setting"] = e.get("current_setting", False)
-            out.append({"id": f"{prefix}:{candidate_id}", "kind": prefix,
-                        "target": {"kind": kind, "id": ""},
-                        "label": f"New {label_noun} — {name}", "field": "body",
-                        "before": "", "after": body, "authored": False,
-                        "payload": payload})
+            out.append(_staged({"id": f"{prefix}:{candidate_id}", "kind": prefix,
+                                "target": {"kind": kind, "id": ""},
+                                "label": f"New {label_noun} — {name}", "field": "body",
+                                "before": "", "after": body, "authored": False,
+                                "payload": payload}, e))
 
-    out.extend(weather._weather_edits(cid, sid, parsed))
+    out.extend(weather._weather_edits(cid, sid, parsed, index))
     return out
 
 
