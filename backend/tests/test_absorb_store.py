@@ -2198,7 +2198,7 @@ def test_apply_edits_records_a_fact_and_retires_the_one_it_replaces(monkeypatch,
     from grimoire.store import facts, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
-    old = facts.record(cid, "The ambassador trusts the party.", "night one", "s3")
+    old = facts.record(cid, "The ambassador trusts the party.", "night one", "000--earlier")
     edits = _fact_row(cid, sid, text="The ambassador thinks he was sold out.",
                       date="night nine", supersedes=old)
     applied, failures = absorb.apply_edits(cid, edits, sid)
@@ -2213,7 +2213,7 @@ def test_apply_edits_retires_a_fact_outright(monkeypatch, tmp_path):
     from grimoire.store import facts, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
-    old = facts.record(cid, "The east gate is barred at dusk.", "", "s2")
+    old = facts.record(cid, "The east gate is barred at dusk.", "", "000--earlier")
     applied, failures = absorb.apply_edits(cid, _fact_row(cid, sid, supersedes=old), sid)
     assert applied == [f"fact:{old}"] and failures == []
     assert facts.read(cid)[old]["status"] == "retired"
@@ -2229,7 +2229,7 @@ def test_a_replacement_edited_down_to_nothing_is_refused_not_reclassified(monkey
     from grimoire.store import facts, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
-    old = facts.record(cid, "The bridge stands.", "", "s1")
+    old = facts.record(cid, "The bridge stands.", "", "000--earlier")
     (edit,) = _fact_row(cid, sid, text="The bridge is rubble.", supersedes=old)
     applied, failures = absorb.apply_edits(cid, [{**edit, "after": "  "}], sid)
     assert applied == []
@@ -2243,7 +2243,7 @@ def test_a_retirement_the_reviewer_typed_a_replacement_into_becomes_one(monkeypa
     from grimoire.store import facts, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
-    old = facts.record(cid, "The bridge stands.", "", "s1")
+    old = facts.record(cid, "The bridge stands.", "", "000--earlier")
     (edit,) = _fact_row(cid, sid, supersedes=old)
     applied, failures = absorb.apply_edits(
         cid, [{**edit, "after": "The bridge is rubble."}], sid)
@@ -2288,8 +2288,8 @@ def test_a_fact_edit_writes_where_its_target_says(monkeypatch, tmp_path):
     from grimoire.store import facts, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
-    judged = facts.record(cid, "The bridge stands.", "", "s1")
-    other = facts.record(cid, "The east gate is barred.", "", "s1")
+    judged = facts.record(cid, "The bridge stands.", "", "000--earlier")
+    other = facts.record(cid, "The east gate is barred.", "", "000--earlier")
     applied, _ = absorb.apply_edits(cid, [
         {"id": "fact:x", "kind": "fact", "target": {"kind": "facts", "id": judged},
          "field": "text", "before": "active — The bridge stands.",
@@ -2462,7 +2462,7 @@ def test_a_replacement_the_reviewer_edited_into_a_restatement_is_refused(
     from grimoire.store import facts, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
-    old = facts.record(cid, "The ambassador trusts the party.", "night one", "s1")
+    old = facts.record(cid, "The ambassador trusts the party.", "night one", "000--earlier")
     (edit,) = _fact_row(cid, sid, text="The ambassador is done with the party.",
                         supersedes=old)
 
@@ -2472,7 +2472,8 @@ def test_a_replacement_the_reviewer_edited_into_a_restatement_is_refused(
     assert failures[0]["kind"] == "error"
     assert "already says" in failures[0]["reason"]
     assert facts.get(cid, old) == {
-        "text": "The ambassador trusts the party.", "date": "night one", "scene": "s1",
+        "text": "The ambassador trusts the party.", "date": "night one",
+        "scene": "000--earlier",
         "status": "active", "superseded_by": "", "retired_scene": ""}
     assert len(facts.read(cid)) == 1      # and nothing was recorded beside it
 
@@ -2484,7 +2485,7 @@ def test_a_genuinely_different_replacement_the_reviewer_typed_still_lands(
     from grimoire.store import facts, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
-    old = facts.record(cid, "The ambassador trusts the party.", "night one", "s1")
+    old = facts.record(cid, "The ambassador trusts the party.", "night one", "000--earlier")
     (edit,) = _fact_row(cid, sid, text="The ambassador is done with the party.",
                         supersedes=old)
 
@@ -2492,3 +2493,81 @@ def test_a_genuinely_different_replacement_the_reviewer_typed_still_lands(
         cid, [{**edit, "after": "The ambassador wants the party gone."}], sid)
     assert applied == [f"fact:{old}"] and failures == []
     assert [f["text"] for f in facts.active(cid)] == ["The ambassador wants the party gone."]
+
+
+def test_the_fact_snapshot_is_scoped_to_the_scene_being_absorbed(monkeypatch, tmp_path):
+    """Absorbing an older scene reads a ledger later scenes have moved. Showing
+    it their facts invites the model to supersede one from a scene that ran
+    before it existed — which `facts.record` then refuses, so the snapshot and
+    the store have to agree on what this scene can end."""
+    from grimoire.store import facts
+    cid = _campaign(monkeypatch, tmp_path)
+    facts.record(cid, "The keep is held.", "", "001--early")
+    facts.record(cid, "The keep has fallen.", "", "009--late")
+    assert absorb.fact_snapshot(cid, "001--early") == "f1: The keep is held."
+    assert absorb.fact_snapshot(cid, "009--late").splitlines() == [
+        "f1: The keep is held.", "f2: The keep has fallen."]
+    assert len(absorb.fact_snapshot(cid).splitlines()) == 2   # no scene: the whole ledger
+
+
+def test_a_supersession_of_a_later_scenes_fact_stages_as_a_new_fact(monkeypatch, tmp_path):
+    """`facts.record` will refuse to write that retirement, so the row must not
+    be STAGED as one — the reviewer would approve a retirement that silently
+    does not happen."""
+    from grimoire.store import facts
+    cid = _campaign(monkeypatch, tmp_path)
+    later = facts.record(cid, "The keep has fallen.", "", "009--late")
+    (edit,) = _fact_row(cid, "001--early", text="The keep is held.", supersedes=later)
+    assert edit["label"] == "New fact"
+    assert edit["target"] == {"kind": "facts", "id": ""}
+    assert edit["payload"]["supersedes"] == "" and edit["before"] == ""
+
+
+def test_a_new_fact_the_reviewer_edited_onto_an_existing_one_is_reported(
+        monkeypatch, tmp_path):
+    """`facts.record` dedupes on (scene, text) and returns the id already there,
+    so the row promised a new entry with its own date and made none. The
+    duplicate-approval gap `materialize` closes for the text the MODEL wrote,
+    reopened one layer down by the reviewer editing `after`."""
+    from grimoire.store import facts, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    facts.record(cid, "The bridge stands.", "the third night", sid)
+    (edit,) = _fact_row(cid, sid, text="The east gate is barred.")
+
+    applied, failures = absorb.apply_edits(
+        cid, [{**edit, "after": "  the BRIDGE stands.  "}], sid)
+    assert applied == []
+    assert "already records that fact" in failures[0]["reason"]
+    assert len(facts.read(cid)) == 1
+
+
+def test_two_approved_rows_edited_to_the_same_fact_report_the_second(monkeypatch, tmp_path):
+    from grimoire.store import facts, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    parsed = absorb.parse_output(json.dumps({"facts": [
+        {"text": "The bridge stands."}, {"text": "The east gate is barred."}]}))
+    a, b = absorb.materialize(cid, sid, parsed)
+
+    applied, failures = absorb.apply_edits(
+        cid, [a, {**b, "after": "The bridge stands."}], sid)
+    assert applied == [a["id"]]
+    assert "already records that fact" in failures[0]["reason"]
+    assert len(facts.read(cid)) == 1
+
+
+def test_a_deduped_row_that_also_retires_something_is_still_applied(monkeypatch, tmp_path):
+    """The report is only for a row with nothing left to do. One that retires a
+    fact did real work even when its text landed on an existing record — calling
+    that failed would be the opposite lie."""
+    from grimoire.store import facts, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    old = facts.record(cid, "The bridge stands.", "", "000--earlier")
+    landed = facts.record(cid, "The bridge is rubble.", "", sid)
+    (edit,) = _fact_row(cid, sid, text="The bridge is rubble.", supersedes=old)
+
+    applied, failures = absorb.apply_edits(cid, [edit], sid)
+    assert applied == [f"fact:{old}"] and failures == []
+    assert facts.get(cid, old)["superseded_by"] == landed

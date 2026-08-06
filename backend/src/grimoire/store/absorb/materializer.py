@@ -147,10 +147,7 @@ def _recorded_here(ledger: dict, sid: str, text: str) -> bool:
     of one scene are two model replies, and a re-extraction that differs only in
     capitalisation is the same fact rather than a second one.
     """
-    want = text.casefold()
-    return any(isinstance(rec, dict) and _text(rec.get("scene")) == sid
-               and _text(rec.get("text")).casefold() == want
-               for rec in ledger.values())
+    return bool(facts.find(ledger, sid, text))
 
 
 def _fact_label(text: str, supersedes: str, date: str) -> str:
@@ -480,14 +477,23 @@ def materialize(cid: str, sid: str, parsed: dict) -> list[dict]:
             # never writes but a hand-edited or malformed record supplies, and
             # that is exactly the record most worth being able to retire.
             continue
-        if not facts.is_active(prior):
-            # A `supersedes` naming a fact that is retired, missing or
-            # malformed is dropped rather than obeyed. The snapshot offers only
-            # standing facts, so the model was never shown that record, and
-            # retiring an already-retired fact would overwrite the pointer
-            # saying what really replaced it. The row's other half survives:
-            # what is left is an ordinary new fact, or -- when the row carried
-            # no text either -- nothing, and it is dropped below.
+        if not facts.is_active(prior) or facts.recorded_after(prior, sid):
+            # A `supersedes` naming a fact that is retired, missing or malformed
+            # is dropped rather than obeyed. The snapshot offers only standing
+            # facts, so the model was never shown that record, and retiring an
+            # already-retired fact would overwrite the pointer saying what
+            # really replaced it.
+            #
+            # So is one recorded AFTER this scene, which `facts.record` will
+            # refuse to write (see `recorded_after`): the snapshot is scoped to
+            # this scene precisely so the model is not offered it, and a row
+            # that names one anyway has to be STAGED as what it will actually
+            # do. Left labelled a supersession, the reviewer approves a
+            # retirement that silently does not happen.
+            #
+            # The row's other half survives either way: what is left is an
+            # ordinary new fact, or -- when the row carried no text either --
+            # nothing, and it is dropped below.
             sup, prior = "", None
         if not text and not sup:
             continue
