@@ -48,13 +48,19 @@ Ordering rules (deadlock avoidance):
            ├─ audit baseline lock   (``store/audit/baselines.py``)
            └─ rolls lock            (``store/rolls.py``)
 
-- Every multi-campaign holder goes through ``hold_all``, which sorts, and
-  nothing else may hold more than one campaign lock at a time
-  (``test_locks_store.py`` enforces that structurally). The two that exist
-  (module publication, the world-module rebind route) did **not** agree before
-  ``hold_all``, though this file used to say they did: the route sorted by cid
-  and module publication took ``list_campaigns()`` order, which is recency
-  (#267). No LLM play flow ever holds more than its own campaign's lock.
+- **Every multi-campaign holder goes through** ``hold_all``, which sorts.
+  Nothing else may hold more than one campaign lock at a time. The two that
+  exist (module publication, the world-module rebind route) did **not** agree
+  before ``hold_all``, though this file used to say they did: the route sorted
+  by cid and module publication took ``list_campaigns()`` order, which is
+  recency (#267). No LLM play flow ever holds more than its own campaign's
+  lock.
+
+  Checked per holder, not structurally: ``test_locks_store.py`` spies on the
+  registry and asserts the order each of the two actually asks for. A THIRD
+  holder written tomorrow is checked by nothing, which is the gap #267 was
+  filed about and this paragraph does not close. Adding one means adding its
+  test beside those two.
 - campaign lock -> audit baseline lock, never reversed
   (``store/audit/baselines.py``).
 
@@ -415,10 +421,16 @@ def hold_all(cids):
     they are genuinely concurrent.
 
     So this is the fix rather than a formality: it is the ONLY place that
-    sorts, and no other caller may hold more than one campaign lock -- a rule
-    ``test_locks_store.py`` enforces against the package's ASTs, because what
-    let #267 in was two comments each claiming to be the sole multi-lock
-    holder.
+    sorts, and no other caller may hold more than one campaign lock.
+
+    That last sentence is a rule, not a guarantee, and the difference is worth
+    stating because getting it wrong is the whole of #267. What enforces it is
+    two per-holder tests in ``test_locks_store.py``, one for each holder that
+    exists today. Nothing checks a holder nobody has written yet -- and #267
+    happened precisely because the second holder was written without knowledge
+    of the first, each carrying a comment calling itself the only one. If you
+    are adding a third, route it through here and add its test beside those
+    two; do not trust this paragraph to have stopped you.
 
     **One deadline**, not one per lock: applying ``LOCK_TIMEOUT`` to each of N
     locks while holding the earlier ones would give an N x LOCK_TIMEOUT convoy.
