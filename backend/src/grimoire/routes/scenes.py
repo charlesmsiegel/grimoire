@@ -1404,6 +1404,14 @@ def _rolling_commit(cid: str, sid: str, summary: str, covered: int, digest: str,
         # The prefix must be intact -- the fold describes those messages.
         intact = store.rolling_summary.covered_digest(
             scene["messages"][:covered]) == digest
+        # ...the facts must be the facts it was given, for the same reason the
+        # prefix must be the prefix. Review caught that adding facts to the
+        # stored validity key did not, on its own, make them a PRECONDITION: a
+        # first location assigned while the model was answering is a silent
+        # write, so the message digest stays intact and prose generated without
+        # that location would land stamped with the old facts key -- immediately
+        # stale on the very next read, with no refold scheduled to repair it.
+        facts_intact = (store.rolling_summary.facts_digest(facts) == facts_key)
         # ...and nothing at least as complete may already be stored. Two
         # background refreshes can overlap, and the newer one can finish first:
         # its extra posts are all APPENDED, so the older one's prefix is still
@@ -1414,7 +1422,7 @@ def _rolling_commit(cid: str, sid: str, summary: str, covered: int, digest: str,
         # stored summary is no bar, since re-folding over it is the repair.
         superseded = bool(stored["summary"]) and not stored["stale"] \
             and stored["at"] >= covered
-        landed = intact and not superseded
+        landed = intact and facts_intact and not superseded
         if landed:
             store.scenes.set_rolling_summary(cid, sid, summary, covered, digest,
                                              facts_key)
