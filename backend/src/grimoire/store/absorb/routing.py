@@ -36,8 +36,11 @@ from ..scenes import read as scenes_read, serialize as scenes_serialize
 #: The narrator says so. Un-labelled prose on either side of the table: the
 #: model's narration ("Grimoire") and the player's own un-labelled posts
 #: ("You"), which are that player narrating rather than a character speaking.
-#: Scene transitions land here too -- they are stored under an internal speaker
-#: the transcript never shows, and read back as the narration they render as.
+#: A scene transition contributes to this tier the same way: it is stored under
+#: an internal speaker the transcript never shows and renders as unlabelled
+#: narration, so `_label` reads it back as the narration it looks like. Citing
+#: the internal marker ITSELF is a different thing and is not narration -- the
+#: model never saw that string, so a row claiming it did not come from there.
 NARRATION = "narration"
 #: The record's own subject said it, about themself. First-hand, and the only
 #: tier a character's own dialogue can reach.
@@ -157,13 +160,20 @@ def speaker_index(cid: str, sid: str) -> dict:
         messages = scenes_read.read_scene(cid, sid)["messages"]
     except Exception:                                          # noqa: BLE001
         messages = []
+    # A list, not a set: `match_name`'s prefix rule needs to see how MANY names
+    # a label could mean, and it counts them by iterating. Deduped as it is
+    # built, so a speaker with fifty lines does not make one name look like
+    # fifty and turn every prefix into an ambiguity.
     labels: list[str] = []
     for m in messages:
         if not isinstance(m, dict):
             continue
         label = _label(m)
-        base = scenes_serialize.speaker_base(label)
-        labels.extend(x for x in (label, base) if x and x not in labels)
+        # The base form as well, so a citation naming the speaker plainly still
+        # matches a line stored as "Mara (aside)".
+        for x in (label, scenes_serialize.speaker_base(label)):
+            if x and x not in labels:
+                labels.append(x)
     try:
         members = appearances_cast.scene_cast(cid, sid)
     except Exception:                                          # noqa: BLE001
@@ -175,6 +185,7 @@ def speaker_index(cid: str, sid: str) -> dict:
     # already declines an ambiguous label; dropping the name here is the same
     # answer one step earlier, where the collision is visible.
     refs: dict[str, str] = {}
+    ambiguous: set[str] = set()
     for a in members:
         name = a.get("name")
         # A STRING, checked rather than assumed: cards are hand-editable and
@@ -186,8 +197,12 @@ def speaker_index(cid: str, sid: str) -> dict:
         if not isinstance(name, str) or not name.strip():
             continue
         ref = f"{a.get('kind')}:{a.get('id')}"
-        refs[name] = ref if refs.get(name, ref) == ref else ""
-    return {"labels": labels, "refs": {n: r for n, r in refs.items() if r}}
+        if name in refs and refs[name] != ref:
+            ambiguous.add(name)
+        refs[name] = ref
+    for name in ambiguous:
+        del refs[name]
+    return {"labels": labels, "refs": refs}
 
 
 def authority(index: dict, speaker: str, subjects: tuple[str, ...] = ()) -> str:
