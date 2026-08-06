@@ -127,6 +127,12 @@ def _persist_reply(cid: str, sid: str, text: str) -> None:
     text, tracked = store.turnstate.split_block(text)
     players = frozenset(store.appearances.player_names(cid, sid))
     subs = store.context.scene_substitutions(cid, sid)
+    # Tracker values get the same one-shot macro resolution the narration below
+    # does: the section they feed is macro-expanded on every context build, so a
+    # stored {{random}} would re-roll each prompt and a stored {{user}} would
+    # drift with the cast.
+    tracked = store.turnstate.expand_values(
+        tracked, lambda v: store.context.expand_macros(v, subs, cid, sid))
     segments = [{"speaker": seg["speaker"],
                  "content": store.context.expand_macros(seg["content"], subs, cid, sid)}
                 for seg in store.scenes.split_reply(text, players)]

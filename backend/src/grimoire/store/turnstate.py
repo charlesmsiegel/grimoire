@@ -117,7 +117,13 @@ def parse_block(body: str) -> dict[str, dict[str, str]]:
         return {}
     if not isinstance(data, dict):
         return {}
-    if set(data) == {"state"} and isinstance(data["state"], dict):
+    # The envelope, told apart from a CHARACTER called "state" by the shape one
+    # level down: an envelope's values are per-character field maps (dicts), and
+    # a character's are field values (strings). Unwrapping on the key alone lost
+    # every block for such a character outright -- `{"state": {"mood": "calm"}}`
+    # became a cast of one named `mood`, whose "fields" were the string "calm".
+    if (set(data) == {"state"} and isinstance(data["state"], dict)
+            and all(isinstance(v, dict) for v in data["state"].values())):
         data = data["state"]
     out: dict[str, dict[str, str]] = {}
     for name, fields in data.items():
@@ -154,6 +160,30 @@ def split_block(text: str) -> tuple[str, dict[str, dict[str, str]]]:
     if rest[close.end():].strip():
         return text, {}                      # not trailing: leave it alone
     return text[:m.start()], parse_block(rest[:close.start()])
+
+
+def expand_values(states: dict[str, dict[str, str]], expand) -> dict[str, dict[str, str]]:
+    """Resolve macros in tracker values ONCE, at persist time.
+
+    The same rule `_persist_reply` applies to narration (#137), and for a
+    sharper reason here: every rendered prompt section goes through
+    `macros.expand_macros`, so a stored `{{random:calm,tense}}` would be
+    re-rolled on every context build and a stored `{{user}}` would drift with
+    the cast — a *transient* value that never holds still cannot streak, so
+    promotion could never see it either.
+
+    `expand` is injected for the reason `resolve`'s matcher is: this module sits
+    below `context` and must not import it.
+
+    Re-cleaned afterwards, because expansion changes the text: a macro can
+    resolve to nothing, or past `MAX_VALUE`.
+    """
+    out: dict[str, dict[str, str]] = {}
+    for name, fields in states.items():
+        got = _clean({f: expand(v) for f, v in fields.items()})
+        if got:
+            out[name] = got
+    return out
 
 
 def resolve(states: dict[str, dict[str, str]], cast: list[dict], match) -> dict[str, dict[str, str]]:
@@ -250,6 +280,17 @@ class StreamRedactor:
     def __init__(self) -> None:
         self._held = ""            # a prefix that could still grow into an opener
         self._tail: str | None = None   # everything from an opener on, or None
+        # Whether everything emitted since the last newline is blank, i.e.
+        # whether the next character sits where `_OPEN`'s `(?:^|\n)[ \t]*` could
+        # start. Start of stream counts.
+        self._blank = True
+
+    def _advance(self, text: str) -> None:
+        if not text:
+            return
+        _, sep, after = text.rpartition("\n")
+        self._blank = (after.strip(" \t") == "") if sep else (
+            self._blank and text.strip(" \t") == "")
 
     def feed(self, chunk: str) -> str:
         if self._tail is not None:
@@ -262,10 +303,19 @@ class StreamRedactor:
             tick = buf.find("`")
             if tick < 0:
                 out += buf
+                self._advance(buf)
                 break
             out += buf[:tick]
+            self._advance(buf[:tick])
             rest = buf[tick:]
-            verdict = _verdict(rest)
+            # Only a fence at a line boundary can be a block, because that is
+            # what `_OPEN` requires. Withholding an INLINE one detached it from
+            # the context that disqualified it: `finish` hands the suffix to
+            # `split_block`, which sees it starting at `^` and strips it as a
+            # trailing block -- while persistence, judging the whole reply,
+            # keeps the fence because "Use " precedes it. The client lost the
+            # rest of the reply until a refresh put it back.
+            verdict = _verdict(rest) if self._blank else "no"
             if verdict == "open":
                 self._tail = rest
                 return out
@@ -276,6 +326,7 @@ class StreamRedactor:
             # and rescan from the next character -- "`` ```state" holds a real
             # opener behind a run that is not one.
             out += rest[0]
+            self._advance(rest[0])
             buf = rest[1:]
         return out
 

@@ -157,8 +157,10 @@ def test_statement_is_not_an_opener():
 
 
 def test_nothing_escapes_after_a_trailing_block():
+    # The fence starts a line — an inline one is not a block at all, and
+    # `test_an_inline_fence_is_never_withheld` covers that case.
     r = turnstate.StreamRedactor()
-    assert r.feed("hi ```state\n") == "hi "
+    assert r.feed("hi\n```state\n") == "hi\n"
     assert r.feed('{"W": {}}') == ""
     assert r.feed("\n```") == ""
     assert r.finish() == ""
@@ -413,3 +415,47 @@ def test_a_complete_opener_held_at_end_of_stream_is_not_leaked():
 def test_a_partial_opener_held_at_end_of_stream_still_comes_back():
     for held in ("`", "``", "```", "```s", "```stat"):
         assert _stream([f"done {held}"]) == f"done {held}"
+
+
+def test_a_character_actually_called_state_is_not_read_as_the_envelope():
+    """`{"state": {"mood": "calm"}}` is the instructed bare form for a character
+    whose display name is `state`. Unwrapping on the key alone turned it into a
+    cast of one named `mood` and lost the block outright."""
+    _, states = turnstate.split_block(_block('{"state": {"mood": "calm"}}'))
+    assert states == {"state": {"mood": "calm"}}
+
+
+def test_the_envelope_still_unwraps_when_its_values_are_field_maps():
+    _, states = turnstate.split_block(
+        _block('{"state": {"Winifred": {"mood": "calm"}, "Mara": {"mood": "wry"}}}'))
+    assert states == {"Winifred": {"mood": "calm"}, "Mara": {"mood": "wry"}}
+
+
+def test_an_inline_fence_is_never_withheld():
+    """`_OPEN` needs a line boundary, so an inline fence is not a block —
+    persistence keeps it. Withholding it detached it from the context that
+    disqualified it, and `finish` then stripped it as if it were trailing."""
+    text = "Use ```state\n{\"W\": {\"mood\": \"wry\"}}\n```"
+    assert turnstate.split_block(text)[0] == text      # persistence keeps it
+    assert _stream([text]) == text                     # so the stream must too
+
+
+def test_an_indented_fence_at_a_line_start_is_still_a_block():
+    text = 'She waits.\n\n  ```state\n{"W": {"mood": "wry"}}\n  ```'
+    assert turnstate.split_block(text)[1] == {"W": {"mood": "wry"}}
+    assert _stream([text]).strip() == "She waits."
+
+
+def test_a_fence_after_a_newline_split_across_deltas_is_still_caught():
+    assert _stream(["She waits.", "\n\n", "```state\n{}\n```"]).strip() == "She waits."
+
+
+def test_expand_values_resolves_once_and_recleans():
+    states = {"W": {"mood": "{{x}}", "intent": "{{gone}}"}}
+    out = turnstate.expand_values(
+        states, lambda v: {"{{x}}": "calm", "{{gone}}": ""}.get(v, v))
+    assert out == {"W": {"mood": "calm"}}          # the empty one drops out
+
+
+def test_expand_values_drops_a_character_left_with_nothing():
+    assert turnstate.expand_values({"W": {"mood": "{{gone}}"}}, lambda v: "") == {}
