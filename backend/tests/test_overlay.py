@@ -782,3 +782,33 @@ def test_campaign_side_delete_takes_the_record_directory_too(monkeypatch, tmp_pa
     assert not (croot / "groups" / gid).exists()
     assert overlay.create_entity(cid, "groups", "Salt Circle") == gid
     assert groupstate.read_state(croot, gid) is None
+
+
+def test_sweep_refuses_an_id_that_could_escape_its_directory(monkeypatch, tmp_path):
+    """`kind` and the id both arrive straight off the URL path, and the sweep
+    removes a whole DIRECTORY -- `<wroot>/groups/..` is the world itself.
+
+    Checking that the directories still exist would not catch it: `rmtree`
+    empties a `..` path and only then fails on the final `rmdir`, so the world
+    dir survives an unguarded call with nothing left in it."""
+    wroot, _cid, croot = _dependent(monkeypatch, tmp_path)
+    gid = entities.create_entity(wroot, "groups", "Salt Circle")   # so `groups/` exists to escape
+    for escape in ("..", "../..", "../../campaigns"):
+        overlay.forget_world_record(wroot, "groups", escape)
+    assert (wroot / "world.md").exists() and (wroot / "groups" / f"{gid}.md").exists()
+    assert (croot / "campaign.md").exists()
+
+
+def test_sweep_survives_a_campaign_nobody_can_read(monkeypatch, tmp_path, caplog):
+    """A store with one undecodable campaign.md must not make a world record
+    undeletable -- the record is already gone when the sweep runs."""
+    wroot, _cid, croot = _dependent(monkeypatch, tmp_path)
+    gid = entities.create_entity(wroot, "groups", "Salt Circle")
+    groupstate.write_state(croot, gid, "## Secrets\nThe abbot is a member.")
+    (croot / "campaign.md").write_bytes(b"---\nname: \xff\xfeRun\n---\n")
+
+    entities.delete_entity(wroot, "groups", gid)
+    with caplog.at_level(logging.WARNING):
+        overlay.forget_world_record(wroot, "groups", gid)   # does not raise
+    assert any("could not enumerate" in r.message for r in caplog.records)
+    assert groupstate.read_state(croot, gid) is not None    # honestly left behind
