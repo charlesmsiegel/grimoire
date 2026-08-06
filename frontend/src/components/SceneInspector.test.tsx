@@ -17,6 +17,7 @@ vi.mock("../api/client", async () => {
       getSceneDatetime: vi.fn(), setSceneDatetime: vi.fn(), getCalendarMonths: vi.fn(),
       listAppearances: vi.fn(), listEntityImages: vi.fn(),
       listEntities: vi.fn(), setSceneLocation: vi.fn(), sceneBriefing: vi.fn(),
+      getRollingSummary: vi.fn(), refreshRollingSummary: vi.fn(),
       addToCast: vi.fn(), removeFromCast: vi.fn(),
       campaignImageUrl: () => "/img",
       entityImageUrl: () => "/loc-img",
@@ -87,6 +88,11 @@ beforeEach(() => {
   // Empty by default, so the briefing section renders nothing and the suites
   // that predate it assert on the same rail they always did (#118).
   (api.sceneBriefing as any).mockResolvedValue(EMPTY_BRIEFING);
+  (api.getRollingSummary as any).mockResolvedValue({
+    summary: "", at: 0, total: 0, stale: false, every: 10, due: false });
+  (api.refreshRollingSummary as any).mockResolvedValue({
+    summary: "Refolded.", at: 4, total: 4, stale: false, every: 10, due: false,
+    refreshed: true });
 });
 
 const EMPTY_BRIEFING = {
@@ -773,4 +779,64 @@ test("switching campaigns does not paint the other campaign's frozen turn", asyn
 
   rerender(<SceneInspector cid="c2" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
   expect(screen.queryByText("the lore as it stood then")).toBeNull();
+});
+
+// ---- the live rolling summary (#85) ----
+test("shows the running summary and what it covers", async () => {
+  (api.getRollingSummary as any).mockResolvedValue({
+    summary: "Mara reaches the salt gate; the ledger is still missing.",
+    at: 12, total: 14, stale: false, every: 10, due: false });
+  renderInspector();
+  await screen.findByText("Mara reaches the salt gate; the ledger is still missing.");
+  await screen.findByText(/12 of 14 posts/);
+});
+
+test("says so when nothing has been summarized yet, rather than showing an empty box", async () => {
+  renderInspector();
+  await screen.findByText(/No summary yet/);
+});
+
+test("flags a summary whose posts have since been rerolled or edited", async () => {
+  (api.getRollingSummary as any).mockResolvedValue({
+    summary: "An older account of the scene.", at: 12, total: 12,
+    stale: true, every: 10, due: false });
+  renderInspector();
+  await screen.findByText(/out of date/i);
+});
+
+test("Refresh now forces a refold and shows the result", async () => {
+  renderInspector();
+  fireEvent.click(await screen.findByRole("button", { name: /refresh now/i }));
+  await waitFor(() => expect(api.refreshRollingSummary).toHaveBeenCalledWith("c", "s", true));
+  await screen.findByText("Refolded.");
+});
+
+test("a refresh that spends nothing leaves the panel as it was", async () => {
+  (api.getRollingSummary as any).mockResolvedValue({
+    summary: "Standing summary.", at: 4, total: 4, stale: false, every: 10, due: false });
+  (api.refreshRollingSummary as any).mockResolvedValue({
+    summary: "Standing summary.", at: 4, total: 4, stale: false, every: 10, due: false,
+    refreshed: false });
+  renderInspector();
+  fireEvent.click(await screen.findByRole("button", { name: /refresh now/i }));
+  await waitFor(() => expect(api.refreshRollingSummary).toHaveBeenCalled());
+  await screen.findByText("Standing summary.");
+});
+
+test("a failed refresh reports itself and never blanks the summary", async () => {
+  (api.getRollingSummary as any).mockResolvedValue({
+    summary: "Standing summary.", at: 4, total: 4, stale: false, every: 10, due: false });
+  (api.refreshRollingSummary as any).mockRejectedValue({ detail: "OpenRouter key not set" });
+  renderInspector();
+  fireEvent.click(await screen.findByRole("button", { name: /refresh now/i }));
+  await screen.findByText("OpenRouter key not set");
+  expect(screen.getByText("Standing summary.")).toBeInTheDocument();
+});
+
+test("a summary that cannot be read is not an empty summary", async () => {
+  // The panel reads on every scene select, and a failed GET must not be
+  // indistinguishable from a scene nobody has summarized.
+  (api.getRollingSummary as any).mockRejectedValue(new Error("offline"));
+  renderInspector();
+  await screen.findByText(/could not be read/i);
 });

@@ -22,7 +22,7 @@ from . import (
     absorb, alternates, appearances, assets, atomic, audit, briefing, campaign_climate, campaigns, cards, changes, characters, checks, chronicle, commitments, commits,
     chub, climates, config, context, dice, dossiers, entities, entity_schema, epub, export, facts, fence, fetch, greetings, groupstate,
     image_subjects, length_drift, lengths, llm_connections, localize, locks, lorebook, migrations, module_edit, modules, overlay, pcs, playing,
-    playstate, plot, prompt_log, proposals, relationships, response_presets, rolls, scene_ids, scene_refs, scenes, sheets,
+    playstate, plot, prompt_log, proposals, relationships, response_presets, rolling_summary, rolls, scene_ids, scene_refs, scenes, sheets,
     styles, suggest,
     sync, tags, taglines, thumbs, turnstate, voice_anchors, voice_drift, worlds,
 )
@@ -124,6 +124,7 @@ __all__ = [
     "relationships",
     "dice",
     "DiceError",
+    "rolling_summary",
     "rolls",
     "RollNotFound",
     "llm_connections",

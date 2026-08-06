@@ -64,6 +64,7 @@ vi.mock("../api/client", async () => {
       campaignChanges: vi.fn(),
       campaignLedger: vi.fn(),
       listAppearances: vi.fn(), listEntityImages: vi.fn(), listEntities: vi.fn(),
+      getRollingSummary: vi.fn(), refreshRollingSummary: vi.fn(),
       campaignImageUrl: (_c: string, char: string, v: string, n: string) => `/img/${char}/${v}/${n}`,
       entityImageUrl: () => "/loc-img",
     },
@@ -178,6 +179,11 @@ beforeEach(() => {
   (api.campaignChanges as any).mockResolvedValue([]);
   (api.campaignLedger as any).mockResolvedValue({ plot: [], commitments: [], facts: [], chronicle: [] });
   (api.listResponsePresets as any).mockResolvedValue([]);
+  (api.getRollingSummary as any).mockResolvedValue({
+    summary: "", at: 0, total: 0, stale: false, every: 10, due: false });
+  (api.refreshRollingSummary as any).mockResolvedValue({
+    summary: "", at: 0, total: 0, stale: false, every: 10, due: false,
+    refreshed: false });
 });
 
 function renderCampaign() {
@@ -5144,4 +5150,48 @@ test("a conflict on a collapsed row opens the section so it can be answered", as
   fireEvent.click(screen.getByRole("button", { name: /Save summary/ }));
   await screen.findByText(/no longer match/);
   expect(screen.getByRole("button", { name: /Keep stored The forged map/ })).toBeTruthy();
+});
+
+// ---- the live rolling summary (#85) ----
+test("a finished turn asks the server to refold the scene summary", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  renderCampaign();
+  fireEvent.change(await screen.findByRole("textbox"), { target: { value: "Go on." } });
+  fireEvent.click(screen.getByRole("button", { name: /Send/ }));
+  // Without `force`: the server decides whether this turn is the Nth, so an
+  // ordinary turn spends nothing.
+  await waitFor(() => expect(api.refreshRollingSummary).toHaveBeenCalledWith("run", "s1"));
+});
+
+test("a refresh that fails never surfaces an error over the turn", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.refreshRollingSummary as any).mockRejectedValue(
+    new ApiError(409, "OpenRouter key not set", "missing_key"));
+  renderCampaign();
+  fireEvent.change(await screen.findByRole("textbox"), { target: { value: "Go on." } });
+  fireEvent.click(screen.getByRole("button", { name: /Send/ }));
+  await waitFor(() => expect(api.refreshRollingSummary).toHaveBeenCalled());
+  // The summary is a background reading aid; a play session must not be
+  // interrupted by one that could not be written.
+  expect(screen.queryByText(/OpenRouter key not set/)).toBeNull();
+});
+
+test("the turn does not wait on the summary refresh", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  let release: (() => void) | undefined;
+  (api.refreshRollingSummary as any).mockImplementation(
+    () => new Promise((resolve) => { release = () => resolve({
+      summary: "Late.", at: 1, total: 1, stale: false, every: 10, due: false,
+      refreshed: true }); }));
+  renderCampaign();
+  fireEvent.change(await screen.findByRole("textbox"), { target: { value: "Go on." } });
+  fireEvent.click(screen.getByRole("button", { name: /Send/ }));
+  // The turn is over — the composer is out of its Stop state and takes input
+  // again — while the refresh is still unresolved. That is what "non-blocking"
+  // has to mean for the player. (The button reads "Continue ▶" here rather than
+  // "Send ▸": a landed send clears the composer.)
+  await waitFor(() => expect(screen.queryByRole("button", { name: /Stop/ })).toBeNull());
+  expect(await screen.findByRole("button", { name: /Continue/ })).not.toBeDisabled();
+  expect(release).toBeDefined();      // ...and the refresh really is still in flight
+  await act(async () => { release!(); });
 });

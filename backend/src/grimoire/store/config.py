@@ -49,6 +49,11 @@ DEFAULT_TURNSTATE_DEPTH = "0"
 # character state at absorb (#121). Only reachable once the ledger has content,
 # so it is safe to default to something useful.
 DEFAULT_PROMOTE_STREAK = "3"
+# How many posts may land before the live per-scene rolling summary is refolded
+# (#85). Each refresh is one extra LLM call, so this is the knob that decides
+# what the feature costs; "0" turns it off, leaving only the panel's explicit
+# Refresh button.
+DEFAULT_ROLLING_SUMMARY_EVERY = "10"
 # The global scope of the response-preset cascade. These MUST be listed here:
 # read_config() narrows its return to _CONFIG_KEYS, so a key omitted from this
 # tuple is silently dropped and the global scope resolves as if unset — no
@@ -62,7 +67,8 @@ _CONFIG_KEYS = ("theme", "context_scan_depth", "system_prompt",
                 "default_style_id", "active_connection_id",
                 "llm_timeout", "absorb_budget", "setup_done",
                 "prompt_log_depth",
-                "turnstate_depth", "promote_streak") + _LENGTH_KEYS
+                "turnstate_depth", "promote_streak",
+                "rolling_summary_every") + _LENGTH_KEYS
 
 
 def _config_path():
@@ -84,6 +90,7 @@ def read_config() -> dict[str, str]:
                 "prompt_log_depth": DEFAULT_PROMPT_LOG_DEPTH,
                 "turnstate_depth": DEFAULT_TURNSTATE_DEPTH,
                 "promote_streak": DEFAULT_PROMOTE_STREAK,
+                "rolling_summary_every": DEFAULT_ROLLING_SUMMARY_EVERY,
                 **{k: "" for k in _LENGTH_KEYS}}
     if not path.exists():
         # Materializing the defaults is a write, and two first-ever readers
@@ -162,6 +169,31 @@ def promote_streak() -> int:
     the ledger's per-scene memory — the ceiling belongs where the retention
     limit is, not here."""
     return _count("promote_streak", DEFAULT_PROMOTE_STREAK)
+def rolling_summary_every() -> int:
+    """Posts between rolling-summary refreshes; 0 means off (#85).
+
+    Same failure posture as `_seconds` and deliberately not folded into it: a
+    malformed value falls back to the default rather than raising, because this
+    is read on the play path and a hand-edited config.md must not take a scene
+    down. What differs is the shape and what non-positive MEANS -- a count, not
+    a duration, and "0" here is a documented setting (the feature is off) rather
+    than "no bound". So a negative reads as 0, but an unparseable value reads as
+    the default: clearing the field in the UI is a mistake to recover from,
+    while typing 0 is an instruction to obey.
+
+    `int(float(...))`, so "10.0" -- which is what a numeric input can serialize
+    to -- is 10 rather than a fallback. Non-finite values are rejected first:
+    `int(float("inf"))` raises, and `nan` compares false against everything, so
+    it would land in neither branch below on merit.
+    """
+    try:
+        value = float(read_config().get("rolling_summary_every",
+                                        DEFAULT_ROLLING_SUMMARY_EVERY))
+    except (TypeError, ValueError):
+        return int(DEFAULT_ROLLING_SUMMARY_EVERY)
+    if not math.isfinite(value):
+        return int(DEFAULT_ROLLING_SUMMARY_EVERY)
+    return int(value) if value > 0 else 0
 
 
 def write_config(**fields: str) -> dict[str, str]:

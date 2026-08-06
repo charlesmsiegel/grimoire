@@ -66,7 +66,8 @@ def check_messages(label: str, expected: list[dict], actual: list[dict]) -> None
 # ---------------------------------------------------------------- pure checks
 
 from grimoire.store import (absorb, chronicle, context, dossiers, relationships,  # noqa: E402
-                            suggest, taglines, voice_anchors, voice_drift)
+                            rolling_summary, suggest, taglines, voice_anchors,
+                            voice_drift)
 
 card = {"name": "Seraphine Vale", "description": "Tall, sharp-eyed smuggler.",
         "personality": "Wry and wary.", "scenario": "Runs the night dock."}
@@ -99,6 +100,16 @@ exp = voice_drift.build_prompt("Seraphine Vale", anchor, transcript)
 check("voice drift system", exp[0]["content"], render("voice_drift/system.j2"))
 check("voice drift user", exp[1]["content"],
       render("voice_drift/user.j2", name="Seraphine Vale", anchor=anchor, transcript=transcript))
+
+# Both folds, because the user template branches on `prior` and the two branches
+# label the transcript differently -- a from-scratch fold that said "posts since
+# that summary" would be asking the model to fold onto a summary it never got.
+for prior in ("", "Seraphine held the dock; the ledger was still missing."):
+    exp = rolling_summary.build_prompt(prior, transcript)
+    check(f"rolling summary system (prior={bool(prior)})", exp[0]["content"],
+          render("rolling_summary/system.j2"))
+    check(f"rolling summary user (prior={bool(prior)})", exp[1]["content"],
+          render("rolling_summary/user.j2", prior=prior, transcript=transcript))
 
 EMPTY_SNAP = {"now": "", "friendly": "", "holidays_today": [], "upcoming": None,
               "birthdays": [], "story_so_far": [], "open_threads": [], "cast": [],

@@ -96,6 +96,9 @@ export type Config = {
   turnstate_depth: string;
   /** Consecutive recorded values that promote a transient field to character state. */
   promote_streak: string;
+  /** Posts between live rolling-summary refreshes; "0" turns the automatic
+   *  refresh off, leaving only the inspector's own Refresh button. */
+  rolling_summary_every: string;
 };
 export type DataDirInfo = {
   data_dir: string;
@@ -413,6 +416,19 @@ export type PromptEntry = {
 /** A frozen breakdown: the same shape `getSceneContext` returns, plus which
  *  turn it was. Rendered by the same component, pointed at stored text. */
 export type PromptSnapshot = SceneContext & Omit<PromptEntry, "scene">;
+/** The live running summary of a scene still being played (#85).
+ *  `at` is how many posts it covers, `total` how many there are; `stale` means
+ *  the posts it covered have since been rerolled, edited or trimmed, so it
+ *  describes a transcript that no longer exists. `due` is what a POST without
+ *  `force` would decide — the gate lives on the server, so the client never
+ *  has to know what `every` means. */
+export type RollingSummary = {
+  summary: string; at: number; total: number;
+  stale: boolean; every: number; due: boolean;
+};
+/** `refreshed` is false whenever the call spent nothing: not due, an empty
+ *  scene, or a provider that answered with no text. */
+export type RollingSummaryRefresh = RollingSummary & { refreshed: boolean };
 export type CastDetail = { kind: "characters" | "pcs"; id: string; name: string; version: string; body: string };
 export type TimelineEvent = { date: string; text: string };
 /** How much weight one staged proposal has earned (#110/#112), computed by
@@ -754,8 +770,8 @@ export const api = {
     return configCache;
   },
   putConfig: (body: Partial<{ theme: string; system_prompt: string; quote_color: string; user_label: string; assistant_label: string; active_connection_id: string; llm_timeout: string; absorb_budget: string; context_budget: string; archive_depth: string; setup_done: string;
-    prompt_log_depth: string; turnstate_depth: string; promote_streak: string }>) =>
-
+    prompt_log_depth: string; turnstate_depth: string; promote_streak: string;
+    rolling_summary_every: string }>) =>
     request<Config>("PUT", "/api/config", body).then((cfg) => {
       configCache = Promise.resolve(cfg); // the write's response is the fresh config
       return cfg;
@@ -1223,6 +1239,14 @@ export const api = {
   getScenePrompt: (cid: string, sid: string, eid: string) =>
     request<PromptSnapshot>(
       "GET", `/api/campaigns/${cid}/scenes/${sid}/prompts/${eid}`),
+  getRollingSummary: (cid: string, sid: string) =>
+    request<RollingSummary>("GET", `/api/campaigns/${cid}/scenes/${sid}/rolling-summary`),
+  /** Ask the server to refold the summary. Without `force` it is a no-op
+   *  unless enough posts have landed, which is why the play loop can fire it
+   *  after every turn: the gate is the server's, not the caller's. */
+  refreshRollingSummary: (cid: string, sid: string, force = false) =>
+    request<RollingSummaryRefresh>(
+      "POST", `/api/campaigns/${cid}/scenes/${sid}/rolling-summary${force ? "?force=true" : ""}`),
   sceneSuggestions: (cid: string, after?: string, offscreen?: boolean) => {
     const params = new URLSearchParams();
     if (after) params.set("after", after);
