@@ -28,6 +28,7 @@ class ConfigUpdate(BaseModel):
     prompt_log_depth: str | None = None
     turnstate_depth: str | None = None
     promote_streak: str | None = None
+    rolling_summary_every: str | None = None
 
 
 class ConnectionCreate(BaseModel):

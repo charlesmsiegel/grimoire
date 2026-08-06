@@ -34,6 +34,8 @@ def _public_config(cfg: dict[str, str]) -> dict:
                                         store.config.DEFAULT_PROMPT_LOG_DEPTH),
             "turnstate_depth": cfg.get("turnstate_depth", store.config.DEFAULT_TURNSTATE_DEPTH),
             "promote_streak": cfg.get("promote_streak", store.config.DEFAULT_PROMOTE_STREAK),
+            "rolling_summary_every": cfg.get("rolling_summary_every",
+                                             store.config.DEFAULT_ROLLING_SUMMARY_EVERY),
             "active_connection_id": active["id"] if active else "",
             "active_connection": ({"id": active["id"], "kind": active["kind"], "name": active["name"]}
                                    if active else None),
