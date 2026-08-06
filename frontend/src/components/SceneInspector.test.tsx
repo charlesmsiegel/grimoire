@@ -528,3 +528,20 @@ test("an explicit toggle outlives the post count that set the default", async ()
   expect(JSON.parse(localStorage.getItem("grimoire.inspector.sections")!).briefing)
     .toBe(false);                                       // ...and remembered as open
 });
+
+test("a briefing never renders under a different campaign's scene of the same id", async () => {
+  // The route is /campaigns/:cid with no `key`, so React Router reuses
+  // CampaignView across campaigns, and scene ids are per-campaign — so two
+  // campaigns sitting on "s" would have matched on sid alone, showing one
+  // game's commitments under the other's name (Codex review).
+  (api.sceneBriefing as any).mockResolvedValue(BRIEFING);
+  const { rerender } = render(
+    <SceneInspector cid="a" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+  await screen.findByText("Find the ledger");
+
+  // Campaign b's request never settles, so anything on screen is a's.
+  (api.sceneBriefing as any).mockReturnValue(new Promise(() => {}));
+  rerender(<SceneInspector cid="b" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+  await waitFor(() =>
+    expect(screen.queryByText("Find the ledger")).not.toBeInTheDocument());
+});

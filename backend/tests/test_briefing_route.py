@@ -195,8 +195,8 @@ def test_commitments_carry_the_same_flag(client):
     assert _brief(client, cid, now)["commitments"][0]["involves"] == ["Winifred Vance"]
 
 
-def test_focus_falls_back_to_the_whole_cast_in_a_scene_with_no_players(client):
-    """An offscreen scene (#pcless) seats only NPCs, so a flag computed against
+def test_focus_widens_to_the_whole_cast_in_an_offscreen_scene(client):
+    """An offscreen scene (pcless) seats only NPCs, so a flag computed against
     role=player would be empty exactly where the director most needs to know
     which threads the characters on stage are carrying."""
     wid, cid = _campaign(client)
@@ -210,6 +210,26 @@ def test_focus_falls_back_to_the_whole_cast_in_a_scene_with_no_players(client):
     body = _brief(client, cid, now)
     assert body["focus"] == ["Seraphine"]
     assert body["plot"][0]["involves"] == ["Seraphine"]
+
+
+def test_an_ordinary_scene_with_no_player_yet_widens_to_nobody(client):
+    """The widening is keyed on the scene's own `pcless` flag, not on "no players
+    came back". An ordinary scene has no players *yet* while it is being set up,
+    and briefly none again if its player is removed — keying on the empty list
+    made `involves` mean one thing before the PC was seated and another after,
+    with the NPC's threads losing their flags the moment she arrived."""
+    wid, cid = _campaign(client)
+    aid, vid = _npc(wid, "Seraphine")
+    past = store.scenes.create_scene(cid, "The Pier at Dusk")
+    store.appearances.appear(cid, past, "characters", aid, vid, "npc")
+    now = store.scenes.create_scene(cid, "The Counting House")     # NOT pcless
+    store.appearances.appear(cid, now, "characters", aid, vid, "npc")
+    store.plot.set_movement(cid, "the-ledger", "Find the ledger", "open", "beat", past)
+
+    body = _brief(client, cid, now)
+    assert body["focus"] == []                          # nobody to be about yet
+    assert [t["id"] for t in body["plot"]] == ["the-ledger"]   # the row still lists
+    assert body["plot"][0]["involves"] == []
 
 
 def test_players_alone_are_the_focus_when_the_scene_has_one(client):
@@ -419,6 +439,28 @@ def test_a_thread_whose_beats_are_the_wrong_shape_still_lists(client):
     }), encoding="utf-8")
 
     assert {t["id"] for t in _brief(client, cid, sid)["plot"]} == {"mapping", "unhashable"}
+
+
+def test_one_malformed_cast_entry_does_not_unflag_every_row(client):
+    """`cast` is hand-editable and the involvement join tests membership of it
+    against a dict, so a list-valued entry is unhashable and `in` RAISES rather
+    than missing. That raise reached the tolerant wrapper, which threw away the
+    history already collected from appearances.json — one bad record unflagging
+    every row in the view."""
+    wid, cid = _campaign(client)
+    pid, vid = _pc(wid, "Winifred Vance")
+    past = store.scenes.create_scene(cid, "The Pier at Dusk")
+    store.appearances.appear(cid, past, "pcs", pid, vid, "player")
+    now = store.scenes.create_scene(cid, "The Counting House")
+    store.appearances.appear(cid, now, "pcs", pid, vid, "player")
+    store.plot.set_movement(cid, "the-ledger", "Find the ledger", "open", "beat", past)
+    (store.campaigns.campaign_root(cid) / "chronicle.json").write_text(json.dumps(
+        {past: {"id": past, "one_line": "It happened.", "date": "",
+                "cast": [[], {"a": 1}, f"pcs/{pid}"]}}), encoding="utf-8")
+
+    body = _brief(client, cid, now)
+    assert body["plot"][0]["involves"] == ["Winifred Vance"]
+    assert body["last_time"]["one_line"] == "It happened."
 
 
 def test_a_record_that_is_not_a_dict_is_skipped(client):
