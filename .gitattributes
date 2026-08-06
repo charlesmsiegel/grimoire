@@ -4,3 +4,12 @@ android/gradlew text eol=lf
 # Windows batch files need CRLF.
 *.bat text eol=crlf
 *.ps1 text eol=crlf
+
+# The frozen store fixture and the canned LLM bodies are data the suite reads
+# back and compares against a recorded snapshot. Pin their line endings so a
+# checkout with core.autocrlf cannot introduce a difference nobody expected —
+# today every reader normalizes newlines, but that is a property of the
+# readers, not of the fixture.
+backend/tests/fixtures/frozen_campaign/**/*.md text eol=lf
+backend/tests/fixtures/frozen_campaign/**/*.json text eol=lf
+backend/tests/fixtures/llm/*.json text eol=lf

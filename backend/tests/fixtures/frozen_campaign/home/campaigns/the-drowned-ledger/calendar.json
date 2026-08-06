@@ -1,0 +1,10 @@
+{
+  "primary": {
+    "provider": "gregorian",
+    "region": "US",
+    "custom_holidays": [],
+    "anchor": null
+  },
+  "secondary": null,
+  "confirmed": false
+}
