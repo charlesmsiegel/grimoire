@@ -72,6 +72,17 @@ deleting mid-reply text is the one failure mode that loses narration. A
 trailing *unterminated* opener is stripped too — a truncated turn has no
 narration after it by construction.
 
+Both fences accept `\r?\n`. A provider returning CRLF otherwise matched
+neither boundary, and that failure is silent and total: the block persists into
+the transcript as narration and its state is never recorded.
+
+The redactor resolves everything it withheld through `split_block` at end of
+stream, held prefixes included. A stream that stops exactly after `` ```state ``
+with no newline leaves a *complete* opener held, and `split_block` strips that
+as an unterminated block — emitting it would show the player an opener the
+transcript does not contain, and on a reroll would show it in place of the
+reply the server just restored.
+
 Stripping and recording are unconditional; only the *instruction* and the
 *injection* are gated on the config. Turning the feature off must not leave
 blocks landing in transcripts while the model still complies from context.
