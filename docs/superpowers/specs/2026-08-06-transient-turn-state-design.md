@@ -103,21 +103,45 @@ false rather than merely stale:
   The tail filter alone does not cover a reroll: the replacement lands at the
   same index, so the discarded variant's entry points at a post that exists
   again, and a replacement carrying no block of its own would inherit it.
+- `remove_trailing_assistant_run` supersedes from the index it cut at — inside
+  the store mutator, not its callers, because there are two (the reroll route
+  and `alternates.promote`, which swaps a parked take in through the same
+  remove/append pair) and they must not diverge. The cut index, not the
+  post-removal length: trailing transition lines are preserved and re-appended,
+  so the replacement lands *above* where the old generation sat.
 - `PUT .../messages/{index}` supersedes from that index too. An edit is the one
   transcript change no index-based filter can see: rewriting a furious exchange
   as a calm one leaves the entry at a perfectly valid index. Everything after
   the edit goes with it, since editing text can add or remove blocks and shift
   every later index onto a post it does not describe.
 
-Promotion reads the transcript length its **caller** passes, and `post_absorb`
-passes the length of the scene snapshot it took before awaiting the extraction
-call. A turn landing while that request is in flight must not contribute a
-promoted value to a review whose summary and edits came from a transcript
-without it.
+Promotion measures the **ledger its caller hands it**, and `post_absorb`
+captures those entries with the scene under one lock before awaiting the
+extraction call. A transcript length alone was not a snapshot: an edit or a
+reroll landing mid-absorb rewrites entries *below* the tail, so only a copy
+taken at the same instant is immune. Nothing that landed after the review's
+transcript can contribute a promoted value to it.
+
+Promotion is gated on `turnstate_depth > 0`, not only on `promote_streak`. The
+Configuration page says `0` turns the whole feature off, so a retained ledger —
+or blocks a model volunteered while it was off all along — must not keep
+proposing canonical state behind that promise. `promote_streak` stays the
+narrower switch: promotion off, tracking still on.
+
+Every "did this turn produce anything?" test runs on the **stripped**
+narration. A reply that is only a tracker block is non-empty raw and empty in
+the transcript, and those tests decide whether to restore a reply reroll
+deleted, whether to take a stranded user post back, and whether to persist at
+all — so testing the raw text made a tracker-only regenerate look successful
+and destroy the only copy of the reply it replaced.
 
 A scene keeps its newest 200 entries. turnstate.json is per-campaign and is
 re-read and rewritten on every persisted turn, and both readers only ever want
 the tail — `current` a window back from it, `streaks` the final run.
+
+`promote_streak` is clamped to that retention: a threshold above it could
+never be met, and a setting that silently cannot fire is worse than one that
+saturates at the memory the system has.
 
 Scene ids are **recycled** on delete (`scenes.lifecycle.delete_scene`), so
 the ledger is purged for the deleted scene there, exactly as `commits` is

@@ -1140,8 +1140,9 @@ def _already_absorbed(scene: dict) -> bool:
     return str(scene.get("meta", {}).get("done", "")).lower() == "true"
 
 
-def _absorb_snapshot(cid: str, sid: str) -> tuple[int, dict]:
-    """The scene and its commit epoch as of one instant, under one lock hold.
+def _absorb_snapshot(cid: str, sid: str) -> tuple[int, dict, list]:
+    """The scene, its commit epoch and its transient-state ledger as of one
+    instant, under one lock hold.
 
     Split out of `post_absorb` so it can be handed to a worker thread: the
     acquire blocks, and `post_absorb` runs on the event loop. Raises
@@ -1149,7 +1150,13 @@ def _absorb_snapshot(cid: str, sid: str) -> tuple[int, dict]:
     propagates it.
     """
     with store.locks.campaign_lock(cid):
-        return store.commits.scene_epoch(cid, sid), _require_scene(cid, sid)
+        scene = _require_scene(cid, sid)
+        # The ledger travels with the scene, not derived from it afterwards.
+        # An edit or a reroll landing while the extraction call is in flight
+        # rewrites entries *below* the tail, so a length is not a snapshot --
+        # only a copy taken under this same hold is one (#120/#121).
+        ledger = store.turnstate.entries(cid, sid, len(scene["messages"]))
+        return store.commits.scene_epoch(cid, sid), scene, ledger
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/absorb")
@@ -1181,7 +1188,7 @@ async def post_absorb(cid: str, sid: str, force: bool = False,
     # request and open stream rather than just this campaign's absorb. Same
     # treatment `streaming.py` gives its blocking finalizers.
     _campaign_root_or_404(cid)
-    epoch, scene = await run_in_threadpool(_absorb_snapshot, cid, sid)
+    epoch, scene, ledger = await run_in_threadpool(_absorb_snapshot, cid, sid)
     conn = _require_connection()
     if not scene["messages"]:
         raise HTTPException(status_code=400, detail="nothing to absorb")
@@ -1210,9 +1217,8 @@ async def post_absorb(cid: str, sid: str, force: bool = False,
     # Both halves come from the SAME snapshot, and for the same reason: a reroll
     # or an append landing while the call was in flight would otherwise have the
     # citations (#112) judged against text the model never saw, and promotion
-    # (#121) reach replies this review does not summarize.
-    edits = store.absorb.materialize(cid, sid, parsed, scene["messages"],
-                                     tail=len(scene["messages"]))
+    # (#121) measure a ledger this review does not summarize.
+    edits = store.absorb.materialize(cid, sid, parsed, scene["messages"], ledger=ledger)
     # Phase 2: propose each present NPC's refreshed campaign dossier -- staged, not
     # written (never raises -- see _stage_dossiers' own failure boundary).
     dossier_edits, dossiers = await _stage_dossiers(cid, sid, transcript, client, conn, budget)

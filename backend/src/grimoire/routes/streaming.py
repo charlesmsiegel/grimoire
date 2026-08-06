@@ -192,6 +192,25 @@ def _record_turnstate(cid: str, sid: str, landed: int, segments: list[dict],
         pass
 
 
+def _narration(watcher) -> str:
+    """What this turn actually SAID -- the reply with its tracker block already
+    split off (#120).
+
+    Every "did this turn produce anything?" test goes through here, because
+    `watcher.narration` answers a different question once a tracker block can
+    exist. A reply consisting only of a block is non-empty raw and empty in the
+    transcript, and the callers below use that test to decide whether to put
+    back a reply that reroll deleted, whether to take a stranded user post off,
+    and whether the turn is worth persisting at all. Testing the raw text there
+    made a tracker-only regenerate look like a successful reply, skip the
+    restore, and delete a reply nothing else held a copy of.
+
+    Cheap and pure, so calling it beside `_persist_reply`'s own split costs a
+    scan of one reply and keeps the grammar in one place.
+    """
+    return store.turnstate.split_block(watcher.narration)[0]
+
+
 def _sse(data: dict) -> str:
     return f"data: {json.dumps(data)}\n\n"
 
@@ -380,7 +399,7 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
                 rec = store.proposals.new(cid, sid, payload)  # heals before replacing
             _persist_reply(cid, sid, watcher.narration)
             frames.append(_sse({"proposal": {**payload, "id": rec["id"]}}))
-        elif watcher.narration.strip():
+        elif _narration(watcher).strip():
             _persist_reply(cid, sid, watcher.narration)
         elif restore_removed is not None:
             # A turn that *succeeded* and produced nothing — a clean EOF with no
@@ -419,7 +438,7 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
         contention would be a new way to lose text, decided as a rider on a fix
         for a different problem. Deleting is what needs the discipline.
         """
-        if watcher.narration.strip():  # a normal turn keeps its partial reply
+        if _narration(watcher).strip():  # a normal turn keeps its partial reply
             _persist_reply(cid, sid, watcher.narration)
             return {}
         # Under the lock, for the reason `on_abort` is: the check and the
@@ -522,7 +541,7 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
             # client — a second tab, a direct API call — can still do it, and
             # that is the wider concurrency class this PR documents rather than
             # closes (#95).
-            if restore_removed is not None and not watcher.narration.strip():
+            if restore_removed is not None and not _narration(watcher).strip():
                 restore_removed()
                 return []
             if len(store.scenes.read_scene(cid, sid)["messages"]) != owned_tail:

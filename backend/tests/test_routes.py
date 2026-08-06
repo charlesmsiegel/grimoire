@@ -9425,3 +9425,28 @@ async def test_a_failure_mid_tracker_block_shows_what_it_persists(monkeypatch, t
     stored = store.scenes.read_scene(cid, sid)["messages"][-1]["content"]
     assert "She turns back." in stored          # persisted, mid-reply block and all
     assert "She turns back." in streamed        # and the client was told
+
+
+async def test_a_tracker_only_regenerate_puts_the_old_reply_back(monkeypatch, tmp_path):
+    """A reply that is nothing but a ```state block is empty once stripped, so
+    it must count as "produced nothing" — the branch that restores the reply
+    reroll deleted. Testing the RAW narration made it look like a successful
+    turn, skipped the restore, and destroyed the only copy of the old reply
+    (#120)."""
+    cid, sid, _at = _scene_with_a_pending_post(tmp_path, monkeypatch)
+    store.scenes.append_reply(cid, sid, [{"speaker": None, "content": "The tide turns."}])
+    token = store.scenes.remove_trailing_assistant_run(cid, sid)   # reroll deletes it
+
+    class TrackerOnly:
+        async def stream(self, messages, cfg):
+            yield '```state\n{"W": {"mood": "wry"}}\n```'
+
+    resp = routes.streaming._chat_stream(
+        cid, sid, [{"role": "user", "content": "and then?"}],
+        {"kind": "openrouter", "model": "m"}, TrackerOnly(),
+        restore_removed=lambda: store.scenes.restore_trailing_assistant_run(cid, sid, token))
+    frames = "".join([f async for f in resp.body_iterator])
+    assert '"done": true' in frames
+    contents = [m["content"] for m in store.scenes.read_scene(cid, sid)["messages"]]
+    assert "The tide turns." in contents          # the deleted reply came back
+    assert not any("```" in c for c in contents)  # and no block was stored
