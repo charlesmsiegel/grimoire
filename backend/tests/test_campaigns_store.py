@@ -1,4 +1,5 @@
 import shutil
+from pathlib import Path
 
 import pytest
 
@@ -451,33 +452,65 @@ def test_slim_interrupted_mid_prune_does_not_tombstone_what_it_pruned(monkeypatc
     assert campaigns.read_campaign(cid)["meta"]["world_copy"] == "overlay"
 
 
-@pytest.mark.parametrize("what", ["write", "drop"])
-@pytest.mark.parametrize("stop_at", range(6))
+def _fatter_campaign(monkeypatch, tmp_path):
+    """`_fat_campaign` plus every other shape the migration classifies: a plot
+    map, a greeting, a PC, a locked actor, and a record the campaign owns."""
+    wroot, cid, same, diverged, removed, aid, vid = _fat_campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    g = greetings.create_greeting(wroot, "Gala", aid, vid, body="Hi.")
+    greetings.set_edges(wroot, g, leads_to=[], excludes=[])
+    pid, _ = pcs.create_pc(wroot, "Elara", [])
+    lid, lvid = characters.create_character(wroot, "Seraphine")
+    manifest = campaigns.read_manifest(cid)
+    (croot / "greetings").mkdir()
+    (croot / "greetings" / f"{g}.md").write_text(
+        (wroot / "greetings" / f"{g}.md").read_text(encoding="utf-8"), encoding="utf-8")
+    manifest[f"greetings/{g}"] = entities.entity_hash(wroot, "greetings", g)
+    shutil.copy(wroot / "plotmap.json", croot / "plotmap.json")
+    manifest["plotmap"] = greetings.plotmap_hash(wroot)
+    shutil.copytree(wroot / "pcs" / pid, croot / "pcs" / pid)
+    manifest[f"pcs/{pid}"] = pcs.dir_hash(wroot, pid)
+    shutil.copytree(wroot / "characters" / lid, croot / "characters" / lid)
+    manifest[f"characters/{lid}"] = characters.dir_hash(wroot, lid)
+    campaigns.write_manifest(cid, manifest)
+    appearances.appear(cid, "s1", "characters", lid, lvid, "npc")   # locks, drops its ref
+    mine = entities.create_entity(croot, "lore", "Winifred", "Campaign only.")
+    _stamp_full(cid)
+    return dict(cid=cid, same=same, diverged=diverged, removed=removed, aid=aid,
+                g=g, pid=pid, lid=lid, mine=mine)
+
+
+@pytest.mark.parametrize("what", ["write", "unlink"])
+@pytest.mark.parametrize("stop_at", range(14))
 def test_no_interruption_of_the_migration_tombstones_a_live_record(monkeypatch, tmp_path,
                                                                    stop_at, what):
     """The invariant behind #270, swept: stop the migration at each of its
-    writes and each of its copy drops in turn, let it run again, and no record
-    the user did not delete may end up tombstoned. Every one of these points
-    tombstones something before the fix."""
-    _wroot, cid, same, diverged, removed, aid, _vid = _fat_campaign(monkeypatch, tmp_path)
+    writes and each of its unlinks in turn, let it run again, and no record the
+    user did not delete may end up tombstoned or become unreadable.
+
+    Both spies are needed. The writes alone miss everything inside a copy drop
+    — including `dematerialize_actor`'s two-unlink window, which left a
+    character that listed but could not be opened (Codex review)."""
+    f = _fatter_campaign(monkeypatch, tmp_path)
+    cid = f["cid"]
 
     class Interrupted(Exception):
         pass
 
     n = [0]
-    real_write, real_drop = atomic.write_text, overlay.dematerialize
+    real_write, real_unlink = atomic.write_text, Path.unlink
 
     def counted(kind, real):
-        def spy(*args):
+        def spy(*args, **kwargs):
             if kind == what and n[0] == stop_at:
                 raise Interrupted
             n[0] += 1
-            return real(*args)
+            return real(*args, **kwargs)
         return spy
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(atomic, "write_text", counted("write", real_write))
-        mp.setattr(overlay, "dematerialize", counted("drop", real_drop))
+        mp.setattr(Path, "unlink", counted("unlink", real_unlink))
         try:
             campaigns.ensure_campaign_slim(cid)
         except Interrupted:
@@ -487,14 +520,43 @@ def test_no_interruption_of_the_migration_tombstones_a_live_record(monkeypatch, 
     campaigns.ensure_campaign_slim(cid)   # and again: the recovery is idempotent
 
     dead = overlay.deleted(cid)
-    assert f"lore/{same}" not in dead
-    assert f"lore/{diverged}" not in dead
-    assert f"characters/{aid}" not in dead
-    assert f"lore/{removed}" in dead                                   # the real deletion stands
-    assert overlay.read_entity(cid, "lore", same)["body"] == "same"
-    assert overlay.read_entity(cid, "lore", diverged)["body"] == "campaign text"
-    assert overlay.read_character(cid, aid)["meta"]["name"] == "Hero"
+    for ref in (f"lore/{f['same']}", f"lore/{f['diverged']}", f"lore/{f['mine']}",
+                f"characters/{f['aid']}", f"characters/{f['lid']}", f"pcs/{f['pid']}",
+                f"greetings/{f['g']}", "plotmap"):
+        assert ref not in dead, f"{ref} tombstoned"
+    assert f"lore/{f['removed']}" in dead                              # the real deletion stands
+    # …and every live record still reads, with the content it had
+    assert overlay.read_entity(cid, "lore", f["same"])["body"] == "same"
+    assert overlay.read_entity(cid, "lore", f["diverged"])["body"] == "campaign text"
+    assert overlay.read_entity(cid, "lore", f["mine"])["body"] == "Campaign only."
+    assert overlay.read_character(cid, f["aid"])["meta"]["name"] == "Hero"
+    assert overlay.read_character(cid, f["lid"])["meta"]["name"] == "Seraphine"
+    assert pcs.read_pc(overlay.pc_root(cid, f["pid"]), f["pid"])["meta"]["name"] == "Elara"
+    assert overlay.read_greeting(cid, f["g"])["body"].strip() == "Hi."
     assert campaigns.read_campaign(cid)["meta"]["world_copy"] == "overlay"
+
+
+def test_slim_does_not_tombstone_a_ref_the_fork_recorded_no_hash_for(monkeypatch, tmp_path):
+    """Both historical writers stored `<world hash> or ""`, so a campaign forked
+    from a world with no plot map carries `plotmap: ''` and no plotmap.json —
+    a ref with no copy, on disk, put there by the fork and not by any
+    interruption. Read as a deletion it tombstones the world's plot map out of
+    the campaign the moment the world gains one, which is #270's own symptom
+    (Codex review)."""
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    aid, vid = characters.create_character(wroot, "Hero")
+    cid = campaigns.create_campaign("C", wid)
+    campaigns.write_manifest(cid, {"plotmap": ""})   # forked before the world had one
+    _stamp_full(cid)
+    g = greetings.create_greeting(wroot, "Gala", aid, vid, body="Hi.")
+    greetings.set_edges(wroot, g, leads_to=["next"], excludes=[])   # …and now it has
+
+    campaigns.ensure_campaign_slim(cid)
+
+    assert "plotmap" not in overlay.deleted(cid)
+    assert overlay.read_plotmap(cid) == greetings.read_plotmap(wroot)
 
 
 def test_slim_prunes_a_copy_the_manifest_does_not_name(monkeypatch, tmp_path):
@@ -546,9 +608,12 @@ def test_slim_sweep_keeps_a_campaign_local_record(monkeypatch, tmp_path):
 
 
 def test_slim_sweep_keeps_a_locked_actors_card(monkeypatch, tmp_path):
-    """A locked actor leaves the manifest holding its card on purpose, so it
-    is untracked by the time the sweep runs — and identical to the world when
-    the lock kept the only version. The lock invariant needs those files."""
+    """A lock drops the actor's manifest ref itself (`appearances.versions._lock`
+    calls `_drop_manifest_ref`), so a locked actor's card is genuinely untracked
+    by the time the sweep runs — and identical to the world when the lock kept
+    the only version. Without the `locked` term the sweep takes exactly the
+    files the lock invariant needs, so this must NOT put the ref back: doing so
+    was what left the term unexercised (Codex review)."""
     home(monkeypatch, tmp_path)
     wid = worlds.create_world("W")
     wroot = worlds.world_root(wid)
@@ -556,10 +621,9 @@ def test_slim_sweep_keeps_a_locked_actors_card(monkeypatch, tmp_path):
     cid = campaigns.create_campaign("C", wid)
     croot = campaigns.campaign_root(cid)
     shutil.copytree(wroot / "characters" / aid, croot / "characters" / aid)
-    ref = f"characters/{aid}"
-    campaigns.write_manifest(cid, {ref: characters.dir_hash(wroot, aid)})
-    appearances.appear(cid, "s1", "characters", aid, vid, "npc")
-    campaigns.write_manifest(cid, {ref: characters.dir_hash(wroot, aid)})
+    campaigns.write_manifest(cid, {f"characters/{aid}": characters.dir_hash(wroot, aid)})
+    appearances.appear(cid, "s1", "characters", aid, vid, "npc")   # drops the ref, keeps the card
+    assert f"characters/{aid}" not in campaigns.read_manifest(cid)
     _stamp_full(cid)
 
     campaigns.ensure_campaign_slim(cid)

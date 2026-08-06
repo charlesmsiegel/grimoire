@@ -568,15 +568,29 @@ def ensure_actor_writable(cid: str, kind: str, aid: str) -> Path:
 def dematerialize_actor(cid: str, kind: str, aid: str) -> None:
     """Remove meta + version files so the actor reverts to inherited. Sidecars
     (tagline/dossier/state) and assets stay — they overlay per file. PCs carry
-    no sidecar .md files, so all *.md go."""
+    no sidecar .md files, so all *.md go.
+
+    The meta file goes FIRST, and that ordering is the whole safety of this
+    function. It is the commit point `actor_root` keys on, so while it is there
+    the campaign claims to have materialized this actor. Unlinking the versions
+    first and it last meant a kill between the two left a directory that still
+    said "materialized" and held no version to read: `read_character` raises,
+    while `list_characters` skips version-less dirs so the world's copy shows
+    through the overlay and the actor stays in the roster. A character that
+    lists but cannot be opened, edited or re-materialized — and nothing repairs
+    it, because the migration only revisits refs sync.md still holds and this
+    one's ref is already gone (Codex review, #270).
+
+    Meta-first inverts that into a state the store already understands: version
+    files with no meta read as inherited, exactly as an interrupted *copy*
+    leaves them, and `materialize_actor` purges them on the next copy."""
     d = croot_of(cid) / kind / aid
     if not d.exists():
         return
-    if kind == "characters":
-        targets = list(d.glob("*.json")) + [d / "character.md"]
-    else:
-        targets = list(d.glob("*.md"))
-    for p in targets:
+    meta = _actor_meta(kind)
+    rest = (list(d.glob("*.json")) if kind == "characters"
+            else [p for p in d.glob("*.md") if p.name != meta])
+    for p in [d / meta, *rest]:
         if p.exists():
             p.unlink()
     if not any(d.iterdir()):
