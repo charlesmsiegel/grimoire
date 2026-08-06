@@ -1151,6 +1151,33 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
   // Trimmed, matching `streaming.py`'s `watcher.narration.strip()`: deltas that
   // are only whitespace persist nothing, so that slot is empty too, and reading
   // them as a landed partial takes away the one button that refills it.
+  // Ask the server whether the scene's running summary is now due (#85).
+  //
+  // Deliberately NOT awaited by any caller: the player's next action must never
+  // queue behind a summarization, which is the whole meaning of "non-blocking"
+  // here. Sent without `force`, so the decision — and the cost — stay on the
+  // server; a scene short of the threshold answers `refreshed: false` having
+  // reached no provider, which is why it is cheap enough to fire after every
+  // transcript write.
+  //
+  // Every rejection is swallowed. A missing key, a dead provider, a busy store:
+  // none is a reason to put a banner over a turn that landed, and the panel's
+  // own Refresh button reports the failure when the player actually asks.
+  //
+  // The `ctxKey` bump is guarded on the reader still being here, like every
+  // other post-await write in this component: a summary written for the scene
+  // they just left must not re-read the panel for the scene they are on.
+  //
+  // A function rather than a line inside `runStream`, because review caught
+  // that generated turns are not the only writer: a manual dice roll and a
+  // check both append narrator posts, so a mechanics-heavy stretch of play
+  // could cross the threshold repeatedly with nothing ever asking.
+  function askForRollingSummary(id: string) {
+    api.refreshRollingSummary(cid, id)
+      .then((r) => { if (r.refreshed && activeIdRef.current === id) setCtxKey((n) => n + 1); })
+      .catch(() => {});
+  }
+
   async function runStream(
     id: string,
     start: (onEvent: (e: ChatEvent) => void, signal: AbortSignal) => Promise<void>,
@@ -1408,9 +1435,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       // The `ctxKey` bump is guarded on the reader still being here, like every
       // other post-await write in this function: a summary written for the scene
       // they just left must not re-read the panel for the scene they are on.
-      api.refreshRollingSummary(cid, id)
-        .then((r) => { if (r.refreshed && activeIdRef.current === id) setCtxKey((n) => n + 1); })
-        .catch(() => {});
+      askForRollingSummary(id);
     }
     // Landed means the backend said so, not that the promise resolved.
     return finished && !errored;
@@ -1666,6 +1691,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       await api.roll(cid, activeId, notation, rollForm.label.trim() || undefined);
       setRollForm(null);
       await selectScene(activeId);
+      askForRollingSummary(activeId);   // a roll is a post too (#85)
     } catch (err: any) {
       setRollForm({ ...rollForm, error: err.detail ?? String(err) });
     } finally {
@@ -1706,6 +1732,7 @@ export default function CampaignView({ ready, topbarCollapsed = false, onToggleT
       await api.rollCheck(cid, activeId, body);
       setRollForm(null);
       await selectScene(activeId);
+      askForRollingSummary(activeId);   // as is a check (#85)
     } catch (err: any) {
       setRollForm({ ...rollForm, error: err.detail ?? String(err) });
     } finally {

@@ -434,13 +434,20 @@ def edit_message(cid: str, sid: str, index: int, content: str) -> None:
 
 
 @locking._serialized
-def set_rolling_summary(cid: str, sid: str, summary: str, at: int, digest: str) -> None:
+def set_rolling_summary(cid: str, sid: str, summary: str, at: int, digest: str,
+                        facts: str = "") -> None:
     """Record the live running summary and what it was folded from (#85).
 
-    The three keys move together and are only meaningful together: prose that
-    covers a prefix, the length of that prefix, and its digest. Writing them in
-    one file write is what keeps a reader from seeing a new summary against an
-    old digest and deciding the fold is stale when it is not.
+    The four keys move together and are only meaningful together: prose, the
+    length of the prefix it covers, that prefix's digest, and a digest of the
+    scene facts the prompt was given. Writing them in one file write is what
+    keeps a reader from seeing a new summary against an old digest and deciding
+    the fold is stale when it is not.
+
+    `facts` is a separate key rather than part of `digest` because the two
+    invalidate for different reasons -- the transcript changing under the fold,
+    versus a fact changing with no transcript change at all, which the silent
+    first-location and first-date writes do.
 
     The summary is collapsed to a single line HERE, not merely by whoever parsed
     the model's reply. `dump_frontmatter` writes one line per key and `_quote`
@@ -466,6 +473,7 @@ def set_rolling_summary(cid: str, sid: str, summary: str, at: int, digest: str) 
     meta["rolling_summary"] = " ".join(summary.split())
     meta["rolling_at"] = str(max(0, at))
     meta["rolling_digest"] = digest
+    meta["rolling_facts"] = facts
     atomic.write_text(p, dump_frontmatter(meta, body))
 
 

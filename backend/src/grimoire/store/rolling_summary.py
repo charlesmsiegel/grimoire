@@ -48,6 +48,27 @@ def covered_digest(messages: list[dict]) -> str:
         json.dumps(canonical, ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
+def facts_digest(facts: dict | None) -> str:
+    """A stable digest of the deterministic facts the prompt is given.
+
+    Separate from `covered_digest` because it answers a different question, and
+    the transcript cannot answer it: a scene's FIRST location and FIRST date are
+    both set silently (`scenes/moment.py`), so those facts can change with no
+    message appended at all. Once the facts reach the prompt -- which they must,
+    since the transcript does not contain them -- they become part of what a
+    stored summary was built from, and a summary built from the wrong location
+    is as stale as one built from a deleted post.
+
+    Sorted keys, and the cast sorted too: seating order is not a fact about the
+    scene, and re-seating the same cast must not invalidate a good summary.
+    """
+    facts = facts or {}
+    canonical = [facts.get("location", ""), facts.get("date", ""),
+                 sorted(facts.get("cast") or [])]
+    return hashlib.sha256(
+        json.dumps(canonical, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
 def build_prompt(prior: str, transcript: str, facts: dict | None = None) -> list[dict]:
     """The refresh call's system/user pair. `prior` is "" on a from-scratch
     fold, in which case `transcript` is the whole scene rather than the tail.
