@@ -8,10 +8,8 @@ materialize` would bind the function rather than the module.
 
 from __future__ import annotations
 
-from .. import (characters, commitments, entities, facts, groupstate, overlay,
-                pcs, playstate, plot, relationships)
-from .. import (characters, commitments, config, entities, groupstate, overlay, pcs,
-                playstate, plot, relationships, turnstate)
+from .. import (characters, commitments, config, entities, facts, groupstate, overlay,
+                pcs, playstate, plot, relationships, turnstate)
 from ..appearances import paths as appearances_paths, versions as appearances_versions
 from ..campaigns import paths as campaigns_paths
 from ..paths import slugify
@@ -170,7 +168,8 @@ def _character_state_edit(cid: str, char_id: str, before: str, after: str) -> di
             "before": before, "after": after, "authored": False}
 
 
-def _promote(cid: str, sid: str, out: list[dict], stage, ledger: list | None) -> None:
+def _promote(cid: str, sid: str, out: list[dict], stage,
+             turn_ledger: list | None) -> None:
     """Fold #121's reinforced transient values into the staged character-state
     edits, in place.
 
@@ -207,13 +206,13 @@ def _promote(cid: str, sid: str, out: list[dict], stage, ledger: list | None) ->
     # the narrower switch: promotion off, tracking still on.
     if need <= 0 or config.turnstate_depth() <= 0:
         return
-    if ledger is None:
+    if turn_ledger is None:
         try:
             tail = len(scenes_read.read_scene(cid, sid)["messages"])
         except (scenes_paths.SceneNotFound, OSError, UnicodeDecodeError):
             return
-        ledger = turnstate.entries(cid, sid, tail)
-    promoted = turnstate.streaks_from(ledger, need)
+        turn_ledger = turnstate.entries(cid, sid, tail)
+    promoted = turnstate.streaks_from(turn_ledger, need)
     if not promoted:
         return
     croot = campaigns_paths.campaign_root(cid)
@@ -252,7 +251,7 @@ def _promote(cid: str, sid: str, out: list[dict], stage, ledger: list | None) ->
 
 def materialize(cid: str, sid: str, parsed: dict,
                 messages: list[dict] | None = None,
-                ledger: list | None = None) -> list[dict]:
+                turn_ledger: list | None = None) -> list[dict]:
     """Turn the parsed edit lists into before/after StagedEdits against the campaign
     copies. Targets that don't exist are dropped (tolerated, not an error).
 
@@ -260,8 +259,10 @@ def materialize(cid: str, sid: str, parsed: dict,
     the caller has it -- the citations are judged against it, and the scene can
     move between rendering the prompt and this call (see `routing.speaker_index`).
 
-    `ledger` is the transient-state entries (#120) the caller's review is being
-    built from. `post_absorb` captures them WITH the scene, under one lock,
+    `turn_ledger` is the transient-state entries (#120) the caller's review is
+    being built from — named apart from the *fact* ledger this function also
+    reads below (#114), which is a local of the same name and would otherwise
+    shadow this parameter outright. `post_absorb` captures them WITH the scene, under one lock,
     before awaiting the extraction call, so promotion (#121) measures the same
     scene version the summary and the other edits describe. A length alone was
     not enough: an edit or a reroll landing mid-absorb rewrites entries *below*
@@ -329,7 +330,7 @@ def materialize(cid: str, sid: str, parsed: dict,
 
     # After the model's own proposals, so a reinforced value merges onto the row
     # the reviewer would already have seen rather than opening a second one.
-    _promote(cid, sid, out, _staged, ledger)
+    _promote(cid, sid, out, _staged, turn_ledger)
 
     for e in parsed.get("group_state_edits", []):
         raw_id = e.get("id", "")
