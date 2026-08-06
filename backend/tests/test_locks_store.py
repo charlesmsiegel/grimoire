@@ -489,8 +489,11 @@ def test_world_module_rebind_acquires_in_sorted_order(monkeypatch, tmp_path):
 #   1. every mention of `campaign_lock` / `hold_all` -- as a name, an
 #      attribute, or a string handed to `getattr` -- is the callee of a `with`
 #      statement's context expression, and
-#   2. those calls all name the same campaign -- read positionally or from the
-#      `cid`/`cids` keyword, and not through a name the scope rebinds.
+#   2. those calls all name the same campaign, and the campaign is PINNED --
+#      a constant, or a name this scope never rebinds. Anything with runtime
+#      state in it is unknown, and unknown never equals unknown.
+#   3. no `yield` or `await` happens while one is held, unless the scope is a
+#      `@contextmanager` whose yield is its caller's `with` body.
 #
 # Anything else fails. Two campaigns in one scope is the deadlock; a lock named
 # anywhere but a `with` has no bounded lifetime, which is how you get two; and
@@ -500,9 +503,9 @@ def test_world_module_rebind_acquires_in_sorted_order(monkeypatch, tmp_path):
 # WHY IT IS SHAPED LIKE THIS -- the part worth reading before changing it.
 # Earlier drafts asked the opposite question: "does this look like a multi-hold
 # I recognize?" They enumerated the bad spellings, and the enumeration was
-# always one spelling short. Across six review rounds, ten separate findings,
-# every one of them the same hold in punctuation the detector had not been
-# taught:
+# always one spelling short. Across seven review rounds, twelve separate
+# findings, every one of them the same hold in punctuation the detector had not
+# been taught:
 #
 #   `lock = campaign_lock(c)` then `stack.enter_context(lock)`  (a local)
 #   `with campaign_lock(a), campaign_lock(b):`                  (one statement)
@@ -514,10 +517,12 @@ def test_world_module_rebind_acquires_in_sorted_order(monkeypatch, tmp_path):
 #   `campaign_lock(cid=a), campaign_lock(cid=b)`                (keyword)
 #   `cl = locks.campaign_lock` then `with cl(a), cl(b):`        (renamed)
 #   `cid = a; with ...(cid): cid = b; with ...(cid):`           (rebound)
+#   `with ...(cids.pop()):` nested inside itself                (stateful)
+#   `for c in ids: with ...(c): yield c`                        (suspended)
 #
-# The last three are a second kind of gap, worth naming separately: not a way to
+# The last four are a second kind of gap, worth naming separately: not a way to
 # HOLD a lock the detector missed, but a way to NAME one -- the factory, or the
-# campaign. That is the other lesson `test_lock_domain_guard.py` had to learn
+# campaign, or the moment the hold ends. That is the other lesson `test_lock_domain_guard.py` had to learn
 # and write down -- "**A name is not a binding.** It was fixed four separate
 # times before it was written down" -- and it is a name away from that file's
 # `_rebinds_cid`, which exists because the same thing happened there.
@@ -576,6 +581,18 @@ _LOCK_CALLS = ("campaign_lock", "hold_all")
 _NESTED_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
 _WITHS = (ast.With, ast.AsyncWith)
 
+#: Suspending inside a lock hands the hold's lifetime to whoever resumes it.
+#: A generator paused in `with campaign_lock(cid):` still holds that lock, so
+#: two live instances hold two campaigns in whatever order the consumer
+#: advanced them -- a multi-hold with one syntactic acquisition.
+_SUSPENDS = (ast.Yield, ast.YieldFrom, ast.Await)
+
+#: ...unless the function IS a context manager, whose single yield is bounded
+#: by its caller's `with`. That is the sanctioned spelling here, and the only
+#: two suspensions in the package -- `module_edit._campaign_locks` and
+#: `proposals.locked` -- are both this.
+_BOUNDED = ("contextmanager", "asynccontextmanager")
+
 
 def _here(node: ast.AST):
     """`ast.walk`, but it does not descend into a nested function or lambda.
@@ -615,6 +632,17 @@ def _scopes(tree: ast.AST):
     yield from (n for n in ast.walk(tree) if isinstance(n, _NESTED_SCOPES))
 
 
+def _bounded_by_its_caller(scope: ast.AST) -> bool:
+    """`scope` is a `@contextmanager`, so its yield is a caller's `with` body.
+
+    Matched on the decorator's name however it is reached (`@contextmanager`,
+    `@contextlib.contextmanager`), which is the same name-level match the rest
+    of this guard uses and carries the same limit.
+    """
+    return any((getattr(d, "attr", None) or getattr(d, "id", None)) in _BOUNDED
+               for d in getattr(scope, "decorator_list", []))
+
+
 _unknown = itertools.count()
 
 
@@ -649,30 +677,35 @@ def _campaign_of(call: ast.Call, rebound: set[str]) -> str:
     is the same call spelled differently, and reading both as "no argument"
     made two campaigns look like one.
 
-    Two ways the campaign is UNKNOWN, and each gets a fresh sentinel so it
-    compares equal to nothing: the argument cannot be read at all, or the
-    expression is built from a name this scope rebinds -- `cid = first; with
-    campaign_lock(cid): cid = second; with campaign_lock(cid):` dumps
-    identically twice and is two campaigns held nested.
+    Only two expressions PIN a campaign: a constant, and a name this scope
+    never rebinds. Everything else -- an unreadable argument, a rebound name,
+    or anything with runtime state in it -- gets a fresh sentinel and so
+    compares equal to nothing.
+
+    That whitelist is the same inversion as the rest of the guard, and it
+    arrived the same way. Two review rounds each produced one more expression
+    whose `ast.dump` was stable while its VALUE was not: `cid = first; with
+    ...(cid): cid = second; with ...(cid):`, and then `with ...(cids.pop()):`
+    nested inside itself. Enumerating those is the losing game again; asking
+    what is demonstrably fixed is not.
 
     Unknown means *fail*, which is the polarity this whole guard turns on. The
     alternative reads two unknowable calls as one campaign and lets the pair
-    through, which is exactly how both of these arrived. A scope with a single
-    lock call is unaffected either way: one campaign cannot disagree with
-    itself, so the loop `for c in ids: with campaign_lock(c):` stays legal
-    though `c` is rebound every iteration.
+    through, which is exactly how both of them arrived. A scope with a single
+    lock call is unaffected either way -- one campaign cannot disagree with
+    itself -- so `for c in ids: with campaign_lock(c):` stays legal though its
+    target is rebound every iteration.
     """
-    expr = None
     if call.args:
         expr = call.args[0]
     else:
         expr = next((kw.value for kw in call.keywords
                      if kw.arg in ("cid", "cids")), None)
-    if expr is None:
-        return f"<unreadable {next(_unknown)}>"
-    if any(isinstance(n, ast.Name) and n.id in rebound for n in ast.walk(expr)):
-        return f"<rebound {next(_unknown)}>"
-    return ast.dump(expr)
+    if isinstance(expr, ast.Constant):
+        return ast.dump(expr)
+    if isinstance(expr, ast.Name) and expr.id not in rebound:
+        return ast.dump(expr)
+    return f"<not pinned {next(_unknown)}>"
 
 
 def _multi_holds(tree: ast.AST) -> list[tuple[int, str]]:
@@ -686,11 +719,19 @@ def _multi_holds(tree: ast.AST) -> list[tuple[int, str]]:
                         for a in node.names
                         if a.name.split(".")[-1] in _LOCK_CALLS and a.asname]
         # The ONLY permitted shape: the callee of a `with`'s context expression.
-        taken = [item.context_expr for node in _here(scope)
-                 if isinstance(node, _WITHS) for item in node.items
-                 if isinstance(item.context_expr, ast.Call)
-                 and _names_a_lock(item.context_expr.func)]
+        holding = [node for node in _here(scope) if isinstance(node, _WITHS)
+                   and any(isinstance(i.context_expr, ast.Call)
+                           and _names_a_lock(i.context_expr.func)
+                           for i in node.items)]
+        taken = [i.context_expr for node in holding for i in node.items
+                 if isinstance(i.context_expr, ast.Call)
+                 and _names_a_lock(i.context_expr.func)]
         permitted = {id(call.func) for call in taken}
+        if not _bounded_by_its_caller(scope):
+            out += [(n.lineno, "campaign lock held across a suspension -- the "
+                               "hold outlives this scope's control of it")
+                    for node in holding for stmt in node.body
+                    for n in _here(stmt) if isinstance(n, _SUSPENDS)]
         # Every other mention fails -- without the guard having to know what it
         # was going to be used for. An alias assignment, an argument to
         # `enter_context`, a `getattr` string: none of them is here.
@@ -844,6 +885,24 @@ _PREFIX = "import contextlib\nfrom grimoire.store import locks\n"
      "        cid = second\n"
      "        with locks.campaign_lock(cid):\n"
      "            pass\n", "a campaign expression rebound between acquisitions"),
+    # --- the two Codex found on 939d85e: same dump, different value ---
+    (_PREFIX + "def f(cids):\n"
+     "    with locks.campaign_lock(cids.pop()):\n"
+     "        with locks.campaign_lock(cids.pop()):\n"
+     "            pass\n", "a stateful campaign expression"),
+    (_PREFIX + "def gen(ids):\n"
+     "    for cid in ids:\n"
+     "        with locks.campaign_lock(cid):\n"
+     "            yield cid\n", "a generator yielding inside a looped lock"),
+    # The same hazard without the loop: two live instances, two campaigns.
+    (_PREFIX + "def gen(cid):\n"
+     "    with locks.campaign_lock(cid):\n"
+     "        yield\n", "a plain generator yielding inside a lock"),
+    # Nobody named this one either; `_SUSPENDS` covers it because holding a
+    # lock across an await is the same extended lifetime.
+    (_PREFIX + "async def f(cid):\n"
+     "    with locks.campaign_lock(cid):\n"
+     "        await go()\n", "an await inside a lock"),
     # Safe, and rejected anyway -- see "WHAT IT REJECTS THAT IS SAFE" above.
     # Listed here so the trade is a test rather than a claim.
     (_PREFIX + "def f(a, b):\n"
@@ -893,6 +952,19 @@ def test_guard_catches_locks_not_taken_the_one_permitted_way(src, why):
      "    with locks.campaign_lock(cid):\n"
      "        pass\n"
      "    cid = b\n", "one lock whose name is rebound elsewhere"),
+    # The sanctioned suspension: a context manager's yield IS its caller's
+    # `with` body, so the hold is bounded after all. `proposals.locked` and
+    # `module_edit._campaign_locks` are both exactly this.
+    (_PREFIX + "@contextlib.contextmanager\n"
+     "def locked(cid):\n"
+     "    with locks.campaign_lock(cid):\n"
+     "        yield\n", "a @contextmanager yielding inside a lock"),
+    ("from contextlib import contextmanager\n"
+     "from grimoire.store import locks\n"
+     "@contextmanager\n"
+     "def locked(cid):\n"
+     "    with locks.campaign_lock(cid):\n"
+     "        yield\n", "the same, decorator imported bare"),
     # A different lock domain accumulated on a stack -- `store/assets.py` does
     # exactly this, and it is none of this guard's business.
     (_PREFIX + "def f(stack, images):\n"
