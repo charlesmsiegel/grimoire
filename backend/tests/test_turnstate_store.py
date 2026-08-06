@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from grimoire.store import campaigns, playstate, turnstate, worlds
+from grimoire.store import campaigns, playstate, scenes, turnstate, worlds
 
 
 def _campaign(monkeypatch, tmp_path):
@@ -88,17 +88,44 @@ CAST = [{"kind": "characters", "id": "winifred", "role": "npc", "name": "Winifre
         {"kind": "pcs", "id": "mara", "role": "player", "name": "Mara"}]
 
 
+def _resolve(states, cast=CAST):
+    # scenes.match_name is what the transcript grammar resolves labels with, and
+    # what the route injects.
+    return turnstate.resolve(states, cast, scenes.match_name)
+
+
 def test_names_resolve_case_insensitively_to_actor_tokens():
-    assert turnstate.resolve({"winifred ash": {"mood": "wry"}}, CAST) == {
+    assert _resolve({"winifred ash": {"mood": "wry"}}) == {
+        "characters:winifred": {"mood": "wry"}}
+
+
+def test_a_shortened_label_resolves_the_way_the_transcript_does():
+    """`**Winifred:**` is a valid transcript label for Winifred Ash, so it is
+    the label the tracker instruction asks the model to reuse. Exact-matching
+    dropped every block from a model that used one."""
+    assert _resolve({"Winifred": {"mood": "wry"}}) == {
         "characters:winifred": {"mood": "wry"}}
 
 
 def test_an_unknown_name_is_dropped():
-    assert turnstate.resolve({"Nobody": {"mood": "wry"}}, CAST) == {}
+    assert _resolve({"Nobody": {"mood": "wry"}}) == {}
 
 
 def test_players_are_not_tracked():
-    assert turnstate.resolve({"Mara": {"mood": "wry"}}, CAST) == {}
+    assert _resolve({"Mara": {"mood": "wry"}}) == {}
+
+
+def test_an_ambiguous_shared_name_resolves_to_neither():
+    cast = [{"kind": "characters", "id": "a", "role": "npc", "name": "Mara Vance"},
+            {"kind": "characters", "id": "b", "role": "npc", "name": "Mara Vance"}]
+    assert _resolve({"Mara Vance": {"mood": "wry"}}, cast) == {}
+
+
+def test_a_prefix_two_characters_share_resolves_to_neither():
+    cast = [{"kind": "characters", "id": "a", "role": "npc", "name": "Mara Vance"},
+            {"kind": "characters", "id": "b", "role": "npc", "name": "Mara Chen"}]
+    assert _resolve({"Mara": {"mood": "wry"}}, cast) == {}
+    assert _resolve({"Mara Chen": {"mood": "wry"}}, cast) == {"characters:b": {"mood": "wry"}}
 
 
 # ---- the stream redactor ---------------------------------------------------

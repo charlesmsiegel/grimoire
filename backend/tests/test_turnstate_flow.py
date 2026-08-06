@@ -3,6 +3,9 @@
 sections come and go with the setting, and a reinforced value is offered as a
 character-state edit at absorb (#121)."""
 
+from fastapi.testclient import TestClient
+
+from grimoire.main import create_app
 from grimoire.routes.streaming import _persist_reply
 from grimoire.store import (absorb, appearances, campaigns, characters, config, context,
                             playstate, scenes, turnstate, worlds)
@@ -87,6 +90,33 @@ def test_a_rerolled_reply_does_not_inherit_the_discarded_variants_mood(
     assert turnstate.entries(cid, sid) == []
 
 
+def test_a_shortened_speaker_label_still_files_its_state(monkeypatch, tmp_path):
+    """The reply labels her `**Winifred:**`, which the transcript grammar
+    accepts for `Winifred Ash` — so the tracker key does too."""
+    cid, sid, char_id = _scene(monkeypatch, tmp_path)
+    _persist_reply(cid, sid, "**Winifred:** Nothing to say.\n\n"
+                   + _block('{"Winifred": {"mood": "guarded"}}'))
+    assert turnstate.entries(cid, sid) == [(0, {f"characters:{char_id}": {"mood": "guarded"}})]
+
+
+def test_editing_a_post_retires_the_state_it_recorded(monkeypatch, tmp_path):
+    """An edit is the one transcript change the tail filter cannot see: the
+    length is unchanged, so the entry keeps claiming a mood for text that no
+    longer says it."""
+    cid, sid, char_id = _scene(monkeypatch, tmp_path)
+    config.write_config(turnstate_depth="4")
+    _persist_reply(cid, sid, "**Winifred Ash:** Get OUT.\n\n"
+                   + _block('{"Winifred Ash": {"mood": "furious"}}'))
+    assert "furious" in dict((s["label"], s["text"]) for s in
+                             context.context_sections(cid, sid))["Transient state"]
+    client = TestClient(create_app())
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/messages/0",
+                   json={"content": "**Winifred Ash:** Please, sit."})
+    assert r.status_code == 200
+    assert turnstate.entries(cid, sid) == []
+    assert "Transient state" not in _labels(cid, sid)
+
+
 def test_superseding_leaves_earlier_posts_alone(monkeypatch, tmp_path):
     cid, sid, char_id = _scene(monkeypatch, tmp_path)
     _persist_reply(cid, sid, "**Winifred Ash:** One.\n\n"
@@ -160,9 +190,10 @@ def test_the_tracker_instruction_is_kept_off_the_opener(monkeypatch, tmp_path):
 # ---- promotion -------------------------------------------------------------
 
 def _reinforce(cid, sid, char_id, value, times=3, field="mood"):
-    for i in range(times):
-        turnstate.record(cid, sid, i, {f"characters:{char_id}": {field: value}})
+    for _ in range(times):
+        i = len(scenes.read_scene(cid, sid)["messages"])
         scenes.append_message(cid, sid, "assistant", f"beat {i}", speaker="Winifred Ash")
+        turnstate.record(cid, sid, i, {f"characters:{char_id}": {field: value}})
 
 
 def _state_edits(cid, sid, parsed=None):
@@ -265,3 +296,16 @@ def test_a_promotion_for_one_character_leaves_the_models_edit_for_another_alone(
     assert {e["id"]: e["after"] for e in edits} == {
         f"character_state:{other}": "Waiting in the yard.",
         f"character_state:{char_id}": "Mood: guarded"}
+
+
+def test_promotion_is_bounded_by_the_callers_snapshot(monkeypatch, tmp_path):
+    """A turn landing while the extraction call is in flight must not
+    contribute a promoted value to a review built from a transcript that did
+    not contain it."""
+    cid, sid, char_id = _scene(monkeypatch, tmp_path)
+    _reinforce(cid, sid, char_id, "guarded", times=2)          # inside the snapshot
+    snapshot = len(scenes.read_scene(cid, sid)["messages"])
+    _reinforce(cid, sid, char_id, "guarded", times=1)          # landed mid-absorb
+    # Live tail sees three and promotes; the snapshot saw two and does not.
+    assert absorb.materialize(cid, sid, {}) != []
+    assert absorb.materialize(cid, sid, {}, tail=snapshot) == []

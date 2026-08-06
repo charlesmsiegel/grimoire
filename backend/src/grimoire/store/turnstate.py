@@ -150,33 +150,47 @@ def split_block(text: str) -> tuple[str, dict[str, dict[str, str]]]:
     return text[:m.start()], parse_block(rest[:close.start()])
 
 
-def resolve(states: dict[str, dict[str, str]], cast: list[dict]) -> dict[str, dict[str, str]]:
-    """Character names as the model wrote them -> ``characters:<id>`` tokens.
+def resolve(states: dict[str, dict[str, str]], cast: list[dict], match) -> dict[str, dict[str, str]]:
+    """Character labels as the model wrote them -> ``characters:<id>`` tokens.
 
-    Matched against the scene cast's display name, case-insensitively. The
-    model is asked for the name it labels dialogue with, which is the name the
-    character-description section showed it; asking for a store id instead
-    would mean listing ids in the play prompt for it to mistype.
+    The model is asked to key the block by the name it labels dialogue with,
+    so the labels are resolved by the rule the transcript itself uses --- and
+    `match` IS that rule, `scenes.match_name`: exact first, else the single
+    name the label is a word-boundary prefix of. Exact-matching here instead
+    would have silently dropped every block from a model that wrote
+    ``**Winifred:**`` for `Winifred Ash`, which the transcript grammar accepts
+    and which is therefore the label the instruction asks it to reuse --- the
+    dialogue persisting while all of its state vanished.
+
+    Injected rather than imported because `scenes` imports this module
+    (`delete_scene` drops a deleted scene's ledger), so reaching back into it
+    would close a cycle. Injection also keeps the rule in one place instead of
+    growing a second, subtly different copy of it here.
 
     NPCs only, and `characters` only --- the same scope `playstate` declares and
     `context.world_state._character_states` renders. A player's mood is not the
     narrator's to track.
 
-    Two present NPCs sharing a display name collapse onto the FIRST in cast
-    order (`scene_cast` sorts by kind then id, so the choice is at least
-    stable). Not a resolvable case: the model labels their dialogue with the
-    same string too, so the block it writes is ambiguous at the source.
+    Two present NPCs sharing a display name resolve to neither: `match_name`
+    reports an ambiguous label as unresolved, and dropping is right, because
+    the block the model wrote is ambiguous at the source for the same reason.
     """
+    # `names` keeps duplicates and `by_name` does not: `match_name` is what
+    # decides a repeated name is ambiguous, and it can only do that if it is
+    # handed both copies. Deduplicating first would hand it one and resolve
+    # confidently to whichever actor happened to be first.
+    names: list[str] = []
     by_name: dict[str, str] = {}
     for a in cast:
         if a.get("role") != "npc" or a.get("kind") != "characters":
             continue
-        name = str(a.get("name") or "").strip().casefold()
+        name = str(a.get("name") or "").strip()
         if name:
+            names.append(name)
             by_name.setdefault(name, f"characters:{a['id']}")
     out: dict[str, dict[str, str]] = {}
-    for name, fields in states.items():
-        token = by_name.get(name.strip().casefold())
+    for label, fields in states.items():
+        token = by_name.get(match(label, names) or "")
         if token:
             out.setdefault(token, {}).update(fields)
     return out

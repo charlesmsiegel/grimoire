@@ -185,7 +185,8 @@ def _record_turnstate(cid: str, sid: str, landed: int, segments: list[dict],
         kept = sum(1 for s in segments if s["content"].strip())
         if not tracked or not kept:
             return
-        states = store.turnstate.resolve(tracked, store.appearances.scene_cast(cid, sid))
+        states = store.turnstate.resolve(tracked, store.appearances.scene_cast(cid, sid),
+                                         store.scenes.match_name)
         store.turnstate.record(cid, sid, landed + kept - 1, states)
     except OSError:
         pass
@@ -248,7 +249,15 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
             if tail:
                 yield _sse({"delta": tail})
         except LLMError as exc:
-            watcher.finish()
+            # Flush the redactor too, and emit what it lets go BEFORE the error
+            # frame. `on_error` persists `watcher.narration` whole, and
+            # `split_block` strips only a TRAILING block -- so a partial that
+            # ends in a `state` fence with narration after it is stored in full
+            # while the redactor was still withholding all of it. Without this
+            # the client would be missing text that a refresh then reveals.
+            flushed = redactor.feed(watcher.finish()) + redactor.finish()
+            if flushed:
+                yield _sse({"delta": flushed})
             note: dict = {}
             if on_error is not None:
                 try:

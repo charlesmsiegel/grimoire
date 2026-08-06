@@ -170,7 +170,7 @@ def _character_state_edit(cid: str, char_id: str, before: str, after: str) -> di
             "before": before, "after": after, "authored": False}
 
 
-def _promote(cid: str, sid: str, out: list[dict], stage) -> None:
+def _promote(cid: str, sid: str, out: list[dict], stage, tail: int | None) -> None:
     """Fold #121's reinforced transient values into the staged character-state
     edits, in place.
 
@@ -201,10 +201,11 @@ def _promote(cid: str, sid: str, out: list[dict], stage) -> None:
     need = config.promote_streak()
     if need <= 0:
         return
-    try:
-        tail = len(scenes_read.read_scene(cid, sid)["messages"])
-    except (scenes_paths.SceneNotFound, OSError, UnicodeDecodeError):
-        return
+    if tail is None:
+        try:
+            tail = len(scenes_read.read_scene(cid, sid)["messages"])
+        except (scenes_paths.SceneNotFound, OSError, UnicodeDecodeError):
+            return
     promoted = turnstate.streaks(cid, sid, tail, need)
     if not promoted:
         return
@@ -243,13 +244,22 @@ def _promote(cid: str, sid: str, out: list[dict], stage) -> None:
 
 
 def materialize(cid: str, sid: str, parsed: dict,
-                messages: list[dict] | None = None) -> list[dict]:
+                messages: list[dict] | None = None,
+                tail: int | None = None) -> list[dict]:
     """Turn the parsed edit lists into before/after StagedEdits against the campaign
     copies. Targets that don't exist are dropped (tolerated, not an error).
 
     `messages` is the transcript the extraction call was SHOWN. Pass it whenever
     the caller has it -- the citations are judged against it, and the scene can
     move between rendering the prompt and this call (see `routing.speaker_index`).
+
+    `tail` is the transcript length the caller's review is being built from.
+    `post_absorb` snapshots the scene before awaiting the extraction call and
+    passes that snapshot's length here, so a turn landing while the request is
+    in flight cannot contribute a promoted value (#121) to a review whose
+    summary and edits were derived from a transcript that did not contain it.
+    Defaulting to the live tail keeps every other caller — the ingest script,
+    the tests — working off the scene as it stands.
     """
     croot = campaigns_paths.campaign_root(cid)
     out: list[dict] = []
@@ -311,7 +321,7 @@ def materialize(cid: str, sid: str, parsed: dict,
 
     # After the model's own proposals, so a reinforced value merges onto the row
     # the reviewer would already have seen rather than opening a second one.
-    _promote(cid, sid, out, _staged)
+    _promote(cid, sid, out, _staged, tail)
 
     for e in parsed.get("group_state_edits", []):
         raw_id = e.get("id", "")
