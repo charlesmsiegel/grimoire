@@ -678,9 +678,12 @@ def _drop_record_dir(root: Path, kind: str, rid: str) -> None:
     Secrets in a live scene's context (#225).
 
     A failure to remove is logged rather than raised: the record itself is
-    already gone by the time this runs, and turning a completed delete into a
-    500 helps nobody. What is left behind is the pre-#225 behaviour, not a new
-    failure mode.
+    already gone by the time this runs, and answering a delete that succeeded
+    with a 500 helps nobody. `rmtree` stops at its first error, so what survives
+    is a *part* of the directory rather than all of it — still strictly less
+    than the pre-#225 leftovers, but the warning says which path to look at
+    because "some of the dead record's sidecars" is not a state to leave a user
+    guessing about.
     """
     if kind not in INHERITED_KINDS or not safe_id(rid):
         return
@@ -727,9 +730,26 @@ def forget_world_record(wroot: Path, kind: str, rid: str) -> None:
     also why the sweep cannot simply run for every campaign — deleting a
     world record has never removed a campaign's copy of it (`sync.incoming`
     skips world-side deletions), and this is not the change that starts.
+
+    What this does NOT reach is campaign-local state keyed by the record id from
+    *outside* the record's directory: `sheets/`, `relationships.json`,
+    `appearances.json`, and the `deleted.json` tombstone that now hides a
+    recreated record rather than adopting it. Each is a separate store with its
+    own semantics, and sweeping them is the dependents design #52 carries.
+
+    The enumeration is best-effort for the same reason the removal is: a store
+    holding one campaign nobody can read must not make a world record
+    undeletable, and the delete has already happened by the time we get here.
     """
     _drop_record_dir(wroot, kind, rid)
-    for cid in dependent_campaigns(wroot):
+    try:
+        cids = dependent_campaigns(wroot)
+    except (OSError, UnicodeDecodeError) as exc:
+        log.warning("could not enumerate the campaigns of %s (%s) -- state they "
+                    "filed against %s/%s stays, and a record recreated under that "
+                    "id will inherit it", wroot, exc, kind, rid)
+        return
+    for cid in cids:
         croot = croot_of(cid)
         if kind in ("characters", "pcs"):
             mine = (croot / kind / rid / _actor_meta(kind)).exists()
