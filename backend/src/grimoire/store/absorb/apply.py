@@ -419,6 +419,25 @@ def _apply_one(cid: str, croot, e: dict, sid: str | None,
                     return {"state": "failed", "id": eid, "kind": "error",
                             "reason": "this says what the fact it replaces already says — "
                                       "edit it to what is true now, or uncheck the row"}
+                scene = sid or p.get("scene", "")
+                # A row that retires nothing and whose text this scene already
+                # holds writes nothing at all: `facts.record` dedupes on
+                # (scene, text) and returns the id already there. Reported
+                # rather than passed over as applied, because the row promised a
+                # NEW entry with its own date and did not make one -- the
+                # duplicate-approval gap `materialize` closes for the text the
+                # MODEL wrote, reopened one layer down by the reviewer editing
+                # `after` into something already recorded, or editing two
+                # approved rows into the same sentence.
+                #
+                # Only when `fid` is empty. A row that also retires something
+                # did real work even when its text deduped onto an existing
+                # record -- that is the chain case `record` documents -- so
+                # calling it failed would be the opposite lie.
+                if not fid and facts.find(facts.read(cid), scene, text):
+                    return {"state": "failed", "id": eid, "kind": "error",
+                            "reason": "this scene already records that fact — edit it to "
+                                      "something else, or uncheck the row"}
                 # `sid` over the staged `payload.scene`, for the reason the plot
                 # branch gives: a retry after a rename must stamp the fact with
                 # the id the scene has now, since `facts.repoint_scenes` has
@@ -433,8 +452,7 @@ def _apply_one(cid: str, croot, e: dict, sid: str | None,
                 # replaced the fact first, to no gain -- both replacements are
                 # on the ledger either way, and a human can retire the one the
                 # story did not keep.
-                facts.record(cid, text, str(p.get("date", "")),
-                             sid or p.get("scene", ""), supersedes=fid)
+                facts.record(cid, text, str(p.get("date", "")), scene, supersedes=fid)
         elif kind == "new_character":
             p = e["payload"]
             card = characters.blank_card(p["name"])

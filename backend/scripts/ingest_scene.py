@@ -117,7 +117,7 @@ async def run_absorb(cid: str, sid: str, client: LLMClient, conn: dict) -> dict:
         # superseded -- the ledger accumulates a stack of mutually contradicting
         # facts on the highest-volume path there is (#114).
         commitment_snapshot=absorb.commitment_snapshot(cid),
-        fact_snapshot=absorb.fact_snapshot(cid))
+        fact_snapshot=absorb.fact_snapshot(cid, sid))
     text = await client.complete(messages, conn)
     parsed = absorb.parse_output(text)
     edits = absorb.materialize(cid, sid, parsed)

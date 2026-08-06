@@ -146,6 +146,45 @@ def restates(rec, text: str) -> bool:
             and _field(rec.get("text")).casefold() == text.strip().casefold())
 
 
+def find(data: dict, scene: str, text: str) -> str:
+    """The id of the fact this scene already holds for this text, or "".
+
+    The per-scene identity of a fact, in one place because there are three
+    callers and they have to agree: `record` dedupes on it, `materialize` keeps
+    the duplicate row off the review panel, and `apply` reports a row whose
+    reviewer-edited text lands on a record that already exists. Two of those
+    were added after a reviewer-edit path walked around the first.
+
+    Deliberately blind to `status`: see `record` for why matching only standing
+    records resurrected retired facts on re-absorb.
+    """
+    want = text.strip().casefold()
+    return next((k for k, rec in data.items()
+                 if isinstance(rec, dict) and _field(rec.get("scene")) == scene
+                 and _field(rec.get("text")).casefold() == want), "")
+
+
+def recorded_after(rec, scene: str) -> bool:
+    """Whether this record was recorded in a scene that comes AFTER `scene` --
+    so `scene` cannot be what ended it.
+
+    Absorbing an older scene (out of order, or `force`-re-absorbing) reads a
+    ledger that later scenes have already moved. Without this, a fact
+    established in scene 9 can be retired and stamped `retired_scene` with scene
+    1: a truth removed by a scene that ran before it existed, which is not a
+    supersession but a hole in the ledger's chronology.
+
+    Ordered by scene id, which is its zero-padded filename stem -- the same
+    "id order is chronological" assumption `chronicle.recent`,
+    `plot.open_threads` and `commitments.open_commitments` already run on. It is
+    an assumption rather than a proof, and it errs the recoverable way: a
+    mis-ordered pair costs a dropped supersession, which the reviewer sees as a
+    row labelled "New fact" and can act on, where the bug it replaces silently
+    deleted a standing truth.
+    """
+    return isinstance(rec, dict) and _field(rec.get("scene")) > scene
+
+
 def _next_id(data: dict) -> str:
     """The first free ``f<N>``.
 
@@ -155,12 +194,19 @@ def _next_id(data: dict) -> str:
     reference cannot be confused for one of those.
 
     Never reuses an id, not even one whose fact was retired: retired records
-    stay in the file, so `in data` covers them, and `superseded_by` pointers
-    from elsewhere in the ledger would otherwise silently re-aim at a different
-    fact.
+    stay in the file, so the keys cover them, and `superseded_by` pointers from
+    elsewhere in the ledger would otherwise silently re-aim at a different fact.
+
+    Keys are not enough to make that true, which is why the referenced ids are
+    reserved too. facts.json is hand-editable: delete the highest-numbered
+    record -- a hallucinated replacement, say -- and its id is free again by key
+    while an older retired fact still points at it, so the next unrelated fact
+    takes the id and rewrites what that supersession says happened.
     """
+    taken = set(data) | {_field(rec.get("superseded_by"))
+                         for rec in data.values() if isinstance(rec, dict)}
     n = len(data) + 1
-    while f"f{n}" in data:
+    while f"f{n}" in taken:
         n += 1
     return f"f{n}"
 
@@ -196,20 +242,21 @@ def record(cid: str, text: str, date: str, scene: str, supersedes: str = "") -> 
     pointing at the record this call returned, which is itself retired pointing
     at whatever replaced it.
 
-    A `supersedes` naming a fact that is missing or already retired is dropped
-    rather than reported: it is the same situation `absorb.conflicts` refuses
-    the row for at save time, so anything reaching here has either been judged
-    or been answered for, and the fact itself must still land.
+    A `supersedes` naming a fact that is missing, already retired, or recorded
+    AFTER `scene` is dropped rather than reported: the first two are the
+    situation `absorb.conflicts` refuses the row for at save time, so anything
+    reaching here has either been judged or been answered for; the third is
+    enforced here rather than only upstream because it is an invariant of the
+    ledger itself -- a scene cannot end a truth that did not exist when it ran
+    (see `recorded_after`) -- and every guard on this feature that lived only in
+    `materialize` was reachable around by editing the row.
     """
     text = text.strip()
     if not text:
         raise ValueError("a fact needs text")
     with locks.campaign_lock(cid):
         data = _read_ledger(cid)
-        want = text.casefold()
-        fid = next((k for k, rec in data.items()
-                    if isinstance(rec, dict) and _field(rec.get("scene")) == scene
-                    and _field(rec.get("text")).casefold() == want), "")
+        fid = find(data, scene, text)
         if not fid:
             fid = _next_id(data)
             data[fid] = {"text": text, "date": date.strip(), "scene": scene,
@@ -219,7 +266,7 @@ def record(cid: str, text: str, date: str, scene: str, supersedes: str = "") -> 
         # superseded by itself would take it off the ledger in the same write
         # that put it there.
         prior = data.get(supersedes) if supersedes and supersedes != fid else None
-        if is_active(prior):
+        if is_active(prior) and not recorded_after(prior, scene):
             prior["status"] = RETIRED
             prior["superseded_by"] = fid
             prior["retired_scene"] = scene
@@ -234,11 +281,15 @@ def retire(cid: str, fid: str, scene: str) -> bool:
     `superseded_by` is written blank rather than left alone: "nothing replaced
     it" is what this operation means, and an active record carrying a
     supersession pointer is incoherent in the first place.
+
+    A fact recorded AFTER `scene` is refused for the reason `record` refuses to
+    supersede one: a scene cannot end a truth that did not exist when it ran,
+    and absorbing an older scene reads a ledger later scenes have moved.
     """
     with locks.campaign_lock(cid):
         data = _read_ledger(cid)
         rec = data.get(fid)
-        if not is_active(rec):
+        if not is_active(rec) or recorded_after(rec, scene):
             return False
         rec["status"] = RETIRED
         rec["superseded_by"] = ""
@@ -278,8 +329,15 @@ def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
             _write(cid, data)
 
 
-def active(cid: str) -> list[dict]:
+def active(cid: str, as_of: str | None = None) -> list[dict]:
     """Every standing fact, oldest scene first.
+
+    `as_of` narrows to the facts recorded at or before that scene — what the
+    ledger stood at when that scene ran, rather than what it stands at now. The
+    absorb snapshot passes it: absorbing an older scene otherwise shows the model
+    facts later scenes recorded, invites it to cite one as `supersedes`, and the
+    ledger's own chronology is what pays (see `recorded_after`, which refuses the
+    write that would result). None means now, which is what the ledger view wants.
 
     Sorted by the recording scene, like `plot.open_threads` and
     `commitments.open_commitments` sort by `last_scene` -- a scene id is its
@@ -288,13 +346,14 @@ def active(cid: str) -> list[dict]:
     after it; the ids are a counter, and reading a ledger out of counting order
     would misdate the very thing it is for.
     """
-    items = [(fid, r) for fid, r in read(cid).items() if is_active(r)]
+    items = [(fid, r) for fid, r in read(cid).items()
+             if is_active(r) and not (as_of is not None and recorded_after(r, as_of))]
     items.sort(key=lambda fr: (_field(fr[1].get("scene")), len(fr[0]), fr[0]))
     return [{"id": fid, "text": _field(r.get("text")), "date": _field(r.get("date")),
              "scene": _field(r.get("scene"))} for fid, r in items]
 
 
-def render_active(cid: str, limit: int | None = None) -> list[str]:
+def render_active(cid: str, limit: int | None = None, as_of: str | None = None) -> list[str]:
     """Formatted lines for the standing facts, leading with the id so the absorb
     prompt's reply can cite one to supersede. The line format lives in
     templates/snippets/fact_line.j2. Tolerant of a garbled facts.json (returns
@@ -309,10 +368,10 @@ def render_active(cid: str, limit: int | None = None) -> list[str]:
     `absorb.snapshots.FACT_SNAPSHOT_LIMIT`). The OLDEST go, because they are the
     ones play has moved furthest past; the cost is that a fact past the cap can
     no longer be superseded, which is the trade the constant's comment explains.
-    A `limit` of None or <= 0 keeps everything.
+    A `limit` of None or <= 0 keeps everything. `as_of` is `active`'s.
     """
     try:
-        rows = active(cid)
+        rows = active(cid, as_of)
     except Exception:  # noqa: BLE001 — garbled facts.json: omit, don't crash callers
         return []
     if limit is not None and limit > 0:

@@ -309,3 +309,68 @@ def test_repoint_writes_nothing_when_no_fact_names_a_renamed_scene(monkeypatch, 
     monkeypatch.setattr(facts, "_write",
                         lambda *a, **k: pytest.fail("repointed nothing and wrote anyway"))
     facts.repoint_scenes(cid, {"009--other": "009--renamed"})
+
+
+def test_a_scene_cannot_end_a_fact_that_did_not_exist_when_it_ran(monkeypatch, tmp_path):
+    """Absorbing an older scene — out of order, or `force`-re-absorbed — reads a
+    ledger later scenes have already moved. Retiring one of their facts stamps
+    `retired_scene` with a scene that ran before the fact existed: a truth
+    removed by something that could not have removed it."""
+    cid = _campaign(monkeypatch, tmp_path)
+    later = facts.record(cid, "The keep has fallen.", "night nine", "009--late")
+    fid = facts.record(cid, "The keep is held.", "night one", "001--early", supersedes=later)
+
+    assert facts.get(cid, later)["status"] == "active"      # untouched
+    assert facts.get(cid, later)["superseded_by"] == ""
+    assert facts.get(cid, fid)["text"] == "The keep is held."   # the fact still lands
+    assert facts.retire(cid, later, "001--early") is False
+
+
+def test_a_scene_can_still_end_a_fact_from_its_own_scene_or_earlier(monkeypatch, tmp_path):
+    """The guard is strictly forward-in-time: same scene and earlier both stand,
+    or a supersession within one absorb would stop working."""
+    cid = _campaign(monkeypatch, tmp_path)
+    earlier = facts.record(cid, "The keep is held.", "", "001--early")
+    same = facts.record(cid, "The gate is open.", "", "009--late")
+    facts.record(cid, "The keep has fallen.", "", "009--late", supersedes=earlier)
+    assert facts.get(cid, earlier)["status"] == "retired"
+    assert facts.retire(cid, same, "009--late") is True
+
+
+def test_as_of_narrows_the_ledger_to_what_stood_when_a_scene_ran(monkeypatch, tmp_path):
+    """What the absorb snapshot passes, so the model is not offered a fact it
+    would only be able to retire by breaking the ledger's chronology."""
+    cid = _campaign(monkeypatch, tmp_path)
+    facts.record(cid, "The keep is held.", "", "001--early")
+    facts.record(cid, "The keep has fallen.", "", "009--late")
+    assert [f["text"] for f in facts.active(cid)] == ["The keep is held.",
+                                                      "The keep has fallen."]
+    assert [f["text"] for f in facts.active(cid, as_of="001--early")] == ["The keep is held."]
+    assert facts.render_active(cid, as_of="001--early") == ["f1: The keep is held."]
+
+
+def test_an_id_referenced_by_a_supersession_is_never_reallocated(monkeypatch, tmp_path):
+    """facts.json is hand-editable. Delete the highest-numbered record — a
+    hallucinated replacement, say — and its id is free again by key while an
+    older retired fact still points at it, so the next unrelated fact would take
+    the id and rewrite what that supersession says happened."""
+    cid = _campaign(monkeypatch, tmp_path)
+    old = facts.record(cid, "The bridge stands.", "", "001--a")
+    gone = facts.record(cid, "The bridge is rubble.", "", "002--b", supersedes=old)
+    data = facts.read(cid)
+    del data[gone]
+    facts._write(cid, data)
+
+    fresh = facts.record(cid, "Something unrelated.", "", "003--c")
+    assert fresh != gone
+    assert facts.get(cid, old)["superseded_by"] == gone     # still names the deleted record
+    assert facts.get(cid, fresh)["text"] == "Something unrelated."
+
+
+def test_find_is_the_one_definition_of_a_scenes_fact(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    fid = facts.record(cid, "The bridge stands.", "", "001--a")
+    data = facts.read(cid)
+    assert facts.find(data, "001--a", "  the BRIDGE stands.  ") == fid
+    assert facts.find(data, "002--b", "The bridge stands.") == ""
+    assert facts.find(data, "001--a", "Something else.") == ""
