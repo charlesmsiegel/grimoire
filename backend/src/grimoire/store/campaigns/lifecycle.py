@@ -126,14 +126,9 @@ def ensure_campaign_slim(cid: str) -> None:
     So the loop below only classifies, and the writes that follow run in the
     one order whose every prefix is a state this function reads correctly:
     tombstones, then the manifest, then the copies it named. Interrupted after
-    the tombstones, the next run repeats them (`add_deleted` is a union).
-    Interrupted after the manifest, what is left is a copy the manifest no
-    longer names — which the next run cannot mistake for a deletion, because
-    the loop only ever looks at refs the manifest still holds, and which
-    `_prune_untracked_copies` clears rather than leaving adrift.
-
-    That sweep runs before the manifest write, and only ever deletes copies
-    nothing names, so it has no ref of its own to order against.
+    the tombstones, the next run repeats them (`add_deleted` is a union), and
+    every interruption around the prune leaves a ref carrying the reserved base
+    — a value the loop attributes to nobody and re-derives the same verdict for.
     """
     mp = paths.campaign_meta_path(cid)
     if not mp.exists():
@@ -164,12 +159,21 @@ def ensure_campaign_slim(cid: str) -> None:
         # tombstones the world's plot map out of the campaign the moment the
         # world gains one, which is #270's own symptom (Codex review).
         attributable = bool(base)
+
+        def spent(mine_h: str | None, world_h: str | None) -> bool:
+            """The copy adds nothing the world does not already hold. A falsy
+            base counts: it is what the prune below reserves before unlinking,
+            so a run interrupted mid-prune re-derives the same verdict and
+            finishes the job (and it is what a materialization reserves, whose
+            unredeemed copy is the world's own bytes either way)."""
+            return mine_h is not None and mine_h == world_h and (base == mine_h or not base)
+
         if ref == "plotmap":
             if not (root / "plotmap.json").exists():
                 if attributable and (wroot / "plotmap.json").exists():
                     deleted_by_user.append(ref)   # keep the user's deletion deleted
                 manifest.pop(ref)
-            elif greetings.plotmap_hash(root) == base == greetings.plotmap_hash(wroot):
+            elif spent(greetings.plotmap_hash(root), greetings.plotmap_hash(wroot)):
                 redundant.append(ref)
                 manifest.pop(ref)
             continue
@@ -183,7 +187,7 @@ def ensure_campaign_slim(cid: str) -> None:
                 if attributable and dh(wroot, eid) is not None:
                     deleted_by_user.append(ref)   # keep the user's deletion deleted
                 manifest.pop(ref)
-            elif mine_h == base == dh(wroot, eid):
+            elif spent(mine_h, dh(wroot, eid)):
                 redundant.append(ref)
                 manifest.pop(ref)
             continue
@@ -191,23 +195,32 @@ def ensure_campaign_slim(cid: str) -> None:
             if attributable and (wroot / kind / f"{eid}.md").exists():
                 deleted_by_user.append(ref)   # keep the user's deletion deleted
             manifest.pop(ref)
-        elif entities.entity_hash(root, kind, eid) == base == entities.entity_hash(wroot, kind, eid):
+        elif spent(entities.entity_hash(root, kind, eid), entities.entity_hash(wroot, kind, eid)):
             redundant.append(ref)
             manifest.pop(ref)
     for ref in deleted_by_user:
         overlay.add_deleted(cid, ref)
     _tombstone_deleted_copied_assets(cid, root, wroot, copied)
-    # Tracked means "named by the manifest ON DISK", which is still the one the
-    # loop started from -- `copied`, not what the loop pruned down to. A ref the
-    # loop dropped is still out there naming its copy until the write below, so
-    # letting the sweep take that copy would drop it *before* the ref: the very
-    # ordering this is here to keep. Locked refs count too -- they leave the
-    # manifest holding their cards on purpose, and the sweep would take exactly
-    # the files the lock invariant needs.
-    _prune_untracked_copies(cid, root, wroot, copied | locked)
+    # Reserve, unlink, drop -- the same two-step `overlay._recorded_base` uses,
+    # run backwards. Dropping the ref outright and then unlinking would leave an
+    # interrupted prune as a copy the manifest does not name, and nothing on
+    # disk tells that apart from a record the campaign owns: ids are
+    # `slugify(name)` and each root uniquifies against itself alone, so a
+    # campaign-local record whose slug the world later reuses with identical
+    # content looks exactly like residue. Deleting it there reads as harmless --
+    # the content is the same -- but the record has silently become inherited,
+    # so the next world edit rewrites it and a world deletion removes it
+    # (Codex review). Reserving instead makes the prune say so itself: a falsy
+    # base is not attributable to any user (see the loop above), and every
+    # interruption point below re-derives the same verdict on the next run.
+    for ref in redundant:
+        manifest[ref] = overlay.RESERVED_BASE
     paths.write_manifest(cid, manifest)
     for ref in redundant:
         overlay.dematerialize(cid, ref)
+    for ref in redundant:
+        manifest.pop(ref, None)
+    paths.write_manifest(cid, manifest)
     _finish(mp, meta, body, root, wroot)
 
 
@@ -236,46 +249,6 @@ def _finish(mp: Path, meta: dict, body: str, root: Path, wroot: Path) -> None:
     _prune_duplicate_files(root, wroot)
     meta.pop(PRUNING_KEY, None)
     atomic.write_text(mp, dump_frontmatter(meta, body))
-
-
-def _prune_untracked_copies(cid: str, root: Path, wroot: Path, tracked: set[str]) -> None:
-    """Drop campaign copies sync.md does not name and the world holds
-    byte-for-byte.
-
-    In a full copy every copy had a ref, so an untracked one is residue: the
-    migration and `overlay._recorded_base` both drop the ref before the copy
-    while the migration is pending (#270), and the copy is what an interrupted
-    one leaves behind. Its bytes are the world's own — that is where a
-    materialization gets them — so dropping it is exactly the dematerialization
-    the migration was going to do anyway.
-
-    **Only** when they match, which is what keeps this off records the campaign
-    owns. It cannot ask whether a copy was residue, only whether the world says
-    the same thing, and a campaign-local record can collide with a world record
-    created later under the same slug — ids are `slugify(name)` and each root
-    uniquifies against itself alone. Treating a differing copy as residue would
-    hand that collision a sync base of its own and offer the unrelated world
-    record as a routine update to it, which one Accept turns into the user's
-    record being deleted (Codex review). A copy that differs is left alone, and
-    the reason it is safe to leave is upstream: `sync._advance` migrates before
-    it accepts, so an interrupted accept never strands one."""
-    if "plotmap" not in tracked and (root / "plotmap.json").exists():
-        mine_h = greetings.plotmap_hash(root)
-        if mine_h is not None and mine_h == greetings.plotmap_hash(wroot):
-            (root / "plotmap.json").unlink()
-    for kind, eid in entities.synced_refs(root):
-        mine_h = entities.entity_hash(root, kind, eid)
-        if (f"{kind}/{eid}" not in tracked and mine_h is not None
-                and mine_h == entities.entity_hash(wroot, kind, eid)):
-            (root / kind / f"{eid}.md").unlink()
-    for kind in appearances_paths.ACTOR_KINDS:
-        dh = characters.dir_hash if kind == "characters" else pcs.dir_hash
-        listed = characters.list_characters(root) if kind == "characters" else pcs.list_pcs(root)
-        for item in listed:
-            aid = item["id"]
-            mine_h = dh(root, aid)
-            if f"{kind}/{aid}" not in tracked and mine_h is not None and mine_h == dh(wroot, aid):
-                overlay.dematerialize_actor(cid, kind, aid)
 
 
 def _tombstone_deleted_copied_assets(cid: str, root: Path, wroot: Path, copied: set[str]) -> None:
