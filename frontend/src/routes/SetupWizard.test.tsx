@@ -284,6 +284,33 @@ test("moving onto a library that already has worlds drops the create-a-world ste
   expect(screen.getByRole("button", { name: /start a campaign/i })).toBeInTheDocument();
 });
 
+test("a move adopts the new library's theme", async () => {
+  // The theme lives in the store's own config.md, so after a move the Theme
+  // step must mark the new library's card active — otherwise clicking the one
+  // that looks active overwrites that library's preference.
+  (api.getConfig as any).mockResolvedValue({ first_run: false, theme: "manuscript" });
+  await moveTo([{ id: "saltmarch", name: "Saltmarch" }]);
+  await waitFor(() => expect(setTheme).toHaveBeenCalledWith("manuscript"));
+});
+
+test("finishing locks the wizard until the write settles", async () => {
+  // finish() is a config write like the theme's; Back-then-pick-a-theme during
+  // a slow one is a second write, and clicking both destinations would make
+  // the landing page depend on response order.
+  let settle: (v: any) => void = () => {};
+  (api.putConfig as any).mockReturnValue(new Promise((r) => { settle = r; }));
+  await goToStep(4);
+  fireEvent.click(await screen.findByRole("button", { name: /finish later/i }));
+
+  await waitFor(() => expect(screen.getByRole("button", { name: /finish later/i })).toBeDisabled());
+  expect(screen.getByRole("button", { name: /^back$/i })).toBeDisabled();
+  expect(navigate).not.toHaveBeenCalled();
+
+  settle({});
+  await waitFor(() => expect(navigate).toHaveBeenCalledWith("/", { replace: true }));
+  expect(api.putConfig).toHaveBeenCalledTimes(1);   // not re-entered
+});
+
 test("the connection step is skippable — playing by hand is allowed", async () => {
   await goToStep(2);
   fireEvent.click(await screen.findByRole("button", { name: /^skip$/i }));

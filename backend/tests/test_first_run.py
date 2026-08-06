@@ -6,6 +6,7 @@ into a wizard, so these tests are as interested in the cases that must answer
 """
 
 import importlib
+import threading
 
 import pytest
 from fastapi.testclient import TestClient
@@ -150,6 +151,52 @@ def test_the_backfill_failing_does_not_break_the_config_read(client, monkeypatch
 
     monkeypatch.setattr(store, "write_config", boom)
     assert client.get("/api/config").json()["first_run"] is False
+
+
+def test_two_config_writes_cannot_erase_each_other(client, monkeypatch):
+    """`write_config` reads, merges and rewrites the whole file, so without
+    serialization two callers merge onto the same pre-image and the second
+    publication drops the first's fields.
+
+    This is the store-level statement of the backfill hazard: `_setup_state`
+    writes `setup_done` from `GET /api/config`, so the second caller here is
+    what a second tab merely *loading the app* does while the first saves a
+    setting. Driven through `write_config` directly rather than the routes —
+    TestClient serializes requests across threads, so an HTTP-level version of
+    this test interleaves nothing and passes with or without the lock.
+    """
+    store.read_config()                 # materialize config.md first
+    real_write = store.config.atomic.write_text
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_write(path, text, *a, **kw):
+        if path.name == "config.md" and "manuscript" in text:
+            started.set()
+            release.wait(5)             # hold the theme save between merge and publish
+        return real_write(path, text, *a, **kw)
+
+    monkeypatch.setattr(store.config.atomic, "write_text", slow_write)
+
+    saver = threading.Thread(target=lambda: store.write_config(theme="manuscript"))
+    saver.start()
+    assert started.wait(5)              # the theme save now holds the lock, mid-publish
+
+    backfill = threading.Thread(target=lambda: store.write_config(setup_done="on"))
+    backfill.start()
+    # Room for the backfill to run all the way through, which is exactly what it
+    # does when nothing serializes the two: it merges onto the pre-theme
+    # frontmatter and publishes, and the theme save then republishes its own
+    # equally stale pre-image over the top. Under the lock this join times out
+    # with the backfill still waiting to acquire, which is the point.
+    backfill.join(1.0)
+    release.set()
+    saver.join(10)
+    backfill.join(10)
+
+    cfg = store.read_config()
+    assert cfg["theme"] == "manuscript"   # neither write erased the other
+    assert cfg["setup_done"] == "on"
 
 
 def test_setup_done_survives_an_unrelated_config_write(client):
