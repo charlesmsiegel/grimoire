@@ -168,23 +168,35 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
   const [locPick, setLocPick] = useState("");
   const [error, setError] = useState<string | null>(null);
-  // Keyed by the scene it was read for, and both halves of that matter.
-  // `undefined` is "in flight, or the read failed", which is NOT the same as a
-  // scene nobody has summarized (`summary: ""`) — reporting an unreachable
-  // store as a scene with nothing to say would be a lie the panel tells on
-  // every select. And the `sid` stamp is what keeps one scene's prose off
-  // another's panel: this reads on every scene switch, two switches in a row
-  // can answer out of order, and prose under the wrong scene reads as fact
-  // where a stale token count merely reads as lag.
-  const [rolling, setRolling] = useState<{ sid: string; data: RollingSummary } | undefined>();
+  // Stamped with the record it was read for, and `undefined` means "in flight,
+  // or the read failed" — NOT the same as a scene nobody has summarized
+  // (`summary: ""`), since reporting an unreachable store as a scene with
+  // nothing to say would be a lie the panel tells on every select.
+  //
+  // The stamp is `cid/sid`, not `sid`, and review caught the difference: scene
+  // ids are campaign-local and collide constantly (every campaign's first scene
+  // called Saltmarch is `001--saltmarch`), and `App.tsx` renders CampaignView
+  // with no key, so moving between campaigns REUSES this component. A sid-only
+  // stamp would show one campaign's prose as fact under another's scene — and,
+  // if the new read then failed, keep showing it, because a value that passes
+  // the stamp suppresses the "could not be read" message.
+  const [rolling, setRolling] =
+    useState<{ key: string; data: RollingSummary } | undefined>();
   const [rollingUnread, setRollingUnread] = useState(false);
-  // Which scene the panel is actually on, readable from a callback that was
-  // created for an earlier one. The stamp above decides what may be RENDERED;
-  // this decides what may be STORED, and review caught that the first without
-  // the second is not enough: A's read answering after B's replaces the single
-  // state with A's, which the stamp then rejects — so the panel reports "no
-  // summary yet" for a scene that has one, until something re-reads.
-  const currentSid = useRef(sid);
+  // The stamp decides what may be RENDERED. This decides what may be STORED,
+  // and one without the other is not enough — that took two review rounds:
+  //
+  // - a superseded read that still installs replaces the current record's data,
+  //   after which the stamp rejects the value it just stored and the panel says
+  //   "No summary yet" about a scene that has one;
+  // - and scene identity cannot order two reads of the SAME scene, which this
+  //   panel issues routinely: the effect re-runs on every `refreshKey` bump, so
+  //   a pre-refresh read and the post-refresh one are in flight together and the
+  //   older can land last.
+  //
+  // So it is a monotonic token, not an identity: only the most recently issued
+  // request may write, whatever it was issued for.
+  const readToken = useRef(0);
   const [rollingBusy, setRollingBusy] = useState(false);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(loadSectionCollapse);
   const toggleSection = useCallback((id: string, current: boolean) => {
@@ -272,15 +284,17 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
     api.getSceneContext(cid, sid).then(setCtx).catch(() => setCtx(null));
 
     api.getChronicle(cid).then(setRecap).catch(() => setRecap([]));
-    currentSid.current = sid;
+    const token = ++readToken.current;
     setRollingUnread(false);
-    // The previous scene's summary is deliberately NOT cleared here: this effect
-    // also re-runs on `refreshKey`, i.e. after every turn, and blanking would
-    // flash "No summary yet" over a summary that is about to come back. The
-    // `sid` stamp below is what makes that safe.
+    // The previous record's summary is deliberately NOT cleared here: this
+    // effect also re-runs on `refreshKey`, i.e. twice per turn, and blanking
+    // would flash "No summary yet" over a summary that is about to come back.
+    // The stamp below is what makes that safe.
     api.getRollingSummary(cid, sid)
-      .then((data) => { if (currentSid.current === sid) setRolling({ sid, data }); })
-      .catch(() => { if (currentSid.current === sid) setRollingUnread(true); });
+      .then((data) => {
+        if (readToken.current === token) setRolling({ key: `${cid}/${sid}`, data });
+      })
+      .catch(() => { if (readToken.current === token) setRollingUnread(true); });
     reloadWhen();
     reloadCfg();
   }, [cid, sid, refreshKey, reloadWhen, reloadCfg, reloadCast]);
@@ -448,11 +462,14 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
       // *now*, including when the automatic refresh is switched off. The
       // server still declines to spend a call when nothing has happened since
       // the last one, and says so in `refreshed`.
+      // Claims a token like a read does, so an ordinary read already in flight
+      // cannot land on top of the result the player explicitly asked for.
+      const token = ++readToken.current;
       const data = await api.refreshRollingSummary(cid, sid, true);
-      // Retired the same way a late read is: the reader can switch scenes while
-      // a refold is in flight, and this one is for the scene they left.
-      if (currentSid.current !== sid) return;
-      setRolling({ sid, data });
+      // Retired the same way a superseded read is: the reader can move on while
+      // a refold is in flight, and this one is for the record they left.
+      if (readToken.current !== token) return;
+      setRolling({ key: `${cid}/${sid}`, data });
       setRollingUnread(false);
     } catch (err: any) {
       // Reported, never destructive: the summary already on screen is still the
@@ -529,9 +546,9 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
       <SideSection id="scenesofar" title="Scene so far" collapsed={!!collapsed.scenesofar}
                    onToggle={toggleSection}>
         {(() => {
-          // Only this scene's answer is shown; another scene's is not an answer
-          // about this one, and neither is a read that failed.
-          const r = rolling?.sid === sid ? rolling.data : undefined;
+          // Only this campaign-and-scene's answer is shown; another record's is
+          // not an answer about this one, and neither is a read that failed.
+          const r = rolling?.key === `${cid}/${sid}` ? rolling.data : undefined;
           if (rollingUnread && !r) {
             return <div className="field-hint">The summary could not be read.</div>;
           }

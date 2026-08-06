@@ -1345,12 +1345,47 @@ def _rolling_commit(cid: str, sid: str, summary: str, covered: int, digest: str)
     """
     with store.locks.campaign_lock(cid):
         scene = store.scenes.read_scene(cid, sid)
-        landed = store.rolling_summary.covered_digest(
+        stored = _rolling_view(cid, sid, scene)
+        # Two independent refusals, and review found the second one after the
+        # first was in place, because they fail on opposite facts.
+        #
+        # The prefix must be intact -- the fold describes those messages.
+        intact = store.rolling_summary.covered_digest(
             scene["messages"][:covered]) == digest
+        # ...and nothing at least as complete may already be stored. Two
+        # background refreshes can overlap, and the newer one can finish first:
+        # its extra posts are all APPENDED, so the older one's prefix is still
+        # perfectly intact and passes the check above. Writing then regresses
+        # `rolling_at` from twelve back to ten, showing the less complete prose
+        # as current and pulling the next automatic refresh early. Coverage only
+        # ever moves forward while the stored summary is itself valid; a stale
+        # stored summary is no bar, since re-folding over it is the repair.
+        superseded = bool(stored["summary"]) and not stored["stale"] \
+            and stored["at"] >= covered
+        landed = intact and not superseded
         if landed:
             store.scenes.set_rolling_summary(cid, sid, summary, covered, digest)
             scene = store.scenes.read_scene(cid, sid)
         return {"landed": landed, "view": _rolling_view(cid, sid, scene)}
+
+
+def _rolling_reread(cid: str, sid: str, fallback: dict) -> dict:
+    """The scene's rolling state as it is right now, for a path that is about to
+    answer without writing.
+
+    Every answer this route gives AFTER the LLM call has to be reconciled, not
+    asserted -- the panel's Refresh button renders it directly. `_rolling_commit`
+    does that for the write path; this is the same duty for the early return
+    that had nothing to write, where the pre-call snapshot would report
+    `stale: false` about a summary that went stale during the call.
+
+    A scene that vanished falls back: there is nothing left to reconcile
+    against, and this call is fire-and-forget from the client anyway.
+    """
+    try:
+        return _rolling_view(cid, sid, _require_scene(cid, sid))
+    except HTTPException:
+        return fallback
 
 
 def _rolling_body(view: dict, every: int) -> dict:
@@ -1414,7 +1449,13 @@ async def post_rolling_summary(cid: str, sid: str, force: bool = False,
         # summary the player can still read AND record it as covering the whole
         # scene, so the next refresh would fold new posts onto nothing and never
         # recover what was lost.
-        return {**_rolling_body(view, every), "refreshed": False}
+        #
+        # Reconciled rather than answered from the pre-call snapshot: the
+        # transcript may have moved under us during the call, and reporting
+        # `stale: false` here would present a summary that just went stale as
+        # current on a panel that renders this answer directly.
+        return {**_rolling_body(_rolling_reread(cid, sid, view), every),
+                "refreshed": False}
     # Off the event loop: this takes the campaign lock, whose acquisition blocks
     # for up to LOCK_TIMEOUT, and this handler is async -- inline it would freeze
     # every unrelated request and open stream on the backend rather than just

@@ -332,6 +332,61 @@ def test_posts_landing_during_the_call_do_not_block_the_write(client):
     assert body["at"] == 10 and body["total"] == 11
 
 
+def test_an_older_refresh_does_not_overwrite_a_newer_one(client):
+    """Two overlapping refreshes, the newer finishing first. The older one's
+    covered prefix is still intact — those messages never changed — so the
+    prefix check alone waves it through, and coverage silently REGRESSES from
+    twelve posts to ten. The panel then shows the less complete prose as
+    current, and the next automatic refresh comes early."""
+    _key(client)
+    cid, sid = _scene(client, posts=10)
+
+    class NewerLandsFirst(FakeLLM):
+        async def complete(self, messages, cfg):
+            for n in range(10, 12):
+                store.scenes.append_message(cid, sid, "user", f"Post {n}.")
+            msgs = store.scenes.read_scene(cid, sid)["messages"]
+            store.scenes.set_rolling_summary(
+                cid, sid, "Newer summary, covering twelve.", len(msgs),
+                store.rolling_summary.covered_digest(msgs))
+            return "Older summary, covering ten."
+
+    _use(client, NewerLandsFirst())
+    body = client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary").json()
+
+    assert body["refreshed"] is False
+    stored = store.scenes.get_rolling_summary(cid, sid)
+    assert stored["summary"] == "Newer summary, covering twelve." and stored["at"] == 12
+    assert body["summary"] == "Newer summary, covering twelve."
+
+
+def test_an_empty_completion_still_reports_the_staleness_it_can_see(client):
+    """The empty-reply branch returns before the write, so it never used to
+    reconcile — and a forced refresh whose covered prefix changed during the
+    call answered `stale: false` about a summary that had just gone stale. The
+    panel renders this answer directly."""
+    _key(client)
+    _use(client, FakeLLM("Good summary."))
+    cid, sid = _scene(client, posts=10)
+    client.post(f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary")
+
+    class EditsThenSaysNothing(FakeLLM):
+        async def complete(self, messages, cfg):
+            store.scenes.edit_message(cid, sid, 0, "Post 0, rewritten mid-call.")
+            return "   \n  "
+
+    # Posts have to be pending, or the route declines before ever calling the
+    # model and this exercises the not-due branch instead of the empty-reply one.
+    for n in range(10, 15):
+        store.scenes.append_message(cid, sid, "user", f"Post {n}.")
+    _use(client, EditsThenSaysNothing())
+    body = client.post(
+        f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary?force=true").json()
+
+    assert body["refreshed"] is False
+    assert body["stale"] is True and body["summary"] == "Good summary."
+
+
 # ---- POST: failure never reaches the turn loop ----
 def test_no_connection_is_a_409_not_a_500(client):
     llm = _use(client, FakeLLM())
