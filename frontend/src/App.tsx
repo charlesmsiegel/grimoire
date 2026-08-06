@@ -102,9 +102,15 @@ export default function App() {
       <Routes>
         {/* A fresh install lands on the wizard instead of an empty campaigns
             list. Only `/` is redirected: every other route stays reachable, so
-            the topbar is an escape hatch and a deep link is never hijacked. */}
+            the topbar is an escape hatch and a deep link is never hijacked.
+            The two guards are exact opposites of one `firstRun`, which is what
+            keeps them from bouncing a redirect back and forth. Gating
+            `/welcome` too is what stops a reload part-way through the wizard —
+            after a world exists, so the server no longer calls it a first run —
+            from restarting at step one and creating a second world. */}
         <Route path="/" element={firstRun ? <Navigate to="/welcome" replace /> : <CampaignsView />} />
-        <Route path="/welcome" element={<SetupWizard onDone={() => setFirstRun(false)} />} />
+        <Route path="/welcome" element={
+          firstRun ? <SetupWizard onDone={() => setFirstRun(false)} /> : <Navigate to="/" replace />} />
         <Route path="/campaigns/new" element={<CampaignWizard ready={ready} />} />
         <Route path="/campaigns/:cid" element={
           <CampaignView ready={ready} topbarCollapsed={topbarCollapsed} onToggleTopbar={toggleTopbar} />} />
