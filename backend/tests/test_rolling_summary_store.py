@@ -29,16 +29,23 @@ def test_rolling_summary_every_default_and_write(monkeypatch, tmp_path):
     assert store.config.rolling_summary_every() == 4
 
 
-@pytest.mark.parametrize("raw", ["", "off", "3.5", "-2", "nan", "1e3000"])
-def test_a_malformed_knob_never_raises_into_the_turn_loop(monkeypatch, tmp_path, raw):
-    """A hand-edited config.md or a cleared field must degrade to a number, not
-    take a scene down. Anything unparseable falls back to the default; anything
-    negative means the same thing as 0 — off."""
+@pytest.mark.parametrize("raw,expected", [
+    # Unparseable — a cleared field, a hand-edited word, a value that is a float
+    # but not a number — falls back to the default. Clearing the box in the UI
+    # is a mistake to recover from, not an instruction.
+    ("", 10), ("off", 10), ("nan", 10), ("inf", 10), ("1e3000", 10),
+    # Parseable: truncated toward zero (a numeric input can serialize "10.0"),
+    # and anything negative means what 0 means — off.
+    ("3.5", 3), ("10.0", 10), ("-2", 0), ("-0.5", 0),
+])
+def test_a_malformed_knob_never_raises_into_the_turn_loop(monkeypatch, tmp_path,
+                                                          raw, expected):
+    """This is read on the play path, so a hand-edited config.md must degrade to
+    a number rather than take a scene down."""
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     importlib.reload(store)
     store.write_config(rolling_summary_every=raw)
-    n = store.config.rolling_summary_every()
-    assert isinstance(n, int) and n >= 0
+    assert store.config.rolling_summary_every() == expected
 
 
 def test_zero_is_off_and_survives_the_round_trip(monkeypatch, tmp_path):
