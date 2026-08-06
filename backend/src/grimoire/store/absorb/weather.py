@@ -11,9 +11,10 @@ from __future__ import annotations
 from .. import calendars, entities, overlay, weather as weather_store
 from ..campaigns import paths as campaigns_paths
 from ..scenes import read as scenes_read
+from . import routing
 
 
-def _weather_edits(cid: str, sid: str, parsed: dict) -> list[dict]:
+def _weather_edits(cid: str, sid: str, parsed: dict, index: dict) -> list[dict]:
     """Narrated weather as staged before/after rows, one per changed axis.
 
     Narration gives a value, not a span, so the span rule is: **default to the
@@ -21,6 +22,12 @@ def _weather_edits(cid: str, sid: str, parsed: dict) -> list[dict]:
     when the narration states one ("the rain set in for three days"), rounded
     outward to whole blocks. Narration that implies onset rather than extent
     ("rain begins") takes the default — one block, re-narratable next turn.
+
+    `index` is `materialize`'s speaker index, threaded through rather than
+    rebuilt: one parsed row fans out into a row per changed axis, and all of
+    them rest on the same cited line, so they must be scored identically. The
+    weather has no personal subject, so no citation can be first-hand about it
+    — which is the right answer for a record that is a fact about the sky.
     """
     rows = parsed.get("weather_edits") or []
     if not rows:
@@ -64,6 +71,7 @@ def _weather_edits(cid: str, sid: str, parsed: dict) -> list[dict]:
                 "payload": {"location": location, "axis": axis, "native": native,
                             "duration_blocks": e.get("duration_blocks", ""),
                             "note": e.get("note", "")},
+                "review": routing.review(index, e),
             })
     return out
 

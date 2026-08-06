@@ -2571,3 +2571,52 @@ def test_a_deduped_row_that_also_retires_something_is_still_applied(monkeypatch,
     applied, failures = absorb.apply_edits(cid, [edit], sid)
     assert applied == [f"fact:{old}"] and failures == []
     assert facts.get(cid, old)["superseded_by"] == landed
+
+# ------------------------------------------------- #110/#112: citation + certainty
+
+def test_parse_output_carries_the_citation_and_certainty_on_every_section():
+    """The two routing inputs ride along on the edit rows themselves (#110/#112),
+    normalized but otherwise untouched — `certainty` clamped into 0-1, the quote
+    and the speaker kept as the model wrote them."""
+    text = json.dumps({
+        "character_state_edits": [{"id": "seraphine", "current_state": "hurt",
+                                   "quote": "I took the knife myself.",
+                                   "speaker": "Seraphine", "certainty": 0.9}],
+        "lore_edits": [{"id": "the-ledger", "append": "It names the harbourmaster.",
+                        "quote": "The ledger names him.", "speaker": "Grimoire",
+                        "certainty": "0.4"}],
+        "plot_movements": [{"title": "The forged map", "beat": "It surfaced.",
+                            "certainty": 7}],
+        "new_lore": [{"name": "The Salt Circle", "body": "A cabal.", "certainty": -2}],
+    })
+    out = absorb.parse_output(text)
+    assert out["character_state_edits"][0] == {
+        "id": "seraphine", "current_state": "hurt", "quote": "I took the knife myself.",
+        "speaker": "Seraphine", "certainty": 0.9}
+    assert out["lore_edits"][0]["certainty"] == 0.4          # numeric string accepted
+    assert out["plot_movements"][0]["certainty"] == 1.0      # clamped up top
+    assert out["new_lore"][0]["certainty"] == 0.0            # clamped up from below
+
+
+def test_parse_output_omits_citation_keys_the_model_did_not_give():
+    """Key PRESENCE is the signal, same rule the knowledge sections already
+    keep: a row with no citation must be distinguishable from one citing the
+    empty string, or `routing` cannot tell "said nothing" from "cited nobody"."""
+    out = absorb.parse_output(json.dumps({
+        "character_state_edits": [{"id": "seraphine", "current_state": "hurt"}],
+        "lore_edits": [{"id": "the-ledger", "append": "x", "speaker": "   ",
+                        "certainty": "not a number"}],
+    }))
+    assert out["character_state_edits"] == [{"id": "seraphine", "current_state": "hurt"}]
+    assert out["lore_edits"] == [{"id": "the-ledger", "append": "x"}]
+
+
+def test_parse_output_rejects_a_non_finite_certainty():
+    """`float("nan")` parses and then poisons every comparison it reaches —
+    `max`/`min` clamping silently returns whichever operand came first, so the
+    band would depend on argument order rather than on the model's answer."""
+    out = absorb.parse_output(json.dumps({
+        "lore_edits": [{"id": "a", "append": "x", "certainty": float("inf")},
+                       {"id": "b", "append": "x", "certainty": float("nan")},
+                       {"id": "c", "append": "x", "certainty": True}]}))
+    assert [e.get("certainty") for e in out["lore_edits"]] == [1.0, None, None]
