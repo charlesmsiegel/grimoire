@@ -1320,6 +1320,39 @@ def _rolling_due(view: dict, every: int, force: bool) -> bool:
     return force or (every > 0 and pending >= every)
 
 
+def _rolling_commit(cid: str, sid: str, summary: str, covered: int, digest: str) -> dict:
+    """Store a fold only if the prefix it was computed FROM is still the prefix
+    on disk, and report the state that results either way.
+
+    Read-verify-write under ONE campaign hold (reentrant, so the mutator's own
+    acquisition is free). The verification is the whole point, and review caught
+    that "self-healing on the next refresh" was not enough for two reasons:
+
+    - The panel's Refresh button trusts this route's answer directly, so a
+      summary stored over a transcript that changed during the call would be
+      presented as CURRENT until some later GET happened to notice.
+    - `delete_scene` frees a scene's id and the numbering reuses it, so a scene
+      deleted and remade under the same title mid-call hands this write the very
+      id it holds -- attaching one scene's prose to another. On an empty
+      replacement not even Refresh clears it: there is nothing pending for a
+      forced refold to fold.
+
+    Both are the same question, so one check answers them: is `messages[:covered]`
+    still what it was? A recycled scene fails it (different transcript, usually
+    none), an edit or reroll inside the covered prefix fails it, a trim fails it
+    -- and an ordinary turn APPENDING during the call passes, which it must, or
+    every busy scene would throw away the summary it just paid for.
+    """
+    with store.locks.campaign_lock(cid):
+        scene = store.scenes.read_scene(cid, sid)
+        landed = store.rolling_summary.covered_digest(
+            scene["messages"][:covered]) == digest
+        if landed:
+            store.scenes.set_rolling_summary(cid, sid, summary, covered, digest)
+            scene = store.scenes.read_scene(cid, sid)
+        return {"landed": landed, "view": _rolling_view(cid, sid, scene)}
+
+
 def _rolling_body(view: dict, every: int) -> dict:
     """`due` always answers the AUTOMATIC question — would a plain per-turn POST
     spend a call — never the forced one. A forced call that found nothing new
@@ -1387,8 +1420,8 @@ async def post_rolling_summary(cid: str, sid: str, force: bool = False,
     # every unrelated request and open stream on the backend rather than just
     # this refresh. Same treatment `post_absorb` and `streaming.py` give theirs.
     try:
-        await run_in_threadpool(store.scenes.set_rolling_summary, cid, sid,
-                                summary, covered, digest)
+        result = await run_in_threadpool(_rolling_commit, cid, sid,
+                                         summary, covered, digest)
     except store.scenes.SceneNotFound:
         # The scene was renamed or deleted while the model was answering, which
         # mints a new id and moves the file out from under this write -- the
@@ -1400,9 +1433,12 @@ async def post_rolling_summary(cid: str, sid: str, force: bool = False,
         # moved on, there is nowhere to put it, and this call is fire-and-forget
         # from the client. Left unhandled it is a 500 with no handler above it.
         return {**_rolling_body(view, every), "refreshed": False}
-    return {"summary": summary, "at": covered, "total": view["total"],
-            "stale": False, "every": every,
-            "due": False, "refreshed": True}
+    # The reconciled view, never the snapshot: `_rolling_commit` re-reads under
+    # its own hold, so this reports the scene as it actually is -- including the
+    # posts that landed during the call, and including a refusal's `stale: true`
+    # rather than the `stale: false` a just-written summary would otherwise
+    # always claim. The panel's Refresh button renders this answer directly.
+    return {**_rolling_body(result["view"], every), "refreshed": result["landed"]}
 
 
 @router.put("/campaigns/{cid}/scenes/{sid}/chronicle")

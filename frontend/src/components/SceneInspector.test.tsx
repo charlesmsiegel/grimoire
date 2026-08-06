@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { SceneInspector } from "./SceneInspector";
 
 vi.mock("../api/client", async () => {
@@ -856,4 +856,30 @@ test("switching scenes never shows the previous scene's summary", async () => {
     <SceneInspector cid="c" sid="s2" refreshKey={0} onSceneChanged={() => {}} />);
   await waitFor(() =>
     expect(screen.queryByText("Scene one: Mara reaches the salt gate.")).toBeNull());
+});
+
+test("a late read for a scene the reader has left does not evict the current one", async () => {
+  // Stamping the response keeps A's prose off B's panel, but on its own it does
+  // not stop A's *later* answer from replacing B's — after which the stamp
+  // rejects it and the panel says "No summary yet" about a scene that has one.
+  let answerA: ((v: any) => void) | undefined;
+  (api.getRollingSummary as any).mockImplementationOnce(
+    () => new Promise((resolve) => { answerA = resolve; }));
+  const view = render(
+    <SceneInspector cid="c" sid="s" refreshKey={0} onSceneChanged={() => {}} />);
+
+  (api.getRollingSummary as any).mockResolvedValueOnce({
+    summary: "Scene two: the ledger surfaces.", at: 2, total: 2,
+    stale: false, every: 10, due: false });
+  view.rerender(
+    <SceneInspector cid="c" sid="s2" refreshKey={0} onSceneChanged={() => {}} />);
+  await screen.findByText("Scene two: the ledger surfaces.");
+
+  // A answers last, and must be dropped rather than overwrite B's state
+  await act(async () => {
+    answerA!({ summary: "Scene one: Mara reaches the salt gate.", at: 4, total: 4,
+               stale: false, every: 10, due: false });
+  });
+  expect(screen.getByText("Scene two: the ledger surfaces.")).toBeInTheDocument();
+  expect(screen.queryByText(/No summary yet/)).toBeNull();
 });
