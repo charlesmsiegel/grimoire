@@ -773,7 +773,8 @@ def forget_world_record(wroot: Path, kind: str, rid: str) -> None:
     holding one campaign nobody can read must not make a world record
     undeletable, and the delete has already happened by the time we get here.
     """
-    _drop_record_dir(wroot, kind, rid)
+    if not _record_present(wroot, kind, rid):
+        _drop_record_dir(wroot, kind, rid)
     try:
         cids = _dependent_campaigns(wroot)
     except (OSError, UnicodeDecodeError) as exc:
@@ -782,17 +783,49 @@ def forget_world_record(wroot: Path, kind: str, rid: str) -> None:
                     "id will inherit it", wroot, exc, kind, rid)
         return
     for cid in cids:
-        croot = croot_of(cid)
-        if kind in ("characters", "pcs"):
-            mine = (croot / kind / rid / _actor_meta(kind)).exists()
-        else:
-            mine = _flat_path(croot, kind, rid).exists()
-        if mine:
-            _drop_manifest_ref(cid, _flat_ref(kind, rid))
-            continue
-        _drop_record_dir(croot, kind, rid)
-        if kind == "greetings":
-            _drop_plotmap_edges(croot, rid)
+        try:
+            _forget_in_campaign(cid, kind, rid)
+        except (OSError, UnicodeDecodeError) as exc:
+            # Per campaign, not per sweep: an unreadable sync.md used to raise
+            # through the loop, so one damaged campaign cost every LATER
+            # dependent its cleanup -- and the route 500'd on a delete that had
+            # already happened, whose retry 404s without sweeping (Codex review).
+            log.warning("could not finish sweeping campaign %s after %s/%s was deleted "
+                        "(%s) -- a record recreated under that id may inherit its state",
+                        cid, kind, rid, exc)
+
+
+def _forget_in_campaign(cid: str, kind: str, rid: str) -> None:
+    croot = croot_of(cid)
+    if kind in ("characters", "pcs"):
+        mine = (croot / kind / rid / _actor_meta(kind)).exists()
+    else:
+        mine = _flat_path(croot, kind, rid).exists()
+    if mine:
+        _drop_manifest_ref(cid, _flat_ref(kind, rid))
+        return
+    _drop_record_dir(croot, kind, rid)
+    if kind == "greetings":
+        _drop_plotmap_edges(croot, rid)
+
+
+def _record_present(root: Path, kind: str, rid: str) -> bool:
+    """Is there a record of this kind and id here *now*?
+
+    Asked again after the delete, because the sweep drops a whole directory and
+    these handlers hold no world-level lock: a concurrent create of the same
+    name takes the id back the instant the delete frees it, and publishes its
+    own `<kind>/<rid>/` for the sweep to remove -- reporting success for a
+    record that no longer exists (Codex review).
+
+    This narrows that window to the gap between the check and the `rmtree`
+    rather than closing it; closing it needs a world-record lock, which this
+    module does not have for anything (`locks.UNREVIEWED`). It costs nothing
+    and removes the destructive outcome for every interleaving but one.
+    """
+    if kind in ("characters", "pcs"):
+        return (root / kind / rid / _actor_meta(kind)).exists()
+    return _flat_path(root, kind, rid).exists()
 
 
 def _drop_plotmap_edges(croot: Path, gid: str) -> None:

@@ -71,8 +71,16 @@ def create_entity(root: Path, kind: str, name: str, body: str = "", keys: str = 
     d.mkdir(parents=True, exist_ok=True)
 
     def exists(c: str) -> bool:
-        # `taken` widens the id namespace (overlay: world files + tombstones)
-        return _entity_path(root, kind, c).exists() or (taken is not None and taken(c))
+        # `taken` widens the id namespace (overlay: world files + tombstones).
+        # The record DIRECTORY counts as taken too, exactly as it does for an
+        # actor (`characters.create_character` keys on `_char_dir`): it holds
+        # the previous record-of-that-slug's assets and campaign-local sidecars,
+        # so handing the id out again adopts them (#225). It also keeps a failed
+        # `instantiate` rollback honest -- that rollback deletes the record
+        # directory, and it must never be one that predates the create (Codex
+        # review).
+        return (_entity_path(root, kind, c).exists() or _kind_dir(root, kind).joinpath(c).is_dir()
+                or (taken is not None and taken(c)))
 
     eid = uniquify(slugify(name), exists)
     meta = {"name": name}
