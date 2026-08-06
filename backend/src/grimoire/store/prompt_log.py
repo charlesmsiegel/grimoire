@@ -227,6 +227,36 @@ def list_entries(cid: str, sid: str) -> list[dict]:
     return [e for e in reversed(_read_index(cid)["entries"]) if e.get("scene") == sid]
 
 
+#: Every field the inspector dereferences without checking, and the type it
+#: assumes. `ContextBreakdown` calls `ctx.total_tokens.toLocaleString()` and
+#: `ctx.sections.map(...)` the moment a snapshot is selected, so a payload that
+#: is valid JSON but the wrong shape -- `{}` after a hand edit or a sync
+#: conflict -- would take the whole inspector down rather than reading as a
+#: debug entry that is simply unavailable. Being strict HERE is what lets the
+#: frontend stay trusting.
+_ROW_TYPES = {"label": str, "text": str, "tier": str,
+              "dropped": bool, "trimmed": int, "tokens": int}
+_TOTAL_KEYS = ("total_tokens", "dropped_tokens", "budget_tokens")
+
+
+def _well_formed(data: object) -> bool:
+    """Whether a payload can be served to the inspector without crashing it.
+
+    Only the fields the panel dereferences are required; unknown extras pass
+    through untouched, so a payload written by a later version stays readable.
+    """
+    if not isinstance(data, dict):
+        return False
+    if not all(isinstance(data.get(k), int) for k in _TOTAL_KEYS):
+        return False
+    rows = data.get("sections")
+    if not isinstance(rows, list):
+        return False
+    return all(isinstance(r, dict)
+               and all(isinstance(r.get(k), t) for k, t in _ROW_TYPES.items())
+               for r in rows)
+
+
 def read_entry(cid: str, eid: str, scene: str | None = None) -> dict | None:
     """One frozen breakdown, or None when it never existed or has been evicted.
 
@@ -247,7 +277,7 @@ def read_entry(cid: str, eid: str, scene: str | None = None) -> dict | None:
         data = json.loads(p.read_text(encoding="utf-8"))
     except (ValueError, OSError):   # ValueError covers UnicodeDecodeError -- see _read_index
         return None
-    return data if isinstance(data, dict) else None
+    return data if _well_formed(data) else None
 
 
 def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
@@ -255,24 +285,51 @@ def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
     but nothing reads it off them -- the list view is the index, and a payload
     is only ever fetched by the id the index handed out.
 
-    Never raises, unlike its siblings in the `scene_refs.repoint` fan-out. They
-    hold play records a rename must not silently desynchronise; this holds
-    debug snapshots, and failing a rename over one would be the worse outcome.
-    An unwritten repoint leaves entries pointing at a scene id that no longer
-    exists, so they simply stop being listed -- the harmless direction.
+    Never raises, unlike `forget_scene` -- and unlike its siblings in the
+    `scene_refs.repoint` fan-out. The reason is the call order in
+    `scenes.lifecycle`: every transcript is renamed on disk BEFORE `repoint`
+    runs (the same reason `alternates.clear_destinations` is hoisted above the
+    renames with a comment saying so). Raising from here would abort a rename
+    with the `.md` files already moved and the other stores already repointed,
+    trading stale debug rows for a half-renamed campaign -- the transcript being
+    the one artifact that cannot be regenerated.
+
+    So the failure path DROPS the rows instead of leaving them keyed to an id
+    that has moved on. Stale rows are not merely unlisted: scene ids are
+    recycled by number and title, so a rename that failed to repoint, followed
+    by a delete and a same-titled recreation, hands the new scene the old id and
+    with it the old prompts. Losing snapshots is this module's accepted cost;
+    showing another scene's is not. If the drop cannot be written either -- most
+    likely, since it is the same file that just refused -- the rename still
+    stands and the rows are no worse than before.
     """
     try:
         with locks.campaign_lock(cid):
             index = _read_index(cid)
-            hit = False
+            if not any(row.get("scene") in mapping for row in index["entries"]):
+                return
             for row in index["entries"]:
                 if row.get("scene") in mapping:
                     row["scene"] = mapping[row["scene"]]
-                    hit = True
-            if hit:
+            try:
                 _write_index(cid, index)
+            except OSError:
+                _drop_scenes(cid, set(mapping))
     except (OSError, locks.StoreBusy):
         pass
+
+
+def _drop_scenes(cid: str, scenes: set[str]) -> None:
+    """Best-effort removal of every row for `scenes`. The fallback when a
+    repoint cannot be written -- see `repoint_scenes`."""
+    index = _read_index(cid)
+    gone = [e for e in index["entries"] if e.get("scene") in scenes]
+    if not gone:
+        return
+    index["entries"] = [e for e in index["entries"] if e.get("scene") not in scenes]
+    _write_index(cid, index)
+    for row in gone:
+        _unlink(cid, row["id"])
 
 
 def forget_scene(cid: str, sid: str) -> None:
