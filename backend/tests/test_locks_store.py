@@ -1074,3 +1074,43 @@ def test_nowait_releases_only_what_it_took(monkeypatch, tmp_path):
         done.set()
         keeper.join(10)
     assert not keeper.is_alive()
+
+
+def test_a_best_effort_hold_gives_up_instead_of_waiting(monkeypatch, tmp_path):
+    """`context._assemble` pairs the transcript with the transient-state ledger
+    under this (#120). It must never block a turn or raise: `post_chat` has
+    already appended the player's post by then, and the undo that would take it
+    back off is not wired until afterwards — a `StoreBusy` there strands the
+    post with nothing able to remove it. Under contention it reports False and
+    the caller reads unlocked."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = "run"
+    held, done = threading.Event(), threading.Event()
+    HOLD = 12.0
+
+    def _hold():
+        with locks.campaign_lock(cid):
+            held.set()
+            done.wait(HOLD)
+
+    t = threading.Thread(target=_hold, daemon=True)
+    t.start()
+    assert held.wait(5)
+    try:
+        started = time.monotonic()
+        with locks.best_effort_campaign_lock(cid, timeout=0.5) as got:
+            elapsed = time.monotonic() - started
+        assert got is False                     # did not get it
+        assert elapsed < 5.0                    # and did not wait the holder out
+    finally:
+        done.set()
+        t.join(5)
+
+
+def test_a_best_effort_hold_takes_the_lock_when_it_is_free(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    with locks.best_effort_campaign_lock("run") as got:
+        assert got is True
+    # released: a normal hold still works afterwards
+    with locks.campaign_lock("run"):
+        pass

@@ -565,10 +565,25 @@ def streaks_from(recorded: list[tuple[int, dict]], need: int) -> dict[str, dict[
 
 
 def repoint_scenes(cid: str, mapping: dict[str, str]) -> None:
-    """Follow renamed scene ids. Part of the `scene_refs.repoint` fan-out."""
+    """Follow renamed scene ids. Part of the `scene_refs.repoint` fan-out.
+
+    Reads strictly, for `drop_scene`'s reason: this is an identity-changing
+    mutation, and `read`'s "unreadable becomes `{}`" would report it as "no
+    scene here needed repointing". `rename_scene` has already moved the
+    transcript by the time the fan-out runs, so the rename would stand while
+    the state stayed filed under the old id — lost to the renamed scene, and
+    waiting to be inherited by whatever later takes that id back.
+    """
     with locks.campaign_lock(cid):
-        data = read(cid)
-        if not any(sid in mapping for sid in data):
+        p = _path(cid)
+        if not p.exists():
+            return
+        raw = p.read_text(encoding="utf-8")     # OSError propagates, deliberately
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            return          # unparseable: there is nothing here to carry over
+        if not isinstance(data, dict) or not any(sid in mapping for sid in data):
             return
         _write(cid, {mapping.get(sid, sid): scene for sid, scene in data.items()})
 

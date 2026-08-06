@@ -79,7 +79,14 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     # took neither could land between them and send the new narration paired
     # with the PREVIOUS turn's mood, or with none. Two file reads long, and the
     # lock is reentrant, so a caller already holding it pays nothing.
-    with locks.campaign_lock(cid):
+    #
+    # BEST-EFFORT, not `campaign_lock`: `post_chat` appends the player's post
+    # before calling this and only wires the undo that would take it back off
+    # afterwards, so a `StoreBusy` raised here would strand that post with no
+    # reply and nothing able to remove it. This path had no lock at all before
+    # the pairing, and it must not become a new way for a turn to fail — under
+    # contention it reads unlocked and one prompt may carry a stale field.
+    with locks.best_effort_campaign_lock(cid):
         scene = scenes_read.read_scene(cid, sid)
         live_turnstate = turnstate.current(cid, sid, len(scene["messages"]),
                                            config.turnstate_depth())
