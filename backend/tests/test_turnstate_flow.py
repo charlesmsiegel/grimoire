@@ -473,3 +473,20 @@ def test_a_real_opener_with_a_trailing_block_is_still_adopted(monkeypatch, tmp_p
     assert r.status_code == 200
     messages = scenes.read_scene(cid, sid)["messages"]
     assert len(messages) == 1 and "```" not in messages[0]["content"]
+
+
+def test_a_sub_speaker_label_still_files_its_state(monkeypatch, tmp_path):
+    """`**Winifred Ash (aside):**` is a supported transcript label, so it is a
+    label the tracker instruction invites the model to reuse as its key.
+    Matching the raw label found nothing, and every field went with it."""
+    cid, sid, char_id = _scene(monkeypatch, tmp_path)
+    _persist_reply(cid, sid, "**Winifred Ash (aside):** He is lying.\n\n"
+                   + _block('{"Winifred Ash (aside)": {"mood": "guarded"}}'))
+    assert turnstate.entries(cid, sid) == [(0, {f"characters:{char_id}": {"mood": "guarded"}})]
+
+
+def test_a_shortened_sub_speaker_label_resolves_too(monkeypatch, tmp_path):
+    cid, sid, char_id = _scene(monkeypatch, tmp_path)
+    _persist_reply(cid, sid, "**Winifred (aside):** He is lying.\n\n"
+                   + _block('{"Winifred (aside)": {"mood": "guarded"}}'))
+    assert turnstate.entries(cid, sid) == [(0, {f"characters:{char_id}": {"mood": "guarded"}})]

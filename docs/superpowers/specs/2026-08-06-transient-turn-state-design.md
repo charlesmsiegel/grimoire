@@ -60,7 +60,11 @@ reuse, and exact-matching would have persisted the dialogue while silently
 dropping all of its state. Injected into `resolve` rather than imported:
 `scenes` imports `turnstate` (for `drop_scene`), so reaching back would close
 a cycle, and injection keeps the rule in one place. Ambiguous labels resolve
-to nobody, which is what `match_name` already says about them. The `{"state": {…}}` envelope is told apart from a character literally named
+to nobody, which is what `match_name` already says about them. A sub-speaker
+parenthetical is dropped first via `scenes.speaker_base` — the same helper
+`absorb.routing` uses, so the two cannot disagree — because
+`**Winifred Ash (aside):**` is a supported label and therefore one the
+instruction invites the model to key by. The `{"state": {…}}` envelope is told apart from a character literally named
 `state` by the shape one level down — an envelope's values are field maps, a
 character's are field values. Fields are exactly `mood`, `intent`, `posture`; other keys are
 dropped; values are collapsed to one line and dropped above 80 characters,
@@ -96,8 +100,14 @@ as an unterminated block — emitting it would show the player an opener the
 transcript does not contain, and on a reroll would show it in place of the
 reply the server just restored.
 
-`_persist_reply` returns how many posts landed, and `POST .../first-post`
-refuses on zero. Text can be non-empty and still produce no post — a trailing
+`_persist_reply` returns how many posts landed, and that count — not a guess
+from the stripped text — is what every "did this turn produce anything?"
+decision runs on. `POST .../first-post` refuses on zero; `finalize` and
+`on_error` act on the returned count; `on_abort` and the roll continuation,
+which must decide *before* persisting, share one predictor (`_would_land`)
+that applies the same rules without writing. A reply that is only a bare
+speaker marker splits into no segment either, so predicting from the stripped
+text alone had skipped the reroll restore for it. Text can be non-empty and still produce no post — a trailing
 block is split off before segmentation, and a bare speaker marker segments into
 nothing — and answering `ok` over a scene that is still empty loses the opener
 the user was adopting with no error to show for it.

@@ -203,8 +203,16 @@ def _record_turnstate(cid: str, sid: str, landed: int, segments: list[dict],
         kept = sum(1 for s in segments if s["content"].strip())
         if not tracked or not kept:
             return
-        states = store.turnstate.resolve(tracked, store.appearances.scene_cast(cid, sid),
-                                         store.scenes.match_name)
+        # The transcript's own label rule, both halves of it: drop a sub-speaker
+        # parenthetical first (`**Mara (aside):**` is Mara — `speaker_base` is
+        # the same helper `absorb.routing` uses so the two cannot disagree),
+        # then match exactly or by unique prefix. Passing the raw label matched
+        # nothing for a sub-speaker, so the dialogue persisted and every field
+        # it carried was dropped.
+        states = store.turnstate.resolve(
+            tracked, store.appearances.scene_cast(cid, sid),
+            lambda label, names: store.scenes.match_name(
+                store.scenes.speaker_base(label), names))
         store.turnstate.record(cid, sid, landed + kept - 1, states)
     except OSError:
         pass
@@ -227,6 +235,29 @@ def _narration(watcher) -> str:
     scan of one reply and keeps the grammar in one place.
     """
     return store.turnstate.split_block(watcher.narration)[0]
+
+
+def _would_land(cid: str, sid: str, text: str) -> int:
+    """How many posts `_persist_reply` would keep from `text`, without writing.
+
+    The authoritative answer is `_persist_reply`'s own return, and the callers
+    that can afford to persist first use that. Two cannot: `on_abort` chooses
+    between restoring and finalizing, and finalizing is what persists;
+    `_continuation_stream` has to decide before `commit_narration`, which runs
+    the write inside its own lock and marks the record `narrated` on the way
+    out. Both need the count in advance, so this predicts it the same way —
+    tracker block off, then the marker grammar, then non-empty content.
+
+    Deliberately skips macro expansion, which `_persist_reply` does and which
+    can only ever shrink a segment. That makes this conservative in the safe
+    direction: it can say "something lands" when nothing does, never the
+    reverse, and the caller's fallback for that is the path it would have taken
+    anyway.
+    """
+    narration, _ = store.turnstate.split_block(text)
+    players = frozenset(store.appearances.player_names(cid, sid))
+    return sum(1 for seg in store.scenes.split_reply(narration, players)
+               if seg["content"].strip())
 
 
 def _sse(data: dict) -> str:
@@ -417,8 +448,8 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
                 rec = store.proposals.new(cid, sid, payload)  # heals before replacing
             _persist_reply(cid, sid, watcher.narration)
             frames.append(_sse({"proposal": {**payload, "id": rec["id"]}}))
-        elif _narration(watcher).strip():
-            _persist_reply(cid, sid, watcher.narration)
+        elif _persist_reply(cid, sid, watcher.narration):
+            pass                     # it landed; nothing else to decide
         elif restore_removed is not None:
             # A turn that *succeeded* and produced nothing — a clean EOF with no
             # text and no fence, which a provider does return (an empty safety
@@ -456,9 +487,8 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
         contention would be a new way to lose text, decided as a rider on a fix
         for a different problem. Deleting is what needs the discipline.
         """
-        if _narration(watcher).strip():  # a normal turn keeps its partial reply
-            _persist_reply(cid, sid, watcher.narration)
-            return {}
+        if _persist_reply(cid, sid, watcher.narration):
+            return {}                # a normal turn keeps its partial reply
         # Under the lock, for the reason `on_abort` is: the check and the
         # rollback have to be one step. Review caught this path checking
         # ownership and then acting on it outside any lock, so a turn claiming
@@ -559,7 +589,7 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
             # client — a second tab, a direct API call — can still do it, and
             # that is the wider concurrency class this PR documents rather than
             # closes (#95).
-            if restore_removed is not None and not _narration(watcher).strip():
+            if restore_removed is not None and not _would_land(cid, sid, watcher.narration):
                 restore_removed()
                 return []
             if len(store.scenes.read_scene(cid, sid)["messages"]) != owned_tail:
@@ -589,7 +619,7 @@ def _continuation_stream(cid: str, sid: str, pid: str, messages: list[dict],
         # Gated on the RAW narration being non-empty, so this changes nothing
         # about a continuation that genuinely produced no text: that has always
         # counted as narrated, and re-deciding it is not this branch's business.
-        if watcher.narration.strip() and not _narration(watcher).strip():
+        if watcher.narration.strip() and not _would_land(cid, sid, watcher.narration):
             frames.append(_sse({"done": True}))
             return frames
         persist = lambda: _persist_reply(cid, sid, watcher.narration)
