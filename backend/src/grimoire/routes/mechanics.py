@@ -68,7 +68,7 @@ def _continuation_rule_bodies(cid: str, resolution: dict) -> tuple[list[str], li
         return on_roll_docs, check_docs
 
 
-def _continuation_messages(cid: str, sid: str, resolution: dict) -> tuple[list[dict], dict]:
+def _continuation_messages(cid: str, sid: str, resolution: dict) -> tuple[list[dict], dict | None]:
     # The roll block is rendered first and named in `appended`: a check can drag
     # in several on-roll rule documents, which is exactly the kind of mandatory
     # bulk that would otherwise be packed around and then appended anyway.
@@ -76,13 +76,15 @@ def _continuation_messages(cid: str, sid: str, resolution: dict) -> tuple[list[d
     block = prompts.render("scene/roll_result.j2", resolution=resolution,
                            on_roll_docs=on_roll_docs, check_docs=check_docs)
     return store.context.compose_turn(
-        cid, sid, appended=(("Roll result", "system", block),))
+        cid, sid, appended=(("Roll result", "system", block),),
+        describe=store.prompt_log.capturing())
 
 
-def _declined_continuation_messages(cid: str, sid: str) -> tuple[list[dict], dict]:
+def _declined_continuation_messages(cid: str, sid: str) -> tuple[list[dict], dict | None]:
     block = prompts.render("scene/roll_declined.j2")
     return store.context.compose_turn(
-        cid, sid, appended=(("Roll declined", "system", block),))
+        cid, sid, appended=(("Roll declined", "system", block),),
+        describe=store.prompt_log.capturing())
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}/roll-proposal")

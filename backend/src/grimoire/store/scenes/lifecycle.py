@@ -185,9 +185,11 @@ def delete_scene(cid: str, sid: str) -> None:
         # which does not always reach errno.
         if exc.errno != errno.ENAMETOOLONG and getattr(exc, "winerror", None) != 206:
             raise
-    # Before the unlink, for the same reason as the sidecar above: ids are
-    # recycled, so snapshots left behind would be shown as the *next* scene's
-    # prompts. `forget_scene` never raises, so unlike the sidecar it cannot
-    # refuse the delete — losing a debug snapshot is not worth failing on.
+    # Before the unlink, and allowed to refuse it, for exactly the reason the
+    # sidecar above is: ids are recycled, so prompt snapshots left behind are
+    # adopted by the next scene to take this id and listed as its own. Unlike
+    # the sidecar this is not a per-scene file that can simply be deleted — it
+    # is rows inside a shared index — so "the delete half-worked" is not a state
+    # it can be left in. Failing here leaves the scene and its id intact.
     prompt_log.forget_scene(cid, sid)
     p.unlink()

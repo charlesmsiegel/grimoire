@@ -292,7 +292,8 @@ def post_start_from_greeting(cid: str, sid: str, body: StartFromGreeting):
 def post_opener(cid: str, sid: str, body: Opener, client: LLMClient = Depends(get_llm)):
     _require_scene(cid, sid)
     conn = _require_connection()
-    messages, breakdown = store.context.compose_opener(cid, sid, body.prompt)
+    messages, breakdown = store.context.compose_opener(
+        cid, sid, body.prompt, describe=store.prompt_log.capturing())
     _record_prompt(cid, sid, "opener", breakdown)
     return _ephemeral_stream(messages, conn, client)
 

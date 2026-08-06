@@ -173,7 +173,8 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, client: LLMClient = Depends(ge
     if ephemeral:
         note = turn.content.strip() or prompts.render("scene/director_note.j2")
         messages, breakdown = store.context.compose_director_turn(
-            cid, sid, note, turn=_turn_override(turn))
+            cid, sid, note, turn=_turn_override(turn),
+            describe=store.prompt_log.capturing())
         _record_prompt(cid, sid, "director", breakdown)
         return _chat_stream(cid, sid, messages, conn, client)
     names = store.appearances.player_names(cid, sid)
@@ -185,7 +186,8 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, client: LLMClient = Depends(ge
     content = store.context.expand_macros(
         turn.content, store.context.scene_substitutions(cid, sid), cid, sid)
     posted_at = store.scenes.append_message(cid, sid, "user", content, speaker=speaker)
-    messages, breakdown = store.context.compose_turn(cid, sid, turn=_turn_override(turn))
+    messages, breakdown = store.context.compose_turn(
+        cid, sid, turn=_turn_override(turn), describe=store.prompt_log.capturing())
     _record_prompt(cid, sid, "chat", breakdown)
     # The post has to precede the stream — `build_messages` renders history out
     # of the transcript, so a turn the model never sees is a turn it cannot
@@ -213,7 +215,8 @@ def post_retry(cid: str, sid: str, body: RetryBody | None = None,
         store.proposals.heal(cid, sid)
         _disown_dead_guidance(cid, sid)
         store.proposals.supersede(cid, sid)  # a fresh generation retires the old decision
-    messages, breakdown = store.context.compose_turn(cid, sid, turn=_turn_override(body))
+    messages, breakdown = store.context.compose_turn(
+        cid, sid, turn=_turn_override(body), describe=store.prompt_log.capturing())
     _record_prompt(cid, sid, "retry", breakdown)
     return _chat_stream(cid, sid, messages, conn, client)
 
@@ -387,8 +390,8 @@ def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
         block = prompts.render("scene/regenerate_guidance.j2", guidance=guidance) if guidance else ""
         messages, breakdown = store.context.compose_turn(
             cid, sid, turn=_turn_override(body),
-            appended=(("Regenerate guidance", "system", block),) if block else ())
-        _record_prompt(cid, sid, "regenerate", breakdown)
+            appended=(("Regenerate guidance", "system", block),) if block else (),
+            describe=store.prompt_log.capturing())
     except BaseException:
         if restore is not None:
             restore()
@@ -409,6 +412,14 @@ def post_regenerate(cid: str, sid: str, body: RegenerateBody | None = None,
         if restore is not None:
             restore()
         raise
+    # AFTER the supersede, not beside the compose that built it. Everything above
+    # can still refuse and unwind the reroll without the model ever being called,
+    # and a snapshot written before that point would leave Turn history showing a
+    # regeneration that never happened. From here the stream is the next
+    # statement, so a recorded turn is one that was really attempted. `record`
+    # cannot raise, so this adds no failure of its own to a path that has just
+    # passed its last one.
+    _record_prompt(cid, sid, "regenerate", breakdown)
     # The old reply had to go before the context was built — the builders read
     # the transcript, so the model cannot be asked to replace something it can
     # still see. That leaves a window where the scene is one reply short and the

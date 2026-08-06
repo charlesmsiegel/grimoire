@@ -259,13 +259,17 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
   // the briefing effect above solves with its `live` flag. A ref rather than
   // that pattern because `showTurn` is triggered by a click rather than by an
   // effect, so there is no cleanup to close over; and a ref rather than the
-  // `sid` prop, because `showTurn` closes over the sid it was created with —
-  // comparing that to itself would be a guard that is always satisfied.
-  const liveScene = useRef(sid);
+  // props, because `showTurn` closes over the ones it was created with —
+  // comparing those to themselves would be a guard that is always satisfied.
+  //
+  // Campaign AND scene. Scene numbering is campaign-local, so two campaigns
+  // routinely have a live scene under the same id, and a scene-only check would
+  // wave the first campaign's prompt through into the second's inspector.
+  const liveScene = useRef(`${cid}/${sid}`);
   // Keyed on the scene alone, deliberately NOT on refreshKey: a turn landing
   // must not yank the reader out of a past turn they are in the middle of
   // reading. Changing scene must, since the entry belongs to the old one.
-  useEffect(() => { liveScene.current = sid; setFrozen(null); }, [cid, sid]);
+  useEffect(() => { liveScene.current = `${cid}/${sid}`; setFrozen(null); }, [cid, sid]);
 
   const showTurn = useCallback(async (eid: string) => {
     setError(null);
@@ -275,9 +279,9 @@ export function SceneInspector({ cid, sid, refreshKey, onSceneChanged, onSceneRe
       // in the new scene's panel — the exact confusion the backend refuses to
       // serve (the detail route scopes each entry to its scene), so the client
       // must not reintroduce it from the other end.
-      if (liveScene.current === sid) setFrozen(snapshot);
+      if (liveScene.current === `${cid}/${sid}`) setFrozen(snapshot);
     } catch (err: any) {
-      if (liveScene.current !== sid) return;
+      if (liveScene.current !== `${cid}/${sid}`) return;
       // The likeliest failure is the retention window having evicted it while
       // the list was on screen, which is a 404 and not worth a scary banner.
       setFrozen(null);
