@@ -9,6 +9,7 @@ lock would leave every existing test passing and silently reopen that race.
 
 import ast
 import inspect
+import itertools
 import os
 import pathlib
 import subprocess
@@ -485,17 +486,21 @@ def test_world_module_rebind_acquires_in_sorted_order(monkeypatch, tmp_path):
 #
 # THE RULE. Outside `hold_all` itself, in any one scope:
 #
-#   1. every `campaign_lock(...)` / `hold_all(...)` call is the direct context
-#      expression of a `with`, and
-#   2. they all name the same campaign.
+#   1. every mention of `campaign_lock` / `hold_all` -- as a name, an
+#      attribute, or a string handed to `getattr` -- is the callee of a `with`
+#      statement's context expression, and
+#   2. those calls all name the same campaign, read positionally or from the
+#      `cid`/`cids` keyword.
 #
-# Anything else fails. Two campaigns in one scope is the deadlock; a lock taken
-# anywhere but a `with` has no bounded lifetime, which is how you get two.
+# Anything else fails. Two campaigns in one scope is the deadlock; a lock named
+# anywhere but a `with` has no bounded lifetime, which is how you get two; and
+# renaming the factory (`cl = locks.campaign_lock`, `import ... as cl`) is
+# rejected outright rather than resolved, so there is no alias to chase.
 #
 # WHY IT IS SHAPED LIKE THIS -- the part worth reading before changing it.
 # Earlier drafts asked the opposite question: "does this look like a multi-hold
 # I recognize?" They enumerated the bad spellings, and the enumeration was
-# always one spelling short. Across four review rounds, seven separate findings,
+# always one spelling short. Across five review rounds, nine separate findings,
 # every one of them the same hold in punctuation the detector had not been
 # taught:
 #
@@ -506,11 +511,22 @@ def test_world_module_rebind_acquires_in_sorted_order(monkeypatch, tmp_path):
 #   `[stack.enter_context(campaign_lock(c)) for c in cids]`     (comprehension)
 #   a registration still live across a sibling `with`           (across forms)
 #   the same stack registered under an unrelated `with`         (grouping)
+#   `campaign_lock(cid=a), campaign_lock(cid=b)`                (keyword)
+#   `cl = locks.campaign_lock` then `with cl(a), cl(b):`        (renamed)
+#
+# The last two are a second kind of gap, worth naming separately: not a way to
+# HOLD a lock the detector missed, but a way to NAME one. That is the other
+# lesson `test_lock_domain_guard.py` had to learn and write down -- "**A name is
+# not a binding.** It was fixed four separate times before it was written down".
+# Both halves get the same treatment here. The whitelist is over *mentions*, so
+# a rename is an offender rather than something to resolve; and an unreadable
+# campaign argument compares equal to nothing, so two unknowns are two
+# campaigns rather than one.
 #
 # So the polarity is inverted, exactly as `test_lock_domain_guard.py` inverted
 # it after the same lesson: nothing is accepted unless it matches the whitelist
 # above, and every other spelling fails without having to be recognized. That
-# is why this is ~20 lines where the enumerating version was ~110, and why
+# is why this is ~30 lines where the enumerating version was ~110, and why
 # `AnnAssign`, `.acquire()` and comprehensions need no special case -- none of
 # them is a `with`, so none of them passes, and neither will the next spelling
 # nobody has thought of.
@@ -571,9 +587,22 @@ def _here(node: ast.AST):
                  if not isinstance(c, _NESTED_SCOPES)]
 
 
-def _callee(node: ast.Call) -> str | None:
-    f = node.func
-    return f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", None)
+def _names_a_lock(node: ast.AST) -> bool:
+    """`node` mentions a protected factory, in any spelling that can reach one.
+
+    A Name (`campaign_lock(...)` after a plain import), an Attribute
+    (`locks.campaign_lock`), or a string constant -- the last because
+    `getattr(locks, "campaign_lock")` is a call by another route, and this
+    guard's whole premise is that it cannot afford to be surprised by one more
+    way of writing the same thing.
+    """
+    if isinstance(node, ast.Name):
+        return node.id in _LOCK_CALLS
+    if isinstance(node, ast.Attribute):
+        return node.attr in _LOCK_CALLS
+    if isinstance(node, ast.Constant):
+        return node.value in _LOCK_CALLS
+    return False
 
 
 def _scopes(tree: ast.AST):
@@ -582,29 +611,55 @@ def _scopes(tree: ast.AST):
     yield from (n for n in ast.walk(tree) if isinstance(n, _NESTED_SCOPES))
 
 
+_unknown = itertools.count()
+
+
 def _campaign_of(call: ast.Call) -> str:
-    """Which campaign this call names, syntactically. A call with no argument
-    dumps to a constant, so two of those read as one campaign rather than as a
-    spurious pair."""
-    arg = call.args[0] if call.args else None
-    return ast.dump(arg) if arg is not None else "<no argument>"
+    """Which campaign this call names, syntactically.
+
+    Positional first, then the `cid`/`cids` keyword -- `campaign_lock(cid=a)`
+    is the same call spelled differently, and reading both as "no argument"
+    made two campaigns look like one.
+
+    A call whose campaign cannot be read at all gets a fresh unknown, so two of
+    them never compare equal. Unknown means *fail*, which is the polarity this
+    whole guard turns on: the alternative reads two unreadable calls as one
+    campaign and lets the pair through.
+    """
+    if call.args:
+        return ast.dump(call.args[0])
+    for kw in call.keywords:
+        if kw.arg in ("cid", "cids"):
+            return ast.dump(kw.value)
+    return f"<unreadable {next(_unknown)}>"
 
 
 def _multi_holds(tree: ast.AST) -> list[tuple[int, str]]:
     """(line, why) for every campaign lock not taken the one permitted way."""
     out = []
     for scope in _scopes(tree):
-        calls = [n for n in _here(scope)
-                 if isinstance(n, ast.Call) and _callee(n) in _LOCK_CALLS]
-        entered = {id(item.context_expr) for node in _here(scope)
-                   if isinstance(node, _WITHS) for item in node.items}
-        out += [(c.lineno, "campaign lock taken outside a `with`, so nothing "
-                           "bounds how long it is held")
-                for c in calls if id(c) not in entered]
-        if len({_campaign_of(c) for c in calls}) > 1:
+        for node in _here(scope):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                out += [(node.lineno, "campaign lock factory bound to another "
+                                      "name -- import it under its own name")
+                        for a in node.names
+                        if a.name.split(".")[-1] in _LOCK_CALLS and a.asname]
+        # The ONLY permitted shape: the callee of a `with`'s context expression.
+        taken = [item.context_expr for node in _here(scope)
+                 if isinstance(node, _WITHS) for item in node.items
+                 if isinstance(item.context_expr, ast.Call)
+                 and _names_a_lock(item.context_expr.func)]
+        permitted = {id(call.func) for call in taken}
+        # Every other mention fails -- without the guard having to know what it
+        # was going to be used for. An alias assignment, an argument to
+        # `enter_context`, a `getattr` string: none of them is here.
+        out += [(n.lineno, "campaign lock named outside a `with` acquisition")
+                for n in _here(scope)
+                if _names_a_lock(n) and id(n) not in permitted]
+        if len({_campaign_of(c) for c in taken}) > 1:
             out += [(c.lineno, "two different campaigns locked in one scope -- "
                                "only `hold_all` may hold more than one")
-                    for c in calls]
+                    for c in taken]
     return sorted(set(out))
 
 
@@ -725,6 +780,21 @@ _PREFIX = "import contextlib\nfrom grimoire.store import locks\n"
      "        with open('x') as fh:\n"
      "            stack.enter_context(locks.campaign_lock(b))\n",
      "one stack registered under an unrelated `with`"),
+    # --- the two Codex found on c0c9dd0: naming, not holding ---
+    (_PREFIX + "def f(a, b):\n"
+     "    with locks.campaign_lock(cid=a), locks.campaign_lock(cid=b):\n"
+     "        pass\n", "campaigns passed by keyword"),
+    (_PREFIX + "cl = locks.campaign_lock\n"
+     "def f(a, b):\n"
+     "    with cl(a), cl(b):\n"
+     "        pass\n", "a renamed alias, bound by assignment"),
+    ("from grimoire.store.locks import campaign_lock as cl\n"
+     "def f(a, b):\n"
+     "    with cl(a), cl(b):\n"
+     "        pass\n", "a renamed alias, bound by import"),
+    # Nobody named this one; the mention whitelist rejects it for free.
+    (_PREFIX + "def f(a):\n"
+     "    return getattr(locks, 'campaign_lock')(a)\n", "a getattr spelling"),
     # Safe, and rejected anyway -- see "WHAT IT REJECTS THAT IS SAFE" above.
     # Listed here so the trade is a test rather than a claim.
     (_PREFIX + "def f(a, b):\n"
@@ -755,6 +825,16 @@ def test_guard_catches_locks_not_taken_the_one_permitted_way(src, why):
      "        pass\n"
      "    with locks.campaign_lock(cid):\n"
      "        pass\n", "two blocks on the SAME campaign"),
+    # Same campaign, keyword spelling: one campaign, not two unknowns.
+    (_PREFIX + "def f(cid):\n"
+     "    with locks.campaign_lock(cid=cid):\n"
+     "        pass\n", "a campaign passed by keyword"),
+    # Importing under its OWN name is not a rename -- `_names_a_lock` still
+    # sees it, so the call is checked exactly as the attribute form is.
+    ("from grimoire.store.locks import campaign_lock\n"
+     "def f(cid):\n"
+     "    with campaign_lock(cid):\n"
+     "        pass\n", "a plain same-name import"),
     # A different lock domain accumulated on a stack -- `store/assets.py` does
     # exactly this, and it is none of this guard's business.
     (_PREFIX + "def f(stack, images):\n"
