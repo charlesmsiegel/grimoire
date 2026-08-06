@@ -50,6 +50,17 @@ FIELDS = ("mood", "intent", "posture")
 #: streak matches between two values that merely start alike.
 MAX_VALUE = 80
 
+#: Entries kept per scene, oldest dropped first. turnstate.json is
+#: per-CAMPAIGN and is re-read and rewritten on every persisted turn, so a
+#: scene's contribution to it has to be bounded by something — otherwise a long
+#: campaign pays for every mood it has ever recorded on every subsequent turn.
+#: Both readers only ever want the tail (`current` a window back from it,
+#: `streaks` the final run), so dropping the oldest costs neither anything a
+#: sane `turnstate_depth` or `promote_streak` could reach. Transient state is
+#: the one store here where forgetting the distant past is the design, not a
+#: compromise.
+MAX_ENTRIES = 200
+
 # The block, as a trailing fence only. `(?:^|\n)` rather than `re.MULTILINE`'s
 # `^` so the newline that precedes the opener is eaten with it, leaving the
 # narration without a dangling blank line.
@@ -150,6 +161,11 @@ def resolve(states: dict[str, dict[str, str]], cast: list[dict]) -> dict[str, di
     NPCs only, and `characters` only --- the same scope `playstate` declares and
     `context.world_state._character_states` renders. A player's mood is not the
     narrator's to track.
+
+    Two present NPCs sharing a display name collapse onto the FIRST in cast
+    order (`scene_cast` sorts by kind then id, so the choice is at least
+    stable). Not a resolvable case: the model labels their dialogue with the
+    same string too, so the block it writes is ambiguous at the source.
     """
     by_name: dict[str, str] = {}
     for a in cast:
@@ -188,6 +204,13 @@ def _verdict(s: str) -> str:
     reason `fence.feed` defers there too: its ``\\b`` was satisfied only by
     end-of-string, and the next delta could turn ``` ```state ``` into
     ``` ```statement ```.
+
+    Deliberately looser than `_OPEN`, which additionally requires the info
+    string to end the line: ``` ```state: ``` says "open" here and is not a
+    block there. Over-triggering costs a pause; under-triggering leaks the
+    block onto the screen. `finish` reconciles the difference by putting what
+    was withheld through `split_block` itself, so the pause is all it ever
+    costs.
     """
     m = _IS_OPENER.match(s)
     if m and m.end() < len(s):
@@ -199,17 +222,18 @@ class StreamRedactor:
     """Withhold a tracker block from the deltas the client sees.
 
     Buffers from any backtick, releases the buffer the moment it cannot become
-    an opener, and emits nothing at all once one opens --- the block is
-    terminal by contract, so there is no re-opening to handle. Pure: it never
-    looks at what was persisted.
+    an opener, and holds everything from an opener onward until `finish` can
+    decide — with `split_block`, the same rule the stored reply is judged by —
+    whether it really was one. Pure: it never looks at what was persisted.
     """
 
     def __init__(self) -> None:
-        self._held = ""     # a prefix that could still grow into an opener
-        self._open = False  # an opener was seen; everything after it is ours
+        self._held = ""            # a prefix that could still grow into an opener
+        self._tail: str | None = None   # everything from an opener on, or None
 
     def feed(self, chunk: str) -> str:
-        if self._open:
+        if self._tail is not None:
+            self._tail += chunk or ""
             return ""
         out = ""
         buf = self._held + (chunk or "")
@@ -223,7 +247,7 @@ class StreamRedactor:
             rest = buf[tick:]
             verdict = _verdict(rest)
             if verdict == "open":
-                self._open = True
+                self._tail = rest
                 return out
             if verdict == "maybe":
                 self._held = rest
@@ -236,12 +260,26 @@ class StreamRedactor:
         return out
 
     def finish(self) -> str:
-        """Release whatever is still withheld. End of stream resolves every
-        "maybe" the other way: a held prefix that never grew into an opener is
-        just text, and dropping it would eat the backticks off a code fence the
-        narration ended on."""
+        """Resolve everything still withheld, at the point the stream ends —
+        which is the first moment either question can be answered.
+
+        A held *prefix* that never grew into an opener is just text; dropping it
+        would eat the backticks off a code fence the narration ended on.
+
+        A block that opened is put through `split_block`, the same rule the
+        persisted reply is judged by. Withholding it outright would have been
+        wrong the moment a model wrote narration AFTER the block: the transcript
+        keeps that (a mid-reply block is never stripped) and the stream would
+        have silently ended the reply early, so the two would disagree about
+        what was said. Released in one burst rather than progressively, because
+        "is this block trailing?" is not decidable until there is no more text.
+        """
+        if self._tail is not None:
+            tail, self._tail = self._tail, None
+            narration, _ = split_block(tail)
+            return narration
         held, self._held = self._held, ""
-        return "" if self._open else held
+        return held
 
 
 # ---- the ledger ------------------------------------------------------------
@@ -303,6 +341,23 @@ def entries(cid: str, sid: str, tail: int | None = None) -> list[tuple[int, dict
     return sorted(out, key=lambda e: e[0])
 
 
+def _capped(scene: dict) -> dict:
+    """The newest `MAX_ENTRIES` of a scene's entries. Unreadable keys are kept
+    rather than counted — they sort nowhere sensible, `entries` already skips
+    them, and a truncation rule is no place to start deleting a file's
+    mysteries."""
+    numbered = []
+    for key in scene:
+        try:
+            numbered.append((int(key), key))
+        except (TypeError, ValueError):
+            continue
+    if len(numbered) <= MAX_ENTRIES:
+        return scene
+    drop = {key for _, key in sorted(numbered)[:len(numbered) - MAX_ENTRIES]}
+    return {k: v for k, v in scene.items() if k not in drop}
+
+
 def record(cid: str, sid: str, index: int, states: dict[str, dict[str, str]]) -> None:
     """File one generation's tracker block at `index` --- the position of the
     LAST post it rode in on, so a fresh entry always sits at the transcript
@@ -312,8 +367,43 @@ def record(cid: str, sid: str, index: int, states: dict[str, dict[str, str]]) ->
     with locks.campaign_lock(cid):
         data = read(cid)
         scene = data.get(sid)
-        data[sid] = {**(scene if isinstance(scene, dict) else {}),
-                     str(index): {token: dict(fields) for token, fields in states.items()}}
+        scene = {**(scene if isinstance(scene, dict) else {}),
+                 str(index): {token: dict(fields) for token, fields in states.items()}}
+        data[sid] = _capped(scene)
+        _write(cid, data)
+
+
+def supersede(cid: str, sid: str, floor: int) -> None:
+    """Forget entries describing posts from `floor` on — the slots a landing
+    generation is about to occupy.
+
+    Called before every reply is appended, not only ones carrying a block, and
+    that is the whole point. A reroll deletes the old reply and the replacement
+    lands at the same index; if the replacement omits its tracker block, the
+    DISCARDED variant's entry is still sitting there, and `entries` cannot tell
+    it apart from a live one — the post it points at exists again. The scene
+    then gets told a character is furious because a reply the player threw away
+    said so.
+
+    `entries`' tail filter does not cover this: it drops entries past the end of
+    the transcript, and after the replacement lands this one is not past it.
+    """
+    with locks.campaign_lock(cid):
+        data = read(cid)
+        scene = data.get(sid)
+        if not isinstance(scene, dict):
+            return
+        kept = {}
+        for key, actors in scene.items():
+            try:
+                stale = int(key) >= floor
+            except (TypeError, ValueError):
+                stale = False       # unreadable key: `entries` skips it anyway
+            if not stale:
+                kept[key] = actors
+        if len(kept) == len(scene):
+            return
+        data[sid] = kept
         _write(cid, data)
 
 

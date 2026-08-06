@@ -74,6 +74,27 @@ def test_a_reply_that_is_only_a_block_records_nothing(monkeypatch, tmp_path):
     assert turnstate.read(cid) == {}
 
 
+def test_a_rerolled_reply_does_not_inherit_the_discarded_variants_mood(
+        monkeypatch, tmp_path):
+    """The failing case supersede exists for: the replacement lands at the same
+    index, so the tail filter cannot tell the dead entry from a live one."""
+    cid, sid, char_id = _scene(monkeypatch, tmp_path)
+    _persist_reply(cid, sid, "**Winifred Ash:** Get out.\n\n"
+                   + _block('{"Winifred Ash": {"mood": "furious"}}'))
+    assert turnstate.entries(cid, sid)[0][1] == {f"characters:{char_id}": {"mood": "furious"}}
+    scenes.remove_trailing_assistant_run(cid, sid)
+    _persist_reply(cid, sid, "**Winifred Ash:** ...if you would.")   # no block this time
+    assert turnstate.entries(cid, sid) == []
+
+
+def test_superseding_leaves_earlier_posts_alone(monkeypatch, tmp_path):
+    cid, sid, char_id = _scene(monkeypatch, tmp_path)
+    _persist_reply(cid, sid, "**Winifred Ash:** One.\n\n"
+                   + _block('{"Winifred Ash": {"mood": "wary"}}'))
+    _persist_reply(cid, sid, "**Winifred Ash:** Two.")
+    assert turnstate.entries(cid, sid) == [(0, {f"characters:{char_id}": {"mood": "wary"}})]
+
+
 # ---- id lifecycle ----------------------------------------------------------
 
 def test_a_renamed_scene_keeps_its_ledger(monkeypatch, tmp_path):
@@ -218,3 +239,29 @@ def test_promotion_ignores_a_character_that_no_longer_exists(monkeypatch, tmp_pa
         turnstate.record(cid, sid, i, {"characters:ghost": {"mood": "guarded"}})
         scenes.append_message(cid, sid, "assistant", f"beat {i}", speaker="Winifred Ash")
     assert _state_edits(cid, sid) == []
+
+
+def test_a_character_no_longer_in_the_cast_is_not_injected(monkeypatch, tmp_path):
+    """The ledger outlives a departure — the section is built from the cast, so
+    a character who has left the scene stops being described by it."""
+    cid, sid, char_id = _scene(monkeypatch, tmp_path)
+    config.write_config(turnstate_depth="4")
+    scenes.append_message(cid, sid, "user", "hello")
+    turnstate.record(cid, sid, 0, {f"characters:{char_id}": {"mood": "guarded"}})
+    assert "Transient state" in _labels(cid, sid)
+    appearances.leave(cid, sid, "characters", char_id)
+    assert "Transient state" not in _labels(cid, sid)
+
+
+def test_a_promotion_for_one_character_leaves_the_models_edit_for_another_alone(
+        monkeypatch, tmp_path):
+    cid, sid, char_id = _scene(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    other, _ = characters.create_character(croot, "Mara Vance", "default",
+                                           characters.blank_card("Mara Vance"))
+    _reinforce(cid, sid, char_id, "guarded")
+    edits = _state_edits(cid, sid, {"character_state_edits": [
+        {"id": f"characters/{other}", "current_state": "Waiting in the yard."}]})
+    assert {e["id"]: e["after"] for e in edits} == {
+        f"character_state:{other}": "Waiting in the yard.",
+        f"character_state:{char_id}": "Mood: guarded"}

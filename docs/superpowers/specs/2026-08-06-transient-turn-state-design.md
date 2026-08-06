@@ -83,10 +83,23 @@ at the transcript tail.
 
 Index-keying is what #120 specifies and it inherits that choice's weakness: a
 `edit_message` that changes how a message splits shifts later indices by one,
-misattributing entries. Bounded and accepted — reads drop entries at or past
-the current transcript length (so reroll and trim self-heal, and a re-landed
-reply overwrites the entry at its own index), and everything outside the
-decay window is dropped anyway.
+misattributing entries. Bounded and accepted — everything outside the decay
+window is dropped anyway.
+
+Two narrower cases are *not* accepted, because the ledger would state something
+false rather than merely stale:
+
+- Reads drop entries at or past the current transcript length, so a `trim` or a
+  reroll that shortens the transcript cannot leave an entry describing a post
+  that no longer exists.
+- Every persisted reply first **supersedes** entries from its landing index on.
+  The tail filter alone does not cover a reroll: the replacement lands at the
+  same index, so the discarded variant's entry points at a post that exists
+  again, and a replacement carrying no block of its own would inherit it.
+
+A scene keeps its newest 200 entries. turnstate.json is per-campaign and is
+re-read and rewritten on every persisted turn, and both readers only ever want
+the tail — `current` a window back from it, `streaks` the final run.
 
 Scene ids are **recycled** on delete (`scenes.lifecycle.delete_scene`), so
 the ledger is purged for the deleted scene there, exactly as `commits` is
@@ -113,10 +126,15 @@ blob in that box is a defect the user has to delete by hand.
 `_persist_reply` strips the block from what is *stored*, but the deltas have
 already reached the browser. A small `StreamRedactor` composed **outside**
 `fence.FenceWatcher` (not inside it — that class is load-bearing for roll
-proposals and does not need a second concern) buffers from any backtick,
-releases the buffer the moment it cannot become a ` ```state ` opener, and
-emits nothing once one opens. `watcher.narration` is untouched, so the
-persistence path is unchanged and the grammar has one definition.
+proposals and does not need a second concern) buffers from any backtick and
+releases the buffer the moment it cannot become a ` ```state ` opener.
+
+Once one opens it withholds the rest and resolves at end of stream with
+`split_block` itself — not by dropping it. "Is this block trailing?" is
+undecidable until there is no more text, and a redactor that guessed would
+silently end the streamed reply early on exactly the input the transcript
+keeps whole. `watcher.narration` is untouched throughout, so the persistence
+path is unchanged and the grammar has one definition.
 
 ## Promotion (#121)
 
