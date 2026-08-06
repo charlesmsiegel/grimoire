@@ -1,3 +1,5 @@
+import shutil
+
 import pytest
 
 from grimoire.store import appearances as ap
@@ -347,78 +349,60 @@ def _stamp_full(cid: str) -> None:
     mp.write_text(dump_frontmatter(meta, body), encoding="utf-8")
 
 
-def test_accept_before_the_migration_drops_the_ref_before_the_copy(monkeypatch, tmp_path):
-    """#270. Accept reverts a record to inherited by dropping both its copy and
-    its manifest ref, and which one may be left stranded depends on how sync.md
-    will next be read. On a campaign slim has not reached, a stranded ref is a
-    record the migration reads as user-deleted and tombstones — so there the
-    ref goes first and the copy second."""
+def test_accept_migrates_the_campaign_before_it_accepts(monkeypatch, tmp_path):
+    """#270. Accept drops a copy and its manifest ref, and to a campaign the
+    slim migration has not reached a ref whose copy is gone is a record the
+    user deleted. Rather than order the two writes around that, `_advance`
+    gets the migration out of the way first, so accept only ever runs against
+    the layout its ordering was designed for."""
     wid, cid = _setup(monkeypatch, tmp_path)
     overlay.materialize_entity(cid, "locations", "seraphine")
     entities.update_entity(worlds.world_root(wid), "locations", "seraphine", body="v2")
     _stamp_full(cid)
-    seen: dict = {}
-    real = overlay.dematerialize
 
-    def spy(c, ref):
-        seen.setdefault(ref, campaigns.read_manifest(c))
-        real(c, ref)
-
-    monkeypatch.setattr(overlay, "dematerialize", spy)
     sync.accept(cid, [{"kind": "locations", "id": "seraphine"}])
-    assert "locations/seraphine" not in seen["locations/seraphine"]   # ref already gone
-    assert not (campaigns.campaign_root(cid) / "locations" / "seraphine.md").exists()
+
+    assert campaigns.read_campaign(cid)["meta"]["world_copy"] == "overlay"
+    assert not overlay.deleted(cid)
     assert overlay.read_entity(cid, "locations", "seraphine")["body"].strip() == "v2"
+    assert sync.incoming(cid) == []
 
 
-def test_an_interrupted_accept_before_the_migration_is_not_read_as_a_deletion(monkeypatch, tmp_path):
-    """Interrupt accept between the two writes on an unmigrated campaign: what
-    is left is a copy sync.md no longer names. The migration reclaims it rather
-    than tombstoning it — the campaign keeps the version it had, and the
-    update the accept never finished taking is offered again."""
+def test_accept_on_an_unmigrated_campaign_whose_world_is_gone_does_nothing(monkeypatch, tmp_path):
+    """The one case where migrating first cannot help: the migration skips
+    while the world dir is missing, leaving the campaign unmigrated. Nothing is
+    stranded, because every world hash `_advance` compares against is then None
+    and it does not touch a single ref."""
+    wid, cid = _setup(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    overlay.materialize_entity(cid, "locations", "seraphine")
+    before = campaigns.read_manifest(cid)
+    _stamp_full(cid)
+    shutil.rmtree(worlds.world_root(wid))
+
+    sync.accept(cid, [{"kind": "locations", "id": "seraphine"}])
+
+    assert campaigns.read_manifest(cid) == before          # untouched
+    assert (croot / "locations" / "seraphine.md").exists()
+    assert not overlay.deleted(cid)
+    assert campaigns.read_campaign(cid)["meta"]["world_copy"] == "full"   # still to migrate
+
+
+def test_accept_drops_the_copy_before_the_ref(monkeypatch, tmp_path):
+    """Past the migration #247's rule stands: a stranded ref names a record the
+    campaign has not materialized, which reads through to the world live and
+    self-heals, while a stranded copy would diverge silently and forever."""
     wid, cid = _setup(monkeypatch, tmp_path)
     croot = campaigns.campaign_root(cid)
     overlay.materialize_entity(cid, "locations", "seraphine")
     entities.update_entity(worlds.world_root(wid), "locations", "seraphine", body="v2")
-    _stamp_full(cid)
-
-    class Interrupted(Exception):
-        pass
-
-    def boom(*_a, **_kw):
-        raise Interrupted
-    monkeypatch.setattr(overlay, "dematerialize", boom)
-    with pytest.raises(Interrupted):
-        sync.accept(cid, [{"kind": "locations", "id": "seraphine"}])
-    monkeypatch.undo()
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    assert (croot / "locations" / "seraphine.md").exists()
-    assert "locations/seraphine" not in campaigns.read_manifest(cid)
-
-    campaigns.ensure_campaign_slim(cid)
-
-    assert "locations/seraphine" not in overlay.deleted(cid)
-    assert overlay.read_entity(cid, "locations", "seraphine")["body"].strip() == "v1"
-    # back in front of sync, rather than a copy that silently never syncs again
-    assert [p["status"] for p in sync.incoming(cid)] == ["update"]
-    sync.accept(cid, [{"kind": "locations", "id": "seraphine"}])
-    assert overlay.read_entity(cid, "locations", "seraphine")["body"].strip() == "v2"
-
-
-def test_accept_after_the_migration_still_drops_the_copy_first(monkeypatch, tmp_path):
-    """The inversion is scoped to the pending migration: past it, #247's rule
-    stands — a stranded ref reads through to the world live and self-heals,
-    while a stranded copy would diverge silently and forever."""
-    wid, cid = _setup(monkeypatch, tmp_path)
-    overlay.materialize_entity(cid, "locations", "seraphine")
-    entities.update_entity(worlds.world_root(wid), "locations", "seraphine", body="v2")
     seen: dict = {}
-    real = overlay.dematerialize
+    real = campaigns.paths.write_manifest
 
-    def spy(c, ref):
-        seen.setdefault(ref, campaigns.read_manifest(c))
-        real(c, ref)
+    def spy(c, m):
+        seen.setdefault("copy_gone", not (croot / "locations" / "seraphine.md").exists())
+        real(c, m)
 
-    monkeypatch.setattr(overlay, "dematerialize", spy)
+    monkeypatch.setattr(campaigns.paths, "write_manifest", spy)
     sync.accept(cid, [{"kind": "locations", "id": "seraphine"}])
-    assert "locations/seraphine" in seen["locations/seraphine"]   # ref still there
+    assert seen["copy_gone"] is True

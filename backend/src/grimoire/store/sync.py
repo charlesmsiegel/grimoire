@@ -13,7 +13,8 @@ from pathlib import Path
 
 from . import atomic, characters, entities, greetings, overlay, pcs
 from .appearances import paths as appearances_paths, versions as appearances_versions
-from .campaigns import paths as campaigns_paths, read as campaigns_read
+from .campaigns import (lifecycle as campaigns_lifecycle, paths as campaigns_paths,
+                        read as campaigns_read)
 
 
 def _ref_str(kind: str, eid: str) -> str:
@@ -166,16 +167,30 @@ def _advance_actor(cid: str, kind: str, actor_id: str, *, copy: bool) -> bool:
 
 
 def _advance(cid: str, refs: list[dict], *, copy: bool) -> None:
+    # Migrate first, so accept only ever runs against the overlay layout (#270).
+    # Accepting drops a copy and its manifest ref, and to a campaign the
+    # migration has not reached a ref whose copy is gone is a record the user
+    # deleted -- so an interruption between the two writes would have it
+    # tombstone an inherited record. Ordering the writes the other way round
+    # there is not enough on its own: the stranded copy is then a record that
+    # reads correctly and never syncs again, and no rule can tell it from one
+    # the campaign owns. Getting the migration out of the way first leaves
+    # neither. Nothing is lost when it cannot run (the world dir is missing):
+    # every `world_h` below is then None and this function does nothing at all.
+    # Cheap besides -- a migrated campaign costs one campaign.md read -- and the
+    # sync routes already call it, so this only closes the gap between theirs
+    # and ours.
+    campaigns_lifecycle.ensure_campaign_slim(cid)
     # `incoming` filters detached refs, but accept/reject take theirs from the
     # request body -- a stale one submitted after the slug was recreated would
     # dematerialize the very copy detaching preserved (Codex review).
     gone = overlay.detached(cid)
     refs = [r for r in refs if _ref_str(r["kind"], r["id"]) not in gone]
     wroot = campaigns_read.world_root_of(cid)
+    croot = campaigns_paths.campaign_root(cid)
     manifest = campaigns_paths.read_manifest(cid)
     manifest_changed = False  # loc/lore manifest write
     touched = False           # any ref advanced → bump campaign.updated
-    drops: list[str] = []     # accepted refs whose copy goes, once the order below allows
     for ref in refs:
         kind, eid = ref["kind"], ref["id"]
         if kind == "plotmap":
@@ -185,7 +200,7 @@ def _advance(cid: str, refs: list[dict], *, copy: bool) -> None:
             if not pending:
                 continue
             if copy:   # take world: drop our copy, revert to inherited
-                drops.append("plotmap")
+                (croot / "plotmap.json").unlink(missing_ok=True)
                 manifest.pop("plotmap", None)
             else:
                 manifest["plotmap"] = world_h
@@ -200,7 +215,7 @@ def _advance(cid: str, refs: list[dict], *, copy: bool) -> None:
             if world_h is None or manifest.get(_ref_str(kind, eid)) == world_h:
                 continue
             if copy:
-                drops.append(_ref_str(kind, eid))
+                overlay.dematerialize_actor(cid, kind, eid)
                 manifest.pop(_ref_str(kind, eid), None)
             else:
                 manifest[_ref_str(kind, eid)] = world_h
@@ -210,27 +225,13 @@ def _advance(cid: str, refs: list[dict], *, copy: bool) -> None:
         if world_h is None or manifest.get(_ref_str(kind, eid)) == world_h:
             continue
         if copy:
-            drops.append(_ref_str(kind, eid))
+            (croot / kind / f"{eid}.md").unlink(missing_ok=True)
             manifest.pop(_ref_str(kind, eid), None)
         else:
             manifest[_ref_str(kind, eid)] = world_h
         manifest_changed = touched = True
-    # Accept drops a copy and its manifest ref, and which of the two an
-    # interruption may strand depends on how sync.md will next be read. Past the
-    # slim migration, strand the ref: it names a record the campaign has not
-    # materialized, which reads through to the world live and self-heals, while
-    # a stranded copy would diverge silently and forever (#247). Before it, that
-    # same ref is a record the migration reads as user-deleted and tombstones,
-    # so the order swaps and the copy is what gets stranded — the migration
-    # reclaims an untracked copy, and offers this update again (#270).
-    if drops and not campaigns_read.slim_pending(cid):
-        for ref in drops:
-            overlay.dematerialize(cid, ref)
-        drops = []
     if manifest_changed:
         campaigns_paths.write_manifest(cid, manifest)
-    for ref in drops:
-        overlay.dematerialize(cid, ref)
     if touched:
         campaigns_read.touch(cid)
 
