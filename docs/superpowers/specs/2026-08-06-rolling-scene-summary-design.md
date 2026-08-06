@@ -93,14 +93,29 @@ content the player deleted, for the rest of the scene, with no way back.
 `messages[:at]` and compares. A mismatch means the covered prefix moved, so the
 prior summary is discarded and the scene is folded from scratch.
 
-This also makes the one concurrency window self-correcting. Two refreshes can
-overlap (a second client, or a manual refresh during an automatic one), and the
-slower one's write lands last, so a summary covering 10 messages can overwrite
-one covering 12. Nothing is lost: the stored `(at, digest)` pair still describes
-exactly what that summary covers, so the next refresh folds forward correctly
-from it. Holding the campaign lock across the LLM call would close the window
-and is refused — it would block every other write in the campaign for the
-duration of a network round trip.
+The same digest is also the **write's own precondition**, checked under one
+campaign hold in `_rolling_commit`: the fold lands only if `messages[:covered]`
+is still what it was when the prompt was built. An earlier draft argued this was
+unnecessary because a bad write is self-correcting on the next refresh; Codex
+review found two cases where it is not, and both are answered by the same check:
+
+- The panel's *Refresh now* renders this route's answer **directly**, so a
+  summary stored over a transcript that changed mid-call would be presented as
+  current until some later GET happened to notice.
+- `delete_scene` frees a scene's id and the numbering reuses it, so a scene
+  deleted and remade under the same title during the call hands the write the
+  very id it holds — attaching one scene's prose to another. On an *empty*
+  replacement not even *Refresh now* clears it, because there is nothing pending
+  for a forced refold to fold.
+
+An ordinary turn **appending** during the call leaves the covered prefix
+untouched and so still lands, which it must — otherwise every busy scene would
+throw away the summary it just paid for. The route then returns the *reconciled*
+view read back under that hold, never the pre-call snapshot.
+
+Holding the campaign lock across the LLM call itself would close the window
+earlier and is refused — it would block every other write in the campaign for
+the duration of a network round trip.
 
 ## 5. Surface
 
